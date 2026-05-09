@@ -29,7 +29,6 @@ import { ContextUsageRing } from './ContextUsageRing';
 import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
-import { BootWelcomeMessage } from './BootWelcomeMessage';
 
 interface ChatViewProps {
   sessionId: string;
@@ -94,8 +93,6 @@ export function ChatView({
     }
     return null;
   }, [storeThreads, sessionId]);
-
-  const isFirstConversation = storeThreads.length <= 1;
 
   const handleSelectProject = useCallback((project: { workingDirectory: string; projectName: string }) => {
     setThreadWorkingDirectory(sessionId, project.workingDirectory, project.projectName);
@@ -417,11 +414,6 @@ export function ChatView({
           /* Empty state with SessionSelector and centered input */
           <div className="h-full flex flex-col items-center justify-center px-4">
             <div className="w-full max-w-[800px] flex flex-col items-center">
-              {isFirstConversation && (
-                <BootWelcomeMessage
-                  onSelectProject={handleOpenNewProject}
-                />
-              )}
               <SessionSelector
                 selectedProject={selectedProject}
                 onSelectProject={handleSelectProject}
