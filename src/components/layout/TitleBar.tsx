@@ -25,8 +25,16 @@ export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
   const threadTitle = activeThread?.title || "New Thread";
   const projectName = activeThread?.projectName || "No Project";
 
+  // Detect platform for window controls layout (macOS traffic lights on left, Windows on right)
+  const isMac = window.electronAPI?.versions?.platform === 'darwin';
+
   return (
-    <div className="titlebar-drag-region">
+    <div
+      className={`titlebar-drag-region${isMac ? ' is-mac' : ' is-win'}`}
+      style={{
+        '--window-controls-offset': isMac ? '70px' : '0px',
+      } as React.CSSProperties}
+    >
       <div className="titlebar-brand">
         <img
           src={brandIconSrc}
