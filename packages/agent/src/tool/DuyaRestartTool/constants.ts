@@ -1,0 +1,1 @@
+export const DUYA_RESTART_TOOL_NAME = 'duya_restart';

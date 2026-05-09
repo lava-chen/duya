@@ -1,0 +1,1 @@
+export const DUYA_CONFIG_TOOL_NAME = 'duya_config';

@@ -1,0 +1,1 @@
+export const DUYA_HEALTH_TOOL_NAME = 'duya_health';

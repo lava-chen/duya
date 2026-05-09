@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.next/
+dist/
+dist-electron/
+release/
+build/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Runtime data
+.duya/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Coverage
+coverage/
+
+# Testing
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# Project specific
+ui-screenshot-*.png
+console_log.txt
+test_permissions.txt
+test_paper.pdf
+duyaUI.pen
+
+# Agent tools
+.claude/
+.trae/
+.qoder/
+.playwright-mcp/
+
+# Docs (keep only product-specs)
+docs/*/
+!docs/product-specs/
+docs/*.md
+
+# Tests
+tests/
+packages/agent/tests/
+
+# Bundled output
+packages/agent/bundle/
+packages/gateway/bundle/
+
+# Assets
+assets/

@@ -1,0 +1,1 @@
+export const DUYA_SESSIONS_TOOL_NAME = 'duya_sessions';

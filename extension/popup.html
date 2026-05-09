@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      min-width: 280px;
+      background: #ffffff;
+      color: #1a1a2e;
+    }
+    .container {
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 700;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+    .version {
+      font-size: 11px;
+      color: #999;
+    }
+    .status-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      transition: background 0.2s;
+    }
+    .status-card.connected {
+      background: #e8f5e9;
+    }
+    .status-card.disconnected {
+      background: #fef3f2;
+    }
+    .status-card.checking {
+      background: #f5f5f5;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.connected {
+      background: #4caf50;
+      box-shadow: 0 0 6px rgba(76, 175, 80, 0.4);
+    }
+    .status-dot.disconnected {
+      background: #ef5350;
+      box-shadow: 0 0 6px rgba(239, 83, 80, 0.3);
+    }
+    .status-dot.checking {
+      background: #bdbdbd;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .status-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .status-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+    }
+    .status-detail {
+      font-size: 11px;
+      color: #888;
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn {
+      flex: 1;
+      padding: 8px 0;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      text-align: center;
+    }
+    .btn:active {
+      transform: scale(0.97);
+    }
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+    .btn-primary:hover {
+      background: #5a6fd6;
+    }
+    .btn-secondary {
+      background: #f0f0f0;
+      color: #555;
+    }
+    .btn-secondary:hover {
+      background: #e4e4e4;
+    }
+    .link-row {
+      display: flex;
+      justify-content: center;
+      margin-top: 10px;
+    }
+    .link {
+      font-size: 12px;
+      color: #999;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .link:hover {
+      color: #667eea;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">D</div>
+      <div>
+        <div class="title" id="titleName">DUYA Browser Bridge</div>
+        <div class="version" id="titleVersion">v-</div>
+      </div>
+    </div>
+
+    <div class="status-card checking" id="statusCard">
+      <div class="status-dot checking" id="statusDot"></div>
+      <div class="status-info">
+        <div class="status-label" id="statusLabel">Checking...</div>
+        <div class="status-detail" id="statusDetail"></div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="connectBtn">Connect</button>
+      <button class="btn btn-secondary" id="settingsBtn">Settings</button>
+    </div>
+
+    <div class="link-row">
+      <span class="link" id="openApp">Open DUYA Desktop</span>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
