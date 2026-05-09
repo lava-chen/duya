@@ -102,6 +102,9 @@ export function SessionSelector({
         </div>
       </div>
 
+      {/* Input area */}
+      {children}
+
       {/* Recent threads */}
       {showRecentThreads && recentThreads.length > 0 && (
         <div className="welcome-recent">
@@ -123,9 +126,6 @@ export function SessionSelector({
           </div>
         </div>
       )}
-
-      {/* Input area rendered below recent threads */}
-      {children}
     </>
   );
 }
