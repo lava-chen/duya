@@ -73,6 +73,7 @@ The browser tool allows you to navigate and interact with web pages using a real
   \`\`\`json
   {"operation": "scroll", "direction": "down", "amount": 500}
   \`\`\`
+  amount must be a number, not a string. Do NOT wrap it in quotes.
 
 - **screenshot** - Take a screenshot
   \`\`\`json
@@ -115,10 +116,13 @@ The browser tool allows you to navigate and interact with web pages using a real
 
 - **wait** - Wait for a condition
   \`\`\`json
+  {"operation": "wait", "type": "ms", "value": "3000"}
+  \`\`\`
+  \`\`\`json
   {"operation": "wait", "type": "element", "value": ".results-loaded", "timeoutMs": 10000}
   \`\`\`
   Wait types:
-  - \`ms\` — wait N milliseconds, \`value\` is duration in ms (e.g., "2000")
+  - \`ms\` — wait N milliseconds, \`value\` is duration in ms (e.g., "3000")
   - \`element\` — wait for a CSS selector to appear, \`value\` is the selector
   - \`load\` — wait for page to fully load (network idle)
 
