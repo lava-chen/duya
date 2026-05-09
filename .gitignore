@@ -68,5 +68,4 @@ packages/agent/tests/
 packages/agent/bundle/
 packages/gateway/bundle/
 
-# Assets
-assets/
+# Bundled output
