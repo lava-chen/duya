@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "DUYA Browser Bridge",
+  "short_name": "DUYA Bridge",
+  "version": "1.1.0",
+  "description": "Browser automation bridge for DUYA AI Agent – enables the agent to navigate, interact with, and capture web pages in a dedicated isolated window.",
+  "minimum_chrome_version": "120",
+  "author": "lava-chen",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "activeTab",
+    "storage",
+    "background",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

@@ -1,0 +1,112 @@
+appId: com.duya.app
+productName: DUYA
+
+# Publish configuration for auto-updater
+# Requires GH_TOKEN environment variable to be set
+publish:
+  provider: github
+  owner: lava-chen
+  repo: duya
+  releaseType: release
+  # Uncomment the following line if you want to publish to a private repository
+  # private: true
+
+directories:
+  output: release
+
+files:
+  - package.json
+  - dist-electron/**/*
+  - dist/**/*
+  - "!node_modules"
+  - "!src"
+  - "!electron"
+  - "!build"
+  - "!scripts"
+  - "!docs"
+  - "!release"
+  - "!packages"
+  - "!data"
+  - "!.duya"
+
+# extraResources: Files copied to resources/ directory, outside of app.asar
+# The agent bundle is built with esbuild (bundle: true) so all runtime
+# dependencies are inlined into a single file. No node_modules copying needed.
+extraResources:
+  - from: assets/
+    to: assets/
+    filter: ["**/*"]
+  - from: node_modules/better-sqlite3/
+    to: better-sqlite3/
+    filter:
+      - "**/*"
+      - "!test/**"
+      - "!benchmark/**"
+      - "!docs/**"
+  - from: packages/agent/bundle/
+    to: agent-bundle/
+    filter: ["**/*"]
+  - from: packages/gateway/bundle/
+    to: gateway-bundle/
+    filter: ["**/*"]
+  - from: packages/agent/skills/
+    to: agent/skills/
+    filter: ["**/*"]
+  - from: public/
+    to: public/
+    filter: ["**/*"]
+  - from: extension/
+    to: extension/
+    filter: ["**/*"]
+
+afterPack: scripts/after-pack.js
+
+# Only unpack better-sqlite3 from asar (native module needs external file access)
+asarUnpack:
+  - "**/better-sqlite3/build/Release/*.node"
+
+mac:
+  icon: assets/macos/icon.icns
+  category: public.app-category.developer-tools
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  notarize: false
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+
+win:
+  icon: assets/windows/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+  artifactName: "${productName}.Setup.${version}.${ext}"
+  installerIcon: assets/windows/icon.ico
+
+linux:
+  icon: assets/linux/icons/512x512.png
+  category: Development
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  desktop:
+    entry:
+      Name: DUYA Beta
+      Comment: AI Agent Desktop Client (Beta)
+      Categories: Development;IDE;
+      StartupWMClass: duya
+  target:
+    - AppImage
+    - deb
+    - rpm

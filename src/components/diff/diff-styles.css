@@ -1,0 +1,263 @@
+/**
+ * Diff Viewer Styles
+ * CSS variables for diff colors in both light and dark themes
+ * Enhanced scrollbar styling
+ */
+
+:root {
+  /* Light theme diff colors */
+  --diff-added-bg: rgba(34, 197, 94, 0.12);
+  --diff-added-text: #15803d;
+  --diff-added-word-bg: rgba(34, 197, 94, 0.35);
+  --diff-removed-bg: rgba(239, 68, 68, 0.12);
+  --diff-removed-text: #b91c1c;
+  --diff-removed-word-bg: rgba(239, 68, 68, 0.35);
+  --diff-hunk-header-bg: rgba(0, 0, 0, 0.04);
+  --diff-hunk-header-text: #6b7280;
+  --diff-line-number-text: #9ca3af;
+  --diff-line-number-bg: rgba(0, 0, 0, 0.02);
+  
+  /* Scrollbar colors - more subtle */
+  --diff-scrollbar-track: transparent;
+  --diff-scrollbar-thumb: rgba(156, 163, 175, 0.25);
+  --diff-scrollbar-thumb-hover: rgba(156, 163, 175, 0.5);
+  --diff-scrollbar-thumb-active: rgba(156, 163, 175, 0.7);
+}
+
+:root[data-theme="dark"] {
+  /* Dark theme diff colors */
+  --diff-added-bg: rgba(34, 197, 94, 0.15);
+  --diff-added-text: #4ade80;
+  --diff-added-word-bg: rgba(34, 197, 94, 0.45);
+  --diff-removed-bg: rgba(239, 68, 68, 0.15);
+  --diff-removed-text: #f87171;
+  --diff-removed-word-bg: rgba(239, 68, 68, 0.45);
+  --diff-hunk-header-bg: rgba(255, 255, 255, 0.05);
+  --diff-hunk-header-text: #9ca3af;
+  --diff-line-number-text: #6b7280;
+  --diff-line-number-bg: rgba(255, 255, 255, 0.02);
+  
+  /* Scrollbar colors for dark theme - more subtle */
+  --diff-scrollbar-track: transparent;
+  --diff-scrollbar-thumb: rgba(75, 85, 99, 0.35);
+  --diff-scrollbar-thumb-hover: rgba(75, 85, 99, 0.55);
+  --diff-scrollbar-thumb-active: rgba(75, 85, 99, 0.75);
+}
+
+/* Diff container */
+.diff-container {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Diff line */
+.diff-line {
+  display: flex;
+  min-height: 24px;
+}
+
+.diff-line.added {
+  background-color: var(--diff-added-bg);
+}
+
+.diff-line.removed {
+  background-color: var(--diff-removed-bg);
+}
+
+/* Line number */
+.diff-line-number {
+  width: 48px;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--diff-line-number-text);
+  background-color: var(--diff-line-number-bg);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+/* Diff prefix (+/-) */
+.diff-prefix {
+  width: 16px;
+  text-align: center;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.diff-prefix.added {
+  color: var(--diff-added-text);
+}
+
+.diff-prefix.removed {
+  color: var(--diff-removed-text);
+}
+
+/* Diff content */
+.diff-content {
+  flex: 1;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.diff-content code {
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+}
+
+/* Word-level diff */
+.diff-word-added {
+  background-color: var(--diff-added-word-bg);
+  border-radius: 3px;
+  padding: 1px 3px;
+  font-weight: 500;
+}
+
+.diff-word-removed {
+  background-color: var(--diff-removed-word-bg);
+  border-radius: 3px;
+  padding: 1px 3px;
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
+/* Hunk header */
+.diff-hunk-header {
+  background-color: var(--diff-hunk-header-bg);
+  color: var(--diff-hunk-header-text);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+/* File header */
+.diff-file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background-color: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-file-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.diff-stat-added {
+  color: var(--diff-added-text);
+}
+
+.diff-stat-removed {
+  color: var(--diff-removed-text);
+}
+
+/* ============================================
+   ENHANCED SCROLLBAR STYLING - Minimalist
+   ============================================ */
+
+/* Webkit browsers (Chrome, Safari, Edge) */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: var(--diff-scrollbar-track);
+  margin: 4px 0;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track-piece {
+  background: var(--diff-scrollbar-track);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--diff-scrollbar-thumb);
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  transition: background 0.15s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--diff-scrollbar-thumb-hover);
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:active {
+  background: var(--diff-scrollbar-thumb-active);
+}
+
+.custom-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--diff-scrollbar-thumb) var(--diff-scrollbar-track);
+}
+
+/* Hover state enhancement */
+.custom-scrollbar:hover {
+  scrollbar-color: var(--diff-scrollbar-thumb-hover) var(--diff-scrollbar-track);
+}
+
+/* Syntax highlighting adjustments for diff */
+.diff-line .syntax-highlighter {
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+.diff-line.added .syntax-highlighter {
+  background: transparent !important;
+}
+
+.diff-line.removed .syntax-highlighter {
+  background: transparent !important;
+}
+
+/* Smooth scrolling */
+.custom-scrollbar {
+  scroll-behavior: smooth;
+}
+
+/* Selection styling */
+.custom-scrollbar ::selection {
+  background-color: rgba(99, 102, 241, 0.3);
+}
+
+/* Focus visible for accessibility */
+.custom-scrollbar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ============================================
+   TOGGLE ANIMATION
+   ============================================ */
+
+.diff-toggle-icon {
+  transition: transform 0.2s ease;
+}
+
+.diff-toggle-icon.collapsed {
+  transform: rotate(-90deg);
+}
+
+/* Collapsed state styling */
+.diff-collapsed {
+  opacity: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.diff-expanded {
+  opacity: 1;
+  height: auto;
+}

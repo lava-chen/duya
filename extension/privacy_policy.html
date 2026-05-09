@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - DUYA Browser Bridge</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 24px;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { font-size: 28px; margin-bottom: 8px; color: #1a1a2e; }
+    h2 { font-size: 20px; margin: 32px 0 12px; color: #1a1a2e; }
+    .meta { color: #666; font-size: 14px; margin-bottom: 32px; }
+    p { margin-bottom: 16px; }
+    ul { margin: 0 0 16px 24px; }
+    li { margin-bottom: 8px; }
+    .contact {
+      background: #f5f5f5;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 32px;
+    }
+  </style>
+</head>
+<body>
+  <h1>DUYA Browser Bridge</h1>
+  <p class="meta">Privacy Policy · Last updated: 2025</p>
+
+  <h2>Overview</h2>
+  <p>DUYA Browser Bridge ("the Extension") is a browser automation tool that works in conjunction with the DUYA Desktop application. This privacy policy explains how the Extension handles your data.</p>
+
+  <h2>Data Collection</h2>
+  <p>The Extension <strong>does not collect, store, or transmit</strong> any personal information, browsing history, or usage data to external servers.</p>
+  <p>All browser automation operations occur locally on your device. The Extension communicates exclusively with the DUYA Desktop application running on the same machine via a local WebSocket connection (<code>ws://127.0.0.1:19825</code>).</p>
+
+  <h2>Permissions Used</h2>
+  <ul>
+    <li><strong>debugger</strong> – Required to control browser tabs via Chrome DevTools Protocol for automation tasks.</li>
+    <li><strong>tabs / activeTab</strong> – Required to identify and manage browser tabs for navigation and screenshot capture.</li>
+    <li><strong>storage</strong> – Used locally to store your blocked domains list; no data leaves your device.</li>
+    <li><strong>alarms / background</strong> – Required to maintain the service worker for WebSocket reconnection and automation heartbeat.</li>
+    <li><strong>&lt;all_urls&gt;</strong> – Required to automate any website you choose to control. The Extension only operates on pages you explicitly ask the agent to interact with.</li>
+  </ul>
+
+  <h2>Local Data Storage</h2>
+  <p>The Extension stores the following locally in your browser:
+  <ul>
+    <li>Blocked domains list (configured by you in Settings)</li>
+    <li>Internal connection state and reconnection preferences</li>
+  </ul>
+  <p>No data is synced across devices or browsers.</p>
+
+  <h2>Third-Party Services</h2>
+  <p>The Extension does not use any third-party analytics, tracking, or advertising services. It does not include any third-party code that could access your data.</p>
+
+  <h2>Data Sharing</h2>
+  <p>The Extension does not share any data with any third parties. All communication is confined to the local DUYA Desktop application on your device.</p>
+
+  <h2>Security</h2>
+  <p>All browser automation is performed in an isolated automation window to protect your active browsing session. The Extension cannot access tabs outside this isolated environment.</p>
+
+  <h2>Changes to This Policy</h2>
+  <p>If this privacy policy changes, the updated version will be posted on this page with an updated "Last updated" date. We encourage you to review it periodically.</p>
+
+  <h2>Contact</h2>
+  <p>If you have any questions about this privacy policy or the Extension's data practices, please contact:</p>
+  <div class="contact">
+    <strong>DUYA Support</strong><br>
+    Email: support@duya.app<br>
+    GitHub Issues: <a href="https://github.com/lava-chen/duya/issues">https://github.com/lava-chen/duya/issues</a>
+  </div>
+</body>
+</html>
