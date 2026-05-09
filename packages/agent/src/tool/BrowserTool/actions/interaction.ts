@@ -69,7 +69,7 @@ export const typeAction: ActionHandler<z.infer<typeof typeSchema>> = {
 
 const scrollSchema = z.object({
   direction: z.enum(['up', 'down', 'left', 'right']).optional().default('down').describe('Scroll direction'),
-  amount: z.number().optional().default(300).describe('Scroll amount in pixels'),
+  amount: z.coerce.number().optional().default(300).describe('Scroll amount in pixels (number, not string)'),
 });
 
 export const scrollAction: ActionHandler<z.infer<typeof scrollSchema>> = {
