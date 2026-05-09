@@ -1200,6 +1200,16 @@ a {
   height: 100%;
 }
 
+/* macOS: reserve space for traffic lights (close/minimize/maximize buttons) */
+.titlebar-drag-region.is-mac .titlebar-brand {
+  padding-left: 80px;
+}
+
+/* Windows: keep original padding */
+.titlebar-drag-region.is-win .titlebar-brand {
+  padding-left: 1.6rem;
+}
+
 .titlebar-logo {
   width: 28px;
   height: 28px;
@@ -1256,8 +1266,18 @@ a {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-right: 140px; /* Reserve space for Windows window controls (min/max/close) */
+  padding-right: 1rem;
   height: 100%;
+}
+
+/* Windows: reserve space for window controls (min/max/close) on the right */
+.titlebar-drag-region.is-win .titlebar-actions {
+  padding-right: 140px;
+}
+
+/* macOS: no right-side window controls needed */
+.titlebar-drag-region.is-mac .titlebar-actions {
+  padding-right: 1rem;
 }
 
 .titlebar-action-btn {
