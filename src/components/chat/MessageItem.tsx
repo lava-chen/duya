@@ -413,8 +413,8 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
       const msgActions = messageToActionItems(msg, toolResultMap);
       rawActions.push(...msgActions);
 
-      // Also collect pasted contents from text-type messages
-      if (typeof msg.content === 'string' && msg.msgType !== 'thinking' && msg.msgType !== 'tool_use') {
+      // Also collect pasted contents from merged messages only (not the main message)
+      if (msg.id !== message.id && typeof msg.content === 'string' && msg.msgType !== 'thinking' && msg.msgType !== 'tool_use') {
         const withPasted = parseMessageContentWithPasted(msg.content);
         allPasted.push(...withPasted.pastedContents);
       }
