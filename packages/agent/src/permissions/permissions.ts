@@ -24,6 +24,7 @@ import {
   shouldFallbackToPrompting,
   type DenialTrackingState,
 } from './denialTracking.js'
+import * as path from 'path'
 
 const PERMISSION_RULE_SOURCES = [
   'userSettings',
@@ -256,6 +257,17 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
+    // 5. Check if the tool operates within the workspace directory
+    if (isToolWithinWorkspace(toolName, input, appState.toolPermissionContext)) {
+      return {
+        behavior: 'allow',
+        decisionReason: {
+          type: 'workingDir',
+          reason: `${toolName} operates within the workspace directory.`,
+        },
+      }
+    }
+
     // Default: ask for permission
     return {
       behavior: 'ask',
@@ -309,6 +321,83 @@ function handleDenialLimitExceeded(
     },
     message: `Permission to use ${toolName} was denied.`,
   }
+}
+
+/**
+ * Check if a tool's operation is confined within the workspace directory.
+ * Tools operating within the workspace get automatic allow.
+ */
+function isToolWithinWorkspace(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: ToolPermissionContext,
+): boolean {
+  // Only check file-system tools
+  const fileSystemTools = ['Bash', 'Write', 'Edit', 'Read', 'Glob', 'Grep']
+  if (!fileSystemTools.includes(toolName)) {
+    return false
+  }
+
+  // Collect all paths from tool input
+  const paths: string[] = []
+
+  if (typeof input.path === 'string') {
+    paths.push(input.path)
+  }
+  if (typeof input.command === 'string') {
+    // Extract paths from bash command (cd, paths in arguments)
+    const cdMatch = input.command.match(/cd\s+["']?([^"';\s]+)/)
+    if (cdMatch) {
+      paths.push(cdMatch[1])
+    }
+  }
+  if (typeof input.cwd === 'string') {
+    paths.push(input.cwd)
+  }
+  if (typeof input.file_path === 'string') {
+    paths.push(input.file_path)
+  }
+  if (typeof input.directory === 'string') {
+    paths.push(input.directory)
+  }
+  if (Array.isArray(input.paths)) {
+    for (const p of input.paths) {
+      if (typeof p === 'string') paths.push(p)
+    }
+  }
+
+  if (paths.length === 0) {
+    return false
+  }
+
+  // Build list of allowed directories
+  const allowedDirs: string[] = []
+
+  // Add additional working directories from context
+  for (const [dirPath] of context.additionalWorkingDirectories) {
+    allowedDirs.push(path.resolve(dirPath))
+  }
+
+  // Add default workspace directory (~/.duya/workspace)
+  const homeDir = process.env.HOME || process.env.USERPROFILE || ''
+  if (homeDir) {
+    allowedDirs.push(path.resolve(path.join(homeDir, '.duya', 'workspace')))
+    allowedDirs.push(path.resolve(path.join(homeDir, '.duya')))
+  }
+
+  // Check if all paths are within allowed directories
+  for (const p of paths) {
+    const resolved = path.resolve(p)
+    const isWithin = allowedDirs.some((allowed) => {
+      const rel = path.relative(allowed, resolved)
+      return !rel.startsWith('..') && !path.isAbsolute(rel)
+    })
+    if (!isWithin) {
+      return false
+    }
+  }
+
+  return true
 }
 
 export {
