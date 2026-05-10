@@ -44,6 +44,20 @@ function debugLog(...args: unknown[]): void {
 }
 
 // =============================================================================
+// Global Error Handlers (prevent uncaught errors from showing native dialogs)
+// =============================================================================
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception', error, undefined, LogComponent.Main);
+  // Don't exit immediately to allow graceful shutdown
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection', reason instanceof Error ? reason : new Error(String(reason)), undefined, LogComponent.Main);
+  // Don't exit to allow graceful shutdown
+});
+
+// =============================================================================
 // Step 0: Single Instance Lock (prevent multi-instance file contention)
 // =============================================================================
 
@@ -2178,4 +2192,9 @@ ipcMain.handle('updater:install', async () => {
 
 ipcMain.handle('updater:get-state', async () => {
   return getUpdaterState();
+});
+
+// Handle install request from renderer (new silent update flow)
+ipcMain.on('update:install', () => {
+  installUpdate();
 });

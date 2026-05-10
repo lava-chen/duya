@@ -1170,6 +1170,21 @@ a {
   overflow: hidden;
 }
 
+.app-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+.app-status-bar:has(> *) {
+  height: 24px;
+  min-height: 24px;
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* Electron draggable title bar region */
 .titlebar-drag-region {
   height: 44px;
