@@ -400,8 +400,9 @@ export interface ElectronAPI {
     onChecking: (callback: () => void) => () => void
     onAvailable: (callback: (e: unknown, info: unknown) => void) => () => void
     onNotAvailable: (callback: (e: unknown, info: unknown) => void) => () => void
-    onDownloading: (callback: () => void) => () => void
-    onProgress: (callback: (e: unknown, data: unknown) => void) => () => void
+    onDownloading: (callback: (data: { version: string }) => void) => () => void
+    onProgress: (callback: (data: { percent: number; transferred: number; total: number }) => void) => () => void
+    onReady: (callback: (data: { version: string; releaseNotes?: string }) => void) => () => void
     onDownloaded: (callback: (e: unknown, info: unknown) => void) => () => void
     onError: (callback: (e: unknown, msg: string) => void) => () => void
   }
@@ -1052,15 +1053,20 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('update:not-available', handler)
       return () => ipcRenderer.removeListener('update:not-available', handler)
     },
-    onDownloading: (callback: () => void) => {
-      const handler = () => callback()
+    onDownloading: (callback: (data: { version: string }) => void) => {
+      const handler = (_e: unknown, data: { version: string }) => callback(data)
       ipcRenderer.on('update:downloading', handler)
       return () => ipcRenderer.removeListener('update:downloading', handler)
     },
-    onProgress: (callback: (e: unknown, data: unknown) => void) => {
-      const handler = (_e: unknown, data: unknown) => callback(_e, data)
+    onProgress: (callback: (data: { percent: number; transferred: number; total: number }) => void) => {
+      const handler = (_e: unknown, data: { percent: number; transferred: number; total: number }) => callback(data)
       ipcRenderer.on('update:progress', handler)
       return () => ipcRenderer.removeListener('update:progress', handler)
+    },
+    onReady: (callback: (data: { version: string; releaseNotes?: string }) => void) => {
+      const handler = (_e: unknown, data: { version: string; releaseNotes?: string }) => callback(data)
+      ipcRenderer.on('update:ready', handler)
+      return () => ipcRenderer.removeListener('update:ready', handler)
     },
     onDownloaded: (callback: (e: unknown, info: unknown) => void) => {
       const handler = (_e: unknown, info: unknown) => callback(_e, info)

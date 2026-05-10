@@ -2,6 +2,7 @@
 
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
+import { UpdateBadge } from "@/components/update/UpdateBadge";
 import { lazy, Suspense, useState, useCallback, useRef, useEffect } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { PanelProvider } from "@/hooks/usePanel";
@@ -102,6 +103,9 @@ export function AppShell({ children }: AppShellProps) {
                 <div className="app-main-inner">
                   <main className="app-content">{children}</main>
                 </div>
+              </div>
+              <div className="app-status-bar">
+                <UpdateBadge />
               </div>
             </div>
             <PanelZone />

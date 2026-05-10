@@ -1,25 +1,24 @@
 import { autoUpdater, UpdateInfo } from 'electron-updater'
-import { BrowserWindow, dialog, app } from 'electron'
+import { BrowserWindow, app } from 'electron'
 import { getLogger } from './logger'
 
 /**
- * Auto Updater - Automatic update system for DUYA
+ * Auto Updater - Silent background updates (Obsidian-style)
  *
  * Features:
- * - Check for updates on startup (with delay)
- * - Manual update check via settings
- * - Download progress tracking
- * - User confirmation before install
+ * - Silent background download when update is available
+ * - Notify renderer of download progress (subtle UI)
+ * - Prompt user to restart only when update is ready to install
  * - Only enabled in packaged app
  */
 
 const logger = getLogger()
 
-// Update check interval (24 hours)
-const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000
+// Update check interval (6 hours)
+const UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000
 
-// Delay before first check (3 seconds after startup)
-const INITIAL_CHECK_DELAY = 3000
+// Delay before first check (30 seconds after startup)
+const INITIAL_CHECK_DELAY = 30_000
 
 interface UpdaterState {
   isChecking: boolean
@@ -44,11 +43,14 @@ const state: UpdaterState = {
 let mainWindow: BrowserWindow | null = null
 let checkInterval: NodeJS.Timeout | null = null
 
-// Send state to renderer
-function notifyRenderer(event: string, data?: unknown): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(`update:${event}`, data)
-  }
+// Notify all renderer windows
+function notifyRenderer(channel: string, payload?: unknown): void {
+  const { BrowserWindow } = require('electron')
+  BrowserWindow.getAllWindows().forEach((win: BrowserWindow) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send(channel, payload)
+    }
+  })
 }
 
 // Reset state
@@ -67,57 +69,34 @@ function setupEventHandlers(): void {
     logger.info('[Updater] Checking for update...')
     state.isChecking = true
     state.error = null
-    notifyRenderer('checking')
+    notifyRenderer('update:checking')
   })
 
-  // Update available
+  // Update available - start silent download
   autoUpdater.on('update-available', (info: UpdateInfo) => {
-    logger.info('[Updater] Update available:', info.version)
+    logger.info(`[Updater] Update available: ${info.version}`)
     state.isChecking = false
+    state.isDownloading = true
     state.updateInfo = info
-    notifyRenderer('available', info)
-
-    // Show dialog to user
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      dialog
-        .showMessageBox(mainWindow, {
-          type: 'info',
-          title: '发现新版本',
-          message: `发现新版本 ${info.version}`,
-          detail: `当前版本: ${app.getVersion()}\n新版本: ${info.version}\n\n是否立即下载更新？`,
-          buttons: ['立即下载', '稍后提醒'],
-          defaultId: 0,
-          cancelId: 1,
-        })
-        .then((result) => {
-          if (result.response === 0) {
-            // User chose to download
-            logger.info('[Updater] User chose to download update')
-            autoUpdater.downloadUpdate().catch((err) => {
-              logger.error('[Updater] Failed to download update:', err)
-            })
-          } else {
-            logger.info('[Updater] User postponed update')
-          }
-        })
-    }
+    // Notify renderer that download is starting
+    notifyRenderer('update:downloading', { version: info.version })
   })
 
   // No update available
-  autoUpdater.on('update-not-available', (info: UpdateInfo) => {
-    logger.info('[Updater] No update available, current version:', info.version)
+  autoUpdater.on('update-not-available', () => {
+    logger.info('[Updater] Already up to date')
     state.isChecking = false
-    notifyRenderer('not-available', info)
+    notifyRenderer('update:not-available')
   })
 
   // Download progress
   autoUpdater.on('download-progress', (progress) => {
     state.downloadProgress = {
-      percent: progress.percent,
+      percent: Math.round(progress.percent),
       transferred: progress.transferred,
       total: progress.total,
     }
-    notifyRenderer('progress', state.downloadProgress)
+    notifyRenderer('update:progress', state.downloadProgress)
 
     // Log progress every 10%
     if (Math.floor(progress.percent) % 10 === 0) {
@@ -125,43 +104,24 @@ function setupEventHandlers(): void {
     }
   })
 
-  // Update downloaded
+  // Update downloaded - notify renderer it's ready
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
-    logger.info('[Updater] Update downloaded:', info.version)
+    logger.info(`[Updater] Download complete: ${info.version}`)
     state.isDownloading = false
     state.updateInfo = info
-    notifyRenderer('downloaded', info)
-
-    // Show dialog to install
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      dialog
-        .showMessageBox(mainWindow, {
-          type: 'info',
-          title: '更新已下载',
-          message: `新版本 ${info.version} 已准备就绪`,
-          detail: '更新将在重启应用后生效。是否立即安装并重启？',
-          buttons: ['立即安装并重启', '稍后手动重启'],
-          defaultId: 0,
-          cancelId: 1,
-        })
-        .then((result) => {
-          if (result.response === 0) {
-            logger.info('[Updater] User chose to install and restart')
-            autoUpdater.quitAndInstall()
-          } else {
-            logger.info('[Updater] User chose to install later')
-          }
-        })
-    }
+    notifyRenderer('update:ready', {
+      version: info.version,
+      releaseNotes: info.releaseNotes,
+    })
   })
 
-  // Error handling
+  // Error handling - silent failure, don't disturb user
   autoUpdater.on('error', (err) => {
-    logger.error('[Updater] Error:', err.message)
+    logger.warn(`[Updater] Error: ${err.message}`)
     state.isChecking = false
     state.isDownloading = false
     state.error = err.message
-    notifyRenderer('error', err.message)
+    // Silent failure - no user notification
   })
 }
 
@@ -178,11 +138,11 @@ export function initUpdater(window: BrowserWindow): void {
   logger.info('[Updater] Initializing auto-updater...')
   setupEventHandlers()
 
-  // Configure auto updater
-  autoUpdater.autoDownload = false // We'll handle download manually
-  autoUpdater.autoInstallOnAppQuit = true // Install on quit if downloaded
+  // Configure auto updater for silent background updates
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
 
-  // Delayed initial check
+  // Delayed initial check (avoid competing with startup resources)
   setTimeout(() => {
     logger.info('[Updater] Performing initial update check...')
     checkForUpdates().catch((err) => {
@@ -190,7 +150,7 @@ export function initUpdater(window: BrowserWindow): void {
     })
   }, INITIAL_CHECK_DELAY)
 
-  // Periodic checks
+  // Periodic checks every 6 hours
   checkInterval = setInterval(() => {
     logger.info('[Updater] Performing periodic update check...')
     checkForUpdates().catch((err) => {
@@ -229,7 +189,7 @@ export async function checkForUpdates(): Promise<{
   }
 }
 
-// Start downloading update
+// Start downloading update (manual trigger)
 export async function downloadUpdate(): Promise<{
   success: boolean
   error?: string
@@ -244,7 +204,7 @@ export async function downloadUpdate(): Promise<{
 
   try {
     state.isDownloading = true
-    notifyRenderer('downloading')
+    notifyRenderer('update:downloading')
     await autoUpdater.downloadUpdate()
     return { success: true }
   } catch (error) {
@@ -260,7 +220,7 @@ export function installUpdate(): void {
   if (!app.isPackaged) {
     return
   }
-  autoUpdater.quitAndInstall()
+  autoUpdater.quitAndInstall(false, true)
 }
 
 // Get current updater state

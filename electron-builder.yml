@@ -2,14 +2,11 @@ appId: com.duya.app
 productName: DUYA
 
 # Publish configuration for auto-updater
-# Requires GH_TOKEN environment variable to be set
+# Uses generic provider to fetch updates from a custom update server
 publish:
-  provider: github
-  owner: lava-chen
-  repo: duya
-  releaseType: release
-  # Uncomment the following line if you want to publish to a private repository
-  # private: true
+  provider: generic
+  url: https://update.duya.dev
+  channel: latest
 
 directories:
   output: release
