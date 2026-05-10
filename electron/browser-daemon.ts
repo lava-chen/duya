@@ -463,16 +463,16 @@ export function startBrowserDaemon(): Promise<void> {
             }, 500);
           } else {
             log('error', `Previous daemon returned ${res.statusCode}, cannot reclaim port`);
-            reject(new Error(`Port ${PORT} is in use and cannot be reclaimed`));
+            reject(new Error(`Port ${PORT} is in use and cannot be reclaimed. Please close other applications using this port or restart your computer.`));
           }
         });
         req.on('error', () => {
           log('error', `Port ${PORT} is in use but no responsive daemon found`);
-          reject(new Error(`Port ${PORT} is in use by a non-responsive process`));
+          reject(new Error(`Port ${PORT} is in use by a non-responsive process. Please close other applications using this port or restart your computer.`));
         });
         req.setTimeout(2000, () => {
           req.destroy();
-          reject(new Error(`Port ${PORT} shutdown request timed out`));
+          reject(new Error(`Port ${PORT} shutdown request timed out. Please close other applications using this port or restart your computer.`));
         });
         req.end();
         return;
@@ -503,18 +503,43 @@ export function stopBrowserDaemon(): Promise<void> {
     }
     pending.clear();
 
+    // Close WebSocket server and all connections
     if (wss) {
+      wss.clients.forEach((client) => {
+        client.terminate();
+      });
       wss.close();
       wss = null;
     }
 
+    // Close extension WebSocket connection
+    if (extensionWs) {
+      extensionWs.terminate();
+      extensionWs = null;
+    }
+
     if (httpServer) {
+      // Force close all active connections
+      httpServer.closeAllConnections?.();
+      
       httpServer.close(() => {
         isRunning = false;
+        httpServer = null;
         log('info', 'Browser Daemon stopped');
         resolve();
       });
+      
+      // Safety timeout: force resolve after 2 seconds
+      setTimeout(() => {
+        if (isRunning) {
+          isRunning = false;
+          httpServer = null;
+          log('warn', 'Browser Daemon stop timed out, forcing cleanup');
+          resolve();
+        }
+      }, 2000);
     } else {
+      isRunning = false;
       resolve();
     }
   });
