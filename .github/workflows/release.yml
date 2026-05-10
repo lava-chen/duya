@@ -28,23 +28,18 @@ jobs:
           node-version: 22
           cache: 'npm'
 
-      - name: Setup Python (for node-gyp)
+      - name: Setup Python (Windows native modules)
+        if: matrix.os == 'windows-latest'
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
-      - name: Install Windows Build Tools
-        if: matrix.platform == 'win'
-        run: |
-          npm install -g node-gyp
-          npm config set msvs_version 2022 --global
-          npm config set python python3 --global
+      - name: Setup MSVC toolchain (Windows native modules)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Rebuild native modules
-        run: npm run rebuild
 
       - name: Build application
         run: npm run electron:build
