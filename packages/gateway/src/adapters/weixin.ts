@@ -103,6 +103,10 @@ export class WeixinAdapter implements PlatformAdapter {
   // Context token persistence (accountId:peerUserId -> token)
   private contextTokens = new Map<string, string>();
 
+  // Pending permission requests (peerUserId -> { permissionId, expiresAt })
+  private pendingPermissions = new Map<string, { permissionId: string; expiresAt: number }>();
+  private static readonly PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
   // Health tracking
   private health = {
     connected: false,
@@ -350,6 +354,19 @@ export class WeixinAdapter implements PlatformAdapter {
     // Pre-fetch typing ticket from getConfig for later typing indicators
     this.maybeFetchTypingTicket(msg.platformUserId, contextToken);
 
+    // Check for permission text commands (allow, allow_once, deny)
+    const permissionDecision = this.parsePermissionCommand(msg.platformUserId, text.trim());
+    if (permissionDecision) {
+      console.log(`[Weixin] Permission command resolved: ${permissionDecision.decision} for ${permissionDecision.permissionId}`);
+      if (this.messageHandler) {
+        this.messageHandler({
+          ...msg,
+          callbackData: `perm:${permissionDecision.decision}:${permissionDecision.permissionId}`,
+        });
+      }
+      return;
+    }
+
     // Check for slash command
     if (text.startsWith('/') && this.commandHandler) {
       try {
@@ -365,6 +382,38 @@ export class WeixinAdapter implements PlatformAdapter {
     } else {
       console.warn('[Weixin] No message handler registered');
     }
+  }
+
+  /**
+   * Parse permission text commands from WeChat users.
+   * Supported commands: "allow", "allow_once", "deny"
+   */
+  private parsePermissionCommand(
+    peerUserId: string,
+    text: string,
+  ): { permissionId: string; decision: 'allow' | 'allow_once' | 'deny' } | null {
+    const normalized = text.toLowerCase().trim();
+    const pending = this.pendingPermissions.get(peerUserId);
+
+    if (!pending) return null;
+    if (Date.now() > pending.expiresAt) {
+      this.pendingPermissions.delete(peerUserId);
+      return null;
+    }
+
+    let decision: 'allow' | 'allow_once' | 'deny' | null = null;
+    if (normalized === 'allow' || normalized === '同意' || normalized === '批准') {
+      decision = 'allow';
+    } else if (normalized === 'allow_once' || normalized === '允许一次') {
+      decision = 'allow_once';
+    } else if (normalized === 'deny' || normalized === '拒绝' || normalized === '不同意') {
+      decision = 'deny';
+    }
+
+    if (!decision) return null;
+
+    this.pendingPermissions.delete(peerUserId);
+    return { permissionId: pending.permissionId, decision };
   }
 
   // ============================================================================
@@ -400,7 +449,7 @@ export class WeixinAdapter implements PlatformAdapter {
         this.stopTyping(chatId);
         return { ok: true };
       case 'permission_request':
-        return this.sendText(creds, peerUserId, reply.text, 'plain', contextToken);
+        return this.sendPermissionRequest(creds, peerUserId, reply, contextToken);
       case 'error':
         return this.sendText(creds, peerUserId, `Error: ${reply.message}`, 'plain', contextToken);
       default:
@@ -436,6 +485,52 @@ export class WeixinAdapter implements PlatformAdapter {
     } catch (err) {
       return { ok: false, error: (err as Error).message };
     }
+  }
+
+  /**
+   * Send a permission request with text instructions for WeChat users.
+   * WeChat iLink Bot API does not support inline buttons, so we use
+   * text-based commands ("allow", "allow_once", "deny") instead.
+   */
+  private async sendPermissionRequest(
+    creds: WeixinCredentials,
+    toUserId: string,
+    reply: NormalizedReply & { type: 'permission_request' },
+    contextToken: string,
+  ): Promise<SendResult> {
+    // Extract permission ID from the first button's callback data
+    // Format: perm:allow:<id>, perm:allow_once:<id>, perm:deny:<id>
+    const firstButton = reply.buttons[0];
+    let permissionId = '';
+    if (firstButton?.callbackData) {
+      const parts = firstButton.callbackData.split(':');
+      if (parts.length >= 3) {
+        permissionId = parts.slice(2).join(':');
+      }
+    }
+
+    // Register pending permission for text command parsing
+    if (permissionId) {
+      this.pendingPermissions.set(toUserId, {
+        permissionId,
+        expiresAt: Date.now() + WeixinAdapter.PERMISSION_TIMEOUT_MS,
+      });
+    }
+
+    // Build text with instructions
+    const text = [
+      reply.text,
+      '',
+      '---',
+      'Please reply with one of the following commands:',
+      '  allow       - Approve permanently',
+      '  allow_once  - Approve this time only',
+      '  deny        - Reject this request',
+      '',
+      '(This request expires in 5 minutes)',
+    ].join('\n');
+
+    return this.sendText(creds, toUserId, text, 'plain', contextToken);
   }
 
   // ============================================================================
