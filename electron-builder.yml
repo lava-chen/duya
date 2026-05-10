@@ -94,6 +94,7 @@ nsis:
   installerIcon: assets/windows/icon.ico
 
 linux:
+  maintainer: DUYA Team <opensource@duya.dev>
   icon: assets/linux/icons/512x512.png
   category: Development
   artifactName: "${productName}-${version}-${arch}.${ext}"
