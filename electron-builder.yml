@@ -1,12 +1,17 @@
 appId: com.duya.app
 productName: DUYA
 
-# Publish configuration for auto-updater
-# Uses generic provider to fetch updates from a custom update server
+# Publish configuration
+# - github: uploads release assets to GitHub Releases during build
+# - generic: tells auto-updater where to download updates at runtime
 publish:
-  provider: generic
-  url: https://update.duya.dev
-  channel: latest
+  - provider: github
+    owner: lava-chen
+    repo: duya
+    releaseType: release
+  - provider: generic
+    url: https://update.duya.dev
+    channel: latest
 
 directories:
   output: release

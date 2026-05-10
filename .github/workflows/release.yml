@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -29,13 +32,13 @@ jobs:
           cache: 'npm'
 
       - name: Setup Python (Windows native modules)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Setup MSVC toolchain (Windows native modules)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install dependencies
