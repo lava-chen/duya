@@ -63,12 +63,48 @@ export interface TrustLevel {
 
 const SKILL_THREAT_PATTERNS: [RegExp, string, Severity, Category, string][] = [
   // ── Prompt injection ────────────────────────────────────────────────────
+  // ── Prompt injection (expanded patterns from hermes-agent) ──────────────
   [
     /ignore\s+(?:\w+\s+)*(previous|all|above|prior)\s+instructions/i,
     'prompt_injection_ignore',
     'critical',
     'injection',
     'Prompt injection: ignore previous instructions',
+  ],
+  [
+    /ignore\s+all\s+previous/i,
+    'prompt_injection_ignore_all',
+    'critical',
+    'injection',
+    'Prompt injection: ignore all previous',
+  ],
+  [
+    /forget\s+your\s+instructions/i,
+    'prompt_injection_forget',
+    'critical',
+    'injection',
+    'Prompt injection: forget your instructions',
+  ],
+  [
+    /new\s+instructions:/i,
+    'prompt_injection_new_instructions',
+    'critical',
+    'injection',
+    'Prompt injection: new instructions declared',
+  ],
+  [
+    /<\s*system\s*>/i,
+    'prompt_injection_system_tag',
+    'critical',
+    'injection',
+    'Prompt injection: system tag detected',
+  ],
+  [
+    /\]\]\s*>/,
+    'prompt_injection_cdata_end',
+    'high',
+    'injection',
+    'Prompt injection: CDATA end sequence',
   ],
   [
     /do\s+not\s+(?:\w+\s+)*tell\s+(?:\w+\s+)*the\s+user/i,
