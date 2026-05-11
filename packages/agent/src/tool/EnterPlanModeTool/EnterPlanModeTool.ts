@@ -1,28 +1,29 @@
 /**
  * EnterPlanModeTool - Enter plan mode
- * Adapted from claude-code-haha for duya
+ * Now delegates to SwitchModeTool for unified mode management
  */
 
-import type { Tool, ToolResult } from '../../types.js';
-import type { ToolExecutor } from '../registry.js';
-import { ENTER_PLAN_MODE_TOOL_NAME } from './constants.js';
-import { DESCRIPTION, getPrompt } from './prompt.js';
-
-// Plan mode state
-let isInPlanMode = false;
+import type { Tool, ToolResult } from '../../types.js'
+import type { ToolExecutor } from '../registry.js'
+import { ENTER_PLAN_MODE_TOOL_NAME } from './constants.js'
+import { DESCRIPTION, getPrompt } from './prompt.js'
+import {
+  setAgentMode,
+  isReadOnlyMode,
+} from '../SwitchModeTool/SwitchModeTool.js'
 
 /**
  * Check if currently in plan mode
  */
 export function isInPlanModeState(): boolean {
-  return isInPlanMode;
+  return isReadOnlyMode()
 }
 
 /**
  * Set plan mode state
  */
 export function setPlanModeState(state: boolean): void {
-  isInPlanMode = state;
+  setAgentMode(state ? 'plan' : 'general')
 }
 
 export class EnterPlanModeTool implements Tool, ToolExecutor {
@@ -43,7 +44,7 @@ export class EnterPlanModeTool implements Tool, ToolExecutor {
   }
 
   async execute(): Promise<ToolResult> {
-    if (isInPlanMode) {
+    if (isInPlanModeState()) {
       return {
         id: crypto.randomUUID(),
         name: this.name,
@@ -54,7 +55,7 @@ export class EnterPlanModeTool implements Tool, ToolExecutor {
       };
     }
 
-    isInPlanMode = true;
+    setAgentMode('plan');
 
     return {
       id: crypto.randomUUID(),

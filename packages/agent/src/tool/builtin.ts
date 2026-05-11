@@ -27,6 +27,7 @@ import { enterWorktreeTool } from './EnterWorktreeTool/EnterWorktreeTool.js';
 import { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 import { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 import { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
+import { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
 import { listMcpResourcesTool } from './ListMcpResourcesTool/ListMcpResourcesTool.js';
 import { readMcpResourceTool } from './ReadMcpResourceTool/ReadMcpResourceTool.js';
 import { webSearchTool } from './WebSearchTool/WebSearchTool.js';
@@ -37,6 +38,7 @@ import { skillTool } from './SkillTool/SkillTool.js';
 import { skillManageTool } from './SkillManageTool.js';
 import { briefTool } from './BriefTool/BriefTool.js';
 import { sessionSearchTool } from './SessionSearchTool/index.js';
+import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
 import { cronTool } from './CronTool/index.js';
 import { CONDUCTOR_TOOLS, getConductorToolExecutors } from '../conductor/ConductorProfile.js';
@@ -116,6 +118,7 @@ export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig)
   // Phase 5: Plan mode tools
   registry.register(enterPlanModeTool, enterPlanModeTool);
   registry.register(exitPlanModeTool, exitPlanModeTool);
+  registry.register(switchModeTool, switchModeTool);
 
   // Phase 5: MCP resource tools
   registry.register(listMcpResourcesTool, listMcpResourcesTool);
@@ -131,6 +134,8 @@ export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig)
   registry.register(skillTool, skillTool);
   registry.register(briefTool, briefTool);
   registry.register(sessionSearchTool.toTool(), sessionSearchTool);
+  const visionTool = new VisionTool();
+  registry.register(visionTool, visionTool);
   registry.register(cronTool.toTool(), cronTool);
 
   // Self-management tools
@@ -228,6 +233,7 @@ export { enterWorktreeTool } from './EnterWorktreeTool/EnterWorktreeTool.js';
 export { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
+export { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
 export { listMcpResourcesTool } from './ListMcpResourcesTool/ListMcpResourcesTool.js';
 export { readMcpResourceTool } from './ReadMcpResourceTool/ReadMcpResourceTool.js';
 export { webSearchTool } from './WebSearchTool/WebSearchTool.js';
@@ -236,6 +242,7 @@ export { browserTool } from './BrowserTool/BrowserTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';
 export { skillManageTool } from './SkillManageTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
+export { VisionTool } from './VisionTool/VisionTool.js';
 export { cronTool } from './CronTool/index.js';
 export { duyaInfoTool } from './DuyaInfoTool/index.js';
 export { duyaConfigTool } from './DuyaConfigTool/index.js';
