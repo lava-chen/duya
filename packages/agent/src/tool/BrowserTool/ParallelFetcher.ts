@@ -5,6 +5,7 @@
  */
 
 import axios from 'axios';
+import { isSafeUrl } from '../../utils/urlSafety.js';
 
 export interface FetchTask {
   id: string;
@@ -55,6 +56,18 @@ export class ParallelFetcher {
    */
   async fetchSingle(task: FetchTask): Promise<FetchResult> {
     const startTime = Date.now();
+
+    // SSRF protection: validate URL before fetching
+    const safetyCheck = await isSafeUrl(task.url);
+    if (!safetyCheck.safe) {
+      return {
+        id: task.id,
+        url: task.url,
+        success: false,
+        error: `URL blocked for security: ${safetyCheck.reason}`,
+        durationMs: Date.now() - startTime,
+      };
+    }
 
     try {
       const response = await axios.get(task.url, {

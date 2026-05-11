@@ -5,6 +5,7 @@
  */
 
 import axios from 'axios';
+import { isSafeUrl } from '../../utils/urlSafety.js';
 
 export interface FallbackSnapshot {
   url: string;
@@ -34,6 +35,19 @@ export class FallbackBrowser {
     if (!url && this.lastUrl) {
       // Return cached snapshot
       return this.buildSnapshot(this.lastUrl, this.lastHtml);
+    }
+
+    // SSRF protection: validate URL before fetching
+    const safetyCheck = await isSafeUrl(url);
+    if (!safetyCheck.safe) {
+      return {
+        url,
+        title: 'Blocked',
+        snapshot: `URL blocked for security: ${safetyCheck.reason}`,
+        interactiveElements: [],
+        truncated: false,
+        source: 'fallback',
+      };
     }
 
     const startTime = Date.now();

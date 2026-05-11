@@ -110,6 +110,7 @@ export class DuyaSessionsTool implements Tool, ToolExecutor {
               title: s.title,
               model: s.model,
               updatedAt: s.updated_at,
+              snippet: typeof s.snippet === 'string' ? s.snippet : null,
             })),
           });
         }
