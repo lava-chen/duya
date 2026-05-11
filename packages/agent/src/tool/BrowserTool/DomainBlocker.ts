@@ -6,16 +6,31 @@
  * - Fallback mode (static HTML fetching)
  *
  * The primary blocking happens in the Extension's background.js
+ *
+ * SSRF protection is provided by urlSafety.ts which blocks:
+ * - Private IP ranges (RFC 1918, RFC 3927, RFC 4193)
+ * - Loopback addresses
+ * - Link-local addresses
+ * - DNS rebinding attacks via hostname resolution check
  */
+
+import { isSafeUrlSync } from '../../utils/urlSafety.js';
 
 export interface DomainBlockerConfig {
   blockedDomains: string[];
 }
 
 /**
- * Check if a URL is blocked based on the domain list
+ * Check if a URL is blocked based on the domain list and SSRF protection.
+ * Also checks against private IP ranges to prevent SSRF attacks.
  */
 export function isUrlBlocked(url: string, blockedDomains: string[]): boolean {
+  // First check SSRF protection (private IPs, loopback, etc.)
+  const safetyResult = isSafeUrlSync(url);
+  if (!safetyResult.safe) {
+    return true;
+  }
+
   if (!blockedDomains || blockedDomains.length === 0) {
     return false;
   }
