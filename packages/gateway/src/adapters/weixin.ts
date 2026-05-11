@@ -282,8 +282,14 @@ export class WeixinAdapter implements PlatformAdapter {
       return;
     }
 
-    // Dedup
-    const msgKey = msg.message_id || `seq_${msg.seq}`;
+    // Skip bot's own messages (hermes-agent pattern: sender_id == account_id)
+    if (msg.from_user_id === this.ilinkBotId) {
+      console.log(`[Weixin] Skipping bot's own message: from=${msg.from_user_id}`);
+      return;
+    }
+
+    // Dedup by composite key (message_id + from_user_id + create_time)
+    const msgKey = `${msg.message_id || `seq_${msg.seq}`}:${msg.from_user_id}:${msg.create_time || 0}`;
     console.log(`[Weixin] Processing message: key=${msgKey}, from=${msg.from_user_id}, type=${msg.msg_type}`);
     if (this.seenMessageIds.has(msgKey)) {
       console.log(`[Weixin] Duplicate message skipped: ${msgKey}`);
@@ -307,6 +313,12 @@ export class WeixinAdapter implements PlatformAdapter {
       if (item.type === WeixinMessageItemType.TEXT && item.text_item?.text) {
         text += item.text_item.text;
       }
+    }
+
+    // Skip messages with no text content
+    if (!text.trim()) {
+      console.log(`[Weixin] Skipping empty message: key=${msgKey}`);
+      return;
     }
 
     // Handle quoted messages

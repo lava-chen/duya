@@ -25,6 +25,7 @@ import type {
   GatewayInitConfig,
   MainToGatewayMessage,
   GatewayToMainMessage,
+  StreamEvent,
 } from './types.js';
 
 // Register adapter imports (side-effect registration)
@@ -98,9 +99,17 @@ function handleMessage(msg: MainToGatewayMessage): void {
     }
 
     case 'gateway:outbound': {
-      gatewayManager?.handleOutboundEvent(msg.sessionId, msg.event).catch((err) => {
-        console.error('[Gateway] Error handling outbound event:', err);
-      });
+      const outMsg = msg as { sessionId: string; platform?: string; platformChatId?: string; event: StreamEvent };
+      // Pass platformChatId directly if available to avoid DB race condition
+      if (outMsg.platformChatId && outMsg.platform) {
+        gatewayManager?.handleOutboundEvent(outMsg.sessionId, outMsg.event, outMsg.platform, outMsg.platformChatId).catch((err) => {
+          console.error('[Gateway] Error handling outbound event:', err);
+        });
+      } else {
+        gatewayManager?.handleOutboundEvent(outMsg.sessionId, outMsg.event).catch((err) => {
+          console.error('[Gateway] Error handling outbound event:', err);
+        });
+      }
       break;
     }
 
