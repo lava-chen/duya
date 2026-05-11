@@ -209,6 +209,7 @@ const zh: Record<TranslationKey, string> = {
   'settings.providers.clickToTest': '点击"运行诊断"以测试所有服务商连接',
   'settings.providers.connectedCount': '{count} 个服务商已连接',
   'settings.providers.connectedCountPlural': '{count} 个服务商已连接',
+  'settings.providers.learnMore': '了解更多关于如何选择服务商',
   'settings.providers.addProviderDesc': '连接到新的 AI 服务商',
 
   'settings.appearance.title': '外观',
@@ -387,6 +388,7 @@ const zh: Record<TranslationKey, string> = {
   // Config Step
   'onboarding.configTitle': '连接您的 AI 服务商',
   'onboarding.configDesc': '选择 AI 服务商并输入 API 密钥，即可开始使用 DUYA。',
+  'onboarding.learnMore': '了解更多关于如何选择服务商',
   'onboarding.getApiKey': '获取 API 密钥',
   'onboarding.apiKeyLabel': 'API 密钥',
   'onboarding.apiKeyPlaceholder': '请输入您的 API 密钥...',

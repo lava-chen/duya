@@ -174,6 +174,15 @@ export function ConfigStep({ state, onUpdateState, error, isLoading, onConnect, 
         <p className="text-sm text-muted-foreground">
           {t("onboarding.configDesc")}
         </p>
+        <a
+          href="https://www.duya.dev/blog/token-provider-guide"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-accent hover:underline flex items-center gap-1 mt-2"
+        >
+          {t("onboarding.learnMore")}
+          <ArrowUpRightIcon size={12} />
+        </a>
       </div>
 
       {/* Scrollable content */}
