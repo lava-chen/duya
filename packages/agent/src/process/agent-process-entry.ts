@@ -111,6 +111,7 @@ interface ChatStartMessage {
     files?: FileAttachment[];
     agentProfileId?: string | null;
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
+    parsedDocs?: Array<{ filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }>;
   };
 }
 
@@ -608,12 +609,26 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       agent.setPermissionMode(permissionMode);
     }
 
+    // Build document context from parsed documents
+    const parsedDocs = msg.options?.parsedDocs;
+    let docContext = '';
+    if (parsedDocs && parsedDocs.length > 0) {
+      const sections: string[] = [];
+      for (const doc of parsedDocs) {
+        const truncated = doc.text.length > 8000
+          ? doc.text.substring(0, 8000) + '\n... (truncated)'
+          : doc.text;
+        sections.push(`--- Document: ${doc.filename} ---\n${truncated}`);
+      }
+      docContext = sections.join('\n\n') + '\n\n---\n';
+    }
+
     // Build message content with file attachments
     let messageContent: string | MessageContent[] = msg.prompt;
     const files = msg.options?.files;
     if (files && files.length > 0) {
       const contentBlocks: MessageContent[] = [
-        { type: 'text', text: msg.prompt }
+        { type: 'text', text: docContext + msg.prompt }
       ];
       for (const file of files) {
         if (file.type.startsWith('image/')) {
@@ -635,6 +650,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       if (contentBlocks.length > 1) {
         messageContent = contentBlocks;
       }
+    } else if (docContext) {
+      messageContent = docContext + msg.prompt;
     }
 
     const eventGen = agent.streamChat(messageContent, {
@@ -1207,6 +1224,7 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason) => {
   console.error('[Agent-Process] Unhandled rejection:', reason);
+  exitAfterCleanup(1);
 });
 
 // Signal ready
