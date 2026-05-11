@@ -485,11 +485,35 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
   const hasPastedContents = allPastedContents.length > 0;
   const hasAttachments = message.attachments && message.attachments.length > 0;
   const imageAttachments = message.attachments?.filter(a => a.type.startsWith('image/')) || [];
+  const fileAttachments = message.attachments?.filter(a => !a.type.startsWith('image/')) || [];
 
   if (isUser) {
     return (
       <div data-message-id={message.id} className="flex justify-end py-3 px-4 group">
         <div className="max-w-[85%] lg:max-w-[75%] flex flex-col items-end">
+          {/* File Attachments (PDF, DOCX, etc.) - Above message bubble */}
+          {fileAttachments.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2 mb-2">
+              {fileAttachments.map((attachment) => (
+                <div
+                  key={attachment.id}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border/50 bg-muted/30 max-w-[240px]"
+                >
+                  <div className="flex-shrink-0 w-8 h-10 rounded bg-red-500/10 flex items-center justify-center">
+                    <span className="text-[10px] font-bold text-red-500">PDF</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium truncate" style={{ color: 'var(--text)' }}>
+                      {attachment.name}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground truncate">
+                      {attachment.size > 0 ? `${(attachment.size / 1024).toFixed(1)} KB` : 'Document'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {/* Image Attachments - Above message bubble */}
           {imageAttachments.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">

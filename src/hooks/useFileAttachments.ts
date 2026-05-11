@@ -1,6 +1,6 @@
 // useFileAttachments.ts - Hook for managing file attachments in message input
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { compressImage } from './useImageCompression';
 
 export interface FileAttachment {
@@ -11,8 +11,32 @@ export interface FileAttachment {
   size: number;
 }
 
+export interface ParsedDocument {
+  filename: string;
+  charCount: number;
+  text: string;
+  extractMethod?: 'text' | 'vision' | 'hybrid';
+  imageChunks?: Array<{ base64: string; mediaType: string }>;
+}
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB target for images after compression
+const DOCUMENT_EXTS = new Set(['.docx', '.doc', '.pdf', '.pptx', '.txt', '.md']);
+
+function isDocumentFile(filename: string): boolean {
+  const ext = '.' + filename.split('.').pop()?.toLowerCase();
+  return DOCUMENT_EXTS.has(ext);
+}
+
+function imageChunkToFileAttachment(base64: string, mediaType: string): FileAttachment {
+  return {
+    id: crypto.randomUUID(),
+    name: 'page.png',
+    type: mediaType,
+    url: `data:${mediaType};base64,${base64}`,
+    size: 0,
+  };
+}
 
 /**
  * Hook for managing file attachments in the message input.
@@ -21,6 +45,9 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB target for images after compressi
  */
 export function useFileAttachments() {
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
+  const [parsedDocuments, setParsedDocuments] = useState<ParsedDocument[]>([]);
+  const [parseErrors, setParseErrors] = useState<Map<string, string>>(new Map());
+  const parsingRef = useRef(false);
 
   /**
    * Convert a File object to a FileAttachment with data URL.
@@ -78,6 +105,54 @@ export function useFileAttachments() {
     if (attachment) {
       setAttachedFiles((prev) => [...prev, attachment]);
     }
+
+    if (isDocumentFile(file.name) && !parsingRef.current) {
+      parsingRef.current = true;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const filePath = (file as any).path;
+        if (filePath && window.electronAPI?.parser) {
+          const result = await window.electronAPI.parser.parse(filePath);
+          if (result) {
+            const textChunks = result.chunks
+              .filter((c): c is { type: 'text'; index: number; text: string } => c.type === 'text')
+              .map((c) => c.text);
+            const text = textChunks.join('\n\n');
+
+            const imageChunks = result.chunks
+              .filter((c): c is { type: 'image'; index: number; base64: string; mediaType: string } => c.type === 'image')
+              .map((c) => ({ base64: c.base64, mediaType: c.mediaType }));
+
+            const doc: ParsedDocument = {
+              filename: result.filename,
+              charCount: result.charCount,
+              text,
+              extractMethod: result.extractMethod,
+            };
+
+            if (imageChunks.length > 0) {
+              doc.imageChunks = imageChunks;
+
+              const syntheticAttachments = imageChunks.map((ic) =>
+                imageChunkToFileAttachment(ic.base64, ic.mediaType),
+              );
+              setAttachedFiles((prev) => [...prev, ...syntheticAttachments]);
+            }
+
+            setParsedDocuments((prev) => [...prev, doc]);
+          }
+        }
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        setParseErrors((prev) => {
+          const next = new Map(prev);
+          next.set(file.name, errMsg);
+          return next;
+        });
+      } finally {
+        parsingRef.current = false;
+      }
+    }
   }, [convertToFileAttachment]);
 
   /**
@@ -86,7 +161,6 @@ export function useFileAttachments() {
   const removeFile = useCallback((id: string) => {
     setAttachedFiles((prev) => {
       const file = prev.find((f) => f.id === id);
-      // Revoke object URL to free memory if it's a blob URL
       if (file?.url.startsWith('blob:')) {
         URL.revokeObjectURL(file.url);
       }
@@ -94,12 +168,8 @@ export function useFileAttachments() {
     });
   }, []);
 
-  /**
-   * Clear all attached files.
-   */
   const clearFiles = useCallback(() => {
     setAttachedFiles((prev) => {
-      // Revoke all blob URLs to free memory
       prev.forEach((file) => {
         if (file.url.startsWith('blob:')) {
           URL.revokeObjectURL(file.url);
@@ -107,6 +177,8 @@ export function useFileAttachments() {
       });
       return [];
     });
+    setParsedDocuments([]);
+    setParseErrors(new Map());
   }, []);
 
   /**
@@ -127,6 +199,8 @@ export function useFileAttachments() {
 
   return {
     attachedFiles,
+    parsedDocuments,
+    parseErrors,
     addFile,
     removeFile,
     clearFiles,

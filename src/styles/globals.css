@@ -5218,10 +5218,11 @@ html.compact .panel-zone {
    Widget Renderer Styles
    ============================================ */
 
+@keyframes widget-shimmer-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .widget-shimmer {
-  @keyframes widget-shimmer-spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
   animation: widget-shimmer-spin 0.8s linear infinite;
 }

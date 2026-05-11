@@ -7,6 +7,8 @@
  * All IPC responses are converted from snake_case (database) to camelCase (frontend).
  */
 
+import type { FileAttachment } from '@/types/message'
+
 // Types matching the store's expected format (camelCase)
 export interface Thread {
   id: string
@@ -49,6 +51,7 @@ export interface Message {
   seqIndex: number | null
   durationMs: number | null
   subAgentId: string | null
+  attachments: FileAttachment[] | null
   createdAt: number
 }
 
@@ -135,6 +138,7 @@ interface DbMessage {
   seq_index: number | null
   duration_ms: number | null
   sub_agent_id: string | null
+  attachments: string | null
   created_at: number
 }
 
@@ -189,6 +193,14 @@ function dbThreadToThread(db: DbThread): Thread {
 }
 
 function dbMessageToMessage(db: DbMessage): Message {
+  let attachments: FileAttachment[] | null = null;
+  if (db.attachments) {
+    try {
+      attachments = JSON.parse(db.attachments) as FileAttachment[];
+    } catch {
+      attachments = null;
+    }
+  }
   return {
     id: db.id,
     sessionId: db.session_id,
@@ -207,6 +219,7 @@ function dbMessageToMessage(db: DbMessage): Message {
     seqIndex: db.seq_index,
     durationMs: db.duration_ms,
     subAgentId: db.sub_agent_id,
+    attachments,
     createdAt: db.created_at,
   }
 }
@@ -346,6 +359,7 @@ export async function addMessageIPC(data: {
   seqIndex?: number | null
   durationMs?: number | null
   subAgentId?: string | null
+  attachments?: FileAttachment[]
 }): Promise<Message | null> {
   const dbMessage = await window.electronAPI!.message!.add({
     id: data.id,
@@ -365,6 +379,7 @@ export async function addMessageIPC(data: {
     seq_index: data.seqIndex,
     duration_ms: data.durationMs,
     sub_agent_id: data.subAgentId,
+    attachments: data.attachments,
   }) as DbMessage
   return dbMessageToMessage(dbMessage)
 }
