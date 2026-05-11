@@ -790,6 +790,8 @@ const en = {
   'settings.support.logs.clearing': 'Clearing...',
   'settings.support.about.title': 'About',
   'settings.support.about.description': 'Application version and information',
+  'settings.support.about.docsLink': 'Documentation',
+  'settings.support.about.docsUrl': 'https://duya.dev/docs',
 
   // Gateway Dashboard
   'gateway.title': 'Gateway',
