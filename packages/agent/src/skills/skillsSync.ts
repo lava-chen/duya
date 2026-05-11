@@ -125,9 +125,40 @@ async function copyDir(src: string, dest: string): Promise<void> {
     if (entry.isDirectory()) {
       await copyDir(srcPath, destPath);
     } else {
-      await fs.copyFile(srcPath, destPath);
+      await copyFileWithRetry(srcPath, destPath);
     }
   }
+}
+
+/**
+ * Copy file with retry logic for EBUSY errors (Windows file locking).
+ * Retries up to 3 times with exponential backoff.
+ */
+async function copyFileWithRetry(srcPath: string, destPath: string, maxRetries = 3): Promise<void> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await fs.copyFile(srcPath, destPath);
+      return;
+    } catch (error) {
+      lastError = error as Error;
+
+      // Check if it's an EBUSY error (file locked on Windows)
+      const isEBUSY = error && typeof error === 'object' && 'code' in error && error.code === 'EBUSY';
+
+      if (isEBUSY && attempt < maxRetries - 1) {
+        // Exponential backoff: 100ms, 200ms, 400ms
+        const delay = 100 * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError;
 }
 
 async function dirExists(dirPath: string): Promise<boolean> {
