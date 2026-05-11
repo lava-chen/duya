@@ -27,11 +27,16 @@ export class StreamHandler {
 
   /**
    * Handle a stream event from Main Process (Agent output)
+   * @param sessionId - The session ID
+   * @param event - The stream event
+   * @param adapter - The platform adapter
+   * @param directChatId - Optional chatId passed directly from Main to avoid DB race condition
    */
   async handleStreamEvent(
     sessionId: string,
     event: StreamEvent,
     adapter: PlatformAdapter,
+    directChatId?: string,
   ): Promise<void> {
     const state = this.activeStreams.get(sessionId);
 
@@ -41,7 +46,11 @@ export class StreamHandler {
 
         if (!state) {
           // First chunk: start buffering
-          await this.startStream(sessionId, content, event, adapter);
+          // Use directChatId if provided, otherwise query via getChatIdForSession
+          const chatId = directChatId ?? (await this.getChatIdForSession(sessionId));
+          if (chatId) {
+            await this.startStreamWithChatId(sessionId, chatId, content, event, adapter);
+          }
         } else {
           // Subsequent chunk: accumulate buffer, send typing indicator
           await this.updateStream(sessionId, content, adapter);
@@ -52,7 +61,7 @@ export class StreamHandler {
       case 'chat:thinking': {
         // Some platforms can show "thinking..." status
         if (adapter.sendTyping) {
-          const chatId = state?.chatId ?? await this.getChatIdForSession(sessionId);
+          const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
           if (chatId) await adapter.sendTyping(chatId);
         }
         break;
@@ -61,8 +70,17 @@ export class StreamHandler {
       case 'chat:done': {
         if (state) {
           await this.finalizeStream(sessionId, event.finalContent ?? state.buffer, adapter);
+        } else if (directChatId) {
+          // Short reply with directChatId (avoids DB race condition)
+          if (event.finalContent) {
+            await adapter.sendReply(directChatId, {
+              type: 'text',
+              text: stripMarkdown(event.finalContent),
+              parseMode: 'plain',
+            });
+          }
         } else {
-          // Short reply that fit in a single done event
+          // Short reply that fit in a single done event - need to query
           const chatId = await this.getChatIdForSession(sessionId);
           if (chatId && event.finalContent) {
             await adapter.sendReply(chatId, {
@@ -76,8 +94,8 @@ export class StreamHandler {
       }
 
       case 'chat:error': {
-        if (state) {
-          const chatId = state.chatId;
+        const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
+        if (chatId) {
           await adapter.sendReply(chatId, {
             type: 'error',
             message: event.message ?? 'Agent error',
@@ -117,16 +135,13 @@ export class StreamHandler {
   // Private methods
   // ---------------------------------------------------------------------------
 
-  private async startStream(
+  private async startStreamWithChatId(
     sessionId: string,
+    chatId: string,
     content: string,
     _event: StreamEvent,
     adapter: PlatformAdapter,
   ): Promise<void> {
-    // Get chatId from event or look up from UserMapper
-    const chatId = await this.getChatIdForSession(sessionId);
-    if (!chatId) return;
-
     const now = Date.now();
     this.activeStreams.set(sessionId, {
       platform: adapter.platform,
@@ -137,6 +152,19 @@ export class StreamHandler {
 
     // Issue #8: send initial typing indicator
     adapter.sendTyping?.(chatId);
+  }
+
+  private async startStream(
+    sessionId: string,
+    content: string,
+    _event: StreamEvent,
+    adapter: PlatformAdapter,
+  ): Promise<void> {
+    // Get chatId from event or look up from UserMapper
+    const chatId = await this.getChatIdForSession(sessionId);
+    if (!chatId) return;
+
+    await this.startStreamWithChatId(sessionId, chatId, content, _event, adapter);
   }
 
   private async updateStream(

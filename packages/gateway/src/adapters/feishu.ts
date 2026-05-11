@@ -122,7 +122,7 @@ export class FeishuAdapter implements PlatformAdapter {
   private dedupCacheSize = 2048;
 
   constructor() {
-    registerAdapterFactory('feishu', () => new FeishuAdapter());
+    // Registration moved to module level below
   }
 
   // ============================================================================
@@ -640,3 +640,5 @@ export class FeishuAdapter implements PlatformAdapter {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+registerAdapterFactory('feishu', () => new FeishuAdapter());

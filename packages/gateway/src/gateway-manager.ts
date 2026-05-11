@@ -24,6 +24,91 @@ import { UserMapper } from './user-mapper.js';
 import { StreamHandler } from './stream-handler.js';
 import { PermissionBroker } from './permission-broker.js';
 import { setProxyUrl, initProxy } from './proxy-fetch.js';
+import { readFile } from 'node:fs/promises';
+import { extname } from 'node:path';
+
+const MAX_GATEWAY_IMAGE_BYTES = 10 * 1024 * 1024;
+
+const IMAGE_MAGIC_BYTES: Record<string, number[]> = {
+  'image/png': [0x89, 0x50, 0x4e, 0x47],
+  'image/jpeg': [0xff, 0xd8, 0xff],
+  'image/gif': [0x47, 0x49, 0x46, 0x38],
+  'image/webp': [0x52, 0x49, 0x46, 0x46],
+  'image/bmp': [0x42, 0x4d],
+};
+
+const EXT_MIME_MAP: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+};
+
+function detectMimeType(buffer: Buffer, filePath?: string): string | null {
+  for (const [mime, magic] of Object.entries(IMAGE_MAGIC_BYTES)) {
+    const matches = magic.every((byte, i) => buffer[i] === byte);
+    if (matches) return mime;
+  }
+  if (filePath) {
+    const ext = extname(filePath).toLowerCase();
+    return EXT_MIME_MAP[ext] || null;
+  }
+  return null;
+}
+
+interface GatewayFileAttachment {
+  name: string;
+  type: string;
+  url: string;
+  size: number;
+}
+
+async function buildImageAttachments(
+  images?: Buffer[],
+  imagePaths?: string[],
+): Promise<GatewayFileAttachment[]> {
+  const attachments: GatewayFileAttachment[] = [];
+
+  if (images && images.length > 0) {
+    for (let i = 0; i < images.length; i++) {
+      const buffer = images[i];
+      const mimeType = detectMimeType(buffer) || 'image/png';
+      const base64 = buffer.toString('base64');
+      attachments.push({
+        name: `image_${i + 1}`,
+        type: mimeType,
+        url: `data:${mimeType};base64,${base64}`,
+        size: buffer.length,
+      });
+    }
+  }
+
+  if (imagePaths && imagePaths.length > 0) {
+    for (const imagePath of imagePaths) {
+      try {
+        const buffer = await readFile(imagePath);
+        if (buffer.length > MAX_GATEWAY_IMAGE_BYTES) {
+          console.warn(`[GatewayManager] Skipping large image: ${imagePath} (${(buffer.length / (1024 * 1024)).toFixed(1)} MB)`);
+          continue;
+        }
+        const mimeType = detectMimeType(buffer, imagePath) || 'image/png';
+        const base64 = buffer.toString('base64');
+        attachments.push({
+          name: imagePath.split(/[/\\]/).pop() || 'image',
+          type: mimeType,
+          url: `data:${mimeType};base64,${base64}`,
+          size: buffer.length,
+        });
+      } catch (err) {
+        console.warn(`[GatewayManager] Failed to read image file: ${imagePath}`, err);
+      }
+    }
+  }
+
+  return attachments;
+}
 
 export class GatewayManager {
   private running = false;
@@ -69,9 +154,7 @@ export class GatewayManager {
       }
     }
 
-    if (this.autoStart) {
-      await this.start();
-    }
+    console.log(`[GatewayManager] Init complete, autoStart=${this.autoStart}, platforms=${this.adapterConfigs.size}`);
   }
 
   /**
@@ -187,9 +270,29 @@ export class GatewayManager {
   /**
    * Handle an outbound stream event from Main Process
    * Routes to the correct adapter based on session → platform mapping
+   * @param sessionId - The session ID
+   * @param event - The stream event
+   * @param directPlatform - Optional platform passed directly from Main to avoid DB race condition
+   * @param directPlatformChatId - Optional platformChatId passed directly from Main to avoid DB race condition
    */
-  async handleOutboundEvent(sessionId: string, event: StreamEvent): Promise<void> {
-    // Look up which platform/chat this session belongs to
+  async handleOutboundEvent(
+    sessionId: string,
+    event: StreamEvent,
+    directPlatform?: string,
+    directPlatformChatId?: string
+  ): Promise<void> {
+    // Use direct platformChatId if provided (avoids DB race condition)
+    if (directPlatform && directPlatformChatId) {
+      const adapter = this.adapters.get(directPlatform as PlatformType);
+      if (!adapter) {
+        console.warn(`[GatewayManager] No running adapter for platform: ${directPlatform}`);
+        return;
+      }
+      await this.streamHandler.handleStreamEvent(sessionId, event, adapter, directPlatformChatId);
+      return;
+    }
+
+    // Fallback: look up which platform/chat this session belongs to
     const mapping = await this.userMapper.getChatIdForSession(sessionId);
     if (!mapping) {
       console.warn(`[GatewayManager] No platform mapping for session: ${sessionId}`);
@@ -261,6 +364,13 @@ export class GatewayManager {
       // Normal inbound message: resolve session and forward to Main
       const sessionId = await this.userMapper.getOrCreateSession(msg);
 
+      // Build image attachments from buffer and file paths
+      const options: Record<string, unknown> = {};
+      const imageAttachments = await buildImageAttachments(msg.images, msg.imagePaths);
+      if (imageAttachments.length > 0) {
+        options.files = imageAttachments;
+      }
+
       this.ipc.send({
         type: 'gateway:inbound',
         sessionId,
@@ -268,6 +378,7 @@ export class GatewayManager {
         platform: msg.platform,
         platformMsgId: msg.platformMsgId,
         platformChatId: msg.platformChatId,
+        options,
       });
     } catch (err) {
       console.error('[GatewayManager] Error handling inbound message:', err);

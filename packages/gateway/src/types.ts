@@ -248,7 +248,7 @@ export type MainToGatewayMessage =
   | { type: 'gateway:stop'; id?: string }
   | { type: 'gateway:reload'; config: GatewayInitConfig }
   | { type: 'gateway:getStatus'; id: string }
-  | { type: 'gateway:outbound'; sessionId: string; event: StreamEvent }
+  | { type: 'gateway:outbound'; sessionId: string; platform?: string; platformChatId?: string; event: StreamEvent }
   | { type: 'gateway:permission_request'; sessionId: string; permission: { id: string; toolName: string; toolInput: Record<string, unknown> } }
   | { type: 'db:response'; id: string; success: boolean; result?: unknown; error?: string }
   | { type: 'gateway:create_session:response'; sessionId: string; error?: string }
