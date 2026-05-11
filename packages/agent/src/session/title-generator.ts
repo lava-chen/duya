@@ -99,34 +99,144 @@ function isMeaningfulFirstMessage(msg: Message | null): boolean {
   return !meaninglessPatterns.some((p) => p.test(text));
 }
 
-const TITLE_GENERATION_PROMPT = `Generate a concise session title (3-7 Chinese words or 5-10 English words) that captures the main topic of this conversation.
+/** Max characters for a message to be considered potentially low-signal. */
+const LOW_SIGNAL_MAX_CHARS = 12;
+/** Max words for a message to be considered potentially low-signal. */
+const LOW_SIGNAL_MAX_WORDS = 2;
 
-Rules:
-- Be specific but brief
-- Use sentence case (capitalize only first word and proper nouns)
-- No punctuation at the end
-- No quotes
-- Focus on the user's goal, not the assistant's response
+/**
+ * Check if text looks like LLM preamble.
+ * Matches: "Title", "Topic", "Sure", "Sure, the title is", "Here's the topic", etc.
+ */
+function isPreamblePrefix(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  // Exact single-word preamble
+  if (/^(?:title|topic|sure|okay|ok)$/.test(lower)) return true;
+  // Starts with a known opener and optionally references title/topic
+  if (/^(?:sure|okay|ok|here(?:'s| is))\b/.test(lower)) return true;
+  // "the title/topic is" or similar
+  if (/^the\s+(?:title|topic)\b/.test(lower)) return true;
+  return false;
+}
 
-Return ONLY the title text, no JSON, no explanation.`;
+/**
+ * Check if a message is likely low-signal (short acknowledgement/command).
+ * Language-agnostic: uses length + word count only.
+ */
+function isLowSignal(message: string): boolean {
+  const trimmed = message.trim();
+  if (trimmed.length > LOW_SIGNAL_MAX_CHARS) return false;
+  if (trimmed.split(/\s+/).length > LOW_SIGNAL_MAX_WORDS) return false;
+  // If it contains a question mark, it's probably a real question
+  if (trimmed.includes('?')) return false;
+  return true;
+}
+
+/**
+ * Select a spread of user messages that captures the session's purpose:
+ * first (original intent), a recent-biased middle, and last (current state).
+ */
+function selectSpreadMessages(allUserMessages: string[]): string[] {
+  const count = allUserMessages.length;
+  if (count === 0) return [];
+
+  // Strip trailing low-signal messages
+  let filtered = allUserMessages;
+  let trimEnd = allUserMessages.length;
+  while (trimEnd > 0 && isLowSignal(allUserMessages[trimEnd - 1]!)) {
+    trimEnd--;
+  }
+  if (trimEnd > 0) {
+    filtered = allUserMessages.slice(0, trimEnd);
+  }
+  // else: all messages are low-signal, keep original array
+
+  const n = filtered.length;
+  if (n === 1) return [filtered[0]!];
+  if (n === 2) return [filtered[0]!, filtered[1]!];
+  if (n === 3) return [filtered[0]!, filtered[1]!, filtered[2]!];
+
+  const midIndex = Math.floor(n * 2 / 3);
+  return [filtered[0]!, filtered[midIndex]!, filtered[n - 1]!];
+}
+
+/**
+ * Validate and clean a generated title.
+ * Iteratively strips known LLM preamble artifacts and checks length bounds.
+ */
+function validateTitle(title: string | null | undefined): string | null {
+  if (!title) return null;
+
+  let cleaned = title.trim();
+
+  // Iterative preamble stripping: handles chained preambles like "Sure: Title: Foo"
+  let prev = '';
+  while (cleaned !== prev) {
+    prev = cleaned;
+    const colonIndex = cleaned.indexOf(':');
+    if (colonIndex > 0 && colonIndex < 40) {
+      const beforeColon = cleaned.slice(0, colonIndex);
+      if (isPreamblePrefix(beforeColon)) {
+        cleaned = cleaned.slice(colonIndex + 1).trim();
+      }
+    }
+  }
+
+  // Strip surrounding quotes
+  if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    cleaned = cleaned.slice(1, -1);
+  }
+
+  // Strip surrounding bold markers **title**
+  if (cleaned.startsWith('**') && cleaned.endsWith('**')) {
+    cleaned = cleaned.slice(2, -2);
+  }
+
+  // Strip leading markdown heading markers (one or more #, -, *)
+  cleaned = cleaned.replace(/^[#\-*]+\s+/, '');
+
+  cleaned = cleaned.trim();
+
+  // Reject empty, too long, or too many words (likely preamble leakage)
+  const MAX_TITLE_WORDS = 10;
+  if (cleaned.length === 0 || cleaned.length >= 100) return null;
+  if (cleaned.split(/\s+/).length > MAX_TITLE_WORDS) return null;
+
+  return cleaned;
+}
+
+const TITLE_GENERATION_PROMPT = `What topic or area is the user exploring? Reply with ONLY a short descriptive title (2-5 words).
+Use a short descriptive label. Use plain text only - no markdown.
+Reply in the same language as the user's messages.
+Examples: "Auto Title Generation", "Dark Mode Support", "Fix API Authentication", "Database Schema Design", "React性能优化", "修复登录bug"
+
+User: `;
 
 /**
  * Extract text content from messages for title generation input.
- * Skips system/meta messages and tool results. Takes the first user message
- * and first assistant response for context.
+ * Uses spread of user messages (first, middle, last) to capture session purpose.
+ * Filters out low-signal messages like "ok", "thanks".
  */
 function extractTitleInput(messages: readonly Message[]): string {
-  const firstUser = messages.find((m) => m.role === 'user');
-  if (!firstUser) return '';
-
-  let text = extractTextFromMessage(firstUser).trim();
-  if (!text) return '';
-
-  if (text.length > MAX_INPUT_LENGTH) {
-    text = text.slice(0, MAX_INPUT_LENGTH);
+  const allUserTexts: string[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      const text = extractTextFromMessage(msg).trim();
+      if (text) {
+        allUserTexts.push(text);
+      }
+    }
   }
 
-  return `User: ${text}`;
+  if (allUserTexts.length === 0) return '';
+
+  const spread = selectSpreadMessages(allUserTexts);
+
+  // Format: each message on its own line with User label
+  return spread.map(t => {
+    const truncated = t.length > MAX_INPUT_LENGTH ? t.slice(0, MAX_INPUT_LENGTH) : t;
+    return `User: ${truncated}`;
+  }).join('\n');
 }
 
 function extractTextFromMessage(msg: Message): string {
@@ -315,12 +425,13 @@ export async function generateSessionTitle(
 
     clearTimeout(timeoutId);
 
-    title = title.trim().replace(/^["']|["']$/g, '').replace(/\n+/g, ' ');
-
-    // Validate title quality
-    if (title.length < TITLE_MIN_LENGTH || title.length > TITLE_MAX_LENGTH * 2) {
+    // Use validateTitle to clean up preamble and validate
+    const cleanedTitle = validateTitle(title);
+    if (!cleanedTitle) {
+      console.log('[TitleGenerator] Title validation failed, using heuristic fallback');
       return { title: fallback, shouldUpdate: true };
     }
+    title = cleanedTitle;
 
     // Check topic drift if sessionId provided
     let shouldUpdate = true;
@@ -331,12 +442,11 @@ export async function generateSessionTitle(
       }
     }
 
+    console.log(`[TitleGenerator] LLM generated title: "${title}", fallback: "${fallback}"`);
     return { title, shouldUpdate };
   } catch (error) {
     // Silently fall back to heuristic - title generation is not critical
-    if (process.env.DUYA_DEBUG_IPC === 'true') {
-      console.log('[TitleGenerator] LLM generation failed, using heuristic:', error);
-    }
+    console.log('[TitleGenerator] LLM generation failed, using heuristic:', error instanceof Error ? error.message : String(error));
     return { title: fallback, shouldUpdate: true };
   }
 }
