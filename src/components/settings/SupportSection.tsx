@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
-import { TrashIcon, FolderOpenIcon, DownloadSimpleIcon } from "@/components/icons";
+import { TrashIcon, FolderOpenIcon, DownloadSimpleIcon, ExternalLinkIcon } from "@/components/icons";
 import {
   SettingsSection,
   SettingsCard,
@@ -159,6 +159,21 @@ export function SupportSection() {
           <SettingsRow
             label={t("settings.general.version")}
             description={appVersion || t("common.loading")}
+          />
+          <SettingsRow
+            label={t("settings.support.about.docsLink")}
+            description="duya.dev/docs"
+            action={
+              <a
+                href="https://duya.dev/docs"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent)]/10 rounded-md transition-colors cursor-pointer"
+              >
+                <ExternalLinkIcon size={14} />
+                {t("settings.support.about.docsLink")}
+              </a>
+            }
           />
         </SettingsCard>
       </SettingsSection>

@@ -792,6 +792,8 @@ const zh: Record<TranslationKey, string> = {
   'settings.support.logs.clearing': '清除中...',
   'settings.support.about.title': '关于',
   'settings.support.about.description': '应用版本与信息',
+  'settings.support.about.docsLink': '官方文档',
+  'settings.support.about.docsUrl': 'https://duya.dev/docs',
 
   // Gateway Dashboard
   'gateway.title': 'Gateway',
