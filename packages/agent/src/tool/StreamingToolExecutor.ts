@@ -1012,6 +1012,22 @@ export class StreamingToolExecutor {
         }, this.config.maxExecutionTimeMs)
       })
 
+      // Set up abort promise - reject when the per-tool abort controller fires.
+      // This lets user interrupts cancel non-worker tools (Read, Write, Edit, etc.)
+      // in addition to worker tools (bash) which are handled by WorkerPool.
+      const abortPromise = new Promise<never>((_, reject) => {
+        const abortHandler = () => {
+          const err = new Error('AbortError')
+          err.name = 'AbortError'
+          reject(err)
+        }
+        if (toolAbortController.signal.aborted) {
+          abortHandler()
+        } else {
+          toolAbortController.signal.addEventListener('abort', abortHandler, { once: true })
+        }
+      })
+
       // For Agent tool, create a context with progress callback to stream sub-agent events
       const isAgentTool = tool.block.name === 'Agent'
       const toolContext: ToolUseContext = isAgentTool
@@ -1031,7 +1047,7 @@ export class StreamingToolExecutor {
           }
         : this.toolUseContext
 
-      // Execute with timeout
+      // Execute with timeout AND abort support
       const result = await Promise.race([
         this.toolRegistry.execute(
           tool.block.name,
@@ -1040,6 +1056,7 @@ export class StreamingToolExecutor {
           toolContext
         ),
         timeoutPromise,
+        abortPromise,
       ])
 
       // Process results
@@ -1204,6 +1221,16 @@ export class StreamingToolExecutor {
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+      // Aborted tools should not retry - immediately finalize as cancelled
+      if (error instanceof Error && error.name === 'AbortError') {
+        tool.status = 'cancelled'
+        messages.push(
+          createErrorMessage(tool.id, '<tool_error>Tool execution was interrupted by user</tool_error>')
+        )
+        this.finalizeTool(tool, messages, 'user_interrupted')
+        return
+      }
 
       // Check if we should retry with fallback strategies
       if (this.config.enableRetry && this.retryStrategies.length > 0) {
@@ -1439,6 +1466,14 @@ export class StreamingToolExecutor {
     if (this.discarded) return
 
     while (this.hasUnfinishedTools()) {
+      // Stop waiting if abort was requested (e.g. user interrupted).
+      // The individual tool abort promises in executeTool will finalize any
+      // still-executing tools as 'cancelled' so getCompletedResults below
+      // picks them up before the loop exits.
+      if (this.siblingAbortController.signal.aborted) {
+        break
+      }
+
       await this.processQueue()
 
       for (const result of this.getCompletedResults()) {
