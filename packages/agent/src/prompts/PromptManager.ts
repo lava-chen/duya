@@ -46,6 +46,7 @@ import { getScratchpadSection } from './sections/dynamic/scratchpad.js'
 import { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
 import { getSessionSearchSection } from './sections/dynamic/sessionSearchSection.js'
 import { getMemorySection } from './sections/dynamic/memorySection.js'
+import { getMemoryContextSection } from './sections/dynamic/memoryContextSection.js'
 import { getWidgetGuidelinesSection } from './sections/dynamic/widgetGuidelines.js'
 import { getConductorCanvasSection } from './sections/dynamic/conductorCanvas.js'
 import { getMemoryManager } from '../memory/index.js'
@@ -156,6 +157,7 @@ export class PromptManager {
       maybeVolatile('skills', () => getSkillsMetadataSection(context), 'Skills can be loaded/unloaded dynamically'),
       maybeVolatile('scratchpad', () => getScratchpadSection(context), 'Scratchpad directory configuration'),
       maybeVolatile('sessionSearch', () => getSessionSearchSection(context), 'Session search guidance for recalling past conversations'),
+      maybeVolatile('memoryContext', () => getMemoryContextSection(context), 'Memory prefetch based on user query'),
       maybeVolatile('widgetGuidelines', () => getWidgetGuidelinesSection(context), 'Widget creation guidelines for generative UI'),
       maybeVolatile('conductorCanvas', () => getConductorCanvasSection(context), 'Canvas workspace context for conductor profile'),
     ].filter((s): s is PromptSection => s !== null)

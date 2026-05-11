@@ -32,5 +32,12 @@ export { scanMemoryContent, scanMemoryContentForPrompt, MemoryScanError } from '
 // Manager
 export { MemoryManager, getMemoryManager, resetMemoryManager } from './manager.js'
 
+// Scoring
+export { scoreMemoryEntries, formatScoredEntries } from './scoring.js'
+export type { ScoredEntry } from './scoring.js'
+
+// Context Builder
+export { buildMemoryContextBlock } from './contextBuilder.js'
+
 // Tool
 export { MemoryTool, getMemoryTool } from './tool.js'

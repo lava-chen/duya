@@ -13,6 +13,8 @@ import * as os from 'os'
 import { FileMemoryStore, type MemoryResult } from './FileMemoryStore.js'
 import { MEMORY_CHAR_LIMITS, type MemoryToolResult, type MemoryToolInput } from './types.js'
 import { MemoryEntry } from './memoryParser.js'
+import { scoreMemoryEntries, formatScoredEntries, type ScoredEntry } from './scoring.js'
+import { buildMemoryContextBlock } from './contextBuilder.js'
 
 // =============================================================================
 // Memory Manager
@@ -36,6 +38,13 @@ export class MemoryManager {
 
   // Initialized flag
   private _initialized: boolean = false
+
+  // Cached entries for prefetch (updated at session load)
+  private _cachedEntries: {
+    globalMemory: MemoryEntry[]
+    globalUser: MemoryEntry[]
+    project: MemoryEntry[]
+  } = { globalMemory: [], globalUser: [], project: [] }
 
   constructor() {
     // Initialize global stores
@@ -86,10 +95,16 @@ export class MemoryManager {
     try {
       this._projectStore.load()
       this._snapshot.projectMemory = this._projectStore.snapshot
+      this._cachedEntries.project = this._projectStore.list()
     } catch {
       // Project memory doesn't exist yet, that's ok
       this._projectStore = null
+      this._cachedEntries.project = []
     }
+
+    // Cache entries for prefetch
+    this._cachedEntries.globalMemory = this._globalMemoryStore.list()
+    this._cachedEntries.globalUser = this._globalUserStore.list()
 
     this._initialized = true
   }
@@ -249,6 +264,51 @@ export class MemoryManager {
       return this._globalUserStore.getUsage()
     }
     return this._globalMemoryStore.getUsage()
+  }
+
+  // ===========================================================================
+  // Prefetch (dynamic memory recall)
+  // ===========================================================================
+
+  /**
+   * Get all cached entries from all stores.
+   */
+  getAllCachedEntries(): MemoryEntry[] {
+    return [
+      ...this._cachedEntries.globalMemory,
+      ...this._cachedEntries.globalUser,
+      ...this._cachedEntries.project,
+    ]
+  }
+
+  /**
+   * Prefetch relevant memories based on query.
+   * Uses keyword matching + recency scoring to find relevant entries.
+   *
+   * @param query - User query text to match against
+   * @returns Memory context block with relevant memories, or empty string
+   */
+  prefetch(query: string): string {
+    const allEntries = this.getAllCachedEntries()
+    if (allEntries.length === 0) return ''
+
+    const scored = scoreMemoryEntries(allEntries, query, { maxEntries: 5 })
+    if (scored.length === 0) return ''
+
+    const formatted = formatScoredEntries(scored)
+    return buildMemoryContextBlock(formatted)
+  }
+
+  /**
+   * Sync after a turn completes.
+   * Currently a no-op placeholder for future SessionMemoryService integration.
+   *
+   * @param _userContent - User message content
+   * @param _assistantContent - Assistant response content
+   */
+  sync_turn(_userContent: string, _assistantContent: string): void {
+    // Reserved for future SessionMemoryService integration
+    // Could be used for automatic memory extraction based on conversation
   }
 }
 

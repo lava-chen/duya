@@ -29,6 +29,8 @@ export const HOOK_EVENTS = [
   'CwdChanged',
   'FileChanged',
   'WorktreeCreate',
+  'PreTurn',    // Before each LLM call
+  'PostTurn',   // After each LLM call completes
 ] as const;
 
 export type HookEvent = (typeof HOOK_EVENTS)[number];
@@ -235,6 +237,26 @@ export const WorktreeCreateHookInputSchema = BaseHookInputSchema.extend({
 export type WorktreeCreateHookInput = z.infer<typeof WorktreeCreateHookInputSchema>;
 
 /**
+ * PreTurn hook input - fired before each LLM call
+ */
+export const PreTurnHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('PreTurn'),
+  turnCount: z.number(),
+});
+
+export type PreTurnHookInput = z.infer<typeof PreTurnHookInputSchema>;
+
+/**
+ * PostTurn hook input - fired after each LLM call completes
+ */
+export const PostTurnHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('PostTurn'),
+  turnCount: z.number(),
+});
+
+export type PostTurnHookInput = z.infer<typeof PostTurnHookInputSchema>;
+
+/**
  * Union of all hook input types
  */
 export const HookInputSchema = z.discriminatedUnion('hook_event_name', [
@@ -253,6 +275,8 @@ export const HookInputSchema = z.discriminatedUnion('hook_event_name', [
   CwdChangedHookInputSchema,
   FileChangedHookInputSchema,
   WorktreeCreateHookInputSchema,
+  PreTurnHookInputSchema,
+  PostTurnHookInputSchema,
 ]);
 
 export type HookInput = z.infer<typeof HookInputSchema>;
@@ -390,6 +414,8 @@ export const HooksSettingsSchema = z.object({
   CwdChanged: z.array(HookMatcherSchema).optional(),
   FileChanged: z.array(HookMatcherSchema).optional(),
   WorktreeCreate: z.array(HookMatcherSchema).optional(),
+  PreTurn: z.array(HookMatcherSchema).optional(),
+  PostTurn: z.array(HookMatcherSchema).optional(),
 });
 
 export type HooksSettings = z.infer<typeof HooksSettingsSchema>;
