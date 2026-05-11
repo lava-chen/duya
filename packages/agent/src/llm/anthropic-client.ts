@@ -4,7 +4,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
-import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseContent, ToolResultContent, TokenUsage } from '../types.js';
+import type { SSEEvent, Tool, Message, MessageContent, TextContent, ImageContent, ToolUseContent, ToolResultContent, TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
 import { checkCacheEligibility, applyCacheControl, type CacheRetention } from './prompt-caching.js';
@@ -524,7 +524,24 @@ function convertContentBlock(block: MessageContent): ContentBlockParam | null {
     return null;
   }
   if (block.type === 'image') {
-    return { type: 'text', text: '[image content]' } as ContentBlockParam;
+    const imgBlock = block as ImageContent;
+    if (imgBlock.source.type === 'base64') {
+      return {
+        type: 'image',
+        source: {
+          type: 'base64' as const,
+          media_type: imgBlock.source.media_type as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+          data: imgBlock.source.data,
+        },
+      } as ContentBlockParam;
+    }
+    return {
+      type: 'image',
+      source: {
+        type: 'url' as const,
+        url: imgBlock.source.data,
+      },
+    } as ContentBlockParam;
   }
   // Filter out thinking blocks - they should not be sent to the LLM
   if (block.type === 'thinking') {
