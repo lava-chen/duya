@@ -20,6 +20,7 @@ import { getAutomationScheduler, initAutomationScheduler } from './automation/Sc
 import { initLogger, getLogger, LogComponent } from './logger'
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, cleanupUpdater } from './updater'
 import { scanSkillFile, shouldAllowInstall, type SkillFinding, type SkillScanResult } from '../packages/agent/src/security/skillScanner.js'
+import { initDocumentParser, getDocumentParser } from './services/document-parser/index'
 
 const isDev = !app.isPackaged
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true'
@@ -769,7 +770,10 @@ async function createWindow() {
               // Try to process queued messages even after crash
               const next = agentPool.drainNextMessage(sessionId);
               if (next) {
-                startAgentTurn(sessionId, next.prompt, next.options);
+                logger.info('Auto-retrying queued message after disconnect', { sessionId }, LogComponent.Main);
+                startAgentTurn(sessionId, next.prompt, next.options).catch((err) => {
+                  logger.error('Auto-retry failed after disconnect', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Main);
+                });
               }
             }
           });
@@ -786,6 +790,7 @@ async function createWindow() {
               permissionMode: options?.permissionMode,
               files: options?.files,
               agentProfileId: options?.agentProfileId,
+              parsedDocs: options?.parsedDocs,
             },
           });
           logger.info('chat:start sent to agent', { sessionId, chatStartSent }, 'Main');
@@ -829,13 +834,15 @@ async function createWindow() {
             }
             // The agent's interrupt() will cause streamChat to exit,
             // which triggers chat:done → markSessionIdle in the handler above.
-            // Fallback: force kill after 4 seconds if still running.
+            // Fallback: force kill after 15 seconds if still running.
+            // Note: 15s allows long-running tools (e.g. file parsing, bash commands)
+            // to complete or time out gracefully before we forcibly terminate.
             setTimeout(() => {
               if (agentPool.isRunning(msg.sessionId!)) {
                 logger.warn('Agent did not stop gracefully, force killing', { sessionId: msg.sessionId }, LogComponent.Main);
                 agentPool.release(msg.sessionId!);
               }
-            }, 4000);
+            }, 15000);
           }
         } else if (msg.type === 'permission:resolve' && msg.id && msg.decision) {
           if (msg.sessionId) {
@@ -1171,6 +1178,14 @@ app.whenReady().then(async () => {
     logger.error('Failed to initialize automation scheduler', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
   }
 
+  try {
+    const docParser = initDocumentParser();
+    await docParser.start();
+    logger.info('Document parser started', undefined, 'Main');
+  } catch (error) {
+    logger.error('Failed to start document parser', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+  }
+
   // Apply app auto-start setting (Windows login)
   const autoStartValue = getAutoStartFromSettings()
   if (autoStartValue) {
@@ -1296,6 +1311,14 @@ async function performGracefulShutdown(): Promise<void> {
   // 6.5 Stop automation scheduler
   try {
     getAutomationScheduler()?.shutdown();
+  } catch {}
+
+  // 6.55 Stop document parser
+  try {
+    const docParser = getDocumentParser();
+    if (docParser) {
+      await docParser.stop();
+    }
   } catch {}
 
   // 6.6 Cleanup updater
@@ -1429,6 +1452,32 @@ ipcMain.handle('app:get-version', () => {
 ipcMain.handle('app:quit', () => {
   isQuitting = true;
   app.quit();
+});
+
+ipcMain.handle('parser:parse', async (_event, filePath: string, options?: { timeout?: number }) => {
+  try {
+    const docParser = getDocumentParser();
+    if (!docParser) {
+      throw new Error('Document parser not initialized');
+    }
+    const sessionId = 'default';
+    const result = await docParser.parse(filePath, sessionId);
+    return result;
+  } catch (error) {
+    throw error;
+  }
+});
+
+ipcMain.handle('parser:getCapabilities', async () => {
+  const docParser = getDocumentParser();
+  if (!docParser) return null;
+  return docParser.getCapabilities();
+});
+
+ipcMain.handle('parser:isReady', async () => {
+  const docParser = getDocumentParser();
+  if (!docParser) return false;
+  return docParser.isReady();
 });
 
 ipcMain.handle('app:get-default-workspace', () => {

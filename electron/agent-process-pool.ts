@@ -338,7 +338,8 @@ export class AgentProcessPool {
 
         // Handle process exit
         child.on('exit', (code, signal) => {
-          if (code !== 0 || signal) {
+          const isCrash = code !== 0 || signal;
+          if (isCrash) {
             this.logger.error('Process exited unexpectedly', undefined, {
               sessionId,
               code,
@@ -354,7 +355,12 @@ export class AgentProcessPool {
           this.busySessions.delete(sessionId);
           this.messageHandlers.delete(sessionId);
           this.providerReinitLock.delete(sessionId);
-          this.pendingMessages.delete(sessionId);
+
+          // Only clear pending messages on normal exit.
+          // On crash/force-kill, preserve them so the user can retry.
+          if (!isCrash) {
+            this.pendingMessages.delete(sessionId);
+          }
 
           // If crashed unexpectedly, notify and release slot
           if (!this.isShuttingDown) {

@@ -64,6 +64,7 @@ export const LogComponent = {
   Notification: 'Notification',
   Skills: 'Skills',
   Files: 'Files',
+  DocumentParser: 'DocumentParser',
 } as const
 
 export type LogComponentName = (typeof LogComponent)[keyof typeof LogComponent]
