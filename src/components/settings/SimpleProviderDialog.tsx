@@ -102,14 +102,18 @@ export function SimpleProviderDialog({
       } catch {
         setSelectedModels([]);
       }
+      // For edit mode, models come from the provider's saved config
+      setModels([]);
     } else {
       setName(preset.name);
       setBaseUrl(preset.baseUrl);
       setApiKey("");
-      setSelectedModels([]);
+      // Pre-populate models from preset's defaultModels
+      const presetModelIds = preset.defaultModels.map((m) => m.modelId);
+      setSelectedModels(preset.defaultRoleModels?.default ? [preset.defaultRoleModels.default] : []);
+      setModels(presetModelIds);
+      setCustomModel("");
     }
-    setModels([]);
-    setCustomModel("");
   }, [open, preset, isEdit, editProvider]);
 
   // Fetch Ollama models

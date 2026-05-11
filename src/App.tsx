@@ -146,7 +146,7 @@ export function App() {
   }, [activeThreadId, loadThreadMessages]);
 
   const handleSendMessage = useCallback(
-    (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => {
+    (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, parsedDocs?: { filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }[]) => {
     if (!activeThreadId || !canSend(activeThreadId)) return;
 
     const now = Date.now();
@@ -177,6 +177,7 @@ export function App() {
       files,
       agentProfileId,
       outputStyleConfig: outputStyleConfig ?? undefined,
+      parsedDocs,
     });
 
     setToolTimeoutCallback(activeThreadId, (retryContent: string) => {

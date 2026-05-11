@@ -323,6 +323,7 @@ export const useConversationStore = create<ConversationState>()(
               seqIndex: m.seqIndex ?? undefined,
               durationMs: m.durationMs ?? undefined,
               subAgentId: m.subAgentId ?? undefined,
+              attachments: m.attachments ?? undefined,
             }));
             const threadData = data.thread;
 
@@ -526,6 +527,7 @@ export const useConversationStore = create<ConversationState>()(
                 seqIndex: m.seqIndex ?? undefined,
                 durationMs: m.durationMs ?? undefined,
                 subAgentId: m.subAgentId ?? undefined,
+                attachments: m.attachments ?? undefined,
               }));
             }
           }
@@ -596,6 +598,7 @@ export const useConversationStore = create<ConversationState>()(
             seqIndex: message.seqIndex,
             durationMs: message.durationMs,
             subAgentId: message.subAgentId,
+            attachments: message.attachments,
           });
         } catch (error) {
           console.error('[Store] Failed to sync message to database:', error);

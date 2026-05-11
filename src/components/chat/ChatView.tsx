@@ -14,7 +14,7 @@ import { subscribeToPermissions, subscribeToPhase } from '@/lib/stream-session-m
 import { Info, CaretDown } from '@phosphor-icons/react';
 import type { PermissionMode } from './PermissionModeSelector';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
-import { getThreadIPC, updateThreadIPC, listThreadsByParentIdIPC } from '@/lib/ipc-client';
+import { getThreadIPC, updateThreadIPC, listThreadsByParentIdIPC, getProviderIPC } from '@/lib/ipc-client';
 import { useSettings } from '@/hooks/useSettings';
 import { useStreamPhase } from '@/hooks/useStreamPhase';
 import { useStreamingContextUsage } from '@/hooks/useStreamingContextUsage';
@@ -33,7 +33,7 @@ import { SessionSelector } from '@/components/home/SessionSelector';
 interface ChatViewProps {
   sessionId: string;
   messages: Message[];
-  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => void;
+  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, parsedDocs?: { filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }[]) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
 }
@@ -151,7 +151,6 @@ export function ChatView({
                 // Pure model name - need to rebuild UI format using provider_id
                 let providerName = data.thread.providerId || 'Unknown';
                 try {
-                  const { getProviderIPC } = await import('@/lib/ipc-client');
                   const provider = await getProviderIPC(data.thread.providerId || '');
                   if (provider) {
                     providerName = provider.name || provider.providerType || provider.id;
@@ -285,11 +284,11 @@ export function ChatView({
   }, [sessionId, parentSessionId, loadThreadMessages]);
 
   const handleSend = useCallback(
-    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => {
+    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, parsedDocs?: { filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }[]) => {
       lastUserContentRef.current = content;
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig);
+      onSendMessage(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig, parsedDocs);
     },
     [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]
   );

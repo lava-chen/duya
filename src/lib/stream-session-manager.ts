@@ -46,6 +46,7 @@ interface StartStreamParams {
   files?: FileAttachment[];
   agentProfileId?: string | null;
   outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
+  parsedDocs?: { filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }[];
 }
 
 interface StartStreamResult {
@@ -247,7 +248,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, model, maxTokens, systemPrompt, initialGeneration, permissionMode, files, agentProfileId, outputStyleConfig } = params;
+    const { sessionId, content, model, maxTokens, systemPrompt, initialGeneration, permissionMode, files, agentProfileId, outputStyleConfig, parsedDocs } = params;
     const state = this.getOrCreateState(sessionId);
 
     if (state.abortController && isActivePhase(state.phase)) {
@@ -309,7 +310,7 @@ class StreamSessionManager {
     void this.startStreamViaMessagePort(
       sessionId,
       streamId,
-      { content, model, maxTokens, systemPrompt, permissionMode, files, agentProfileId, outputStyleConfig },
+      { content, model, maxTokens, systemPrompt, permissionMode, files, agentProfileId, outputStyleConfig, parsedDocs },
       nextGeneration
     );
 
@@ -328,6 +329,7 @@ class StreamSessionManager {
       files?: FileAttachment[];
       agentProfileId?: string | null;
       outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
+      parsedDocs?: { filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }[];
     },
     generation: number
   ): Promise<void> {
@@ -778,6 +780,7 @@ class StreamSessionManager {
       files: params.files,
       agentProfileId: params.agentProfileId,
       outputStyleConfig: params.outputStyleConfig,
+      parsedDocs: params.parsedDocs,
     });
   }
 

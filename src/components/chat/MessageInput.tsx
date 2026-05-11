@@ -20,7 +20,7 @@ import {
 } from '@/lib/message-input-logic';
 import { ModelSelector, type ModelOption } from './ModelSelector';
 import { PermissionModeSelector, type PermissionMode } from './PermissionModeSelector';
-import { useFileAttachments } from '@/hooks/useFileAttachments';
+import { useFileAttachments, type ParsedDocument } from '@/hooks/useFileAttachments';
 import { usePastedContent } from '@/hooks/usePastedContent';
 import { PastedContentList } from './PastedContentAttachment';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -38,7 +38,12 @@ interface FileChip {
 }
 
 interface MessageInputProps {
-  onSend: (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => void;
+  onSend: (
+    content: string,
+    files?: FileAttachment[],
+    outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
+    parsedDocs?: ParsedDocument[],
+  ) => void;
   onCommand?: (command: string) => void;
   onStop?: () => void;
   disabled?: boolean;
@@ -193,7 +198,7 @@ export function MessageInput({
   });
 
   // File attachments
-  const { attachedFiles, addFile, removeFile, handleFileInput } = useFileAttachments();
+  const { attachedFiles, parsedDocuments, parseErrors, addFile, removeFile, clearFiles, handleFileInput } = useFileAttachments();
 
   // Pasted content attachments
   const {
@@ -541,7 +546,8 @@ export function MessageInput({
         setInputValue('');
         setFileChips([]);
         clearPastedContents();
-        onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
+        clearFiles();
+        onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, parsedDocuments);
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto';
         }
@@ -562,11 +568,12 @@ export function MessageInput({
         const result = onExecuteCommand?.(cmd);
         if (result) {
           // Show command result as a message
-          onSend(result.content, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
+          onSend(result.content, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, parsedDocuments);
         }
         setInputValue('');
         setFileChips([]);
         clearPastedContents();
+        clearFiles();
         return;
       } else if (slashResult.action === 'set_badge') {
         setBadge(slashResult.badge);
@@ -578,15 +585,16 @@ export function MessageInput({
       const cliAppend = buildCliAppend(cliBadge);
       if (cliBadge) setCliBadge(null);
 
-      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
+      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, parsedDocuments);
       setInputValue('');
       setFileChips([]);
       clearPastedContents();
+      clearFiles();
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles],
+    [inputValue, disabled, isStreaming, badge, cliBadge, attachedFiles, parsedDocuments, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles],
   );
 
   const handleKeyDown = useCallback(
