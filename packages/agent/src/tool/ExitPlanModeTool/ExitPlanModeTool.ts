@@ -1,13 +1,13 @@
 /**
  * ExitPlanModeTool - Exit plan mode
- * Adapted from claude-code-haha for duya
+ * Now delegates to SwitchModeTool for unified mode management
  */
 
-import type { Tool, ToolResult } from '../../types.js';
-import type { ToolExecutor } from '../registry.js';
-import { EXIT_PLAN_MODE_TOOL_NAME } from './constants.js';
-import { DESCRIPTION, getPrompt } from './prompt.js';
-import { isInPlanModeState, setPlanModeState } from '../EnterPlanModeTool/EnterPlanModeTool.js';
+import type { Tool, ToolResult } from '../../types.js'
+import type { ToolExecutor } from '../registry.js'
+import { EXIT_PLAN_MODE_TOOL_NAME } from './constants.js'
+import { DESCRIPTION, getPrompt } from './prompt.js'
+import { isReadOnlyMode, setAgentMode } from '../SwitchModeTool/SwitchModeTool.js'
 
 export class ExitPlanModeTool implements Tool, ToolExecutor {
   readonly name = EXIT_PLAN_MODE_TOOL_NAME;
@@ -27,7 +27,7 @@ export class ExitPlanModeTool implements Tool, ToolExecutor {
   }
 
   async execute(): Promise<ToolResult> {
-    if (!isInPlanModeState()) {
+    if (!isReadOnlyMode()) {
       return {
         id: crypto.randomUUID(),
         name: this.name,
@@ -38,7 +38,7 @@ export class ExitPlanModeTool implements Tool, ToolExecutor {
       };
     }
 
-    setPlanModeState(false);
+    setAgentMode('general');
 
     return {
       id: crypto.randomUUID(),
