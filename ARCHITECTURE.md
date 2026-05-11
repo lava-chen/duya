@@ -1,6 +1,6 @@
 # DUYA 架构文档
 
-> 更新时间：2026-04-28（更新技术栈：Vite + Zero Router，完善 Gateway/Bridge、Automation、Logging、Updater 系统）
+> 更新时间：2026-05-11（修正技术栈：移除不存在的 Zero Router，更新安全扫描器描述、BashClassifier 为 stub 实现、Gateway 组件名称）
 >
 > 历史更新：2026-04-24（新增安全扫描系统与提示词系统工程文档）
 >
@@ -13,7 +13,7 @@ DUYA 是一个基于 Electron + Vite 的 AI Agent 客户端应用，采用 **Mul
 | 层 | 技术 |
 |---|------|
 | 桌面外壳 | Electron 28 |
-| 前端框架 | Vite 6 + React 19 + Zero Router |
+| 前端框架 | Vite 6 + React 19（条件渲染，无 router 库）|
 | Agent 核心 | `@duya/agent` + `@anthropic-ai/sdk` |
 | 状态管理 | Zustand + SQLite (better-sqlite3) |
 | 样式 | Tailwind CSS 4 |
@@ -69,7 +69,7 @@ DUYA 采用 **Multi-Agent Process** 模式，每个 Agent 运行在独立的 **C
 | **BootConfig** | 引导配置（指南针），管理 boot.json 中的数据库路径 | `electron/boot-config.ts` |
 | **AgentProcessPool** | 并发 Agent 上限（CPU核数/2）、spawn/kill 管理、心跳监控（杀僵尸进程）、排队队列、每条消息落库 | `electron/agent-process-pool.ts` |
 | **Session Manager** | Session 状态跟踪与会话生命周期管理 | `electron/session-manager.ts` |
-| **Channel Manager** | MessagePort 通道管理（用于持久化连接），自动重连；invoke 通道用于主动查询（session 列表、历史加载） | `electron/message-port-manager.ts` |
+| **Channel Manager** | MessagePort 通道管理（用于持久化连接）；invoke 通道用于主动查询（session 列表、历史加载）。注意：MessagePort 不可重连（窗口关闭即端口销毁） | `electron/message-port-manager.ts` |
 | **Config Manager** | 加密配置存储、权限控制、实时广播 | `electron/config-manager.ts` |
 | **DB Handlers** | 数据库 IPC 处理器、Schema 管理、迁移、Safe Mode | `electron/db-handlers.ts` |
 | **Agent Communicator** | Agent IPC 处理器、DB 请求分发 | `electron/ipc/agent-communicator.ts` |
@@ -392,8 +392,8 @@ DUYA 实现了多层安全扫描机制，防止提示词注入和恶意代码执
 │  │   .md           │  │   skills        │  │ - Dangerous     │ │
 │  │ - SOUL.md       │  │ - Trust levels  │  │   pattern detect│ │
 │  │                 │  │                 │  │                 │ │
-│  │ 20+ threat      │  │ 80+ threat      │  │ Severity-based  │ │
-│  │ patterns        │  │ patterns        │  │ approval        │ │
+│  │ 24+ threat      │  │ 80+ threat      │  │ Stub (ant-only   │
+│  │ patterns        │  │ patterns        │  │ classifier perm) │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -467,21 +467,11 @@ const INSTALL_POLICY = {
 
 #### BashClassifier（命令分类器）
 
-对 Bash 命令进行危险程度分类：
-
 **文件位置**：`packages/agent/src/security/bashClassifier.ts`
 
-**分类级别**：
+**当前状态**：Stub 实现（`isClassifierPermissionsEnabled()` 返回 `false`），分类器权限仅在 Claude Code（ant）中使用。
 
-| 级别 | 说明 | 示例 |
-|------|------|------|
-| `safe` | 安全命令 | ls, cat, grep |
-| `low` | 低风险 | mkdir, touch |
-| `medium` | 中等风险 | git push |
-| `high` | 高风险 | sudo, curl \| sh |
-| `critical` | 严重风险 | rm -rf /, mkfs |
-
-**详细文档**：参见 [docs/SECURITY.md](./docs/SECURITY.md)
+BashClassifier 在 DUYA 中未启用，命令分类由 SkillScanner 的 `execution` 类别处理。
 
 ### 提示词系统
 
@@ -765,7 +755,7 @@ duya/
 │   ├── port-types.ts           # Port 类型定义
 │   └── ipc/
 │       ├── agent-communicator.ts  # Agent IPC 处理器 + DB 请求分发
-│       └── bridge-communicator.ts # Bridge IPC 处理器
+│       └── gateway-communicator.ts # Gateway IPC 处理器
 │
 ├── packages/agent/src/
 │   ├── process/
@@ -795,8 +785,13 @@ duya/
 │   │           ├── skillsMetadata.ts   # 技能元数据
 │   │           ├── sessionGuidance.ts  # 会话指导
 │   │           ├── memorySection.ts    # 记忆片段
+│   │           ├── memoryContextSection.ts  # 记忆上下文
 │   │           ├── outputStyle.ts      # 输出样式
-│   │           └── scratchpad.ts       # 临时空间
+│   │           ├── scratchpad.ts       # 临时空间
+│   │           ├── sessionSearchSection.ts  # 会话搜索
+│   │           ├── agentsMdSection.ts  # AGENTS.md 内容
+│   │           ├── widgetGuidelines.ts # Widget 指南
+│   │           └── conductorCanvas.ts  # Conductor 画布
 │   ├── llm/                    # LLM Provider 适配层
 │   ├── tool/                   # 工具实现
 │   ├── permissions/            # 权限系统
@@ -809,7 +804,7 @@ duya/
 │   │   └── bashClassifier.ts   # Bash命令分类
 │   └── ...
 │
-└── src/                         # Vite + React (Zero Router)
+└── src/                         # Vite + React（条件渲染，无 Router）
     ├── components/              # UI 组件
     │   ├── chat/               # 聊天相关组件
     │   ├── layout/             # 布局组件（sidebar、app shell）
