@@ -334,6 +334,7 @@ async function loadSkillsFromDirectory(
   source: SkillSource,
   parentCategory?: SkillCategory,
   securityBypassSkills?: string[],
+  bundledSkillNames?: Set<string>,
 ): Promise<PromptSkill[]> {
   const skills: PromptSkill[] = [];
 
@@ -370,13 +371,19 @@ async function loadSkillsFromDirectory(
     if (!stat.isDirectory()) continue;
 
     const inheritedCategory = isCategoryDir ? CATEGORY_MAP[entry.toLowerCase()] ?? parentCategory : parentCategory;
-    const skill = await createSkillFromDirectory(entryPath, entry, source, inheritedCategory, securityBypassSkills);
+
+    // Determine the effective source for this skill
+    // Bundled skills synced to user dir should be treated as 'bundled' to skip security scans
+    const effectiveSource: SkillSource =
+      (source === 'user' && bundledSkillNames?.has(entry)) ? 'bundled' : source;
+
+    const skill = await createSkillFromDirectory(entryPath, entry, effectiveSource, inheritedCategory, securityBypassSkills);
     if (skill) {
       skills.push(skill);
     } else {
       // If not a skill directory, recursively try to load as category directory
       // This handles nested category structures like skills/apple/apple-notes/
-      const nestedSkills = await loadSkillsFromDirectory(entryPath, source, inheritedCategory, securityBypassSkills);
+      const nestedSkills = await loadSkillsFromDirectory(entryPath, effectiveSource, inheritedCategory, securityBypassSkills, bundledSkillNames);
       skills.push(...nestedSkills);
     }
   }
@@ -477,6 +484,17 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
   const allSkills: PromptSkill[] = [];
   const securityBypassSkills = options?.securityBypassSkills;
 
+  // Get bundled skill names upfront so we can pass them to loadSkillsFromDirectory
+  // This allows bundled skills synced to user dir to skip security scans
+  let bundledSkillNames = new Set<string>();
+  try {
+    const { listBundledSkillNames } = await import('./skillsSync.js');
+    const bundledNames = await listBundledSkillNames();
+    bundledSkillNames = new Set(bundledNames);
+  } catch (e) {
+    console.warn('[Skills] Failed to get bundled skill names:', e);
+  }
+
   // Sync bundled skills to user directory if needed
   // This copies bundled skills to ~/.duya/skills/ where users can see and edit them
   if (options?.syncBundled !== false) {
@@ -496,28 +514,16 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
 
   // Load all skills from user directory (~/.duya/skills/)
   // This includes synced built-in skills AND user-added skills
-  const userSkills = await loadSkillsFromDirectory(user, 'user', undefined, securityBypassSkills);
+  // bundledSkillNames is passed so that synced bundled skills use source='bundled' to skip security scans
+  const userSkills = await loadSkillsFromDirectory(user, 'user', undefined, securityBypassSkills, bundledSkillNames);
 
-  // Re-mark bundled skills with correct source so they skip security checks
-  try {
-    const { listBundledSkillNames } = await import('./skillsSync.js');
-    const bundledNames = await listBundledSkillNames();
-    const bundledNameSet = new Set(bundledNames);
-    for (const skill of userSkills) {
-      if (bundledNameSet.has(skill.name)) {
-        skill.source = 'bundled';
-      }
-    }
-    if (bundledNameSet.size > 0) {
-      console.log(`[Skills] ${bundledNameSet.size} bundled skills marked as trusted`);
-    }
-  } catch (e) {
-    console.warn('[Skills] Failed to re-mark bundled skills:', e);
+  if (bundledSkillNames.size > 0) {
+    console.log(`[Skills] ${bundledSkillNames.size} bundled skills loaded with security bypass`);
   }
   allSkills.push(...userSkills);
 
   // Load project-level skills
-  const projectSkills = await loadSkillsFromDirectory(project, 'project', undefined, securityBypassSkills);
+  const projectSkills = await loadSkillsFromDirectory(project, 'project', undefined, securityBypassSkills, bundledSkillNames);
   allSkills.push(...projectSkills);
 
   // Load skills from additional custom paths
@@ -527,7 +533,7 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
       const resolvedPath = path.isAbsolute(additionalPath)
         ? additionalPath
         : path.join(cwd, additionalPath);
-      const additionalSkills = await loadSkillsFromDirectory(resolvedPath, 'user', undefined, securityBypassSkills);
+      const additionalSkills = await loadSkillsFromDirectory(resolvedPath, 'user', undefined, securityBypassSkills, bundledSkillNames);
       allSkills.push(...additionalSkills);
     }
   }
