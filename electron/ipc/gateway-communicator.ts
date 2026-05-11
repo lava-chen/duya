@@ -229,17 +229,39 @@ async function handleInboundMessage(msg: GatewayMessage): Promise<void> {
 
       const db = getDatabase();
       const sessionRow = db?.prepare(
-        'SELECT working_directory, system_prompt FROM chat_sessions WHERE id = ?'
-      ).get(sessionId) as { working_directory: string; system_prompt: string } | undefined;
+        'SELECT working_directory, system_prompt, model FROM chat_sessions WHERE id = ?'
+      ).get(sessionId) as { working_directory: string; system_prompt: string; model?: string } | undefined;
       const workingDirectory = sessionRow?.working_directory ?? '';
       const systemPrompt = sessionRow?.system_prompt || '';
 
-      // Get model from gatewayModel setting, fallback to provider default
+      // Get model from gatewayModel setting, fallback to session model, then provider default
       const gatewayModel = getSetting('gatewayModel');
       const providerModel = gatewayModel ||
+        (sessionRow?.model as string) ||
         (activeProvider.options?.defaultModel as string) ||
         (activeProvider.options?.model as string) ||
         '';
+
+      // Validate model is configured - send friendly error if missing
+      if (!providerModel) {
+        const errorMsg = 'Gateway 未配置模型，请前往 设置 → Provider 配置中选择一个模型，然后再试。';
+        console.error('[GatewayCommunicator] Model not configured for gateway session', {
+          sessionId,
+          gatewayModel,
+          sessionModel: sessionRow?.model,
+          providerDefaultModel: activeProvider.options?.defaultModel,
+          providerModel: activeProvider.options?.model,
+        });
+        // Send error to user via platform
+        if (isGatewaySession(sessionId)) {
+          forwardToGateway(sessionId, {
+            type: 'error',
+            message: errorMsg,
+          });
+        }
+        pool.release(sessionId);
+        return;
+      }
 
       // Get sandbox enabled setting
       let sandboxEnabled = true;
@@ -418,11 +440,20 @@ async function handleCreateSession(msg: GatewayMessage): Promise<void> {
     // Resolve working directory for this gateway session
     const workingDirectory = resolveGatewayWorkspace(db);
 
+    // Resolve model for this gateway session
+    const configManager = getConfigManager();
+    const activeProvider = configManager?.getActiveProvider();
+    const gatewayModel = getSetting('gatewayModel');
+    const providerModel = gatewayModel ||
+      (activeProvider?.options?.defaultModel as string) ||
+      (activeProvider?.options?.model as string) ||
+      '';
+
     // Create the session in database
     db.prepare(
-      `INSERT INTO chat_sessions (id, title, created_at, updated_at, working_directory, system_prompt)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(sessionId, `Chat via ${platform}`, now, now, workingDirectory, '');
+      `INSERT INTO chat_sessions (id, title, created_at, updated_at, working_directory, system_prompt, model)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(sessionId, `Chat via ${platform}`, now, now, workingDirectory, '', providerModel);
 
     console.log(`[GatewayCommunicator] Created session ${sessionId} for ${platform} user ${platformUserId}, workspace: ${workingDirectory}`);
 
@@ -578,11 +609,20 @@ function dispatchGatewayDbAction(
       // Resolve working directory for the new session
       const workingDirectory = resolveGatewayWorkspace(db);
 
+      // Resolve model for the new session
+      const configManager = getConfigManager();
+      const activeProvider = configManager?.getActiveProvider();
+      const gwModel = getSetting('gatewayModel');
+      const sesModel = gwModel ||
+        (activeProvider?.options?.defaultModel as string) ||
+        (activeProvider?.options?.model as string) ||
+        '';
+
       // Create new session
       db.prepare(
-        `INSERT INTO chat_sessions (id, title, created_at, updated_at, working_directory, system_prompt)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).run(newSessionId, `Chat via ${p.platform}`, now, now, workingDirectory, '');
+        `INSERT INTO chat_sessions (id, title, created_at, updated_at, working_directory, system_prompt, model)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(newSessionId, `Chat via ${p.platform}`, now, now, workingDirectory, '', sesModel);
 
       // Clear old session messages
       db.prepare('DELETE FROM messages WHERE session_id = ?').run(oldMapping.session_id);
@@ -659,9 +699,12 @@ function dispatchGatewayDbAction(
 export function forwardToGateway(sessionId: string, event: Record<string, unknown>): void {
   if (!gatewayProcess) return;
 
+  const sessionInfo = gatewaySessions.get(sessionId);
   gatewayProcess.send({
     type: 'gateway:outbound',
     sessionId,
+    platform: sessionInfo?.platform,
+    platformChatId: sessionInfo?.platformChatId,
     event,
   });
 }

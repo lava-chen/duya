@@ -16,6 +16,7 @@ import {
 } from '@/components/icons';
 import { ChannelIcon, CHANNEL_COLORS } from '@/components/bridge/ChannelIcon';
 import { useTranslation } from '@/hooks/useTranslation';
+import { getActiveProviderIPC } from '@/lib/ipc-client';
 import {
   SettingsSection,
   SettingsCard,
@@ -102,6 +103,8 @@ export default function BridgeSection() {
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [activeChannel, setActiveChannel] = useState<ChannelType>('telegram');
+  const [gatewayModel, setGatewayModel] = useState<string>('');
+  const [activeProviderModel, setActiveProviderModel] = useState<string>('');
 
   const channels: ChannelInfo[] = [
     {
@@ -145,7 +148,19 @@ export default function BridgeSection() {
     fetchStatus();
     fetchSettings();
     fetchProxyStatus();
+    fetchProviderInfo();
   }, []);
+
+  const fetchProviderInfo = async () => {
+    try {
+      const activeProvider = await getActiveProviderIPC();
+      if (activeProvider) {
+        setActiveProviderModel(activeProvider.defaultModel || '');
+      }
+      const gwModel = await window.electronAPI?.settingsDb?.get('gatewayModel');
+      setGatewayModel(typeof gwModel === 'string' ? gwModel : '');
+    } catch { /* ignore */ }
+  };
 
   const fetchStatus = async () => {
     try {
@@ -227,6 +242,9 @@ export default function BridgeSection() {
     try {
       await window.electronAPI?.settingsDb?.set(key, value);
       await fetchSettings();
+      if (key === 'gatewayModel' || key === 'provider_defaultModel' || key === 'provider_model') {
+        await fetchProviderInfo();
+      }
 
       if (status?.running) {
         try {
@@ -402,6 +420,38 @@ export default function BridgeSection() {
             onChange={(v) => updateSetting('bridge_workspace', v)}
             placeholder="~/.duya/workspace"
           />
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Gateway Model Status */}
+      <SettingsSection title="Gateway 模型配置" description="Gateway 使用独立模型配置，不受当前 active provider 影响">
+        <SettingsCard>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">当前模型</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {gatewayModel
+                  ? `Gateway 配置: ${gatewayModel}`
+                  : activeProviderModel
+                    ? `使用 Active Provider: ${activeProviderModel}`
+                    : '未配置 - 请前往设置 → Provider 配置中选择一个模型'}
+              </p>
+            </div>
+            {gatewayModel || activeProviderModel ? (
+              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                已配置
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-yellow-500/10 text-yellow-500 border border-yellow-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                未配置
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            如果需要使用与 Provider 不同的模型，请在 Provider 设置中配置 gatewayModel。
+          </p>
         </SettingsCard>
       </SettingsSection>
 

@@ -117,6 +117,18 @@ export function ProviderConnectDialog({
   const [fetchingModels, setFetchingModels] = useState(false);
   const [fetchModelsError, setFetchModelsError] = useState<string | null>(null);
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [modelWarning, setModelWarning] = useState(false);
+
+  // Show warning when baseUrl is filled but modelName is empty
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!preset) return;
+      const hasBaseUrl = !!(baseUrl.trim() || preset.baseUrl);
+      const needsModel = preset.fields.includes("model_names");
+      setModelWarning(hasBaseUrl && needsModel && !modelName.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [baseUrl, modelName, preset]);
 
   useEffect(() => {
     if (!open || !preset) return;
@@ -518,8 +530,19 @@ export function ProviderConnectDialog({
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
                   placeholder={isOllamaPreset ? "llama3.2" : "ark-code-latest"}
-                  className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
+                  className={`w-full px-3 py-2 rounded-lg border text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono ${
+                    modelWarning
+                      ? 'border-destructive/70 focus:ring-destructive/50'
+                      : 'border-border/50'
+                  }`}
                 />
+
+                {/* Model name warning */}
+                {modelWarning && (
+                  <p className="text-[11px] text-destructive mt-1">
+                    {locale === "zh" ? "请填写模型名称，Gateway 需要模型配置才能正常工作" : "Model name is required - Gateway needs a model to function properly"}
+                  </p>
+                )}
 
                 {/* Ollama model selector dropdown */}
                 {isOllamaPreset && showModelSelector && ollamaModels.length > 0 && (

@@ -54,7 +54,7 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
           flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium
           ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
           ${isBypass
-            ? 'bg-status-error-muted text-status-error-foreground border border-status-error-foreground/30'
+            ? 'bg-error-soft text-error border border-error/30'
             : 'text-muted-foreground border border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50'
           }
         `}
@@ -111,7 +111,7 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
                 type="button"
                 onClick={confirmBypass}
                 className="px-3 py-1.5 rounded-md text-xs font-medium transition-colors text-white"
-                style={{ backgroundColor: 'var(--status-error)' }}
+                style={{ backgroundColor: 'var(--error)' }}
               >
                 {t('permissionMode.bypassConfirm')}
               </button>
