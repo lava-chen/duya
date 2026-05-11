@@ -123,6 +123,8 @@ export class SkillRegistry {
       userInvocable: skill.userInvocable ?? true,
       isHidden: skill.isHidden ?? false,
       paths: skill.paths,
+      requiredEnvVars: skill.requiredEnvVars,
+      isConditional: skill.isConditional,
     };
   }
 
@@ -142,6 +144,8 @@ export class SkillRegistry {
       userInvocable: s.userInvocable ?? true,
       isHidden: s.isHidden ?? false,
       paths: s.paths,
+      requiredEnvVars: s.requiredEnvVars,
+      isConditional: s.isConditional,
     }));
   }
 

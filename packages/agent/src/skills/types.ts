@@ -68,6 +68,12 @@ export interface PromptSkill {
   paths?: string[];
   /** Hooks to register when skill is invoked */
   hooks?: Record<string, unknown>;
+  /** Required environment variables */
+  requiredEnvVars?: RequiredEnvVar[];
+  /** Setup configuration */
+  setup?: SkillSetupConfig;
+  /** Whether this skill is conditionally activated (has paths but not yet activated) */
+  isConditional?: boolean;
   /** Get the prompt content for this skill */
   getPromptForCommand(args: string, context: ToolUseContext): Promise<string>;
 }
@@ -112,6 +118,12 @@ export interface SkillMetadata {
   paths?: string[];
   /** Supported platforms (e.g., ['macos', 'windows', 'linux']) */
   platforms?: string[];
+  /** Required environment variables */
+  requiredEnvVars?: RequiredEnvVar[];
+  /** Whether this skill needs setup */
+  setupNeeded?: boolean;
+  /** Whether this skill is conditionally activated */
+  isConditional?: boolean;
 }
 
 /**
@@ -147,6 +159,30 @@ export interface SkillResult {
 }
 
 /**
+ * Required environment variable definition
+ */
+export interface RequiredEnvVar {
+  name: string;
+  prompt: string;
+  help?: string;
+  required_for?: string;
+  optional?: boolean;
+}
+
+/**
+ * Setup configuration for environment variable collection
+ */
+export interface SkillSetupConfig {
+  help?: string;
+  collect_secrets?: Array<{
+    env_var: string;
+    prompt: string;
+    provider_url?: string;
+    secret?: boolean;
+  }>;
+}
+
+/**
  * Skill frontmatter parsed from SKILL.md
  */
 export interface SkillFrontmatter {
@@ -166,4 +202,13 @@ export interface SkillFrontmatter {
   hooks?: Record<string, unknown>;
   /** Supported platforms (e.g., ['macos', 'windows', 'linux']) */
   platforms?: string[];
+  /** Required environment variables */
+  required_environment_variables?: RequiredEnvVar[];
+  /** Legacy prerequisites (env_vars, commands) */
+  prerequisites?: {
+    env_vars?: string[];
+    commands?: string[];
+  };
+  /** Setup configuration for secret collection */
+  setup?: SkillSetupConfig;
 }

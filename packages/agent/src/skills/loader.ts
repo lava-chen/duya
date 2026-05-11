@@ -5,13 +5,16 @@
  */
 
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { homedir, platform as getPlatform } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ToolUseContext } from '../types.js';
-import type { PromptSkill, SkillArgument, SkillCategory, SkillSource } from './types.js';
+import type { PromptSkill, SkillArgument, SkillCategory, SkillSource, RequiredEnvVar } from './types.js';
 import { getSkillRegistry } from './registry.js';
 import { scanSkillFile, shouldAllowInstall, type SkillFinding } from '../security/skillScanner.js';
+import { registerConditionalSkill, separateConditionalSkills } from './conditionalSkills.js';
+import { normalizeRequiredEnvVars } from './envVarCollector.js';
 
 /**
  * Check if the current platform matches the skill's supported platforms
@@ -247,6 +250,12 @@ async function createSkillFromDirectory(
     return null;
   }
 
+  // Parse required environment variables
+  const requiredEnvVars = normalizeRequiredEnvVars(frontmatter);
+
+  // Parse setup configuration
+  const setup = frontmatter.setup as { help?: string; collect_secrets?: Array<{ env_var: string; prompt: string; provider_url?: string; secret?: boolean }> } | undefined;
+
   const skill: PromptSkill = {
     type: 'prompt',
     name: skillName,
@@ -270,6 +279,9 @@ async function createSkillFromDirectory(
     category,
     paths,
     hooks: undefined,
+    requiredEnvVars: requiredEnvVars.length > 0 ? requiredEnvVars : undefined,
+    setup,
+    isConditional: paths && paths.length > 0 ? true : undefined,
     async getPromptForCommand(args, _context): Promise<string> {
       let finalContent = `Base directory for this skill: ${skillDir}\n\n${markdownContent}`;
 
@@ -538,10 +550,27 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
     }
   }
 
-  // Register all skills
-  for (const skill of allSkills) {
+  // Separate unconditional and conditional skills
+  const [unconditionalSkills, conditionalSkillsList] = separateConditionalSkills(allSkills);
+
+  // Register unconditional skills immediately
+  for (const skill of unconditionalSkills) {
     getSkillRegistry().register(skill);
   }
+
+  // Register conditional skills as pending (not activated yet)
+  for (const skill of conditionalSkillsList) {
+    registerConditionalSkill(skill);
+    getSkillRegistry().register(skill);
+  }
+
+  // Log summary
+  const conditionalCount = conditionalSkillsList.length;
+  if (conditionalCount > 0) {
+    console.log(`[Skills] ${conditionalCount} conditional skill(s) pending activation (matched by file paths)`);
+  }
+
+  console.log(`[Skills] Loaded ${unconditionalSkills.length} unconditional + ${conditionalCount} conditional skills`);
 
   return allSkills;
 }
@@ -690,5 +719,4 @@ function processSkillPaths(content: string, skillDir: string): string {
   return content;
 }
 
-// Import sync fs for path checking
-import fsSync from 'node:fs';
+
