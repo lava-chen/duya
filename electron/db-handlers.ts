@@ -695,7 +695,7 @@ function initializeSchema(db: BetterSqlite3): void {
   insertSetting.run('theme', 'dark', Date.now());
   insertSetting.run('collapsedProjects', '[]', Date.now());
   insertSetting.run('remote_bridge_enabled', 'false', Date.now());
-  insertSetting.run('bridge_auto_start', 'false', Date.now());
+  insertSetting.run('bridge_auto_start', 'true', Date.now());
   insertSetting.run('skillNudgeInterval', '10', Date.now());
   insertSetting.run('summaryLLMEnabled', 'false', Date.now());
   insertSetting.run('summaryLLMConfig', 'null', Date.now());
@@ -1463,6 +1463,17 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 23,
+    name: 'add_attachments_to_messages',
+    migrate: (db) => {
+      const tableInfo = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
+      const columns = tableInfo.map(col => col.name);
+      if (!columns.includes('attachments')) {
+        db.exec(`ALTER TABLE messages ADD COLUMN attachments TEXT`);
+      }
+    },
+  },
 ];
 
 function runMigrations(db: Database.Database): void {
@@ -1693,11 +1704,12 @@ export function registerDbHandlers(): void {
     seq_index?: number;
     duration_ms?: number;
     sub_agent_id?: string;
+    attachments?: unknown[];
   }) => {
     const now = Date.now();
     db!.prepare(`
-      INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, created_at)
-      VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @created_at)
+      INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+      VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
     `).run({
       id: data.id,
       session_id: data.session_id,
@@ -1716,6 +1728,7 @@ export function registerDbHandlers(): void {
       seq_index: data.seq_index ?? null,
       duration_ms: data.duration_ms ?? null,
       sub_agent_id: data.sub_agent_id ?? null,
+      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
       created_at: now,
     });
 
@@ -1770,8 +1783,8 @@ export function registerDbHandlers(): void {
         db!.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
         const stmt = db!.prepare(`
-          INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, created_at)
-          VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @created_at)
+          INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+          VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
         `);
 
         for (const rawMsg of messages) {
@@ -1809,6 +1822,10 @@ export function registerDbHandlers(): void {
             }
           }
 
+          const attachments = msg.attachments
+            ? (typeof msg.attachments === 'string' ? msg.attachments : JSON.stringify(msg.attachments))
+            : null;
+
           stmt.run({
             id: (msg.id as string) || randomUUID(),
             session_id: sessionId,
@@ -1827,6 +1844,7 @@ export function registerDbHandlers(): void {
             seq_index: (msg.seq_index as number) ?? null,
             duration_ms: (msg.duration_ms as number) ?? null,
             sub_agent_id: (msg.sub_agent_id as string) || null,
+            attachments,
             created_at: (msg.timestamp as number) || now,
           });
         }
@@ -2211,18 +2229,22 @@ export function registerDbHandlers(): void {
       ).get();
       if (ftsAvailable) {
         return db!.prepare(`
-          SELECT DISTINCT m.session_id, s.* FROM messages_fts f
+          SELECT s.*, substr(m.content, 1, 300) as snippet
+          FROM messages_fts f
           JOIN messages m ON f.rowid = m.rowid
           JOIN chat_sessions s ON m.session_id = s.id
           WHERE messages_fts MATCH ? AND s.is_deleted = 0
+          GROUP BY s.id
           ORDER BY s.updated_at DESC LIMIT ?
         `).all(query, limit);
       }
     } catch {}
     return db!.prepare(`
-      SELECT DISTINCT s.* FROM messages m
+      SELECT s.*, substr(m.content, 1, 300) as snippet
+      FROM messages m
       JOIN chat_sessions s ON m.session_id = s.id
       WHERE m.content LIKE ? AND s.is_deleted = 0
+      GROUP BY s.id
       ORDER BY s.updated_at DESC LIMIT ?
     `).all(`%${query}%`, limit);
   });

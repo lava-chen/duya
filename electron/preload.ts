@@ -305,6 +305,28 @@ export interface BrowserExtensionAPI {
   getExtensionPath: () => Promise<string>
 }
 
+export interface DocumentParserAPI {
+  parse: (filePath: string, options?: { timeout?: number }) => Promise<{
+    fileHash: string
+    sessionId: string
+    filename: string
+    charCount: number
+    chunks: Array<
+      | { type: 'text'; index: number; text: string }
+      | { type: 'image'; index: number; base64: string; mediaType: string }
+    >
+    extractMethod?: 'text' | 'vision' | 'hybrid'
+    metadata?: Record<string, unknown>
+    parsedAt: number
+  }>
+  getCapabilities: () => Promise<{
+    parsers: Record<string, string | boolean>
+    libreoffice_path: string | null
+    version: string
+  } | null>
+  isReady: () => Promise<boolean>
+}
+
 export interface ElectronAPI {
   versions: {
     electron: string
@@ -377,6 +399,7 @@ export interface ElectronAPI {
   files: FilesAPI
   weixin: WeixinAccountAPI
   browserExtension: BrowserExtensionAPI
+  parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
   // Logger API
   logger: {
@@ -996,6 +1019,11 @@ const electronAPI: ElectronAPI = {
   browserExtension: {
     getStatus: () => ipcRenderer.invoke('browser-extension:get-status'),
     getExtensionPath: () => ipcRenderer.invoke('browser-extension:get-path'),
+  },
+  parser: {
+    parse: (filePath, options) => ipcRenderer.invoke('parser:parse', filePath, options),
+    getCapabilities: () => ipcRenderer.invoke('parser:getCapabilities'),
+    isReady: () => ipcRenderer.invoke('parser:isReady'),
   },
   agentProfile: {
     list: () => ipcRenderer.invoke('db:agentProfile:list'),
