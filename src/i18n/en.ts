@@ -207,6 +207,7 @@ const en = {
   'settings.providers.clickToTest': 'Click "Run Diagnostics" to test all provider connections',
   'settings.providers.connectedCount': '{count} provider connected',
   'settings.providers.connectedCountPlural': '{count} providers connected',
+  'settings.providers.learnMore': 'Learn more about choosing a provider',
   'settings.providers.addProviderDesc': 'Connect to a new AI provider',
 
   'settings.appearance.title': 'Appearance',
@@ -385,6 +386,7 @@ const en = {
   // Config Step
   'onboarding.configTitle': 'Connect Your AI Provider',
   'onboarding.configDesc': 'Choose an AI provider and enter your API key to start using DUYA.',
+  'onboarding.learnMore': 'Learn more about choosing a provider',
   'onboarding.getApiKey': 'Get API Key',
   'onboarding.apiKeyLabel': 'API Key',
   'onboarding.apiKeyPlaceholder': 'Enter your API key...',

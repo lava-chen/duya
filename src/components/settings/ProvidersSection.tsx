@@ -15,6 +15,7 @@ import {
   ChartLineIcon,
   TrashIcon,
   NotePencilIcon,
+  ArrowUpRightIcon,
 } from "@/components/icons";
 import { QUICK_PRESETS, findPresetByBaseUrl } from "@/lib/provider-presets";
 import type { QuickPreset } from "@/lib/provider-presets";
@@ -763,6 +764,17 @@ export function ProvidersSection() {
               </div>
             </div>
           ))}
+        </div>
+        <div className="mt-4 pt-4 border-t border-border/30">
+          <a
+            href="https://www.duya.dev/blog/token-provider-guide"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-accent hover:underline flex items-center gap-1"
+          >
+            {t("settings.providers.learnMore")}
+            <ArrowUpRightIcon size={12} />
+          </a>
         </div>
       </SettingsSection>
 
