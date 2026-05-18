@@ -70,34 +70,13 @@ export function CanvasGrid() {
   );
 
   const handleLayoutChange = useCallback(
-    (newLayout: Layout) => {
-      if (!activeCanvasId || !editMode) return;
-
-      for (const item of newLayout) {
-        const widget = widgets.find((w) => w.id === item.i);
-        if (!widget) continue;
-
-        const position: Position = {
-          x: item.x,
-          y: item.y,
-          w: item.w,
-          h: item.h,
-        };
-
-        if (
-          position.x !== widget.position.x ||
-          position.y !== widget.position.y ||
-          position.w !== widget.position.w ||
-          position.h !== widget.position.h
-        ) {
-          updateWidget(item.i, {
-            position,
-            updatedAt: Date.now(),
-          });
-        }
-      }
+    (_newLayout: Layout) => {
+      // Intentionally empty — syncing position back to the store here
+      // creates an infinite loop: store update → re-render → new layout prop →
+      // react-grid-layout fires onLayoutChange again.
+      // Positions are synced in onDragStop / onResizeStop instead.
     },
-    [activeCanvasId, editMode, widgets, updateWidget]
+    []
   );
 
   const handleDragStop = useCallback(

@@ -72,8 +72,8 @@ export function GatewaySessionList({ onSessionClick }: GatewaySessionListProps) 
 
   if (loading) {
     return (
-      <div className="gateway-session-loading">
-        <SpinnerGapIcon size={16} className="animate-spin" />
+      <div className="flex items-center justify-center gap-2 py-8 text-xs" style={{ color: "var(--muted)" }}>
+        <SpinnerGapIcon size={14} className="animate-spin" />
         <span>{t("common.loading")}</span>
       </div>
     );
@@ -81,10 +81,9 @@ export function GatewaySessionList({ onSessionClick }: GatewaySessionListProps) 
 
   if (sessions.length === 0) {
     return (
-      <div className="gateway-session-empty">
-        <ChatCircleIcon size={28} />
-        <p>{t("gateway.noSessions")}</p>
-        <span>{t("gateway.noSessionsDesc")}</span>
+      <div className="flex flex-col items-center justify-center gap-2 py-10 text-center" style={{ color: "var(--muted)" }}>
+        <ChatCircleIcon size={20} style={{ opacity: 0.3 }} />
+        <span className="text-xs">{t("gateway.noSessions")}</span>
       </div>
     );
   }
@@ -107,16 +106,16 @@ export function GatewaySessionList({ onSessionClick }: GatewaySessionListProps) 
   };
 
   return (
-    <div className="gateway-session-list">
+    <div className="flex flex-col gap-4">
       {activeSessions.length > 0 && (
-        <div className="gateway-session-group">
-          <div className="gateway-session-group-header">
-            <span className="gateway-session-group-dot active" />
-            <span className="gateway-session-group-title active">
+        <div className="flex flex-col gap-1.5">
+          <div className="session-section-header">
+            <span className="session-section-dot active" />
+            <span className="session-section-title active">
               {t("gateway.active")} ({activeSessions.length})
             </span>
           </div>
-          <div className="gateway-session-items">
+          <div className="flex flex-col">
             {activeSessions.map((session) => (
               <SessionItem
                 key={session.id}
@@ -132,13 +131,13 @@ export function GatewaySessionList({ onSessionClick }: GatewaySessionListProps) 
       )}
 
       {historySessions.length > 0 && (
-        <div className="gateway-session-group">
-          <div className="gateway-session-group-header">
-            <span className="gateway-session-group-title">
+        <div className="flex flex-col gap-1.5">
+          <div className="session-section-header">
+            <span className="session-section-title">
               {t("gateway.history")} ({historySessions.length})
             </span>
           </div>
-          <div className="gateway-session-items">
+          <div className="flex flex-col">
             {historySessions.map((session) => (
               <SessionItem
                 key={session.id}
@@ -198,34 +197,29 @@ function SessionItem({
   return (
     <button
       onClick={onClick}
-      className={`gateway-session-item ${isActive ? "active" : ""}`}
+      className={`session-row ${isActive ? "active" : ""}`}
     >
-      <div
-        className="gateway-session-platform-badge"
-        style={{
-          backgroundColor: `${platformColor}15`,
-          color: platformColor,
-        }}
+      <span
+        className="session-row-platform"
+        style={{ color: platformColor }}
       >
         {platformLabel}
-      </div>
+      </span>
 
-      <div className="gateway-session-info">
-        <div className="gateway-session-title-row">
-          <span className="gateway-session-title">
-            {session.title || t("project.untitled")}
-          </span>
-          {isActive && (
-            <span className="gateway-session-badge">
-              <CircleNotchIcon size={8} className="animate-spin" />
-              {t("gateway.streaming")}
-            </span>
-          )}
-        </div>
-        <span className="gateway-session-meta">
-          {session.platform} · {formatRelativeTime(session.updatedAt)}
+      <div className="session-row-info">
+        <span className="session-row-title">
+          {session.title || t("project.untitled")}
+        </span>
+        <span className="session-row-meta">
+          {formatRelativeTime(session.updatedAt)}
         </span>
       </div>
+
+      {isActive && (
+        <span className="session-row-badge">
+          <CircleNotchIcon size={8} className="animate-spin" />
+        </span>
+      )}
     </button>
   );
 }

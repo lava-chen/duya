@@ -13,9 +13,11 @@ import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
 import { FontProvider } from "@/contexts/FontContext";
 import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, subscribeToDbPersisted, canSend } from "@/lib/stream-session-manager";
+import { useSettings } from "@/hooks/useSettings";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
+import { interruptChat } from "@/lib/agent-sse-client";
 
 const ACTIVE_LIKE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 const isActiveLike = (phase: StreamPhase) => ACTIVE_LIKE_PHASES.includes(phase);
@@ -84,6 +86,7 @@ export function App() {
     addMessage,
     loadThreadMessages,
   } = useConversationStore();
+  const { settings } = useSettings();
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingSnapshot, setStreamingSnapshot] = useState<SessionStreamSnapshot | null>(null);
@@ -106,7 +109,9 @@ export function App() {
       const isActive = isActiveLike(snapshot.phase);
 
       // Phase transition: active → non-active (stream ended)
-      // Inject optimistic messages to avoid blank gap before DB load completes
+      // Inject optimistic messages to avoid blank gap before DB load completes.
+      // Do NOT call loadThreadMessages here — db_persisted event is the authoritative
+      // signal that messages have been persisted and will trigger the DB reload.
       if (wasActive && !isActive) {
         const optimistic = buildOptimisticMessages(snapshot);
         if (optimistic.length > 0) {
@@ -119,8 +124,7 @@ export function App() {
             },
           });
         }
-        // Trigger DB load immediately (will silently replace optimistic messages)
-        loadThreadMessages(activeThreadId);
+        // DB reload is triggered by db_persisted event below — do not call loadThreadMessages here
       }
 
       prevPhaseRef.current = snapshot.phase;
@@ -137,7 +141,10 @@ export function App() {
 
     ensureSession(activeThreadId);
     const unsubscribe = subscribeToDbPersisted(activeThreadId, (event) => {
+      const startTime = performance.now();
+      console.log(`[App] db_persisted received: ${activeThreadId.slice(0, 8)}, success=${event.success}, elapsedSinceEvent=${event.timestamp ? (Date.now() - event.timestamp) : 'unknown'}ms`);
       if (event.success) {
+        console.log(`[App] calling loadThreadMessages: ${activeThreadId.slice(0, 8)}`);
         loadThreadMessages(activeThreadId);
       }
     });
@@ -145,22 +152,42 @@ export function App() {
     return unsubscribe;
   }, [activeThreadId, loadThreadMessages]);
 
+  // Handle notification click to navigate to session
+  useEffect(() => {
+    if (window.electronAPI?.onNotificationClicked) {
+      const unsubscribe = window.electronAPI.onNotificationClicked((data) => {
+        if (data.sessionId) {
+          setActiveThread(data.sessionId);
+        }
+      });
+      return unsubscribe;
+    }
+  }, [setActiveThread]);
+
   const handleSendMessage = useCallback(
-    (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, parsedDocs?: { filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }[]) => {
+    (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => {
     if (!activeThreadId || !canSend(activeThreadId)) return;
 
     const now = Date.now();
 
-    // Store message with markers for display
+    // Store message — attachments now carry full parsed data (images + documents)
+    const userMsgId = crypto.randomUUID();
     const userMsg: Message = {
-      id: crypto.randomUUID(),
+      id: userMsgId,
       role: "user",
       content,
       timestamp: now,
       attachments: files,
     };
+    console.log('[App] handleSendMessage:', {
+      contentLength: content.length,
+      filesCount: files?.length,
+      filesWithText: files?.filter(f => f.text)?.map(f => ({ name: f.name, textLength: f.text?.length })),
+      filesWithImageChunks: files?.filter(f => f.imageChunks)?.map(f => ({ name: f.name, chunks: f.imageChunks?.length })),
+    });
 
     addMessage(activeThreadId, userMsg);
+
     setIsStreaming(true);
 
     // Strip markers before sending to API
@@ -177,7 +204,7 @@ export function App() {
       files,
       agentProfileId,
       outputStyleConfig: outputStyleConfig ?? undefined,
-      parsedDocs,
+      titleGenerationModel: settings.titleGenerationModel,
     });
 
     setToolTimeoutCallback(activeThreadId, (retryContent: string) => {
@@ -193,15 +220,15 @@ export function App() {
       addMessage(activeThreadId, retryMsg);
       // Strip markers before sending to API
       const plainRetryContent = stripPastedContentMarkers(retryContent);
-      void startStream({ sessionId: activeThreadId, content: plainRetryContent, permissionMode: agentPermissionMode, model, agentProfileId });
+      void startStream({ sessionId: activeThreadId, content: plainRetryContent, permissionMode: agentPermissionMode, model, agentProfileId, titleGenerationModel: settings.titleGenerationModel });
     });
-  }, [activeThreadId, addMessage]);
+  }, [activeThreadId, addMessage, settings.titleGenerationModel]);
 
   const handleInterrupt = useCallback(() => {
     if (activeThreadId) {
       stopStream(activeThreadId);
-      // Also send interrupt to main process to kill the agent subprocess
-      window.electronAPI?.getAgentPort?.()?.interruptChat(activeThreadId);
+      // Send interrupt to Agent Server to kill the agent subprocess
+      void interruptChat(activeThreadId);
     }
   }, [activeThreadId]);
 

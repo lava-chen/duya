@@ -298,6 +298,24 @@ export function detectCliTool(input: string): string | null {
 }
 
 /**
+ * Parse slash command from input text.
+ * Extracts the command part and remaining text after the slash command.
+ */
+export function parseSlashCommand(input: string): { slashCommand: string; remainingText: string } | null {
+  if (!input.startsWith('/')) return null;
+
+  const spaceIndex = input.indexOf(' ');
+  if (spaceIndex === -1) {
+    return { slashCommand: input, remainingText: '' };
+  }
+
+  return {
+    slashCommand: input.slice(0, spaceIndex),
+    remainingText: input.slice(spaceIndex + 1),
+  };
+}
+
+/**
  * Resolve badge action to determine what to do when a badge is submitted.
  */
 export function resolveBadgeAction(

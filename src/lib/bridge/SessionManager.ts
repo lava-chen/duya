@@ -206,57 +206,17 @@ export class SessionManager {
 
   /**
    * Wait for MessagePort to be available
+   * Note: MessagePort architecture is deprecated, this method always returns null
    */
-  private waitForMessagePort(timeoutMs = 5000): Promise<MessagePort | null> {
-    return new Promise((resolve) => {
-      // Check if port is already available
-      const existingPort = this.getMessagePort();
-      if (existingPort) {
-        resolve(existingPort);
-        return;
-      }
-
-      // Wait for port to become available
-      const startTime = Date.now();
-      const checkInterval = 100;
-
-      const checkPort = () => {
-        const port = this.getMessagePort();
-        if (port) {
-          resolve(port);
-          return;
-        }
-
-        if (Date.now() - startTime >= timeoutMs) {
-          console.warn('[SessionManager] Timeout waiting for MessagePort');
-          resolve(null);
-          return;
-        }
-
-        setTimeout(checkPort, checkInterval);
-      };
-
-      checkPort();
-    });
+  private waitForMessagePort(_timeoutMs = 5000): Promise<MessagePort | null> {
+    return Promise.resolve(null);
   }
 
   /**
    * Get MessagePort from electronAPI
-   * Returns null if the port is not available (uses AgentControlPortAPI under the hood)
+   * Returns null since MessagePort architecture is deprecated
    */
   private getMessagePort(): MessagePort | null {
-    if (typeof window === 'undefined' || !window.electronAPI) {
-      return null;
-    }
-
-    const api = window.electronAPI.getAgentPort?.();
-    if (!api) {
-      return null;
-    }
-
-    // The current AgentControlPortAPI doesn't expose the raw MessagePort directly.
-    // This method returns null and requires the bridge to work with the typed API.
-    // In the full MessagePort architecture, this would return the actual MessagePort.
     return null;
   }
 

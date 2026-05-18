@@ -97,27 +97,13 @@ export const WidgetLayer: React.FC<WidgetLayerProps> = ({ elements, readOnly }) 
   );
 
   const handleLayoutChange = useCallback(
-    (newLayout: Layout) => {
-      if (!activeCanvasId) return;
-
-      for (const item of newLayout) {
-        const el = elements.find((e) => e.id === item.i);
-        if (!el) continue;
-
-        if (
-          item.x !== el.position.x ||
-          item.y !== el.position.y ||
-          item.w !== el.position.w ||
-          item.h !== el.position.h
-        ) {
-          updateElement(item.i, {
-            position: { ...el.position, x: item.x, y: item.y, w: item.w, h: item.h },
-            updatedAt: Date.now(),
-          });
-        }
-      }
+    (_newLayout: Layout) => {
+      // Intentionally empty — syncing position back to the store here
+      // creates an infinite loop: store update → re-render → new layout prop →
+      // react-grid-layout fires onLayoutChange again.
+      // Positions are synced in onDragStop / onResizeStop instead.
     },
-    [activeCanvasId, elements, updateElement]
+    []
   );
 
   const handleDragStop = useCallback(

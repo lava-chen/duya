@@ -8,6 +8,7 @@ import {
   XIcon,
   StopIcon,
   FileIcon,
+  XCircleIcon,
 } from '@/components/icons';
 import { Select } from 'antd';
 import type { CommandBadge, CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
@@ -20,9 +21,10 @@ import {
 } from '@/lib/message-input-logic';
 import { ModelSelector, type ModelOption } from './ModelSelector';
 import { PermissionModeSelector, type PermissionMode } from './PermissionModeSelector';
-import { useFileAttachments, type ParsedDocument } from '@/hooks/useFileAttachments';
+import { useFileAttachments } from '@/hooks/useFileAttachments';
 import { usePastedContent } from '@/hooks/usePastedContent';
 import { PastedContentList } from './PastedContentAttachment';
+import { FileAttachmentCard } from './FileAttachmentCard';
 import { useTranslation } from '@/hooks/useTranslation';
 import { listProvidersIPC, listOutputStylesIPC, type Provider } from '@/lib/ipc-client';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
@@ -42,7 +44,6 @@ interface MessageInputProps {
     content: string,
     files?: FileAttachment[],
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
-    parsedDocs?: ParsedDocument[],
   ) => void;
   onCommand?: (command: string) => void;
   onStop?: () => void;
@@ -198,7 +199,7 @@ export function MessageInput({
   });
 
   // File attachments
-  const { attachedFiles, parsedDocuments, parseErrors, addFile, removeFile, clearFiles, handleFileInput } = useFileAttachments();
+  const { attachedFiles, parseErrors, addFile, removeFile, clearFiles, handleFileInput } = useFileAttachments();
 
   // Pasted content attachments
   const {
@@ -518,7 +519,7 @@ export function MessageInput({
       e.preventDefault();
       const trimmedValue = inputValue.trim();
 
-      // Check if we have any content to send (input, pasted content, files, or file chips)
+      // Check if we have any content to send (input, pasted content, files, file chips, or parsed docs)
       const hasContent = trimmedValue || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0;
       if (!hasContent) return;
       if (disabled || isStreaming) return;
@@ -547,7 +548,7 @@ export function MessageInput({
         setFileChips([]);
         clearPastedContents();
         clearFiles();
-        onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, parsedDocuments);
+        onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto';
         }
@@ -568,7 +569,7 @@ export function MessageInput({
         const result = onExecuteCommand?.(cmd);
         if (result) {
           // Show command result as a message
-          onSend(result.content, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, parsedDocuments);
+          onSend(result.content, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
         }
         setInputValue('');
         setFileChips([]);
@@ -585,7 +586,7 @@ export function MessageInput({
       const cliAppend = buildCliAppend(cliBadge);
       if (cliBadge) setCliBadge(null);
 
-      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, parsedDocuments);
+      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
       setInputValue('');
       setFileChips([]);
       clearPastedContents();
@@ -594,7 +595,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, badge, cliBadge, attachedFiles, parsedDocuments, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles],
+    [inputValue, disabled, isStreaming, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles],
   );
 
   const handleKeyDown = useCallback(
@@ -630,16 +631,11 @@ export function MessageInput({
         e.preventDefault();
         const hasContent = inputValue.trim() || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0;
         if (!isStreaming && hasContent) {
-          // Simulate form submit
-          const form = textareaRef.current?.closest('form');
-          if (form) {
-            const event = new Event('submit', { bubbles: true, cancelable: true });
-            form.dispatchEvent(event);
-          }
+          handleSubmit({ preventDefault: () => {} } as FormEvent);
         }
       }
     },
-    [isStreaming, inputValue, hasPastedContents, attachedFiles, fileChips, popoverMode, filteredItems, selectedIndex, insertItem, closePopover],
+    [isStreaming, inputValue, hasPastedContents, attachedFiles, fileChips, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
   );
 
   const handleStop = useCallback(() => {
@@ -658,23 +654,18 @@ export function MessageInput({
 
   return (
     <div className="flex flex-col">
-      {/* File Attachments Capsules */}
-      {attachedFiles.length > 0 && (
+      {/* Document Parse Errors */}
+      {parseErrors.size > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
-          {attachedFiles.map((file) => (
+          {Array.from(parseErrors.entries()).map(([filename, error]) => (
             <div
-              key={file.id}
-              className="flex items-center gap-1 px-2 py-1 bg-muted rounded-full text-xs"
+              key={filename}
+              className="flex items-center gap-1 px-2 py-1 bg-destructive/10 text-destructive rounded-full text-xs"
+              title={error}
             >
-              <FileIcon size={12} />
-              <span className="truncate max-w-[100px]">{file.name}</span>
-              <button
-                type="button"
-                onClick={() => removeFile(file.id)}
-                className="w-4 h-4 rounded-full bg-muted-foreground/20 flex items-center justify-center hover:bg-muted-foreground/40 transition-colors"
-              >
-                <XIcon size={10} />
-              </button>
+              <XCircleIcon size={12} />
+              <span className="truncate max-w-[150px]">{filename}</span>
+              <span className="text-destructive/60 text-[10px]">解析失败</span>
             </div>
           ))}
         </div>
@@ -702,6 +693,23 @@ export function MessageInput({
         />
 
         <div className="rounded-2xl p-3 transition-shadow" style={{ backgroundColor: 'var(--surface)', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+          {/* File Attachments Square Cards - Inside input box */}
+          {attachedFiles.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {attachedFiles.map((file) => (
+                <FileAttachmentCard
+                  key={file.id}
+                  id={file.id}
+                  name={file.name}
+                  size={file.size}
+                  thumbnail={file.thumbnail}
+                  onRemove={removeFile}
+                  width={104}
+                />
+              ))}
+            </div>
+          )}
+
           {/* Pasted Content Attachments - Inside input box */}
           <PastedContentList contents={pastedContents} onRemove={removePastedContent} />
 
@@ -736,7 +744,7 @@ export function MessageInput({
           {/* Textarea */}
           <textarea
             ref={textareaRef}
-            className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none min-h-[40px] max-h-[150px]"
+            className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none min-h-[56px] max-h-[150px]"
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}

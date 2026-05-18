@@ -5,6 +5,7 @@ import type { Message, ToolUseInfo, ToolResultInfo } from '@/types';
 import { ToolActionsGroup, pairTools, type ActionItem, type ToolAction } from './ToolActionsGroup';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { CopyIcon, CheckIcon, NotePencilIcon } from '@/components/icons';
+import { FileAttachmentCard } from './FileAttachmentCard';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
 import { parseAllShowWidgets } from '@/lib/widget-parser';
 import { WidgetRenderer } from './WidgetRenderer';
@@ -64,15 +65,22 @@ function parseMessageContent(content: string | unknown[], msgType?: string): {
   }
 
   if (msgType === 'tool_use') {
-    if (typeof content === 'string') {
-      try {
-        const parsed = JSON.parse(content);
-        toolUses.push({ id: '', name: '', input: parsed });
-      } catch {
-        toolUses.push({ id: '', name: '', input: {} });
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block && typeof block === 'object') {
+          const b = block as Record<string, unknown>;
+          if (b.type === 'tool_use') {
+            toolUses.push({
+              id: b.id as string,
+              name: b.name as string,
+              input: b.input as Record<string, unknown> || {},
+            });
+          }
+        }
       }
     } else {
-      toolUses.push({ id: '', name: '', input: content as unknown as Record<string, unknown> || {} });
+      // Backward compat: string content for tool_use (unlikely after parsing)
+      toolUses.push({ id: '', name: '', input: {} });
     }
     return { text, toolUses, thinkingContent };
   }
@@ -103,35 +111,6 @@ function parseMessageContent(content: string | unknown[], msgType?: string): {
   }
 
   if (typeof content === 'string') {
-    if (content.trim().startsWith('[')) {
-      try {
-        const blocks = JSON.parse(content);
-        if (Array.isArray(blocks)) {
-          const textParts: string[] = [];
-
-          blocks.forEach(block => {
-            if (block.type === 'text' && block.text) {
-              textParts.push(block.text);
-            } else if (block.type === 'tool_use') {
-              toolUses.push({
-                id: block.id,
-                name: block.name,
-                input: block.input || {},
-              });
-            } else if (block.type === 'thinking' && block.thinking) {
-              const rawThinking = block.thinking;
-              thinkingContent = typeof rawThinking === 'string' ? rawThinking : JSON.stringify(rawThinking);
-            }
-          });
-
-          text = textParts.join('');
-          return { text, toolUses, thinkingContent };
-        }
-      } catch {
-        // If JSON parsing fails, treat as plain text
-      }
-    }
-
     text = content;
     return { text, toolUses };
   }
@@ -316,52 +295,8 @@ function messageToActionItems(
     return actions;
   }
 
-  // Parse string content that might be JSON array
+  // String content is plain text (JSON arrays already parsed in ipc-client)
   if (typeof msg.content === 'string') {
-    if (msg.content.trim().startsWith('[')) {
-      try {
-        const blocks = JSON.parse(msg.content);
-        if (Array.isArray(blocks)) {
-          for (const block of blocks) {
-            if (block.type === 'text' && block.text && String(block.text).trim()) {
-              actions.push({ kind: 'text', content: String(block.text) });
-            } else if (block.type === 'tool_use') {
-              if (block.name === 'show_widget') {
-                const widgetCode = (block.input as Record<string, unknown>)?.widget_code;
-                if (typeof widgetCode === 'string' && widgetCode.trim()) {
-                  actions.push({ kind: 'widget', content: widgetCode });
-                }
-                continue;
-              }
-              const toolId = String(block.id || '');
-              const result = toolId ? toolResultMap.get(toolId) : undefined;
-              actions.push({
-                kind: 'tool',
-                tool: {
-                  id: toolId,
-                  name: String(block.name || ''),
-                  input: block.input || {},
-                  result: result?.content,
-                  isError: result?.is_error,
-                  durationMs: result?.duration_ms,
-                },
-              });
-            } else if (block.type === 'thinking' && block.thinking) {
-              const rawThinking = block.thinking;
-              const thinkingStr = typeof rawThinking === 'string' ? rawThinking : JSON.stringify(rawThinking);
-              if (thinkingStr.trim()) {
-                actions.push({ kind: 'thinking', content: thinkingStr });
-              }
-            }
-          }
-          return actions;
-        }
-      } catch {
-        // Not JSON array, treat as plain text
-      }
-    }
-
-    // Plain text
     const withPasted = parseMessageContentWithPasted(msg.content);
     if (withPasted.text.trim()) {
       actions.push({ kind: 'text', content: withPasted.text });
@@ -495,22 +430,14 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
           {fileAttachments.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">
               {fileAttachments.map((attachment) => (
-                <div
+                <FileAttachmentCard
                   key={attachment.id}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border/50 bg-muted/30 max-w-[240px]"
-                >
-                  <div className="flex-shrink-0 w-8 h-10 rounded bg-red-500/10 flex items-center justify-center">
-                    <span className="text-[10px] font-bold text-red-500">PDF</span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium truncate" style={{ color: 'var(--text)' }}>
-                      {attachment.name}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground truncate">
-                      {attachment.size > 0 ? `${(attachment.size / 1024).toFixed(1)} KB` : 'Document'}
-                    </p>
-                  </div>
-                </div>
+                  id={attachment.id}
+                  name={attachment.name}
+                  size={attachment.size}
+                  thumbnail={attachment.thumbnail}
+                  width={120}
+                />
               ))}
             </div>
           )}
@@ -520,7 +447,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
               {imageAttachments.map((attachment) => (
                 <div key={attachment.id} className="relative group/image">
                   <img
-                    src={attachment.url}
+                    src={attachment.displayUrl || attachment.url}
                     alt={attachment.name}
                     className="max-w-[200px] max-h-[150px] rounded-lg object-cover border border-border/50"
                     loading="lazy"

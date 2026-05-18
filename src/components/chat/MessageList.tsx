@@ -6,7 +6,6 @@ import React, { useEffect, useRef, useMemo, useCallback, forwardRef, useImperati
 import type { Message } from '@/types';
 import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
-import { useStreamingAgentProgress } from '@/hooks/useStreamingAgentProgress';
 
 export interface MessageListRef {
   scrollToBottom: () => void;
@@ -48,19 +47,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const hasScrolledOnMountRef = useRef(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
-  // Expose scrollToBottom via ref
-  useImperativeHandle(ref, () => ({
-    scrollToBottom: () => {
-      const container = containerRef.current;
-      if (!container) return;
-      const lastEl = container.querySelector('[data-message-id]:last-child');
-      if (lastEl) {
-        lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
-      } else {
-        container.scrollTop = container.scrollHeight;
-      }
-    },
-  }));
+  const lastMessageSelector = '[data-message-id]:last-of-type';
 
   // Check if user is near bottom of scroll
   const checkScrollPosition = useCallback(() => {
@@ -203,8 +190,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     return result;
   }, [messages]);
 
-  const agentProgressEvents = useStreamingAgentProgress(sessionId);
-  const shouldRenderStreamingMessage = isStreaming || agentProgressEvents.length > 0;
+  const shouldRenderStreamingMessage = isStreaming;
 
   // Track session changes and reset scroll state
   useEffect(() => {
@@ -228,7 +214,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     // Only scroll when we have messages and haven't scrolled yet for this session
     if (messages.length > 0 && !hasScrolledOnMountRef.current) {
       // Scroll immediately without animation to prevent visible scrolling
-      const lastMessageEl = container.querySelector('[data-message-id]:last-child');
+      const lastMessageEl = container.querySelector('[data-message-id]:last-of-type');
       if (lastMessageEl) {
         lastMessageEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
       } else {
@@ -264,7 +250,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           if (el) {
             el.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
           } else {
-            const lastEl = container.querySelector('[data-message-id]:last-child');
+            const lastEl = container.querySelector('[data-message-id]:last-of-type');
             if (lastEl) {
               lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
             } else {
@@ -274,7 +260,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
         });
       } else {
         // Non-user message added (e.g. assistant/tool) — scroll to bottom
-        const lastEl = container.querySelector('[data-message-id]:last-child');
+        const lastEl = container.querySelector('[data-message-id]:last-of-type');
         if (lastEl) {
           lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
         } else {
@@ -284,7 +270,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     }
 
     if (isStreaming && !wasStreamingRef.current) {
-      const lastEl = container.querySelector('[data-message-id]:last-child');
+      const lastEl = container.querySelector('[data-message-id]:last-of-type');
       if (lastEl) {
         lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
       } else {
@@ -296,31 +282,85 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     wasStreamingRef.current = isStreaming;
   }, [messages, isStreaming]);
 
-  // Continuous scroll during streaming - only if user is already near bottom
-  const isNearBottomRef = useRef(true);
+  // Intelligent auto-scroll during streaming
+  // Rules:
+  // 1. Streaming content -> auto-scroll to bottom
+  // 2. User scrolled up -> pause auto-scroll (show indicator)
+  // 3. User reaches bottom and stays idle -> resume auto-scroll
+  const isUserScrolledUpRef = useRef(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
 
+  // Reset idle state when user reaches bottom
+  const resetIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+    }
+    idleTimerRef.current = setTimeout(() => {
+      // After 2 seconds at bottom, resume auto-scroll
+      isUserScrolledUpRef.current = false;
+    }, 2000);
+  }, []);
+
+  // Handle user scroll - detect if scrolled away from bottom
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleUserScroll = () => {
+      const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const atBottom = distFromBottom < 50;
+
+      if (atBottom) {
+        // User reached bottom - reset idle timer
+        resetIdleTimer();
+        isUserScrolledUpRef.current = false;
+      } else {
+        // User scrolled away from bottom
+        isUserScrolledUpRef.current = true;
+        if (idleTimerRef.current) {
+          clearTimeout(idleTimerRef.current);
+        }
+      }
+    };
+
+    container.addEventListener('scroll', handleUserScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', handleUserScroll);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [resetIdleTimer]);
+
+  // Continuous scroll during streaming
   useEffect(() => {
     if (!isStreaming) return;
 
     const container = containerRef.current;
     if (!container) return;
 
-    // Only auto-scroll if user is near bottom (within 80px)
-    const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    isNearBottomRef.current = distFromBottom < 80;
+    // Skip if user scrolled up and hasn't returned to bottom
+    if (isUserScrolledUpRef.current) return;
 
-    if (!isNearBottomRef.current) return;
-
-    // Use requestAnimationFrame for smoother scrolling, synced with browser render
-    requestAnimationFrame(() => {
+    // Scroll to bottom with requestAnimationFrame for smooth typing effect
+    const scroll = () => {
       if (!containerRef.current) return;
-      const lastEl = containerRef.current.querySelector('[data-message-id]:last-child');
+
+      const lastEl = containerRef.current.querySelector('[data-message-id]:last-of-type');
       if (lastEl) {
         lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
       } else {
         containerRef.current.scrollTop = containerRef.current.scrollHeight;
       }
-    });
+    };
+
+    // Use RAF for smooth, non-blocking scroll
+    scrollRafRef.current = requestAnimationFrame(scroll);
+
+    return () => {
+      if (scrollRafRef.current) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+    };
   }, [isStreaming]);
 
 

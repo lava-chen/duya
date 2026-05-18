@@ -16,7 +16,7 @@ import {
 } from '@/components/icons';
 import { ChannelIcon, CHANNEL_COLORS } from '@/components/bridge/ChannelIcon';
 import { useTranslation } from '@/hooks/useTranslation';
-import { getActiveProviderIPC } from '@/lib/ipc-client';
+
 import {
   SettingsSection,
   SettingsCard,
@@ -30,7 +30,7 @@ import { cn } from '@/lib/utils';
 interface BridgeStatus {
   running: boolean;
   adapters: Array<{
-    channelType: string;
+    platform: string;
     running: boolean;
     lastMessageAt?: number;
     error?: string;
@@ -103,9 +103,6 @@ export default function BridgeSection() {
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [activeChannel, setActiveChannel] = useState<ChannelType>('telegram');
-  const [gatewayModel, setGatewayModel] = useState<string>('');
-  const [activeProviderModel, setActiveProviderModel] = useState<string>('');
-
   const channels: ChannelInfo[] = [
     {
       id: 'telegram',
@@ -148,19 +145,7 @@ export default function BridgeSection() {
     fetchStatus();
     fetchSettings();
     fetchProxyStatus();
-    fetchProviderInfo();
   }, []);
-
-  const fetchProviderInfo = async () => {
-    try {
-      const activeProvider = await getActiveProviderIPC();
-      if (activeProvider) {
-        setActiveProviderModel(activeProvider.defaultModel || '');
-      }
-      const gwModel = await window.electronAPI?.settingsDb?.get('gatewayModel');
-      setGatewayModel(typeof gwModel === 'string' ? gwModel : '');
-    } catch { /* ignore */ }
-  };
 
   const fetchStatus = async () => {
     try {
@@ -242,10 +227,6 @@ export default function BridgeSection() {
     try {
       await window.electronAPI?.settingsDb?.set(key, value);
       await fetchSettings();
-      if (key === 'gatewayModel' || key === 'provider_defaultModel' || key === 'provider_model') {
-        await fetchProviderInfo();
-      }
-
       if (status?.running) {
         try {
           await window.electronAPI?.gateway?.reload();
@@ -310,7 +291,7 @@ export default function BridgeSection() {
   };
 
   const getChannelStatus = (channelId: ChannelType) => {
-    const adapter = status?.adapters.find(a => a.channelType === channelId);
+    const adapter = status?.adapters.find(a => a.platform === channelId);
     const isRunning = adapter?.running ?? false;
     const hasError = adapter?.error && adapter.error.length > 0;
     const enabledKey = `bridge_${channelId}_enabled` as keyof BridgeSettings;
@@ -423,38 +404,6 @@ export default function BridgeSection() {
         </SettingsCard>
       </SettingsSection>
 
-      {/* Gateway Model Status */}
-      <SettingsSection title="Gateway 模型配置" description="Gateway 使用独立模型配置，不受当前 active provider 影响">
-        <SettingsCard>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">当前模型</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {gatewayModel
-                  ? `Gateway 配置: ${gatewayModel}`
-                  : activeProviderModel
-                    ? `使用 Active Provider: ${activeProviderModel}`
-                    : '未配置 - 请前往设置 → Provider 配置中选择一个模型'}
-              </p>
-            </div>
-            {gatewayModel || activeProviderModel ? (
-              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                已配置
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-yellow-500/10 text-yellow-500 border border-yellow-500/20">
-                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
-                未配置
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground mt-2">
-            如果需要使用与 Provider 不同的模型，请在 Provider 设置中配置 gatewayModel。
-          </p>
-        </SettingsCard>
-      </SettingsSection>
-
       {/* Channels Section with Sidebar Layout */}
       <SettingsSection title={t('bridge.channels')} description={t('bridge.configureMessagingPlatforms')} className="flex-1 min-h-0">
         <div className="flex h-full min-h-[400px] border border-border/50 rounded-xl overflow-hidden bg-card">
@@ -521,7 +470,7 @@ export default function BridgeSection() {
               <ChannelSettingsPanel
                 title={t('bridge.telegram')}
                 enabled={settings?.['bridge_telegram_enabled'] === 'true'}
-                running={status?.adapters.find(a => a.channelType === 'telegram')?.running}
+                running={status?.adapters.find(a => a.platform === 'telegram')?.running}
                 onTest={() => testConnection('telegram')}
                 testing={testingChannel === 'telegram'}
                 testResult={testResults['telegram']}
@@ -542,7 +491,7 @@ export default function BridgeSection() {
               <ChannelSettingsPanel
                 title={t('bridge.qq')}
                 enabled={settings?.['bridge_qq_enabled'] === 'true'}
-                running={status?.adapters.find(a => a.channelType === 'qq')?.running}
+                running={status?.adapters.find(a => a.platform === 'qq')?.running}
                 onTest={() => testConnection('qq')}
                 testing={testingChannel === 'qq'}
                 testResult={testResults['qq']}
@@ -575,7 +524,7 @@ export default function BridgeSection() {
             {activeChannel === 'weixin' && (
               <WeChatSettingsPanel
                 enabled={settings?.['bridge_weixin_enabled'] === 'true'}
-                running={status?.adapters.find(a => a.channelType === 'weixin')?.running}
+                running={status?.adapters.find(a => a.platform === 'weixin')?.running}
                 onTest={() => testConnection('weixin')}
                 testing={testingChannel === 'weixin'}
                 testResult={testResults['weixin']}
@@ -590,7 +539,7 @@ export default function BridgeSection() {
               <ChannelSettingsPanel
                 title={t('bridge.feishu')}
                 enabled={settings?.['bridge_feishu_enabled'] === 'true'}
-                running={status?.adapters.find(a => a.channelType === 'feishu')?.running}
+                running={status?.adapters.find(a => a.platform === 'feishu')?.running}
                 onTest={() => testConnection('feishu')}
                 testing={testingChannel === 'feishu'}
                 testResult={testResults['feishu']}
@@ -661,7 +610,7 @@ export default function BridgeSection() {
             {activeChannel === 'whatsapp' && (
               <WhatsAppSettingsPanel
                 enabled={settings?.['bridge_whatsapp_enabled'] === 'true'}
-                running={status?.adapters.find(a => a.channelType === 'whatsapp')?.running}
+                running={status?.adapters.find(a => a.platform === 'whatsapp')?.running}
                 onTest={() => testConnection('whatsapp')}
                 testing={testingChannel === 'whatsapp'}
                 testResult={testResults['whatsapp']}

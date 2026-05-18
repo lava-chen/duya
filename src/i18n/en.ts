@@ -209,6 +209,14 @@ const en = {
   'settings.providers.connectedCountPlural': '{count} providers connected',
   'settings.providers.learnMore': 'Learn more about choosing a provider',
   'settings.providers.addProviderDesc': 'Connect to a new AI provider',
+  'settings.providers.modelSelection': 'Model Selection',
+  'settings.providers.modelSelectionDesc': 'Select models for different tasks',
+  'settings.providers.visionModel': 'Vision Model',
+  'settings.providers.visionModelDesc': 'For image analysis and understanding',
+  'settings.providers.gatewayModel': 'Gateway Model',
+  'settings.providers.gatewayModelDesc': 'For bridge/channel chat sessions',
+  'settings.providers.titleModel': 'Title Model',
+  'settings.providers.titleModelDesc': 'For auto-generating conversation titles',
 
   'settings.appearance.title': 'Appearance',
   'settings.appearance.description': 'Customize the look and feel',
@@ -318,6 +326,8 @@ const en = {
   'common.settings': 'Settings',
   'common.select': 'Select',
   'common.reset': 'Reset',
+  'common.showAll': 'Show all ({count})',
+  'common.collapse': 'Collapse',
 
   'thread.newThread': 'New Thread',
   'thread.deleteThread': 'Delete Thread',

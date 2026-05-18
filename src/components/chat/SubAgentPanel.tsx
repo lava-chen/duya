@@ -84,7 +84,7 @@ function getAgentDisplayNameFromEvents(events: AgentProgressEventWithMeta[]): st
   return '';
 }
 
-export function useSubAgents(sessionId: string): SubAgentInfo[] {
+export function useAgents(sessionId: string): SubAgentInfo[] {
   const events = useStreamingAgentProgress(sessionId);
 
   return useMemo(() => {
@@ -118,8 +118,10 @@ export function useSubAgents(sessionId: string): SubAgentInfo[] {
   }, [events]);
 }
 
+export const useSubAgents = useAgents;
+
 export function SubAgentPanel({ sessionId, onOpenSubAgent }: SubAgentPanelProps) {
-  const agents = useSubAgents(sessionId);
+  const agents = useAgents(sessionId);
   const phase = useStreamPhase(sessionId);
   const [expanded, setExpanded] = useState(true);
   const [dismissed, setDismissed] = useState(false);

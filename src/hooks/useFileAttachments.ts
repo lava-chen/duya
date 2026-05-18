@@ -7,16 +7,19 @@ export interface FileAttachment {
   id: string;
   name: string;
   type: string;
+  /** URL can be: data URL (images), absolute file path, or empty for placeholder */
   url: string;
   size: number;
-}
-
-export interface ParsedDocument {
-  filename: string;
-  charCount: number;
-  text: string;
+  /** Absolute file path for document files (pdf, docx, etc.) */
+  path?: string;
+  /** Parsed text content for document files */
+  text?: string;
+  /** Extraction method for parsed documents */
   extractMethod?: 'text' | 'vision' | 'hybrid';
+  /** Image chunks from OCR/vision extraction */
   imageChunks?: Array<{ base64: string; mediaType: string }>;
+  /** Thumbnail preview for document files (base64 data URL) */
+  thumbnail?: string;
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
@@ -45,7 +48,6 @@ function imageChunkToFileAttachment(base64: string, mediaType: string): FileAtta
  */
 export function useFileAttachments() {
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
-  const [parsedDocuments, setParsedDocuments] = useState<ParsedDocument[]>([]);
   const [parseErrors, setParseErrors] = useState<Map<string, string>>(new Map());
   const parsingRef = useRef(false);
 
@@ -101,17 +103,39 @@ export function useFileAttachments() {
    * Add a file to the attachments list.
    */
   const addFile = useCallback(async (file: File) => {
-    const attachment = await convertToFileAttachment(file);
-    if (attachment) {
-      setAttachedFiles((prev) => [...prev, attachment]);
-    }
+    if (isDocumentFile(file.name)) {
+      // Document files (pdf, docx, etc.) — add a placeholder, then update in place
+      // after parsing completes. All parsed data goes into the attachment itself.
+      const placeholderId = crypto.randomUUID();
+      setAttachedFiles((prev) => [...prev, {
+        id: placeholderId,
+        name: file.name,
+        type: file.type,
+        url: '',
+        size: file.size,
+      }]);
 
-    if (isDocumentFile(file.name) && !parsingRef.current) {
-      parsingRef.current = true;
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const filePath = (file as any).path;
-        if (filePath && window.electronAPI?.parser) {
+      if (!parsingRef.current) {
+        parsingRef.current = true;
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const filePath = (file as any).path;
+          if (!filePath) {
+            setParseErrors((prev) => {
+              const next = new Map(prev);
+              next.set(file.name, '无法获取文件路径，请通过文件对话框选择文件');
+              return next;
+            });
+            return;
+          }
+          if (!window.electronAPI?.parser) {
+            setParseErrors((prev) => {
+              const next = new Map(prev);
+              next.set(file.name, '文档解析服务未初始化，请重启应用');
+              return next;
+            });
+            return;
+          }
           const result = await window.electronAPI.parser.parse(filePath);
           if (result) {
             const textChunks = result.chunks
@@ -123,34 +147,84 @@ export function useFileAttachments() {
               .filter((c): c is { type: 'image'; index: number; base64: string; mediaType: string } => c.type === 'image')
               .map((c) => ({ base64: c.base64, mediaType: c.mediaType }));
 
-            const doc: ParsedDocument = {
-              filename: result.filename,
-              charCount: result.charCount,
-              text,
-              extractMethod: result.extractMethod,
-            };
+            // Build thumbnail data URL from parser result
+            const thumbnail = result.thumbnail
+              ? `data:${result.thumbnail.mediaType};base64,${result.thumbnail.base64}`
+              : undefined;
 
-            if (imageChunks.length > 0) {
-              doc.imageChunks = imageChunks;
-
-              const syntheticAttachments = imageChunks.map((ic) =>
-                imageChunkToFileAttachment(ic.base64, ic.mediaType),
-              );
-              setAttachedFiles((prev) => [...prev, ...syntheticAttachments]);
-            }
-
-            setParsedDocuments((prev) => [...prev, doc]);
+            // Update placeholder with parsed data
+            setAttachedFiles((prev) => prev.map((f) =>
+              f.id === placeholderId ? {
+                ...f,
+                url: filePath,
+                path: filePath,
+                text,
+                extractMethod: result.extractMethod,
+                imageChunks: imageChunks.length > 0 ? imageChunks : undefined,
+                thumbnail,
+              } : f
+            ));
+            console.log('[useFileAttachments] attachment updated:', {
+              id: placeholderId,
+              name: result.filename,
+              hasText: !!text,
+              textLength: text.length,
+              imageChunksCount: imageChunks.length,
+              hasThumbnail: !!thumbnail,
+            });
           }
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          setParseErrors((prev) => {
+            const next = new Map(prev);
+            next.set(file.name, errMsg);
+            return next;
+          });
+        } finally {
+          parsingRef.current = false;
         }
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        setParseErrors((prev) => {
-          const next = new Map(prev);
-          next.set(file.name, errMsg);
-          return next;
-        });
-      } finally {
-        parsingRef.current = false;
+      }
+    } else {
+      // Image files — generate thumbnail for display, store path for vision tool
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filePath = (file as any).path;
+      if (filePath) {
+        // Generate thumbnail for display (browsers can't show file:// URLs)
+        let thumbnailUrl = '';
+        try {
+          const thumbnail = await compressImage(file, {
+            maxWidth: 400,
+            maxHeight: 300,
+            quality: 0.7,
+            maxSizeMB: 0.5,
+          });
+          // Convert to base64 data URL for display
+          thumbnailUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = () => resolve('');
+            reader.readAsDataURL(thumbnail);
+          });
+        } catch (err) {
+          console.warn('[useFileAttachments] Thumbnail generation failed:', err);
+        }
+
+        setAttachedFiles((prev) => [...prev, {
+          id: crypto.randomUUID(),
+          name: file.name,
+          type: file.type,
+          url: filePath,       // Original file path for vision_analyze tool
+          path: filePath,      // Also stored in path field
+          size: file.size,
+          displayUrl: thumbnailUrl, // Base64 thumbnail for display
+        }]);
+      } else {
+        // Fallback: if no path available (shouldn't happen in Electron), compress and store as data URL
+        console.warn('[useFileAttachments] No file path available for image, falling back to data URL');
+        const attachment = await convertToFileAttachment(file);
+        if (attachment) {
+          setAttachedFiles((prev) => [...prev, attachment]);
+        }
       }
     }
   }, [convertToFileAttachment]);
@@ -159,14 +233,14 @@ export function useFileAttachments() {
    * Remove a file from the attachments list by ID.
    */
   const removeFile = useCallback((id: string) => {
+    const file = attachedFiles.find((f) => f.id === id);
     setAttachedFiles((prev) => {
-      const file = prev.find((f) => f.id === id);
       if (file?.url.startsWith('blob:')) {
         URL.revokeObjectURL(file.url);
       }
       return prev.filter((f) => f.id !== id);
     });
-  }, []);
+  }, [attachedFiles]);
 
   const clearFiles = useCallback(() => {
     setAttachedFiles((prev) => {
@@ -177,7 +251,6 @@ export function useFileAttachments() {
       });
       return [];
     });
-    setParsedDocuments([]);
     setParseErrors(new Map());
   }, []);
 
@@ -199,7 +272,6 @@ export function useFileAttachments() {
 
   return {
     attachedFiles,
-    parsedDocuments,
     parseErrors,
     addFile,
     removeFile,

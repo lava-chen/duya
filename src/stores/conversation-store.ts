@@ -11,7 +11,10 @@ import {
   getProjectGroupsIPC,
   addMessageIPC,
   getActiveProviderIPC,
+  updateThreadIPC,
 } from '@/lib/ipc-client';
+import { getAgentServerClient } from '@/lib/agent-http-client';
+import { registerLoadedMessages } from '@/lib/stream-session-manager';
 
 // Thread interface - uses camelCase for frontend consistency
 // generation is optional since older threads may not have it
@@ -81,6 +84,7 @@ interface ConversationState {
   loadThreadMessages: (threadId: string) => Promise<void>;
   syncThreadToDatabase: (thread: Thread) => Promise<void>;
   syncMessageToDatabase: (threadId: string, message: Message) => Promise<void>;
+  syncThreadTitleToDatabase: (id: string, title: string) => Promise<void>;
   forceSync: () => Promise<void>; // Force immediate sync with database
 }
 
@@ -243,10 +247,11 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       setActiveThread: async (id) => {
-        console.log('[Store] setActiveThread called:', id.slice(0, 8));
+        const startTime = performance.now();
+        console.log(`[Store] setActiveThread START: ${id.slice(0, 8)}`);
         let thread = get().threads.find(t => t.id === id);
         console.log('[Store] Found in local threads:', !!thread, 'parentId:', thread?.parentId);
-        
+
         // If thread not in local state, try to fetch from DB
         if (!thread) {
           console.log('[Store] Thread not in local, fetching from DB...');
@@ -265,27 +270,28 @@ export const useConversationStore = create<ConversationState>()(
             console.error('[Store] Failed to fetch thread from DB:', err);
           }
         }
-        
+
         const parentId = thread?.parentId || null;
         console.log('[Store] Final parentId:', parentId);
         const updates: Partial<ConversationState> = { activeThreadId: id, currentView: 'chat', parentSessionId: parentId };
-        
+
         // Auto-expand parent thread in sidebar when opening a sub-agent
         if (parentId) {
           const newExpanded = new Set(get().expandedThreads);
           newExpanded.add(parentId);
           updates.expandedThreads = newExpanded;
         }
-        
+
         // Force reload threads from DB to show newly created sub-agent sessions in sidebar
         updates.lastSyncAt = 0;
         set(updates);
-        
+
         // Load messages for this thread from database
         get().loadThreadMessages(id);
-        
+
         // Always reload from DB to ensure we have latest data including sub-agents
         get().loadFromDatabase();
+        console.log(`[Store] setActiveThread DONE: ${id.slice(0, 8)}, total=${(performance.now() - startTime).toFixed(1)}ms`);
       },
 
       goToParentSession: () => {
@@ -297,8 +303,26 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       loadThreadMessages: async (threadId) => {
+        const startTime = performance.now();
+        console.log(`[Store] loadThreadMessages START: ${threadId.slice(0, 8)}`);
         try {
+          // Check if session is currently streaming - if so skip DB load
+          // to avoid duplicates from SSE events
+          let isStreaming = false;
+          try {
+            const status = await getAgentServerClient().getSessionStatus(threadId);
+            if (status && status.state === 'STREAMING') {
+              console.log(`[Store] Skipping DB load for STREAMING session: ${threadId.slice(0, 8)}`);
+              isStreaming = true;
+            }
+          } catch {
+            // Ignore - Agent Server may not be running
+          }
+          if (isStreaming) return;
+
+          const dbStart = performance.now();
           const data = await getThreadIPC(threadId);
+          console.log(`[Store] getThreadIPC DONE: ${threadId.slice(0, 8)}, messages=${data?.messages?.length ?? 0}, elapsed=${(performance.now() - dbStart).toFixed(1)}ms`);
           if (data) {
             // Convert IPC messages to store's expected format (timestamp instead of createdAt)
             const messages: Message[] = (data.messages || []).map((m) => ({
@@ -326,6 +350,8 @@ export const useConversationStore = create<ConversationState>()(
               attachments: m.attachments ?? undefined,
             }));
             const threadData = data.thread;
+            const mapEnd = performance.now();
+            console.log(`[Store] messages MAPPED: ${threadId.slice(0, 8)}, count=${messages.length}, elapsed=${(mapEnd - dbStart).toFixed(1)}ms`);
 
             set((state) => {
               // Update thread's generation if provided
@@ -343,6 +369,10 @@ export const useConversationStore = create<ConversationState>()(
                 threads: updatedThreads,
               };
             });
+            // Register loaded messages with stream-session-manager to deduplicate
+            // tool_use/tool_result from SSE reconnection after page refresh
+            registerLoadedMessages(threadId, data.messages);
+            console.log(`[Store] loadThreadMessages DONE: ${threadId.slice(0, 8)}, total=${(performance.now() - startTime).toFixed(1)}ms`);
           }
         } catch (error) {
           console.error('[Store] Failed to load thread messages:', error);
@@ -413,10 +443,10 @@ export const useConversationStore = create<ConversationState>()(
           ),
         }));
 
-        // Sync to database
+        // Sync title update to database using updateThreadIPC
         const thread = get().threads.find((t) => t.id === id);
         if (thread) {
-          get().syncThreadToDatabase(thread);
+          get().syncThreadTitleToDatabase(id, title);
         }
       },
 
@@ -584,7 +614,7 @@ export const useConversationStore = create<ConversationState>()(
             id: message.id,
             sessionId: threadId,
             role: message.role,
-            content: message.content,
+            content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
             name: message.name,
             toolCallId: message.tool_call_id,
             tokenUsage: message.tokenUsage ? JSON.stringify(message.tokenUsage) : undefined,
@@ -602,6 +632,16 @@ export const useConversationStore = create<ConversationState>()(
           });
         } catch (error) {
           console.error('[Store] Failed to sync message to database:', error);
+        }
+      },
+
+      syncThreadTitleToDatabase: async (id, title) => {
+        try {
+          await updateThreadIPC(id, { title });
+          // Notify other windows/tabs after successful sync
+          notifyThreadsChanged();
+        } catch (error) {
+          console.error('[Store] Failed to sync thread title to database:', error);
         }
       },
     }),

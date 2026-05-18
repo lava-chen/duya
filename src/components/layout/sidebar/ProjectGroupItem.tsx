@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useConversationStore, type Thread, type ProjectGroup } from "@/stores/conversation-store";
 import { ThreadListItem } from "./ThreadListItem";
-import { FolderIcon, FolderOpenIcon, ArchiveIcon, DotsThreeIcon, FolderOpenIcon as OpenFolderIcon, CopyIcon, PlusIcon } from "@/components/icons";
+import { FolderIcon, FolderOpenIcon, ArchiveIcon, DotsThreeIcon, FolderOpenIcon as OpenFolderIcon, CopyIcon, PlusIcon, CaretDownIcon, CaretRightIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 
 interface ProjectGroupItemProps {
@@ -13,6 +13,8 @@ interface ProjectGroupItemProps {
   threadChildren?: Map<string, Thread[]>;
 }
 
+const THREAD_COLLAPSE_THRESHOLD = 5;
+
 export function ProjectGroupItem({ project, threads, activeThreadId, threadChildren }: ProjectGroupItemProps) {
   const { t } = useTranslation();
   const { deleteThread, createThread, setActiveThread } = useConversationStore();
@@ -20,11 +22,19 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
+  const [showAllThreads, setShowAllThreads] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   // Sort threads by updatedAt, most recent first
   const sortedThreads = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
+
+  // Determine if we need to collapse threads
+  const hasMoreThreads = sortedThreads.length > THREAD_COLLAPSE_THRESHOLD;
+  const visibleThreads = showAllThreads
+    ? sortedThreads
+    : sortedThreads.slice(0, THREAD_COLLAPSE_THRESHOLD);
+  const hiddenCount = sortedThreads.length - THREAD_COLLAPSE_THRESHOLD;
 
   const handleToggle = useCallback(() => {
     setIsExpanded((prev) => !prev);
@@ -167,7 +177,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
         {/* Thread List */}
         {isExpanded && (
           <div className="project-group-threads">
-            {sortedThreads.map((thread) => (
+            {visibleThreads.map((thread) => (
               <ThreadListItem
                 key={thread.id}
                 thread={thread}
@@ -175,6 +185,26 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
                 childrenThreads={threadChildren?.get(thread.id) || []}
               />
             ))}
+            {hasMoreThreads && !showAllThreads && (
+              <button
+                type="button"
+                className="project-group-expand-all"
+                onClick={() => setShowAllThreads(true)}
+              >
+                <CaretRightIcon size={10} />
+                <span>{t('common.showAll', { count: hiddenCount })}</span>
+              </button>
+            )}
+            {hasMoreThreads && showAllThreads && (
+              <button
+                type="button"
+                className="project-group-expand-all"
+                onClick={() => setShowAllThreads(false)}
+              >
+                <CaretDownIcon size={10} />
+                <span>{t('common.collapse')}</span>
+              </button>
+            )}
           </div>
         )}
       </div>

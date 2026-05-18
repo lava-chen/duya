@@ -76,6 +76,8 @@ export interface AppSettings {
   visionLLMEnabled: boolean;
   // Gateway model settings
   gatewayModel: string;
+  // Title generation model
+  titleGenerationModel?: string;
   // Appearance settings
   font?: string;
   compactMode?: boolean;

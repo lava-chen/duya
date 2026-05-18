@@ -241,9 +241,9 @@ function AskUserQuestionUI({
       const qIdx = String(i);
       const selected = Array.from(selections[qIdx] || []);
       if (useOther[qIdx] && otherTexts[qIdx]?.trim()) {
-        selected.push(otherTexts[qIdx].trim());
+        selected.push(`Other: ${otherTexts[qIdx].trim()}`);
       }
-      answers[q.question] = selected.join(', ');
+      answers[q.question] = selected.join(' || ');
     });
     onSubmit('allow', { questions: toolInput.questions, answers });
   };
@@ -272,6 +272,7 @@ function AskUserQuestionUI({
             <div className="flex flex-wrap gap-2">
               {q.options.map((opt) => {
                 const isSelected = selected.has(opt.label);
+                const isRecommended = opt.label.includes('(Recommended)');
                 return (
                   <button
                     key={opt.label}
@@ -288,7 +289,15 @@ function AskUserQuestionUI({
                     {q.multiSelect && (
                       <span className="mr-1.5">{isSelected ? '☑' : '☐'}</span>
                     )}
-                    {opt.label}
+                    {opt.label.replace(' (Recommended)', '')}
+                    {isRecommended && (
+                      <span
+                        className="ml-1 text-[10px] font-semibold"
+                        style={{ color: 'var(--accent)' }}
+                      >
+                        ★
+                      </span>
+                    )}
                   </button>
                 );
               })}

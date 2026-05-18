@@ -52,7 +52,7 @@ function playNotificationSound(): void {
 /**
  * Show a system notification if enabled
  */
-export async function showNotification(options: { title: string; body: string }): Promise<boolean> {
+export async function showNotification(options: { title: string; body: string; sessionId?: string }): Promise<boolean> {
   const enabled = await areNotificationsEnabled();
   if (!enabled) {
     return false;
@@ -100,11 +100,12 @@ export async function showNotification(options: { title: string; body: string })
 /**
  * Show a message completion notification
  */
-export async function showMessageCompletionNotification(sessionTitle?: string): Promise<boolean> {
+export async function showMessageCompletionNotification(sessionId?: string, sessionTitle?: string): Promise<boolean> {
   const title = sessionTitle || 'DUYA';
   return showNotification({
     title,
     body: 'Message completed',
+    sessionId,
   });
 }
 

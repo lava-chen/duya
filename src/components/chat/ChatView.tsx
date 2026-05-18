@@ -23,6 +23,7 @@ import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
 import type { FileAttachment } from '@/types/message';
 import { SubAgentPanel } from './SubAgentPanel';
+import { compactContext } from '@/lib/agent-sse-client';
 import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from './AgentModeSelector';
 import type { AgentMode } from './AgentModeSelector';
 import { ContextUsageRing } from './ContextUsageRing';
@@ -33,7 +34,7 @@ import { SessionSelector } from '@/components/home/SessionSelector';
 interface ChatViewProps {
   sessionId: string;
   messages: Message[];
-  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, parsedDocs?: { filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }[]) => void;
+  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
 }
@@ -122,6 +123,8 @@ export function ChatView({
   const { uses } = useStreamingTools(sessionId);
   const streamingError = useStreamingError(sessionId);
   const lastUserContentRef = useRef<string>('');
+  const lastFilesRef = useRef<FileAttachment[] | undefined>(undefined);
+  const lastOutputStyleRef = useRef<{ name: string; prompt: string; keepCodingInstructions?: boolean } | null | undefined>(undefined);
 
   // Permission system
   const {
@@ -284,11 +287,13 @@ export function ChatView({
   }, [sessionId, parentSessionId, loadThreadMessages]);
 
   const handleSend = useCallback(
-    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, parsedDocs?: { filename: string; charCount: number; text: string; extractMethod?: string; imageChunks?: Array<{ base64: string; mediaType: string }> }[]) => {
+    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => {
       lastUserContentRef.current = content;
+      lastFilesRef.current = files;
+      lastOutputStyleRef.current = outputStyleConfig;
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig, parsedDocs);
+      onSendMessage(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig);
     },
     [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]
   );
@@ -301,37 +306,25 @@ export function ChatView({
     const lastContent = lastUserContentRef.current;
     if (lastContent) {
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(lastContent, permissionMode, actualModel, undefined, agentProfileId);
+      // Use saved files and parsed docs for retry
+      onSendMessage(lastContent, permissionMode, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current);
     }
   }, [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]);
 
   const handleCompact = useCallback(() => {
-    const api = window.electronAPI?.getAgentPort?.();
-    if (api && sessionId) {
-      setIsCompacting(true);
-      api.compactContext(sessionId);
-    }
+    if (!sessionId) return;
+    setIsCompacting(true);
+    compactContext(sessionId, {
+      onDone: () => {
+        setIsCompacting(false);
+        setCompressionNotification('Context compressed successfully.');
+      },
+      onError: (error) => {
+        setIsCompacting(false);
+        setCompressionNotification(`Compression failed: ${error}`);
+      },
+    });
   }, [sessionId]);
-
-  // Listen for compaction completion and errors
-  useEffect(() => {
-    const api = window.electronAPI?.getAgentPort?.();
-    if (!api) return;
-
-    const cleanupDone = api.onCompactDone(() => {
-      setIsCompacting(false);
-      setCompressionNotification('Context compressed successfully.');
-    });
-    const cleanupError = api.onCompactError((message) => {
-      setIsCompacting(false);
-      setCompressionNotification(`Compression failed: ${message}`);
-    });
-
-    return () => {
-      cleanupDone();
-      cleanupError();
-    };
-  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
