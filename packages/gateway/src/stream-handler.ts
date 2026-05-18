@@ -1,16 +1,18 @@
 /**
  * StreamHandler - Platform-specific stream reply adaptation
  *
- * Agent sends streaming text (chat:text chunks), but platforms differ wildly:
- * - Telegram: non-streaming, send complete reply on chat:done
- * - Feishu: update message card content
- * - WeChat: no edit support, must wait for done then send complete reply
- *
- * This handler abstracts those differences behind a unified interface.
+ * Refactored to use StreamingStrategy pattern.
  */
 
 import type { PlatformType, StreamEvent } from './types.js';
 import type { PlatformAdapter } from './adapters/base.js';
+import {
+  StreamingStrategyRegistry,
+  StreamingStrategy,
+  stripMarkdown,
+} from './stream/streaming-strategy.js';
+
+const TYPING_INDICATOR_INTERVAL = 4500;
 
 interface StreamState {
   platform: PlatformType;
@@ -19,19 +21,19 @@ interface StreamState {
   lastTypingTime: number;
 }
 
-/** Issue #8: Send typing indicator every N ms during streaming */
-const TYPING_INDICATOR_INTERVAL = 4500;
-
 export class StreamHandler {
   private activeStreams = new Map<string, StreamState>();
+  private strategyRegistry: StreamingStrategyRegistry;
+  private getChatIdForSession: (sessionId: string) => Promise<string | null> = async () => null;
 
-  /**
-   * Handle a stream event from Main Process (Agent output)
-   * @param sessionId - The session ID
-   * @param event - The stream event
-   * @param adapter - The platform adapter
-   * @param directChatId - Optional chatId passed directly from Main to avoid DB race condition
-   */
+  constructor(strategyRegistry?: StreamingStrategyRegistry) {
+    this.strategyRegistry = strategyRegistry ?? new StreamingStrategyRegistry();
+  }
+
+  setChatIdResolver(resolver: (sessionId: string) => Promise<string | null>): void {
+    this.getChatIdForSession = resolver;
+  }
+
   async handleStreamEvent(
     sessionId: string,
     event: StreamEvent,
@@ -39,27 +41,24 @@ export class StreamHandler {
     directChatId?: string,
   ): Promise<void> {
     const state = this.activeStreams.get(sessionId);
+    const strategy = this.strategyRegistry.getStrategy(adapter.platform);
 
     switch (event.type) {
       case 'chat:text': {
         const content = event.content ?? '';
 
         if (!state) {
-          // First chunk: start buffering
-          // Use directChatId if provided, otherwise query via getChatIdForSession
-          const chatId = directChatId ?? (await this.getChatIdForSession(sessionId));
+          const chatId = directChatId ?? await this.getChatIdForSession(sessionId);
           if (chatId) {
-            await this.startStreamWithChatId(sessionId, chatId, content, event, adapter);
+            await this.startStreamWithChatId(sessionId, chatId, content, adapter);
           }
         } else {
-          // Subsequent chunk: accumulate buffer, send typing indicator
           await this.updateStream(sessionId, content, adapter);
         }
         break;
       }
 
       case 'chat:thinking': {
-        // Some platforms can show "thinking..." status
         if (adapter.sendTyping) {
           const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
           if (chatId) await adapter.sendTyping(chatId);
@@ -68,65 +67,25 @@ export class StreamHandler {
       }
 
       case 'chat:done': {
-        if (state) {
-          await this.finalizeStream(sessionId, event.finalContent ?? state.buffer, adapter);
-        } else if (directChatId) {
-          // Short reply with directChatId (avoids DB race condition)
-          if (event.finalContent) {
-            await adapter.sendReply(directChatId, {
-              type: 'text',
-              text: stripMarkdown(event.finalContent),
-              parseMode: 'plain',
-            });
-          }
-        } else {
-          // Short reply that fit in a single done event - need to query
-          const chatId = await this.getChatIdForSession(sessionId);
-          if (chatId && event.finalContent) {
-            await adapter.sendReply(chatId, {
-              type: 'text',
-              text: stripMarkdown(event.finalContent),
-              parseMode: 'plain',
-            });
-          }
-        }
+        await this.finalizeSession(sessionId, event.finalContent ?? state?.buffer ?? '', adapter, strategy, directChatId);
         break;
       }
 
       case 'chat:error': {
-        const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
-        if (chatId) {
-          await adapter.sendReply(chatId, {
-            type: 'error',
-            message: event.message ?? 'Agent error',
-          });
-          this.activeStreams.delete(sessionId);
-        }
+        await this.handleStreamError(sessionId, event.message ?? 'Agent error', adapter, strategy, directChatId);
         break;
       }
-
-      default:
-        break;
     }
   }
 
-  /**
-   * Check if a session has an active stream
-   */
   hasActiveStream(sessionId: string): boolean {
     return this.activeStreams.has(sessionId);
   }
 
-  /**
-   * Clean up stream state for a session
-   */
   cleanupStream(sessionId: string): void {
     this.activeStreams.delete(sessionId);
   }
 
-  /**
-   * Clean up all active streams
-   */
   cleanupAll(): void {
     this.activeStreams.clear();
   }
@@ -139,7 +98,6 @@ export class StreamHandler {
     sessionId: string,
     chatId: string,
     content: string,
-    _event: StreamEvent,
     adapter: PlatformAdapter,
   ): Promise<void> {
     const now = Date.now();
@@ -150,21 +108,7 @@ export class StreamHandler {
       lastTypingTime: now,
     });
 
-    // Issue #8: send initial typing indicator
     adapter.sendTyping?.(chatId);
-  }
-
-  private async startStream(
-    sessionId: string,
-    content: string,
-    _event: StreamEvent,
-    adapter: PlatformAdapter,
-  ): Promise<void> {
-    // Get chatId from event or look up from UserMapper
-    const chatId = await this.getChatIdForSession(sessionId);
-    if (!chatId) return;
-
-    await this.startStreamWithChatId(sessionId, chatId, content, _event, adapter);
   }
 
   private async updateStream(
@@ -178,133 +122,60 @@ export class StreamHandler {
     state.buffer += content;
 
     const now = Date.now();
-
-    // Issue #8: send typing indicator periodically
     if (now - state.lastTypingTime >= TYPING_INDICATOR_INTERVAL) {
       adapter.sendTyping?.(state.chatId);
       state.lastTypingTime = now;
     }
   }
 
-  private async finalizeStream(
+  private async finalizeSession(
     sessionId: string,
     finalText: string,
     adapter: PlatformAdapter,
+    strategy: StreamingStrategy,
+    directChatId?: string,
   ): Promise<void> {
     const state = this.activeStreams.get(sessionId);
-    if (!state) return;
 
-    switch (adapter.platform) {
-      case 'telegram': {
-        // Send complete reply as a single message (non-streaming)
-        // Strip common markdown markers so plain text looks clean
-        const plainText = stripMarkdown(finalText);
-        await adapter.sendReply(state.chatId, {
-          type: 'text',
-          text: plainText,
-          parseMode: 'plain',
-        });
-        break;
+    if (state) {
+      const replies = await strategy.finalizeStream(state.chatId, finalText);
+      for (const reply of replies) {
+        await adapter.sendReply(state.chatId, reply);
       }
-
-      case 'feishu': {
-        // Final card update
-        await adapter.sendReply(state.chatId, {
-          type: 'stream_end',
-          finalText,
-        });
-        break;
+      this.activeStreams.delete(sessionId);
+    } else if (directChatId) {
+      const replies = await strategy.finalizeStream(directChatId, finalText);
+      for (const reply of replies) {
+        await adapter.sendReply(directChatId, reply);
       }
-
-      case 'whatsapp': {
-        // WhatsApp: send complete reply as plain text (non-streaming)
-        const plainText = stripMarkdown(finalText);
-        await adapter.sendReply(state.chatId, {
-          type: 'text',
-          text: plainText,
-          parseMode: 'plain',
-        });
-        break;
-      }
-
-      case 'qq': {
-        // QQ: send complete reply as text (supports markdown)
-        await adapter.sendReply(state.chatId, {
-          type: 'text',
-          text: finalText,
-          parseMode: 'Markdown',
-        });
-        break;
-      }
-
-      default: {
-        // Platforms that don't support editing: send complete reply now
-        await adapter.sendReply(state.chatId, {
-          type: 'text',
-          text: finalText,
-          parseMode: 'plain',
-        });
-        break;
+    } else {
+      const chatId = await this.getChatIdForSession(sessionId);
+      if (chatId) {
+        const replies = await strategy.finalizeStream(chatId, finalText);
+        for (const reply of replies) {
+          await adapter.sendReply(chatId, reply);
+        }
       }
     }
-
-    this.activeStreams.delete(sessionId);
   }
 
-  /**
-   * Get chatId for a session - will be injected by GatewayManager
-   * This is a placeholder that GatewayManager overrides
-   */
-  private getChatIdForSession: (sessionId: string) => Promise<string | null> = async () => null;
+  private async handleStreamError(
+    sessionId: string,
+    message: string,
+    adapter: PlatformAdapter,
+    strategy: StreamingStrategy,
+    directChatId?: string,
+  ): Promise<void> {
+    const state = this.activeStreams.get(sessionId);
+    const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
 
-  /**
-   * Set the function to resolve chatId from sessionId
-   * Called by GatewayManager during initialization
-   */
-  setChatIdResolver(resolver: (sessionId: string) => Promise<string | null>): void {
-    this.getChatIdForSession = resolver;
+    if (chatId) {
+      const reply = strategy.handleError(chatId, message);
+      await adapter.sendReply(chatId, reply);
+      this.activeStreams.delete(sessionId);
+    }
   }
 }
 
-/**
- * Strip common markdown formatting markers to produce clean plain text.
- * Handles bold (**), italic (*), headers (#), inline code (`), code blocks,
- * strikethrough (~~), and bullet list markers (-, *, +).
- */
-function stripMarkdown(text: string): string {
-  if (!text) return text;
-
-  return (
-    text
-      // Fenced code blocks: remove ``` fences but keep content
-      .replace(/```[\s\S]*?```/g, (match) => {
-        const lines = match.split('\n');
-        if (lines.length <= 2) return '';
-        // Remove opening fence (with optional lang) and closing fence
-        return lines.slice(1, -1).join('\n');
-      })
-      // Inline code: remove backticks
-      .replace(/`([^`]+)`/g, '$1')
-      // Bold: **text** or __text__
-      .replace(/\*\*(.+?)\*\*/g, '$1')
-      .replace(/__(.+?)__/g, '$1')
-      // Italic: *text* or _text_ (but not bullet lists)
-      .replace(/(?<!\s|^)\*(.+?)\*(?!\s|$)/g, '$1')
-      .replace(/(?<!\s|^)_(.+?)_(?!\s|$)/g, '$1')
-      // Strikethrough: ~~text~~
-      .replace(/~~(.+?)~~/g, '$1')
-      // Headers: ## Title → Title
-      .replace(/^#{1,6}\s+(.+)$/gm, '$1')
-      // Bullet list markers at line start
-      .replace(/^[\s]*[-*+]\s+/gm, '')
-      // Numbered list markers at line start
-      .replace(/^[\s]*\d+\.\s+/gm, '')
-      // Blockquote markers
-      .replace(/^>\s*/gm, '')
-      // Horizontal rules
-      .replace(/^[\s]*[-*_]{3,}[\s]*$/gm, '')
-      // Excessive blank lines
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-  );
-}
+// Re-export for backwards compatibility
+export { stripMarkdown } from './stream/streaming-strategy.js';
