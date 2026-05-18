@@ -90,13 +90,12 @@ function isMeaningfulFirstMessage(msg: Message | null): boolean {
   if (!msg) {
     return false;
   }
-  const text = extractTextFromMessage(msg).trim().toLowerCase();
-  // Check for common greeting patterns
-  const meaninglessPatterns = [
-    /^(hi|hello|你好|嗨|hey|yo|您好|hi\s*[,.!]*|hello\s*[,.!]*)\s*$/i,
-    /^[\s,.!]*$/,
-  ];
-  return !meaninglessPatterns.some((p) => p.test(text));
+  const text = extractTextFromMessage(msg).trim();
+  // Only consider it meaningless if it's JUST a greeting (no other content)
+  // Pattern matches: standalone greetings with optional punctuation, but nothing else
+  const standaloneGreetingPattern = /^(?:hi|hello|你好|嗨|hey|yo|您好)[\s,.!]*$/i;
+  const emptyPattern = /^[\s,.!]*$/;
+  return !standaloneGreetingPattern.test(text) && !emptyPattern.test(text);
 }
 
 /** Max characters for a message to be considered potentially low-signal. */
@@ -169,6 +168,25 @@ function validateTitle(title: string | null | undefined): string | null {
 
   let cleaned = title.trim();
 
+  // Reject known bad responses that are not valid titles
+  const badResponses = [
+    'the user',
+    'the user:',
+    'user',
+    'question',
+    'help',
+    'problem',
+    '聊天',
+    '对话',
+    '问题',
+    '标题',
+  ];
+  const lowerCleaned = cleaned.toLowerCase();
+  if (badResponses.includes(lowerCleaned)) {
+    console.log(`[TitleGenerator] validateTitle: rejected bad response "${cleaned}"`);
+    return null;
+  }
+
   // Iterative preamble stripping: handles chained preambles like "Sure: Title: Foo"
   let prev = '';
   while (cleaned !== prev) {
@@ -202,41 +220,67 @@ function validateTitle(title: string | null | undefined): string | null {
   if (cleaned.length === 0 || cleaned.length >= 100) return null;
   if (cleaned.split(/\s+/).length > MAX_TITLE_WORDS) return null;
 
+  // Final check for bad responses after cleaning
+  if (badResponses.includes(cleaned.toLowerCase())) {
+    console.log(`[TitleGenerator] validateTitle: rejected after cleaning "${cleaned}"`);
+    return null;
+  }
+
   return cleaned;
 }
 
-const TITLE_GENERATION_PROMPT = `What topic or area is the user exploring? Reply with ONLY a short descriptive title (2-5 words).
-Use a short descriptive label. Use plain text only - no markdown.
-Reply in the same language as the user's messages.
-Examples: "Auto Title Generation", "Dark Mode Support", "Fix API Authentication", "Database Schema Design", "React性能优化", "修复登录bug"
+const TITLE_GENERATION_PROMPT = `CRITICAL: You must output ONLY a JSON object, no explanations or thinking.
 
-User: `;
+Correct output examples:
+{"title":"纽博格林耐力赛新闻"}
+{"title":"trendradar开源项目搜索"}
+
+INCORRECT outputs (will be rejected):
+- "Let me think about this..." ❌
+- "Based on the conversation..." ❌
+- "The title is: ..." ❌
+- "Here is the JSON: ..." ❌
+
+Rules:
+1. Chinese conversation → Chinese title
+2. 4-6 words maximum
+3. NEVER write explanations, only the JSON
+
+Output now:
+
+Conversation:
+`;
 
 /**
  * Extract text content from messages for title generation input.
- * Uses spread of user messages (first, middle, last) to capture session purpose.
- * Filters out low-signal messages like "ok", "thanks".
+ * Uses first 10 messages (5 rounds) to capture session purpose.
+ * Filters out tool result content and low-signal messages.
  */
 function extractTitleInput(messages: readonly Message[]): string {
-  const allUserTexts: string[] = [];
-  for (const msg of messages) {
-    if (msg.role === 'user') {
-      const text = extractTextFromMessage(msg).trim();
-      if (text) {
-        allUserTexts.push(text);
-      }
+  // Take first 10 messages (5 rounds of user-assistant) to capture full context
+  const recentMessages = messages.slice(0, 10);
+  console.log(`[TitleGenerator] extractTitleInput: processing ${recentMessages.length} messages`);
+
+  const formattedMessages: string[] = [];
+  for (const msg of recentMessages) {
+    const text = extractTextFromMessage(msg).trim();
+    if (!text) continue;
+
+    // Skip very short or low-signal messages at the end
+    if (msg.role === 'user' && formattedMessages.length >= 4 && isLowSignal(text)) {
+      console.log(`[TitleGenerator] Skipping low-signal message: "${text}"`);
+      continue;
     }
+
+    // Truncate very long content (tool output, etc.)
+    const truncated = text.length > 500 ? text.slice(0, 500) + '...' : text;
+    const prefix = msg.role === 'user' ? 'User' : 'Assistant';
+    formattedMessages.push(`${prefix}: ${truncated}`);
   }
 
-  if (allUserTexts.length === 0) return '';
-
-  const spread = selectSpreadMessages(allUserTexts);
-
-  // Format: each message on its own line with User label
-  return spread.map(t => {
-    const truncated = t.length > MAX_INPUT_LENGTH ? t.slice(0, MAX_INPUT_LENGTH) : t;
-    return `User: ${truncated}`;
-  }).join('\n');
+  const result = formattedMessages.join('\n');
+  console.log(`[TitleGenerator] extractTitleInput result (${formattedMessages.length} messages):\n${result.substring(0, 500)}...`);
+  return result;
 }
 
 function extractTextFromMessage(msg: Message): string {
@@ -257,15 +301,16 @@ function extractTextFromMessage(msg: Message): string {
 
 /**
  * Chinese stop words to filter out when extracting key phrases.
+ * Only single-character function words - multi-char prefixes are handled by regex in extractChineseTopic.
  */
 const CN_STOP_WORDS = new Set([
-  '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个',
-  '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好',
+  '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
+  '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '看', '好',
   '自己', '这', '他', '她', '它', '们', '那', '什么', '怎么', '如何', '哪个',
   '这个', '那个', '这些', '那些', '可以', '需要', '应该', '能够', '可能',
   '因为', '所以', '但是', '不过', '虽然', '如果', '的话', '而且', '或者',
   '吧', '吗', '呢', '啊', '哦', '嗯', '哈', '呀', '嘛', '呗',
-  '帮忙', '帮我', '请', '请问', '想问', '想问一下', '想问下',
+  '请',
 ]);
 
 /**
@@ -355,13 +400,11 @@ export function generateHeuristicTitle(messages: readonly Message[]): string | n
 
 /**
  * Generate a session title using LLM with fallback to heuristic.
- * Supports per-session tracking and topic drift detection.
  *
  * @param messages - Conversation messages
  * @param llmClient - LLM client for generation (optional)
  * @param signal - Abort signal for cancellation
- * @param sessionId - Session ID for per-session tracking (optional)
- * @param previousTitle - Previous title to check for topic drift (optional)
+ * @param sessionId - Session ID for logging (optional)
  * @returns Generated title or null
  */
 export async function generateSessionTitle(
@@ -369,85 +412,123 @@ export async function generateSessionTitle(
   llmClient?: LLMClient,
   signal?: AbortSignal,
   sessionId?: string,
-  previousTitle?: string | null,
-): Promise<{ title: string | null; shouldUpdate: boolean }> {
+): Promise<{ title: string | null }> {
+  console.log(`[TitleGenerator] Called with ${messages.length} messages, sessionId=${sessionId}, hasLLM=${!!llmClient}`);
+
   // Always try heuristic first as fallback
   const fallback = generateHeuristicTitle(messages);
+  console.log(`[TitleGenerator] Heuristic fallback: "${fallback}"`);
 
-  // Check if first user message is meaningful
-  const firstUser = messages.find((m) => m.role === 'user');
-  const isMeaningful = isMeaningfulFirstMessage(firstUser ?? null);
+  // Check if there are any meaningful user messages (not just greetings)
+  const allUserMessages = messages.filter((m) => m.role === 'user');
+  const meaningfulUserMessages = allUserMessages.filter((m) => isMeaningfulFirstMessage(m));
+  const hasMeaningfulContent = meaningfulUserMessages.length > 0;
+  const firstUser = allUserMessages[0];
+  console.log(`[TitleGenerator] Total user messages: ${allUserMessages.length}, meaningful: ${meaningfulUserMessages.length}`);
+  console.log(`[TitleGenerator] First user message: "${firstUser?.content?.toString().substring(0, 50)}", isMeaningful=${isMeaningfulFirstMessage(firstUser ?? null)}`);
 
   // If no LLM available, return heuristic immediately
   if (!llmClient) {
-    return { title: fallback, shouldUpdate: isMeaningful };
+    console.log('[TitleGenerator] No LLM client, returning heuristic');
+    return { title: fallback };
   }
 
-  // If first message is meaningless (like "hello"), skip LLM and use heuristic
-  if (!isMeaningful) {
-    console.log('[TitleGenerator] First message is not meaningful, skipping LLM generation');
-    return { title: fallback, shouldUpdate: false };
+  // Only skip if ALL user messages are greetings or empty
+  // If there's any meaningful content, continue to LLM generation
+  if (!hasMeaningfulContent) {
+    console.log('[TitleGenerator] No meaningful user messages found, using heuristic fallback');
+    return { title: fallback };
   }
 
   const input = extractTitleInput(messages);
+  console.log('[TitleGenerator] extractTitleInput returned:', input.substring(0, 100) + '...');
   if (!input.trim()) {
-    return { title: fallback, shouldUpdate: true };
+    console.log('[TitleGenerator] Input is empty after trim, returning fallback');
+    return { title: fallback };
   }
 
   try {
+    console.log('[TitleGenerator] About to call streamChat with LLM client');
+    console.log('[TitleGenerator] Input preview:', input.substring(0, 200));
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
 
-    // Link external signal if provided
+    const onExternalAbort = () => controller.abort();
     if (signal) {
-      signal.addEventListener('abort', () => controller.abort());
+      signal.addEventListener('abort', onExternalAbort, { once: true });
     }
 
-    const stream = llmClient.streamChat(
-      [
-        { role: 'user', content: `${TITLE_GENERATION_PROMPT}\n\nConversation:\n${input}`, timestamp: Date.now() },
-      ],
-      {
-        systemPrompt: 'You are a title generator. Respond with only the title, no other text.',
-        maxTokens: 30,
-        temperature: 0.3,
-      },
-    );
+    try {
+      console.log('[TitleGenerator] Creating stream with LLM client');
+      const stream = llmClient.streamChat(
+        [
+          { role: 'user', content: `${TITLE_GENERATION_PROMPT}${input}`, timestamp: Date.now() },
+        ],
+        {
+          systemPrompt: 'You are a title generator. Output ONLY JSON, no explanations.',
+          maxTokens: 50,
+          temperature: 0.3,
+        },
+      );
 
-    let title = '';
-    for await (const event of stream) {
-      if (event.type === 'text') {
-        title += event.data;
-      } else if (event.type === 'error') {
-        throw new Error(String(event.data));
+      let title = '';
+      let eventCount = 0;
+      for await (const event of stream) {
+        eventCount++;
+        if (event.type === 'text') {
+          title += event.data;
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=text, text length=${event.data.length}`);
+        } else if (event.type === 'thinking') {
+          // MiniMax puts the actual response in 'thinking' events, not in 'text' events
+          // Extract the title from thinking content - MiniMax generates Chinese titles
+          const content = typeof event.data === 'string' ? event.data : (event.data as { content?: string })?.content || '';
+          title += content;
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=thinking, extracting content length=${content.length}`);
+        } else if (event.type === 'error') {
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=error, message=${event.data}`);
+          throw new Error(event.data);
+        } else if (event.type === 'done') {
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=done`);
+        } else {
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=${event.type}`);
+        }
+      }
+      console.log(`[TitleGenerator] Stream iteration done, eventCount=${eventCount}, title="${title}"`);
+
+      clearTimeout(timeoutId);
+
+      // Try to parse JSON response
+      let cleanedTitle: string | null = null;
+      try {
+        const jsonMatch = title.match(/\{[^}]*\}/s);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]!);
+          if (parsed.title && typeof parsed.title === 'string') {
+            cleanedTitle = validateTitle(parsed.title);
+          }
+        }
+      } catch {
+        console.log('[TitleGenerator] JSON parse failed');
+      }
+
+      if (!cleanedTitle) {
+        console.log('[TitleGenerator] Title validation failed, using heuristic fallback');
+        return { title: fallback };
+      }
+      title = cleanedTitle;
+
+      console.log(`[TitleGenerator] LLM generated title: "${title}", fallback: "${fallback}"`);
+      return { title };
+    } finally {
+      clearTimeout(timeoutId);
+      if (signal) {
+        signal.removeEventListener('abort', onExternalAbort);
       }
     }
-
-    clearTimeout(timeoutId);
-
-    // Use validateTitle to clean up preamble and validate
-    const cleanedTitle = validateTitle(title);
-    if (!cleanedTitle) {
-      console.log('[TitleGenerator] Title validation failed, using heuristic fallback');
-      return { title: fallback, shouldUpdate: true };
-    }
-    title = cleanedTitle;
-
-    // Check topic drift if sessionId provided
-    let shouldUpdate = true;
-    if (sessionId && previousTitle) {
-      shouldUpdate = !shouldRegenerateTitle(sessionId, messages, previousTitle);
-      if (!shouldUpdate) {
-        console.log('[TitleGenerator] Topic drift detected, will regenerate title');
-      }
-    }
-
-    console.log(`[TitleGenerator] LLM generated title: "${title}", fallback: "${fallback}"`);
-    return { title, shouldUpdate };
   } catch (error) {
     // Silently fall back to heuristic - title generation is not critical
     console.log('[TitleGenerator] LLM generation failed, using heuristic:', error instanceof Error ? error.message : String(error));
-    return { title: fallback, shouldUpdate: true };
+    return { title: fallback };
   }
 }
 

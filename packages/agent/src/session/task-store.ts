@@ -239,6 +239,25 @@ class DirectTaskStore implements TaskStore {
     const db = getDb();
     const now = Date.now();
 
+    // First, get existing task to build the result
+    const existingRow = db.prepare(
+      'SELECT * FROM tasks WHERE id = ? AND session_id = ?'
+    ).get(taskId, this.sessionId) as DbRow | undefined;
+    if (!existingRow) return null;
+
+    // Build the updated task object
+    const updatedTask: Task = {
+      id: existingRow.id,
+      subject: updates.subject ?? existingRow.subject,
+      description: updates.description ?? existingRow.description,
+      status: updates.status ?? (existingRow.status as TaskStatus),
+      activeForm: updates.activeForm ?? existingRow.active_form ?? undefined,
+      owner: updates.owner ?? existingRow.owner ?? undefined,
+      blocks: updates.blocks ?? JSON.parse(existingRow.blocks || '[]'),
+      blockedBy: updates.blockedBy ?? JSON.parse(existingRow.blocked_by || '[]'),
+      metadata: updates.metadata ?? JSON.parse(existingRow.metadata || '{}'),
+    };
+
     db.prepare(`
       UPDATE tasks SET
         subject = COALESCE(?, subject),
@@ -260,7 +279,7 @@ class DirectTaskStore implements TaskStore {
       now, taskId, this.sessionId
     );
 
-    return this.getTask(taskId);
+    return updatedTask;
   }
 
   async deleteTask(taskId: string): Promise<boolean> {

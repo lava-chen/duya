@@ -17,7 +17,7 @@ import { resolveAgentTools } from './agentToolUtils.js'
 import { ToolRegistry } from '../registry.js'
 import { getPromptProfileForSubagentType } from '../../prompts/modes/index.js'
 import { PromptManager } from '../../prompts/PromptManager.js'
-import { replaceMessages } from '../../session/db.js'
+import { appendMessages } from '../../session/db.js'
 import { messageDb } from '../../ipc/db-client.js'
 
 export interface RunAgentParams {
@@ -201,20 +201,17 @@ export async function* runAgent({
   let errorMessage = ''
   let lastEventType: SSEEvent['type'] | 'none' = 'none'
   let lastEventAt = Date.now()
-
-  let persistGeneration = 0
+  let lastPersistTime = 0
+  const PERSIST_INTERVAL_MS = 3000
   const persistInterval = sessionId ? setInterval(async () => {
     const allMessages = subAgent.getMessages()
     if (allMessages.length === 0) return
     try {
-      const result = await replaceMessages(sessionId, allMessages, persistGeneration)
-      if (result.success) {
-        persistGeneration = (result as unknown as { newGeneration?: number }).newGeneration ?? persistGeneration + 1
-      }
+      await appendMessages(sessionId, allMessages)
     } catch {
       // periodic persist failure is non-critical
     }
-  }, 3000) : null
+  }, PERSIST_INTERVAL_MS) : null
 
   try {
     // Create an abort controller for the sub-agent, linked to parent's abort controller
@@ -403,9 +400,9 @@ export async function* runAgent({
     const allMessages = subAgent.getMessages()
     if (allMessages.length > 0) {
       try {
-        const persistResult = await replaceMessages(sessionId, allMessages, persistGeneration)
+        const persistResult = await appendMessages(sessionId, allMessages)
         if (!persistResult.success) {
-          console.warn(`[AgentTool] Failed to persist sub-agent messages: ${persistResult.reason}`)
+          console.warn(`[AgentTool] Failed to persist sub-agent messages: count=${persistResult.count}`)
         }
       } catch (err) {
         console.warn('[AgentTool] Failed to persist sub-agent messages:', err)

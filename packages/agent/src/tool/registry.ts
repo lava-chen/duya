@@ -25,6 +25,15 @@ interface RegisteredTool {
 }
 
 /**
+ * Tool metadata for search results
+ */
+export interface ToolMeta {
+  name: string;
+  description: string;
+  category: string;
+}
+
+/**
  * 工具注册表
  */
 export class ToolRegistry {

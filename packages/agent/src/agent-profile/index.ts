@@ -12,6 +12,7 @@
 export type {
   AgentProfile,
   AgentProfileDbRow,
+  PromptProfileOverride,
 } from './types.js';
 
 export {

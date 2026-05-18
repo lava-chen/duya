@@ -89,7 +89,10 @@ function handleDbResponse(response: DbResponse): void {
 }
 
 // Initialize IPC listeners
+let dbClientInitialized = false;
 export function initDbClient(): void {
+  if (dbClientInitialized) return;
+  dbClientInitialized = true;
   if (typeof process !== 'undefined' && process.on) {
     process.on('message', (msg: DbResponse) => {
       if (msg.type === 'db:response') {
@@ -153,6 +156,7 @@ export const messageDb = {
     seq_index?: number;
     duration_ms?: number;
     sub_agent_id?: string;
+    attachments?: unknown[];
   }) => sendDbRequest('message:add', data),
 
   getBySession: (sessionId: string) => sendDbRequest('message:getBySession', { sessionId }),
@@ -163,6 +167,9 @@ export const messageDb = {
 
   replace: (sessionId: string, messages: unknown[], generation: number) =>
     sendDbRequest('message:replace', { sessionId, messages, generation }),
+
+  append: (sessionId: string, messages: unknown[]) =>
+    sendDbRequest('message:append', { sessionId, messages }),
 };
 
 // ==================== Lock Operations ====================
@@ -312,6 +319,29 @@ export const channelDb = {
     offsetValue: string,
     offsetType = 'long_polling'
   ) => sendDbRequest('channel:setOffset', { channelType, offsetKey, offsetValue, offsetType }),
+};
+
+// ==================== Attachment Operations (parsed_document) ====================
+
+export const attachmentDb = {
+  storeParsedDocument: (
+    messageId: string,
+    sessionId: string,
+    data: {
+      filename: string;
+      filePath: string;
+      charCount: number;
+      text: string;
+      extractMethod?: string;
+      imageChunks?: Array<{ base64: string; mediaType: string }>;
+    }
+  ) => sendDbRequest('attachment:store', { messageId, sessionId, ...data }),
+
+  getParsedDocumentsForSession: (sessionId: string) =>
+    sendDbRequest('attachment:getForSession', { sessionId }),
+
+  getParsedDocumentsForMessage: (messageId: string) =>
+    sendDbRequest('attachment:getForMessage', { messageId }),
 };
 
 // ==================== Project Operations ====================

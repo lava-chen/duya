@@ -13,8 +13,8 @@ import { GrepTool } from './GrepTool/GrepTool.js';
 import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 import { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
 import { agentTool } from './AgentTool/index.js';
-import { teamCreateTool } from '../tools/TeamCreateTool/TeamCreateTool.js';
-import { teamDeleteTool } from '../tools/TeamDeleteTool/TeamDeleteTool.js';
+import { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
+import { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools imports
 import { taskCreateTool } from './TaskCreateTool/TaskCreateTool.js';
@@ -41,7 +41,6 @@ import { sessionSearchTool } from './SessionSearchTool/index.js';
 import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
 import { cronTool } from './CronTool/index.js';
-import { CONDUCTOR_TOOLS, getConductorToolExecutors } from '../conductor/ConductorProfile.js';
 import { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from '../conductor/CanvasOrchestratorProfile.js';
 import { duyaInfoTool } from './DuyaInfoTool/index.js';
 import { duyaConfigTool } from './DuyaConfigTool/index.js';
@@ -49,6 +48,7 @@ import { duyaRestartTool } from './DuyaRestartTool/index.js';
 import { duyaHealthTool } from './DuyaHealthTool/index.js';
 import { duyaSessionsTool } from './DuyaSessionsTool/index.js';
 import { duyaLogsTool } from './DuyaLogsTool/index.js';
+import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 
 /**
  * BashTool instance
@@ -150,6 +150,9 @@ export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig)
   const memoryTool = getMemoryTool();
   registry.register(memoryTool.toTool(), memoryTool);
 
+  // AskUserQuestion tool - prompt the user with multi-choice questions
+  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool);
+
   // Skill management tool - for creating/updating skills
   registry.register(skillManageTool, skillManageTool);
 
@@ -188,16 +191,7 @@ When in doubt, choose the diagram over text.`,
     }
   );
 
-  // Conductor tools - canvas widget operations
-  const conductorExecutors = getConductorToolExecutors();
-  for (const tool of CONDUCTOR_TOOLS) {
-    const executor = conductorExecutors[tool.name];
-    if (executor) {
-      registry.register(tool, executor);
-    }
-  }
-
-  // Canvas Orchestrator V2 tools - generic element operations
+  // Canvas Orchestrator tools - generic element operations
   const orchestratorExecutors = getCanvasOrchestratorExecutors();
   for (const tool of CANVAS_ORCHESTRATOR_TOOLS) {
     const executor = orchestratorExecutors[tool.name];
@@ -219,8 +213,8 @@ export { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 export { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
 export { getAgentToolDefinition, getAgentDefinitions, getPrompt } from './AgentTool/index.js';
 export type { AgentDefinition, AgentToolInput, AgentToolResult } from './AgentTool/index.js';
-export { teamCreateTool } from '../tools/TeamCreateTool/TeamCreateTool.js';
-export { teamDeleteTool } from '../tools/TeamDeleteTool/TeamDeleteTool.js';
+export { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
+export { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools exports
 export { taskCreateTool } from './TaskCreateTool/TaskCreateTool.js';

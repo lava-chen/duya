@@ -7,7 +7,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-interface AppConfig {
+export interface AppConfig {
   databasePath?: string;
 }
 

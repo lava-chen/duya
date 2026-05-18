@@ -15,6 +15,11 @@ import type {
 } from './types.js'
 
 /**
+ * Default prompt profile used when no override is specified
+ */
+export const DEFAULT_PROMPT_PROFILE: PromptProfile = { base: 'full' }
+
+/**
  * Default section sets for each base mode
  * Sections: intro, system, taskHandling, actions, toolUsage, toneAndStyle, outputEfficiency,
  *           memory, skills, mcp, sessionGuidance, agentsMd
@@ -103,10 +108,44 @@ export function isSectionEnabled(profile: PromptProfile, sectionName: string): b
 }
 
 /**
- * Default profile: full mode (backward compatible)
+ * Apply AgentProfile's promptProfile override to a base profile
+ * All profiles default to 'full' base, then apply overrides
  */
-export const DEFAULT_PROMPT_PROFILE: PromptProfile = {
-  base: 'full',
+export function applyProfileOverrides(
+  override: import('../../agent-profile/types.js').PromptProfileOverride | undefined,
+  base: PromptProfile = DEFAULT_PROMPT_PROFILE
+): PromptProfile {
+  if (!override) {
+    return base
+  }
+
+  return {
+    ...base,
+    overrides: {
+      enableSections: override.enableSections ?? [],
+      disableSections: override.disableSections ?? [],
+    },
+  }
+}
+
+/**
+ * Get prompt profile for an AgentProfile
+ * Combines base profile with AgentProfile's promptProfile override
+ */
+export function getPromptProfileForAgentProfile(
+  agentProfile: import('../../agent-profile/types.js').AgentProfile
+): PromptProfile {
+  return applyProfileOverrides(agentProfile.promptProfile)
+}
+
+/**
+ * Resolve enabled sections for an AgentProfile
+ */
+export function resolveEnabledSectionsForAgentProfile(
+  agentProfile: import('../../agent-profile/types.js').AgentProfile
+): Set<string> {
+  const profile = getPromptProfileForAgentProfile(agentProfile)
+  return resolveEnabledSections(profile)
 }
 
 /**

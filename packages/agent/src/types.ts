@@ -69,6 +69,11 @@ export interface Message {
   seq_index?: number;
   duration_ms?: number;
   sub_agent_id?: string;
+  /** File attachments (name, type, url, size, text, imageChunks, etc.) */
+  attachments?: FileAttachment[];
+  /** Original user message used when prompt includes synthetic context (doc text).
+   *  When set, replaceMessages will use displayContent for the DB instead of content. */
+  displayContent?: string | MessageContent[];
 }
 
 // Assistant 消息
@@ -251,6 +256,23 @@ export interface ChatOptions {
   agentProfileId?: string | null;
   /** Output style configuration for this chat turn */
   outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
+  /**
+   * User-facing content to store in DB instead of `prompt`.
+   * When set, `prompt` is sent to the LLM (may include synthetic context like parsed docs),
+   * while `displayContent` is stored as the user message in the database for rendering.
+   */
+  displayContent?: string;
+  /** File attachments to store on the user message in DB */
+  attachments?: FileAttachment[];
+  /** IPC functions for conductor executor communication */
+  conductorIpc?: {
+    sendToMain: (msg: Record<string, unknown>) => void;
+    ipcRequest: <T = unknown>(
+      channel: string,
+      payload: unknown,
+      options?: { timeout?: number }
+    ) => Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }>;
+  };
 }
 
 // 会话信息
@@ -279,6 +301,16 @@ export interface FileAttachment {
   type: string;
   url: string; // data URL, blob URL, or file path
   size: number;
+  /** Absolute file path for document files (pdf, docx, etc.) */
+  path?: string;
+  /** Parsed text content for document files */
+  text?: string;
+  /** Extraction method for parsed documents */
+  extractMethod?: 'text' | 'vision' | 'hybrid';
+  /** Image chunks from OCR/vision extraction */
+  imageChunks?: Array<{ base64: string; mediaType: string }>;
+  /** Thumbnail preview for document files (base64 data URL) */
+  thumbnail?: string;
 }
 
 // 会话选项扩展
@@ -310,6 +342,19 @@ export interface ToolUseContext {
    * This allows the UI to show what the sub-agent is doing while it runs.
    */
   reportAgentProgress?: (event: AgentProgressEvent) => void;
+  /**
+   * @deprecated 向主进程发起单向消息。新代码应使用 ipcRequest 获得响应。
+   */
+  sendToMain?: (msg: Record<string, unknown>) => void;
+  /**
+   * 向主进程发起 IPC 请求并等待响应。
+   * 用于 executor 需要获取实时数据（如 snapshot）或提交操作并获取结果。
+   */
+  ipcRequest?: <T = unknown>(
+    channel: string,
+    payload: unknown,
+    options?: { timeout?: number }
+  ) => Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }>;
 }
 
 /** Progress event emitted by a sub-agent during execution */

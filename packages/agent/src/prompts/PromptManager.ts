@@ -48,7 +48,7 @@ import { getSessionSearchSection } from './sections/dynamic/sessionSearchSection
 import { getMemorySection } from './sections/dynamic/memorySection.js'
 import { getMemoryContextSection } from './sections/dynamic/memoryContextSection.js'
 import { getWidgetGuidelinesSection } from './sections/dynamic/widgetGuidelines.js'
-import { getConductorCanvasSection } from './sections/dynamic/conductorCanvas.js'
+import { buildConductorCanvasSection } from './sections/dynamic/conductorCanvas.js'
 import { getMemoryManager } from '../memory/index.js'
 import { getShellForPrompt } from '../utils/shellDetector.js'
 import {
@@ -159,7 +159,7 @@ export class PromptManager {
       maybeVolatile('sessionSearch', () => getSessionSearchSection(context), 'Session search guidance for recalling past conversations'),
       maybeVolatile('memoryContext', () => getMemoryContextSection(context), 'Memory prefetch based on user query'),
       maybeVolatile('widgetGuidelines', () => getWidgetGuidelinesSection(context), 'Widget creation guidelines for generative UI'),
-      maybeVolatile('conductorCanvas', () => getConductorCanvasSection(context), 'Canvas workspace context for conductor profile'),
+      maybeVolatile('conductorCanvas', () => buildConductorCanvasSection(context), 'Canvas workspace context for conductor profile'),
     ].filter((s): s is PromptSection => s !== null)
 
     // Resolve static sections (cached)

@@ -6,14 +6,12 @@ import { buildConductorSystemPrompt } from './prompt.js';
 export interface ConductorSnapshot {
   canvasId: string;
   canvasName: string;
-  widgets: Array<{
+  elements: Array<{
     id: string;
-    type: string;
     kind: string;
     position: { x: number; y: number; w: number; h: number };
+    vizSpec: Record<string, unknown> | null;
     config: Record<string, unknown>;
-    data: Record<string, unknown>;
-    dataVersion: number;
   }>;
   actionCursor: number;
 }
@@ -76,11 +74,12 @@ export class ConductorAgent {
       const systemPrompt = buildConductorSystemPrompt({
         canvasId: snapshot.canvasId,
         canvasName: snapshot.canvasName,
-        widgetCount: snapshot.widgets.length,
-        widgets: snapshot.widgets.map((w) => ({
-          id: w.id,
-          type: w.type,
-          data: w.data,
+        elementCount: snapshot.elements.length,
+        elements: snapshot.elements.map((el) => ({
+          id: el.id,
+          elementKind: el.kind,
+          vizSpec: el.vizSpec,
+          position: el.position,
         })),
       });
 

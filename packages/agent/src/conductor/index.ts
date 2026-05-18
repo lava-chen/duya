@@ -1,16 +1,10 @@
-export { CONDUCTOR_TOOLS, getConductorToolExecutors } from './ConductorProfile.js';
 export type { ConductorSnapshot } from './ConductorProfile.js';
 
 export { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from './CanvasOrchestratorProfile.js';
 
 export { buildConductorSystemPrompt, CONDUCTOR_PROMPT_PROFILE } from './prompt.js';
 
-export {
-  WIDGET_TOOL_SCHEMAS,
-  getWidgetToolSchemas,
-  formatToolSchemasForPrompt,
-} from './WidgetTools.js';
-export type { WidgetToolSchema, WidgetToolResult } from './WidgetTools.js';
+export { buildConductorCanvasSection } from '../prompts/sections/dynamic/conductorCanvas.js';
 
 export {
   PerceptionEngine,
@@ -39,3 +33,4 @@ export {
   extractAllDuyaWidgetFences,
 } from './dynamicProtocol.js';
 export type { DynamicWidgetOutput, PendingDynamicWidget, CodeFenceParseResult } from './dynamicProtocol.js';
+export { ConductorAgent, type ConductorAgentConfig } from './ConductorAgent.js';

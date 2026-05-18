@@ -34,8 +34,20 @@ export { cachedPromptSection, volatilePromptSection, prependBullets } from './co
 // Manager
 export { PromptManager, getDefaultPromptManager, resetDefaultPromptManager } from './PromptManager.js'
 
-// Sections (for direct access if needed)
-export { getIntroSection } from './sections/intro.js'
+// Modes & Profile
+export {
+  resolveEnabledSections,
+  isSectionEnabled,
+  resolveEnabledSectionsForAgentProfile,
+  getPromptProfileForAgentProfile,
+  getPromptProfileForSubagentType,
+  applyProfileOverrides,
+  DEFAULT_PROMPT_PROFILE,
+  DEFAULT_BASE_SECTION_SETS,
+  SUBAGENT_TYPE_PROFILE_MAP,
+} from './modes/index.js'
+
+export type { PromptBaseMode, PromptOverlay, PromptProfile } from './modes/types.js'
 export { getSystemSection } from './sections/system.js'
 export { getTaskHandlingSection } from './sections/taskHandling.js'
 export { getActionsSection } from './sections/actions.js'

@@ -75,14 +75,15 @@ export class SessionStoreManager {
       return null;
     }
 
-    const messages = db.getMessages(sessionId);
+    // Load messages with attachment rehydration
+    const messages = db.getMessagesWithAttachments(sessionId);
     this.currentSessionId = sessionId;
     this.currentSession = {
       id: session.id,
       createdAt: session.created_at,
       updatedAt: session.updated_at,
       messageCount: messages.length,
-      messages: messages.map(db.messageRowToMessage),
+      messages: messages,
       metadata: {
         title: session.title,
         model: session.model,
@@ -137,15 +138,25 @@ export class SessionStoreManager {
       session_id: this.currentSessionId,
       role: message.role,
       content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+      msg_type: message.msg_type,
+      thinking: message.thinking,
+      tool_name: message.tool_name,
+      tool_input: message.tool_input,
+      parent_tool_call_id: message.parent_tool_call_id,
+      viz_spec: message.viz_spec,
+      status: message.status,
+      seq_index: message.seq_index,
+      duration_ms: message.duration_ms,
+      sub_agent_id: message.sub_agent_id,
+      attachments: message.attachments,
     });
 
     // Reload session to get updated message count
-    const messages = db.getMessages(this.currentSessionId);
+    const messages = db.getMessagesWithAttachments(this.currentSessionId);
     this.currentSession = {
       ...this.currentSession!,
       messageCount: messages.length,
-      messages: messages.map(db.messageRowToMessage),
-      updatedAt: now,
+      messages,
     };
 
     return {
@@ -163,7 +174,7 @@ export class SessionStoreManager {
     if (!this.currentSessionId) {
       return [];
     }
-    return db.getMessages(this.currentSessionId).map(db.messageRowToMessage);
+    return db.getMessagesWithAttachments(this.currentSessionId);
   }
 
   /**
@@ -208,13 +219,13 @@ export class SessionStoreManager {
       return null;
     }
 
-    const messages = db.getMessages(this.currentSessionId);
+    const messages = db.getMessagesWithAttachments(this.currentSessionId);
     this.currentSession = {
       id: session.id,
       createdAt: session.created_at,
       updatedAt: session.updated_at,
       messageCount: messages.length,
-      messages: messages.map(db.messageRowToMessage),
+      messages,
       metadata: {
         title: session.title,
         model: session.model,

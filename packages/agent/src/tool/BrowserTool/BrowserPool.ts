@@ -13,7 +13,7 @@
  */
 
 import type { ICDPClient } from './CDPClient.js';
-import { PlaywrightCDPClient } from './CDPClient.js';
+import { createCDPClient } from './CDPClient.js';
 import { SnapshotEngine } from './SnapshotEngine.js';
 
 export interface InvestigationTask {
@@ -234,10 +234,9 @@ export class BrowserPool {
       }
     }
 
-    // Create new session
-    const client = new PlaywrightCDPClient();
+    // Create new session — prefer Extension CDP, fallback to Playwright → FallbackBrowser
+    const client = await createCDPClient(sessionId);
     const snapshotEngine = new SnapshotEngine(client);
-    await client.connect();
 
     const session: BrowserSession = {
       id: sessionId,

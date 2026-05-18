@@ -1,9 +1,19 @@
 /**
  * Agent Profile System - Core Types
  *
- * Slim design — agent profiles focus on tool scope, not prompt engineering.
- * Prompt customization is handled via AGENTS.md and Output Styles.
+ * Agent profiles control both tool scope and prompt sections.
  */
+
+// ============================================================
+// Prompt Profile Override
+// ============================================================
+
+export interface PromptProfileOverride {
+  /** Disable specific prompt sections */
+  disableSections?: string[];
+  /** Enable specific prompt sections (useful for re-enabling after base profile excludes them) */
+  enableSections?: string[];
+}
 
 // ============================================================
 // Agent Profile
@@ -24,6 +34,9 @@ export interface AgentProfile {
 
   /** Default model ID override */
   defaultModel?: string;
+
+  /** Prompt sections control */
+  promptProfile?: PromptProfileOverride;
 
   /** Whether this profile is selectable by users in the UI */
   userVisible: boolean;
@@ -65,7 +78,10 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     name: 'General',
     description: 'General purpose assistant for most tasks',
     allowedTools: ['*'],
-    disallowedTools: [],
+    disallowedTools: ['file:Glob', 'file:Grep', 'canvas:*'],
+    promptProfile: {
+      disableSections: ['taskHandling'],
+    },
     userVisible: true,
     isPreset: true,
     isEnabled: true,
@@ -76,8 +92,8 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     id: 'code-expert',
     name: 'Code',
     description: 'Code development and software engineering',
-    allowedTools: ['file:*', 'search:*', 'exec:*', 'process:*', 'git:*'],
-    disallowedTools: ['browser:*', 'gateway:*'],
+    allowedTools: ['*'],
+    disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'skill_manage', 'memory', 'SessionSearch'],
     userVisible: true,
     isPreset: true,
     isEnabled: true,
@@ -90,6 +106,9 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     description: 'Research, investigation and deep analysis',
     allowedTools: ['file:read*', 'search:*', 'browser:*'],
     disallowedTools: ['file:write*', 'file:edit*', 'exec:*'],
+    promptProfile: {
+      disableSections: ['taskHandling', 'actions'],
+    },
     userVisible: true,
     isPreset: true,
     isEnabled: true,
@@ -102,6 +121,9 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     description: 'Read-only exploration — sub-agent only',
     allowedTools: ['file:read*', 'search:*'],
     disallowedTools: ['file:write*', 'file:edit*', 'exec:*', 'browser:*', 'gateway:*'],
+    promptProfile: {
+      disableSections: ['memory', 'skills', 'sessionGuidance', 'widgetGuidelines'],
+    },
     userVisible: false,
     isPreset: true,
     isEnabled: true,
@@ -114,6 +136,9 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     description: 'Planning and architecture design — sub-agent only',
     allowedTools: ['file:read*', 'search:*'],
     disallowedTools: ['file:write*', 'file:edit*', 'exec:*', 'browser:*', 'gateway:*'],
+    promptProfile: {
+      disableSections: ['memory', 'skills', 'sessionGuidance', 'widgetGuidelines'],
+    },
     userVisible: false,
     isPreset: true,
     isEnabled: true,

@@ -41,3 +41,7 @@ export { buildMemoryContextBlock } from './contextBuilder.js'
 
 // Tool
 export { MemoryTool, getMemoryTool } from './tool.js'
+
+// Session Memory Service
+export { SessionMemoryService, createSessionMemoryService } from './SessionMemoryService.js'
+export type { SessionMemoryConfig, ExtractionResult } from './SessionMemoryService.js'

@@ -11,6 +11,7 @@ import { checkCacheEligibility, applyCacheControl, type CacheRetention } from '.
 import { normalizeUsage, type NormalizedUsage } from './usage.js';
 import { CacheMonitor } from '../observability/cache-monitor.js';
 
+
 // =============================================================================
 // Message Conversion Utilities
 // =============================================================================
@@ -61,6 +62,20 @@ function isMiniMaxEndpoint(baseURL?: string): boolean {
     normalized.startsWith('https://api.minimax.io/anthropic') ||
     normalized.startsWith('https://api.minimaxi.com/anthropic')
   );
+}
+
+// MiniMax CDN image URL patterns — images uploaded by MiniMax to its infrastructure
+// that should not be treated as external web resources by the agent
+const MINIMAX_CDN_PATTERNS = [
+  /https?:\/\/[^\s]*\.oss-cn-[a-z0-9-]+\.aliyuncs\.com[^\s]*/i,
+  /https?:\/\/[^\s]*\.minimax\.io[^\s]*/i,
+  /https?:\/\/[^\s]*\.minimaxi\.com[^\s]*/i,
+  /https?:\/\/[^/]*\.alicdn\.com[^\s]*/i,
+  /https?:\/\/[^/]*\.aliyuncs\.com[^\s]*/i,
+];
+
+function isMiniMaxCDNUrl(url: string): boolean {
+  return MINIMAX_CDN_PATTERNS.some(pattern => pattern.test(url));
 }
 
 /**
@@ -317,13 +332,15 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
     }
 
     if (msg.role === 'user') {
+      let userContent = convertContentToAnthropic(msg.content) as MessageParam['content'];
+
       converted.push({
         originalRole: 'user',
         toolCallIds: [],
         toolResultIds: [],
         param: {
           role: 'user',
-          content: convertContentToAnthropic(msg.content) as MessageParam['content'],
+          content: userContent,
         },
       });
     } else if (msg.role === 'assistant') {
@@ -534,6 +551,13 @@ function convertContentBlock(block: MessageContent): ContentBlockParam | null {
           data: imgBlock.source.data,
         },
       } as ContentBlockParam;
+    }
+    // Filter MiniMax CDN URLs — they are artifacts of MiniMax's internal image hosting,
+    // not user-intended web resources. Passing them to the model would cause it to
+    // attempt to fetch them via browser tool, which is incorrect.
+    if (isMiniMaxCDNUrl(imgBlock.source.data)) {
+      logger.warn('[AnthropicClient] Dropped MiniMax CDN image URL in content block');
+      return null;
     }
     return {
       type: 'image',

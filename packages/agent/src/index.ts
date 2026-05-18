@@ -18,7 +18,7 @@ import type {
   ToolResultContent,
   AgentProgressEvent,
 } from './types.js';
-import { PromptManager, asSystemPrompt } from './prompts/index.js';
+import { PromptManager, asSystemPrompt, getPromptProfileForAgentProfile } from './prompts/index.js';
 import { getMemoryManager } from './memory/index.js';
 import { compactHistory } from './compact/compact.js';
 import type { CompactResult, TokenEstimation } from './compact/compact.js';
@@ -166,9 +166,9 @@ export {
   SelfImprover,
   getDefaultSelfImprover,
   resetDefaultSelfImprover,
-} from './SelfImprover.js';
-export type { SkillReviewResult } from './SelfImprover.js';
-import { SelfImprover } from './SelfImprover.js';
+} from './self-improver/SelfImprover.js';
+export type { SkillReviewResult } from './self-improver/SelfImprover.js';
+import { SelfImprover } from './self-improver/SelfImprover.js';
 
 // Agent Profile exports
 export type {
@@ -398,6 +398,13 @@ export class duyaAgent {
       }
     }
 
+    // Apply prompt profile from agent profile (before building system prompt)
+    if (appliedProfile?.promptProfile) {
+      const promptProfile = getPromptProfileForAgentProfile(appliedProfile);
+      this.promptManager.setPromptProfile(promptProfile);
+      logger.info(`[Agent] Applying prompt profile with sections: disabled=${promptProfile.overrides?.disableSections?.join(', ') || 'none'}`);
+    }
+
     // Apply output style config if provided
     if (options?.outputStyleConfig) {
       logger.info(`[Agent] Applying output style: ${options.outputStyleConfig.name}`);
@@ -496,18 +503,45 @@ export class duyaAgent {
         // Check if the last message is already a user message with the same content
         // This prevents duplicates when messages are pre-loaded from DB before streamChat is called
         const lastMessage = messages[messages.length - 1];
+        // Use displayContent for comparison when available (original prompt without synthetic context)
+        // For MessageContent[] prompts, extract text blocks for comparison
+        const rawCompareContent = options?.displayContent ?? (typeof prompt === 'string' ? prompt : '');
+        const compareContent = typeof rawCompareContent === 'string'
+          ? rawCompareContent
+          : (Array.isArray(prompt)
+              ? prompt.filter((b: unknown) => (b as Record<string, unknown>).type === 'text')
+                  .map((b: unknown) => (b as Record<string, string>).text || '')
+                  .join('')
+              : '');
+        // Extract comparable content from lastMessage (handle both string and MessageContent[])
+        const lastMessageContent = typeof lastMessage?.content === 'string'
+          ? lastMessage.content
+          : (Array.isArray(lastMessage?.content)
+              ? (lastMessage.content as Array<{type: string; text?: string}>)
+                  .filter(b => b.type === 'text')
+                  .map(b => b.text || '')
+                  .join('')
+              : '');
         const isDuplicate = lastMessage &&
           lastMessage.role === 'user' &&
-          typeof prompt === 'string' &&
-          (lastMessage.content === prompt ||
-            (typeof lastMessage.content === 'string' && lastMessage.content.trim() === prompt.trim()));
+          (lastMessageContent === compareContent ||
+            lastMessageContent.trim() === compareContent.trim());
 
         if (!isDuplicate) {
-          messages.push({ role: 'user', content: prompt as string | MessageContent[], timestamp: Date.now(), seq_index: seqIndex });
-          // messages is now the same reference as this.messages, so this.messages is automatically updated
+          messages.push({
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: prompt as string | MessageContent[],
+            timestamp: Date.now(),
+            seq_index: seqIndex,
+            attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
+          } as Message);
         } else if (lastMessage) {
-          // Update existing user message with seq_index
           lastMessage.seq_index = seqIndex;
+          const newAttachments = (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments;
+          if (newAttachments && newAttachments.length > 0) {
+            lastMessage.attachments = newAttachments;
+          }
         }
       }
 
@@ -535,6 +569,9 @@ export class duyaAgent {
         },
         // Permission callback - passed from ChatOptions by API route
         requestPermission: options?.requestPermission,
+        // Conductor IPC pass-through
+        sendToMain: options?.conductorIpc?.sendToMain,
+        ipcRequest: options?.conductorIpc?.ipcRequest,
       };
 
       const executor = new StreamingToolExecutor(
@@ -647,7 +684,7 @@ export class duyaAgent {
             finalAssistantContent.push(...assistantContent);
 
             if (finalAssistantContent.length > 0 || needsFollowUp) {
-              messages.push({ role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex });
+              messages.push({ id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex });
             }
 
             // Now get remaining tool results and add them after assistant message
@@ -680,6 +717,9 @@ export class duyaAgent {
                 if (isToolResult) {
                   toolResultMessageCount++;
                   result.message.seq_index = seqIndex;
+                  if (!result.message.id) {
+                    result.message.id = crypto.randomUUID();
+                  }
                   messages.push(result.message);
 
                   // Yield tool result event
@@ -792,7 +832,7 @@ export class duyaAgent {
 
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`[Agent] Turn ${turnCount}: Error in LLM stream:`, error);
+        logger.error(`[Agent] Turn ${turnCount}: Error in LLM stream`, error instanceof Error ? error : new Error(errorMessage));
 
         // Check for context length exceeded errors and attempt reactive compaction
         const isContextLengthError =
@@ -834,8 +874,7 @@ export class duyaAgent {
             if (hasUnmatchedToolUse) {
               // Remove the incomplete assistant message to avoid saving partial state
               messages.splice(lastAssistantIdx, 1);
-              console.log('[Agent] Removed incomplete assistant message after error');
-            }
+                          }
           }
         }
 
@@ -885,15 +924,12 @@ export class duyaAgent {
     yield { type: 'skill_review_started' };
 
     // Fire-and-forget: run review in background without blocking the generator
-    this._runBackgroundReview(messagesSnapshot).then((result) => {
-      // Log result for debugging; UI can query separately if needed
-      console.log(`[SelfImprover] Background review completed: passed=${result.evaluationResult?.passed}, score=${result.evaluationResult?.score}, skill=${result.creatorResult?.skillName}`);
-    }).catch((err) => {
-      console.error(`[SelfImprover] Background review failed:`, err);
+    this._runBackgroundReview(messagesSnapshot).catch((err) => {
+      logger.error('[SelfImprover] Background review failed', err);
     });
   }
 
-  private async _runBackgroundReview(messagesSnapshot: Message[]): Promise<import('./SelfImprover.js').ImprovementResult> {
+  private async _runBackgroundReview(messagesSnapshot: Message[]): Promise<import('./self-improver/SelfImprover.js').ImprovementResult> {
     return this.selfImprover.initiateSkillCreation(
       messagesSnapshot,
       {
