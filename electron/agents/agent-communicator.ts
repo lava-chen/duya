@@ -1,0 +1,252 @@
+/**
+ * agent-communicator.ts - Thin IPC handler layer for Agent communication
+ *
+ * Registers IPC handlers that delegate to db-bridge.ts for business logic.
+ * This file is the entry point for agent-related IPC in electron/main.ts.
+ */
+
+import { ipcMain, BrowserWindow } from 'electron';
+import { getAgentProcessPool } from './process-pool/agent-process-pool';
+import { getConfigManager, toLLMProvider, type ApiProvider } from '../config/manager';
+import { getDatabase } from '../ipc/db-handlers';
+import { getLogger, LogComponent } from '../logging/logger';
+import { dispatchDbAction, handleDbRequest as processDbRequest, type DbRequest, type DbResponse } from './db-bridge';
+
+// Re-export for backward compatibility
+export { dispatchDbAction, handleDbRequest as handleDbRequest, type DbRequest, type DbResponse } from './db-bridge';
+
+/**
+ * Get default model name based on provider type
+ */
+function getDefaultModelForProvider(providerType: ApiProvider['providerType'], options?: Record<string, unknown>): string {
+  if (options) {
+    const optModel = (options as Record<string, unknown>).defaultModel || (options as Record<string, unknown>).model;
+    if (typeof optModel === 'string' && optModel.length > 0) {
+      return optModel;
+    }
+  }
+
+  switch (providerType) {
+    case 'ollama':
+      return 'llama3.2';
+    case 'openai':
+      return 'gpt-4o';
+    case 'openai-compatible':
+      return '';
+    case 'anthropic':
+      return 'claude-sonnet-4-20250514';
+    default:
+      return '';
+  }
+}
+
+// Broadcast event to all renderer windows
+function broadcastToRenderers(channel: string, ...args: unknown[]): void {
+  const windows = BrowserWindow.getAllWindows();
+  for (const window of windows) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(channel, ...args);
+    }
+  }
+}
+
+// Register Agent-specific IPC handlers
+export function registerAgentHandlers(): void {
+  // Handler for agent to send notifications to renderer
+  ipcMain.handle('agent:notify', (_event, data: { type: string; payload: unknown }) => {
+    getLogger().info('Notification', { type: data.type, payload: data.payload }, LogComponent.AgentCommunicator);
+    broadcastToRenderers('agent:event', data);
+  });
+
+  // Handler to check if agent is running
+  ipcMain.handle('agent:isRunning', () => {
+    const pool = getAgentProcessPool();
+    return pool.isRunning('');
+  });
+
+  // Handler to get agent provider config for initializing agent subprocess
+  ipcMain.handle('agent:getProviderConfig', (_event, sessionId: string) => {
+    const configManager = getConfigManager();
+    const db = getDatabase();
+
+    const session = db?.prepare('SELECT provider_id, model FROM chat_sessions WHERE id = ?').get(sessionId) as { provider_id: string | null; model: string | null } | undefined;
+
+    let provider = session?.provider_id
+      ? configManager.getAllProviders()[session.provider_id]
+      : null;
+
+    if (!provider) {
+      provider = configManager.getActiveProvider() || null;
+    }
+
+    if (!provider) return null;
+
+    const defaultModel = getDefaultModelForProvider(provider.providerType, provider.options);
+
+    return {
+      apiKey: provider.apiKey,
+      baseURL: provider.baseUrl || undefined,
+      model: session?.model || defaultModel,
+      provider: toLLMProvider(provider.providerType),
+    };
+  });
+
+  // Handler to get masked provider config for renderer (no API key exposure)
+  ipcMain.handle('agent:getMaskedProviderConfig', (_event, sessionId: string) => {
+    const configManager = getConfigManager();
+    const db = getDatabase();
+
+    const session = db?.prepare('SELECT provider_id, model FROM chat_sessions WHERE id = ?').get(sessionId) as { provider_id: string | null; model: string | null } | undefined;
+
+    let provider = session?.provider_id
+      ? configManager.getAllProviders()[session.provider_id]
+      : null;
+
+    if (!provider) {
+      provider = configManager.getActiveProvider() || null;
+    }
+
+    if (!provider) return null;
+
+    const key = provider.apiKey;
+    const maskedKey = key.length <= 8 ? '***' : key.slice(0, 4) + '***' + key.slice(-4);
+
+    return {
+      apiKey: maskedKey,
+      baseURL: provider.baseUrl || undefined,
+      model: session?.model || '',
+      provider: provider.providerType,
+    };
+  });
+
+  // Helper to mask API key in provider for renderer
+  function maskProvider(provider: ApiProvider): Record<string, unknown> {
+    const key = provider.apiKey;
+    const hasKey = !!key && key.length > 0;
+    const maskedKey = hasKey && key.length > 8 ? key.slice(0, 4) + '***' + key.slice(-4) : (hasKey ? '***' : '');
+    return {
+      id: provider.id,
+      name: provider.name,
+      providerType: provider.providerType,
+      baseUrl: provider.baseUrl ?? '',
+      apiKey: maskedKey,
+      isActive: provider.isActive,
+      hasApiKey: hasKey,
+      sortOrder: provider.sortOrder ?? 0,
+      extraEnv: JSON.stringify(provider.extraEnv ?? {}),
+      protocol: provider.providerType,
+      headers: JSON.stringify(provider.headers ?? {}),
+      options: JSON.stringify(provider.options ?? {}),
+      notes: provider.notes ?? '',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  }
+
+  // Get all providers (masked)
+  ipcMain.handle('config:provider:getAll', () => {
+    const configManager = getConfigManager();
+    const providers = configManager.getAllProviders();
+    const masked = Object.values(providers).map(maskProvider);
+    getLogger().info('config:provider:getAll', { count: masked.length }, LogComponent.AgentCommunicator);
+    return masked;
+  });
+
+  // Get provider by ID (masked)
+  ipcMain.handle('config:provider:get', (_event, id: string) => {
+    const configManager = getConfigManager();
+    const provider = configManager.getAllProviders()[id];
+    return provider ? maskProvider(provider) : null;
+  });
+
+  // Get active provider (masked)
+  ipcMain.handle('config:provider:getActive', () => {
+    const configManager = getConfigManager();
+    const provider = configManager.getActiveProvider();
+    return provider ? maskProvider(provider) : null;
+  });
+
+  // Get active provider with full API key (for agent initialization)
+  ipcMain.handle('config:provider:getActiveProviderConfig', () => {
+    const configManager = getConfigManager();
+    const provider = configManager.getActiveProvider();
+    if (!provider) return null;
+
+    const model = (provider.options?.defaultModel as string) ||
+      (provider.options?.model as string) ||
+      (Array.isArray(provider.options?.enabled_models) && (provider.options?.enabled_models as string[])[0]) ||
+      '';
+
+    return {
+      apiKey: provider.apiKey,
+      baseUrl: provider.baseUrl || undefined,
+      providerType: provider.providerType,
+      model,
+      provider: toLLMProvider(provider.providerType),
+      authStyle: 'api_key' as const,
+    };
+  });
+
+  // Upsert provider
+  ipcMain.handle('config:provider:upsert', (_event, data: ApiProvider) => {
+    const configManager = getConfigManager();
+    configManager.upsertProvider(data);
+    return maskProvider(data);
+  });
+
+  // Update provider (partial update)
+  ipcMain.handle('config:provider:update', (_event, id: string, data: Partial<ApiProvider>) => {
+    const configManager = getConfigManager();
+    const existing = configManager.getAllProviders()[id];
+    if (!existing) return null;
+    const updated = { ...existing, ...data, id };
+    configManager.upsertProvider(updated);
+    return maskProvider(updated);
+  });
+
+  // Delete provider
+  ipcMain.handle('config:provider:delete', (_event, id: string) => {
+    const configManager = getConfigManager();
+    return configManager.deleteProvider(id);
+  });
+
+  // Activate provider
+  ipcMain.handle('config:provider:activate', (_event, id: string) => {
+    const configManager = getConfigManager();
+    configManager.activateProvider(id);
+    const provider = configManager.getAllProviders()[id];
+    return provider ? maskProvider(provider) : null;
+  });
+
+  // ==================== Output Style handlers ====================
+  ipcMain.handle('config:style:getAll', () => {
+    const configManager = getConfigManager();
+    const styles = configManager.getOutputStyles();
+    return Object.values(styles);
+  });
+
+  ipcMain.handle('config:style:get', (_event, id: string) => {
+    const configManager = getConfigManager();
+    const styles = configManager.getOutputStyles();
+    return styles[id] || null;
+  });
+
+  ipcMain.handle('config:style:upsert', (_event, data: { id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean }) => {
+    const configManager = getConfigManager();
+    const result = configManager.upsertOutputStyle({
+      id: data.id,
+      name: data.name,
+      description: data.description,
+      prompt: data.prompt,
+      keepCodingInstructions: data.keepCodingInstructions,
+    });
+    return result ? configManager.getOutputStyles()[data.id] : null;
+  });
+
+  ipcMain.handle('config:style:delete', (_event, id: string) => {
+    const configManager = getConfigManager();
+    return configManager.deleteOutputStyle(id);
+  });
+
+  getLogger().info('Agent handlers registered', undefined, LogComponent.AgentCommunicator);
+}

@@ -134,6 +134,15 @@ export interface ProviderAPI {
   update: (id: string, data: Record<string, unknown>) => Promise<unknown>
   delete: (id: string) => Promise<boolean>
   activate: (id: string) => Promise<unknown>
+  // Get full provider config (unmasked API key) for agent initialization
+  getActiveProviderConfig: () => Promise<{
+    apiKey: string
+    baseUrl?: string
+    providerType: string
+    model: string
+    provider: string
+    authStyle: string
+  } | null>
 }
 
 export interface OutputStyleAPI {
@@ -317,6 +326,7 @@ export interface DocumentParserAPI {
     >
     extractMethod?: 'text' | 'vision' | 'hybrid'
     metadata?: Record<string, unknown>
+    thumbnail?: { base64: string; mediaType: string }
     parsedAt: number
   }>
   getCapabilities: () => Promise<{
@@ -342,8 +352,9 @@ export interface ElectronAPI {
     openPath: (folderPath: string) => Promise<string>
   }
   notification: {
-    show: (options: { title: string; body: string }) => Promise<boolean>
+    show: (options: { title: string; body: string; sessionId?: string }) => Promise<boolean>
   }
+  onNotificationClicked: (callback: (data: { sessionId: string }) => void) => () => void
   app: {
     getVersion: () => Promise<string>
     quit: () => Promise<void>
@@ -363,6 +374,8 @@ export interface ElectronAPI {
   getConfigPort: () => ConfigPortAPI | null
   getAgentPort: () => AgentControlPortAPI | null
   getConductorPort: () => ConductorPortAPI | null
+  // Agent Server port for SSE client (Phase 7.1 - plan 53)
+  getAgentServerPort: () => Promise<number | null>
   // Port status API for checking if ports are ready
   portStatus: PortStatusAPI
   // Session port API for per-session MessagePort communication
@@ -401,6 +414,18 @@ export interface ElectronAPI {
   browserExtension: BrowserExtensionAPI
   parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
+  // Agent Server API
+  agentServer: {
+    getPort: () => Promise<number | null>
+    getUrl: () => Promise<string | null>
+  }
+  // Vision API
+  vision: {
+    get: () => Promise<{ providerId?: string; model?: string; enabled?: boolean }>
+    set: (data: { providerId?: string; model?: string; enabled?: boolean }) => Promise<void>
+  }
+  // Session management
+  getInterruptedSessions: () => Promise<string[]>
   // Logger API
   logger: {
     export: () => Promise<{ success: boolean; logs?: string; error?: string }>
@@ -496,8 +521,7 @@ function handleSessionPortMessage(sessionId: string, data: Record<string, unknow
       try {
         handler(payload)
       } catch (error) {
-        console.error(`[preload] Session ${sessionId} port handler error:`, error)
-      }
+              }
     })
   }
 }
@@ -525,8 +549,7 @@ function handleAgentPortMessage(data: Record<string, unknown>): void {
       try {
         handler(payload)
       } catch (error) {
-        console.error('[preload] Agent port handler error:', error)
-      }
+              }
     })
   }
 }
@@ -564,17 +587,15 @@ ipcRenderer.on('agent-control-port', (event) => {
     agentPortReadyCallbacks.forEach(callback => {
       try {
         callback()
-      } catch (error) {
-        console.error('[preload] Error in agentPort ready callback:', error)
+      } catch {
+        // ignore callback errors
       }
-    })
+    });
     agentPortReadyCallbacks.clear()
     // Dispatch event to notify renderer that agentPort is ready
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent('agent-port-ready'))
     }, 0)
-  } else {
-    console.error('[preload] No port in agent-control-port event')
   }
 })
 
@@ -588,7 +609,11 @@ ipcRenderer.on('conductor-port', (event) => {
       const handlers = conductorPortHandlers.get(type as string)
       if (handlers) {
         handlers.forEach(handler => {
-          try { handler(payload) } catch (error) { console.error('[preload] Conductor port handler error:', error) }
+          try {
+            handler(payload)
+          } catch {
+            // ignore handler errors
+          }
         })
       }
     }
@@ -601,16 +626,15 @@ ipcRenderer.on('sync:threads-changed', () => {
   syncCallbacks.forEach(callback => {
     try {
       callback()
-    } catch (error) {
-      console.error('[preload] Error in sync callback:', error)
+    } catch {
+      // ignore callback errors
     }
   })
 })
 
 // Listen for daemon disconnected events
 ipcRenderer.on('daemon:disconnected', (_event, data: { code: number; source: string }) => {
-  console.warn('[preload] Daemon disconnected:', data.source, 'code:', data.code)
-  window.dispatchEvent(new CustomEvent('daemon-disconnected', { detail: data }))
+    window.dispatchEvent(new CustomEvent('daemon-disconnected', { detail: data }))
 })
 
 // Helper functions for configPort API
@@ -829,6 +853,13 @@ const electronAPI: ElectronAPI = {
   notification: {
     show: (options) => ipcRenderer.invoke('notification:show', options),
   },
+  onNotificationClicked: (callback: (data: { sessionId: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string }) => callback(data);
+    ipcRenderer.on('notification:clicked', handler);
+    return () => {
+      ipcRenderer.removeListener('notification:clicked', handler);
+    };
+  },
   app: {
     getVersion: () => ipcRenderer.invoke('app:get-version'),
     quit: () => ipcRenderer.invoke('app:quit'),
@@ -862,6 +893,8 @@ const electronAPI: ElectronAPI = {
   getConfigPort: getConfigPortAPI,
   getAgentPort: getAgentPortAPI,
   getConductorPort: getConductorPortAPI,
+  // Agent Server port for SSE client (Phase 7.1 - plan 53)
+  getAgentServerPort: () => ipcRenderer.invoke('agent-server:get-port'),
   // Session port API for per-session MessagePort communication
   getSessionPort: (sessionId: string) => {
     const info = sessionPorts.get(sessionId)
@@ -943,6 +976,8 @@ const electronAPI: ElectronAPI = {
     update: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('config:provider:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('config:provider:delete', id),
     activate: (id: string) => ipcRenderer.invoke('config:provider:activate', id),
+    // Get full provider config with unmasked API key for agent initialization
+    getActiveProviderConfig: () => ipcRenderer.invoke('config:provider:getActiveProviderConfig'),
   },
   outputStyle: {
     list: () => ipcRenderer.invoke('config:style:getAll'),
@@ -1032,6 +1067,11 @@ const electronAPI: ElectronAPI = {
     update: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:agentProfile:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('db:agentProfile:delete', id),
   },
+  // Agent Server API
+  agentServer: {
+    getPort: () => ipcRenderer.invoke('agent-server:getPort'),
+    getUrl: () => ipcRenderer.invoke('agent-server:getUrl'),
+  },
   // Logger API for checking if ports are ready
   portStatus: {
     isAgentPortReady: () => agentPortState.isAgentPortReadyFlag,
@@ -1107,6 +1147,18 @@ const electronAPI: ElectronAPI = {
       return () => ipcRenderer.removeListener('update:error', handler)
     },
   },
+  // Vision API
+  vision: {
+    get: () => ipcRenderer.invoke('vision:get'),
+    set: (data: { providerId?: string; model?: string; enabled?: boolean }) => ipcRenderer.invoke('vision:set', data),
+  },
+  // Session management
+  getInterruptedSessions: () => ipcRenderer.invoke('session:getInterruptedSessions'),
 }
 
-contextBridge.exposeInMainWorld('electronAPI', electronAPI)
+contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+
+// Agent Server port accessor for SSE client
+export function getAgentServerPort(): Promise<number | null> {
+  return ipcRenderer.invoke('agent-server:get-port');
+}

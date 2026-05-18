@@ -158,9 +158,9 @@ export async function cleanupChildProcess(
 
   // Unpipe stdio to prevent EPIPE errors when parent exits
   try {
-    child.stdout?.unpipe?.();
-    child.stderr?.unpipe?.();
-    child.stdin?.unpipe?.();
+    (child.stdout as unknown as { unpipe?: () => void })?.unpipe?.();
+    (child.stderr as unknown as { unpipe?: () => void })?.unpipe?.();
+    (child.stdin as unknown as { unpipe?: () => void })?.unpipe?.();
   } catch {
     // Ignore
   }

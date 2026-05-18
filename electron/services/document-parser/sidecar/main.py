@@ -33,6 +33,7 @@ async def send_result(
     char_count: int,
     chunks: list[dict[str, Any]],
     extract_method: str | None = None,
+    thumbnail: dict[str, Any] | None = None,
 ) -> None:
     result: dict[str, Any] = {
         "status": "done",
@@ -41,6 +42,8 @@ async def send_result(
     }
     if extract_method:
         result["extractMethod"] = extract_method
+    if thumbnail:
+        result["thumbnail"] = thumbnail
     await send_json({
         "jsonrpc": "2.0",
         "id": req_id,
@@ -95,13 +98,16 @@ async def handle_parse(req_id: int, params: dict[str, Any]) -> None:
                 })
 
             chunks = text_chunks + image_chunks
+            thumbnail: dict[str, Any] | None = raw_result.get("thumbnail")
             await send_progress(req_id, 1.0)
-            await send_result(req_id, len(text), chunks, extract_method)
+            await send_result(req_id, len(text), chunks, extract_method, thumbnail)
         else:
             text = str(raw_result)
             chunks = registry.chunk_text(text)
             await send_progress(req_id, 1.0)
             await send_result(req_id, len(text), chunks)
+
+        print(f"[Python-Sidecar] parse result: text_len={len(text)}, chunks={len(chunks)}", file=sys.stderr)
     except Exception as e:
         error_msg = str(e) or type(e).__name__
         await send_error(req_id, -32603, f"Parse failed: {error_msg}")

@@ -67,7 +67,7 @@ class ParserRegistry:
     @staticmethod
     def chunk_text(text: str, max_chunk_size: int = 4000, overlap: int = 200) -> list[dict[str, Any]]:
         if not text:
-            return [{"index": 0, "text": ""}]
+            return [{"type": "text", "index": 0, "text": ""}]
 
         chunks: list[dict[str, Any]] = []
         paragraphs = text.split("\n\n")
@@ -82,7 +82,7 @@ class ParserRegistry:
                     current_chunk = para
             else:
                 if current_chunk:
-                    chunks.append({"index": index, "text": current_chunk})
+                    chunks.append({"type": "text", "index": index, "text": current_chunk})
                     index += 1
                     overlap_text = current_chunk[-overlap:] if len(current_chunk) > overlap else current_chunk
                     if para.startswith(overlap_text):
@@ -93,11 +93,11 @@ class ParserRegistry:
                     start = 0
                     while start < len(para):
                         end = min(start + max_chunk_size, len(para))
-                        chunks.append({"index": index, "text": para[start:end]})
+                        chunks.append({"type": "text", "index": index, "text": para[start:end]})
                         index += 1
                         start = end - overlap if end < len(para) else end
 
         if current_chunk:
-            chunks.append({"index": index, "text": current_chunk})
+            chunks.append({"type": "text", "index": index, "text": current_chunk})
 
         return chunks

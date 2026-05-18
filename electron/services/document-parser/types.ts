@@ -13,6 +13,11 @@ export interface ImageChunk {
 
 export type ParseChunk = TextChunk | ImageChunk;
 
+export interface ThumbnailData {
+  base64: string;
+  mediaType: string;
+}
+
 export interface ParseResult {
   fileHash: string;
   sessionId: string;
@@ -21,6 +26,7 @@ export interface ParseResult {
   chunks: ParseChunk[];
   extractMethod?: 'text' | 'vision' | 'hybrid';
   metadata?: Record<string, unknown>;
+  thumbnail?: ThumbnailData;
   parsedAt: number;
 }
 
@@ -44,6 +50,7 @@ export interface JsonRpcProgressResponse {
     status: 'parsing';
     progress: number;
   };
+  type?: never;
 }
 
 export interface JsonRpcDoneResponse {
@@ -54,7 +61,9 @@ export interface JsonRpcDoneResponse {
     charCount: number;
     chunks: ParseChunk[];
     extractMethod?: 'text' | 'vision' | 'hybrid';
+    thumbnail?: ThumbnailData;
   };
+  type?: never;
 }
 
 export interface JsonRpcErrorResponse {
@@ -64,6 +73,7 @@ export interface JsonRpcErrorResponse {
     code: number;
     message: string;
   };
+  type?: never;
 }
 
 export type JsonRpcResponse = JsonRpcProgressResponse | JsonRpcDoneResponse | JsonRpcErrorResponse;
@@ -73,6 +83,8 @@ export interface CapabilityMessage {
   parsers: Record<string, string | boolean>;
   libreoffice_path: string | null;
   version: string;
+  jsonrpc?: never;
+  id?: never;
 }
 
 export type SidecarMessage = JsonRpcResponse | CapabilityMessage;
