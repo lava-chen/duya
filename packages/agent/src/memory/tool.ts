@@ -12,6 +12,7 @@
 import { BaseTool } from '../tool/BaseTool.js'
 import type { ToolResult } from '../tool/types.js'
 import { getMemoryManager } from './manager.js'
+import { MEMORY_CHAR_LIMITS } from './types.js'
 import { z } from 'zod'
 
 const TOOL_NAME = 'Memory'
@@ -46,7 +47,7 @@ ACTIONS:
 - remove: Delete an entry (requires oldText to match)
 - list: List all entries (optionally filter by type)
 
-CHAR LIMITS: global memory 2,200 chars, global user 1,375 chars, project memory 2,200 chars.
+CHAR LIMITS: global memory ${MEMORY_CHAR_LIMITS.memory.toLocaleString()} chars, global user ${MEMORY_CHAR_LIMITS.user.toLocaleString()} chars, project memory ${MEMORY_CHAR_LIMITS.project.toLocaleString()} chars.
 When at limit, replace or remove existing entries before adding new ones.`
 
 const MemoryInputSchema = z.object({

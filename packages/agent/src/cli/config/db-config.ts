@@ -10,7 +10,8 @@ import Database from 'better-sqlite3';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { existsSync, mkdirSync } from 'fs';
-import { getConfigDatabasePath } from '../../config.js';
+import { getConfigDatabasePath } from '../../config/index.js';
+import { logger } from '../../utils/logger.js';
 
 // Default database path
 function getDefaultDbPath(): string {
@@ -54,24 +55,22 @@ export function initCliDatabase(): Database.Database {
   const dbPath = getDbPath();
   const dbDir = dirname(dbPath);
 
-  console.log('[Agent DB] Database path:', dbPath);
-  console.log('[Agent DB] Database dir:', dbDir);
-  console.log('[Agent DB] Dir exists:', existsSync(dbDir));
+  logger.info('Database path', { dbPath, dbDir, dirExists: existsSync(dbDir) }, 'DB');
 
   if (!existsSync(dbDir)) {
-    console.log('[Agent DB] Creating directory:', dbDir);
+    logger.info('Creating database directory', { dbDir }, 'DB');
     mkdirSync(dbDir, { recursive: true });
   }
 
-  console.log('[Agent DB] Opening database...');
+  logger.info('Opening database', undefined, 'DB');
   try {
     db = new Database(dbPath);
-    console.log('[Agent DB] Database opened successfully');
+    logger.info('Database opened successfully', { dbPath }, 'DB');
   } catch (err) {
-    console.error('[Agent DB] Failed to open database:', err);
-    console.log('[Agent DB] Falling back to in-memory database');
+    logger.error('Failed to open database', err instanceof Error ? err : new Error(String(err)), { dbPath }, 'DB');
+    logger.info('Falling back to in-memory database', undefined, 'DB');
     db = new Database(':memory:');
-    console.log('[Agent DB] Using in-memory database');
+    logger.info('Using in-memory database', undefined, 'DB');
   }
 
   // Try to set WAL mode, but don't fail if it doesn't work

@@ -38,23 +38,16 @@ const POLICY_TABLE: Record<InterventionTrigger, InterventionLevel> = {
 };
 
 const HIGH_RISK_TOOLS = new Set([
-  'conductor_create_widget',
-  'conductor_move_widget',
-  'conductor_delete_widget',
   'canvas_create_element',
   'canvas_delete_element',
 ]);
 
 const MEDIUM_RISK_TOOLS = new Set([
-  'conductor_update_widget_data',
-  'conductor_auto_layout',
   'canvas_update_element',
   'canvas_arrange_elements',
 ]);
 
 const LOW_RISK_TOOLS = new Set([
-  'conductor_get_snapshot',
-  'conductor_suggest_widget',
   'canvas_get_snapshot',
 ]);
 
@@ -74,7 +67,7 @@ export class InterventionPolicy {
     let level: InterventionLevel;
 
     if (HIGH_RISK_TOOLS.has(toolName)) {
-      level = toolName === 'conductor_delete_widget' ? 'confirm_undoable' : 'confirm';
+      level = toolName === 'canvas_delete_element' ? 'confirm_undoable' : 'confirm';
     } else if (MEDIUM_RISK_TOOLS.has(toolName)) {
       if (context.triggeredBy === 'user_active_input') {
         level = 'silent';

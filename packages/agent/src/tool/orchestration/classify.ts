@@ -5,58 +5,89 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   read: ToolBatch.READ,
   grep: ToolBatch.READ,
   glob: ToolBatch.READ,
+  browser: ToolBatch.READ,
+  vision_analyze: ToolBatch.READ,
+  duya_sessions: ToolBatch.READ,
+  duya_info: ToolBatch.READ,
+  duya_config: ToolBatch.READ,
+  duya_restart: ToolBatch.READ,
+  duya_health: ToolBatch.READ,
+  duya_logs: ToolBatch.READ,
+
+  // Skill tools — READ (查询/调用)
+  skill: ToolBatch.READ,
+  Skill: ToolBatch.READ,
+  skill_manage: ToolBatch.WRITE,
+
+  // Brief — READ
+  brief: ToolBatch.READ,
+  Brief: ToolBatch.READ,
+
+  // Session search — READ
+  session_search: ToolBatch.READ,
+  SessionSearch: ToolBatch.READ,
+
+  // Task read tools — READ
+  task_get: ToolBatch.READ,
+  TaskGet: ToolBatch.READ,
+  task_list: ToolBatch.READ,
+  TaskList: ToolBatch.READ,
+  task_output: ToolBatch.READ,
+  TaskOutput: ToolBatch.READ,
+
+  // MCP resource tools — READ
+  list_mcp_resources: ToolBatch.READ,
+  ListMcpResources: ToolBatch.READ,
+  read_mcp_resource: ToolBatch.READ,
+  ReadMcpResource: ToolBatch.READ,
+
+  // Web tools (disabled but keep mapping for safety)
   web_search: ToolBatch.READ,
   web_fetch: ToolBatch.READ,
-  list_mcp_resources: ToolBatch.READ,
-  read_mcp_resource: ToolBatch.READ,
-  task_get: ToolBatch.READ,
-  task_list: ToolBatch.READ,
-  task_output: ToolBatch.READ,
-  lsp: ToolBatch.READ,
-  repl: ToolBatch.READ,
-  skill: ToolBatch.READ,
-  brief: ToolBatch.READ,
-  browser: ToolBatch.READ,
-  session_search: ToolBatch.READ,
-  config: ToolBatch.READ,
 
   // WRITE batch — 修改文件系统，串行
   write: ToolBatch.WRITE,
   edit: ToolBatch.WRITE,
-  task_create: ToolBatch.WRITE,
-  task_update: ToolBatch.WRITE,
-  skill_manage: ToolBatch.WRITE,
   cron: ToolBatch.WRITE,
+  task_create: ToolBatch.WRITE,
+  TaskCreate: ToolBatch.WRITE,
+  task_update: ToolBatch.WRITE,
+  TaskUpdate: ToolBatch.WRITE,
   memory: ToolBatch.WRITE,
+  Memory: ToolBatch.WRITE,
 
   // SYSTEM batch — 独占执行
   bash: ToolBatch.SYSTEM,
   Agent: ToolBatch.SYSTEM,
+  task: ToolBatch.SYSTEM,
   Task: ToolBatch.SYSTEM,
-  enter_worktree: ToolBatch.SYSTEM,
-  exit_worktree: ToolBatch.SYSTEM,
-  enter_plan_mode: ToolBatch.SYSTEM,
-  exit_plan_mode: ToolBatch.SYSTEM,
   task_stop: ToolBatch.SYSTEM,
-  team_create: ToolBatch.SYSTEM,
-  team_delete: ToolBatch.SYSTEM,
+  TaskStop: ToolBatch.SYSTEM,
+  TeamCreate: ToolBatch.SYSTEM,
+  TeamDelete: ToolBatch.SYSTEM,
   show_widget: ToolBatch.SYSTEM,
+  SwitchMode: ToolBatch.SYSTEM,
 
-  // Conductor tools — 独占
-  conductor_get_snapshot: ToolBatch.SYSTEM,
-  conductor_update_widget_data: ToolBatch.SYSTEM,
-  conductor_create_widget: ToolBatch.SYSTEM,
-  conductor_suggest_widget: ToolBatch.SYSTEM,
-  conductor_move_widget: ToolBatch.SYSTEM,
-  conductor_delete_widget: ToolBatch.SYSTEM,
-  conductor_auto_layout: ToolBatch.SYSTEM,
+  // Worktree tools — SYSTEM
+  enter_worktree: ToolBatch.SYSTEM,
+  EnterWorktree: ToolBatch.SYSTEM,
+  exit_worktree: ToolBatch.SYSTEM,
+  ExitWorktree: ToolBatch.SYSTEM,
 
-  // Canvas Orchestrator V2 tools — 独占
+  // Plan mode tools — SYSTEM
+  enter_plan_mode: ToolBatch.SYSTEM,
+  EnterPlanMode: ToolBatch.SYSTEM,
+  exit_plan_mode: ToolBatch.SYSTEM,
+  ExitPlanMode: ToolBatch.SYSTEM,
+
+  // Canvas Orchestrator tools — SYSTEM
   canvas_create_element: ToolBatch.SYSTEM,
   canvas_update_element: ToolBatch.SYSTEM,
   canvas_delete_element: ToolBatch.SYSTEM,
   canvas_arrange_elements: ToolBatch.SYSTEM,
   canvas_get_snapshot: ToolBatch.SYSTEM,
+  canvas_align: ToolBatch.SYSTEM,
+  canvas_layout_grid: ToolBatch.SYSTEM,
 }
 
 export function classifyTool(toolName: string): ToolBatch {

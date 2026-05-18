@@ -4,13 +4,20 @@ export type SemanticEventType =
   | 'layout_changed'
   | 'data_updated'
   | 'timer_completed'
-  | 'task_completed';
+  | 'task_completed'
+  | 'element_created'
+  | 'element_updated'
+  | 'element_deleted'
+  | 'element_moved'
+  | 'canvas_renamed';
 
 export interface SemanticEvent {
   type: SemanticEventType;
   canvasId: string;
   widgetId?: string;
+  elementId?: string;
   data?: Record<string, unknown>;
+  description?: string;
   ts: number;
 }
 
@@ -69,6 +76,32 @@ export class PerceptionEngine {
       return [...this.recentEvents];
     }
     return this.recentEvents.filter((e) => e.ts > since);
+  }
+
+  /** Format events as LLM-readable text for system prompt injection */
+  formatEventsAsContext(): string | null {
+    const events = this.recentEvents;
+    if (events.length === 0) return null;
+
+    const lines = events.map((e) => {
+      const time = new Date(e.ts).toLocaleTimeString();
+      const desc = e.description || `${e.type} on ${e.elementId || e.widgetId || 'canvas'}`;
+      return `[${time}] ${desc}`;
+    });
+
+    return `## Canvas Changes Since Last Message\n${lines.join('\n')}`;
+  }
+
+  /** Return true if there are unread events */
+  hasUnreadEvents(): boolean {
+    return this.recentEvents.length > 0;
+  }
+
+  /** Drain and return all events (mark them as read) */
+  drainEvents(): SemanticEvent[] {
+    const events = [...this.recentEvents];
+    this.recentEvents = [];
+    return events;
   }
 
   clear(): void {

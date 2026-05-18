@@ -36,6 +36,9 @@ export class MemoryManager {
   // Project path for this session
   private _projectPath: string = ''
 
+  // Anchor store
+  private _anchorStore: FileMemoryStore | null = null
+
   // Initialized flag
   private _initialized: boolean = false
 
@@ -105,6 +108,15 @@ export class MemoryManager {
     // Cache entries for prefetch
     this._cachedEntries.globalMemory = this._globalMemoryStore.list()
     this._cachedEntries.globalUser = this._globalUserStore.list()
+
+    // Load anchor store
+    const anchorStorePath = path.join(projectDuyaDir, 'ANCHORS.md')
+    this._anchorStore = new FileMemoryStore(anchorStorePath, { charLimit: 2000 })
+    try {
+      this._anchorStore.load()
+    } catch {
+      this._anchorStore = null
+    }
 
     this._initialized = true
   }
@@ -309,6 +321,36 @@ export class MemoryManager {
   sync_turn(_userContent: string, _assistantContent: string): void {
     // Reserved for future SessionMemoryService integration
     // Could be used for automatic memory extraction based on conversation
+  }
+
+  // ===========================================================================
+  // Anchor Operations
+  // ===========================================================================
+
+  async addAnchor(content: string, category: string): Promise<MemoryResult> {
+    if (!this._anchorStore) {
+      return { success: false, error: 'Anchor store not available' }
+    }
+    return this._anchorStore.add(content, category)
+  }
+
+  async removeAnchor(id: string): Promise<MemoryResult> {
+    if (!this._anchorStore) {
+      return { success: false, error: 'Anchor store not available' }
+    }
+    return this._anchorStore.remove(id)
+  }
+
+  listAnchors(): MemoryResult {
+    if (!this._anchorStore) {
+      return { success: false, error: 'Anchor store not available' }
+    }
+    const entries = this._anchorStore.list()
+    return {
+      success: true,
+      entries,
+      usage: this._anchorStore.getUsage(),
+    }
   }
 }
 

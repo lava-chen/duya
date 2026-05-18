@@ -18,7 +18,7 @@ This tool provides generic web browsing capabilities:
 - Capture network requests
 - Evaluate JavaScript in iframes
 - Access cookies
-- **browser_parallel** - Investigate multiple URLs simultaneously in separate browser windows
+- **parallel_fetch** - Investigate multiple URLs simultaneously (fast HTTP or real browsers)
 
 Use this when you need to:
 - Access JavaScript-heavy websites (SPAs, React/Vue apps)
@@ -183,9 +183,10 @@ The browser tool allows you to navigate and interact with web pages using a real
   \`\`\`
   Use this when you are done with browser operations to clean up the automation window.
 
-- **browser_parallel** - Investigate multiple URLs simultaneously in separate browser windows
+- **parallel_fetch** - Investigate multiple URLs simultaneously (fast HTTP or real browsers)
   \`\`\`json
-  {"operation": "browser_parallel", "urls": ["https://site1.com", "https://site2.com"], "task": "Compare pricing", "timeoutMs": 30000}
+  {"operation": "parallel_fetch", "urls": ["https://site1.com", "https://site2.com"], "task": "Compare pricing", "timeoutMs": 30000}
+  Uses real browsers by default (Extension CDP / Duya browser plugin). Set \`"useBrowser": false\` for fast HTTP only (no JS rendering).
   \`\`\`
   **Required parameter: \`urls\`** — must be an array of URL strings. Example: ["https://a.com", "https://b.com"]
   Opens multiple independent browser sessions (up to 5) to investigate different URLs at the same time.
@@ -208,7 +209,7 @@ The browser tool allows you to navigate and interact with web pages using a real
 8. The evaluate operation is very powerful - you can extract any data from the page by writing JavaScript
 9. Many websites store data in global variables like window.__INITIAL_STATE__ or window.ytInitialData
 10. **Always call \`close_window\` when you are done with browser operations** - this closes the automation window and cleans up resources
-11. **Use \`browser_parallel\` for multi-URL research** — it's MUCH faster than navigating each URL one at a time (5 parallel windows instead of 5 serial navigations)
+11. **Use \`parallel_fetch\` for multi-URL research** — it opens multiple browser windows in parallel (up to 5) using the Duya browser plugin. Much faster than navigating each URL one at a time. Set \`useBrowser: false\` to disable JS rendering for faster static fetches.
 
 ### Discovering Platform-Specific Features
 

@@ -50,7 +50,12 @@ export function getSessionGuidanceSection(ctx: PromptContext): string | null {
 
   const items: (string | null)[] = [
     hasAskUserQuestion
-      ? `If you do not understand why the user has denied a tool call, use the ${TOOL_NAMES.ASK_USER_QUESTION} to ask them.`
+      ? `Use ${TOOL_NAMES.ASK_USER_QUESTION} to ask the user questions when you need to:
+      1. Gather user preferences or requirements
+      2. Clarify ambiguous instructions
+      3. Get decisions on implementation choices
+      4. Offer choices about what direction to take
+      Rules: 1-4 questions per call, 2-4 options per question, support multi-select. Always add "(Recommended)" to your preferred option label. Mark the recommended option as the first in the list.`
       : null,
     isNonInteractiveSession
       ? null

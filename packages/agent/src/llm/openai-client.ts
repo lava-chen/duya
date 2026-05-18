@@ -29,6 +29,42 @@ function parseMessageContent(content: string | MessageContent[]): string | Messa
   return content;
 }
 
+// Domains that represent CDN-hosted images which should be treated as inline images,
+// not as web pages. MiniMax uploads user-attached images to these CDNs and returns
+// CDN URLs in the conversation history.
+const CDN_IMAGE_DOMAINS = [
+  /https?:\/\/[^\s]*\.oss-cn-[a-z0-9-]+\.aliyuncs\.com[^\s]*/i,
+  /https?:\/\/[^\s]*\.minimax\.io[^\s]*/i,
+  /https?:\/\/[^\s]*\.minimaxi\.com[^\s]*/i,
+  /https?:\/\/[^/]*\.alicdn\.com[^\s]*/i,
+  /https?:\/\/[^/]*\.aliyuncs\.com[^\s]*/i,
+];
+
+function isCDNImageUrl(url: string): boolean {
+  return CDN_IMAGE_DOMAINS.some(pattern => pattern.test(url));
+}
+
+/**
+ * Scan OpenAI content parts for MiniMax CDN image URLs and strip them out.
+ * The CDN URLs are MiniMax's internal representation of user-uploaded images.
+ * Since we store base64 data in message_attachments and rehydrate at load time,
+ * these CDN URLs should never reach the LLM — but this is a safety net.
+ *
+ * Content parts containing CDN URLs are removed so the model never sees them
+ * and never tries to open them with a browser tool.
+ */
+function filterCDNImageUrls(parts: Array<OpenAI.Chat.ChatCompletionContentPart>): Array<OpenAI.Chat.ChatCompletionContentPart> {
+  return parts.filter(part => {
+    if (part.type === 'image_url' && part.image_url && typeof part.image_url.url === 'string') {
+      if (isCDNImageUrl(part.image_url.url)) {
+        logger.warn('[OpenAIClient] Filtered CDN image URL from content', { url: part.image_url.url.substring(0, 80) });
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
 /**
  * Convert duya Message[] to OpenAI ChatCompletionMessageParam[]
  * @param includeToolCalls - Whether to include tool_calls in assistant messages (default: true)
@@ -65,7 +101,13 @@ function toOpenAIMessages(messages: Message[], includeToolCalls: boolean = true)
           if (typeof content === 'string') {
             result.push({ role: 'user', content });
           } else {
-            result.push({ role: 'user', content });
+            // Safety net: filter CDN image URLs to prevent MiniMax CDN URLs
+            // from reaching the model (they are artifacts of MiniMax's upstream
+            // processing, not user-intended web resources)
+            const filtered = filterCDNImageUrls(content);
+            if (filtered.length > 0) {
+              result.push({ role: 'user', content: filtered });
+            }
           }
         }
       } else {
@@ -129,14 +171,22 @@ function convertContentToOpenAI(content: string | MessageContent[]): string | Ar
     } else if (block.type === 'image') {
       // OpenAI supports image content blocks
       const imgBlock = block as { type: 'image'; source: { type: 'base64' | 'url'; media_type: string; data: string } };
-      parts.push({
-        type: 'image_url',
-        image_url: {
-          url: imgBlock.source.type === 'base64'
-            ? `data:${imgBlock.source.media_type};base64,${imgBlock.source.data}`
-            : imgBlock.source.data,
-        },
-      });
+      if (imgBlock.source.type === 'base64') {
+        parts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${imgBlock.source.media_type};base64,${imgBlock.source.data}`,
+          },
+        });
+      } else if (!isCDNImageUrl(imgBlock.source.data)) {
+        parts.push({
+          type: 'image_url',
+          image_url: {
+            url: imgBlock.source.data,
+          },
+        });
+      }
+      // Silently drop CDN URLs — they are MiniMax artifacts, not user-intended resources
     }
     // tool_result blocks are handled separately in toOpenAIMessages
     // tool_use blocks are handled separately via tool_calls
@@ -294,6 +344,7 @@ export class OpenAIClient implements LLMClient {
       temperature: options?.temperature ?? 1,
       tools: options?.tools?.length ? options.tools : undefined,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     logger.info(`[OpenAIClient] Request params: ${JSON.stringify({ ...requestParams, messages: `[${requestParams.messages.length} messages]` })}`, undefined, 'OpenAIClient');
@@ -311,10 +362,21 @@ export class OpenAIClient implements LLMClient {
     const THINK_CLOSE_PATTERN = /<\/(think|thinking|thought)>/i;
 
     let eventCount = 0;
+    let accumulatedUsage: { input_tokens: number; output_tokens: number; total_tokens?: number } | null = null;
     for await (const event of stream) {
       eventCount++;
       const delta = event.choices[0]?.delta;
       const finishReason = event.choices[0]?.finish_reason;
+
+      // Collect usage from stream chunks (OpenAI sends usage in the final chunk when stream_options.include_usage is true)
+      if ((event as unknown as { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }).usage) {
+        const usage = (event as unknown as { usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }).usage;
+        accumulatedUsage = {
+          input_tokens: usage.prompt_tokens ?? 0,
+          output_tokens: usage.completion_tokens ?? 0,
+          total_tokens: usage.total_tokens,
+        };
+      }
 
       if (eventCount === 1) {
          logger.info(`[OpenAIClient] Received first stream event`, undefined, 'OpenAIClient');
@@ -512,6 +574,14 @@ export class OpenAIClient implements LLMClient {
     }
 
     logger.info(`[OpenAIClient] Stream completed, total events: ${eventCount}`, undefined, 'OpenAIClient');
+
+    // Yield result event with token usage before done
+    if (accumulatedUsage) {
+      yield {
+        type: 'result',
+        data: accumulatedUsage,
+      };
+    }
 
     yield { type: 'done' };
   }

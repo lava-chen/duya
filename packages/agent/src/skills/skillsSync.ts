@@ -111,7 +111,19 @@ async function writeManifest(manifest: Manifest): Promise<void> {
 
   const tmpPath = `${manifestPath}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(manifest, null, 2), 'utf-8');
-  await fs.rename(tmpPath, manifestPath);
+
+  try {
+    await fs.rename(tmpPath, manifestPath);
+  } catch (e) {
+    // Fallback for ENOENT/EBUSY (Windows file locking, stale tmp files, race conditions)
+    if (e && typeof e === 'object' && ('code' in e) && (e.code === 'ENOENT' || e.code === 'EBUSY')) {
+      console.warn('[SkillsSync] Manifest rename failed, using direct write fallback');
+      await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+      try { await fs.unlink(tmpPath); } catch { /* ignore cleanup failure */ }
+    } else {
+      throw e;
+    }
+  }
 }
 
 async function copyDir(src: string, dest: string): Promise<void> {

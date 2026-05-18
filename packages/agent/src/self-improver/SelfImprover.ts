@@ -13,9 +13,9 @@
  * - Iteration loop: max 3 revisions before rejection
  */
 
-import type { Message, AgentOptions } from './types.js';
-import { readDraftSkill, backupDraftSkill, getDraftSkillsDir } from './skills/SkillDraftManager.js';
-import { getSkillRegistry } from './skills/registry.js';
+import type { Message, AgentOptions } from '../types.js';
+import { readDraftSkill, backupDraftSkill, getDraftSkillsDir } from '../skills/SkillDraftManager.js';
+import { getSkillRegistry } from '../skills/registry.js';
 
 // ============================================================================
 // Types
@@ -269,8 +269,8 @@ If nothing is worth saving, just say 'Nothing to save.' and stop.`;
  *
  * Dynamic import ensures the module graph resolves before duyaAgent is accessed at runtime.
  */
-async function createSubAgent(options: AgentOptions): Promise<InstanceType<typeof import('./index.js').duyaAgent>> {
-  const { duyaAgent } = await import('./index.js');
+async function createSubAgent(options: AgentOptions): Promise<InstanceType<typeof import('../index.js').duyaAgent>> {
+  const { duyaAgent } = await import('../index.js');
   return new duyaAgent(options);
 }
 

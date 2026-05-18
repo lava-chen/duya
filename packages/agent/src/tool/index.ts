@@ -23,8 +23,8 @@ export type {
   CanUseToolFn,
   CanUseToolDecision,
 } from './StreamingToolExecutor.js';
-export { teamCreateTool } from '../tools/TeamCreateTool/TeamCreateTool.js';
-export { teamDeleteTool } from '../tools/TeamDeleteTool/TeamDeleteTool.js';
+export { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
+export { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools exports
 export { taskGetTool } from './TaskGetTool/TaskGetTool.js';
@@ -42,6 +42,7 @@ export { webSearchTool } from './WebSearchTool/WebSearchTool.js';
 export { webFetchTool } from './WebFetchTool/WebFetchTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
+export { AskUserQuestionTool, askUserQuestionTool, storePendingAnswer, clearPendingAnswer } from './AskUserQuestionTool/AskUserQuestionTool.js';
 
 // Retry system exports
 export { ToolRetryExecutor } from './retry/ToolRetryExecutor.js';

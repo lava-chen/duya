@@ -7,7 +7,7 @@ import { tabsListAction, tabsNewAction, tabsCloseAction, tabsSelectAction } from
 import { fileUploadAction, selectAction } from './forms.js';
 import { networkStartAction, networkReadAction } from './network.js';
 import { cookiesAction } from './cookies.js';
-import { parallelFetchAction, browserParallelAction } from './parallel.js';
+import { parallelFetchAction } from './parallel.js';
 import { closeWindowAction } from './close.js';
 import type { ActionHandler } from './types.js';
 
@@ -29,7 +29,6 @@ export {
   waitAction,
   selectAction,
   parallelFetchAction,
-  browserParallelAction,
   tabsListAction,
   tabsNewAction,
   tabsCloseAction,
@@ -56,7 +55,6 @@ const ALL_ACTIONS: ActionHandler[] = [
   waitAction,
   selectAction,
   parallelFetchAction,
-  browserParallelAction,
   tabsListAction,
   tabsNewAction,
   tabsCloseAction,

@@ -14,6 +14,7 @@ import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseConte
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
 
+
 /**
  * Ollama API message format
  */
@@ -95,12 +96,10 @@ function toOllamaMessages(messages: Message[]): OllamaMessage[] {
     if (msg.role === 'system') {
       result.push({ role: 'system', content: String(msg.content) });
     } else if (msg.role === 'user') {
-      // Handle tool_result content
       if (Array.isArray(msg.content)) {
         const toolResultBlocks = msg.content.filter(b => b.type === 'tool_result');
         const otherBlocks = msg.content.filter(b => b.type !== 'tool_result');
 
-        // Tool results in Ollama are sent as user messages with tool role
         for (const block of toolResultBlocks) {
           const resultBlock = block as ToolResultContent;
           result.push({
@@ -111,7 +110,6 @@ function toOllamaMessages(messages: Message[]): OllamaMessage[] {
           });
         }
 
-        // Other content as regular user message
         if (otherBlocks.length > 0) {
           const textContent = otherBlocks
             .filter(b => b.type === 'text')
@@ -122,7 +120,8 @@ function toOllamaMessages(messages: Message[]): OllamaMessage[] {
             .map(b => (b as ImageContent).source.data);
 
           if (textContent || images.length > 0) {
-            const userMsg: OllamaMessage = { role: 'user', content: textContent || undefined };
+            const finalContent = textContent || '';
+            const userMsg: OllamaMessage = { role: 'user', content: finalContent || undefined };
             if (images.length > 0) {
               userMsg.images = images;
             }
