@@ -26,7 +26,10 @@ await build({
   format: 'cjs',
   sourcemap: false,
   minify: true,
-  external: [],
+  external: [
+    '@aws-sdk/client-s3',
+    '@aws-sdk/s3-request-presigner',
+  ],
   banner: {
     js: importMetaUrlPolyfill,
   },
