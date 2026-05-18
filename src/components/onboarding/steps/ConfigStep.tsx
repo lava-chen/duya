@@ -276,9 +276,6 @@ export function ConfigStep({ state, onUpdateState, error, isLoading, onConnect, 
                       </div>
                       <span className="text-sm font-mono truncate">{model.displayName}</span>
                     </div>
-                    {model.role && (
-                      <span className="text-[10px] text-muted-foreground shrink-0 ml-2">{model.role}</span>
-                    )}
                   </button>
                 );
               })}

@@ -2,7 +2,7 @@
  * Provider Presets
  * Single source of truth for quick-add provider configurations
  *
- * Based on CodePilot's provider-catalog.ts
+ * Based on hermes-agent's models_dev.py and CodePilot's provider-catalog.ts
  *
  * NOTE: Brand icons are NOT imported here to avoid SSR issues with @lobehub/icons.
  * Consumers should use the iconKey field and resolve icons themselves using
@@ -30,22 +30,10 @@ export type AuthStyle =
   | 'env_only'
   | 'custom_header';
 
-export type ModelRole = 'default' | 'reasoning' | 'small' | 'haiku' | 'sonnet' | 'opus';
-
 export interface CatalogModel {
   modelId: string;
   upstreamModelId?: string;
   displayName: string;
-  role?: ModelRole;
-}
-
-export interface RoleModels {
-  default?: string;
-  reasoning?: string;
-  small?: string;
-  haiku?: string;
-  sonnet?: string;
-  opus?: string;
 }
 
 export interface VendorPreset {
@@ -58,7 +46,6 @@ export interface VendorPreset {
   baseUrl: string;
   defaultEnvOverrides: Record<string, string>;
   defaultModels: CatalogModel[];
-  defaultRoleModels?: RoleModels;
   fields: ('name' | 'api_key' | 'base_url' | 'extra_env' | 'model_names' | 'model_mapping')[];
   category?: 'chat' | 'media';
   iconKey: string;
@@ -77,14 +64,6 @@ export interface QuickPreset extends VendorPreset {
   provider_type: string;
 }
 
-// ── Default Anthropic models ────────────────────────────────────
-
-const ANTHROPIC_DEFAULT_MODELS: CatalogModel[] = [
-  { modelId: 'sonnet', displayName: 'Sonnet 4.6', role: 'sonnet' },
-  { modelId: 'opus', displayName: 'Opus 4.6', role: 'opus' },
-  { modelId: 'haiku', displayName: 'Haiku 4.5', role: 'haiku' },
-];
-
 // ── Vendor presets ──────────────────────────────────────────────
 
 export const VENDOR_PRESETS: VendorPreset[] = [
@@ -98,13 +77,12 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     authStyle: 'api_key',
     baseUrl: 'https://api.anthropic.com',
     defaultEnvOverrides: {},
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
-    defaultRoleModels: {
-      default: 'claude-3-5-sonnet-latest',
-      sonnet: 'claude-3-5-sonnet-latest',
-      opus: 'claude-3-opus-latest',
-      haiku: 'claude-3-5-haiku-latest',
-    },
+    defaultModels: [
+      { modelId: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' },
+      { modelId: 'claude-opus-4-7', displayName: 'Claude Opus 4.7' },
+      { modelId: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+      { modelId: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5' },
+    ],
     fields: ['api_key'],
     iconKey: 'anthropic',
     meta: {
@@ -123,7 +101,11 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     authStyle: 'api_key',
     baseUrl: '',
     defaultEnvOverrides: { ANTHROPIC_API_KEY: '' },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: [
+      { modelId: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' },
+      { modelId: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+      { modelId: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5' },
+    ],
     fields: ['name', 'api_key', 'base_url', 'extra_env', 'model_mapping'],
     iconKey: 'server',
   },
@@ -139,20 +121,43 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://openrouter.ai/api/v1',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'anthropic/claude-3.5-sonnet', displayName: 'Claude 3.5 Sonnet', role: 'sonnet' },
-      { modelId: 'opus', upstreamModelId: 'anthropic/claude-3-opus', displayName: 'Claude 3 Opus', role: 'opus' },
-      { modelId: 'haiku', upstreamModelId: 'anthropic/claude-3-haiku', displayName: 'Claude 3 Haiku', role: 'haiku' },
+      { modelId: 'anthropic/claude-3.5-sonnet', displayName: 'Claude 3.5 Sonnet' },
+      { modelId: 'anthropic/claude-3-opus', displayName: 'Claude 3 Opus' },
+      { modelId: 'anthropic/claude-3-haiku', displayName: 'Claude 3 Haiku' },
     ],
-    defaultRoleModels: {
-      default: 'anthropic/claude-3.5-sonnet',
-      sonnet: 'anthropic/claude-3.5-sonnet',
-      opus: 'anthropic/claude-3-opus',
-      haiku: 'anthropic/claude-3-haiku',
-    },
     fields: ['api_key'],
     iconKey: 'openrouter',
     meta: {
       apiKeyUrl: 'https://openrouter.ai/keys',
+      billingModel: 'pay_as_you_go',
+    },
+  },
+
+  // ── DeepSeek ──
+  {
+    key: 'deepseek',
+    name: 'DeepSeek',
+    description: 'DeepSeek Anthropic-compatible API — V4 Pro / V4 Flash',
+    descriptionZh: 'DeepSeek Anthropic 兼容 API — V4 Pro / V4 Flash',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    defaultEnvOverrides: {
+      API_TIMEOUT_MS: '3000000',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    },
+    defaultModels: [
+      { modelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
+      { modelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
+      { modelId: 'deepseek-chat', displayName: 'DeepSeek Chat' },
+      { modelId: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'deepseek',
+    sdkProxyOnly: true,
+    meta: {
+      apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+      docsUrl: 'https://platform.deepseek.com/docs',
       billingModel: 'pay_as_you_go',
     },
   },
@@ -168,14 +173,16 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     defaultEnvOverrides: {
       API_TIMEOUT_MS: '3000000',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.5-air',
-      ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5-turbo',
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.1',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'sonnet', displayName: 'GLM-5-Turbo', role: 'sonnet' },
-      { modelId: 'opus', upstreamModelId: 'opus', displayName: 'GLM-5.1', role: 'opus' },
-      { modelId: 'haiku', upstreamModelId: 'haiku', displayName: 'GLM-4.5-Air', role: 'haiku' },
+      { modelId: 'glm-5.1', displayName: 'GLM-5.1' },
+      { modelId: 'glm-5', displayName: 'GLM-5' },
+      { modelId: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
+      { modelId: 'glm-5v-turbo', displayName: 'GLM-5V Turbo' },
+      { modelId: 'glm-4.7', displayName: 'GLM-4.7' },
+      { modelId: 'glm-4.5', displayName: 'GLM-4.5' },
+      { modelId: 'glm-4.5-flash', displayName: 'GLM-4.5 Flash' },
+      { modelId: 'glm-4.5-air', displayName: 'GLM-4.5 Air' },
     ],
     fields: ['api_key'],
     iconKey: 'zhipu',
@@ -199,14 +206,16 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://api.z.ai/api/anthropic',
     defaultEnvOverrides: {
       API_TIMEOUT_MS: '3000000',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.5-air',
-      ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5-turbo',
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.1',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'sonnet', displayName: 'GLM-5-Turbo', role: 'sonnet' },
-      { modelId: 'opus', upstreamModelId: 'opus', displayName: 'GLM-5.1', role: 'opus' },
-      { modelId: 'haiku', upstreamModelId: 'haiku', displayName: 'GLM-4.5-Air', role: 'haiku' },
+      { modelId: 'glm-5.1', displayName: 'GLM-5.1' },
+      { modelId: 'glm-5', displayName: 'GLM-5' },
+      { modelId: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
+      { modelId: 'glm-5v-turbo', displayName: 'GLM-5V Turbo' },
+      { modelId: 'glm-4.7', displayName: 'GLM-4.7' },
+      { modelId: 'glm-4.5', displayName: 'GLM-4.5' },
+      { modelId: 'glm-4.5-flash', displayName: 'GLM-4.5 Flash' },
+      { modelId: 'glm-4.5-air', displayName: 'GLM-4.5 Air' },
     ],
     fields: ['api_key'],
     iconKey: 'zhipu',
@@ -222,7 +231,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   // ── Kimi ──
   {
     key: 'kimi',
-    name: 'Kimi Coding Plan',
+    name: 'Kimi',
     description: 'Kimi Coding Plan API',
     descriptionZh: 'Kimi 编程计划 API',
     protocol: 'anthropic',
@@ -230,7 +239,13 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://api.kimi.com/coding/',
     defaultEnvOverrides: { ENABLE_TOOL_SEARCH: 'false' },
     defaultModels: [
-      { modelId: 'sonnet', displayName: 'Kimi K2.5', role: 'default' },
+      { modelId: 'kimi-k2.6', displayName: 'Kimi K2.6' },
+      { modelId: 'kimi-k2.5', displayName: 'Kimi K2.5' },
+      { modelId: 'kimi-k2', displayName: 'Kimi K2' },
+      { modelId: 'kimi-k2-thinking', displayName: 'Kimi K2 Thinking' },
+      { modelId: 'kimi-k2-thinking-turbo', displayName: 'Kimi K2 Thinking Turbo' },
+      { modelId: 'kimi-k2-turbo-preview', displayName: 'Kimi K2 Turbo Preview' },
+      { modelId: 'kimi-k2-0905-preview', displayName: 'Kimi K2 Preview (0905)' },
     ],
     fields: ['api_key'],
     iconKey: 'kimi',
@@ -253,7 +268,13 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://api.moonshot.cn/anthropic',
     defaultEnvOverrides: { ENABLE_TOOL_SEARCH: 'false' },
     defaultModels: [
-      { modelId: 'sonnet', displayName: 'Kimi K2.5', role: 'default' },
+      { modelId: 'kimi-k2.6', displayName: 'Kimi K2.6' },
+      { modelId: 'kimi-k2.5', displayName: 'Kimi K2.5' },
+      { modelId: 'kimi-k2', displayName: 'Kimi K2' },
+      { modelId: 'kimi-k2-thinking', displayName: 'Kimi K2 Thinking' },
+      { modelId: 'kimi-k2-thinking-turbo', displayName: 'Kimi K2 Thinking Turbo' },
+      { modelId: 'kimi-k2-turbo-preview', displayName: 'Kimi K2 Turbo Preview' },
+      { modelId: 'kimi-k2-0905-preview', displayName: 'Kimi K2 Preview (0905)' },
     ],
     fields: ['api_key'],
     iconKey: 'moonshot',
@@ -263,6 +284,32 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       docsUrl: 'https://platform.moonshot.cn/docs/guide/agent-support',
       billingModel: 'pay_as_you_go',
       notes: ['建议设置每日消费上限，防止 agentic 循环快速消耗 token'],
+    },
+  },
+
+  // ── StepFun Step Plan ──
+  {
+    key: 'stepfun',
+    name: 'StepFun Step Plan',
+    description: 'StepFun Step Plan — Fast reasoning and coding',
+    descriptionZh: '阶跃星辰 Step Plan — 快速推理与编程',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: 'https://api.stepfun.ai/step_plan/v1',
+    defaultEnvOverrides: {
+      API_TIMEOUT_MS: '3000000',
+    },
+    defaultModels: [
+      { modelId: 'step-3.5-flash', displayName: 'Step-3.5 Flash' },
+      { modelId: 'step-3.5-flash-2603', displayName: 'Step-3.5 Flash (2603)' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'stepfun',
+    sdkProxyOnly: true,
+    meta: {
+      apiKeyUrl: 'https://platform.stepfun.com/api',
+      docsUrl: 'https://platform.stepfun.com/docs',
+      billingModel: 'coding_plan',
     },
   },
 
@@ -280,14 +327,11 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      { modelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7' },
+      { modelId: 'MiniMax-M2.5', displayName: 'MiniMax-M2.5' },
+      { modelId: 'MiniMax-M2.1', displayName: 'MiniMax-M2.1' },
+      { modelId: 'MiniMax-M2', displayName: 'MiniMax-M2' },
     ],
-    defaultRoleModels: {
-      default: 'MiniMax-M2.7',
-      sonnet: 'MiniMax-M2.7',
-      opus: 'MiniMax-M2.7',
-      haiku: 'MiniMax-M2.7',
-    },
     fields: ['api_key'],
     iconKey: 'minimax',
     sdkProxyOnly: true,
@@ -313,14 +357,11 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
-      { modelId: 'sonnet', upstreamModelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7', role: 'default' },
+      { modelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7' },
+      { modelId: 'MiniMax-M2.5', displayName: 'MiniMax-M2.5' },
+      { modelId: 'MiniMax-M2.1', displayName: 'MiniMax-M2.1' },
+      { modelId: 'MiniMax-M2', displayName: 'MiniMax-M2' },
     ],
-    defaultRoleModels: {
-      default: 'MiniMax-M2.7',
-      sonnet: 'MiniMax-M2.7',
-      opus: 'MiniMax-M2.7',
-      haiku: 'MiniMax-M2.7',
-    },
     fields: ['api_key'],
     iconKey: 'minimax',
     sdkProxyOnly: true,
@@ -342,11 +383,15 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'doubao-1-5-pro-32k', displayName: 'Doubao 1.5 Pro 32K', role: 'default' },
-      { modelId: 'doubao-1-5-lite-32k', displayName: 'Doubao 1.5 Lite 32K', role: 'default' },
-      { modelId: 'deepseek-v3-241226', displayName: 'DeepSeek V3', role: 'default' },
-      { modelId: 'deepseek-r1-250120', displayName: 'DeepSeek R1', role: 'default' },
-      { modelId: 'glm-4-9b-chat', displayName: 'GLM-4 9B Chat', role: 'default' },
+      { modelId: 'doubao-1.5-pro-32k', displayName: 'Doubao 1.5 Pro 32K' },
+      { modelId: 'doubao-1.5-lite-32k', displayName: 'Doubao 1.5 Lite 32K' },
+      { modelId: 'doubao-pro-32k', displayName: 'Doubao Pro 32K' },
+      { modelId: 'doubao-lite-32k', displayName: 'Doubao Lite 32K' },
+      { modelId: 'deepseek-v3-241226', displayName: 'DeepSeek V3 (241226)' },
+      { modelId: 'deepseek-r1-250120', displayName: 'DeepSeek R1 (250120)' },
+      { modelId: 'glm-4-9b-chat', displayName: 'GLM-4 9B Chat' },
+      { modelId: 'glm-4-flash', displayName: 'GLM-4 Flash' },
+      { modelId: 'kimi-k2.5', displayName: 'Kimi K2.5' },
     ],
     fields: ['api_key', 'model_names'],
     iconKey: 'volcengine',
@@ -356,6 +401,106 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       docsUrl: 'https://www.volcengine.com/docs/82379/1928262',
       billingModel: 'coding_plan',
       notes: ['需先在控制台激活 Endpoint', 'API Key 为临时凭证'],
+    },
+  },
+
+  // ── Xiaomi MiMo (按量付费) ──
+  {
+    key: 'xiaomi-mimo',
+    name: 'Xiaomi MiMo',
+    description: 'Xiaomi MiMo Pay-as-you-go API — MiMo-V2.5-Pro',
+    descriptionZh: '小米 MiMo 按量付费 — MiMo-V2.5-Pro',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: 'https://api.xiaomimimo.com/anthropic',
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: 'mimo-v2.5-pro', displayName: 'MiMo-V2.5-Pro' },
+      { modelId: 'mimo-v2.5', displayName: 'MiMo-V2.5' },
+      { modelId: 'mimo-v2-pro', displayName: 'MiMo-V2-Pro' },
+      { modelId: 'mimo-v2-omni', displayName: 'MiMo-V2-Omni' },
+      { modelId: 'mimo-v2-flash', displayName: 'MiMo-V2-Flash' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'xiaomi',
+    sdkProxyOnly: true,
+    meta: {
+      apiKeyUrl: 'https://platform.xiaomimimo.com/#/console/api-keys',
+      docsUrl: 'https://platform.xiaomimimo.com/#/docs/integration/claudecode',
+      billingModel: 'pay_as_you_go',
+    },
+  },
+
+  // ── Xiaomi MiMo Token Plan ──
+  {
+    key: 'xiaomi-mimo-token-plan',
+    name: 'Xiaomi MiMo Token Plan',
+    description: 'Xiaomi MiMo Token Plan subscription',
+    descriptionZh: '小米 MiMo Token Plan 订阅套餐',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: 'mimo-v2.5-pro', displayName: 'MiMo-V2.5-Pro' },
+      { modelId: 'mimo-v2.5', displayName: 'MiMo-V2.5' },
+      { modelId: 'mimo-v2-pro', displayName: 'MiMo-V2-Pro' },
+      { modelId: 'mimo-v2-omni', displayName: 'MiMo-V2-Omni' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'xiaomi',
+    sdkProxyOnly: true,
+    meta: {
+      apiKeyUrl: 'https://platform.xiaomimimo.com/#/console/plan-manage',
+      docsUrl: 'https://platform.xiaomimimo.com/#/docs/integration/claudecode',
+      billingModel: 'token_plan',
+    },
+  },
+
+  // ── xAI Grok ──
+  {
+    key: 'xai',
+    name: 'xAI Grok',
+    description: 'xAI Grok — Fast reasoning models',
+    descriptionZh: 'xAI Grok — 快速推理模型',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: 'https://api.x.ai/v1',
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: 'grok-4.20-reasoning', displayName: 'Grok 4.20 Reasoning' },
+      { modelId: 'grok-4-1-fast-reasoning', displayName: 'Grok 4-1 Fast Reasoning' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'xai',
+    meta: {
+      apiKeyUrl: 'https://console.x.ai/',
+      docsUrl: 'https://docs.x.ai/docs',
+      billingModel: 'pay_as_you_go',
+    },
+  },
+
+  // ── Arcee ──
+  {
+    key: 'arcee',
+    name: 'Arcee',
+    description: 'Arcee AI — Trinity Large Thinking models',
+    descriptionZh: 'Arcee AI — Trinity 大型推理模型',
+    protocol: 'anthropic',
+    authStyle: 'auth_token',
+    baseUrl: 'https://api.arcee.ai/api/v1',
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: 'trinity-large-thinking', displayName: 'Trinity Large Thinking' },
+      { modelId: 'trinity-large-preview', displayName: 'Trinity Large Preview' },
+      { modelId: 'trinity-mini', displayName: 'Trinity Mini' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'arcee',
+    meta: {
+      apiKeyUrl: 'https://www.arcee.ai/',
+      docsUrl: 'https://docs.arcee.ai/',
+      billingModel: 'pay_as_you_go',
     },
   },
 
@@ -370,12 +515,20 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: 'qwen3.5-plus', displayName: 'Qwen 3.5 Plus', role: 'default' },
+      { modelId: 'qwen3.6-plus', displayName: 'Qwen 3.6 Plus' },
+      { modelId: 'qwen3.5-plus', displayName: 'Qwen 3.5 Plus' },
+      { modelId: 'qwen3.5-plus-02-15', displayName: 'Qwen 3.5 Plus (02-15)' },
+      { modelId: 'qwen3.5-35b-a3b', displayName: 'Qwen 3.5 35B A3B' },
       { modelId: 'qwen3-coder-next', displayName: 'Qwen 3 Coder Next' },
       { modelId: 'qwen3-coder-plus', displayName: 'Qwen 3 Coder Plus' },
+      { modelId: 'qwen3-coder', displayName: 'Qwen 3 Coder' },
+      { modelId: 'kimi-k2.6', displayName: 'Kimi K2.6' },
       { modelId: 'kimi-k2.5', displayName: 'Kimi K2.5' },
+      { modelId: 'kimi-k2-thinking', displayName: 'Kimi K2 Thinking' },
+      { modelId: 'glm-5.1', displayName: 'GLM-5.1' },
       { modelId: 'glm-5', displayName: 'GLM-5' },
       { modelId: 'glm-4.7', displayName: 'GLM-4.7' },
+      { modelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7' },
       { modelId: 'MiniMax-M2.5', displayName: 'MiniMax-M2.5' },
     ],
     fields: ['api_key'],
@@ -403,7 +556,11 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       AWS_REGION: 'us-east-1',
       CLAUDE_CODE_SKIP_BEDROCK_AUTH: '1',
     },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: [
+      { modelId: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' },
+      { modelId: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+      { modelId: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5' },
+    ],
     fields: ['extra_env'],
     iconKey: 'bedrock',
     meta: {
@@ -428,7 +585,11 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLOUD_ML_REGION: 'us-east5',
       CLAUDE_CODE_SKIP_VERTEX_AUTH: '1',
     },
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: [
+      { modelId: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' },
+      { modelId: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+      { modelId: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5' },
+    ],
     fields: ['extra_env'],
     iconKey: 'google',
     meta: {
@@ -451,11 +612,11 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       OPENAI_API_KEY: 'ollama',
     },
     defaultModels: [
-      { modelId: 'llama3.2', displayName: 'Llama 3.2', role: 'default' },
-      { modelId: 'qwen2.5', displayName: 'Qwen 2.5', role: 'default' },
-      { modelId: 'codellama', displayName: 'CodeLlama', role: 'default' },
-      { modelId: 'mistral', displayName: 'Mistral', role: 'default' },
-      { modelId: 'deepseek-coder', displayName: 'DeepSeek Coder', role: 'default' },
+      { modelId: 'llama3.2', displayName: 'Llama 3.2' },
+      { modelId: 'qwen2.5', displayName: 'Qwen 2.5' },
+      { modelId: 'codellama', displayName: 'CodeLlama' },
+      { modelId: 'mistral', displayName: 'Mistral' },
+      { modelId: 'deepseek-coder', displayName: 'DeepSeek Coder' },
     ],
     fields: ['base_url', 'model_names'],
     iconKey: 'ollama',
@@ -469,6 +630,29 @@ export const VENDOR_PRESETS: VendorPreset[] = [
         'API Key 可填写任意值，本地运行无需验证',
         '不确定能运行什么模型？用 CanIRun.ai 检测: https://www.canirun.ai/',
       ],
+    },
+  },
+
+  // ── LiteLLM ──
+  {
+    key: 'litellm',
+    name: 'LiteLLM',
+    description: 'LiteLLM proxy — local or remote',
+    descriptionZh: 'LiteLLM 代理 — 本地或远程',
+    protocol: 'anthropic',
+    authStyle: 'api_key',
+    baseUrl: 'http://localhost:4000',
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' },
+      { modelId: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+      { modelId: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5' },
+    ],
+    fields: ['api_key', 'base_url'],
+    iconKey: 'server',
+    meta: {
+      docsUrl: 'https://docs.litellm.ai/docs/',
+      billingModel: 'self_hosted',
     },
   },
 ];

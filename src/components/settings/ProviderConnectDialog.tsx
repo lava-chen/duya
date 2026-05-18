@@ -150,18 +150,19 @@ export function ProviderConnectDialog({
       setApiKey(editProvider.api_key || "");
 
       // Parse role_models_json for model mapping
-      // Use preset.defaultRoleModels as fallback for missing values
+      // Use first preset model as fallback for missing values
+      const firstPresetModel = preset.defaultModels?.[0]?.modelId || "";
       try {
         const rm = JSON.parse(editProvider.role_models_json || "{}");
-        setModelName(rm.default || preset.defaultRoleModels?.default || "");
-        setMapSonnet(rm.sonnet || preset.defaultRoleModels?.sonnet || "");
-        setMapOpus(rm.opus || preset.defaultRoleModels?.opus || "");
-        setMapHaiku(rm.haiku || preset.defaultRoleModels?.haiku || "");
+        setModelName(rm.default || firstPresetModel);
+        setMapSonnet(rm.sonnet || firstPresetModel);
+        setMapOpus(rm.opus || firstPresetModel);
+        setMapHaiku(rm.haiku || firstPresetModel);
       } catch {
-        setModelName(preset.defaultRoleModels?.default || "");
-        setMapSonnet(preset.defaultRoleModels?.sonnet || "");
-        setMapOpus(preset.defaultRoleModels?.opus || "");
-        setMapHaiku(preset.defaultRoleModels?.haiku || "");
+        setModelName(firstPresetModel);
+        setMapSonnet(firstPresetModel);
+        setMapOpus(firstPresetModel);
+        setMapHaiku(firstPresetModel);
       }
       // Parse enabled_models and title_model from options_json
       // Note: Electron IPC may auto-parse JSON, so options_json might be an object
@@ -258,7 +259,7 @@ export function ProviderConnectDialog({
         base_url: baseUrl || preset.baseUrl,
         api_key: apiKey,
         auth_style: preset.authStyle,
-        model: modelName || preset.defaultRoleModels?.default,
+        model: modelName || preset.defaultModels?.[0]?.modelId || "",
       });
 
       if (data.success) {
@@ -298,13 +299,14 @@ export function ProviderConnectDialog({
     }
 
     // Build role_models_json from model mapping
-    // Use preset.defaultRoleModels as fallback when UI fields don't provide values
+    // Use first preset model as fallback when UI fields don't provide values
     let roleModelsJson = "{}";
     const roleModels: Record<string, string> = {};
+    const firstPresetModel = preset.defaultModels?.[0]?.modelId || "";
 
-    // Start with preset defaults (for new providers or missing fields)
-    if (preset.defaultRoleModels) {
-      Object.assign(roleModels, preset.defaultRoleModels);
+    // Start with first preset model as default
+    if (firstPresetModel) {
+      roleModels.default = firstPresetModel;
     }
 
     // Override with UI values if present (user explicitly set them)
