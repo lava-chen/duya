@@ -1,0 +1,140 @@
+/**
+ * ipc/settings-handlers.ts - Settings-related IPC handlers
+ *
+ * Handlers for:
+ * - Auto-start settings
+ * - Browser extension status
+ * - Agent re-initialization
+ */
+
+import { ipcMain, app } from 'electron';
+import { getLogger, LogComponent } from '../logging/logger';
+import { getConfigManager, toLLMProvider } from '../config/manager';
+import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
+import { getBrowserExtensionStatus } from '../services/browser/daemon';
+import { getDatabase } from './db-handlers';
+import { setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from '../services/auto-start';
+
+export function registerSettingsHandlers(): void {
+  // Auto-start settings
+  ipcMain.handle('settings:set-auto-start', async (_event, enabled: boolean) => {
+    try {
+      const success = setAutoStart(enabled);
+      if (success) {
+        setAutoStartToSettings(enabled);
+      }
+      return { success, supported: process.platform !== 'linux' };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to set auto-start', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
+      return { success: false, supported: process.platform !== 'linux', error: String(error) };
+    }
+  });
+
+  ipcMain.handle('settings:get-auto-start-status', async () => {
+    try {
+      const loginItemSettings = app.getLoginItemSettings();
+      const dbValue = getAutoStartFromSettings();
+      const isSupported = process.platform !== 'linux';
+
+      const isEnabled = process.platform === 'win32'
+        ? loginItemSettings.openAtLogin
+        : loginItemSettings.openAtLogin;
+
+      return {
+        enabled: isEnabled,
+        dbValue,
+        canChange: app.isPackaged && isSupported,
+        supported: isSupported,
+        platform: process.platform,
+      };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to get auto-start status', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
+      return { enabled: false, canChange: false, supported: false, platform: process.platform, error: String(error) };
+    }
+  });
+
+  // Browser extension status
+  ipcMain.handle('browser-extension:get-status', async () => {
+    try {
+      const status = getBrowserExtensionStatus();
+      return { success: true, status };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to get browser extension status', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+      return { success: false, error: String(error) };
+    }
+  });
+
+  // Agent re-initialization with new provider
+  ipcMain.handle('agent:reinit-provider', async () => {
+    try {
+      const configManager = getConfigManager();
+      const activeProvider = configManager.getActiveProvider();
+
+      if (!activeProvider) {
+        const logger = getLogger();
+        logger.info('agent:reinit-provider: No active provider found', undefined, LogComponent.Main);
+        return { success: false, reason: 'no_active_provider' };
+      }
+
+      const logger = getLogger();
+      logger.info('Re-initializing agent with provider', { providerType: activeProvider.providerType, baseUrl: activeProvider.baseUrl }, LogComponent.Main);
+
+      const agentPool = getAgentProcessPool();
+      const status = agentPool.getStatus();
+      const db = getDatabase();
+
+      // Get blocked domains from settings
+      let blockedDomains: string[] = [];
+      try {
+        const blockedRow = db?.prepare("SELECT value FROM settings WHERE key = 'blockedDomains'").get() as { value: string } | undefined;
+        if (blockedRow?.value) {
+          blockedDomains = JSON.parse(blockedRow.value);
+        }
+      } catch {}
+
+      // Get sandbox enabled setting
+      let sandboxEnabled = true;
+      try {
+        const sandboxRow = db?.prepare("SELECT value FROM settings WHERE key = 'sandboxEnabled'").get() as { value: string } | undefined;
+        if (sandboxRow?.value !== undefined) {
+          sandboxEnabled = sandboxRow.value === 'true';
+        }
+      } catch {}
+
+      for (const proc of status.processes) {
+        const sessionRow = db?.prepare('SELECT working_directory, system_prompt FROM chat_sessions WHERE id = ?').get(proc.sessionId) as { working_directory: string; system_prompt: string } | undefined;
+        const workingDirectory = sessionRow?.working_directory ?? '';
+        const systemPrompt = sessionRow?.system_prompt || '';
+
+        const providerModel = (activeProvider.options?.defaultModel as string) ||
+          (activeProvider.options?.model as string) ||
+          '';
+
+        agentPool.send(proc.sessionId, {
+          type: 'init',
+          sessionId: proc.sessionId,
+          providerConfig: {
+            provider: toLLMProvider(activeProvider.providerType),
+            apiKey: activeProvider.apiKey,
+            baseURL: activeProvider.baseUrl,
+            model: providerModel,
+            authStyle: 'api_key',
+          },
+          workingDirectory,
+          systemPrompt,
+          blockedDomains,
+          sandboxEnabled,
+        });
+      }
+
+      return { success: true };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('agent:reinit-provider failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Main);
+      return { success: false, reason: String(error) };
+    }
+  });
+}
