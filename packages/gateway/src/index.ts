@@ -15,6 +15,7 @@ export { UserMapper } from './user-mapper.js';
 export { StreamHandler } from './stream-handler.js';
 export { PermissionBroker } from './permission-broker.js';
 export { CatchupBatchProcessor, getCatchupBatchProcessor, runRealtimeCatchupBatch } from './catchup-batch.js';
+export { getProxyStatus } from './proxy-fetch.js';
 
 // ---------------------------------------------------------------------------
 // Subprocess entry point (when run via child_process.fork)
