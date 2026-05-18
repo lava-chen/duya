@@ -290,16 +290,8 @@ export function AutomationView() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
-            <Clock size={20} weight="duotone" />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Automation</h2>
-            <p className="text-xs" style={{ color: 'var(--muted)' }}>Schedule and manage cron jobs</p>
-          </div>
-        </div>
+      <div className="flex items-center justify-between px-6 py-4">
+        <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Automation</h2>
         <button
           className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
           style={{
@@ -326,23 +318,17 @@ export function AutomationView() {
 
       {/* Error Banner */}
       {error && (
-        <div className="mx-6 mt-4 px-4 py-3 rounded-lg flex items-center gap-2" style={{ background: 'var(--error-soft)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+        <div className="mx-6 mb-4 px-4 py-3 rounded-lg flex items-center gap-2" style={{ background: 'var(--error-soft)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
           <WarningCircle size={16} className="text-[var(--error)]" />
           <span className="text-sm" style={{ color: 'var(--error)' }}>{error}</span>
         </div>
       )}
 
       {/* Main Content */}
-      <div className="flex-1 overflow-hidden p-6">
-        <div className="h-full grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="flex-1 overflow-hidden px-6 pb-6">
+        <div className="h-full grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Cron Jobs List - Left Side */}
-          <section className="flex flex-col h-full rounded-xl overflow-hidden lg:col-span-1" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-            <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between" style={{ background: 'var(--surface)' }}>
-              <h3 className="font-medium text-sm" style={{ color: 'var(--text)' }}>Cron Jobs</h3>
-              <span className="text-xs px-2 py-1 rounded-full" style={{ background: 'var(--chip)', color: 'var(--muted)' }}>
-                {crons.length}
-              </span>
-            </div>
+          <section className="flex flex-col h-full lg:col-span-1">
             <div className="flex-1 overflow-y-auto scrollbar-thin">
               {loading ? (
                 <div className="flex items-center justify-center h-32" style={{ color: 'var(--muted)' }}>
@@ -353,14 +339,13 @@ export function AutomationView() {
                 <div className="flex flex-col items-center justify-center h-32 text-center p-4">
                   <Clock size={32} className="mb-2 opacity-30" style={{ color: 'var(--muted)' }} />
                   <p className="text-sm" style={{ color: 'var(--muted)' }}>No cron jobs yet</p>
-                  <p className="text-xs mt-1" style={{ color: 'var(--muted)', opacity: 0.7 }}>Click "New Cron" to create one</p>
                 </div>
               ) : (
-                <div>
+                <div className="space-y-1">
                   {crons.map((cron) => (
                     <div
                       key={cron.id}
-                      className="px-4 py-3 cursor-pointer transition-all duration-200 border-b border-[var(--border)] last:border-b-0"
+                      className="px-3 py-2.5 cursor-pointer transition-all duration-200 rounded-lg"
                       style={{
                         background: selectedCronId === cron.id && !isCreating ? 'var(--accent-soft)' : 'transparent',
                       }}
@@ -397,7 +382,7 @@ export function AutomationView() {
           </section>
 
           {/* Detail/Editor Panel - Right Side */}
-          <section className="flex flex-col h-full rounded-xl overflow-hidden lg:col-span-2" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <section className="flex flex-col h-full rounded-xl overflow-hidden lg:col-span-2" style={{ border: '1px solid var(--border)' }}>
             {isCreating ? (
               <CronEditor
                 availableModels={availableModels}
@@ -445,9 +430,6 @@ export function AutomationView() {
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ background: 'var(--surface)' }}>
-                  <Gear size={32} style={{ color: 'var(--muted)' }} />
-                </div>
                 <p className="text-base font-medium mb-1" style={{ color: 'var(--text)' }}>Select a cron job</p>
                 <p className="text-sm" style={{ color: 'var(--muted)' }}>Choose a cron job from the list to view details and runs</p>
               </div>

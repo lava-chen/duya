@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@/components/icons";
 import { subscribeToPhase } from "@/lib/stream-session-manager";
@@ -66,14 +66,21 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
   const subAgents = useSubAgents(thread.id);
 
   const hasChildren = childrenThreads.length > 0;
-  const isExpanded = expandedThreads.has(thread.id);
 
-  // Debug logging
-  useEffect(() => {
-    if (hasChildren) {
-      console.log('[ThreadListItem]', thread.id.slice(0, 8), 'hasChildren:', hasChildren, 'childrenCount:', childrenThreads.length, 'isExpanded:', isExpanded);
-    }
-  }, [hasChildren, childrenThreads.length, isExpanded, thread.id]);
+  // Auto-collapse children if all sub-agents are completed and last activity was > 5 minutes ago
+  const shouldAutoCollapse = useMemo(() => {
+    if (!hasChildren || childrenThreads.length === 0) return false;
+    const now = Date.now();
+    const fiveMinutes = 5 * 60 * 1000;
+    // Check if all children are sub-agents and their parent thread hasn't been updated recently
+    const allCompleted = childrenThreads.every((child) => {
+      // If child has no running indicator, consider it completed
+      return child.updatedAt < now - fiveMinutes;
+    });
+    return allCompleted && thread.updatedAt < now - fiveMinutes;
+  }, [hasChildren, childrenThreads, thread.updatedAt]);
+
+  const isExpanded = expandedThreads.has(thread.id) && !shouldAutoCollapse;
 
   // Subscribe to stream phase changes to show running indicator
   useEffect(() => {

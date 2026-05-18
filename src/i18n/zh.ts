@@ -211,6 +211,14 @@ const zh: Record<TranslationKey, string> = {
   'settings.providers.connectedCountPlural': '{count} 个服务商已连接',
   'settings.providers.learnMore': '了解更多关于如何选择服务商',
   'settings.providers.addProviderDesc': '连接到新的 AI 服务商',
+  'settings.providers.modelSelection': '模型选择',
+  'settings.providers.modelSelectionDesc': '为不同任务选择模型',
+  'settings.providers.visionModel': '视觉模型',
+  'settings.providers.visionModelDesc': '用于图像分析和理解',
+  'settings.providers.gatewayModel': '网关模型',
+  'settings.providers.gatewayModelDesc': '用于桥接/频道聊天会话',
+  'settings.providers.titleModel': '标题模型',
+  'settings.providers.titleModelDesc': '用于自动生成会话标题',
 
   'settings.appearance.title': '外观',
   'settings.appearance.description': '自定义外观和风格',
@@ -320,6 +328,8 @@ const zh: Record<TranslationKey, string> = {
   'common.settings': '设置',
   'common.select': '选择',
   'common.reset': '重置',
+  'common.showAll': '展开显示 ({count} 个)',
+  'common.collapse': '收起',
 
   'thread.newThread': '新对话',
   'thread.deleteThread': '删除对话',

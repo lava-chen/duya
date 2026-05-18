@@ -90,10 +90,3 @@ export const DB_DEFAULT_MODEL = 'claude-sonnet-4-20250514';
  * Set to 'true' to always use SSE, 'false' to prefer MessagePort
  */
 export const DUYA_USE_SSE_FALLBACK = import.meta.env.VITE_DUYA_USE_SSE_FALLBACK === 'true';
-
-/**
- * Check if MessagePort is available for Agent communication
- */
-export const isAgentPortAvailable = (): boolean => {
-  return !!window.electronAPI?.getAgentPort?.();
-};

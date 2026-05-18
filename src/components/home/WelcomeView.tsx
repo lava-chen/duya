@@ -58,7 +58,11 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   }, []);
 
   const handleSend = useCallback(
-    async (content: string, files?: FileAttachment[]) => {
+    async (
+      content: string,
+      files?: FileAttachment[],
+      outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
+    ) => {
       if (!selectedProject) return;
 
       const { modelName: actualModel } = parseModelName(sessionModel || '');
@@ -79,7 +83,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           // Double rAF ensures the ChatView mount effects (subscribeSession, etc.) have fired
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, permissionMode, actualModel, files);
+            send?.(content, permissionMode, actualModel, files, undefined, outputStyleConfig);
           });
         });
       }

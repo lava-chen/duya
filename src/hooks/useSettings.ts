@@ -34,6 +34,8 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     visionLLMEnabled: false,
     // Gateway model settings
     gatewayModel: "claude-sonnet-4-20250514",
+    // Title generation model
+    titleGenerationModel: undefined,
     // Appearance settings
     font: undefined,
     compactMode: false,
@@ -48,6 +50,16 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
   };
 
   try {
+    // Parse modelSelection as fallback for gateway/title models
+    let modelSelection: { gatewayModel?: string; titleGenerationModel?: string; embeddingModel?: string } | null = null;
+    if (raw.modelSelection) {
+      try {
+        modelSelection = JSON.parse(raw.modelSelection);
+      } catch {
+        modelSelection = null;
+      }
+    }
+
     return {
       apiKey: raw.apiKey ?? defaults.apiKey,
       baseURL: raw.baseURL ?? defaults.baseURL,
@@ -80,8 +92,34 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
         ? JSON.parse(raw.visionLLMConfig)
         : defaults.visionLLMConfig,
       visionLLMEnabled: raw.visionLLMEnabled === "true",
-      // Gateway model settings
-      gatewayModel: raw.gatewayModel ?? defaults.gatewayModel,
+      // Gateway model settings - handle both plain string and JSON-stringified string, with modelSelection fallback
+      gatewayModel: (() => {
+        const val = raw.gatewayModel ?? modelSelection?.gatewayModel;
+        if (!val) return defaults.gatewayModel;
+        // If it looks like a JSON string (starts and ends with quote), try to parse it
+        if (typeof val === 'string' && val.startsWith('"') && val.endsWith('"')) {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return val;
+          }
+        }
+        return val;
+      })(),
+      // Title generation model - handle both plain string and JSON-stringified string, with modelSelection fallback
+      titleGenerationModel: (() => {
+        const val = raw.titleGenerationModel ?? modelSelection?.titleGenerationModel;
+        if (!val) return undefined;
+        // If it looks like a JSON string (starts and ends with quote), try to parse it
+        if (typeof val === 'string' && val.startsWith('"') && val.endsWith('"')) {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return val;
+          }
+        }
+        return val;
+      })(),
       // Appearance settings
       font: raw.font ?? defaults.font,
       compactMode: raw.compactMode === "true",
@@ -141,6 +179,8 @@ export function useSettings(): {
     visionLLMEnabled: false,
     // Gateway model settings
     gatewayModel: "claude-sonnet-4-20250514",
+    // Title generation model
+    titleGenerationModel: undefined,
     // Appearance settings
     font: undefined,
     compactMode: false,

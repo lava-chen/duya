@@ -8,6 +8,7 @@
  */
 
 import type { FileAttachment } from '@/types/message'
+import type { ContentBlock } from '@/types/message'
 
 // Types matching the store's expected format (camelCase)
 export interface Thread {
@@ -37,7 +38,7 @@ export interface Message {
   id: string
   sessionId: string
   role: 'user' | 'assistant' | 'system' | 'tool'
-  content: string
+  content: string | ContentBlock[]
   name: string | null
   toolCallId: string | null
   tokenUsage: string | null
@@ -73,6 +74,26 @@ export interface Provider {
   updatedAt: number
   /** Provider default model from options */
   defaultModel?: string
+}
+
+/**
+ * Model information from provider options
+ */
+export interface ModelInfo {
+  displayName?: string
+  description?: string
+  capabilities?: {
+    supportsVision?: boolean
+    supportsFunctionCalling?: boolean
+    supportsStreaming?: boolean
+    maxTokens?: number
+    contextWindow?: number
+  }
+  pricing?: {
+    inputCost?: number
+    outputCost?: number
+    currency?: string
+  }
 }
 
 export interface ProjectGroup {
@@ -142,21 +163,43 @@ interface DbMessage {
   created_at: number
 }
 
-interface DbProvider {
+// Backend returns camelCase (via maskProvider in agent-communicator.ts)
+interface BackendProvider {
   id: string
   name: string
-  provider_type: string
-  base_url: string
-  api_key: string
-  is_active: number
-  sort_order: number
-  extra_env: string
+  providerType: string
+  baseUrl: string
+  apiKey: string
+  isActive: boolean
+  hasApiKey: boolean
+  sortOrder: number
+  extraEnv: string
   protocol: string
-  headers_json: string
-  options_json: string
+  headers: string
+  options: string
   notes: string
-  created_at: number
-  updated_at: number
+  createdAt: number
+  updatedAt: number
+}
+
+function backendProviderToProvider(db: BackendProvider): Provider {
+  return {
+    id: db.id,
+    name: db.name,
+    providerType: db.providerType,
+    baseUrl: db.baseUrl,
+    apiKey: db.apiKey,
+    isActive: db.isActive,
+    hasApiKey: db.hasApiKey,
+    sortOrder: db.sortOrder,
+    extraEnv: db.extraEnv,
+    protocol: db.protocol,
+    headers: db.headers,
+    options: db.options,
+    notes: db.notes,
+    createdAt: db.createdAt,
+    updatedAt: db.updatedAt,
+  }
 }
 
 interface DbProjectGroup {
@@ -201,11 +244,24 @@ function dbMessageToMessage(db: DbMessage): Message {
       attachments = null;
     }
   }
+
+  let content: string | ContentBlock[] = db.content;
+  if (typeof content === 'string' && content.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) {
+        content = parsed as ContentBlock[];
+      }
+    } catch {
+      // keep as string
+    }
+  }
+
   return {
     id: db.id,
     sessionId: db.session_id,
     role: db.role,
-    content: db.content,
+    content,
     name: db.name,
     toolCallId: db.tool_call_id,
     tokenUsage: db.token_usage,
@@ -224,41 +280,13 @@ function dbMessageToMessage(db: DbMessage): Message {
   }
 }
 
-function dbProviderToProvider(db: DbProvider): Provider {
-  const apiKey = db.api_key || '';
-  // hasApiKey is true if api_key is not empty (masked key like '***' or 'sk-***xxxx' means key exists)
-  const hasApiKey = apiKey.length > 0;
-  return {
-    id: db.id,
-    name: db.name,
-    providerType: db.provider_type,
-    baseUrl: db.base_url,
-    apiKey: apiKey,
-    isActive: db.is_active === 1,
-    hasApiKey: hasApiKey,
-    sortOrder: db.sort_order,
-    extraEnv: db.extra_env,
-    protocol: db.protocol,
-    headers: db.headers_json,
-    options: db.options_json,
-    notes: db.notes,
-    createdAt: db.created_at,
-    updatedAt: db.updated_at,
-  }
-}
-
-function dbProjectToProject(db: DbProjectGroup): ProjectGroup {
+function backendProjectToProject(db: DbProjectGroup): ProjectGroup {
   return {
     workingDirectory: db.working_directory,
     projectName: db.project_name,
     threadCount: db.thread_count,
     lastActivity: db.last_activity,
   }
-}
-
-// Check if AgentControlPort is available (MessagePort-based chat)
-export function isAgentPortAvailable(): boolean {
-  return typeof window !== 'undefined' && !!window.electronAPI?.getAgentPort?.()
 }
 
 // Thread operations
@@ -402,18 +430,18 @@ export async function getMessagesBySessionIPC(sessionId: string): Promise<Messag
 
 // Provider operations
 export async function listProvidersIPC(): Promise<Provider[]> {
-  // Backend now returns camelCase fields matching Provider interface directly
-  return await window.electronAPI!.provider!.list() as Provider[]
+  const raw = await window.electronAPI!.provider!.list() as BackendProvider[]
+  return raw.map(backendProviderToProvider)
 }
 
 export async function getProviderIPC(id: string): Promise<Provider | null> {
-  // Backend now returns camelCase fields matching Provider interface directly
-  return await window.electronAPI!.provider!.get(id) as Provider | null
+  const raw = await window.electronAPI!.provider!.get(id) as BackendProvider | null
+  return raw ? backendProviderToProvider(raw) : null
 }
 
 export async function getActiveProviderIPC(): Promise<Provider | null> {
-  // Backend now returns camelCase fields matching Provider interface directly
-  return await window.electronAPI!.provider!.getActive() as Provider | null
+  const raw = await window.electronAPI!.provider!.getActive() as BackendProvider | null
+  return raw ? backendProviderToProvider(raw) : null
 }
 
 export async function upsertProviderIPC(data: {
@@ -425,8 +453,7 @@ export async function upsertProviderIPC(data: {
   isActive?: boolean
   options?: Record<string, unknown>
 }): Promise<Provider | null> {
-  // Backend now returns camelCase fields matching Provider interface directly
-  return await window.electronAPI!.provider!.upsert({
+  const raw = await window.electronAPI!.provider!.upsert({
     id: data.id,
     name: data.name,
     providerType: data.providerType,
@@ -434,7 +461,8 @@ export async function upsertProviderIPC(data: {
     apiKey: data.apiKey,
     isActive: data.isActive,
     options: data.options,
-  }) as Provider
+  }) as BackendProvider | null
+  return raw ? backendProviderToProvider(raw) : null
 }
 
 export async function updateProviderIPC(id: string, data: {
@@ -448,8 +476,8 @@ export async function updateProviderIPC(id: string, data: {
   options?: Record<string, unknown>
   notes?: string
 }): Promise<Provider | null> {
-  // Backend now returns camelCase fields matching Provider interface directly
-  return await window.electronAPI!.provider!.update(id, data) as Provider
+  const raw = await window.electronAPI!.provider!.update(id, data) as BackendProvider | null
+  return raw ? backendProviderToProvider(raw) : null
 }
 
 export async function deleteProviderIPC(id: string): Promise<boolean> {
@@ -457,11 +485,10 @@ export async function deleteProviderIPC(id: string): Promise<boolean> {
 }
 
 export async function activateProviderIPC(id: string): Promise<Provider | null> {
-  // Backend now returns camelCase fields matching Provider interface directly
-  const provider = await window.electronAPI!.provider!.activate(id) as Provider
+  const raw = await window.electronAPI!.provider!.activate(id) as BackendProvider | null
   // Re-initialize agent with the new provider
   await window.electronAPI!.agent!.reinitProvider()
-  return provider
+  return raw ? backendProviderToProvider(raw) : null
 }
 
 // Output Style operations
@@ -484,7 +511,7 @@ export async function deleteOutputStyleIPC(id: string): Promise<boolean> {
 // Project operations
 export async function getProjectGroupsIPC(): Promise<ProjectGroup[]> {
   const dbProjects = await window.electronAPI!.project.getGroups() as DbProjectGroup[]
-  return dbProjects.map(dbProjectToProject)
+  return dbProjects.map(backendProjectToProject)
 }
 
 // Lock operations

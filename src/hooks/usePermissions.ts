@@ -10,6 +10,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { PermissionRequestEvent } from '@/types/stream';
 import { resolvePermissionIPC } from '@/lib/ipc-client';
+import { subscribeToPhase, getSnapshot } from '@/lib/stream-session-manager';
 
 export interface UsePermissionsOptions {
   /** Session ID for permission resolution forwarding */
@@ -76,6 +77,18 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
 
       // Prevent multiple responses
       if (waitingRef.current) return;
+
+      // Guard: don't send permission to a session that is no longer active
+      if (sessionId) {
+        const snapshot = getSnapshot(sessionId);
+        if (snapshot && snapshot.phase !== 'awaiting_permission') {
+          console.warn('[usePermissions] Session no longer awaiting permission, clearing stale prompt');
+          setPendingPermission(null);
+          setPermissionResolved(null);
+          return;
+        }
+      }
+
       waitingRef.current = true;
 
       try {
@@ -89,8 +102,10 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
           }
         );
 
+        // Even if IPC returns null (e.g., agent process unavailable),
+        // update local state as the decision was made by the user
         if (!resolvedPermission) {
-          console.error('[usePermissions] Failed to send permission decision');
+          console.warn('[usePermissions] IPC returned null, but local state updated');
         }
 
         // Update local state
@@ -146,6 +161,22 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
       return () => clearTimeout(timer);
     }
   }, [permissionProfile, pendingPermission, permissionResolved, respondToPermission]);
+
+  // Dismiss stale permission prompt when session phase changes away from awaiting_permission
+  // (e.g. session completed while permission was still pending in UI)
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const unsub = subscribeToPhase(sessionId, (phase: string) => {
+      if (phase !== 'awaiting_permission' && pendingPermission && !waitingRef.current) {
+        console.log('[usePermissions] Phase changed to', phase, '- clearing stale permission');
+        setPendingPermission(null);
+        setPermissionResolved(null);
+      }
+    });
+
+    return unsub;
+  }, [sessionId, pendingPermission]);
 
   return {
     pendingPermission,

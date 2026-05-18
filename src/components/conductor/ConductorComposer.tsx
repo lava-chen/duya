@@ -1,23 +1,19 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { PaperPlaneTilt, Stop, SpinnerGap, Robot, Wrench, Warning, CheckCircle, XCircle, Newspaper } from "@phosphor-icons/react";
+import { PaperPlaneTilt, Stop, SpinnerGap, Robot, Wrench, Warning, CheckCircle, XCircle } from "@phosphor-icons/react";
 import { useConductorStore } from "@/stores/conductor-store";
-import type { AgentStreamItem } from "@/stores/conductor-store";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { executeAction } from "@/lib/conductor-ipc";
-
-
+import { useConductorStream, useConductorStreamControl } from "@/hooks/useConductorStream";
+import type { ConductorEvent } from "@/lib/stream-session-manager";
 
 export function ConductorComposer() {
   const [value, setValue] = useState("");
   const {
     activeCanvasId,
     agentStatus,
-    agentStream,
     setAgentStatus,
-    addAgentStreamItem,
-    clearAgentStream,
     widgets,
     snapshot,
     conductorModels,
@@ -31,133 +27,92 @@ export function ConductorComposer() {
   const streamRef = useRef<HTMLDivElement>(null);
   const [showStream, setShowStream] = useState(false);
 
+  // Use unified stream session manager
+  const { events, phase, error } = useConductorStream(activeCanvasId);
+  const { startStream, stopStream, handleEvent } = useConductorStreamControl(activeCanvasId);
+
+  // Sync phase with agentStatus
+  useEffect(() => {
+    if (phase === 'idle') setAgentStatus("idle");
+    else if (phase === 'thinking') setAgentStatus("thinking");
+    else if (phase === 'streaming' || phase === 'tool_use') setAgentStatus("streaming");
+    else if (phase === 'completed') setAgentStatus("completed");
+    else if (phase === 'error') setAgentStatus("error");
+  }, [phase, setAgentStatus]);
+
+  // Auto-scroll to bottom when events update
   useEffect(() => {
     if (streamRef.current) {
       streamRef.current.scrollTop = streamRef.current.scrollHeight;
     }
-  }, [agentStream]);
+  }, [events]);
 
+  // Execute tool action and handle result
   const executeToolResult = useCallback(async (data: { id: string; name: string; result: string }) => {
     try {
       const parsed = JSON.parse(data.result);
       if (!parsed.success || !parsed.action) return;
 
       const actionType = parsed.action;
-      if (actionType === 'widget.update_data' || actionType === 'widget.create') {
-        try {
-          await executeAction({
-            action: actionType,
-            canvasId: parsed.canvasId,
-            widgetId: parsed.widgetId,
-            kind: parsed.kind,
-            type: parsed.type,
-            position: parsed.position,
-            data: parsed.data,
-            actor: 'agent',
-          } as any);
 
-          addAgentStreamItem({
-            id: crypto.randomUUID(),
-            type: "tool_result",
-            content: `✅ ${actionType}`,
-            toolResult: data.result,
-            ts: Date.now(),
-          });
-        } catch (err) {
-          addAgentStreamItem({
-            id: crypto.randomUUID(),
-            type: "error",
-            content: `操作失败: ${err instanceof Error ? err.message : String(err)}`,
-            ts: Date.now(),
-          });
-        }
+      try {
+        await executeAction({
+          action: actionType,
+          canvasId: parsed.canvasId,
+          elementId: parsed.elementId,
+          elementKind: parsed.kind || parsed.elementKind,
+          widgetId: parsed.widgetId,
+          kind: parsed.kind,
+          type: parsed.type,
+          position: parsed.position,
+          data: parsed.data,
+          vizSpec: parsed.vizSpec,
+          layout: parsed.layout,
+          actor: 'agent',
+        } as any);
+      } catch (err) {
+        handleEvent('error', { message: `操作失败: ${err instanceof Error ? err.message : String(err)}` });
       }
     } catch {
       // Not JSON or unexpected format, ignore
     }
-  }, [addAgentStreamItem]);
+  }, [handleEvent]);
 
-  // Fetch models on mount & when window regains focus (user may have changed providers)
+  // Subscribe to conductor port events and forward to stream manager
   useEffect(() => {
-    fetchConductorModels();
-    const handleFocus = () => fetchConductorModels();
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, []);
+    if (!activeCanvasId) return;
 
-  useEffect(() => {
     const port = (window as any).electronAPI?.getConductorPort?.();
     if (!port) return;
 
     const unsubText = port.onText((data: { content: string }) => {
-      addAgentStreamItem({
-        id: crypto.randomUUID(),
-        type: "text",
-        content: data.content,
-        ts: Date.now(),
-      });
+      handleEvent('text', data);
     });
 
     const unsubThinking = port.onThinking((data: { content: string }) => {
-      addAgentStreamItem({
-        id: crypto.randomUUID(),
-        type: "thinking",
-        content: data.content,
-        ts: Date.now(),
-      });
+      handleEvent('thinking', data);
     });
 
     const unsubToolUse = port.onToolUse((data: { id: string; name: string; input: unknown }) => {
-      setAgentStatus("tool_use");
-      addAgentStreamItem({
-        id: crypto.randomUUID(),
-        type: "tool_use",
-        content: `Calling tool: ${data.name}`,
-        toolName: data.name,
-        toolInput: typeof data.input === "string" ? data.input : JSON.stringify(data.input),
-        ts: Date.now(),
-      });
+      handleEvent('tool_use', data);
     });
 
     const unsubToolResult = port.onToolResult((data: { id: string; result: unknown; error?: boolean }) => {
+      handleEvent('tool_result', data);
       const resultStr = typeof data.result === "string" ? data.result : JSON.stringify(data.result);
       executeToolResult({ id: data.id, name: "", result: resultStr });
     });
 
     const unsubStatus = port.onStatus((data: { status: string }) => {
-      if (data.status === "idle") {
-        setAgentStatus("idle");
-      } else if (data.status === "thinking") {
-        setAgentStatus("thinking");
-      } else if (data.status === "streaming") {
-        setAgentStatus("streaming");
-      }
+      handleEvent('status', data);
     });
 
     const unsubError = port.onError((data: { message: string }) => {
-      setAgentStatus("error");
-      addAgentStreamItem({
-        id: crypto.randomUUID(),
-        type: "error",
-        content: data.message,
-        ts: Date.now(),
-      });
+      handleEvent('error', data);
     });
 
     const unsubDone = port.onDone(() => {
-      setAgentStatus("completed");
-    });
-
-    const unsubDisconnected = port.onDisconnected(() => {
-      if (agentStatus !== "idle" && agentStatus !== "completed" && agentStatus !== "error") {
-        setAgentStatus("error");
-        addAgentStreamItem({
-          id: crypto.randomUUID(),
-          type: "error",
-          content: "Agent process disconnected unexpectedly",
-          ts: Date.now(),
-        });
-      }
+      handleEvent('done', {});
     });
 
     return () => {
@@ -168,31 +123,24 @@ export function ConductorComposer() {
       unsubStatus();
       unsubError();
       unsubDone();
-      unsubDisconnected();
     };
-  }, []);
+  }, [activeCanvasId, handleEvent, executeToolResult]);
+
+  // Fetch models on mount
+  useEffect(() => {
+    fetchConductorModels();
+    const handleFocus = () => fetchConductorModels();
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [fetchConductorModels]);
 
   const handleSend = useCallback(async () => {
-    if (!value.trim() || agentStatus !== "idle") return;
+    if (!value.trim() || agentStatus !== "idle" || !activeCanvasId) return;
 
     const content = value;
     setValue("");
-    clearAgentStream();
     setShowStream(true);
     setAgentStatus("thinking");
-
-    const port = (window as any).electronAPI?.getConductorPort?.();
-    if (!port) {
-      setUiError("Conductor channel unavailable. Please restart app.");
-      setAgentStatus("error");
-      addAgentStreamItem({
-        id: crypto.randomUUID(),
-        type: "error",
-        content: "Conductor port not available. Please restart the app.",
-        ts: Date.now(),
-      });
-      return;
-    }
 
     const canvasSnapshot = snapshot || {
       canvasId: activeCanvasId,
@@ -209,25 +157,16 @@ export function ConductorComposer() {
       actionCursor: 0,
     };
 
-    port.startAgent({
+    startStream({
       content,
       snapshot: canvasSnapshot,
-      canvasId: activeCanvasId || undefined,
       model: conductorModel || undefined,
     });
-  }, [value, agentStatus, activeCanvasId, widgets, snapshot, conductorModel]);
+  }, [value, agentStatus, activeCanvasId, widgets, snapshot, conductorModel, setAgentStatus, startStream]);
 
   const handleStop = useCallback(() => {
-    try {
-      const port = (window as any).electronAPI?.getConductorPort?.();
-      if (port) {
-        port.interruptAgent();
-      }
-    } catch (error) {
-      setUiError(`Interrupt failed: ${error instanceof Error ? error.message : "unknown error"}`);
-    }
-    setAgentStatus("completed");
-  }, [setAgentStatus, setUiError]);
+    stopStream();
+  }, [stopStream]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -236,25 +175,28 @@ export function ConductorComposer() {
     }
   };
 
-  const isStreaming = agentStatus !== "idle" && agentStatus !== "completed" && agentStatus !== "error";
+  const isStreaming = phase !== 'idle' && phase !== 'completed' && phase !== 'error';
+
+  // Map conductor phase to AgentStreamItem-compatible format for rendering
+  const streamItems = events.map((event, index) => mapEventToStreamItem(event, index));
 
   return (
     <div className="flex-shrink-0 bg-transparent">
-      {showStream && agentStream.length > 0 && (
+      {showStream && streamItems.length > 0 && (
         <div
           ref={streamRef}
           className="max-h-[148px] overflow-y-auto scrollbar-thin px-2.5 py-2 border-b border-[var(--border)]/80 space-y-1.5"
         >
-          {agentStream.map((item) => (
+          {streamItems.map((item) => (
             <StreamItem key={item.id} item={item} />
           ))}
-          {agentStatus === "completed" && (
+          {phase === 'completed' && (
             <div className="flex items-center gap-1.5 text-[10px] text-[var(--muted)]">
               <CheckCircle size={10} className="text-green-500" />
               Complete
             </div>
           )}
-          {agentStatus === "error" && (
+          {phase === 'error' && (
             <div className="flex items-center gap-1.5 text-[10px] text-[var(--error)]">
               <XCircle size={10} />
               Error
@@ -310,7 +252,63 @@ export function ConductorComposer() {
   );
 }
 
-function StreamItem({ item }: { item: AgentStreamItem }) {
+// Map ConductorEvent to AgentStreamItem-compatible format
+function mapEventToStreamItem(event: ConductorEvent, index: number): {
+  id: string;
+  type: "text" | "thinking" | "tool_use" | "tool_result" | "tool_progress" | "status" | "error";
+  content: string;
+  toolName?: string;
+  toolInput?: string;
+  toolResult?: string;
+  isError?: boolean;
+  ts: number;
+} {
+  switch (event.type) {
+    case 'text':
+      return { id: `text-${index}`, type: 'text', content: event.content, ts: event.timestamp };
+    case 'thinking':
+      return { id: `thinking-${index}`, type: 'thinking', content: event.content, ts: event.timestamp };
+    case 'tool_use':
+      return {
+        id: `tool-${index}`,
+        type: 'tool_use',
+        content: `Calling tool: ${event.toolUse.name}`,
+        toolName: event.toolUse.name,
+        toolInput: typeof event.toolUse.input === 'string' ? event.toolUse.input : JSON.stringify(event.toolUse.input),
+        ts: event.timestamp,
+      };
+    case 'tool_result':
+      return {
+        id: `result-${index}`,
+        type: 'tool_result',
+        content: event.toolResult.is_error ? `❌ Error: ${event.toolResult.content}` : `✅ ${event.toolResult.content}`,
+        toolResult: event.toolResult.content,
+        isError: event.toolResult.is_error,
+        ts: event.timestamp,
+      };
+    case 'status':
+      return { id: `status-${index}`, type: 'status', content: event.status, ts: event.timestamp };
+    case 'error':
+      return { id: `error-${index}`, type: 'error', content: event.message, isError: true, ts: event.timestamp };
+    case 'done':
+      return { id: `done-${index}`, type: 'status', content: 'Done', ts: event.timestamp };
+  }
+}
+
+interface StreamItemProps {
+  item: {
+    id: string;
+    type: "text" | "thinking" | "tool_use" | "tool_result" | "tool_progress" | "status" | "error";
+    content: string;
+    toolName?: string;
+    toolInput?: string;
+    toolResult?: string;
+    isError?: boolean;
+    ts: number;
+  };
+}
+
+function StreamItem({ item }: StreamItemProps) {
   const iconMap = {
     thinking: <Robot size={11} className="text-purple-400 flex-shrink-0 mt-0.5" />,
     text: <Robot size={11} className="text-[var(--accent)] flex-shrink-0 mt-0.5" />,

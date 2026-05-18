@@ -8,12 +8,8 @@ import {
   XIcon,
   ArrowLeftIcon,
   DatabaseIcon,
-  EyeIcon,
   CheckCircleIcon,
   LightningIcon,
-  GlobeIcon,
-  KeyIcon,
-  CpuIcon,
   InfoIcon,
 } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -21,7 +17,6 @@ import { SUPPORTED_LOCALES, type Locale, type TranslationKey } from "@/i18n";
 import { useState, useEffect, useCallback } from "react";
 import { checkMigrationNeededIPC, migrateDatabaseIPC } from "@/lib/ipc-client";
 import { testNotification } from "@/lib/notification";
-import type { VisionLLMConfig } from "@/types";
 import {
   SettingsSection,
   SettingsCard,
@@ -31,16 +26,6 @@ import {
   SettingsSelectRow,
   SettingsInput,
 } from "@/components/settings/ui";
-
-const VISION_PRESETS = [
-  { provider: "openai", model: "gpt-4o", baseURL: "https://api.openai.com/v1" },
-  { provider: "openai", model: "gpt-4o-mini", baseURL: "https://api.openai.com/v1" },
-  { provider: "anthropic", model: "claude-sonnet-4-20250514", baseURL: "https://api.anthropic.com" },
-  { provider: "openrouter", model: "google/gemini-2.5-flash", baseURL: "https://openrouter.ai/api/v1" },
-  { provider: "ollama", model: "llava", baseURL: "http://localhost:11434" },
-];
-
-
 
 interface MigrationInfo {
   needed: boolean;
@@ -66,12 +51,6 @@ export function GeneralSection() {
   const [isMigrating, setIsMigrating] = useState(false);
   const [migrationError, setMigrationError] = useState<string | null>(null);
 
-  const [visionEnabled, setVisionEnabled] = useState(false);
-  const [visionProvider, setVisionProvider] = useState("");
-  const [visionModel, setVisionModel] = useState("");
-  const [visionBaseURL, setVisionBaseURL] = useState("");
-  const [visionApiKey, setVisionApiKey] = useState("");
-  const [visionTestStatus, setVisionTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [notificationTestStatus, setNotificationTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
 
   // Gateway models from providers
@@ -157,16 +136,6 @@ export function GeneralSection() {
 
     loadGatewayModels();
   }, [listProviders]);
-
-  useEffect(() => {
-    if (settings.visionLLMConfig) {
-      setVisionEnabled(settings.visionLLMEnabled);
-      setVisionProvider(settings.visionLLMConfig.provider);
-      setVisionModel(settings.visionLLMConfig.model);
-      setVisionBaseURL(settings.visionLLMConfig.baseURL);
-      setVisionApiKey(settings.visionLLMConfig.apiKey);
-    }
-  }, [settings.visionLLMConfig, settings.visionLLMEnabled]);
 
   const handleAutoStartChange = async (enabled: boolean) => {
     if (!window.electronAPI?.settings) return;
@@ -271,41 +240,7 @@ export function GeneralSection() {
     }
   };
 
-  const handleVisionSave = useCallback(async () => {
-    const config: VisionLLMConfig = {
-      provider: visionProvider,
-      model: visionModel,
-      baseURL: visionBaseURL,
-      apiKey: visionApiKey,
-      enabled: visionEnabled,
-    };
-    await save({
-      visionLLMConfig: config,
-      visionLLMEnabled: visionEnabled,
-    });
-  }, [visionProvider, visionModel, visionBaseURL, visionApiKey, visionEnabled, save]);
-
-  const handleVisionPresetSelect = useCallback((preset: (typeof VISION_PRESETS)[0]) => {
-    setVisionProvider(preset.provider);
-    setVisionModel(preset.model);
-    setVisionBaseURL(preset.baseURL);
-  }, []);
-
-  const handleVisionTestConnection = useCallback(async () => {
-    setVisionTestStatus("testing");
-    try {
-      if (!visionProvider || !visionModel) {
-        setVisionTestStatus("error");
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setVisionTestStatus("success");
-    } catch {
-      setVisionTestStatus("error");
-    }
-  }, [visionProvider, visionModel]);
-
-  const handleTestNotification = useCallback(async () => {
+  const handleTestNotification = async () => {
     setNotificationTestStatus("testing");
     try {
       const success = await testNotification();
@@ -313,14 +248,7 @@ export function GeneralSection() {
     } catch {
       setNotificationTestStatus("error");
     }
-  }, []);
-
-  const visionHasChanges =
-    visionEnabled !== settings.visionLLMEnabled ||
-    visionProvider !== (settings.visionLLMConfig?.provider || "") ||
-    visionModel !== (settings.visionLLMConfig?.model || "") ||
-    visionBaseURL !== (settings.visionLLMConfig?.baseURL || "") ||
-    visionApiKey !== (settings.visionLLMConfig?.apiKey || "");
+  };
 
   if (loading) {
     return (
@@ -472,14 +400,7 @@ export function GeneralSection() {
               </div>
             }
           />
-          <SettingsSelectRow
-            label={t("settings.general.gatewayModel")}
-            description={t("settings.general.gatewayModelDesc")}
-            value={settings?.gatewayModel || gatewayModels[0]?.value || "claude-sonnet-4-20250514"}
-            onValueChange={(v) => save({ gatewayModel: v })}
-            options={gatewayModels}
-          />
-        </SettingsCard>
+          </SettingsCard>
       </SettingsSection>
 
       {/* Notifications Section */}
@@ -522,111 +443,6 @@ export function GeneralSection() {
                 : t("settings.general.testNotification")}
             </button>
           </SettingsCardFooter>
-        </SettingsCard>
-      </SettingsSection>
-
-      {/* Vision Model Section */}
-      <SettingsSection
-        title={t("settings.general.visionModel")}
-        description={t("settings.general.visionModelDesc")}
-      >
-        <SettingsCard>
-          <SettingsToggle
-            label={t("settings.general.enableVisionModel")}
-            description={t("settings.general.enableVisionModelDesc")}
-            checked={visionEnabled}
-            onCheckedChange={setVisionEnabled}
-          />
-
-          {visionEnabled && (
-            <>
-              {/* Quick Presets */}
-              <div className="px-4 py-3.5">
-                <label className="text-sm font-medium text-foreground block mb-3">{t("settings.general.quickPresets")}</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {VISION_PRESETS.map((preset) => (
-                    <button
-                      key={`${preset.provider}-${preset.model}`}
-                      type="button"
-                      onClick={() => handleVisionPresetSelect(preset)}
-                      className={`p-3 text-left rounded-lg border transition-all duration-200 hover:scale-[1.02] ${
-                        visionProvider === preset.provider && visionModel === preset.model
-                          ? "border-accent ring-1 ring-accent bg-accent/5"
-                          : "border-border/50 bg-surface/50 hover:border-accent/30"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <CpuIcon size={14} className="text-accent" />
-                        <span className="text-xs font-medium capitalize text-foreground">{preset.provider}</span>
-                      </div>
-                      <span className="text-xs text-muted-foreground">{preset.model}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <SettingsInput
-                label={t("settings.general.provider")}
-                value={visionProvider}
-                onChange={setVisionProvider}
-                placeholder={t("settings.general.providerPlaceholder")}
-              />
-              <SettingsInput
-                label={t("settings.general.model")}
-                value={visionModel}
-                onChange={setVisionModel}
-                placeholder={t("settings.general.modelPlaceholder")}
-              />
-              <SettingsInput
-                label={t("settings.general.baseUrl")}
-                value={visionBaseURL}
-                onChange={setVisionBaseURL}
-                placeholder={t("settings.general.baseUrlPlaceholder")}
-              />
-              <SettingsInput
-                label={t("settings.general.apiKey")}
-                type="password"
-                value={visionApiKey}
-                onChange={setVisionApiKey}
-                placeholder={t("settings.general.apiKeyPlaceholder")}
-              />
-
-              <SettingsCardFooter>
-                <button
-                  type="button"
-                  onClick={handleVisionTestConnection}
-                  disabled={visionTestStatus === "testing"}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-border/50 hover:bg-muted transition-all"
-                >
-                  {visionTestStatus === "testing" ? (
-                    <SpinnerGapIcon size={14} className="animate-spin" />
-                  ) : visionTestStatus === "success" ? (
-                    <CheckCircleIcon size={14} className="text-green-500" />
-                  ) : visionTestStatus === "error" ? (
-                    <XIcon size={14} className="text-destructive" />
-                  ) : (
-                    <LightningIcon size={14} />
-                  )}
-                  {visionTestStatus === "testing"
-                    ? t("settings.general.testing")
-                    : visionTestStatus === "success"
-                    ? t("settings.general.connected")
-                    : visionTestStatus === "error"
-                    ? t("settings.general.failed")
-                    : t("settings.general.testConnection")}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleVisionSave}
-                  disabled={!visionHasChanges || saving}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {saving ? <SpinnerGapIcon size={14} className="animate-spin" /> : <CheckCircleIcon size={14} />}
-                  {saving ? t("settings.general.saving") : t("settings.general.save")}
-                </button>
-              </SettingsCardFooter>
-            </>
-          )}
         </SettingsCard>
       </SettingsSection>
 

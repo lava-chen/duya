@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ToolUseInfo, ToolResultInfo } from '@/types';
 import { ToolActionsGroup, pairTools } from './ToolActionsGroup';
 import { Shimmer } from './Shimmer';
@@ -15,6 +15,7 @@ import { useStreamingRetry } from '@/hooks/useStreamingRetry';
 import { useStreamingActions } from '@/hooks/useStreamingActions';
 import { useStreamPhase } from '@/hooks/useStreamPhase';
 import { useStreamStartedAt } from '@/hooks/useStreamStartedAt';
+import { useTypewriter } from '@/hooks/useTypewriter';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
 import { parseAllShowWidgets, hasUnclosedWidgetFence, getPartialWidgetCode } from '@/lib/widget-parser';
@@ -22,47 +23,6 @@ import { parseAllShowWidgets, hasUnclosedWidgetFence, getPartialWidgetCode } fro
 interface StreamingMessageProps {
   sessionId: string;
   onForceStop?: () => void;
-}
-
-const BUFFER_WORD_THRESHOLD = 40;
-const BUFFER_MAX_MS = 2500;
-
-function useBufferedContent(rawContent: string, isStreaming: boolean): string {
-  const [bypassed, setBypassed] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const shouldBypass = !isStreaming || bypassed ||
-    (rawContent.split(/\s+/).filter(Boolean).length >= BUFFER_WORD_THRESHOLD);
-
-  useEffect(() => {
-    if (shouldBypass && !bypassed && isStreaming && rawContent) {
-      setBypassed(true);
-    }
-  }, [shouldBypass, bypassed, isStreaming, rawContent]);
-
-  useEffect(() => {
-    if (!rawContent && !isStreaming) {
-      setBypassed(false);
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    }
-  }, [rawContent, isStreaming]);
-
-  const hasContent = !!rawContent;
-  useEffect(() => {
-    if (!isStreaming || bypassed || !hasContent) return;
-    if (timerRef.current) return;
-    timerRef.current = setTimeout(() => {
-      setBypassed(true);
-      timerRef.current = null;
-    }, BUFFER_MAX_MS);
-  }, [isStreaming, bypassed, hasContent]);
-
-  if (!isStreaming) return rawContent;
-  if (shouldBypass) return rawContent;
-  return '';
 }
 
 function ThinkingPhaseLabel() {
@@ -152,23 +112,23 @@ const StreamingTextContent = React.memo(function StreamingTextContent({
   text: string;
   isStreaming: boolean;
 }) {
-  const bufferedContent = useBufferedContent(text, isStreaming);
+  const displayContent = useTypewriter(text, isStreaming);
 
-  if (!bufferedContent) return null;
+  if (!displayContent) return null;
 
-  const hasWidgetFence = bufferedContent.includes('```show-widget');
+  const hasWidgetFence = text.includes('```show-widget');
   if (!hasWidgetFence) {
     return (
       <MarkdownRenderer className="mt-3 prose prose-sm max-w-none message-content">
-        {bufferedContent}
+        {displayContent}
       </MarkdownRenderer>
     );
   }
 
-  const hasUnclosed = hasUnclosedWidgetFence(bufferedContent);
+  const hasUnclosed = hasUnclosedWidgetFence(text);
 
   if (hasUnclosed) {
-    const partial = getPartialWidgetCode(bufferedContent);
+    const partial = getPartialWidgetCode(text);
     if (partial) {
       return (
         <div className="mt-3">
@@ -189,7 +149,7 @@ const StreamingTextContent = React.memo(function StreamingTextContent({
     }
   }
 
-  const segments = parseAllShowWidgets(bufferedContent);
+  const segments = parseAllShowWidgets(text);
   return (
     <div className="mt-3">
       {segments.map((seg, i) => {
@@ -346,7 +306,7 @@ export const StreamingMessage = React.memo(function StreamingMessage({
   const hasWidgetActions = actions.some(a => a.kind === 'widget');
 
   return (
-    <div className="py-4 px-4">
+    <div data-message-id="streaming" className="py-4 px-4">
       <div className={hasWidgetActions ? 'max-w-[95%]' : 'max-w-[90%] lg:max-w-[85%]'}>
         <StreamingTools
           actions={actions}
@@ -354,9 +314,9 @@ export const StreamingMessage = React.memo(function StreamingMessage({
           streamingToolOutput={toolOutput}
         />
 
-        {isStreaming && <StreamingTextContent text={text} isStreaming={isStreaming} />}
+        <StreamingTextContent text={text} isStreaming={isStreaming} />
 
-        {isStreaming && <StreamingVizWidgets actions={actions} />}
+        <StreamingVizWidgets actions={actions} />
 
         {isStreaming && !text && uses.length === 0 && !thinking && (
           <div className="py-2">

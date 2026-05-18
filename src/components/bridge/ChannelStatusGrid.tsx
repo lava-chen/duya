@@ -6,7 +6,6 @@ import {
   CheckCircleIcon,
   CircleNotchIcon,
   WarningIcon,
-  ArrowUpRightIcon,
 } from "@/components/icons";
 import { ChannelIcon, CHANNEL_COLORS } from "./ChannelIcon";
 
@@ -123,10 +122,10 @@ export function ChannelStatusGrid({ onChannelClick }: ChannelStatusGridProps) {
   if (enabledChannels.length === 0) {
     return (
       <div
-        className="p-4 rounded-xl text-xs text-center"
-        style={{ color: "var(--muted)", backgroundColor: "var(--surface)" }}
+        className="py-6 text-xs text-center"
+        style={{ color: "var(--muted)" }}
       >
-        No channels configured. Click the settings icon to add channels.
+        No channels configured
       </div>
     );
   }
@@ -138,7 +137,7 @@ export function ChannelStatusGrid({ onChannelClick }: ChannelStatusGridProps) {
   const isOrphaned = status?._orphaned ?? false;
 
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="flex flex-col">
       {enabledChannels.map((ch) => {
         const info = CHANNEL_INFO[ch] || {
           name: ch,
@@ -154,28 +153,23 @@ export function ChannelStatusGrid({ onChannelClick }: ChannelStatusGridProps) {
 
         let statusLabel = "Disconnected";
         let statusColor = "var(--muted)";
-        let statusBg = "var(--surface)";
         let StatusIcon = CircleNotchIcon;
 
         if (isConnected) {
           statusLabel = "Connected";
           statusColor = "var(--success)";
-          statusBg = "var(--success-soft)";
           StatusIcon = CheckCircleIcon;
         } else if (isRunning) {
-          statusLabel = "Connecting...";
+          statusLabel = "Connecting";
           statusColor = "var(--warning)";
-          statusBg = "var(--warning-soft)";
           StatusIcon = CircleNotchIcon;
         } else if (hasError) {
           statusLabel = "Error";
           statusColor = "var(--error)";
-          statusBg = "var(--error-soft)";
           StatusIcon = WarningIcon;
         } else if (isOrphaned) {
           statusLabel = "Active";
           statusColor = "var(--success)";
-          statusBg = "var(--success-soft)";
           StatusIcon = CheckCircleIcon;
         }
 
@@ -183,57 +177,31 @@ export function ChannelStatusGrid({ onChannelClick }: ChannelStatusGridProps) {
           <button
             key={ch}
             onClick={() => onChannelClick?.(ch)}
-            className="group relative p-4 rounded-xl text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
-            style={{
-              backgroundColor: "var(--surface)",
-              border: "1px solid var(--border)",
-            }}
+            className="channel-row"
           >
-            {/* Top row: icon + name + status */}
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2.5">
-                <div
-                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-transform duration-200 group-hover:scale-110"
-                  style={{
-                    backgroundColor: info.bgColor,
-                    color: info.color,
-                  }}
-                >
-                  <ChannelIcon channel={ch} size={18} />
-                </div>
-                <span className="text-sm font-semibold" style={{ color: "var(--text)" }}>
-                  {info.name}
-                </span>
-              </div>
-              <div
-                className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium"
-                style={{
-                  backgroundColor: statusBg,
-                  color: statusColor,
-                }}
-              >
-                <StatusIcon size={10} className={isRunning && !isConnected ? "animate-spin" : ""} />
-                {statusLabel}
-              </div>
+            <div
+              className="channel-row-icon"
+              style={{
+                backgroundColor: info.bgColor,
+                color: info.color,
+              }}
+            >
+              <ChannelIcon channel={ch} size={16} />
             </div>
 
-            {/* Bottom row: metadata */}
-            <div className="flex items-center justify-between">
-              <div className="flex flex-col gap-0.5">
-                {botUsername && (
-                  <span className="text-[11px] font-medium" style={{ color: "var(--muted)" }}>
-                    @{botUsername}
-                  </span>
-                )}
-                <span className="text-[10px]" style={{ color: "var(--muted)" }}>
-                  {totalMessages} messages
-                </span>
-              </div>
-              <ArrowUpRightIcon
-                size={14}
-                className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                style={{ color: "var(--muted)" }}
-              />
+            <div className="channel-row-info">
+              <span className="channel-row-name">{info.name}</span>
+              {botUsername && (
+                <span className="channel-row-meta">@{botUsername}</span>
+              )}
+              {!botUsername && (
+                <span className="channel-row-meta">{totalMessages} messages</span>
+              )}
+            </div>
+
+            <div className="channel-row-status">
+              <StatusIcon size={10} className={isRunning && !isConnected ? "animate-spin" : ""} />
+              <span style={{ color: statusColor }}>{statusLabel}</span>
             </div>
           </button>
         );

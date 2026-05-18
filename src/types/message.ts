@@ -2,10 +2,15 @@
 
 export type MsgType = 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'viz';
 
+export interface ContentBlock {
+  type: string;
+  [key: string]: unknown;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  content: string | ContentBlock[];
   name?: string;
   tool_call_id?: string;
   timestamp: number;
@@ -87,13 +92,26 @@ export interface SessionStreamSnapshot {
   /** Tool progress info for tracking running tool elapsed time */
   toolProgressInfo?: { toolName: string; elapsedSeconds: number } | null;
   /** DB persistence confirmation from server */
-  dbPersisted?: { success: boolean; reason?: string; generation: number; messageCount: number; streamId?: string };
+  dbPersisted?: { success: boolean; reason?: string; generation: number; messageCount: number; streamId?: string; timestamp?: number };
 }
 
 export interface FileAttachment {
   id: string;
   name: string;
   type: string;
-  url: string; // data URL, blob URL, or file path
+  /** URL can be: data URL (images), absolute file path, or empty for placeholder */
+  url: string;
   size: number;
+  /** Absolute file path for document files (pdf, docx, etc.) */
+  path?: string;
+  /** Parsed text content for document files */
+  text?: string;
+  /** Extraction method for parsed documents */
+  extractMethod?: 'text' | 'vision' | 'hybrid';
+  /** Image chunks from OCR/vision extraction */
+  imageChunks?: Array<{ base64: string; mediaType: string }>;
+  /** Thumbnail preview for document files (base64 data URL) */
+  thumbnail?: string;
+  /** Base64 data URL for image display (used when url is a file path) */
+  displayUrl?: string;
 }
