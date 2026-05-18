@@ -21,14 +21,14 @@ import type {
   WeixinMessageItem,
   QrCodeStartResponse,
   QrCodeStatusResponse,
-} from './weixin-types.js';
+} from './protocol-types.js';
 import {
   WeixinMessageType,
   WeixinMessageState,
   WeixinMessageItemType,
   DEFAULT_BASE_URL,
   CHANNEL_VERSION,
-} from './weixin-types.js';
+} from './protocol-types.js';
 
 const LONG_POLL_TIMEOUT_MS = 35_000;
 const API_TIMEOUT_MS = 15_000;
