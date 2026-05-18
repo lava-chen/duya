@@ -110,7 +110,8 @@ export function SimpleProviderDialog({
       setApiKey("");
       // Pre-populate models from preset's defaultModels
       const presetModelIds = preset.defaultModels.map((m) => m.modelId);
-      setSelectedModels(preset.defaultRoleModels?.default ? [preset.defaultRoleModels.default] : []);
+      // Select the first model as default
+      setSelectedModels(presetModelIds.length > 0 ? [presetModelIds[0]] : []);
       setModels(presetModelIds);
       setCustomModel("");
     }
