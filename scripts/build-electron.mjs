@@ -38,6 +38,12 @@ async function buildElectron() {
     outfile: 'dist-electron/preload.js',
   });
 
+  await build({
+    ...shared,
+    entryPoints: ['electron/agents/server/index.ts'],
+    outfile: 'dist-electron/agent-server.js',
+  });
+
   // Agent runs as ChildProcess via agent-process-entry.ts
   // which is built separately by the agent package's own TypeScript build (npm run build:agent)
   // and is NOT part of the electron bundle.
