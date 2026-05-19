@@ -895,7 +895,7 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
 
   private async sendCommand(command: Omit<Record<string, unknown>, 'id'>): Promise<unknown> {
     const id = generateId();
-    const body = { id, ...command };
+    const body = { id, sessionId: this.sessionId, ...command };
 
     const res = await this.requestDaemon('/command', {
       method: 'POST',

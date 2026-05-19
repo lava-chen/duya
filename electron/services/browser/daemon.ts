@@ -49,6 +49,10 @@ let extensionVersion: string | null = null;
 let extensionName: string | null = null;
 let extensionId: string | null = null;
 const pending = new Map<string, PendingRequest>();
+/** Maps commandId → sessionId for tracking which session issued a command */
+const commandSessionMap = new Map<string, string>();
+/** Maps sessionId → tabId for status queries */
+const sessionTabMap = new Map<string, number>();
 const LOG_BUFFER_SIZE = 200;
 const logBuffer: LogEntry[] = [];
 let httpServer: ReturnType<typeof createServer> | null = null;
@@ -194,6 +198,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       pending: pending.size,
       memoryMB: Math.round(mem.rss / 1024 / 1024 * 10) / 10,
       port: PORT,
+      sessionTabs: Object.fromEntries(sessionTabMap),
     });
     return;
   }
@@ -258,6 +263,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           reject(new Error(`Command timeout (${timeoutMs / 1000}s)`));
         }, timeoutMs);
         pending.set(body.id, { resolve, reject, timer });
+        if (body.sessionId) {
+          commandSessionMap.set(body.id, body.sessionId as string);
+        }
         extensionWs!.send(JSON.stringify(body));
       });
 
@@ -326,7 +334,13 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
     ws.on('message', (data: RawData) => {
       try {
         const rawMsg = data.toString();
-        const msg = JSON.parse(rawMsg) as { id?: string; type?: string; version?: string; name?: string; level?: string; msg?: string; ts?: number; ok?: boolean; error?: string; domains?: string[] };
+        const msg = JSON.parse(rawMsg) as {
+          id?: string; type?: string; version?: string; name?: string;
+          level?: string; msg?: string; ts?: number; ok?: boolean;
+          error?: string; domains?: string[];
+          sessionId?: string;
+          data?: { tabId?: number; url?: string; title?: string; timedOut?: boolean };
+        };
 
         // Handle hello message from extension
         if (msg.type === 'hello') {
@@ -382,6 +396,12 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
         if (p) {
           clearTimeout(p.timer);
           pending.delete(msg.id ?? '');
+          // Track session→tabId from navigate responses
+          const cmdSessionId = commandSessionMap.get(msg.id ?? '');
+          if (cmdSessionId && msg.ok && msg.data?.tabId) {
+            sessionTabMap.set(cmdSessionId, msg.data.tabId);
+          }
+          commandSessionMap.delete(msg.id ?? '');
           p.resolve(msg);
         }
       } catch {
@@ -403,6 +423,8 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
           p.reject(new Error('Extension disconnected'));
         }
         pending.clear();
+        commandSessionMap.clear();
+        sessionTabMap.clear();
       }
     });
 
@@ -419,6 +441,8 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
           p.reject(new Error('Extension disconnected'));
         }
         pending.clear();
+        commandSessionMap.clear();
+        sessionTabMap.clear();
       }
     });
 
@@ -502,6 +526,8 @@ export function stopBrowserDaemon(): Promise<void> {
       p.reject(new Error('Daemon shutting down'));
     }
     pending.clear();
+    commandSessionMap.clear();
+    sessionTabMap.clear();
 
     // Close WebSocket server and all connections
     if (wss) {

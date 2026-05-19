@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "DUYA Browser Bridge",
   "short_name": "DUYA Bridge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Browser automation bridge for DUYA AI Agent – enables navigating, interacting with, and capturing web pages in an isolated window.",
   "minimum_chrome_version": "120",
   "author": "lava-chen",
