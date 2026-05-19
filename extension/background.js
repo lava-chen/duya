@@ -25,50 +25,65 @@ const attachedTabs = new Map();
 // ─── Automation Window Isolation ─────────────────────────────────────
 // All DUYA operations happen in a dedicated Chrome window so the
 // user's active browsing session is never touched.
+// Each agent session gets its own tab for independent parallel operation.
 
-/** @type {{ windowId: number; tabId: number; idleTimer: ReturnType<typeof setTimeout> | null } | null} */
-let automationWindow = null;
+/** @type {number | null} */
+let automationWindowId = null;
 const IDLE_TIMEOUT = 60000; // 60s idle timeout
 
-async function getOrCreateAutomationTab() {
-  // Check if our automation window is still alive
-  if (automationWindow) {
+/**
+ * @typedef {{ tabId: number; idleTimer: ReturnType<typeof setTimeout> | null }} SessionState
+ */
+
+/** @type {Map<string, SessionState>} */
+const sessionTabs = new Map();
+
+/**
+ * Get or create a tab for the given session.
+ * Each session gets its own independent tab in the automation window.
+ */
+async function getOrCreateSessionTab(sessionId) {
+  if (!sessionId) {
+    throw new Error('Missing sessionId');
+  }
+
+  // Return existing tab for this session
+  const existing = sessionTabs.get(sessionId);
+  if (existing) {
     try {
-      await chrome.windows.get(automationWindow.windowId);
-      // Window still exists, reset idle timer
-      resetIdleTimer();
-      return automationWindow.tabId;
+      await chrome.tabs.get(existing.tabId);
+      resetSessionIdleTimer(sessionId);
+      return existing.tabId;
     } catch {
-      // Window was closed by user
-      automationWindow = null;
+      // Tab was closed externally, clean up and recreate
+      sessionTabs.delete(sessionId);
+      attachedTabs.delete(String(existing.tabId));
     }
   }
 
-  // Create a new automation window
-  const win = await chrome.windows.create({
-    url: 'about:blank',
-    focused: false,
-    width: 1280,
-    height: 900,
-    type: 'normal',
-  });
-
-  const windowId = win.id;
-  const tabId = win.tabs?.[0]?.id;
-
-  if (!tabId) {
-    throw new Error('Failed to create automation window: no tab created');
+  // Ensure automation window exists
+  const windowId = await getOrCreateAutomationWindow();
+  if (!windowId) {
+    throw new Error('Failed to create automation window');
   }
 
-  automationWindow = {
+  // Create a new tab for this session
+  const tab = await chrome.tabs.create({
     windowId,
-    tabId,
-    idleTimer: null,
-  };
+    url: 'about:blank',
+    active: false,
+  });
 
-  console.log(`[DUYA Bridge] Created automation window ${windowId} with tab ${tabId}`);
+  const tabId = tab.id;
+  if (!tabId) {
+    throw new Error('Failed to create session tab: no tab id');
+  }
 
-  // Wait for the initial tab to finish loading
+  sessionTabs.set(sessionId, { tabId, idleTimer: null });
+
+  console.log(`[DUYA Bridge] Created session tab ${tabId} for session "${sessionId}"`);
+
+  // Wait for initial tab load
   await new Promise((resolve) => {
     const timeout = setTimeout(resolve, 500);
     const listener = (updatedTabId, info) => {
@@ -81,25 +96,70 @@ async function getOrCreateAutomationTab() {
     chrome.tabs.onUpdated.addListener(listener);
   });
 
-  resetIdleTimer();
+  resetSessionIdleTimer(sessionId);
   return tabId;
 }
 
-function resetIdleTimer() {
-  if (!automationWindow) return;
-  if (automationWindow.idleTimer) {
-    clearTimeout(automationWindow.idleTimer);
+/**
+ * Get or create the shared automation window.
+ * All session tabs live inside this single window.
+ */
+async function getOrCreateAutomationWindow() {
+  if (automationWindowId) {
+    try {
+      await chrome.windows.get(automationWindowId);
+      return automationWindowId;
+    } catch {
+      automationWindowId = null;
+    }
   }
-  automationWindow.idleTimer = setTimeout(() => {
-    closeAutomationWindow();
+
+  const win = await chrome.windows.create({
+    url: 'about:blank',
+    focused: false,
+    width: 1280,
+    height: 900,
+    type: 'normal',
+  });
+
+  automationWindowId = win.id;
+  console.log(`[DUYA Bridge] Created automation window ${win.id}`);
+  return win.id;
+}
+
+/**
+ * Reset idle timer for a specific session tab.
+ * When timer fires, only that session's tab is closed.
+ */
+function resetSessionIdleTimer(sessionId) {
+  const session = sessionTabs.get(sessionId);
+  if (!session) return;
+
+  if (session.idleTimer) {
+    clearTimeout(session.idleTimer);
+  }
+
+  session.idleTimer = setTimeout(() => {
+    closeSessionTab(sessionId);
   }, IDLE_TIMEOUT);
 }
 
-async function closeAutomationWindow() {
-  if (!automationWindow) return;
-  const { windowId, tabId } = automationWindow;
+/**
+ * Close a specific session tab and clean up its debugger attachment.
+ * If no sessions remain, close the automation window.
+ */
+async function closeSessionTab(sessionId) {
+  const session = sessionTabs.get(sessionId);
+  if (!session) return;
 
-  // Clean up attached debugger
+  const { tabId } = session;
+
+  // Clean up timer
+  if (session.idleTimer) {
+    clearTimeout(session.idleTimer);
+  }
+
+  // Detach debugger
   try {
     await chrome.debugger.detach({ tabId });
   } catch {
@@ -107,26 +167,70 @@ async function closeAutomationWindow() {
   }
   attachedTabs.delete(String(tabId));
 
-  // Close the window
+  // Close the tab
   try {
-    await chrome.windows.remove(windowId);
-    console.log(`[DUYA Bridge] Automation window ${windowId} closed (idle timeout)`);
+    await chrome.tabs.remove(tabId);
+    console.log(`[DUYA Bridge] Session tab ${tabId} closed for session "${sessionId}"`);
   } catch {
     // Already gone
   }
 
-  automationWindow = null;
+  sessionTabs.delete(sessionId);
+
+  // Close automation window if no sessions remain
+  if (sessionTabs.size === 0 && automationWindowId) {
+    try {
+      await chrome.windows.remove(automationWindowId);
+      console.log(`[DUYA Bridge] Automation window ${automationWindowId} closed (all sessions ended)`);
+    } catch {
+      // Already gone
+    }
+    automationWindowId = null;
+  }
 }
+
+/**
+ * Validate that a tabId belongs to a session.
+ */
+function validateTabOwnership(tabId, sessionId) {
+  if (!sessionId || !tabId) return false;
+
+  const session = sessionTabs.get(sessionId);
+  if (!session) return false;
+  if (session.tabId !== tabId) return false;
+
+  resetSessionIdleTimer(sessionId);
+  return true;
+}
+
+// Clean up when a session tab is closed externally (e.g. user closes it)
+chrome.tabs.onRemoved.addListener((tabId) => {
+  for (const [sessionId, session] of sessionTabs) {
+    if (session.tabId === tabId) {
+      if (session.idleTimer) {
+        clearTimeout(session.idleTimer);
+      }
+      attachedTabs.delete(String(tabId));
+      sessionTabs.delete(sessionId);
+      console.log(`[DUYA Bridge] Session tab ${tabId} removed externally for session "${sessionId}"`);
+      break;
+    }
+  }
+});
 
 // Clean up when the automation window is closed by user
 chrome.windows.onRemoved.addListener((windowId) => {
-  if (automationWindow && automationWindow.windowId === windowId) {
-    if (automationWindow.idleTimer) {
-      clearTimeout(automationWindow.idleTimer);
+  if (automationWindowId === windowId) {
+    // Clean up all session tabs
+    for (const [sessionId, session] of sessionTabs) {
+      if (session.idleTimer) {
+        clearTimeout(session.idleTimer);
+      }
+      attachedTabs.delete(String(session.tabId));
     }
-    attachedTabs.delete(String(automationWindow.tabId));
-    automationWindow = null;
-    console.log('[DUYA Bridge] Automation window closed by user');
+    sessionTabs.clear();
+    automationWindowId = null;
+    console.log('[DUYA Bridge] Automation window closed by user, all sessions cleaned up');
   }
 });
 
@@ -222,7 +326,23 @@ function sendResult(id, result) {
 // ─── Command Handler ─────────────────────────────────────────────────
 
 async function handleCommand(msg) {
-  const { id, action } = msg;
+  const { id, action, sessionId, tabId } = msg;
+
+  // Validate tab ownership for commands that specify both sessionId and tabId
+  // (skip navigate, close_window, close_session, and tabs which manage tabs themselves)
+  if (sessionId && tabId &&
+      action !== 'navigate' &&
+      action !== 'close_window' &&
+      action !== 'close_session' &&
+      action !== 'tabs') {
+    if (!validateTabOwnership(tabId, sessionId)) {
+      sendResult(id, {
+        ok: false,
+        error: `Tab ${tabId} does not belong to session "${sessionId}"`,
+      });
+      return;
+    }
+  }
 
   try {
     switch (action) {
@@ -267,7 +387,12 @@ async function handleCommand(msg) {
         break;
 
       case 'close_window':
-        await handleCloseWindow(id);
+        await handleCloseWindow(id, msg);
+        break;
+
+      case 'close_session':
+        await closeSessionTab(msg.sessionId);
+        sendResult(id, { ok: true });
         break;
 
       default:
@@ -361,7 +486,7 @@ async function isUrlBlocked(url) {
 // ─── Navigation ──────────────────────────────────────────────────────
 
 async function handleNavigate(id, msg) {
-  const { url } = msg;
+  const { url, sessionId } = msg;
 
   if (!url) {
     sendResult(id, { ok: false, error: 'Missing url' });
@@ -375,10 +500,10 @@ async function handleNavigate(id, msg) {
     return;
   }
 
-  // Get or create the automation tab in our isolated window
-  const targetTabId = await getOrCreateAutomationTab();
+  // Get or create tab for this session
+  const targetTabId = await getOrCreateSessionTab(sessionId);
 
-  // Navigate in the automation tab
+  // Navigate in the session tab
   await chrome.tabs.update(targetTabId, { url });
 
   // Wait for navigation to complete
@@ -434,18 +559,23 @@ async function handleNavigate(id, msg) {
 // ─── Tabs ────────────────────────────────────────────────────────────
 
 async function handleTabs(id) {
-  // Only list tabs in the automation window
-  if (automationWindow) {
+  // Only list tabs in the automation window that belong to active sessions
+  if (automationWindowId && sessionTabs.size > 0) {
     try {
-      const tabs = await chrome.tabs.query({ windowId: automationWindow.windowId });
+      const tabs = await chrome.tabs.query({ windowId: automationWindowId });
+      const sessionTabIds = new Set(
+        Array.from(sessionTabs.values()).map(s => s.tabId)
+      );
       sendResult(id, {
         ok: true,
-        data: tabs.map(t => ({
-          id: t.id,
-          url: t.url,
-          title: t.title,
-          active: t.active,
-        })),
+        data: tabs
+          .filter(t => sessionTabIds.has(t.id))
+          .map(t => ({
+            id: t.id,
+            url: t.url,
+            title: t.title,
+            active: t.active,
+          })),
       });
       return;
     } catch {
@@ -698,8 +828,16 @@ async function handlePressKey(id, msg) {
 
 // ─── Close Window ────────────────────────────────────────────────────
 
-async function handleCloseWindow(id) {
-  await closeAutomationWindow();
+async function handleCloseWindow(id, msg) {
+  const { sessionId } = msg;
+  if (sessionId) {
+    await closeSessionTab(sessionId);
+  } else {
+    // Close all sessions (backward compat)
+    for (const sid of Array.from(sessionTabs.keys())) {
+      await closeSessionTab(sid);
+    }
+  }
   sendResult(id, { ok: true });
 }
 
