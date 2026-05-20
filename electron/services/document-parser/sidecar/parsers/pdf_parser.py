@@ -1,5 +1,7 @@
 import base64
 import io
+import sys
+import traceback
 import pdfplumber
 
 PDF_CONFIDENCE_THRESHOLD = 100
@@ -48,7 +50,7 @@ class PdfParser:
             if thumbnail:
                 result["thumbnail"] = thumbnail
         except Exception:
-            pass
+            print(f"[PdfParser] Thumbnail generation failed: {traceback.format_exc()}", file=sys.stderr)
 
         if total_chars == 0:
             # No text extracted — fully scanned document, render as images
@@ -58,7 +60,7 @@ class PdfParser:
                     result["images"] = images
                     result["extractMethod"] = "vision"
             except Exception:
-                pass
+                print(f"[PdfParser] Vision fallback failed: {traceback.format_exc()}", file=sys.stderr)
         elif avg_chars_per_page < PDF_CONFIDENCE_THRESHOLD // 2 and page_count <= 5:
             # Very low confidence AND few pages — likely mixed content, add images as hybrid
             try:
@@ -67,14 +69,15 @@ class PdfParser:
                     result["images"] = images
                     result["extractMethod"] = "hybrid"
             except Exception:
-                pass
+                print(f"[PdfParser] Hybrid fallback failed: {traceback.format_exc()}", file=sys.stderr)
 
         return result
 
     def _render_thumbnail(self, filepath: str) -> dict | None:
         try:
             from pdf2image import convert_from_path
-        except ImportError:
+        except ImportError as e:
+            print(f"[PdfParser] pdf2image not installed: {e}", file=sys.stderr)
             return None
 
         images = convert_from_path(
