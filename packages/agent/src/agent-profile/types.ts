@@ -78,8 +78,9 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     name: 'General',
     description: 'General purpose assistant for most tasks',
     allowedTools: ['*'],
-    disallowedTools: ['file:Glob', 'file:Grep', 'canvas:*'],
+    disallowedTools: ['canvas_*'],
     promptProfile: {
+      enableSections: ['generalTaskGuidance'],
       disableSections: ['taskHandling'],
     },
     userVisible: true,

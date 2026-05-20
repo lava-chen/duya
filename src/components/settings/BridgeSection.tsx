@@ -27,6 +27,19 @@ import {
 } from '@/components/settings/ui';
 import { cn } from '@/lib/utils';
 
+interface PendingPairing {
+  platform: string;
+  platformUserId: string;
+  code: string;
+  expiresAt: number;
+}
+
+interface ApprovedUser {
+  platform: string;
+  platformUserId: string;
+  approvedAt: number;
+}
+
 interface BridgeStatus {
   running: boolean;
   adapters: Array<{
@@ -103,6 +116,12 @@ export default function BridgeSection() {
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [activeChannel, setActiveChannel] = useState<ChannelType>('telegram');
+  const [pairingPending, setPairingPending] = useState<PendingPairing[]>([]);
+  const [pairingApproved, setPairingApproved] = useState<ApprovedUser[]>([]);
+  const [pairingCode, setPairingCode] = useState('');
+  const [pairingPlatform, setPairingPlatform] = useState('weixin');
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
   const channels: ChannelInfo[] = [
     {
       id: 'telegram',
@@ -145,6 +164,7 @@ export default function BridgeSection() {
     fetchStatus();
     fetchSettings();
     fetchProxyStatus();
+    fetchPairing();
   }, []);
 
   const fetchStatus = async () => {
@@ -211,6 +231,42 @@ export default function BridgeSection() {
     } catch {
       // Ignore errors
     }
+  };
+
+  const fetchPairing = async () => {
+    try {
+      const data = await window.electronAPI?.gateway?.pairingList();
+      if (data) {
+        setPairingPending((data.pending as PendingPairing[]) ?? []);
+        setPairingApproved((data.approved as ApprovedUser[]) ?? []);
+      }
+    } catch { /* ignore */ }
+  };
+
+  const handlePairingApprove = async () => {
+    if (!pairingCode.trim() || !pairingPlatform) return;
+    setPairingLoading(true);
+    setPairingError(null);
+    try {
+      const result = await window.electronAPI?.gateway?.pairingApprove(pairingPlatform, pairingCode.trim());
+      if (result?.approved) {
+        setPairingCode('');
+        await fetchPairing();
+      } else {
+        setPairingError(result?.error || 'Invalid pairing code');
+      }
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : 'Approve failed');
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  const handlePairingRevoke = async (platform: string, platformUserId: string) => {
+    try {
+      await window.electronAPI?.gateway?.pairingRevoke(platform, platformUserId);
+      await fetchPairing();
+    } catch { /* ignore */ }
   };
 
   const updateSetting = async (key: string, value: string) => {
@@ -319,6 +375,119 @@ export default function BridgeSection() {
           <p className="text-sm text-destructive">{error}</p>
         </div>
       )}
+
+      {/* Pairing Section */}
+      <SettingsSection title="Pairing" description="Approve users from messaging platforms to interact with the agent">
+        <SettingsCard>
+          {/* Pending pairing requests */}
+          {pairingPending.length > 0 && (
+            <div className="px-4 pt-3 pb-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                Pending Requests ({pairingPending.length})
+              </p>
+              <div className="space-y-1.5">
+                {pairingPending.map((p, i) => (
+                  <div key={`${p.platform}-${p.platformUserId}-${i}`}
+                    className="flex items-center justify-between rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="text-xs font-mono font-bold text-warning bg-warning/10 px-1.5 py-0.5 rounded">
+                        {p.code}
+                      </span>
+                      <span className="text-xs text-muted-foreground capitalize">{p.platform}</span>
+                      <span className="text-xs text-muted-foreground/70 truncate max-w-[140px]">
+                        {p.platformUserId}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => { setPairingCode(p.code); setPairingPlatform(p.platform); handlePairingApprove(); }}
+                      className="text-xs px-2 py-1 rounded bg-warning/20 text-warning hover:bg-warning/30 transition-colors shrink-0"
+                    >
+                      Approve
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Manual pairing code input */}
+          <div className="px-4 py-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+              Enter Pairing Code
+            </p>
+            <div className="flex items-center gap-2">
+              <select
+                value={pairingPlatform}
+                onChange={(e) => setPairingPlatform(e.target.value)}
+                className="h-9 rounded-lg border border-border/50 bg-background px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
+              >
+                <option value="weixin">WeChat</option>
+                <option value="telegram">Telegram</option>
+                <option value="qq">QQ</option>
+                <option value="feishu">Feishu</option>
+                <option value="discord">Discord</option>
+                <option value="whatsapp">WhatsApp</option>
+              </select>
+              <input
+                type="text"
+                value={pairingCode}
+                onChange={(e) => { setPairingCode(e.target.value); setPairingError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handlePairingApprove(); }}
+                placeholder="8-character code"
+                maxLength={8}
+                className="flex-1 h-9 rounded-lg border border-border/50 bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-accent"
+              />
+              <button
+                onClick={handlePairingApprove}
+                disabled={pairingLoading || !pairingCode.trim()}
+                className="h-9 px-4 rounded-lg text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/90 transition-all disabled:opacity-50 shrink-0"
+              >
+                {pairingLoading ? <SpinnerGapIcon size={14} className="animate-spin" /> : 'Approve'}
+              </button>
+            </div>
+            {pairingError && (
+              <p className="text-xs text-destructive mt-1.5">{pairingError}</p>
+            )}
+          </div>
+
+          {/* Approved users */}
+          {pairingApproved.length > 0 && (
+            <div className="px-4 pb-3 pt-1 border-t border-border/30">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                Approved Users ({pairingApproved.length})
+              </p>
+              <div className="space-y-1.5">
+                {pairingApproved.map((a, i) => (
+                  <div key={`${a.platform}-${a.platformUserId}-${i}`}
+                    className="flex items-center justify-between rounded-lg border border-success/30 bg-success/5 px-3 py-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CheckCircleIcon size={12} className="text-green-500 shrink-0" />
+                      <span className="text-xs text-muted-foreground capitalize">{a.platform}</span>
+                      <span className="text-xs text-muted-foreground/70 truncate max-w-[180px]">
+                        {a.platformUserId}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handlePairingRevoke(a.platform, a.platformUserId)}
+                      className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {pairingPending.length === 0 && pairingApproved.length === 0 && (
+            <div className="px-4 py-4 text-center">
+              <p className="text-xs text-muted-foreground">
+                No pairing requests yet. When someone DMs the bot (with DM policy set to "pairing"), their code will appear here.
+              </p>
+            </div>
+          )}
+        </SettingsCard>
+      </SettingsSection>
 
       {/* Bridge Control Section */}
       <SettingsSection title={t('bridge.bridgeControl')} description={t('bridge.bridgeControlDesc')}>
@@ -536,74 +705,15 @@ export default function BridgeSection() {
 
             {/* Feishu Settings */}
             {activeChannel === 'feishu' && (
-              <ChannelSettingsPanel
-                title={t('bridge.feishu')}
+              <FeishuSettingsPanel
                 enabled={settings?.['bridge_feishu_enabled'] === 'true'}
                 running={status?.adapters.find(a => a.platform === 'feishu')?.running}
                 onTest={() => testConnection('feishu')}
                 testing={testingChannel === 'feishu'}
                 testResult={testResults['feishu']}
-              >
-                <SettingsInput
-                  label="App ID"
-                  description="Feishu Open Platform app ID"
-                  value={settings?.['bridge_feishu_app_id'] || ''}
-                  onChange={(v) => updateSetting('bridge_feishu_app_id', v)}
-                  placeholder="cli_xxxxxxxxxxxxxx"
-                />
-                <SettingsInput
-                  label="App Secret"
-                  type="password"
-                  value={settings?.['bridge_feishu_app_secret'] || ''}
-                  onChange={(v) => updateSetting('bridge_feishu_app_secret', v)}
-                  placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                />
-                <SettingsSelectRow
-                  label="Domain"
-                  description="Feishu (China) or Lark (International)"
-                  value={settings?.['bridge_feishu_domain'] || 'feishu'}
-                  onValueChange={(v) => updateSetting('bridge_feishu_domain', v)}
-                  options={[
-                    { value: 'feishu', label: 'Feishu (飞书)' },
-                    { value: 'lark', label: 'Lark (国际版)' },
-                  ]}
-                />
-                <SettingsSelectRow
-                  label="DM Policy"
-                  description="Who can send DMs to the bot"
-                  value={settings?.['bridge_feishu_dm_policy'] || 'open'}
-                  onValueChange={(v) => updateSetting('bridge_feishu_dm_policy', v)}
-                  options={[
-                    { value: 'open', label: 'Open - All users' },
-                    { value: 'allowlist', label: 'Allowlist - Specific users only' },
-                    { value: 'pairing', label: 'Pairing mode' },
-                    { value: 'disabled', label: 'Disabled' },
-                  ]}
-                />
-                <SettingsSelectRow
-                  label="Group Policy"
-                  description="Bot behavior in group chats"
-                  value={settings?.['bridge_feishu_group_policy'] || 'open'}
-                  onValueChange={(v) => updateSetting('bridge_feishu_group_policy', v)}
-                  options={[
-                    { value: 'open', label: 'Open - All groups' },
-                    { value: 'allowlist', label: 'Allowlist - Specific groups only' },
-                    { value: 'disabled', label: 'Disabled' },
-                  ]}
-                />
-                <SettingsToggle
-                  label="Require @mention"
-                  description="Only respond when bot is mentioned in groups"
-                  checked={settings?.['bridge_feishu_require_mention'] === 'true'}
-                  onCheckedChange={(checked) => updateSetting('bridge_feishu_require_mention', checked ? 'true' : 'false')}
-                />
-                <SettingsToggle
-                  label="Thread Sessions"
-                  description="Use per-thread sessions for context"
-                  checked={settings?.['bridge_feishu_thread_session'] === 'true'}
-                  onCheckedChange={(checked) => updateSetting('bridge_feishu_thread_session', checked ? 'true' : 'false')}
-                />
-              </ChannelSettingsPanel>
+                settings={settings}
+                updateSetting={updateSetting}
+              />
             )}
 
             {/* WhatsApp Settings */}
@@ -1249,6 +1359,298 @@ function WhatsAppSettingsPanel({
             <li>Configure group policies and mention settings as needed</li>
           </ol>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function FeishuSettingsPanel({
+  enabled,
+  running,
+  onTest,
+  testing,
+  testResult,
+  settings,
+  updateSetting,
+}: {
+  enabled: boolean;
+  running?: boolean;
+  onTest: () => void;
+  testing: boolean;
+  testResult?: TestResult;
+  settings: BridgeSettings | null;
+  updateSetting: (key: string, value: string) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [qrImage, setQrImage] = useState<string | null>(null);
+  const [qrStatus, setQrStatus] = useState<string>('');
+  const [qrLoading, setQrLoading] = useState(false);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+      }
+    };
+  }, []);
+
+  const startQrLogin = async () => {
+    setQrLoading(true);
+    setQrStatus('');
+    try {
+      const data = await window.electronAPI?.gateway?.feishuQrBegin();
+      if (!data || !data.success || !data.device_code) {
+        throw new Error(data?.error || 'Failed to start QR registration');
+      }
+      setQrStatus('waiting');
+
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = setInterval(() => pollQrStatus(data), 3000);
+    } catch (err) {
+      setQrStatus('failed');
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const pollQrStatus = async (begin: { qr_url?: string; device_code?: string; user_code?: string; success: boolean; error?: string }) => {
+    try {
+      if (!begin.device_code) {
+        setQrStatus('failed');
+        return;
+      }
+      const data = await window.electronAPI?.gateway?.feishuQrPoll({
+        device_code: begin.device_code,
+        interval: 5,
+        expire_in: 600,
+      });
+      if (!data) {
+        setQrStatus('failed');
+        return;
+      }
+
+      if (data.success && data.app_id) {
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+        setQrStatus('confirmed');
+        updateSetting('bridge_feishu_app_id', data.app_id);
+        updateSetting('bridge_feishu_app_secret', data.app_secret ?? '');
+        setTimeout(() => {
+          setQrImage(null);
+          setQrStatus('');
+        }, 2000);
+      } else if (data.status === 'pending') {
+        setQrStatus('waiting');
+        // Use the QR URL for display
+        if (begin.qr_url && !qrImage) {
+          setQrImage(begin.qr_url);
+        }
+      } else if (data.error) {
+        setQrStatus('failed');
+      }
+    } catch {
+      setQrStatus('failed');
+    }
+  };
+
+  const cancelQrLogin = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    setQrImage(null);
+    setQrStatus('');
+  };
+
+  const hasAppId = !!(settings?.['bridge_feishu_app_id']);
+
+  return (
+    <div className="p-6">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold">{t('bridge.feishu')}</h2>
+          {enabled && running !== undefined && (
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${
+                running
+                  ? "bg-green-500/10 text-green-500 border border-green-500/20"
+                  : "bg-yellow-500/10 text-yellow-500 border border-yellow-500/20"
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${running ? "bg-green-500" : "bg-yellow-500"}`} />
+              {running ? t('bridge.connected') : t('bridge.disconnected')}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onTest}
+          disabled={testing || !enabled}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
+        >
+          {testing ? (
+            <SpinnerGapIcon size={14} className="animate-spin" />
+          ) : testResult ? (
+            testResult.success ? (
+              <CheckCircleIcon size={14} className="text-green-500" />
+            ) : (
+              <XCircleIcon size={14} className="text-destructive" />
+            )
+          ) : (
+            <CircleNotchIcon size={14} />
+          )}
+          {t('bridge.test')}
+        </button>
+      </div>
+
+      {/* Test Result */}
+      {testResult && (
+        <div className={`mb-6 p-3 rounded-lg ${
+          testResult.success
+            ? 'bg-green-500/10 border border-green-500/30'
+            : 'bg-red-500/10 border border-red-500/30'
+        }`}>
+          <div className="flex items-center gap-2">
+            {testResult.success ? (
+              <CheckCircleIcon size={16} className="text-green-500 shrink-0" />
+            ) : (
+              <XCircleIcon size={16} className="text-destructive shrink-0" />
+            )}
+            <div>
+              <p className={`text-sm font-medium ${testResult.success ? 'text-green-500' : 'text-destructive'}`}>
+                {testResult.message}
+              </p>
+              {testResult.details && (
+                <p className="text-xs text-muted-foreground mt-0.5">{testResult.details}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Registration - Only shown when no App ID configured */}
+      {!hasAppId && !qrImage ? (
+        <div className="mb-6">
+          <p className="text-sm text-muted-foreground mb-3">Scan QR code to create a Feishu app automatically:</p>
+          <button
+            onClick={startQrLogin}
+            disabled={qrLoading}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-accent text-accent-foreground hover:bg-accent/90 transition-all shadow-sm"
+          >
+            {qrLoading ? <SpinnerGapIcon size={16} className="animate-spin" /> : <GlobeIcon size={16} />}
+            {t('bridge.feishuQrRegister')}
+          </button>
+        </div>
+      ) : !hasAppId ? (
+        <div className="mb-6 rounded-lg border border-border/50 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium flex items-center gap-2">
+              <GlobeIcon size={16} />
+              {t('bridge.feishuQrScanning')}
+            </h3>
+            <button
+              className="text-xs px-2 py-1 rounded bg-muted hover:bg-muted/80 transition-colors"
+              onClick={cancelQrLogin}
+            >
+              {t('bridge.cancel')}
+            </button>
+          </div>
+
+          <div className="flex justify-center">
+            <img
+              src={qrImage ?? ''}
+              alt="Feishu QR Code"
+              className="w-48 h-48 rounded-lg border border-border/30"
+            />
+          </div>
+
+          <div className="text-center">
+            {qrStatus === 'waiting' && (
+              <div className="flex items-center justify-center gap-2 text-sm text-blue-500">
+                <SpinnerGapIcon size={14} className="animate-spin" />
+                {t('bridge.waitingForScan')}
+              </div>
+            )}
+            {qrStatus === 'confirmed' && (
+              <div className="flex items-center justify-center gap-2 text-sm text-green-500">
+                <CheckCircleIcon size={14} />
+                {t('bridge.loginSuccess')}
+              </div>
+            )}
+            {qrStatus === 'failed' && (
+              <div className="flex items-center justify-center gap-2 text-sm text-destructive">
+                <XCircleIcon size={14} />
+                {t('bridge.loginFailed')}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Manual Configuration */}
+      <div className="space-y-4">
+        <SettingsInput
+          label="App ID"
+          description="Feishu Open Platform app ID"
+          value={settings?.['bridge_feishu_app_id'] || ''}
+          onChange={(v) => updateSetting('bridge_feishu_app_id', v)}
+          placeholder="cli_xxxxxxxxxxxxxx"
+        />
+        <SettingsInput
+          label="App Secret"
+          type="password"
+          value={settings?.['bridge_feishu_app_secret'] || ''}
+          onChange={(v) => updateSetting('bridge_feishu_app_secret', v)}
+          placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        />
+        <SettingsSelectRow
+          label="Domain"
+          description="Feishu (China) or Lark (International)"
+          value={settings?.['bridge_feishu_domain'] || 'feishu'}
+          onValueChange={(v) => updateSetting('bridge_feishu_domain', v)}
+          options={[
+            { value: 'feishu', label: 'Feishu (飞书)' },
+            { value: 'lark', label: 'Lark (国际版)' },
+          ]}
+        />
+        <SettingsSelectRow
+          label="DM Policy"
+          description="Who can send DMs to the bot"
+          value={settings?.['bridge_feishu_dm_policy'] || 'open'}
+          onValueChange={(v) => updateSetting('bridge_feishu_dm_policy', v)}
+          options={[
+            { value: 'open', label: 'Open - All users' },
+            { value: 'allowlist', label: 'Allowlist - Specific users only' },
+            { value: 'pairing', label: 'Pairing mode' },
+            { value: 'disabled', label: 'Disabled' },
+          ]}
+        />
+        <SettingsSelectRow
+          label="Group Policy"
+          description="Bot behavior in group chats"
+          value={settings?.['bridge_feishu_group_policy'] || 'open'}
+          onValueChange={(v) => updateSetting('bridge_feishu_group_policy', v)}
+          options={[
+            { value: 'open', label: 'Open - All groups' },
+            { value: 'allowlist', label: 'Allowlist - Specific groups only' },
+            { value: 'disabled', label: 'Disabled' },
+          ]}
+        />
+        <SettingsToggle
+          label="Require @mention"
+          description="Only respond when bot is mentioned in groups"
+          checked={settings?.['bridge_feishu_require_mention'] === 'true'}
+          onCheckedChange={(checked) => updateSetting('bridge_feishu_require_mention', checked ? 'true' : 'false')}
+        />
+        <SettingsToggle
+          label="Thread Sessions"
+          description="Use per-thread sessions for context"
+          checked={settings?.['bridge_feishu_thread_session'] === 'true'}
+          onCheckedChange={(checked) => updateSetting('bridge_feishu_thread_session', checked ? 'true' : 'false')}
+        />
       </div>
     </div>
   );

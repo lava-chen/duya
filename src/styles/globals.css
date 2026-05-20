@@ -4099,10 +4099,13 @@ a {
   opacity: 0.7;
 }
 
-.session-row-platform {
-  font-size: 0.65rem;
-  font-weight: 600;
-  width: 1.5rem;
+.session-row-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
   flex-shrink: 0;
 }
 

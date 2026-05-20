@@ -3,9 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   SpinnerGapIcon,
-  CheckCircleIcon,
-  CircleNotchIcon,
-  WarningIcon,
 } from "@/components/icons";
 import { ChannelIcon, CHANNEL_COLORS } from "./ChannelIcon";
 
@@ -27,6 +24,11 @@ interface BridgeStatus {
     lastMessageAt?: number;
     error?: string;
     health?: AdapterHealth;
+    displayConfig?: {
+      streaming: boolean | null;
+      toolProgress: 'all' | 'new' | 'off';
+      showReasoning: boolean;
+    };
   }>;
   autoStart: boolean;
   _orphaned?: boolean;
@@ -69,9 +71,10 @@ const ALL_CHANNELS = ["telegram", "feishu", "qq", "weixin"];
 
 interface ChannelStatusGridProps {
   onChannelClick?: (channel: string) => void;
+  selectedChannel?: string | null;
 }
 
-export function ChannelStatusGrid({ onChannelClick }: ChannelStatusGridProps) {
+export function ChannelStatusGrid({ onChannelClick, selectedChannel }: ChannelStatusGridProps) {
   const [status, setStatus] = useState<BridgeStatus | null>(null);
   const [settings, setSettings] = useState<ChannelSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,10 +137,8 @@ export function ChannelStatusGrid({ onChannelClick }: ChannelStatusGridProps) {
     status?.adapters.map((a) => [a.channelType, a]) ?? []
   );
 
-  const isOrphaned = status?._orphaned ?? false;
-
   return (
-    <div className="flex flex-col">
+    <div className="channel-sidebar">
       {enabledChannels.map((ch) => {
         const info = CHANNEL_INFO[ch] || {
           name: ch,
@@ -145,64 +146,53 @@ export function ChannelStatusGrid({ onChannelClick }: ChannelStatusGridProps) {
           bgColor: "var(--surface)",
         };
         const adapter = adapterMap.get(ch);
-        const isRunning = adapter?.running ?? false;
         const isConnected = adapter?.health?.connected ?? false;
-        const hasError = adapter?.error && adapter.error.length > 0;
-        const botUsername = adapter?.health?.botUsername;
+        const isRunning = adapter?.running ?? false;
+        const displayConfig = adapter?.displayConfig;
         const totalMessages = adapter?.health?.totalMessages ?? 0;
 
-        let statusLabel = "Disconnected";
-        let statusColor = "var(--muted)";
-        let StatusIcon = CircleNotchIcon;
-
+        // Determine status color
+        let statusColor = "#ef4444"; // Red (disconnected/error)
         if (isConnected) {
-          statusLabel = "Connected";
-          statusColor = "var(--success)";
-          StatusIcon = CheckCircleIcon;
+          statusColor = "#22c55e"; // Green (connected)
         } else if (isRunning) {
-          statusLabel = "Connecting";
-          statusColor = "var(--warning)";
-          StatusIcon = CircleNotchIcon;
-        } else if (hasError) {
-          statusLabel = "Error";
-          statusColor = "var(--error)";
-          StatusIcon = WarningIcon;
-        } else if (isOrphaned) {
-          statusLabel = "Active";
-          statusColor = "var(--success)";
-          StatusIcon = CheckCircleIcon;
+          statusColor = "#f59e0b"; // Yellow (connecting)
         }
 
+        const tooltipParts: string[] = [info.name];
+        if (displayConfig) {
+          const features: string[] = [];
+          if (displayConfig.streaming === false) features.push('no-stream');
+          if (displayConfig.toolProgress === 'off') features.push('no-tools');
+          if (displayConfig.toolProgress === 'new') features.push('tools-new');
+          if (displayConfig.showReasoning) features.push('reasoning');
+          if (features.length > 0) tooltipParts.push(`(${features.join(',')})`);
+        }
+        if (isConnected) tooltipParts.push(`msgs:${totalMessages}`);
+        if (!isConnected && isRunning) tooltipParts.push('connecting...');
+        if (adapter?.error) tooltipParts.push(`err:${adapter.error.slice(0, 30)}`);
+
+        const isSelected = selectedChannel === ch;
         return (
           <button
             key={ch}
             onClick={() => onChannelClick?.(ch)}
-            className="channel-row"
+            className={`channel-sidebar-item ${isSelected ? "selected" : ""}`}
+            title={tooltipParts.join(' ')}
           >
             <div
-              className="channel-row-icon"
+              className="channel-sidebar-icon"
               style={{
                 backgroundColor: info.bgColor,
                 color: info.color,
               }}
             >
-              <ChannelIcon channel={ch} size={16} />
+              <ChannelIcon channel={ch} size={22} />
             </div>
-
-            <div className="channel-row-info">
-              <span className="channel-row-name">{info.name}</span>
-              {botUsername && (
-                <span className="channel-row-meta">@{botUsername}</span>
-              )}
-              {!botUsername && (
-                <span className="channel-row-meta">{totalMessages} messages</span>
-              )}
-            </div>
-
-            <div className="channel-row-status">
-              <StatusIcon size={10} className={isRunning && !isConnected ? "animate-spin" : ""} />
-              <span style={{ color: statusColor }}>{statusLabel}</span>
-            </div>
+            <span
+              className="channel-sidebar-status-dot"
+              style={{ backgroundColor: statusColor }}
+            />
           </button>
         );
       })}

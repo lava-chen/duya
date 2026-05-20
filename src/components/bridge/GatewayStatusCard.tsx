@@ -207,16 +207,19 @@ export function GatewayStatusCard() {
             <span className="gateway-stat-value">{sessionCount}</span>
             <span className="gateway-stat-label">{t("gateway.sessions")}</span>
           </div>
+          <div className="gateway-stat-divider" />
           <div className="gateway-stat">
             <span className="gateway-stat-value">{connectedCount}</span>
             <span className="gateway-stat-label">{t("gateway.connected")}</span>
           </div>
+          <div className="gateway-stat-divider" />
           <div className="gateway-stat">
             <span className="gateway-stat-value">
               {status.adapters.reduce((sum, a) => sum + (a.health?.totalMessages ?? 0), 0)}
             </span>
             <span className="gateway-stat-label">{t("gateway.messages")}</span>
           </div>
+          <div className="gateway-stat-divider" />
           <div className="gateway-stat">
             <span className="gateway-stat-value">
               {lastActivity ? formatRelativeTime(lastActivity) : "-"}

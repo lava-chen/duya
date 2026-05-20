@@ -67,8 +67,13 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
 
   const hasChildren = childrenThreads.length > 0;
 
+  // Auto-collapse children only on initial load, not after user interaction
+  const [userToggled, setUserToggled] = useState(false);
+
   // Auto-collapse children if all sub-agents are completed and last activity was > 5 minutes ago
   const shouldAutoCollapse = useMemo(() => {
+    // If user has manually toggled, respect their choice
+    if (userToggled) return false;
     if (!hasChildren || childrenThreads.length === 0) return false;
     const now = Date.now();
     const fiveMinutes = 5 * 60 * 1000;
@@ -78,7 +83,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
       return child.updatedAt < now - fiveMinutes;
     });
     return allCompleted && thread.updatedAt < now - fiveMinutes;
-  }, [hasChildren, childrenThreads, thread.updatedAt]);
+  }, [hasChildren, childrenThreads, thread.updatedAt, userToggled]);
 
   const isExpanded = expandedThreads.has(thread.id) && !shouldAutoCollapse;
 
@@ -206,7 +211,11 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
           <button
             type="button"
             className="thread-item-expand-btn"
-            onClick={(e) => { e.stopPropagation(); toggleThreadExpanded(thread.id); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setUserToggled(true);
+              toggleThreadExpanded(thread.id);
+            }}
           >
             {isExpanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
           </button>

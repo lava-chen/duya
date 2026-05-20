@@ -692,7 +692,7 @@ export function MessageInput({
           onFocusTextarea={() => textareaRef.current?.focus()}
         />
 
-        <div className="rounded-2xl p-3 transition-shadow" style={{ backgroundColor: 'var(--surface)', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+        <div className="rounded-3xl p-2 transition-shadow" style={{ backgroundColor: 'var(--surface)', boxShadow: 'inset 0 0 0 1px var(--border-color), 0 2px 8px rgba(0,0,0,0.08)' }}>
           {/* File Attachments Square Cards - Inside input box */}
           {attachedFiles.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">
@@ -701,7 +701,6 @@ export function MessageInput({
                   key={file.id}
                   id={file.id}
                   name={file.name}
-                  size={file.size}
                   thumbnail={file.thumbnail}
                   onRemove={removeFile}
                   width={104}
@@ -744,7 +743,7 @@ export function MessageInput({
           {/* Textarea */}
           <textarea
             ref={textareaRef}
-            className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none min-h-[56px] max-h-[150px]"
+            className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none min-h-[48px] max-h-[150px] py-2 px-3"
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
@@ -787,7 +786,7 @@ export function MessageInput({
           )}
 
           {/* Bottom Toolbar */}
-          <div className="mt-3 flex items-center justify-between">
+          <div className="mt-1 px-2 flex items-center justify-between">
             {/* Left: Plus Button (with file attach, model selector, effort) & Permission */}
             <div className="flex items-center gap-2">
               {/* Plus Button with Dropdown Menu */}

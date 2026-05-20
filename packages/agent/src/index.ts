@@ -35,6 +35,7 @@ import { permissionModeFromString } from './permissions/PermissionMode.js';
 import { logger } from './utils/logger.js';
 import { getAgentProfileService } from './agent-profile/AgentProfileService.js';
 import type { AgentProfile } from './agent-profile/types.js';
+import { resolveAllowedTools } from './agent-profile/ToolFilter.js';
 
 // Compaction system exports
 export type {
@@ -447,23 +448,8 @@ export class duyaAgent {
       );
     }
     const allTools = registry.getAllTools();
-    // Apply tool filtering if disabledTools or toolFilter is provided
-    let tools: Tool[];
-    if (options?.disabledTools?.length) {
-      tools = allTools.filter(t => !options.disabledTools!.includes(t.name));
-      logger.info(`[Agent] streamChat: Filtered tools by disabledTools, ${tools.length}/${allTools.length} enabled`);
-    } else {
-      tools = allTools;
-    }
-    logger.info(`[Agent] streamChat: Loaded ${tools.length} tools`);
 
-    // Load agent definitions
-    logger.info(`[Agent] streamChat: Loading agent definitions...`);
-    const { getAgentDefinitions } = await import('./tool/AgentTool/index.js');
-    const agentDefinitions = getAgentDefinitions();
-    logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
-
-    // Apply agent profile if provided
+    // Apply agent profile if provided (before tool filtering)
     let appliedProfile: AgentProfile | undefined;
     if (options?.agentProfileId) {
       const profileService = getAgentProfileService();
@@ -475,6 +461,41 @@ export class duyaAgent {
         logger.warn(`[Agent] Agent profile not found: ${options.agentProfileId}`);
       }
     }
+
+    // Apply tool filtering: disabledTools -> agent profile allowedTools/disallowedTools
+    let tools: Tool[] = allTools;
+
+    // Layer 1: Filter by disabledTools option
+    if (options?.disabledTools?.length) {
+      tools = tools.filter(t => !options.disabledTools!.includes(t.name));
+      logger.info(`[Agent] streamChat: Filtered tools by disabledTools, ${tools.length}/${allTools.length} enabled`);
+    }
+
+    // Layer 2: Filter by agent profile allowedTools/disallowedTools
+    if (appliedProfile) {
+      const allToolNames = tools.map(t => t.name);
+      const filterResult = resolveAllowedTools(appliedProfile, allToolNames);
+
+      if (filterResult.isValid) {
+        const allowedToolSet = new Set(filterResult.allowed);
+        tools = tools.filter(t => allowedToolSet.has(t.name));
+        logger.info(`[Agent] streamChat: Filtered tools by agent profile, ${tools.length}/${allToolNames.length} enabled`);
+
+        if (filterResult.denied.length > 0) {
+          logger.info(`[Agent] streamChat: Denied tools: ${filterResult.denied.join(', ')}`);
+        }
+      } else {
+        logger.warn(`[Agent] streamChat: Agent profile filtering resulted in no available tools`);
+      }
+    }
+
+    logger.info(`[Agent] streamChat: Loaded ${tools.length} tools`);
+
+    // Load agent definitions
+    logger.info(`[Agent] streamChat: Loading agent definitions...`);
+    const { getAgentDefinitions } = await import('./tool/AgentTool/index.js');
+    const agentDefinitions = getAgentDefinitions();
+    logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
 
     // Apply prompt profile from agent profile (before building system prompt)
     if (appliedProfile?.promptProfile) {
@@ -592,7 +613,7 @@ export class duyaAgent {
         const lastMessage = messages[messages.length - 1];
         // Use displayContent for comparison when available (original prompt without synthetic context)
         // For MessageContent[] prompts, extract text blocks for comparison
-        const rawCompareContent = options?.displayContent ?? (typeof prompt === 'string' ? prompt : '');
+        const rawCompareContent = options?.displayContent ?? (typeof prompt === 'string' ? prompt : Array.isArray(prompt) ? prompt : '');
         const compareContent = typeof rawCompareContent === 'string'
           ? rawCompareContent
           : (Array.isArray(prompt)

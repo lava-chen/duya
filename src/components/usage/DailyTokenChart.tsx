@@ -48,21 +48,37 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
     }));
   }, [data, mode]);
 
-  const maxValue = useMemo(() => {
-    if (chartData.length === 0) return 1;
-    if (stackMode === 'total') {
-      return Math.max(...chartData.map((d) => d.totalValue), 1);
+  // Use sqrt scaling to make small values more visible
+  const { maxTotalValue, maxSegmentValue, getScaledHeight } = useMemo(() => {
+    if (chartData.length === 0) {
+      return { maxTotalValue: 1, maxSegmentValue: 1, getScaledHeight: (v: number) => v };
     }
-    return Math.max(
-      ...chartData.flatMap((d) => [
-        d.segments.input,
-        d.segments.output,
-        d.segments.cacheRead,
-        d.segments.cacheWrite,
-      ]),
-      1
-    );
-  }, [chartData, stackMode]);
+
+    const totalValues = chartData.map((d) => d.totalValue);
+    const allSegments = chartData.flatMap((d) => [
+      d.segments.input,
+      d.segments.output,
+      d.segments.cacheRead,
+      d.segments.cacheWrite,
+    ]);
+
+    const maxTotal = Math.max(...totalValues, 1);
+    const maxSegment = Math.max(...allSegments, 1);
+    const sqrtMaxTotal = Math.sqrt(maxTotal);
+    const sqrtMaxSegment = Math.sqrt(maxSegment);
+
+    return {
+      maxTotalValue: maxTotal,
+      maxSegmentValue: maxSegment,
+      getScaledHeight: (value: number, isSegment = false) => {
+        if (value <= 0) return 0;
+        // Use sqrt scaling: small values become more visible
+        const sqrtMax = isSegment ? sqrtMaxSegment : sqrtMaxTotal;
+        const scaled = (Math.sqrt(value) / sqrtMax) * 100;
+        return Math.max(scaled, 4); // Minimum 4% height for non-zero values
+      },
+    };
+  }, [chartData]);
 
   const handleBarHover = useCallback(
     (index: number, event: React.MouseEvent) => {
@@ -146,14 +162,18 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
         <>
           <div className="flex items-end gap-1 h-48 px-2">
             {chartData.map((entry, index) => {
-              const barHeight = maxValue > 0 ? (entry.totalValue / maxValue) * 100 : 0;
+              const barHeight = getScaledHeight(entry.totalValue);
               const isHovered = hoveredIndex === index;
+
+              // Calculate bar width: flex-1 when few items, fixed width when many
+              const barWidth = chartData.length <= 30 ? 'flex-1' : '12px';
 
               if (stackMode === 'total') {
                 return (
                   <div
                     key={entry.date}
-                    className="flex-1 flex flex-col justify-end group cursor-pointer"
+                    className={`flex flex-col justify-end group cursor-pointer h-full ${chartData.length <= 30 ? 'flex-1' : 'flex-shrink-0'}`}
+                    style={{ width: chartData.length <= 30 ? undefined : '12px', maxWidth: '40px' }}
                     onMouseEnter={(e) => handleBarHover(index, e)}
                     onMouseMove={(e) => handleBarHover(index, e)}
                     onMouseLeave={handleBarLeave}
@@ -161,40 +181,40 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
                     <div
                       className="w-full rounded-t transition-all duration-200"
                       style={{
-                        height: `${Math.max(barHeight, 1)}%`,
+                        height: `${barHeight}%`,
                         backgroundColor: 'var(--accent)',
                         opacity: isHovered ? 1 : 0.7,
-                        minHeight: '2px',
+                        minHeight: entry.totalValue > 0 ? '4px' : '0',
                       }}
                     />
                   </div>
                 );
               }
 
-              // Stacked breakdown
+              // Stacked breakdown - scale segments relative to max segment value
               const segmentKeys = ['input', 'output', 'cacheRead', 'cacheWrite'] as const;
               return (
                 <div
                   key={entry.date}
-                  className="flex-1 flex flex-col justify-end group cursor-pointer"
+                  className={`flex flex-col justify-end group cursor-pointer h-full ${chartData.length <= 30 ? 'flex-1' : 'flex-shrink-0'}`}
+                  style={{ width: chartData.length <= 30 ? undefined : '12px', maxWidth: '40px' }}
                   onMouseEnter={(e) => handleBarHover(index, e)}
                   onMouseMove={(e) => handleBarHover(index, e)}
                   onMouseLeave={handleBarLeave}
                 >
-                  <div className="w-full flex flex-col-reverse rounded-t overflow-hidden">
+                  <div className="w-full flex flex-col-reverse rounded-t overflow-hidden" style={{ height: `${getScaledHeight(entry.totalValue)}%` }}>
                     {segmentKeys.map((key) => {
                       const segmentValue = entry.segments[key];
-                      const segmentHeight =
-                        maxValue > 0 ? (segmentValue / maxValue) * 100 : 0;
+                      const segmentRatio = entry.totalValue > 0 ? segmentValue / entry.totalValue : 0;
                       return (
                         <div
                           key={key}
                           className="w-full transition-all duration-200"
                           style={{
-                            height: `${Math.max(segmentHeight, 0.5)}%`,
+                            height: `${segmentRatio * 100}%`,
                             backgroundColor: SEGMENT_COLORS[key],
                             opacity: isHovered ? 1 : 0.8,
-                            minHeight: '1px',
+                            minHeight: segmentValue > 0 ? '1px' : '0',
                           }}
                         />
                       );

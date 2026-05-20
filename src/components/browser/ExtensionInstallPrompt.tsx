@@ -4,7 +4,19 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
-import { XIcon, ChromeIcon, ArrowRightIcon, CheckIcon, CopyIcon, FolderOpenIcon } from '@/components/icons';
+import { 
+  XIcon, 
+  ChromeIcon, 
+  ArrowRightIcon, 
+  CheckIcon, 
+  CopyIcon, 
+  FolderOpenIcon,
+  ExternalLinkIcon,
+  ChevronDownIcon,
+} from '@/components/icons';
+
+// Chrome Web Store extension URL
+const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
 
 interface ExtensionInstallPromptProps {
   isOpen: boolean;
@@ -20,6 +32,7 @@ type InstallStep = {
 
 /**
  * ExtensionInstallPrompt - Guides users to install DUYA Browser Bridge extension
+ * Supports both Chrome Web Store (recommended) and manual installation
  */
 export function ExtensionInstallPrompt({
   isOpen,
@@ -27,27 +40,45 @@ export function ExtensionInstallPrompt({
   onDontShowAgain,
 }: ExtensionInstallPromptProps) {
   const { t } = useTranslation();
-  const [currentStep, setCurrentStep] = useState(0);
+  const [showManualInstall, setShowManualInstall] = useState(false);
   const [extensionPath, setExtensionPath] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
-      setCurrentStep(0);
+      setShowManualInstall(false);
     }
   }, [isOpen]);
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && showManualInstall) {
       window.electronAPI?.browserExtension?.getExtensionPath()
         .then(setExtensionPath)
         .catch(() => {});
     }
-  }, [isOpen]);
+  }, [isOpen, showManualInstall]);
 
   if (!isOpen) return null;
 
-  const installSteps: InstallStep[] = [
+  const storeInstallSteps: InstallStep[] = [
+    {
+      number: 1,
+      title: t('extensionInstall.storeStep1Title') || 'Go to Chrome Web Store',
+      description: t('extensionInstall.storeStep1Desc') || 'Click the button below to open the Chrome Web Store',
+    },
+    {
+      number: 2,
+      title: t('extensionInstall.storeStep2Title') || 'Add to Chrome',
+      description: t('extensionInstall.storeStep2Desc') || 'Click "Add to Chrome" button on the store page',
+    },
+    {
+      number: 3,
+      title: t('extensionInstall.storeStep3Title') || 'Confirm Installation',
+      description: t('extensionInstall.storeStep3Desc') || 'Click "Add extension" in the popup to complete installation',
+    },
+  ];
+
+  const manualInstallSteps: InstallStep[] = [
     {
       number: 1,
       title: t('extensionInstall.step1Title') || 'Open Chrome Extensions',
@@ -65,20 +96,14 @@ export function ExtensionInstallPrompt({
     },
   ];
 
+  const installSteps = showManualInstall ? manualInstallSteps : storeInstallSteps;
+
+  const handleOpenChromeStore = () => {
+    window.open(CHROME_STORE_URL, '_blank');
+  };
+
   const handleOpenExtensions = () => {
     window.open('chrome://extensions/', '_blank');
-  };
-
-  const handleNextStep = () => {
-    if (currentStep < installSteps.length - 1) {
-      setCurrentStep(currentStep + 1);
-    }
-  };
-
-  const handlePrevStep = () => {
-    if (currentStep > 0) {
-      setCurrentStep(currentStep - 1);
-    }
   };
 
   const handleOpenFolder = () => {
@@ -210,23 +235,26 @@ export function ExtensionInstallPrompt({
           {/* Installation steps */}
           <div className="mb-6">
             <h4 className="text-sm font-medium mb-3" style={{ color: 'var(--text)' }}>
-              {t('extensionInstall.stepsTitle') || 'Installation Steps'}
+              {showManualInstall 
+                ? (t('extensionInstall.manualStepsTitle') || 'Manual Installation Steps')
+                : (t('extensionInstall.stepsTitle') || 'Installation Steps')
+              }
             </h4>
             <div className="space-y-2">
-              {installSteps.map((step, index) => (
+              {installSteps.map((step) => (
                 <div
                   key={step.number}
-                  className="flex items-start gap-3 p-3 rounded-xl transition-all"
+                  className="flex items-start gap-3 p-3 rounded-xl"
                   style={{
-                    backgroundColor: index === currentStep ? 'rgba(94, 109, 255, 0.08)' : 'var(--surface)',
-                    border: index === currentStep ? '1px solid rgba(94, 109, 255, 0.3)' : '1px solid transparent',
+                    backgroundColor: 'var(--surface)',
+                    border: '1px solid transparent',
                   }}
                 >
                   <div
                     className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
                     style={{
-                      backgroundColor: index <= currentStep ? 'var(--accent)' : 'var(--border)',
-                      color: index <= currentStep ? '#fff' : 'var(--muted)',
+                      backgroundColor: 'var(--accent)',
+                      color: '#fff',
                     }}
                   >
                     {step.number}
@@ -244,44 +272,100 @@ export function ExtensionInstallPrompt({
             </div>
           </div>
 
-          {/* Extension path info */}
-          <div
-            className="p-3 rounded-xl mb-4"
-            style={{ backgroundColor: 'rgba(251, 191, 36, 0.08)', border: '1px solid rgba(251, 191, 36, 0.2)' }}
+          {/* Chrome Web Store Button - Primary */}
+          {!showManualInstall && (
+            <button
+              onClick={handleOpenChromeStore}
+              className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 mb-4"
+              style={{ background: 'linear-gradient(140deg, #5f71ff, #7286ff)' }}
+            >
+              <ChromeIcon size={18} />
+              {t('extensionInstall.openChromeStore') || 'Install from Chrome Web Store'}
+              <ExternalLinkIcon size={14} />
+            </button>
+          )}
+
+          {/* Manual Install Section */}
+          {showManualInstall && (
+            <>
+              {/* Extension path info */}
+              <div
+                className="p-3 rounded-xl mb-4"
+                style={{ backgroundColor: 'rgba(251, 191, 36, 0.08)', border: '1px solid rgba(251, 191, 36, 0.2)' }}
+              >
+                <p className="text-[11px] mb-1" style={{ color: 'var(--muted)' }}>
+                  {t('extensionInstall.extensionPath') || 'Extension folder location:'}
+                </p>
+                <div className="flex items-center gap-2">
+                  <code
+                    className="text-[11px] font-mono px-2 py-1 rounded flex-1 truncate"
+                    style={{ backgroundColor: 'var(--surface)', color: 'var(--text)' }}
+                  >
+                    {extensionPath || '...'}
+                  </code>
+                  <button
+                    onClick={handleCopyPath}
+                    className="shrink-0 p-1.5 rounded-lg transition-colors"
+                    style={{ color: copyFeedback ? 'var(--accent)' : 'var(--muted)' }}
+                    title={copyFeedback ? 'Copied!' : 'Copy path'}
+                  >
+                    <CopyIcon size={14} />
+                  </button>
+                  <button
+                    onClick={handleOpenFolder}
+                    className="shrink-0 p-1.5 rounded-lg transition-colors"
+                    style={{ color: 'var(--muted)' }}
+                    title="Open folder"
+                  >
+                    <FolderOpenIcon size={14} />
+                  </button>
+                </div>
+                {copyFeedback && (
+                  <p className="text-[10px] mt-1" style={{ color: 'var(--accent)' }}>
+                    Copied!
+                  </p>
+                )}
+              </div>
+
+              <button
+                onClick={handleOpenExtensions}
+                className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 mb-4"
+                style={{ background: 'linear-gradient(140deg, #5f71ff, #7286ff)' }}
+              >
+                <ChromeIcon size={18} />
+                {t('extensionInstall.openChrome') || 'Open Chrome Extensions'}
+                <ArrowRightIcon size={14} />
+              </button>
+            </>
+          )}
+
+          {/* Toggle between store and manual install */}
+          <button
+            onClick={() => setShowManualInstall(!showManualInstall)}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs transition-colors"
+            style={{ 
+              color: 'var(--muted)',
+              backgroundColor: 'var(--surface)',
+            }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.backgroundColor = 'var(--surface-hover)')
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.backgroundColor = 'var(--surface)')
+            }
           >
-            <p className="text-[11px] mb-1" style={{ color: 'var(--muted)' }}>
-              {t('extensionInstall.extensionPath') || 'Extension folder location:'}
-            </p>
-            <div className="flex items-center gap-2">
-              <code
-                className="text-[11px] font-mono px-2 py-1 rounded flex-1 truncate"
-                style={{ backgroundColor: 'var(--surface)', color: 'var(--text)' }}
-              >
-                {extensionPath || '...'}
-              </code>
-              <button
-                onClick={handleCopyPath}
-                className="shrink-0 p-1.5 rounded-lg transition-colors"
-                style={{ color: copyFeedback ? 'var(--accent)' : 'var(--muted)' }}
-                title={copyFeedback ? 'Copied!' : 'Copy path'}
-              >
-                <CopyIcon size={14} />
-              </button>
-              <button
-                onClick={handleOpenFolder}
-                className="shrink-0 p-1.5 rounded-lg transition-colors"
-                style={{ color: 'var(--muted)' }}
-                title="Open folder"
-              >
-                <FolderOpenIcon size={14} />
-              </button>
-            </div>
-            {copyFeedback && (
-              <p className="text-[10px] mt-1" style={{ color: 'var(--accent)' }}>
-                Copied!
-              </p>
-            )}
-          </div>
+            <ChevronDownIcon 
+              size={14} 
+              style={{ 
+                transform: showManualInstall ? 'rotate(180deg)' : 'rotate(0deg)',
+                transition: 'transform 0.2s'
+              }} 
+            />
+            {showManualInstall 
+              ? (t('extensionInstall.useStoreInstall') || 'Install from Chrome Web Store instead')
+              : (t('extensionInstall.useManualInstall') || 'Can\'t access store? Use manual install')
+            }
+          </button>
         </div>
 
         {/* Footer */}
@@ -313,14 +397,6 @@ export function ExtensionInstallPrompt({
               }
             >
               {t('common.later') || 'Later'}
-            </button>
-            <button
-              onClick={handleOpenExtensions}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs text-white transition-colors hover:opacity-90"
-              style={{ background: 'linear-gradient(140deg, #5f71ff, #7286ff)' }}
-            >
-              {t('extensionInstall.openChrome') || 'Open Chrome Extensions'}
-              <ArrowRightIcon size={14} />
             </button>
           </div>
         </div>

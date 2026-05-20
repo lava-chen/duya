@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { buildReceiverSrcdoc } from '@/lib/widget-sanitizer';
+import { buildReceiverSrcdoc, sanitizeForStreaming } from '@/lib/widget-sanitizer';
 import { WIDGET_CSS_BRIDGE } from '@/lib/widget-css-bridge';
 import { CopyIcon, CheckIcon, DownloadSimpleIcon } from '@/components/icons';
 
@@ -150,6 +150,7 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
   const [loading, setLoading] = useState(true);
   const lastCodeRef = useRef(widgetCode);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const iframeReadyRef = useRef(false);
   const theme = useTheme();
 
   const cacheKey = computeWidgetCacheKey(widgetCode);
@@ -179,6 +180,7 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
     setError(null);
     setLoading(true);
     lastCodeRef.current = widgetCode;
+    iframeReadyRef.current = false;
   }, [widgetCode, isStreaming, cacheKey]);
 
   useEffect(() => {
@@ -198,6 +200,7 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
       switch (e.data.type) {
         case 'widget:ready':
           setLoading(false);
+          iframeReadyRef.current = true;
           break;
         case 'widget:resize':
           if (typeof e.data.height === 'number' && e.data.height > 0) {
@@ -235,11 +238,21 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
     debounceRef.current = setTimeout(() => {
       const iframe = iframeRef.current;
       if (!iframe || !iframe.contentWindow) return;
-      if (widgetCode !== lastCodeRef.current) {
+      if (widgetCode === lastCodeRef.current) return;
+
+      const isJS = widgetCode.includes('<script') || widgetCode.includes('import ');
+      if (isJS) {
+        return;
+      }
+
+      if (iframeReadyRef.current) {
+        const visualHtml = sanitizeForStreaming(widgetCode).replace(/<script[\s\S]*?<\/script>/gi, '');
+        iframe.contentWindow.postMessage({ type: 'widget:update', content: visualHtml }, '*');
+      } else {
         const srcdoc = buildSrcdocRef.current(widgetCode, true);
         iframe.srcdoc = srcdoc;
-        lastCodeRef.current = widgetCode;
       }
+      lastCodeRef.current = widgetCode;
     }, DEBOUNCE_MS);
 
     return () => {

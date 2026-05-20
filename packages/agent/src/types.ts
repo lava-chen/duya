@@ -273,6 +273,12 @@ export interface ChatOptions {
       options?: { timeout?: number }
     ) => Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }>;
   };
+  /** List of tool names to disable for this chat turn */
+  disabledTools?: string[];
+  /** If true, skip system prompt entirely (use empty string) */
+  disableSystemPrompt?: boolean;
+  /** Prefix to prepend to the system prompt */
+  systemPromptPrefix?: string;
 }
 
 // 会话信息
@@ -395,6 +401,8 @@ export interface ToolUseContextOptions {
   baseURL?: string;
   authStyle?: 'api_key' | 'auth_token';
   provider?: 'anthropic' | 'openai' | 'ollama';
+  // Vision model callback for image analysis
+  analyzeImage?: (base64Data: string, mimeType: string, prompt?: string) => Promise<string>;
 }
 
 export interface AppState {

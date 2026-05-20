@@ -72,7 +72,7 @@ function useAdaptiveTypewriter(fullText: string, isStreaming: boolean): string {
     // ── 1. Speed recalculation ──────────────────────────────────────────────
     const elapsed = performance.now() - lastMeasureRef.current;
     if (elapsed >= MEASURE_INTERVAL_MS) {
-      const newChars   = target - charsAtMeasureRef.current;  // chars that arrived
+      const newChars    = targetLen - charsAtMeasureRef.current;  // chars that arrived
       const frames     = elapsed / 16.67;                      // ~60 fps
       const rawCPF     = (newChars / frames) * HEADROOM_FACTOR;
       charsPerFrameRef.current = Math.min(
@@ -80,13 +80,13 @@ function useAdaptiveTypewriter(fullText: string, isStreaming: boolean): string {
         Math.max(MIN_CHARS_PER_FRAME, Math.ceil(rawCPF))
       );
       lastMeasureRef.current    = performance.now();
-      charsAtMeasureRef.current = target;
+      charsAtMeasureRef.current = targetLen;
     }
  
     // ── 2. Flush immediately when streaming has ended ───────────────────────
     if (!isStreamingRef.current) {
-      if (cur < target) {
-        displayedRef.current = target;
+      if (cur < targetLen) {
+        displayedRef.current = targetLen;
         setDisplayed(targetRef.current);
       }
       rafRef.current = null;
@@ -94,8 +94,8 @@ function useAdaptiveTypewriter(fullText: string, isStreaming: boolean): string {
     }
  
     // ── 3. Advance cursor ───────────────────────────────────────────────────
-    if (cur < target) {
-      const next = Math.min(target, cur + charsPerFrameRef.current);
+    if (cur < targetLen) {
+      const next = Math.min(targetLen, cur + charsPerFrameRef.current);
       displayedRef.current = next;
       // Slice at a safe UTF-16 boundary (avoid splitting surrogates)
       setDisplayed(targetRef.current.slice(0, next));

@@ -910,6 +910,15 @@ function renderActionItem(
       return <TextRow key={key} content={action.content} />;
     case 'tool':
       return <ToolActionRow key={key} tool={action.tool} streamingToolOutput={action.streamingToolOutput} />;
+    case 'widget':
+      return (
+        <WidgetErrorBoundary key={key} widgetCode={action.content}>
+          <WidgetRenderer
+            widgetCode={action.content}
+            isStreaming={false}
+          />
+        </WidgetErrorBoundary>
+      );
     default:
       return null;
   }

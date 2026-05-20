@@ -1,234 +1,230 @@
 /**
- * WeChat iLink Bot API - HTTP protocol client
+ * WeChat iLink Bot API client
  *
- * Pure protocol layer — no business logic or state management.
- * Derived from OpenClaw weixin plugin reference (protocol only).
- *
- * Disguise notes (for WeChat server-side compatibility):
- * - channel_version: MUST match the real OpenClaw weixin plugin version.
- *   The real @tencent-weixin/openclaw-weixin v1.0.2 reads its own package.json
- *   and sends channel_version: "1.0.2". We replicate that exact value.
- * - X-WECHAT-UIN: MUST use the same generation algorithm as OpenClaw:
- *   random uint32 → decimal string → base64.
- * - Content-Length: included to match real OpenClaw request pattern.
+ * Low-level HTTP wrapper for the Tencent iLink Bot API.
+ * Reference: https://ilinkai.weixin.qq.com
  */
 
-import * as crypto from 'crypto';
-import type {
-  WeixinCredentials,
-  GetUpdatesResponse,
-  GetConfigResponse,
-  WeixinMessageItem,
-  QrCodeStartResponse,
-  QrCodeStatusResponse,
-} from './protocol-types.js';
-import {
-  WeixinMessageType,
-  WeixinMessageState,
-  WeixinMessageItemType,
-  DEFAULT_BASE_URL,
-  CHANNEL_VERSION,
-} from './protocol-types.js';
+import { proxyFetch } from '../../proxy-fetch.js';
 
-const LONG_POLL_TIMEOUT_MS = 35_000;
-const API_TIMEOUT_MS = 15_000;
-const CONFIG_TIMEOUT_MS = 10_000;
-const QR_LOGIN_TIMEOUT_MS = 40_000;
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-// ============================================================================
-// Auth headers — MUST match real OpenClaw weixin plugin pattern
-// ============================================================================
-
-function generateWechatUin(): string {
-  const uint32 = crypto.randomBytes(4).readUInt32BE(0);
-  return Buffer.from(String(uint32), 'utf-8').toString('base64');
+export interface WxApiConfig {
+  baseUrl: string;
+  token: string;
+  timeoutMs: number;
 }
 
-function buildHeaders(
-  creds: WeixinCredentials,
-  body: string,
-  routeTag?: string,
-): Record<string, string> {
+interface BaseInfo {
+  channel_version: string;
+}
+
+export interface GetUpdatesResponse {
+  ret: number;
+  errcode?: number;
+  errmsg?: string;
+  msgs?: Array<Record<string, unknown>>;
+  get_updates_buf: string;
+  longpolling_timeout_ms?: number;
+}
+
+export interface SendMessageResponse {
+  ret: number;
+  errcode?: number;
+  errmsg?: string;
+  msg_id?: string;
+}
+
+export interface SendTypingResponse {
+  ret: number;
+  errcode?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const CHANNEL_VERSION = '2.2.0';
+const ILINK_APP_ID = 'bot';
+const ILINK_APP_CLIENT_VERSION = (2 << 16) | (2 << 8) | 0;
+
+const EP_GET_UPDATES = 'ilink/bot/getupdates';
+const EP_SEND_MESSAGE = 'ilink/bot/sendmessage';
+const EP_SEND_TYPING = 'ilink/bot/sendtyping';
+const EP_GET_CONFIG = 'ilink/bot/getconfig';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function baseInfo(): BaseInfo {
+  return { channel_version: CHANNEL_VERSION };
+}
+
+function randomWechatUin(): string {
+  const buf = crypto.getRandomValues(new Uint32Array(1));
+  return btoa(String(buf[0]));
+}
+
+function headers(token: string, body: string): Record<string, string> {
   return {
     'Content-Type': 'application/json',
-    'Content-Length': String(Buffer.byteLength(body, 'utf-8')),
     'AuthorizationType': 'ilink_bot_token',
-    'Authorization': `Bearer ${creds.botToken}`,
-    'X-WECHAT-UIN': generateWechatUin(),
-    ...(routeTag ? { 'SKRouteTag': routeTag } : {}),
+    'Content-Length': String(new TextEncoder().encode(body).length),
+    'X-WECHAT-UIN': randomWechatUin(),
+    'iLink-App-Id': ILINK_APP_ID,
+    'iLink-App-ClientVersion': String(ILINK_APP_CLIENT_VERSION),
+    'Authorization': `Bearer ${token}`,
   };
 }
 
-// ============================================================================
-// Core HTTP client
-// ============================================================================
-
-async function weixinRequest<T>(
-  creds: WeixinCredentials,
-  endpoint: string,
-  body: unknown,
-  timeoutMs: number = API_TIMEOUT_MS,
-  routeTag?: string,
-): Promise<T> {
-  const url = `${creds.baseUrl || DEFAULT_BASE_URL}/ilink/bot/${endpoint}`;
-  const bodyStr = JSON.stringify(body);
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: buildHeaders(creds, bodyStr, routeTag),
-    body: bodyStr,
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-
-  if (!res.ok) {
-    throw new Error(`WeChat API error: ${res.status} ${res.statusText}`);
-  }
-
-  const rawText = await res.text();
-  if (!rawText.trim()) return {} as T;
-
-  try {
-    return JSON.parse(rawText) as T;
-  } catch (err) {
-    throw new Error(
-      `WeChat API returned non-JSON for ${endpoint}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+function jsonEncode(payload: Record<string, unknown>): string {
+  return JSON.stringify(payload);
 }
 
-// ============================================================================
-// Long polling
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
 
-export async function getUpdates(
-  creds: WeixinCredentials,
-  getUpdatesBuf: string,
-  timeoutMs: number = LONG_POLL_TIMEOUT_MS,
-): Promise<GetUpdatesResponse> {
-  try {
-    return await weixinRequest<GetUpdatesResponse>(
-      creds,
-      'getupdates',
-      {
-        get_updates_buf: getUpdatesBuf ?? '',
-        base_info: { channel_version: CHANNEL_VERSION },
-      },
-      timeoutMs + 5_000,
-    );
-  } catch (err) {
-    // Timeout is normal for long-polling
-    if (err instanceof Error && err.name === 'TimeoutError') {
-      return { msgs: [], get_updates_buf: getUpdatesBuf };
+let _config: WxApiConfig = {
+  baseUrl: 'https://ilinkai.weixin.qq.com',
+  token: '',
+  timeoutMs: 15_000,
+};
+
+export const wxApi = {
+  configure(config: Partial<WxApiConfig>): void {
+    _config = { ..._config, ...config };
+  },
+
+  async getUpdates(syncBuf: string, timeoutMs: number): Promise<GetUpdatesResponse> {
+    const payload = {
+      ...baseInfo(),
+      get_updates_buf: syncBuf,
+    };
+    const body = jsonEncode(payload);
+    const url = `${_config.baseUrl}/${EP_GET_UPDATES}`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await proxyFetch(url, {
+        method: 'POST',
+        headers: headers(_config.token, body),
+        body,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`iLink getUpdates HTTP ${response.status}`);
+      }
+
+      return (await response.json()) as GetUpdatesResponse;
+    } finally {
+      clearTimeout(timer);
     }
-    throw err;
-  }
-}
+  },
 
-// ============================================================================
-// Outbound
-// ============================================================================
+  async sendMessage(to: string, text: string): Promise<SendMessageResponse> {
+    if (!text?.trim()) throw new Error('sendMessage: text must not be empty');
 
-function generateClientId(): string {
-  return `duya-wx-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-}
-
-export async function sendMessage(
-  creds: WeixinCredentials,
-  toUserId: string,
-  items: WeixinMessageItem[],
-  contextToken: string,
-): Promise<{ clientId: string }> {
-  const clientId = generateClientId();
-  await weixinRequest<Record<string, unknown>>(creds, 'sendmessage', {
-    msg: {
+    const message = {
       from_user_id: '',
-      to_user_id: toUserId,
-      client_id: clientId,
-      message_type: WeixinMessageType.BOT,
-      message_state: WeixinMessageState.FINISH,
-      item_list: items.length > 0 ? items : undefined,
-      context_token: contextToken || undefined,
-    },
-    base_info: { channel_version: CHANNEL_VERSION },
-  });
-  return { clientId };
-}
+      to_user_id: to,
+      client_id: `duya-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      message_type: 2,
+      message_state: 2,
+      item_list: [{ type: 1, text_item: { text } }],
+    };
 
-export async function sendTextMessage(
-  creds: WeixinCredentials,
-  toUserId: string,
-  text: string,
-  contextToken: string,
-): Promise<{ clientId: string }> {
-  return sendMessage(creds, toUserId, [
-    { type: WeixinMessageItemType.TEXT, text_item: { text } },
-  ], contextToken);
-}
+    const payload = { ...baseInfo(), msg: message };
+    const body = jsonEncode(payload);
+    const url = `${_config.baseUrl}/${EP_SEND_MESSAGE}`;
 
-// ============================================================================
-// Config & typing
-// ============================================================================
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), _config.timeoutMs);
 
-export async function getConfig(
-  creds: WeixinCredentials,
-  ilinkUserId?: string,
-  contextToken?: string,
-): Promise<GetConfigResponse> {
-  return weixinRequest<GetConfigResponse>(
-    creds,
-    'getconfig',
-    {
-      ilink_user_id: ilinkUserId,
-      context_token: contextToken,
-      base_info: { channel_version: CHANNEL_VERSION },
-    },
-    CONFIG_TIMEOUT_MS,
-  );
-}
+    try {
+      const response = await proxyFetch(url, {
+        method: 'POST',
+        headers: headers(_config.token, body),
+        body,
+        signal: controller.signal,
+      });
 
-export async function sendTyping(
-  creds: WeixinCredentials,
-  ilinkUserId: string,
-  typingTicket: string,
-  status: number,
-): Promise<void> {
-  try {
-    await weixinRequest<Record<string, unknown>>(
-      creds,
-      'sendtyping',
-      {
-        ilink_user_id: ilinkUserId,
-        typing_ticket: typingTicket,
-        status,
-        base_info: { channel_version: CHANNEL_VERSION },
-      },
-      CONFIG_TIMEOUT_MS,
-    );
-  } catch {
-    // Typing indicator is best-effort
-  }
-}
+      if (!response.ok) {
+        throw new Error(`iLink sendMessage HTTP ${response.status}`);
+      }
 
-// ============================================================================
-// QR Login
-// ============================================================================
+      return (await response.json()) as SendMessageResponse;
+    } finally {
+      clearTimeout(timer);
+    }
+  },
 
-export async function startLoginQr(): Promise<QrCodeStartResponse> {
-  const url = `${DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`;
-  const res = await fetch(url, {
-    method: 'GET',
-    signal: AbortSignal.timeout(API_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`QR login start failed: ${res.status}`);
-  return res.json() as Promise<QrCodeStartResponse>;
-}
+  async sendTyping(toUserId: string, status: number): Promise<SendTypingResponse> {
+    const payload = {
+      ...baseInfo(),
+      ilink_user_id: toUserId,
+      status,
+    };
+    const body = jsonEncode(payload);
+    const url = `${_config.baseUrl}/${EP_SEND_TYPING}`;
 
-export async function pollLoginQrStatus(qrcode: string): Promise<QrCodeStatusResponse> {
-  const url = `${DEFAULT_BASE_URL}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`;
-  const res = await fetch(url, {
-    method: 'GET',
-    signal: AbortSignal.timeout(QR_LOGIN_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`QR status poll failed: ${res.status}`);
-  return res.json() as Promise<QrCodeStatusResponse>;
-}
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), _config.timeoutMs);
+
+    try {
+      const response = await proxyFetch(url, {
+        method: 'POST',
+        headers: headers(_config.token, body),
+        body,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`iLink sendTyping HTTP ${response.status}`);
+      }
+
+      return (await response.json()) as SendTypingResponse;
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+
+  async getConfig(userId: string, contextToken?: string): Promise<Record<string, unknown>> {
+    const payload: Record<string, unknown> = {
+      ...baseInfo(),
+      ilink_user_id: userId,
+    };
+    if (contextToken) {
+      payload.context_token = contextToken;
+    }
+
+    const body = jsonEncode(payload);
+    const url = `${_config.baseUrl}/${EP_GET_CONFIG}`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), _config.timeoutMs);
+
+    try {
+      const response = await proxyFetch(url, {
+        method: 'POST',
+        headers: headers(_config.token, body),
+        body,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`iLink getConfig HTTP ${response.status}`);
+      }
+
+      return (await response.json()) as Record<string, unknown>;
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+};

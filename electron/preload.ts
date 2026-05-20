@@ -270,6 +270,8 @@ export interface GatewayAPI {
   pairingList: () => Promise<{ pending: unknown[]; approved: unknown[] }>
   pairingApprove: (platform: string, code: string) => Promise<{ approved: boolean; error?: string }>
   pairingRevoke: (platform: string, platformUserId: string) => Promise<{ revoked: boolean }>
+  feishuQrBegin: () => Promise<{ success: boolean; qr_url?: string; device_code?: string; user_code?: string; error?: string }>
+  feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) => Promise<{ success: boolean; app_id?: string; app_secret?: string; open_id?: string; status?: string; error?: string }>
 }
 
 export interface AutomationAPI {
@@ -1073,14 +1075,13 @@ const electronAPI: ElectronAPI = {
     listSessions: () => ipcRenderer.invoke('gateway:listSessions'),
     getSession: (sessionId: string) => ipcRenderer.invoke('gateway:getSession', sessionId),
     pairingList: async () => {
-      const [pending, approved] = await Promise.all([
-        ipcRenderer.invoke('gateway:pairing:listPending'),
-        ipcRenderer.invoke('gateway:pairing:listApproved'),
-      ]);
-      return { pending, approved };
+      return await ipcRenderer.invoke('gateway:pairing:list');
     },
     pairingApprove: (platform: string, code: string) => ipcRenderer.invoke('gateway:pairing:approve', platform, code),
     pairingRevoke: (platform: string, platformUserId: string) => ipcRenderer.invoke('gateway:pairing:revoke', platform, platformUserId),
+    feishuQrBegin: () => ipcRenderer.invoke('gateway:feishu:qr:begin'),
+    feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) =>
+      ipcRenderer.invoke('gateway:feishu:qr:poll', begin),
   },
   automation: {
     listCrons: () => ipcRenderer.invoke('automation:cron:list'),

@@ -66,6 +66,31 @@ export class NonStreamingStrategy implements StreamingStrategy {
 }
 
 /**
+ * Weixin streaming strategy: buffers all chunks, sends complete message at the end.
+ * WeChat does NOT support message editing, so we never use progressive editing.
+ * The adapter's sendReply handles text splitting, chunk delay, and formatting.
+ */
+export class WeixinStreamingStrategy implements StreamingStrategy {
+  readonly platform: PlatformType = 'weixin';
+
+  matches(p: PlatformType): boolean {
+    return p === 'weixin';
+  }
+
+  async finalizeStream(_chatId: string, finalText: string): Promise<NormalizedReply[]> {
+    return [{
+      type: 'text',
+      text: finalText,
+      parseMode: 'plain',
+    }];
+  }
+
+  handleError(_chatId: string, message: string): NormalizedReply {
+    return { type: 'error', message };
+  }
+}
+
+/**
  * Markdown-capable strategy: send with Markdown parse mode.
  * Used by QQ and similar platforms.
  */
@@ -124,7 +149,7 @@ export class StreamingStrategyRegistry {
     new NonStreamingStrategy('telegram'),
     new NonStreamingStrategy('whatsapp'),
     new NonStreamingStrategy('discord'),
-    new NonStreamingStrategy('weixin'),
+    new WeixinStreamingStrategy(),
     new MarkdownStreamingStrategy('qq'),
   ];
 
