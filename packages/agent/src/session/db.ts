@@ -185,6 +185,21 @@ export interface ReplaceMessagesResult {
   messageCount?: number;
 }
 
+/** Research session row in the database */
+export interface ResearchSessionRow {
+  id: string;
+  session_id: string;
+  original_query: string;
+  clarification: string | null;  // JSON: { [questionId]: answer }
+  context_json: string;         // JSON: serialized ResearchContext
+  status: 'active' | 'completed' | 'aborted';
+  current_phase: string;
+  iterations: number;
+  coverage: number;
+  created_at: number;
+  updated_at: number;
+}
+
 // ============================================================
 // Database Initialization
 // ============================================================
@@ -534,6 +549,34 @@ function initializeSchema(db: BetterSqlite3.Database): void {
     }
   } catch (error) {
     logger.error('Migration failed: creating message_attachments table', error instanceof Error ? error : undefined, undefined, 'DB');
+  }
+
+  // Schema migration: Create research_sessions table for Research Mode (Plan 60)
+  try {
+    const researchTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='research_sessions'").get();
+    if (!researchTableInfo) {
+      db.exec(`
+        CREATE TABLE research_sessions (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          original_query TEXT NOT NULL,
+          clarification TEXT,
+          context_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          current_phase TEXT NOT NULL DEFAULT 'idle',
+          iterations INTEGER NOT NULL DEFAULT 0,
+          coverage REAL NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sessions_session ON research_sessions(session_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sessions_status ON research_sessions(status)`);
+      logger.info('Migration: Created research_sessions table', undefined, 'DB');
+    }
+  } catch (error) {
+    logger.error('Migration failed: creating research_sessions table', error instanceof Error ? error : undefined, undefined, 'DB');
   }
 }
 
@@ -1258,17 +1301,9 @@ export function rehydrateContentWithAttachments(
     return content;
   }
 
-  const CDN_PATTERNS = [
-    /https?:\/\/[^\s]*\.oss-cn-[a-z0-9-]+\.aliyuncs\.com[^\s]*/i,
-    /https?:\/\/[^\s]*\.minimax\.io[^\s]*/i,
-    /https?:\/\/[^\s]*\.minimaxi\.com[^\s]*/i,
-    /https?:\/\/[^/]*\.alicdn\.com[^\s]*/i,
-    /https?:\/\/[^/]*\.aliyuncs\.com[^\s]*/i,
-  ];
-
-  const isCDNUrl = (url: string): boolean => {
-    return CDN_PATTERNS.some(pattern => pattern.test(url));
-  };
+  // Import shared CDN URL detection utility
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { isCDNImageUrl } = require('../utils/urlSafety.js');
 
   const results: MessageContent[] = [];
   let needsRehydration = false;
@@ -1280,7 +1315,7 @@ export function rehydrateContentWithAttachments(
       let url = imgBlock.source?.url || imgBlock.source?.data;
 
       // Check if this is a CDN URL that needs rehydration
-      if (imgBlock.source?.type === 'url' && url && isCDNUrl(url)) {
+      if (imgBlock.source?.type === 'url' && url && isCDNImageUrl(url)) {
         needsRehydration = true;
         // Try to find matching attachment by original_url
         let rehydrated = false;
@@ -1917,4 +1952,173 @@ export function extractAndStoreAttachments(
   if (allAttachments.length > 0) {
     storeAttachments(allAttachments, sessionId);
   }
+}
+
+// ============================================================
+// Research Session CRUD Operations (Plan 60)
+// ============================================================
+
+/**
+ * Create a new research session.
+ */
+export function createResearchSession(data: {
+  id: string;
+  session_id: string;
+  original_query: string;
+  clarification?: string;
+  context_json: string;
+  status?: 'active' | 'completed' | 'aborted';
+}): ResearchSessionRow {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSessionDb.create(data) as unknown as ResearchSessionRow;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+
+  db.prepare(`
+    INSERT INTO research_sessions (
+      id, session_id, original_query, clarification, context_json,
+      status, current_phase, iterations, coverage, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'idle', 0, 0, ?, ?)
+  `).run(
+    data.id,
+    data.session_id,
+    data.original_query,
+    data.clarification ?? null,
+    data.context_json,
+    data.status ?? 'active',
+    now,
+    now
+  );
+
+  return {
+    id: data.id,
+    session_id: data.session_id,
+    original_query: data.original_query,
+    clarification: data.clarification ?? null,
+    context_json: data.context_json,
+    status: data.status ?? 'active',
+    current_phase: 'idle',
+    iterations: 0,
+    coverage: 0,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+/**
+ * Get a research session by ID.
+ */
+export function getResearchSession(id: string): ResearchSessionRow | null {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSessionDb.get(id) as unknown as ResearchSessionRow | null;
+  }
+
+  const db = getDb();
+  return db.prepare('SELECT * FROM research_sessions WHERE id = ?').get(id) as ResearchSessionRow | null;
+}
+
+/**
+ * Get research session by session_id (chat session).
+ */
+export function getResearchSessionBySessionId(sessionId: string): ResearchSessionRow | null {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSessionDb.getBySessionId(sessionId) as unknown as ResearchSessionRow | null;
+  }
+
+  const db = getDb();
+  return db.prepare('SELECT * FROM research_sessions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1').get(sessionId) as ResearchSessionRow | null;
+}
+
+/**
+ * Update a research session.
+ */
+export function updateResearchSession(
+  id: string,
+  data: {
+    clarification?: string;
+    context_json?: string;
+    status?: 'active' | 'completed' | 'aborted';
+    current_phase?: string;
+    iterations?: number;
+    coverage?: number;
+  }
+): ResearchSessionRow | null {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSessionDb.update(id, data) as unknown as ResearchSessionRow | null;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+
+  const fields: string[] = ['updated_at = ?'];
+  const params: unknown[] = [now];
+
+  if (data.clarification !== undefined) {
+    fields.push('clarification = ?');
+    params.push(data.clarification);
+  }
+  if (data.context_json !== undefined) {
+    fields.push('context_json = ?');
+    params.push(data.context_json);
+  }
+  if (data.status !== undefined) {
+    fields.push('status = ?');
+    params.push(data.status);
+  }
+  if (data.current_phase !== undefined) {
+    fields.push('current_phase = ?');
+    params.push(data.current_phase);
+  }
+  if (data.iterations !== undefined) {
+    fields.push('iterations = ?');
+    params.push(data.iterations);
+  }
+  if (data.coverage !== undefined) {
+    fields.push('coverage = ?');
+    params.push(data.coverage);
+  }
+
+  params.push(id);
+
+  db.prepare(`UPDATE research_sessions SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+  return getResearchSession(id);
+}
+
+/**
+ * Delete a research session.
+ */
+export function deleteResearchSession(id: string): boolean {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSessionDb.delete(id) as unknown as boolean;
+  }
+
+  const db = getDb();
+  const result = db.prepare('DELETE FROM research_sessions WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+/**
+ * List all research sessions.
+ */
+export function listResearchSessions(limit = 100): ResearchSessionRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSessionDb.list(limit) as unknown as ResearchSessionRow[];
+  }
+
+  const db = getDb();
+  return db.prepare('SELECT * FROM research_sessions ORDER BY updated_at DESC LIMIT ?').all(limit) as ResearchSessionRow[];
+}
+
+/**
+ * List research sessions by status.
+ */
+export function listResearchSessionsByStatus(status: 'active' | 'completed' | 'aborted'): ResearchSessionRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSessionDb.listByStatus(status) as unknown as ResearchSessionRow[];
+  }
+
+  const db = getDb();
+  return db.prepare('SELECT * FROM research_sessions WHERE status = ? ORDER BY updated_at DESC').all(status) as ResearchSessionRow[];
 }

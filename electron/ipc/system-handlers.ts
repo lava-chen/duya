@@ -71,7 +71,10 @@ export function registerSystemHandlers(): void {
         notification.onclick = () => {
           const mainWindow = getMainWindow();
           if (mainWindow && !mainWindow.isDestroyed()) {
-            // Focus the window first
+            // Show and focus the window
+            if (!mainWindow.isVisible()) {
+              mainWindow.show();
+            }
             if (mainWindow.isMinimized()) {
               mainWindow.restore();
             }
@@ -181,25 +184,28 @@ export function registerSystemHandlers(): void {
   // Vision settings handlers
   ipcMain.handle('vision:get', async () => {
     const configManager = getConfigManager();
-    const config = configManager.getConfig();
+    const settings = configManager.getVisionSettings();
     return {
-      providerId: config.visionProviderId,
-      model: config.visionModel,
-      enabled: config.visionEnabled ?? true,
+      provider: settings.provider,
+      model: settings.model,
+      baseUrl: settings.baseUrl,
+      apiKey: settings.apiKey,
+      enabled: settings.enabled,
     };
   });
 
-  ipcMain.handle('vision:set', async (_event, data: { providerId?: string; model?: string; enabled?: boolean }) => {
+  ipcMain.handle('vision:set', async (_event, data: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean }) => {
     const configManager = getConfigManager();
-    if (data.providerId !== undefined) {
-      configManager.setConfig('visionProviderId', data.providerId);
-    }
-    if (data.model !== undefined) {
-      configManager.setConfig('visionModel', data.model);
-    }
-    if (data.enabled !== undefined) {
-      configManager.setConfig('visionEnabled', data.enabled ? 'true' : 'false');
-    }
+    const currentSettings = configManager.getVisionSettings();
+    const newSettings = {
+      ...currentSettings,
+      provider: data.provider ?? currentSettings.provider,
+      model: data.model ?? currentSettings.model,
+      baseUrl: data.baseUrl ?? currentSettings.baseUrl,
+      apiKey: data.apiKey ?? currentSettings.apiKey,
+      enabled: data.enabled ?? currentSettings.enabled,
+    };
+    configManager.setConfig('visionSettings', newSettings);
   });
 
   // Session management handlers

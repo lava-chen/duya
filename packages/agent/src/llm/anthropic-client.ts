@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js';
 import { checkCacheEligibility, applyCacheControl, type CacheRetention } from './prompt-caching.js';
 import { normalizeUsage, type NormalizedUsage } from './usage.js';
 import { CacheMonitor } from '../observability/cache-monitor.js';
+import { isCDNImageUrl } from '../utils/urlSafety.js';
 
 
 // =============================================================================
@@ -62,20 +63,6 @@ function isMiniMaxEndpoint(baseURL?: string): boolean {
     normalized.startsWith('https://api.minimax.io/anthropic') ||
     normalized.startsWith('https://api.minimaxi.com/anthropic')
   );
-}
-
-// MiniMax CDN image URL patterns — images uploaded by MiniMax to its infrastructure
-// that should not be treated as external web resources by the agent
-const MINIMAX_CDN_PATTERNS = [
-  /https?:\/\/[^\s]*\.oss-cn-[a-z0-9-]+\.aliyuncs\.com[^\s]*/i,
-  /https?:\/\/[^\s]*\.minimax\.io[^\s]*/i,
-  /https?:\/\/[^\s]*\.minimaxi\.com[^\s]*/i,
-  /https?:\/\/[^/]*\.alicdn\.com[^\s]*/i,
-  /https?:\/\/[^/]*\.aliyuncs\.com[^\s]*/i,
-];
-
-function isMiniMaxCDNUrl(url: string): boolean {
-  return MINIMAX_CDN_PATTERNS.some(pattern => pattern.test(url));
 }
 
 /**
@@ -555,7 +542,7 @@ function convertContentBlock(block: MessageContent): ContentBlockParam | null {
     // Filter MiniMax CDN URLs — they are artifacts of MiniMax's internal image hosting,
     // not user-intended web resources. Passing them to the model would cause it to
     // attempt to fetch them via browser tool, which is incorrect.
-    if (isMiniMaxCDNUrl(imgBlock.source.data)) {
+    if (isCDNImageUrl(imgBlock.source.data)) {
       logger.warn('[AnthropicClient] Dropped MiniMax CDN image URL in content block');
       return null;
     }

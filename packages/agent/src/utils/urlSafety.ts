@@ -303,6 +303,31 @@ export function isSafeUrlSync(url: string): URLSafetyResult {
 }
 
 // =============================================================================
+// CDN Image URL Detection
+// =============================================================================
+
+/**
+ * CDN domains that should not be used as inline images.
+ * These are typically MiniMax/Alibaba cloud CDN URLs that cannot be fetched
+ * by the model for vision analysis.
+ */
+const CDN_IMAGE_PATTERNS = [
+  /https?:\/\/[^\s]*\.oss-cn-[a-z0-9-]+\.aliyuncs\.com[^\s]*/i,
+  /https?:\/\/[^\s]*\.minimax\.io[^\s]*/i,
+  /https?:\/\/[^\s]*\.minimaxi\.com[^\s]*/i,
+  /https?:\/\/[^\s]*\.alicdn\.com[^\s]*/i,
+  /https?:\/\/[^\s]*\.aliyuncs\.com[^\s]*/i,
+];
+
+/**
+ * Check if a URL is a CDN-hosted image that should not be used as inline image.
+ * These URLs cannot be fetched by the model for vision analysis.
+ */
+export function isCDNImageUrl(url: string): boolean {
+  return CDN_IMAGE_PATTERNS.some(pattern => pattern.test(url));
+}
+
+// =============================================================================
 // Redirect Guard
 // =============================================================================
 
