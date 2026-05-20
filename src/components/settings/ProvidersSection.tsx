@@ -351,6 +351,18 @@ function getProviderIcon(providerType: string, baseUrl: string | undefined) {
 
   switch (providerType) {
     case "anthropic":
+      // Check URL patterns for providers that use anthropic protocol
+      if (url.includes("minimax")) return <PresetIcon iconKey="minimax" size={20} />;
+      if (url.includes("bigmodel.cn") || url.includes("z.ai")) return <PresetIcon iconKey="zhipu" size={20} />;
+      if (url.includes("kimi.com")) return <PresetIcon iconKey="kimi" size={20} />;
+      if (url.includes("moonshot")) return <PresetIcon iconKey="moonshot" size={20} />;
+      if (url.includes("stepfun")) return <PresetIcon iconKey="stepfun" size={20} />;
+      if (url.includes("deepseek")) return <PresetIcon iconKey="deepseek" size={20} />;
+      if (url.includes("xiaomimimo")) return <PresetIcon iconKey="xiaomi" size={20} />;
+      if (url.includes("x.ai")) return <PresetIcon iconKey="xai" size={20} />;
+      if (url.includes("arcee")) return <PresetIcon iconKey="arcee" size={20} />;
+      if (url.includes("volces.com") || url.includes("volcengine")) return <PresetIcon iconKey="volcengine" size={20} />;
+      if (url.includes("bailian") || url.includes("dashscope")) return <PresetIcon iconKey="bailian" size={20} />;
       return <PresetIcon iconKey="anthropic" size={20} />;
     case "openrouter":
       return <PresetIcon iconKey="openrouter" size={20} />;

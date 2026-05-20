@@ -27,6 +27,8 @@ export const TOOL_NAMES = {
   AGENT: 'Agent',
   SKILL: 'Skill',
   TASK: 'Task', // Unified task tool with actions: create, get, list, update, output, stop
+  TASK_CREATE: 'Task', // Alias for TASK (create action)
+  TASK_UPDATE: 'Task', // Alias for TASK (update action)
   TODO_WRITE: 'TodoWrite',
   ASK_USER_QUESTION: 'AskUserQuestion',
   DISCOVER_SKILLS: 'DiscoverSkills',

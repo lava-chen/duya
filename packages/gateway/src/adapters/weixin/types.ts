@@ -24,6 +24,10 @@ export interface WeChatConfigOptions {
   require_mention?: boolean;
   mention_patterns?: string[];
   free_response_chats?: string[];
+  send_chunk_delay_seconds?: number;
+  send_chunk_retries?: number;
+  send_chunk_retry_delay_seconds?: number;
+  split_multiline_messages?: boolean;
 }
 
 export const WX_MSG_TYPES = {

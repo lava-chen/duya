@@ -25,6 +25,7 @@ import { StreamHandler } from './stream-handler.js';
 import { PermissionBroker } from './permission-broker.js';
 import { setProxyUrl, initProxy } from './proxy-fetch.js';
 import { buildImageAttachments } from './attachment-builder.js';
+import { resolveDisplayConfig, type DisplayUserConfig } from './display-config.js';
 
 export class GatewayManager {
   private running = false;
@@ -162,17 +163,32 @@ export class GatewayManager {
 
     for (const [platform, adapter] of this.adapters) {
       const health = adapter.getHealth?.();
+      const displayConfig = resolveDisplayConfig(platform);
       adapters.push({
         platform,
         running: adapter.isRunning(),
         health,
+        displayConfig: {
+          streaming: displayConfig.streaming,
+          toolProgress: displayConfig.toolProgress,
+          showReasoning: displayConfig.showReasoning,
+        },
       });
     }
 
     // Include configured but not started adapters
     for (const platform of this.adapterConfigs.keys()) {
       if (!this.adapters.has(platform)) {
-        adapters.push({ platform, running: false });
+        const displayConfig = resolveDisplayConfig(platform);
+        adapters.push({
+          platform,
+          running: false,
+          displayConfig: {
+            streaming: displayConfig.streaming,
+            toolProgress: displayConfig.toolProgress,
+            showReasoning: displayConfig.showReasoning,
+          },
+        });
       }
     }
 
@@ -248,6 +264,29 @@ export class GatewayManager {
    */
   getIpcClient(): IpcClient {
     return this.ipc;
+  }
+
+  /**
+   * Handle session reset notification from Main Process.
+   * Cleans up local state (active streams) for the given session.
+   */
+  onSessionReset(sessionId: string): void {
+    this.streamHandler.cleanupStream(sessionId);
+  }
+
+  /**
+   * Handle display state changes from the agent (typing, tool progress, etc.)
+   * Forwards to the relevant adapter for platform-specific display handling.
+   */
+  handleDisplayState(platform: string, platformChatId: string, state: string): void {
+    const adapter = this.adapters.get(platform as PlatformType);
+    if (!adapter) return;
+
+    if (state === 'typing_start') {
+      adapter.sendTyping?.(platformChatId);
+    } else if (state === 'typing_stop') {
+      adapter.stopTyping?.(platformChatId);
+    }
   }
 
   /**

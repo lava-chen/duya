@@ -16,6 +16,8 @@ export { StreamHandler } from './stream-handler.js';
 export { PermissionBroker } from './permission-broker.js';
 export { CatchupBatchProcessor, getCatchupBatchProcessor, runRealtimeCatchupBatch } from './catchup-batch.js';
 export { getProxyStatus } from './proxy-fetch.js';
+export { resolveDisplayConfig, resolveDisplaySetting, supportsStreamingEdit, showToolProgress } from './display-config.js';
+export type { DisplayConfig, DisplayOverrides, DisplayUserConfig } from './display-config.js';
 
 // ---------------------------------------------------------------------------
 // Subprocess entry point (when run via child_process.fork)

@@ -434,7 +434,6 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
                   key={attachment.id}
                   id={attachment.id}
                   name={attachment.name}
-                  size={attachment.size}
                   thumbnail={attachment.thumbnail}
                   width={120}
                 />

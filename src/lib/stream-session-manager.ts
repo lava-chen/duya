@@ -794,6 +794,34 @@ class StreamSessionManager {
       console.warn('[stream-session-manager] No provider config available');
     }
 
+    // Inject vision model config into providerConfig if available
+    if (providerConfig) {
+      try {
+        const visionApi = (window.electronAPI as unknown as Record<string, unknown>)?.vision as
+          { get: () => Promise<{ provider: string; model: string; baseUrl: string; apiKey: string; enabled: boolean } | null> } | undefined;
+        if (visionApi?.get) {
+          const vc = await visionApi.get();
+          if (vc?.enabled && vc.model) {
+            (providerConfig as unknown as Record<string, unknown>).visionConfig = {
+              provider: vc.provider,
+              model: vc.model,
+              baseURL: vc.baseUrl,
+              apiKey: vc.apiKey,
+              enabled: vc.enabled,
+            };
+            console.log('[stream-session-manager] Vision model config injected:', {
+              provider: vc.provider,
+              model: vc.model,
+            });
+          } else {
+            console.log('[stream-session-manager] Vision model not enabled or no model configured');
+          }
+        }
+      } catch (err) {
+        console.warn('[stream-session-manager] Failed to get vision config:', err);
+      }
+    }
+
     let titleGenerationModelConfig = titleGenConfigParam;
     console.log(`[stream-session-manager] titleGenerationModel raw value: "${titleGenerationModel}"`);
     if (!titleGenerationModelConfig && titleGenerationModel) {

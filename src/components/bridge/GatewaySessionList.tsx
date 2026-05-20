@@ -16,9 +16,10 @@ const ACTIVE_PHASES: StreamPhase[] = ["starting", "streaming", "awaiting_permiss
 
 interface GatewaySessionListProps {
   onSessionClick: (session: GatewaySession) => void;
+  channelFilter?: string | null;
 }
 
-export function GatewaySessionList({ onSessionClick }: GatewaySessionListProps) {
+export function GatewaySessionList({ onSessionClick, channelFilter }: GatewaySessionListProps) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<GatewaySession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,8 +89,11 @@ export function GatewaySessionList({ onSessionClick }: GatewaySessionListProps) 
     );
   }
 
-  const activeSessions = sessions.filter((s) => activeSessionIds.has(s.id));
-  const historySessions = sessions.filter((s) => !activeSessionIds.has(s.id));
+  const filteredSessions = channelFilter
+    ? sessions.filter((s) => s.platform === channelFilter)
+    : sessions;
+  const activeSessions = filteredSessions.filter((s) => activeSessionIds.has(s.id));
+  const historySessions = filteredSessions.filter((s) => !activeSessionIds.has(s.id));
 
   const formatRelativeTime = (timestamp: number): string => {
     const now = Date.now();
@@ -106,49 +110,34 @@ export function GatewaySessionList({ onSessionClick }: GatewaySessionListProps) 
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-2">
       {activeSessions.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <div className="session-section-header">
-            <span className="session-section-dot active" />
-            <span className="session-section-title active">
-              {t("gateway.active")} ({activeSessions.length})
-            </span>
-          </div>
-          <div className="flex flex-col">
-            {activeSessions.map((session) => (
-              <SessionItem
-                key={session.id}
-                session={session}
-                isActive
-                onClick={() => onSessionClick(session)}
-                formatRelativeTime={formatRelativeTime}
-                t={t}
-              />
-            ))}
-          </div>
+        <div className="flex flex-col gap-1">
+          {activeSessions.map((session) => (
+            <SessionItem
+              key={session.id}
+              session={session}
+              isActive
+              onClick={() => onSessionClick(session)}
+              formatRelativeTime={formatRelativeTime}
+              t={t}
+            />
+          ))}
         </div>
       )}
 
       {historySessions.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <div className="session-section-header">
-            <span className="session-section-title">
-              {t("gateway.history")} ({historySessions.length})
-            </span>
-          </div>
-          <div className="flex flex-col">
-            {historySessions.map((session) => (
-              <SessionItem
-                key={session.id}
-                session={session}
-                isActive={false}
-                onClick={() => onSessionClick(session)}
-                formatRelativeTime={formatRelativeTime}
-                t={t}
-              />
-            ))}
-          </div>
+        <div className="flex flex-col gap-1">
+          {historySessions.map((session) => (
+            <SessionItem
+              key={session.id}
+              session={session}
+              isActive={false}
+              onClick={() => onSessionClick(session)}
+              formatRelativeTime={formatRelativeTime}
+              t={t}
+            />
+          ))}
         </div>
       )}
     </div>

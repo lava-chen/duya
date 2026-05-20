@@ -1,345 +1,419 @@
 /**
- * WeChat Adapter - PlatformAdapter implementation for WeChat via iLink protocol
+ * WeChat (weixin) Platform Adapter
  *
- * Uses long polling to receive messages and HTTP API to send messages.
- * Protocol: https://ilinkai.weixin.qq.com/ilink/bot/*
+ * Communicates with the WeChat personal account via iLink Bot API.
+ *
+ * Key design:
+ *   - Long-poll loop drives inbound message delivery
+ *   - Outbound replies are split by weixin-specific formatting rules
+ *   - Chunk delay between sequential sends for natural pacing
+ *   - Typing indicator support via sendTyping/stopTyping
+ *   - WeChat does NOT support message editing (SUPPORTS_MESSAGE_EDITING = false)
  */
 
-import crypto from 'crypto';
 import type {
+  PlatformType,
   PlatformConfig,
   NormalizedMessage,
   NormalizedReply,
   SendResult,
 } from '../../types.js';
 import { BaseAdapter } from '../base-adapter.js';
-import { registerAdapterFactory } from '../base.js';
+import type { AdapterHealthState } from '../base-adapter.js';
 import {
-  getUpdates,
-  sendTextMessage,
-  getConfig,
-  sendTyping,
-  type WeixinCredentials,
-} from './api.js';
-import { WeixinMessageItemType, WeixinTypingStatus } from './protocol-types.js';
+  formatMessage,
+  splitTextForWeixinDelivery,
+  WX_MAX_MESSAGE_LENGTH,
+  rewriteMarkdownLinks,
+} from './markdown-utils.js';
+import type { WeChatMessage, WeChatConfigOptions } from './types.js';
+import { WX_MSG_TYPES } from './types.js';
+import { parseMessageContent, isFromGroup } from './message-utils.js';
+import { wxApi } from './api.js';
 
-const MAX_MESSAGE_LENGTH = 2048;
-const CHAT_RATE_LIMIT_MS = 2000;
-const DEDUP_MAX = 500;
-const LONG_POLL_INTERVAL_MS = 38_000;
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
-export class WeChatAdapter extends BaseAdapter {
-  readonly platform = 'weixin' as const;
+const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com';
+const LONG_POLL_TIMEOUT_MS = 35_000;
+const API_TIMEOUT_MS = 15_000;
+const MAX_CONSECUTIVE_FAILURES = 3;
+const RETRY_DELAY_SECONDS = 2;
+const BACKOFF_DELAY_SECONDS = 30;
+const MESSAGE_DEDUP_TTL_MS = 5 * 60 * 1000;
 
-  private credentials: WeixinCredentials | null = null;
-  private seenMessageIds = new Set<string>();
-  private getUpdatesBuf = '';
-  private pollAbortController: AbortController | null = null;
-  private ilinkUserId = '';
-  private contextToken = '';
-  private typingTicket = '';
+const DEFAULT_CHUNK_DELAY_SECONDS = 0.35;
+const DEFAULT_CHUNK_RETRIES = 2;
+const DEFAULT_CHUNK_RETRY_DELAY_SECONDS = 1.0;
 
-  constructor() {
-    super({ rateLimitMs: CHAT_RATE_LIMIT_MS });
+const TYPING_START = 1;
+const TYPING_STOP = 2;
 
-    registerAdapterFactory('weixin', () => new WeChatAdapter());
+// ---------------------------------------------------------------------------
+// Adapter
+// ---------------------------------------------------------------------------
+
+export class WeixinAdapter extends BaseAdapter {
+  readonly platform: PlatformType = 'weixin';
+  SUPPORTS_MESSAGE_EDITING = false;
+
+  private accountId = '';
+  private baseUrl = ILINK_BASE_URL;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private sendChunkDelaySeconds: number = DEFAULT_CHUNK_DELAY_SECONDS;
+  private sendChunkRetries: number = DEFAULT_CHUNK_RETRIES;
+  private sendChunkRetryDelaySeconds: number = DEFAULT_CHUNK_RETRY_DELAY_SECONDS;
+  private splitMultilineMessages = false;
+  private pollSyncBuf = '';
+  private consecutiveFailures = 0;
+
+  // Deduplication (timestamp-based for WeChat)
+  private recentMsgIds = new Set<string>();
+  private dedupCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Typing indicator
+  private typingActive = new Map<string, boolean>();
+
+  constructor(options?: {
+    rateLimitMs?: number;
+    dedupCapacity?: number;
+  }) {
+    super({
+      rateLimitMs: options?.rateLimitMs ?? 1000,
+      dedupCapacity: options?.dedupCapacity ?? 200,
+    });
   }
 
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
   async start(config: PlatformConfig): Promise<void> {
-    if (this.running) return;
+    const weixinOptions = config.options as WeChatConfigOptions | undefined;
+    this.token = config.credentials.token ?? config.credentials.bot_token ?? '';
+    this.accountId = config.credentials.account_id ?? config.credentials.app_id ?? '';
 
-    const botToken = config.credentials['botToken'] ?? config.credentials['token'] ?? '';
-    const ilinkBotId = config.credentials['ilinkBotId'] ?? config.credentials['accountId'] ?? '';
-    const baseUrl = config.credentials['baseUrl'] ?? 'https://ilinkai.weixin.qq.com';
-    const cdnBaseUrl = config.credentials['cdnBaseUrl'] ?? 'https://novac2c.cdn.weixin.qq.com/c2c';
-
-    if (!botToken || !ilinkBotId) {
-      console.error('[WeChat] Missing credentials: botToken and ilinkBotId are required');
+    if (!this.token) {
+      console.warn('[Weixin] No token configured');
       return;
     }
 
-    this.credentials = { botToken, ilinkBotId, baseUrl, cdnBaseUrl };
-    this.config = config;
-    this.getUpdatesBuf = '';
-    this.ilinkUserId = '';
+    this.baseUrl = (config.credentials.base_url as string) ?? ILINK_BASE_URL;
+    this.sendChunkDelaySeconds =
+      (weixinOptions?.send_chunk_delay_seconds as number) ??
+      (config.credentials.send_chunk_delay_seconds as number) ??
+      DEFAULT_CHUNK_DELAY_SECONDS;
+    this.sendChunkRetries =
+      (weixinOptions?.send_chunk_retries as number) ??
+      (config.credentials.send_chunk_retries as number) ??
+      DEFAULT_CHUNK_RETRIES;
+    this.sendChunkRetryDelaySeconds =
+      (weixinOptions?.send_chunk_retry_delay_seconds as number) ??
+      DEFAULT_CHUNK_RETRY_DELAY_SECONDS;
 
-    try {
-      const cfg = await getConfig(this.credentials, undefined, undefined);
-      if (cfg.typing_ticket) this.typingTicket = cfg.typing_ticket;
-      console.log('[WeChat] Got config, typing_ticket:', !!cfg.typing_ticket);
-    } catch (err) {
-      console.warn('[WeChat] getConfig failed:', err);
-    }
+    this.splitMultilineMessages =
+      (weixinOptions?.split_multiline_messages as boolean) ??
+      false;
 
-    this.updateHealthConnected();
     this.running = true;
-    console.log('[WeChat] Adapter started with iLink credentials');
+    this.consecutiveFailures = 0;
+    this.updateHealthConnected();
 
-    this.startLongPolling();
+    wxApi.configure({
+      baseUrl: this.baseUrl,
+      token: this.token,
+      timeoutMs: API_TIMEOUT_MS,
+    });
+
+    this.startPollLoop();
+    this.startDedupCleanup();
+
+    console.log(
+      `[Weixin] Started account=${this.accountId.slice(0, 8)} ` +
+      `chunkDelay=${this.sendChunkDelaySeconds}s retries=${this.sendChunkRetries}`,
+    );
   }
 
   async stop(): Promise<void> {
-    if (!this.running) return;
-
     this.running = false;
-    this.stopLongPolling();
-    this.health.connected = false;
-    console.log('[WeChat] Adapter stopped');
+
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    if (this.dedupCleanupTimer) {
+      clearTimeout(this.dedupCleanupTimer);
+      this.dedupCleanupTimer = null;
+    }
+
+    this.recentMsgIds.clear();
+    this.typingActive.clear();
+
+    console.log('[Weixin] Stopped');
   }
 
   isRunning(): boolean {
     return this.running;
   }
 
+  // ---------------------------------------------------------------------------
+  // Outbound: sendReply
+  // ---------------------------------------------------------------------------
+
   async sendReply(chatId: string, reply: NormalizedReply): Promise<SendResult> {
-    if (!this.credentials) {
-      return { ok: false, error: 'Not initialized' };
+    if (reply.type === 'error') {
+      return this.sendText(chatId, `❌ ${reply.message}`);
     }
 
+    if (reply.type === 'text') {
+      return this.sendText(chatId, reply.text);
+    }
+
+    if (reply.type === 'stream_end') {
+      return this.sendText(chatId, reply.finalText);
+    }
+
+    if (reply.type === 'stream_start') {
+      return { ok: true };
+    }
+
+    if (reply.type === 'stream_chunk') {
+      return { ok: true };
+    }
+
+    if (reply.type === 'permission_request') {
+      return this.sendText(chatId, reply.text);
+    }
+
+    if (reply.type === 'media') {
+      return { ok: false, error: 'Media not yet supported for weixin' };
+    }
+
+    return { ok: false, error: `Unsupported reply type: ${(reply as NormalizedReply).type}` };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Typing indicators
+  // ---------------------------------------------------------------------------
+
+  async sendTyping(chatId: string): Promise<void> {
+    if (this.typingActive.get(chatId)) return;
     try {
-      switch (reply.type) {
-        case 'text': {
-          const chunks = this.splitText(reply.text, MAX_MESSAGE_LENGTH);
-          let lastMsgId = '';
-
-          for (const chunk of chunks) {
-            await this.waitForRateLimit(chatId);
-            const result = await this.sendText(chatId, chunk);
-            lastMsgId = result.msgid ?? '';
-            this.recordSendTime(chatId);
-          }
-
-          return { ok: true, platformMsgId: lastMsgId };
-        }
-
-        case 'stream_start':
-        case 'stream_chunk':
-          return { ok: true };
-
-        case 'stream_end': {
-          const chunks = this.splitText(reply.finalText, MAX_MESSAGE_LENGTH);
-          let lastMsgId = '';
-
-          for (const chunk of chunks) {
-            await this.waitForRateLimit(chatId);
-            const result = await this.sendText(chatId, chunk);
-            lastMsgId = result.msgid ?? '';
-            this.recordSendTime(chatId);
-          }
-
-          return { ok: true, platformMsgId: lastMsgId };
-        }
-
-        case 'permission_request': {
-          const text = `${reply.text}\n\n${reply.buttons.map((b) => `[${b.text}]`).join(' ')}`;
-          await this.waitForRateLimit(chatId);
-          await this.sendText(chatId, text);
-          this.recordSendTime(chatId);
-          return { ok: true };
-        }
-
-        case 'error': {
-          await this.waitForRateLimit(chatId);
-          const result = await this.sendText(chatId, `Error: ${reply.message}`);
-          this.recordSendTime(chatId);
-          return { ok: true, platformMsgId: result.msgid };
-        }
-
-        default:
-          return { ok: false, error: 'Unknown reply type' };
-      }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      await wxApi.sendTyping(chatId, TYPING_START);
+      this.typingActive.set(chatId, true);
+    } catch {
+      // Best-effort
     }
   }
 
-  async sendTyping(chatId: string): Promise<void> {
-    if (!this.credentials || !this.typingTicket) return;
-
+  async stopTyping(chatId: string): Promise<void> {
+    if (!this.typingActive.get(chatId)) return;
     try {
-      await sendTyping(this.credentials, chatId, this.typingTicket, WeixinTypingStatus.TYPING);
+      await wxApi.sendTyping(chatId, TYPING_STOP);
+      this.typingActive.set(chatId, false);
     } catch {
       // Best-effort
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Long polling
+  // Private: text sending
   // ---------------------------------------------------------------------------
 
-  private startLongPolling(): void {
-    this.pollAbortController = new AbortController();
-    this.pollLoop();
-  }
+  private async sendText(chatId: string, text: string): Promise<SendResult> {
+    if (!text || !text.trim()) return { ok: true };
 
-  private stopLongPolling(): void {
-    this.pollAbortController?.abort();
-    this.pollAbortController = null;
-  }
-
-  private async pollLoop(): Promise<void> {
-    while (this.running && this.pollAbortController && !this.pollAbortController.signal.aborted) {
-      try {
-        if (!this.credentials) break;
-
-        const response = await getUpdates(
-          this.credentials,
-          this.getUpdatesBuf,
-          LONG_POLL_INTERVAL_MS,
-        );
-
-        if (response.msgs && response.msgs.length > 0) {
-          this.getUpdatesBuf = response.get_updates_buf ?? '';
-
-          for (const msg of response.msgs) {
-            this.handleInboundMessage(msg);
-          }
-        } else {
-          this.getUpdatesBuf = response.get_updates_buf ?? '';
-        }
-      } catch (err) {
-        if (this.pollAbortController?.signal.aborted) break;
-
-        const isTimeout = err instanceof Error && err.name === 'TimeoutError';
-        if (!isTimeout) {
-          console.error('[WeChat] Poll error:', err);
-          this.updateHealthError(err);
-        }
-
-        await this.delay(1000);
-      }
-    }
-
-    if (this.running) {
-      setTimeout(() => this.pollLoop(), 0);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Message handling
-  // ---------------------------------------------------------------------------
-
-  private handleInboundMessage(msg: {
-    message_id?: string;
-    from_user_id?: string;
-    to_user_id?: string;
-    item_list?: Array<{
-      type: number;
-      text_item?: { text: string };
-      image_item?: unknown;
-      voice_item?: unknown;
-    }>;
-    context_token?: string;
-    create_time?: number;
-    state?: number;
-  }): void {
-    const msgId = msg.message_id;
-    if (msgId && this.seenMessageIds.has(msgId)) return;
-    if (msgId) {
-      this.seenMessageIds.add(msgId);
-      if (this.seenMessageIds.size > DEDUP_MAX) {
-        const first = this.seenMessageIds.values().next().value;
-        if (first) this.seenMessageIds.delete(first);
-      }
-    }
-
-    this.incrementMessageCount();
-
-    if (msg.context_token) {
-      this.contextToken = msg.context_token;
-    }
-
-    const fromUserId = msg.from_user_id ?? '';
-    if (fromUserId && !this.ilinkUserId) {
-      this.ilinkUserId = fromUserId;
-      console.log('[WeChat] Set ilinkUserId:', this.ilinkUserId);
-    }
-
-    const text = this.parseMessageItems(msg.item_list);
-    if (!text) return;
-
-    const normalized: NormalizedMessage = {
-      platform: 'weixin',
-      platformUserId: fromUserId,
-      platformChatId: msg.to_user_id ?? fromUserId,
-      platformMsgId: msgId ?? `local_${Date.now()}`,
-      text,
-      ts: msg.create_time ? msg.create_time * 1000 : Date.now(),
-    };
-
-    if (normalized.text?.startsWith('/') && this.commandHandler) {
-      this.commandHandler(normalized).catch((err) => {
-        console.error('[WeChat] Command handler error:', err);
-        if (this.messageHandler) this.messageHandler(normalized);
-      });
-      return;
-    }
-
-    this.messageHandler?.(normalized);
-  }
-
-  private parseMessageItems(
-    items?: Array<{
-      type: number;
-      text_item?: { text: string };
-      image_item?: unknown;
-      voice_item?: unknown;
-    }>,
-  ): string | undefined {
-    if (!items || items.length === 0) return undefined;
-
-    for (const item of items) {
-      if (item.type === WeixinMessageItemType.TEXT && item.text_item?.text) {
-        return item.text_item.text;
-      }
-    }
-    return undefined;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Send
-  // ---------------------------------------------------------------------------
-
-  private async sendText(toUserId: string, content: string): Promise<{ msgid?: string }> {
-    if (!this.credentials) {
-      throw new Error('Not initialized');
-    }
-
-    const { clientId } = await sendTextMessage(
-      this.credentials,
-      toUserId,
-      content,
-      this.contextToken,
+    const formatted = formatMessage(text);
+    const chunks = splitTextForWeixinDelivery(
+      formatted,
+      WX_MAX_MESSAGE_LENGTH,
+      this.splitMultilineMessages,
     );
 
-    console.log(`[WeChat] Sent to ${toUserId}: ${content.substring(0, 50)}... (clientId: ${clientId})`);
-    return { msgid: clientId };
-  }
+    let lastMsgId: string | undefined;
+    let sendErrors = 0;
 
-  // ---------------------------------------------------------------------------
-  // Utility
-  // ---------------------------------------------------------------------------
+    for (let idx = 0; idx < chunks.length; idx++) {
+      const chunk = chunks[idx];
 
-  private splitText(text: string, maxLength: number): string[] {
-    if (text.length <= maxLength) return [text];
+      try {
+        const result = await this.sendChunk(chatId, chunk);
+        if (!result.ok) {
+          sendErrors++;
+          if (sendErrors >= this.sendChunkRetries) {
+            return result;
+          }
+        } else {
+          sendErrors = 0;
+          lastMsgId = result.platformMsgId;
+        }
+      } catch (err) {
+        sendErrors++;
+        console.error(`[Weixin] Chunk send failed (${idx + 1}/${chunks.length}):`, err);
+        if (sendErrors >= this.sendChunkRetries) {
+          return {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
 
-    const chunks: string[] = [];
-    let remaining = text;
-
-    while (remaining.length > maxLength) {
-      const splitIndex = remaining.lastIndexOf('\n', maxLength);
-      const chunk = splitIndex > 0 ? remaining.slice(0, splitIndex) : remaining.slice(0, maxLength);
-      chunks.push(chunk);
-      remaining = remaining.slice(chunk.length);
+      if (idx < chunks.length - 1 && this.sendChunkDelaySeconds > 0) {
+        await this.delay(this.sendChunkDelaySeconds * 1000);
+      }
     }
 
-    if (remaining) chunks.push(remaining);
-    return chunks;
+    return { ok: true, platformMsgId: lastMsgId };
   }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private async sendChunk(chatId: string, text: string): Promise<SendResult> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= this.sendChunkRetries; attempt++) {
+      try {
+        const resp = await wxApi.sendMessage(chatId, text);
+        if (resp.errcode && resp.errcode !== 0) {
+          throw new Error(
+            `Weixin API error: errcode=${resp.errcode} errmsg=${resp.errmsg ?? 'unknown'}`,
+          );
+        }
+        this.incrementMessageCount();
+        return { ok: true, platformMsgId: resp.msg_id };
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt >= this.sendChunkRetries) break;
+
+        const wait = this.sendChunkRetryDelaySeconds * (attempt + 1) * 1000;
+        console.warn(
+          `[Weixin] Send retry ${attempt + 1}/${this.sendChunkRetries}, waiting ${wait}ms: ${lastError.message}`,
+        );
+        await this.delay(wait);
+      }
+    }
+
+    return { ok: false, error: lastError?.message ?? 'Send failed' };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Poll loop
+  // ---------------------------------------------------------------------------
+
+  private startPollLoop(): void {
+    const poll = async () => {
+      if (!this.running) return;
+
+      try {
+        const response = await wxApi.getUpdates(this.pollSyncBuf, LONG_POLL_TIMEOUT_MS);
+
+        const newSyncBuf = response.get_updates_buf;
+        if (newSyncBuf) {
+          this.pollSyncBuf = newSyncBuf;
+        }
+
+        this.consecutiveFailures = 0;
+
+        for (const msg of response.msgs ?? []) {
+          await this.processMessage(msg).catch((err) => {
+            console.error('[Weixin] Message processing error:', err);
+          });
+        }
+      } catch (err) {
+        this.consecutiveFailures++;
+        console.error(
+          `[Weixin] Poll error (${this.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`,
+          err,
+        );
+
+        if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          this.updateHealthError(err);
+          this.consecutiveFailures = 0;
+          this.pollTimer = setTimeout(poll, BACKOFF_DELAY_SECONDS * 1000);
+          return;
+        }
+      }
+
+      if (this.running) {
+        this.pollTimer = setTimeout(poll, RETRY_DELAY_SECONDS * 1000);
+      }
+    };
+
+    poll();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Inbound message processing
+  // ---------------------------------------------------------------------------
+
+  private async processMessage(msg: WeChatMessage): Promise<void> {
+    const senderId = msg.FromUserName?.trim();
+    if (!senderId || senderId === this.accountId) return;
+
+    const msgId = msg.MsgId || msg.Int64;
+    if (!msgId || this.isDuplicate(msgId)) return;
+
+    this.markDuplicate(msgId);
+
+    const text = parseMessageContent(msg);
+    const isGroup = isFromGroup(msg.ToUserName ?? '');
+    const chatId = isGroup ? (msg.ToUserName ?? senderId) : senderId;
+
+    // Skip non-text messages for now
+    if (!text && msg.MsgType !== WX_MSG_TYPES.TEXT) return;
+
+    if (!text) return;
+
+    const normalizedMsg: NormalizedMessage = {
+      platform: 'weixin',
+      platformUserId: senderId,
+      platformChatId: chatId,
+      platformMsgId: msgId,
+      text,
+      ts: msg.CreateTime ? msg.CreateTime * 1000 : Date.now(),
+    };
+
+    if (text.startsWith('/')) {
+      if (this.commandHandler) {
+        await this.commandHandler(normalizedMsg);
+      }
+    } else {
+      this.messageHandler?.(normalizedMsg);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deduplication
+  // ---------------------------------------------------------------------------
+
+  private isDuplicate(msgId: string): boolean {
+    return this.recentMsgIds.has(msgId);
+  }
+
+  private markDuplicate(msgId: string): void {
+    this.recentMsgIds.add(msgId);
+    if (this.recentMsgIds.size > this.dedupCapacity) {
+      const toDelete: string[] = [];
+      let count = 0;
+      for (const id of this.recentMsgIds) {
+        if (count >= this.dedupCapacity / 4) break;
+        toDelete.push(id);
+        count++;
+      }
+      for (const id of toDelete) {
+        this.recentMsgIds.delete(id);
+      }
+    }
+  }
+
+  private startDedupCleanup(): void {
+    this.dedupCleanupTimer = setInterval(() => {
+      if (this.recentMsgIds.size > this.dedupCapacity / 2) {
+        this.recentMsgIds.clear();
+      }
+    }, MESSAGE_DEDUP_TTL_MS);
   }
 }
 
-new WeChatAdapter();
+// Factory registration
+import { registerAdapterFactory } from '../base.js';
+registerAdapterFactory('weixin', () => new WeixinAdapter());

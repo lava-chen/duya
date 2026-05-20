@@ -63,8 +63,8 @@ export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
               {HOUR_LABELS.map((label, i) => (
                 <div
                   key={label}
-                  className="flex-1 text-[9px] text-[var(--muted)] text-center"
-                  style={{ marginLeft: i === 0 ? 0 : 'calc(300% - 1px)' }}
+                  className="text-[9px] text-[var(--muted)] text-center"
+                  style={{ width: 'calc(300% + 1px)' }}
                 >
                   {label}
                 </div>
@@ -134,9 +134,9 @@ export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
 
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none bg-[var(--main-bg)] border border-[var(--border)] rounded-lg shadow-lg p-2 text-xs"
+          className="fixed z-[100] pointer-events-none bg-[var(--main-bg)] border border-[var(--border)] rounded-lg shadow-lg p-2 text-xs"
           style={{
-            left: tooltip.x + 10,
+            left: tooltip.x > window.innerWidth - 150 ? tooltip.x - 120 : tooltip.x + 10,
             top: tooltip.y - 10,
           }}
         >

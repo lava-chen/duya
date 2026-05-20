@@ -690,6 +690,7 @@ export class AnthropicClient implements LLMClient {
     let isInThinkTag = false;
     let hasExtractedThinkContent = false;
     let hasYieldedPreToolThinking = false;
+    let hasReceivedExtendedThinking = false;
 
     let eventCount = 0;
     try {
@@ -713,6 +714,7 @@ export class AnthropicClient implements LLMClient {
           isInThinkTag = false;
           hasExtractedThinkContent = false;
         } else if (event.content_block.type === 'thinking') {
+          hasReceivedExtendedThinking = true;
           // MiniMax thinking block - accumulate thinking content
           thinkingContent = '';
         }
@@ -771,7 +773,7 @@ export class AnthropicClient implements LLMClient {
             textContentSinceLastTool += textDelta;
             // Only yield pre-tool thinking once, when text first exceeds threshold
             // and no tool calls have started yet
-            if (toolStartTimes.size === 0 && !hasYieldedPreToolThinking && textContentSinceLastTool.length > 10) {
+            if (toolStartTimes.size === 0 && !hasYieldedPreToolThinking && !hasReceivedExtendedThinking && textContentSinceLastTool.length > 10) {
               hasYieldedPreToolThinking = true;
               yield {
                 type: 'thinking',

@@ -40,6 +40,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   sessionId,
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
   const prevMessagesLengthRef = useRef(messages.length);
   const wasStreamingRef = useRef(false);
   const userMessageIdRef = useRef<string | null>(null);
@@ -47,7 +48,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const hasScrolledOnMountRef = useRef(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
-  const lastMessageSelector = '[data-message-id]:last-of-type';
+  // Single scroll state: true = user is at bottom and wants auto-scroll
+  const autoScrollRef = useRef(true);
 
   // Check if user is near bottom of scroll
   const checkScrollPosition = useCallback(() => {
@@ -59,7 +61,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     onScrollStateChange?.(isNearBottom);
   }, [onScrollStateChange]);
 
-  // Handle scroll events
+  // Scroll event: notify external about scroll position
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -75,6 +77,41 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       container.removeEventListener('scroll', handleScroll);
     };
   }, [checkScrollPosition]);
+
+  // Scroll event: track whether user is at bottom for auto-scroll decisions
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleUserScroll = () => {
+      const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      autoScrollRef.current = distFromBottom < 50;
+    };
+
+    container.addEventListener('scroll', handleUserScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', handleUserScroll);
+    };
+  }, []);
+
+  // ResizeObserver: during streaming, auto-scroll when content grows and user is at bottom
+  useEffect(() => {
+    const inner = innerRef.current;
+    if (!inner) return;
+
+    const ro = new ResizeObserver(() => {
+      if (isStreaming && autoScrollRef.current) {
+        requestAnimationFrame(() => {
+          const container = containerRef.current;
+          if (!container) return;
+          container.scrollTop = container.scrollHeight;
+        });
+      }
+    });
+
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [isStreaming]);
 
   // Group assistant messages with their tool results
   // Merge messages from the same round (same seqIndex or consecutive assistant messages)
@@ -201,6 +238,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       prevMessagesLengthRef.current = 0;
       wasStreamingRef.current = false;
       hasScrolledOnMountRef.current = false;
+      autoScrollRef.current = true;
       setIsInitialLoading(true);
     }
   }, [sessionId]);
@@ -221,17 +259,29 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
         container.scrollTop = container.scrollHeight;
       }
       hasScrolledOnMountRef.current = true;
-      // Show content after scroll is done
+      // Show content after scroll is done — layout is correct now
       setIsInitialLoading(false);
     }
   }, [messages.length, sessionId]);
 
-  // Handle message additions and streaming state changes
+  // Scroll to bottom (exposed to parent)
+  const scrollToBottom = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    autoScrollRef.current = true;
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    scrollToBottom,
+  }), [scrollToBottom]);
+
+  // Handle message additions
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    // Messages loaded from empty (initial load or after session change) — scroll to bottom
+    // Messages loaded from empty (initial load or after session change) — handled by useLayoutEffect
     const wasEmpty = prevMessagesLengthRef.current === 0;
     const hasMessagesNow = messages.length > 0;
     if (wasEmpty && hasMessagesNow) {
@@ -239,16 +289,15 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       return;
     }
 
-    // New user message detected — scroll it to top of viewport
+    // New user message detected — scroll it to viewport (nearest edge, not forced top)
     if (messages.length > prevMessagesLengthRef.current) {
       const lastMsg = messages[messages.length - 1];
       if (lastMsg.role === 'user' && userMessageIdRef.current !== lastMsg.id) {
         userMessageIdRef.current = lastMsg.id;
-        // Defer to let DOM render the new message element
         requestAnimationFrame(() => {
           const el = container.querySelector(`[data-message-id="${lastMsg.id}"]`);
           if (el) {
-            el.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
+            el.scrollIntoView({ block: 'nearest', behavior: 'instant' as ScrollBehavior });
           } else {
             const lastEl = container.querySelector('[data-message-id]:last-of-type');
             if (lastEl) {
@@ -258,8 +307,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             }
           }
         });
-      } else {
-        // Non-user message added (e.g. assistant/tool) — scroll to bottom
+      } else if (autoScrollRef.current) {
+        // Non-user message added — scroll to bottom only if user is already there
         const lastEl = container.querySelector('[data-message-id]:last-of-type');
         if (lastEl) {
           lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
@@ -269,6 +318,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       }
     }
 
+    // Streaming just started — scroll to bottom
     if (isStreaming && !wasStreamingRef.current) {
       const lastEl = container.querySelector('[data-message-id]:last-of-type');
       if (lastEl) {
@@ -281,87 +331,6 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     prevMessagesLengthRef.current = messages.length;
     wasStreamingRef.current = isStreaming;
   }, [messages, isStreaming]);
-
-  // Intelligent auto-scroll during streaming
-  // Rules:
-  // 1. Streaming content -> auto-scroll to bottom
-  // 2. User scrolled up -> pause auto-scroll (show indicator)
-  // 3. User reaches bottom and stays idle -> resume auto-scroll
-  const isUserScrolledUpRef = useRef(false);
-  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scrollRafRef = useRef<number | null>(null);
-
-  // Reset idle state when user reaches bottom
-  const resetIdleTimer = useCallback(() => {
-    if (idleTimerRef.current) {
-      clearTimeout(idleTimerRef.current);
-    }
-    idleTimerRef.current = setTimeout(() => {
-      // After 2 seconds at bottom, resume auto-scroll
-      isUserScrolledUpRef.current = false;
-    }, 2000);
-  }, []);
-
-  // Handle user scroll - detect if scrolled away from bottom
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const handleUserScroll = () => {
-      const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-      const atBottom = distFromBottom < 50;
-
-      if (atBottom) {
-        // User reached bottom - reset idle timer
-        resetIdleTimer();
-        isUserScrolledUpRef.current = false;
-      } else {
-        // User scrolled away from bottom
-        isUserScrolledUpRef.current = true;
-        if (idleTimerRef.current) {
-          clearTimeout(idleTimerRef.current);
-        }
-      }
-    };
-
-    container.addEventListener('scroll', handleUserScroll, { passive: true });
-    return () => {
-      container.removeEventListener('scroll', handleUserScroll);
-      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-    };
-  }, [resetIdleTimer]);
-
-  // Continuous scroll during streaming
-  useEffect(() => {
-    if (!isStreaming) return;
-
-    const container = containerRef.current;
-    if (!container) return;
-
-    // Skip if user scrolled up and hasn't returned to bottom
-    if (isUserScrolledUpRef.current) return;
-
-    // Scroll to bottom with requestAnimationFrame for smooth typing effect
-    const scroll = () => {
-      if (!containerRef.current) return;
-
-      const lastEl = containerRef.current.querySelector('[data-message-id]:last-of-type');
-      if (lastEl) {
-        lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
-      } else {
-        containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      }
-    };
-
-    // Use RAF for smooth, non-blocking scroll
-    scrollRafRef.current = requestAnimationFrame(scroll);
-
-    return () => {
-      if (scrollRafRef.current) {
-        cancelAnimationFrame(scrollRafRef.current);
-      }
-    };
-  }, [isStreaming]);
 
 
 
@@ -379,7 +348,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       )}
 
       <div
-        className={`flex flex-col max-w-[800px] mx-auto px-4 transition-opacity duration-150 ${isInitialLoading ? 'opacity-0' : 'opacity-100'}`}
+        ref={innerRef}
+        className={`flex flex-col max-w-[800px] mx-auto px-4 ${isInitialLoading ? 'invisible' : ''}`}
       >
         {groupedMessages.map((group) => (
           <MessageItem

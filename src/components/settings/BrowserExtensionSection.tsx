@@ -13,11 +13,16 @@ import {
   ArrowsClockwiseIcon,
   PlusIcon,
   XIcon,
+  ChevronDownIcon,
+  FolderOpenIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useBrowserExtension } from '@/hooks/useBrowserExtension';
 import { useSettings } from '@/hooks/useSettings';
 import { SettingsSection, SettingsCard, SettingsRow } from '@/components/settings/ui';
+
+// Chrome Web Store extension URL
+const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
 
 const DOMAIN_PATTERN = /^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
 
@@ -43,6 +48,8 @@ export default function BrowserExtensionSection() {
     interval: 30000,
   });
   const [copied, setCopied] = useState(false);
+  const [showManualInstall, setShowManualInstall] = useState(false);
+  const [extensionPath, setExtensionPath] = useState('');
 
   // Browser Security state
   const [blockedDomains, setBlockedDomains] = useState<string[]>([]);
@@ -57,6 +64,14 @@ export default function BrowserExtensionSection() {
       setDomainError(null);
     }
   }, [settings.blockedDomains]);
+
+  useEffect(() => {
+    if (showManualInstall) {
+      window.electronAPI?.browserExtension?.getExtensionPath()
+        .then(setExtensionPath)
+        .catch(() => {});
+    }
+  }, [showManualInstall]);
 
   const handleAddDomain = useCallback(() => {
     if (!newDomain.trim()) return;
@@ -85,16 +100,27 @@ export default function BrowserExtensionSection() {
     setIsDirty(false);
   }, [blockedDomains, save]);
 
+  const handleOpenChromeStore = () => {
+    window.open(CHROME_STORE_URL, '_blank');
+  };
+
   const handleOpenExtensions = () => {
     window.open('chrome://extensions/', '_blank');
   };
 
+  const handleOpenFolder = () => {
+    if (extensionPath) {
+      window.electronAPI?.shell?.openPath(extensionPath);
+    }
+  };
+
   const handleCopyPath = useCallback(() => {
-    const path = '<DUYA_INSTALL_DIR>/extension/';
-    navigator.clipboard.writeText(path);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, []);
+    if (extensionPath) {
+      navigator.clipboard.writeText(extensionPath);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }, [extensionPath]);
 
   const getStatusConfig = () => {
     switch (status) {
@@ -237,45 +263,115 @@ export default function BrowserExtensionSection() {
             </p>
           </div>
 
-          <SettingsSection title={t('browserExtension.steps')}>
-            <SettingsCard>
-              {[
-                t('browserExtension.step1'),
-                t('browserExtension.step2'),
-                t('browserExtension.step3'),
-              ].map((step, idx) => (
-                <div key={idx} className="flex items-start gap-3 px-4 py-3">
-                  <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold bg-accent/10 text-accent shrink-0">
-                    {idx + 1}
-                  </div>
-                  <span className="text-sm leading-relaxed text-foreground pt-0.5">{step}</span>
-                </div>
-              ))}
-            </SettingsCard>
-          </SettingsSection>
+          {/* Chrome Web Store Install - Primary */}
+          {!showManualInstall && (
+            <>
+              <SettingsSection title={t('browserExtension.storeInstallTitle') || 'Install from Chrome Web Store'}>
+                <SettingsCard>
+                  {[
+                    t('browserExtension.storeStep1') || 'Click the button below to open Chrome Web Store',
+                    t('browserExtension.storeStep2') || 'Click "Add to Chrome" on the store page',
+                    t('browserExtension.storeStep3') || 'Confirm by clicking "Add extension"',
+                  ].map((step, idx) => (
+                    <div key={idx} className="flex items-start gap-3 px-4 py-3">
+                      <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold bg-accent/10 text-accent shrink-0">
+                        {idx + 1}
+                      </div>
+                      <span className="text-sm leading-relaxed text-foreground pt-0.5">{step}</span>
+                    </div>
+                  ))}
+                </SettingsCard>
+              </SettingsSection>
 
-          <SettingsSection title={t('browserExtension.extensionPath')}>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 px-4 py-3 rounded-lg text-xs font-mono truncate bg-surface border border-border/50 text-foreground">
-                {'<DUYA_INSTALL_DIR>/extension/'}
-              </code>
               <button
-                onClick={handleCopyPath}
-                className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all"
-                title={t('common.copy')}
+                onClick={handleOpenChromeStore}
+                className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
               >
-                {copied ? <CheckCircleIcon size={16} className="text-green-500" /> : <CopyIcon size={16} className="text-muted-foreground" />}
+                <ChromeIcon size={18} />
+                {t('browserExtension.openChromeStore') || 'Install from Chrome Web Store'}
+                <ExternalLinkIcon size={14} />
               </button>
-            </div>
-          </SettingsSection>
+            </>
+          )}
 
+          {/* Manual Install - Collapsible */}
+          {showManualInstall && (
+            <>
+              <SettingsSection title={t('browserExtension.manualInstallTitle') || 'Manual Installation'}>
+                <SettingsCard>
+                  {[
+                    t('browserExtension.step1') || 'Open Chrome and navigate to chrome://extensions/',
+                    t('browserExtension.step2') || 'Enable "Developer mode" in the top right corner',
+                    t('browserExtension.step3') || 'Click "Load unpacked" and select the extension folder',
+                  ].map((step, idx) => (
+                    <div key={idx} className="flex items-start gap-3 px-4 py-3">
+                      <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold bg-accent/10 text-accent shrink-0">
+                        {idx + 1}
+                      </div>
+                      <span className="text-sm leading-relaxed text-foreground pt-0.5">{step}</span>
+                    </div>
+                  ))}
+                </SettingsCard>
+              </SettingsSection>
+
+              <SettingsSection title={t('browserExtension.extensionPath')}>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 px-4 py-3 rounded-lg text-xs font-mono truncate bg-surface border border-border/50 text-foreground">
+                    {extensionPath || '<DUYA_INSTALL_DIR>/extension/'}
+                  </code>
+                  <button
+                    onClick={handleCopyPath}
+                    disabled={!extensionPath}
+                    className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
+                    title={t('common.copy')}
+                  >
+                    {copied ? <CheckCircleIcon size={16} className="text-green-500" /> : <CopyIcon size={16} className="text-muted-foreground" />}
+                  </button>
+                  <button
+                    onClick={handleOpenFolder}
+                    disabled={!extensionPath}
+                    className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
+                    title="Open folder"
+                  >
+                    <FolderOpenIcon size={16} className="text-muted-foreground" />
+                  </button>
+                </div>
+              </SettingsSection>
+
+              <button
+                onClick={handleOpenExtensions}
+                className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
+              >
+                <ChromeIcon size={18} />
+                {t('browserExtension.openChrome')}
+                <ExternalLinkIcon size={14} />
+              </button>
+            </>
+          )}
+
+          {/* Toggle between store and manual install */}
           <button
-            onClick={handleOpenExtensions}
-            className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
+            onClick={() => setShowManualInstall(!showManualInstall)}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs transition-colors"
+            style={{ 
+              color: 'var(--muted)',
+              backgroundColor: 'var(--surface)',
+            }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.backgroundColor = 'var(--surface-hover)')
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.backgroundColor = 'var(--surface)')
+            }
           >
-            <ChromeIcon size={18} />
-            {t('browserExtension.openChrome')}
-            <ExternalLinkIcon size={14} />
+            <ChevronDownIcon 
+              size={14} 
+              className={`transition-transform duration-200 ${showManualInstall ? 'rotate-180' : ''}`}
+            />
+            {showManualInstall 
+              ? (t('browserExtension.useStoreInstall') || 'Install from Chrome Web Store instead')
+              : (t('browserExtension.useManualInstall') || 'Can\'t access store? Use manual install')
+            }
           </button>
         </div>
       )}

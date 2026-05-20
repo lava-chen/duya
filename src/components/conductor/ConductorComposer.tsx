@@ -82,47 +82,83 @@ export function ConductorComposer() {
   useEffect(() => {
     if (!activeCanvasId) return;
 
-    const port = (window as any).electronAPI?.getConductorPort?.();
-    if (!port) return;
+    // Wait for conductor port to be ready (dispatched from preload after MessageChannel setup)
+    const handleConductorPortReady = () => {
+      console.log('[ConductorComposer] conductor-port-ready event received, time:', Date.now());
+      registerConductorHandlers();
+    };
 
+    // Check if port already exists (in case event already fired)
+    let port = (window as any).electronAPI?.getConductorPort?.();
+    console.log('[ConductorComposer] getConductorPort() result:', !!port, 'time:', Date.now());
+    if (port) {
+      // Port already ready, register handlers directly
+      registerConductorHandlers();
+    } else {
+      // Wait for port to be ready
+      window.addEventListener('conductor-port-ready', handleConductorPortReady);
+    }
+
+    function registerConductorHandlers() {
+      const port = (window as any).electronAPI?.getConductorPort?.();
+      if (!port) {
+        console.error('[ConductorComposer] ERROR: ConductorPort is null! Events will not be received.');
+        return;
+      }
+
+      console.log('[ConductorComposer] Registering conductor port handlers');
     const unsubText = port.onText((data: { content: string }) => {
+      console.log('[ConductorComposer] onText received:', data.content?.substring(0, 50));
       handleEvent('text', data);
     });
 
     const unsubThinking = port.onThinking((data: { content: string }) => {
+      console.log('[ConductorComposer] onThinking received');
       handleEvent('thinking', data);
     });
 
     const unsubToolUse = port.onToolUse((data: { id: string; name: string; input: unknown }) => {
+      console.log('[ConductorComposer] onToolUse received:', data.name);
       handleEvent('tool_use', data);
     });
 
     const unsubToolResult = port.onToolResult((data: { id: string; result: unknown; error?: boolean }) => {
+      console.log('[ConductorComposer] onToolResult received');
       handleEvent('tool_result', data);
       const resultStr = typeof data.result === "string" ? data.result : JSON.stringify(data.result);
       executeToolResult({ id: data.id, name: "", result: resultStr });
     });
 
     const unsubStatus = port.onStatus((data: { status: string }) => {
+      console.log('[ConductorComposer] onStatus received:', data.status);
       handleEvent('status', data);
     });
 
     const unsubError = port.onError((data: { message: string }) => {
+      console.error('[ConductorComposer] onError received:', data.message);
       handleEvent('error', data);
     });
 
     const unsubDone = port.onDone(() => {
+      console.log('[ConductorComposer] onDone received');
       handleEvent('done', {});
     });
 
+    console.log('[ConductorComposer] All handlers registered successfully');
+      return () => {
+        unsubText();
+        unsubThinking();
+        unsubToolUse();
+        unsubToolResult();
+        unsubStatus();
+        unsubError();
+        unsubDone();
+      };
+    }
+
+    // Cleanup function for event listener case
     return () => {
-      unsubText();
-      unsubThinking();
-      unsubToolUse();
-      unsubToolResult();
-      unsubStatus();
-      unsubError();
-      unsubDone();
+      window.removeEventListener('conductor-port-ready', handleConductorPortReady);
     };
   }, [activeCanvasId, handleEvent, executeToolResult]);
 

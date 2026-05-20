@@ -291,7 +291,7 @@ export function AutomationView() {
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4">
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Automation</h2>
+        <h2 className="automation-title-copernicus" style={{ color: 'var(--text)' }}>Automation</h2>
         <button
           className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
           style={{

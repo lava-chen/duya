@@ -190,6 +190,12 @@ export interface AdapterStatus {
   error?: string;
   /** Detailed health information */
   health?: AdapterHealth;
+  /** Display configuration tier info */
+  displayConfig?: {
+    streaming: boolean | null;
+    toolProgress: 'all' | 'new' | 'off';
+    showReasoning: boolean;
+  };
 }
 
 export interface GatewayStatus {
@@ -239,6 +245,7 @@ export type GatewayToMainMessage =
   | { type: 'gateway:error'; error: string }
   | { type: 'gateway:start:response'; id?: string; success: boolean; error?: string }
   | { type: 'gateway:stop:response'; id?: string; success: boolean; error?: string }
+  | { type: 'gateway:getStatus:response'; id?: string; status: GatewayStatus }
   | { type: 'gateway:reset_session'; id?: string; platform: PlatformType; platformChatId: string; platformUserId: string; platformMsgId: string };
 
 /** Main Process → Gateway */

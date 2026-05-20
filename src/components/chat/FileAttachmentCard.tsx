@@ -3,7 +3,6 @@ import { XIcon } from '../icons';
 interface FileAttachmentCardProps {
   id: string;
   name: string;
-  size: number;
   thumbnail?: string;
   onRemove?: (id: string) => void;
   width?: number;
@@ -12,7 +11,6 @@ interface FileAttachmentCardProps {
 export function FileAttachmentCard({
   id,
   name,
-  size,
   thumbnail,
   onRemove,
   width = 120,
@@ -21,8 +19,55 @@ export function FileAttachmentCard({
   const isPdf = ext === 'PDF';
   const hasThumbnail = !!thumbnail;
 
-  const sizeText = size > 0 ? `${(size / 1024).toFixed(1)} KB` : 'Document';
+  // For non-PDF files with thumbnail: show horizontal layout with name + ext badge + preview
+  const isHorizontalLayout = !isPdf && hasThumbnail;
 
+  if (isHorizontalLayout) {
+    return (
+      <div
+        className="relative flex items-stretch rounded-lg border border-border/50 bg-muted/30 overflow-hidden"
+        style={{ width: width * 2.2 }}
+      >
+        {onRemove && (
+          <button
+            type="button"
+            onClick={() => onRemove(id)}
+            className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/40 flex items-center justify-center hover:bg-black/60 transition-colors"
+          >
+            <XIcon size={10} className="text-white" />
+          </button>
+        )}
+
+        {/* Left side: File name and ext badge */}
+        <div className="flex-1 flex flex-col justify-between p-3 min-w-0">
+          <p
+            className="text-[13px] font-medium leading-tight line-clamp-2"
+            style={{ color: 'var(--text)' }}
+          >
+            {name}
+          </p>
+          <div className="px-2 py-1 rounded-md text-[10px] font-medium bg-white/90 text-gray-700 shadow-sm border border-gray-200 w-fit">
+            {ext}
+          </div>
+        </div>
+
+        {/* Right side: Thumbnail */}
+        <div
+          className="flex-shrink-0 overflow-hidden"
+          style={{ width: width, height: width }}
+        >
+          <img
+            src={thumbnail}
+            alt={name}
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // PDF or files without thumbnail: vertical layout with square preview
   return (
     <div
       className="relative flex flex-col items-center rounded-lg border border-border/50 bg-muted/30 overflow-hidden"
@@ -41,7 +86,7 @@ export function FileAttachmentCard({
       {/* Thumbnail / Preview Area */}
       <div
         className="flex-shrink-0 w-full flex items-center justify-center overflow-hidden relative"
-        style={{ height: width * 0.85 }}
+        style={{ height: width }}
       >
         {hasThumbnail ? (
           <>
@@ -53,7 +98,7 @@ export function FileAttachmentCard({
             />
             {/* PDF badge overlay */}
             {isPdf && (
-              <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-black/60 text-white/90 backdrop-blur-sm">
+              <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md text-[10px] font-medium bg-white/90 text-gray-700 shadow-sm border border-gray-200">
                 PDF
               </div>
             )}
@@ -75,19 +120,6 @@ export function FileAttachmentCard({
             </span>
           </div>
         )}
-      </div>
-
-      {/* File info */}
-      <div className="w-full px-2.5 py-2 min-w-0">
-        <p
-          className="text-[11px] font-medium truncate"
-          style={{ color: 'var(--text)' }}
-        >
-          {name}
-        </p>
-        <p className="text-[10px] text-muted-foreground truncate">
-          {sizeText}
-        </p>
       </div>
     </div>
   );

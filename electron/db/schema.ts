@@ -166,6 +166,18 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS threads (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'New Chat',
+      provider_type TEXT NOT NULL DEFAULT 'gateway',
+      model TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC)`);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS channel_offsets (
       channel_type TEXT NOT NULL,
       offset_key TEXT NOT NULL,

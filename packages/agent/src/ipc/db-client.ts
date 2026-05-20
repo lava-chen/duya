@@ -350,6 +350,40 @@ export const projectDb = {
   getGroups: () => sendDbRequest('project:getGroups', {}),
 };
 
+// ==================== Research Session Operations ====================
+
+export const researchSessionDb = {
+  create: (data: {
+    id: string;
+    session_id: string;
+    original_query: string;
+    clarification?: string;
+    context_json: string;
+    status?: 'active' | 'completed' | 'aborted';
+  }) => sendDbRequest('researchSession:create', data),
+
+  get: (id: string) => sendDbRequest('researchSession:get', { id }),
+
+  getBySessionId: (sessionId: string) =>
+    sendDbRequest('researchSession:getBySessionId', { sessionId }),
+
+  update: (id: string, data: {
+    clarification?: string;
+    context_json?: string;
+    status?: 'active' | 'completed' | 'aborted';
+    current_phase?: string;
+    iterations?: number;
+    coverage?: number;
+  }) => sendDbRequest('researchSession:update', { id, ...data }),
+
+  delete: (id: string) => sendDbRequest('researchSession:delete', { id }),
+
+  list: (limit?: number) => sendDbRequest('researchSession:list', { limit }),
+
+  listByStatus: (status: 'active' | 'completed' | 'aborted') =>
+    sendDbRequest('researchSession:listByStatus', { status }),
+};
+
 // ==================== Automation Operations ====================
 
 export const automationDb = {
