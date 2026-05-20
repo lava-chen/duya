@@ -11,6 +11,7 @@ import { getConfigManager, type ApiProvider } from '../config/manager';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
 import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
+import { getPairingStore } from '../gateway/pairing';
 
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 
@@ -407,42 +408,8 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
       try {
         let session = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
-                if (!session) {
-          // Auto-create session if it doesn't exist (happens when frontend creates session without DB entry first)
-                    db.prepare(`
-            INSERT INTO chat_sessions (
-              id, title, model, system_prompt, working_directory,
-              project_name, status, mode, provider_id, generation,
-              parent_id, agent_type, agent_name,
-              created_at, updated_at, is_deleted
-            ) VALUES (
-              @id, @title, @model, @system_prompt, @working_directory,
-              @project_name, @status, @mode, @provider_id, @generation,
-              @parent_id, @agent_type, @agent_name,
-              @created_at, @updated_at, 0
-            )
-          `).run({
-            id: sessionId,
-            title: 'New Chat',
-            model: '',
-            system_prompt: '',
-            working_directory: '',
-            project_name: '',
-            status: 'active',
-            mode: 'code',
-            provider_id: 'env',
-            generation: 0,
-            parent_id: null,
-            agent_type: 'main',
-            agent_name: '',
-            created_at: now,
-            updated_at: now,
-          });
-          const newSession = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
-          if (!newSession) {
-                        return { success: false, reason: 'session_not_found' };
-          }
-                    session = newSession;
+        if (!session) {
+          return { success: false, reason: 'session_not_found' };
         }
         if (generation < session.generation) {
                     return { success: false, reason: 'stale_generation' };
@@ -1014,7 +981,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'config:vision:set': {
       const cm = getConfigManager();
       const current = cm.getVisionSettings();
-      const merged = { ...current, ...p as Record<string, unknown> };
+      const merged = { ...current, ...p as Record<string, unknown>, enabled: true };
       cm.setConfig('visionSettings', merged, 'agent');
       return { ok: true };
     }
@@ -1225,6 +1192,93 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           created_at: row.created_at,
         };
       });
+    }
+
+    // ==================== Research Session actions (Plan 60 - Research Mode) ====================
+    case 'researchSession:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_sessions (
+          id, session_id, original_query, clarification, context_json,
+          status, current_phase, iterations, coverage, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'idle', 0, 0, ?, ?)
+      `).run(
+        p.id, p.session_id, p.original_query, p.clarification || null,
+        p.context_json, p.status || 'active', now, now
+      );
+      return db.prepare('SELECT * FROM research_sessions WHERE id = ?').get(p.id);
+    }
+
+    case 'researchSession:get': {
+      return db.prepare('SELECT * FROM research_sessions WHERE id = ?').get(p.id);
+    }
+
+    case 'researchSession:getBySessionId': {
+      return db.prepare(
+        'SELECT * FROM research_sessions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1'
+      ).get(p.sessionId);
+    }
+
+    case 'researchSession:update': {
+      const id = p.id as string;
+      const now = Date.now();
+      const fields: string[] = ['updated_at = ?'];
+      const params: unknown[] = [now];
+
+      if (p.clarification !== undefined) { fields.push('clarification = ?'); params.push(p.clarification); }
+      if (p.context_json !== undefined) { fields.push('context_json = ?'); params.push(p.context_json); }
+      if (p.status !== undefined) { fields.push('status = ?'); params.push(p.status); }
+      if (p.current_phase !== undefined) { fields.push('current_phase = ?'); params.push(p.current_phase); }
+      if (p.iterations !== undefined) { fields.push('iterations = ?'); params.push(p.iterations); }
+      if (p.coverage !== undefined) { fields.push('coverage = ?'); params.push(p.coverage); }
+      params.push(id);
+
+      db.prepare(`UPDATE research_sessions SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+      return db.prepare('SELECT * FROM research_sessions WHERE id = ?').get(id);
+    }
+
+    case 'researchSession:delete': {
+      const result = db.prepare('DELETE FROM research_sessions WHERE id = ?').run(p.id);
+      return { success: result.changes > 0 };
+    }
+
+    case 'researchSession:list': {
+      const limit = (p.limit as number) || 100;
+      return db.prepare('SELECT * FROM research_sessions ORDER BY updated_at DESC LIMIT ?').all(limit);
+    }
+
+    case 'researchSession:listByStatus': {
+      return db.prepare(
+        'SELECT * FROM research_sessions WHERE status = ? ORDER BY updated_at DESC'
+      ).all(p.status);
+    }
+
+    case 'pairing:listPending': {
+      const store = getPairingStore();
+      return store.listAllPending();
+    }
+
+    case 'pairing:listApproved': {
+      const store = getPairingStore();
+      return store.listApproved();
+    }
+
+    case 'pairing:approve': {
+      if (!p.platform || !p.code) throw new Error('Missing platform or code');
+      const store = getPairingStore();
+      return store.approve(p.platform as string, p.code as string);
+    }
+
+    case 'pairing:revoke': {
+      if (!p.platform || !p.platformUserId) throw new Error('Missing platform or platformUserId');
+      const store = getPairingStore();
+      return store.revoke(p.platform as string, p.platformUserId as string);
+    }
+
+    case 'pairing:isApproved': {
+      if (!p.platform || !p.platformUserId) throw new Error('Missing platform or platformUserId');
+      const store = getPairingStore();
+      return { approved: store.isApproved(p.platform as string, p.platformUserId as string) };
     }
 
     default:

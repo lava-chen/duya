@@ -31,6 +31,7 @@ import type { PromptProfile } from './modes/types.js'
 
 import { getIntroSection } from './sections/intro.js'
 import { getSystemSection } from './sections/system.js'
+import { getGeneralTaskGuidanceSection } from './sections/generalTaskGuidance.js'
 import { getTaskHandlingSection } from './sections/taskHandling.js'
 import { getActionsSection } from './sections/actions.js'
 import { getToolUsageSection } from './sections/toolUsage.js'
@@ -48,6 +49,7 @@ import { getSessionSearchSection } from './sections/dynamic/sessionSearchSection
 import { getMemorySection } from './sections/dynamic/memorySection.js'
 import { getMemoryContextSection } from './sections/dynamic/memoryContextSection.js'
 import { getWidgetGuidelinesSection } from './sections/dynamic/widgetGuidelines.js'
+import { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
 import { buildConductorCanvasSection } from './sections/dynamic/conductorCanvas.js'
 import { getMemoryManager } from '../memory/index.js'
 import { getShellForPrompt } from '../utils/shellDetector.js'
@@ -132,6 +134,7 @@ export class PromptManager {
     const staticSections: PromptSection[] = [
       maybeCached('intro', () => getIntroSection(context)),
       maybeCached('system', () => getSystemSection(context)),
+      maybeCached('generalTaskGuidance', () => getGeneralTaskGuidanceSection(context)),
       ...(keepCodingInstructions && enabledSectionNames.has('taskHandling')
         ? [cachedPromptSection('taskHandling', () => getTaskHandlingSection(context))]
         : []),
@@ -159,6 +162,7 @@ export class PromptManager {
       maybeVolatile('sessionSearch', () => getSessionSearchSection(context), 'Session search guidance for recalling past conversations'),
       maybeVolatile('memoryContext', () => getMemoryContextSection(context), 'Memory prefetch based on user query'),
       maybeVolatile('widgetGuidelines', () => getWidgetGuidelinesSection(context), 'Widget creation guidelines for generative UI'),
+      maybeVolatile('visionGuidelines', () => getVisionGuidelinesSection(context), 'Vision tool guidelines for image analysis'),
       maybeVolatile('conductorCanvas', () => buildConductorCanvasSection(context), 'Canvas workspace context for conductor profile'),
     ].filter((s): s is PromptSection => s !== null)
 
@@ -224,6 +228,14 @@ export class PromptManager {
       userType: this.options.userType,
       outputStyleConfig: this.options.outputStyleConfig,
       communicationPlatform: this.options.communicationPlatform,
+      isWorktree: this.options.isWorktree,
+      isNonInteractiveSession: this.options.isNonInteractiveSession,
+      isReplModeEnabled: this.options.isReplModeEnabled,
+      hasEmbeddedSearchTools: this.options.hasEmbeddedSearchTools,
+      isForkSubagentEnabled: this.options.isForkSubagentEnabled,
+      isVerificationAgentEnabled: this.options.isVerificationAgentEnabled,
+      isSkillSearchEnabled: this.options.isSkillSearchEnabled,
+      scratchpadDir: this.options.scratchpadDir,
     }
 
     return context

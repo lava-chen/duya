@@ -26,7 +26,7 @@ export const DEFAULT_PROMPT_PROFILE: PromptProfile = { base: 'full' }
  */
 export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig> = {
   full: {
-    enable: ['intro', 'system', 'taskHandling', 'actions', 'toolUsage', 'toneAndStyle', 'outputEfficiency', 'memory', 'skills', 'mcp', 'sessionGuidance', 'widgetGuidelines', 'platform'],
+    enable: ['intro', 'system', 'taskHandling', 'actions', 'toolUsage', 'toneAndStyle', 'outputEfficiency', 'memory', 'skills', 'mcp', 'sessionGuidance', 'widgetGuidelines', 'visionGuidelines', 'platform'],
     disable: [],
   },
   minimal: {

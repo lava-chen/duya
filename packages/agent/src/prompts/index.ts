@@ -49,6 +49,7 @@ export {
 
 export type { PromptBaseMode, PromptOverlay, PromptProfile } from './modes/types.js'
 export { getSystemSection } from './sections/system.js'
+export { getGeneralTaskGuidanceSection } from './sections/generalTaskGuidance.js'
 export { getTaskHandlingSection } from './sections/taskHandling.js'
 export { getActionsSection } from './sections/actions.js'
 export { getToolUsageSection } from './sections/toolUsage.js'
@@ -71,6 +72,9 @@ export {
 
 // Widget Guidelines
 export { getWidgetGuidelinesSection } from './sections/dynamic/widgetGuidelines.js'
+
+// Vision Guidelines
+export { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
 
 // Platform Hints
 export { getPlatformHint, hasPlatformCapability, PLATFORM_HINTS } from './platformHints.js'

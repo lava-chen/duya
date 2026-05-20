@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import type { AppSettings } from "@/types";
+import type { AppSettings, VisionLLMConfig } from "@/types";
 import { getAllSettingsIPC } from "@/lib/ipc-client";
 
 /**
@@ -87,11 +87,35 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       // Notification settings
       notificationsEnabled: raw.notificationsEnabled !== "false",
       soundEffectsEnabled: raw.soundEffectsEnabled !== "false",
-      // Vision model settings
-      visionLLMConfig: raw.visionLLMConfig && raw.visionLLMConfig !== "null"
-        ? JSON.parse(raw.visionLLMConfig)
-        : defaults.visionLLMConfig,
-      visionLLMEnabled: raw.visionLLMEnabled === "true",
+      // Vision model settings - read from visionSettings for backend compatibility
+      visionLLMConfig: (() => {
+        // Try visionSettings first (backend format), then fall back to visionLLMConfig
+        const rawConfig = raw.visionSettings || raw.visionLLMConfig;
+        if (rawConfig && rawConfig !== "null") {
+          try {
+            const parsed = JSON.parse(rawConfig);
+            return {
+              provider: parsed.provider || '',
+              model: parsed.model || '',
+              baseURL: parsed.baseUrl || parsed.baseURL || '', // Handle both formats
+              apiKey: parsed.apiKey || '',
+              enabled: parsed.enabled ?? false,
+            };
+          } catch {
+            return defaults.visionLLMConfig;
+          }
+        }
+        return defaults.visionLLMConfig;
+      })(),
+      visionLLMEnabled: raw.visionSettings
+        ? (() => {
+          try {
+            return JSON.parse(raw.visionSettings).enabled ?? false;
+          } catch {
+            return false;
+          }
+        })()
+        : raw.visionLLMEnabled === "true",
       // Gateway model settings - handle both plain string and JSON-stringified string, with modelSelection fallback
       gatewayModel: (() => {
         const val = raw.gatewayModel ?? modelSelection?.gatewayModel;
@@ -201,7 +225,34 @@ export function useSettings(): {
     try {
       setError(null);
       const raw = await getAllSettingsIPC();
-      setSettings(parseAppSettings(raw));
+      const parsed = parseAppSettings(raw);
+
+      // 使用 ConfigManager API 读取 vision 设置（统一存储）
+      if (typeof window !== 'undefined' && window.electronAPI?.vision?.get) {
+        try {
+          const visionConfig = await window.electronAPI.vision.get() as {
+            provider?: string;
+            model?: string;
+            baseUrl?: string;
+            apiKey?: string;
+            enabled?: boolean;
+          } | null;
+          if (visionConfig) {
+            parsed.visionLLMConfig = {
+              provider: visionConfig.provider || '',
+              model: visionConfig.model || '',
+              baseURL: visionConfig.baseUrl || '',
+              apiKey: visionConfig.apiKey || '',
+              enabled: visionConfig.enabled ?? false,
+            };
+            parsed.visionLLMEnabled = visionConfig.enabled ?? false;
+          }
+        } catch {
+          // 读取失败，使用 SQLite 中的数据作为 fallback
+        }
+      }
+
+      setSettings(parsed);
     } catch {
       setError("Failed to load settings");
     } finally {
@@ -219,7 +270,44 @@ export function useSettings(): {
     try {
       if (typeof window !== 'undefined' && window.electronAPI?.settingsDb?.setJson) {
         for (const [key, value] of Object.entries(updates)) {
-          await window.electronAPI.settingsDb.setJson(key, value);
+          // Use ConfigManager-backed API for vision settings (统一存储)
+          if (key === 'visionLLMConfig' && value) {
+            const config = value as VisionLLMConfig;
+            if (window.electronAPI.vision?.set) {
+              await window.electronAPI.vision.set({
+                provider: config.provider,
+                model: config.model,
+                baseUrl: config.baseURL,
+                apiKey: config.apiKey,
+                enabled: config.enabled,
+              });
+            } else {
+              // Fallback: 直接写入 SQLite
+              await window.electronAPI.settingsDb.setJson('visionSettings', {
+                provider: config.provider,
+                model: config.model,
+                baseUrl: config.baseURL,
+                apiKey: config.apiKey,
+                enabled: config.enabled,
+              });
+            }
+          } else if (key === 'visionLLMEnabled') {
+            if (window.electronAPI.vision?.set) {
+              await window.electronAPI.vision.set({ enabled: value as boolean });
+            } else {
+              // Fallback
+              const currentSettings = await window.electronAPI.settingsDb.get('visionSettings');
+              if (currentSettings) {
+                const parsed = typeof currentSettings === 'string' ? JSON.parse(currentSettings) : currentSettings;
+                await window.electronAPI.settingsDb.setJson('visionSettings', {
+                  ...parsed,
+                  enabled: value,
+                });
+              }
+            }
+          } else {
+            await window.electronAPI.settingsDb.setJson(key, value);
+          }
         }
         const raw = await getAllSettingsIPC();
         setSettings(parseAppSettings(raw));

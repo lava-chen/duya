@@ -248,5 +248,26 @@ export function registerAgentHandlers(): void {
     return configManager.deleteOutputStyle(id);
   });
 
+  // ==================== Vision handlers ====================
+  ipcMain.handle('config:vision:get', () => {
+    const configManager = getConfigManager();
+    return configManager.getVisionSettings();
+  });
+
+  ipcMain.handle('config:vision:set', (_event, data: { provider?: string; model?: string; baseURL?: string; apiKey?: string; enabled?: boolean }) => {
+    const configManager = getConfigManager();
+    const current = configManager.getVisionSettings();
+    const merged = {
+      ...current,
+      ...data,
+      // Normalize baseURL -> baseUrl for ConfigManager
+      baseUrl: data.baseURL || current.baseUrl,
+    };
+    // Remove baseURL from merged since ConfigManager uses baseUrl
+    delete (merged as Record<string, unknown>).baseURL;
+    configManager.setConfig('visionSettings', merged, 'renderer');
+    return configManager.getVisionSettings();
+  });
+
   getLogger().info('Agent handlers registered', undefined, LogComponent.AgentCommunicator);
 }
