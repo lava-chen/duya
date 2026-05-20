@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { readFile } from 'node:fs/promises';
 import { appendMessages, storeParsedDocumentAttachment, getParsedDocumentAttachmentsForSession } from '../session/db.js';
 import { buildAttachmentContext } from '../llm/attachment-context.js';
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
@@ -32,19 +33,8 @@ import { setConductorCanvasState } from '../prompts/sections/dynamic/conductorCa
 import { duyaAgent } from '../index.js';
 import { sendEvent, parseStdin } from './worker-protocol.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
-
-// CDN domains that should not be used as inline images
-const CDN_IMAGE_PATTERNS = [
-  /https?:\/\/[^\s]*\.oss-cn-[a-z0-9-]+\.aliyuncs\.com[^\s]*/i,
-  /https?:\/\/[^\s]*\.minimax\.io[^\s]*/i,
-  /https?:\/\/[^\s]*\.minimaxi\.com[^\s]*/i,
-  /https?:\/\/[^/]*\.alicdn\.com[^\s]*/i,
-  /https?:\/\/[^/]*\.aliyuncs\.com[^\s]*/i,
-];
-
-function isCDNImageUrl(url: string): boolean {
-  return CDN_IMAGE_PATTERNS.some(pattern => pattern.test(url));
-}
+import { isCDNImageUrl } from '../utils/urlSafety.js';
+import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -574,8 +564,12 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
 // ============================================================================
 
 // Send events via stdout JSON lines (worker-protocol.ts)
+// Events go to BOTH channels:
+//   - process.send() (IPC) for DB requests, permissions, RPC
+//   - sendEvent() (stdout) for the SSE stream handler in router.ts
 function sendToMain(msg: Record<string, unknown>): void {
-  sendEvent({ ...msg, _logger: 'agent-process' });
+  process.send?.(msg);
+  sendEvent(msg);
 }
 
 function findToolResultBlocks(m: Message): boolean {
@@ -752,6 +746,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     hasOptionsMessages: Array.isArray(msg.options?.messages),
     optionsMessageCount: Array.isArray(msg.options?.messages) ? msg.options?.messages.length : 0,
     hasFiles: Array.isArray(msg.options?.files) && msg.options.files.length > 0,
+    filesKeys: msg.options?.files?.[0] ? Object.keys(msg.options.files[0]) : [],
+    firstFileHasText: msg.options?.files?.[0] ? 'text' in msg.options.files[0] : false,
+    firstFileTextLength: msg.options?.files?.[0]?.text?.length ?? 'N/A',
+    firstFileRaw: msg.options?.files?.[0] ? JSON.stringify(msg.options.files[0]).substring(0, 200) : 'N/A',
   });
 
   try {
@@ -772,63 +770,164 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     console.error('[DEBUG] first file text length:', msg.options?.files?.[0]?.text?.length);
     console.error('[DEBUG] docFiles count:', (msg.options?.files || []).filter((f: FileAttachment) => f.path || f.text).length);
     const docFiles = (files || []).filter(f => f.path || f.text);
-    let messageContent: string | MessageContent[] = msg.prompt;
+    const imageFiles = (files || []).filter(f => f.type.startsWith('image/') || f.type.startsWith('img/'));
+    console.error('[DEBUG] imageFiles count:', imageFiles.length, 'types:', imageFiles.map(f => f.type));
 
-    // Collect image file paths for vision tool notification
-    const imageFilePaths: string[] = [];
-    const imagesNeedingVision: Array<{ path: string; name: string }> = [];
-
-    if (files && files.length > 0) {
-      const contentBlocks: MessageContent[] = [
-        { type: 'text', text: msg.prompt }
-      ];
-      for (const file of files) {
-        if (file.type.startsWith('image/')) {
-          // Check if we have base64 data or data URL
-          if (file.url.startsWith('data:')) {
-            // Legacy: data URL with base64
-            const base64Data = file.url.split(',')[1];
-            const mediaType = file.type;
-            contentBlocks.push({
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: mediaType,
-                data: base64Data,
-              },
-            });
-          } else if (file.base64) {
-            // Legacy: explicit base64 field
-            contentBlocks.push({
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: file.type,
-                data: file.base64,
-              },
-            });
-          } else if (file.url && !file.url.startsWith('data:')) {
-            // File path - check if it's a CDN/external URL (not supported as image)
-            if (isCDNImageUrl(file.url)) {
-              warn('[Agent-Process] Image file has CDN URL (not supported as image):', file.name);
-              // Add path notification so LLM knows about the image
-              imageFilePaths.push(file.url);
-              imagesNeedingVision.push({ path: file.url, name: file.name });
+    // Pre-analyze user-attached images with the configured vision model.
+    // Mirrors hermes-agent design: a dedicated vision model analyzes images
+    // and the text description is passed to the main LLM as context.
+    // Original image content blocks are still included for natively
+    // multimodal-capable models (e.g. Claude, GPT-4V).
+    console.error('[DEBUG] Vision config check:', {
+      hasAgent: !!agent,
+      hasAnalyzeImage: agent ? typeof (agent as Record<string, unknown>).analyzeImage === 'function' : false,
+      imageFilesCount: imageFiles.length,
+    });
+    let preAnalysisText = '';
+    let visionAnalysisFailed = false;
+    if (imageFiles.length > 0 && agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function') {
+      for (const file of imageFiles) {
+        let base64Data = '';
+        if (file.url.startsWith('data:')) {
+          base64Data = file.url.split(',')[1] || '';
+        } else if ((file as unknown as Record<string, string>).base64) {
+          base64Data = (file as unknown as Record<string, string>).base64;
+        } else if (file.url && !file.url.startsWith('data:') && !isCDNImageUrl(file.url)) {
+          try {
+            const imgBuffer = await readFile(file.url);
+            // Compress image if needed before vision analysis
+            if (needsResizing(imgBuffer)) {
+              try {
+                const resized = await resizeImageBuffer(imgBuffer);
+                base64Data = resized.buffer.toString('base64');
+                log(`[Agent-Process] Compressed image "${file.name}": ${imgBuffer.length} → ${resized.buffer.length} bytes`);
+              } catch (resizeErr) {
+                warn(`[Agent-Process] Image compression failed for "${file.name}", using original:`, resizeErr);
+                base64Data = imgBuffer.toString('base64');
+              }
             } else {
-              // Local file path - track for vision tool notification
-              imageFilePaths.push(file.url);
-              imagesNeedingVision.push({ path: file.url, name: file.name });
+              base64Data = imgBuffer.toString('base64');
             }
-          } else {
-            warn('[Agent-Process] Image file has no URL or base64 data:', file.name);
+          } catch {
+            // ignore read failure, image block is still added below
+          }
+        }
+
+        if (base64Data) {
+          try {
+            const result = await (agent as unknown as { analyzeImage: (b64: string, mt: string) => Promise<string> }).analyzeImage(base64Data, file.type);
+            if (result) {
+              preAnalysisText += `\n\n[Image: "${file.name}"]\n${result}`;
+              log(`[Agent-Process] Vision analysis: "${file.name}" — ${result.length} chars`);
+            }
+          } catch (err) {
+            // Mark vision analysis as failed so we can notify the user
+            visionAnalysisFailed = true;
+            warn(`[Agent-Process] Vision analysis failed for "${file.name}":`, err);
           }
         }
       }
+    }
+
+    let effectivePrompt = msg.prompt;
+    if (preAnalysisText) {
+      effectivePrompt = msg.prompt
+        ? `${msg.prompt}\n\n--- Image Analysis (auto-generated) ---${preAnalysisText}`
+        : `The user sent an image. Here is a detailed description generated by an AI vision model:\n${preAnalysisText}\n\nPlease help the user based on the image description above.`;
+    }
+
+    let messageContent: string | MessageContent[] = effectivePrompt;
+
+    if (files && files.length > 0) {
+      const contentBlocks: MessageContent[] = [];
+      const imageBlocks: MessageContent[] = [];
+
+      // First add text block if there's actual text
+      if (effectivePrompt && effectivePrompt.trim()) {
+        contentBlocks.push({ type: 'text', text: effectivePrompt });
+      }
+
+      for (const file of files) {
+        if (file.type.startsWith('image/') || file.type.startsWith('img/')) {
+          console.error('[DEBUG] Processing image file:', {
+            name: file.name,
+            urlPrefix: file.url.substring(0, 50),
+            hasDataUrl: file.url.startsWith('data:'),
+            hasBase64: !!file.base64,
+            hasUrl: !!file.url,
+            isCDN: isCDNImageUrl(file.url),
+            path: file.path,
+          });
+
+          let imageBase64: string | null = null;
+          let imageMediaType = file.type;
+
+          // Check if we have base64 data or data URL
+          if (file.url.startsWith('data:')) {
+            // Legacy: data URL with base64
+            imageBase64 = file.url.split(',')[1];
+            console.error('[DEBUG] Added image via data URL, base64 length:', imageBase64?.length);
+          } else if (file.base64) {
+            // Legacy: explicit base64 field
+            imageBase64 = file.base64;
+            console.error('[DEBUG] Added image via base64 field');
+          } else if (file.url && !file.url.startsWith('data:')) {
+            // File path - check if it's a CDN/external URL (not supported as image)
+            if (isCDNImageUrl(file.url)) {
+              warn('[Agent-Process] Skipping CDN image URL:', file.name);
+              console.error('[DEBUG] Skipped CDN image URL:', file.url);
+            } else {
+              // Local file path - read and inline as image content block
+              try {
+                console.error('[DEBUG] Reading local image from path:', file.url);
+                const imgBuffer = await readFile(file.url);
+
+                // Compress image if needed to meet API limits
+                if (needsResizing(imgBuffer)) {
+                  try {
+                    const resized = await resizeImageBuffer(imgBuffer, TARGET_IMAGE_SIZE_BYTES);
+                    imageBase64 = resized.buffer.toString('base64');
+                    imageMediaType = resized.mediaType;
+                    log(`[Agent-Process] Compressed image "${file.name}": ${imgBuffer.length} → ${resized.buffer.length} bytes`);
+                    console.error('[DEBUG] Compressed local image, base64 length:', imageBase64.length);
+                  } catch (resizeErr) {
+                    warn(`[Agent-Process] Image compression failed for "${file.name}", using original:`, resizeErr);
+                    imageBase64 = imgBuffer.toString('base64');
+                  }
+                } else {
+                  imageBase64 = imgBuffer.toString('base64');
+                }
+                log('[Agent-Process] Inlined local image:', file.name);
+                console.error('[DEBUG] Successfully read local image, base64 length:', imageBase64.length);
+              } catch (err) {
+                warn('[Agent-Process] Failed to read local image:', file.name, err);
+                console.error('[DEBUG] Failed to read local image:', err);
+              }
+            }
+          } else {
+            warn('[Agent-Process] Image file has no URL or base64 data:', file.name);
+            console.error('[DEBUG] Image has no URL or base64, name:', file.name);
+          }
+
+          // Add image block if we have data
+          if (imageBase64) {
+            imageBlocks.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: imageMediaType,
+                data: imageBase64,
+              },
+            });
+          }
+        }
+      }
+
       // Also add document-extracted images (e.g. scanned PDF with embedded images)
       for (const doc of docFiles) {
         if (doc.imageChunks) {
           for (const img of doc.imageChunks) {
-            contentBlocks.push({
+            imageBlocks.push({
               type: 'image',
               source: {
                 type: 'base64',
@@ -839,16 +938,23 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           }
         }
       }
-      messageContent = contentBlocks;
+
+      // Assemble: text first, then images
+      messageContent = [...contentBlocks, ...imageBlocks];
     } else if (docFiles.some(d => d.imageChunks?.length)) {
       // No direct file attachments, but parsed documents contain extracted images
-      const contentBlocks: MessageContent[] = [
-        { type: 'text', text: msg.prompt }
-      ];
+      const contentBlocks: MessageContent[] = [];
+      const imageBlocks: MessageContent[] = [];
+
+      // Text first (filter empty)
+      if (effectivePrompt && effectivePrompt.trim()) {
+        contentBlocks.push({ type: 'text', text: effectivePrompt });
+      }
+
       for (const doc of docFiles) {
         if (doc.imageChunks) {
           for (const img of doc.imageChunks) {
-            contentBlocks.push({
+            imageBlocks.push({
               type: 'image',
               source: {
                 type: 'base64',
@@ -859,29 +965,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           }
         }
       }
-      messageContent = contentBlocks;
+      messageContent = [...contentBlocks, ...imageBlocks];
     }
 
-    // Add vision tool notification for image files without base64
-    if (imagesNeedingVision.length > 0) {
-      const visionNote = imagesNeedingVision.map(img =>
-        `[Image file: ${img.name}]\nPath: ${img.path}`
-      ).join('\n\n');
-      const toolNote = '\n\n---\nYou can use the vision_analyze tool to examine these images. Example: vision_analyze({image_path: "/path/to/image.png"})';
-
-      if (typeof messageContent === 'string') {
-        messageContent += '\n\n' + visionNote + toolNote;
-      } else {
-        // Append to text block
-        const textBlock = messageContent.find(b => b.type === 'text');
-        if (textBlock) {
-          (textBlock as { text: string }).text += '\n\n' + visionNote + toolNote;
-        } else {
-          messageContent.push({ type: 'text', text: visionNote + toolNote });
-        }
-      }
-      log('[Agent-Process] Added vision tool notification for', imagesNeedingVision.length, 'image files');
-    }
+    // Silently skip images that could not be auto-inlined.
+    // CDN URLs are inaccessible; local file read failures shouldn't
+    // prompt the LLM to try other tools (vision_analyze is deregistered,
+    // read_file can't handle images). The LLM simply won't see these images.
 
     // Assemble attachment context before passing to streamChat so LLM clients
     // receive fully assembled messages without needing attachment awareness
@@ -1188,21 +1278,44 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
   log('[Agent-Process] handleConductorStart:', { sessionId: msg.sessionId, promptLength: msg.prompt.length });
 
   try {
+    log('[Agent-Process] handleConductorStart: starting...');
+
     startChatHeartbeat();
     sendToMain({ type: 'conductor:status', sessionId: msg.sessionId, status: 'streaming' });
 
-    log('[Agent-Process] Starting conductor streamChat with profile: conductor');
-    const stream = conductorAgent.streamChat(msg.prompt, {
-      agentProfileId: 'conductor',
-      conductorIpc: {
-        sendToMain,
-        ipcRequest: conductorIpcRequest,
-      },
-    });
-    log('[Agent-Process] streamChat generator created, iterating...');
+    log('[Agent-Process] handleConductorStart: calling streamChat...');
+    log('[Agent-Process] handleConductorStart: conductorAgent exists:', !!conductorAgent);
+    log('[Agent-Process] handleConductorStart: conductorAgent type:', typeof conductorAgent);
+    log('[Agent-Process] handleConductorStart: prompt length:', msg.prompt.length);
+
+    let stream;
+    try {
+      stream = conductorAgent.streamChat(msg.prompt, {
+        agentProfileId: 'conductor',
+        conductorIpc: {
+          sendToMain,
+          ipcRequest: conductorIpcRequest,
+        },
+      });
+      log('[Agent-Process] streamChat generator created successfully');
+    } catch (err) {
+      log('[Agent-Process] streamChat creation FAILED:', err);
+      sendToMain({
+        type: 'conductor:error',
+        sessionId: msg.sessionId,
+        message: `streamChat creation failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      stopChatHeartbeat();
+      return;
+    }
 
     let eventCount = 0;
+    let streamStarted = false;
     for await (const event of stream) {
+      if (!streamStarted) {
+        log('[Agent-Process] First event received from stream!');
+        streamStarted = true;
+      }
       eventCount++;
       if (event.type === 'text' || event.type === 'thinking') {
         log(`[Agent-Process] Event ${eventCount}: ${event.type}, len=${String((event as {data: string}).data).length}`);
@@ -1487,7 +1600,8 @@ async function main(): Promise<void> {
           log('[Agent-Process] Received conductor:init for session:', conductorSessionId);
           if (conductorAgent) {
             log('[Agent-Process] Conductor agent already initialized, skipping re-init');
-            sendEvent({ type: 'conductor:ready', sessionId: conductorSessionId });
+            // Use IPC channel for conductor:ready so AgentProcessPool can receive it
+            process.send?.({ type: 'conductor:ready', sessionId: conductorSessionId });
             break;
           }
           if (conductorInitializing) {
@@ -1495,7 +1609,7 @@ async function main(): Promise<void> {
             const waitForInit = setInterval(() => {
               if (conductorAgent) {
                 clearInterval(waitForInit);
-                sendEvent({ type: 'conductor:ready', sessionId: conductorSessionId });
+                process.send?.({ type: 'conductor:ready', sessionId: conductorSessionId });
               }
             }, 50);
             break;
@@ -1506,7 +1620,8 @@ async function main(): Promise<void> {
           } finally {
             conductorInitializing = false;
           }
-          sendEvent({ type: 'conductor:ready', sessionId: conductorSessionId });
+          // Use IPC channel for conductor:ready so AgentProcessPool can receive it
+          process.send?.({ type: 'conductor:ready', sessionId: conductorSessionId });
           break;
         }
 
@@ -1515,6 +1630,10 @@ async function main(): Promise<void> {
           log('[Agent-Process] Received conductor:agent:start for session:', conductorStartMsg.sessionId);
           if (conductorInProgress) {
             log('[Agent-Process] Conductor already in progress, ignoring duplicate');
+            break;
+          }
+          if (conductorInitializing) {
+            log('[Agent-Process] Conductor still initializing, ignoring');
             break;
           }
           conductorInProgress = true;
