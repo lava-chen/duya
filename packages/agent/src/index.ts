@@ -6,6 +6,7 @@
 import type {
   AgentOptions,
   ChatOptions,
+  ImageContent,
   Message,
   MessageContent,
   Tool,
@@ -283,6 +284,7 @@ export class duyaAgent {
     this.model = options.model;
 
     // Initialize vision model client if configured
+    logger.info(`[duyaAgent] Vision config check: enabled=${options.visionConfig?.enabled}, provider=${options.visionConfig?.provider}, model=${options.visionConfig?.model}`);
     if (options.visionConfig?.enabled) {
       this.visionConfig = options.visionConfig;
       const visionProvider = (options.visionConfig.provider as 'anthropic' | 'openai' | 'ollama') || 'openai';
@@ -296,6 +298,8 @@ export class duyaAgent {
       } catch (err) {
         logger.warn(`[duyaAgent] Failed to initialize vision model: ${err instanceof Error ? err.message : String(err)}`);
       }
+    } else {
+      logger.info(`[duyaAgent] Vision model NOT initialized - disabled or not configured`);
     }
 
     this.promptManager = options.promptManager || new PromptManager({
@@ -355,6 +359,72 @@ export class duyaAgent {
   }
 
   /**
+   * Analyze an image using the configured vision model.
+   * Returns text description of the image, or empty string if vision is unavailable.
+   */
+  async analyzeImage(imageBase64: string, mediaType: string, customPrompt?: string): Promise<string> {
+    console.log('[duyaAgent] analyzeImage called:', {
+      hasVisionClient: !!this.visionClient,
+      visionConfig: this.visionConfig,
+      imageBase64Length: imageBase64.length,
+      mediaType,
+      customPrompt: customPrompt?.substring(0, 100),
+    });
+
+    if (!this.visionClient) {
+      logger.warn('[duyaAgent] analyzeImage: No vision client configured');
+      console.log('[duyaAgent] analyzeImage: returning empty string - no vision client');
+      return '';
+    }
+
+    const prompt = customPrompt || 'Please describe this image in detail. What do you see? Include any text, colors, shapes, objects, people, and the overall scene.';
+
+    const userMessage: Message = {
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        {
+          type: 'image',
+          source: { type: 'base64', media_type: mediaType as ImageContent['source']['media_type'], data: imageBase64 },
+        },
+      ],
+    };
+
+    const result: string[] = [];
+    try {
+      console.log('[duyaAgent] Starting vision stream...');
+      const stream = this.visionClient.streamChat([userMessage], {
+        maxTokens: 1024,
+        temperature: 0,
+      });
+
+      let eventCount = 0;
+      for await (const event of stream) {
+        eventCount++;
+        console.log('[duyaAgent] Vision stream event:', event.type, eventCount);
+        if (event.type === 'text') {
+          result.push(event.data);
+          console.log('[duyaAgent] Vision text event:', event.data?.substring(0, 100));
+        }
+        if (event.type === 'done' || event.type === 'error') {
+          console.log('[duyaAgent] Vision stream ended:', event.type);
+          break;
+        }
+      }
+      console.log('[duyaAgent] Vision stream finished, events:', eventCount);
+    } catch (err) {
+      console.log('[duyaAgent] Vision analysis exception:', err instanceof Error ? err.message : String(err));
+      logger.warn(`[duyaAgent] Vision analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+      return '';
+    }
+
+    const analysis = result.join('').trim();
+    console.log('[duyaAgent] Vision analysis complete:', { resultLength: analysis.length, preview: analysis.substring(0, 100) });
+    logger.info(`[duyaAgent] Vision analysis complete: ${analysis.length} chars`);
+    return analysis;
+  }
+
+  /**
    * Stream chat with tool execution loop
    * @param prompt User input
    * @param options Chat options
@@ -376,7 +446,15 @@ export class duyaAgent {
         this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined
       );
     }
-    const tools = registry.getAllTools();
+    const allTools = registry.getAllTools();
+    // Apply tool filtering if disabledTools or toolFilter is provided
+    let tools: Tool[];
+    if (options?.disabledTools?.length) {
+      tools = allTools.filter(t => !options.disabledTools!.includes(t.name));
+      logger.info(`[Agent] streamChat: Filtered tools by disabledTools, ${tools.length}/${allTools.length} enabled`);
+    } else {
+      tools = allTools;
+    }
     logger.info(`[Agent] streamChat: Loaded ${tools.length} tools`);
 
     // Load agent definitions
@@ -411,14 +489,23 @@ export class duyaAgent {
       this.promptManager.updateOptions({ outputStyleConfig: options.outputStyleConfig });
     }
 
-    // Build system prompt: use custom if provided, otherwise use PromptManager
+    // Build system prompt: respect disableSystemPrompt option
     let systemPromptContent: string;
-    if (options?.systemPrompt) {
+    if (options?.disableSystemPrompt) {
+      systemPromptContent = '';
+      logger.info('[Agent] streamChat: System prompt disabled (empty)');
+    } else if (options?.systemPrompt) {
       systemPromptContent = options.systemPrompt;
     } else {
       const enabledToolNames = tools.map(t => t.name);
       const systemPromptResult = await this.promptManager.buildSystemPrompt(new Set(enabledToolNames));
       systemPromptContent = [...systemPromptResult].join('\n\n');
+    }
+
+    // Prepend system prompt prefix if provided
+    if (options?.systemPromptPrefix) {
+      systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
+      logger.info('[Agent] streamChat: Added system prompt prefix');
     }
 
     // Inject agent profile identity into system prompt
@@ -566,11 +653,11 @@ export class duyaAgent {
             activeAgents: agentDefinitions,
             allAgents: agentDefinitions,
           },
+          analyzeImage: this.analyzeImage.bind(this),
         },
         // Permission callback - passed from ChatOptions by API route
         requestPermission: options?.requestPermission,
-        // Conductor IPC pass-through
-        sendToMain: options?.conductorIpc?.sendToMain,
+        // IPC for conductor executor communication
         ipcRequest: options?.conductorIpc?.ipcRequest,
       };
 

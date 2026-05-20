@@ -105,14 +105,33 @@ export function ModelSelectionSection() {
         setLoading(true);
         console.log('[ModelSelection] Loading model configurations...');
 
+        // First load providers (needed for mapping provider type to provider ID)
+        const providersList = await listProviders();
+        const activeProviders = providersList.filter(p => p.isActive);
+        setProviders(activeProviders);
+
         // Load vision settings from ConfigManager
-        const visionSettings = await window.electronAPI.vision.get() as { providerId?: string; model?: string; enabled?: boolean };
+        const visionSettings = await window.electronAPI.vision.get() as { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean };
         console.log('[ModelSelection] Vision settings:', visionSettings);
 
-        if (visionSettings?.model && visionSettings?.providerId) {
-          const fullValue = `${visionSettings.providerId}:${visionSettings.model}`;
-          setVisionModel(fullValue);
-          setOriginalVisionModel(fullValue);
+        // Convert provider type name (e.g. "ollama") to provider ID
+        if (visionSettings?.model && visionSettings?.provider) {
+          const matchingProvider = activeProviders.find(p => {
+            const providerType = p.providerType?.toLowerCase() || '';
+            const providerName = p.name?.toLowerCase() || '';
+            return providerType === visionSettings.provider?.toLowerCase() ||
+                   providerName === visionSettings.provider?.toLowerCase();
+          });
+          if (matchingProvider) {
+            const fullValue = `${matchingProvider.id}:${visionSettings.model}`;
+            setVisionModel(fullValue);
+            setOriginalVisionModel(fullValue);
+          } else if (visionSettings.enabled) {
+            // Provider not found but vision is enabled - use raw format
+            const fullValue = `custom:${visionSettings.model}`;
+            setVisionModel(fullValue);
+            setOriginalVisionModel(fullValue);
+          }
         }
 
         // Load other model settings from Settings DB
@@ -161,12 +180,17 @@ export function ModelSelectionSection() {
       const visionParsed = parseModelValue(visionModel);
 
       // Save vision settings to ConfigManager
-      if (visionModel) {
-        await window.electronAPI.vision.set({
-          providerId: visionParsed.providerId,
-          model: visionParsed.model,
-          enabled: true,
-        } as Record<string, unknown>);
+      if (visionModel && visionParsed.providerId && visionParsed.model) {
+        const provider = providers.find(p => p.id === visionParsed.providerId);
+        if (provider) {
+          await window.electronAPI.vision.set({
+            provider: provider.providerType || provider.name.toLowerCase(),
+            model: visionParsed.model,
+            baseUrl: provider.baseUrl || '',
+            apiKey: provider.apiKey || '',
+            enabled: true,
+          });
+        }
       }
 
       // Save other model settings to Settings DB
@@ -190,7 +214,7 @@ export function ModelSelectionSection() {
     } finally {
       setSaving(false);
     }
-  }, [visionModel, gatewayModel, titleModel, embeddingModel]);
+  }, [visionModel, gatewayModel, titleModel, embeddingModel, providers]);
 
   const hasChanges =
     visionModel !== originalVisionModel ||

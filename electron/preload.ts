@@ -152,6 +152,29 @@ export interface OutputStyleAPI {
   delete: (id: string) => Promise<boolean>
 }
 
+export interface VisionAPI {
+  get: () => Promise<{
+    provider: string
+    model: string
+    baseUrl: string
+    apiKey: string
+    enabled: boolean
+  }>
+  set: (config: {
+    provider?: string
+    model?: string
+    baseUrl?: string
+    apiKey?: string
+    enabled?: boolean
+  }) => Promise<{
+    provider: string
+    model: string
+    baseUrl: string
+    apiKey: string
+    enabled: boolean
+  }>
+}
+
 export interface PermissionAPI {
   create: (data: Record<string, unknown>) => Promise<unknown>
   get: (id: string) => Promise<unknown>
@@ -244,6 +267,9 @@ export interface GatewayAPI {
     createdAt: number
     updatedAt: number
   } | null>
+  pairingList: () => Promise<{ pending: unknown[]; approved: unknown[] }>
+  pairingApprove: (platform: string, code: string) => Promise<{ approved: boolean; error?: string }>
+  pairingRevoke: (platform: string, platformUserId: string) => Promise<{ revoked: boolean }>
 }
 
 export interface AutomationAPI {
@@ -420,10 +446,7 @@ export interface ElectronAPI {
     getUrl: () => Promise<string | null>
   }
   // Vision API
-  vision: {
-    get: () => Promise<{ providerId?: string; model?: string; enabled?: boolean }>
-    set: (data: { providerId?: string; model?: string; enabled?: boolean }) => Promise<void>
-  }
+  vision: VisionAPI
   // Session management
   getInterruptedSessions: () => Promise<string[]>
   // Logger API
@@ -601,23 +624,40 @@ ipcRenderer.on('agent-control-port', (event) => {
 
 // Listen for conductor port from main process
 ipcRenderer.on('conductor-port', (event) => {
+  console.log('[preload] conductor-port received, ports count:', event.ports?.length, 'time:', Date.now());
   const [port] = event.ports
   if (port) {
     conductorPort = port
+    console.log('[preload] conductorPort assigned, time:', Date.now());
     port.onmessage = (e) => {
+      console.log('[preload] conductorPort.onmessage:', e.data?.type, 'time:', Date.now());
       const { type, ...payload } = e.data
       const handlers = conductorPortHandlers.get(type as string)
       if (handlers) {
         handlers.forEach(handler => {
           try {
             handler(payload)
-          } catch {
-            // ignore handler errors
+          } catch (err) {
+            console.error('[preload] conductorPort handler error:', err);
           }
         })
       }
     }
-    port.start()
+    port.onmessageerror = (e) => {
+      console.error('[preload] conductorPort messageerror:', e, '— port may be detached or closed');
+    }
+    try {
+      console.log('[preload] calling port.start()...');
+      port.start()
+      console.log('[preload] port.start() succeeded');
+    } catch (err) {
+      console.error('[preload] port.start() FAILED:', err);
+    }
+    // Dispatch event to notify renderer that conductorPort is ready
+    console.log('[preload] dispatching conductor-port-ready event, time:', Date.now());
+    window.dispatchEvent(new CustomEvent('conductor-port-ready'));
+  } else {
+    console.error('[preload] ERROR: conductor-port received but no ports in event!');
   }
 })
 
@@ -667,7 +707,10 @@ function getConfigPortAPI(): ConfigPortAPI | null {
 
 // Helper functions for conductorPort API
 function getConductorPortAPI(): ConductorPortAPI | null {
-  if (!conductorPort) return null;
+  if (!conductorPort) {
+    console.warn('[preload] getConductorPortAPI: conductorPort is null');
+    return null;
+  }
 
   const registerHandler = (type: string, handler: (data: unknown) => void): () => void => {
     let handlers = conductorPortHandlers.get(type);
@@ -687,13 +730,20 @@ function getConductorPortAPI(): ConductorPortAPI | null {
   return {
     startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string }) => {
       const sessionId = data.canvasId ? `conductor-${data.canvasId}` : `conductor-${Date.now()}`;
-      conductorPort?.postMessage({
+      console.log('[preload] startAgent called:', { sessionId, contentLength: data.content?.length, canvasId: data.canvasId });
+      if (!conductorPort) {
+        console.error('[preload] startAgent: conductorPort is null!');
+        return;
+      }
+      console.log('[preload] startAgent: posting to conductorPort...');
+      conductorPort.postMessage({
         type: 'conductor:agent:start',
         sessionId,
         prompt: data.content,
         snapshot: data.snapshot,
         model: data.model,
       });
+      console.log('[preload] startAgent: message posted successfully');
     },
     interruptAgent: () => {
       conductorPort?.postMessage({ type: 'conductor:interrupt' });
@@ -985,6 +1035,11 @@ const electronAPI: ElectronAPI = {
     upsert: (data: Record<string, unknown>) => ipcRenderer.invoke('config:style:upsert', data),
     delete: (id: string) => ipcRenderer.invoke('config:style:delete', id),
   },
+  vision: {
+    get: () => ipcRenderer.invoke('config:vision:get'),
+    set: (config: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean }) =>
+      ipcRenderer.invoke('config:vision:set', config),
+  },
   permission: {
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('db:permission:create', data),
     get: (id: string) => ipcRenderer.invoke('db:permission:get', id),
@@ -1017,6 +1072,15 @@ const electronAPI: ElectronAPI = {
     getProxyStatus: () => ipcRenderer.invoke('gateway:getProxyStatus'),
     listSessions: () => ipcRenderer.invoke('gateway:listSessions'),
     getSession: (sessionId: string) => ipcRenderer.invoke('gateway:getSession', sessionId),
+    pairingList: async () => {
+      const [pending, approved] = await Promise.all([
+        ipcRenderer.invoke('gateway:pairing:listPending'),
+        ipcRenderer.invoke('gateway:pairing:listApproved'),
+      ]);
+      return { pending, approved };
+    },
+    pairingApprove: (platform: string, code: string) => ipcRenderer.invoke('gateway:pairing:approve', platform, code),
+    pairingRevoke: (platform: string, platformUserId: string) => ipcRenderer.invoke('gateway:pairing:revoke', platform, platformUserId),
   },
   automation: {
     listCrons: () => ipcRenderer.invoke('automation:cron:list'),
@@ -1146,11 +1210,6 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('update:error', handler)
       return () => ipcRenderer.removeListener('update:error', handler)
     },
-  },
-  // Vision API
-  vision: {
-    get: () => ipcRenderer.invoke('vision:get'),
-    set: (data: { providerId?: string; model?: string; enabled?: boolean }) => ipcRenderer.invoke('vision:set', data),
   },
   // Session management
   getInterruptedSessions: () => ipcRenderer.invoke('session:getInterruptedSessions'),

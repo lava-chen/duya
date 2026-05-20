@@ -1,6 +1,13 @@
 /**
- * VisionTool - Read and encode image files for vision model analysis
- * Supports local image files and returns base64-encoded data URLs
+ * VisionTool - Analyze images using the configured vision model.
+ *
+ * This tool is invoked by the agent when it needs to understand image content,
+ * for example screenshots it captured, user-uploaded images, or images found
+ * in web pages.
+ *
+ * Design mirrors hermes-agent's vision_analyze: a dedicated vision model is
+ * called via the analyzeImage callback (configured separately in Settings)
+ * and the text description is returned as tool output.
  */
 
 import { readFile, stat } from 'node:fs/promises';
@@ -34,7 +41,7 @@ function detectMimeType(header: Buffer, ext: string): string | null {
 
 export class VisionTool implements Tool, ToolExecutor {
   readonly name = 'vision_analyze';
-  readonly description = `Analyze images using AI vision. Provides a comprehensive description and answers specific questions about the image content. Supports JPEG, PNG, GIF, WebP, and BMP image formats.`;
+  readonly description = `Analyze the content of an image using an AI vision model. Provide an image path to get a detailed text description of what the image contains — objects, people, text, colors, layout, and overall scene. Supports JPEG, PNG, GIF, WebP, and BMP formats. Use this tool whenever you need to understand the contents of an image file.`;
 
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
@@ -45,13 +52,17 @@ export class VisionTool implements Tool, ToolExecutor {
       },
       question: {
         type: 'string',
-        description: 'A specific question about the image content to answer.',
+        description: 'Optional: a specific question about the image to answer (e.g., "What is the error message shown?"). If omitted, a general description is returned.',
       },
     },
     required: ['image_path'],
   };
 
-  async execute(input: Record<string, unknown>, workingDirectory?: string, _context?: ToolUseContext): Promise<ToolResult> {
+  async execute(
+    input: Record<string, unknown>,
+    workingDirectory?: string,
+    context?: ToolUseContext,
+  ): Promise<ToolResult> {
     const id = crypto.randomUUID();
     const imagePath = input.image_path as string;
     const question = input.question as string | undefined;
@@ -65,54 +76,95 @@ export class VisionTool implements Tool, ToolExecutor {
       const fileStats = await stat(resolvedPath);
 
       if (fileStats.isDirectory()) {
-        return { id, name: this.name, result: `Error: Path is a directory, not a file: ${resolvedPath}`, error: true };
+        return {
+          id, name: this.name,
+          result: `Error: Path is a directory, not a file: ${resolvedPath}`,
+          error: true,
+        };
+      }
+
+      if (fileStats.size === 0) {
+        return {
+          id, name: this.name,
+          result: `Error: File is empty: ${resolvedPath}`,
+          error: true,
+        };
       }
 
       if (fileStats.size > MAX_IMAGE_BYTES) {
         return {
-          id,
-          name: this.name,
-          result: `Error: Image file too large (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB, max ${MAX_IMAGE_BYTES / (1024 * 1024)} MB). Please compress the image and try again.`,
+          id, name: this.name,
+          result: `Error: Image too large (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB, max ${MAX_IMAGE_BYTES / (1024 * 1024)} MB). Please compress and try again.`,
           error: true,
         };
       }
 
       const fileBuffer = await readFile(resolvedPath);
       const ext = resolvedPath.slice(resolvedPath.lastIndexOf('.')).toLowerCase();
-
       const mimeType = detectMimeType(fileBuffer.subarray(0, 32), ext);
+
       if (!mimeType) {
         return {
-          id,
-          name: this.name,
-          result: `Error: Unsupported image format. Supported formats: JPEG, PNG, GIF, WebP, BMP. File: ${resolvedPath}`,
+          id, name: this.name,
+          result: `Error: Unsupported image format. Supported: JPEG, PNG, GIF, WebP, BMP. File: ${resolvedPath}`,
           error: true,
         };
       }
 
       const base64Data = fileBuffer.toString('base64');
-      const dataUrl = `data:${mimeType};base64,${base64Data}`;
 
-      let resultText = `Image analyzed: ${resolvedPath}\n`;
-      resultText += `Format: ${mimeType}\n`;
-      resultText += `Size: ${(fileStats.size / 1024).toFixed(1)} KB\n`;
-
-      if (question) {
-        resultText += `Question: ${question}\n`;
+      const analyzeImage = context?.options?.analyzeImage;
+      console.log('[VisionTool] analyzeImage callback:', analyzeImage ? 'present' : 'MISSING');
+      console.log('[VisionTool] context.options:', JSON.stringify(Object.keys(context?.options || {})));
+      if (!analyzeImage) {
+        return {
+          id, name: this.name,
+          result: `Error: Vision model is not configured. Please configure a vision model in Settings > Vision Model to enable image analysis.`,
+          error: true,
+        };
       }
 
-      resultText += `\nImage data (base64 data URL):\n${dataUrl}\n`;
-      resultText += `\n[Vision analysis requires a vision-capable model. If your model supports vision, ensure it is configured as the primary model with vision capabilities.]`;
+      const prompt = question
+        ? `Answer the following question about this image: "${question}"\n\nProvide a clear and thorough answer based on what you see in the image.`
+        : undefined;
+
+      console.log('[VisionTool] Calling analyzeImage with:', {
+        base64Length: base64Data.length,
+        mimeType,
+        hasPrompt: !!prompt,
+        promptPreview: prompt?.substring(0, 100),
+      });
+      const analysis = await analyzeImage(base64Data, mimeType, prompt);
+      console.log('[VisionTool] analyzeImage returned:', {
+        analysisLength: analysis.length,
+        analysisPreview: analysis.substring(0, 200),
+      });
+
+      if (!analysis) {
+        console.log('[VisionTool] Analysis is empty, returning error');
+        return {
+          id, name: this.name,
+          result: `Error: Vision model returned no analysis. The vision model may not support image inputs, or there was an API error. Check console logs for details.`,
+          error: true,
+        };
+      }
+
+      const resultParts: string[] = [];
+      resultParts.push(`Image analyzed: ${resolvedPath}`);
+      resultParts.push(`Format: ${mimeType} | Size: ${(fileStats.size / 1024).toFixed(1)} KB`);
+      if (question) {
+        resultParts.push(`Question: ${question}`);
+      }
+      resultParts.push(`\n${analysis}`);
 
       return {
         id,
         name: this.name,
-        result: resultText,
+        result: resultParts.join('\n'),
         metadata: {
           imagePath: resolvedPath,
           mimeType,
           imageSizeBytes: fileStats.size,
-          durationMs: 0,
         },
       };
     } catch (error) {

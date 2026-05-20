@@ -26,16 +26,12 @@ export const TOOL_NAMES = {
   GREP: 'Grep',
   AGENT: 'Agent',
   SKILL: 'Skill',
-  TASK_CREATE: 'TaskCreate',
-  TASK_UPDATE: 'TaskUpdate',
-  TASK_GET: 'TaskGet',
-  TASK_LIST: 'TaskList',
-  TASK_STOP: 'TaskStop',
-  TASK_OUTPUT: 'TaskOutput',
+  TASK: 'Task', // Unified task tool with actions: create, get, list, update, output, stop
   TODO_WRITE: 'TodoWrite',
   ASK_USER_QUESTION: 'AskUserQuestion',
   DISCOVER_SKILLS: 'DiscoverSkills',
   SLEEP: 'Sleep',
+  VISION: 'vision_analyze',
 } as const
 
 // ============================================================
@@ -310,6 +306,22 @@ export interface PromptManagerOptions {
   communicationPlatform?: CommunicationPlatform
   /** Prompt profile: base + overlays for progressive disclosure */
   promptProfile?: import('./modes/types.js').PromptProfile
+  /** Whether this is a git worktree */
+  isWorktree?: boolean
+  /** Whether this is a non-interactive session */
+  isNonInteractiveSession?: boolean
+  /** Whether REPL mode is enabled */
+  isReplModeEnabled?: boolean
+  /** Whether embedded search tools (find/grep) are available */
+  hasEmbeddedSearchTools?: boolean
+  /** Whether fork subagent is enabled */
+  isForkSubagentEnabled?: boolean
+  /** Whether verification agent is enabled */
+  isVerificationAgentEnabled?: boolean
+  /** Whether skill search is enabled */
+  isSkillSearchEnabled?: boolean
+  /** Scratchpad directory path */
+  scratchpadDir?: string
 }
 
 // ============================================================
