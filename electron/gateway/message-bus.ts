@@ -121,14 +121,65 @@ export function handleGatewayMessage(
       break;
 
     case 'db:request': {
-      const action = (msg.action || msg) as { type?: string; action?: string; payload?: Record<string, unknown>; id?: string };
-      const result = dispatchGatewayDbAction(action);
+      // Handle both direct format (action, payload) and wrapped format
+      const msgId = msg.id as string | undefined;
+      const rawAction = msg.action;
+      const rawType = msg.type as string | undefined;
+
+      // Check if this is a wrapped message (action nested inside)
+      let action: string;
+      let payload: unknown;
+      let actionId: string;
+
+      if (typeof rawAction === 'string') {
+        // Direct format: { type: 'db:request', id, action, payload }
+        action = rawAction;
+        payload = msg.payload;
+        actionId = msgId || '';
+      } else if (typeof rawAction === 'object' && rawAction !== null) {
+        // Wrapped format: { type: 'db:request', id, action: { action, payload } }
+        const wrapped = rawAction as { action?: string; type?: string; payload?: unknown; id?: string };
+        action = wrapped.action || wrapped.type || '';
+        payload = wrapped.payload;
+        actionId = wrapped.id || msgId || '';
+      } else {
+        // Malformed message - try to extract from the message itself
+        action = (msg as { action?: string }).action || '';
+        payload = (msg as { payload?: unknown }).payload;
+        actionId = msgId || '';
+      }
+
+      console.log('[Main] db:request received, id:', actionId, 'action:', action || '(none)');
+
+      if (!action) {
+        console.warn('[Main] db:request missing action, ignoring malformed message');
+        sendToGatewayProcess({
+          type: 'db:response',
+          id: actionId,
+          success: false,
+          error: 'Missing action field in db:request',
+        });
+        break;
+      }
+
+      const actionObj = { action, payload } as { type?: string; action?: string; payload?: Record<string, unknown>; id?: string };
+      const result = dispatchGatewayDbAction(actionObj);
+
+      console.log('[Main] db:request result:', result ? 'ok' : 'null');
+
       if (result) {
         sendToGatewayProcess({
           type: 'db:response',
-          id: msg.id || (action as { id?: string }).id || '',
-          sessionId: sessionId || '',
+          id: actionId,
+          success: !result.error,
           ...result,
+        });
+      } else {
+        sendToGatewayProcess({
+          type: 'db:response',
+          id: actionId,
+          success: false,
+          error: 'No handler for action',
         });
       }
       break;
@@ -182,6 +233,46 @@ export function handleGatewayMessage(
       const platform = inboundMsg.platform;
       const platformChatId = inboundMsg.platformChatId;
 
+      // Get default provider config for gateway sessions
+      let providerConfig: Record<string, unknown> | undefined;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { getConfigManager } = require('../config/manager');
+        const db = require('../db/connection').getDatabase();
+        const configManager = getConfigManager();
+        const activeProvider = configManager?.getActiveProvider();
+
+        // Helper to read from settings DB (same as gateway:get_config handler)
+        const getSetting = (key: string): string | undefined => {
+          if (!db) return undefined;
+          const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+          if (row) {
+            try { return JSON.parse(row.value); } catch { return row.value; }
+          }
+          return undefined;
+        };
+
+        // Get model from settings DB first (set by Settings UI), fallback to provider options
+        const gatewayModelSetting = getSetting('gatewayModel');
+        const modelFromProvider = activeProvider?.options?.defaultModel || activeProvider?.options?.model || '';
+        const resolvedModel = gatewayModelSetting || modelFromProvider;
+
+        if (activeProvider) {
+          providerConfig = {
+            apiKey: activeProvider.apiKey,
+            baseURL: activeProvider.baseUrl || undefined,
+            model: resolvedModel,
+            provider: activeProvider.providerType,
+            authStyle: 'api_key',
+          };
+          console.log('[Main] gateway:inbound: using provider config, provider:', activeProvider.providerType, 'model:', resolvedModel || '(empty)');
+        } else {
+          console.warn('[Main] gateway:inbound: no active provider configured');
+        }
+      } catch (err) {
+        console.error('[Main] gateway:inbound: failed to get provider config:', err);
+      }
+
       // Accumulate text from chat:text events
       let accumulatedText = '';
       let sseBuffer = '';
@@ -193,7 +284,9 @@ export function handleGatewayMessage(
           platform,
           platformMsgId: inboundMsg.platformMsgId,
           platformChatId,
+          agentProfileId: 'gateway',
         },
+        providerConfig,
       });
 
       const req = require('http').request(
@@ -307,6 +400,93 @@ export function handleGatewayMessage(
       break;
     }
 
+    case 'gateway:create_session': {
+      // Handle gateway:create_session from Gateway subprocess
+      const data = msg as {
+        id?: string;
+        platform: string;
+        platformUserId: string;
+        platformChatId: string;
+      };
+      console.log('[Main] gateway:create_session received, id:', data.id);
+
+      const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      createOrResetGatewaySession(sessionId, data.platform);
+
+      // Save session to threads table
+      const db = getDatabase();
+      if (db) {
+        try {
+          const now = Date.now();
+          const title = `${data.platform} ${new Date().toLocaleString()}`;
+          db.prepare(`
+            INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+          `).run(sessionId, title, 'gateway', '', now, now);
+        } catch (err) {
+          getLogger().error('Failed to save gateway session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
+        }
+      }
+
+      // Send response back to Gateway
+      sendToGatewayProcess({
+        type: 'gateway:create_session:response',
+        sessionId,
+      });
+      break;
+    }
+
+    case 'gateway:reset_session': {
+      // Handle gateway:reset_session from Gateway subprocess
+      const data = msg as {
+        id?: string;
+        platform: string;
+        platformChatId: string;
+        platformUserId: string;
+        platformMsgId: string;
+      };
+      console.log('[Main] gateway:reset_session received, platform:', data.platform);
+
+      // Find and reset existing session for this platform
+      const states = getSessionStates();
+      let oldSessionId = '';
+      for (const [id, state] of states) {
+        if (state.bridgeChannel === data.platform) {
+          resetGatewaySession(id);
+          oldSessionId = id;
+          break;
+        }
+      }
+
+      const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      createOrResetGatewaySession(sessionId, data.platform);
+
+      // Save new session to threads table
+      const db = getDatabase();
+      if (db) {
+        try {
+          const now = Date.now();
+          const title = `${data.platform} Reset ${new Date().toLocaleString()}`;
+          db.prepare(`
+            INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
+          `).run(sessionId, title, 'gateway', '', now, now);
+        } catch (err) {
+          getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
+        }
+      }
+
+      // Send response back to Gateway
+      sendToGatewayProcess({
+        type: 'gateway:reset_session:response',
+        sessionId,
+        oldSessionId,
+      });
+      break;
+    }
+
     case 'bridge:error': {
       const message = msg.message as string || 'Unknown gateway error';
       getLogger().error(`Gateway bridge error: ${message}`, undefined, { sessionId, error: msg.error }, LogComponent.Gateway);
@@ -407,6 +587,10 @@ function getOrBuildInitConfig(): GatewayInitConfig {
     ).all() as Array<{ account_id: string; user_id: string; token: string; base_url: string; cdn_base_url: string }>;
 
     for (const account of weixinAccounts) {
+      if (!account.token?.trim()) {
+        console.warn('[Gateway] Skipping weixin account with empty token:', account.account_id);
+        continue;
+      }
       platforms.push({
         platform: 'weixin',
         enabled: true,
@@ -628,14 +812,57 @@ export function registerGatewayIpcHandlers(): void {
     return { success: true };
   });
 
-  ipcMain.handle('gateway:create_session', (_event, sessionId: string, channel: string) => {
-    createOrResetGatewaySession(sessionId, channel);
-    return { success: true };
+  ipcMain.handle('gateway:create_session', (_event, data: { platform: string; platformUserId: string; platformChatId: string }) => {
+    const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    createOrResetGatewaySession(sessionId, data.platform);
+
+    // Save session to threads table so it appears in gateway session list
+    const db = getDatabase();
+    if (db) {
+      try {
+        const now = Date.now();
+        const title = `${data.platform} ${new Date().toLocaleString()}`;
+        db.prepare(`
+          INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+        `).run(sessionId, title, 'gateway', '', now, now);
+      } catch (err) {
+        getLogger().error('Failed to save gateway session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
+      }
+    }
+
+    return { sessionId, success: true };
   });
 
-  ipcMain.handle('gateway:reset_session', (_event, sessionId: string) => {
-    resetGatewaySession(sessionId);
-    return { success: true };
+  ipcMain.handle('gateway:reset_session', (_event, data: { platform: string; platformChatId: string; platformUserId: string }) => {
+    // Find existing session for this platform+chat
+    const states = getSessionStates();
+    for (const [id, state] of states) {
+      if (state.bridgeChannel === data.platform) {
+        resetGatewaySession(id);
+      }
+    }
+    const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    createOrResetGatewaySession(sessionId, data.platform);
+
+    // Save session to threads table so it appears in gateway session list
+    const db = getDatabase();
+    if (db) {
+      try {
+        const now = Date.now();
+        const title = `${data.platform} Reset ${new Date().toLocaleString()}`;
+        db.prepare(`
+          INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
+        `).run(sessionId, title, 'gateway', '', now, now);
+      } catch (err) {
+        getLogger().error('Failed to save gateway reset session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
+      }
+    }
+
+    return { sessionId, success: true };
   });
 
   ipcMain.handle('gateway:is_gateway_session', (_event, sessionId: string) => {

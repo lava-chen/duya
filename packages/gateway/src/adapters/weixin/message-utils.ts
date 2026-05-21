@@ -30,7 +30,20 @@ export function splitMessage(text: string, maxLength: number = MAX_MESSAGE_LENGT
   return chunks;
 }
 
-export function parseMessageContent(msg: { Content?: string; StrContent?: string }): string {
+export function parseMessageContent(msg: {
+  Content?: string;
+  StrContent?: string;
+  item_list?: Array<{ type: number; text_item?: { text: string } }>;
+}): string {
+  // Support new API format with item_list
+  if (msg.item_list && msg.item_list.length > 0) {
+    for (const item of msg.item_list) {
+      if (item.type === 1 && item.text_item?.text) {
+        return item.text_item.text;
+      }
+    }
+  }
+  // Fall back to old format
   return msg.Content ?? msg.StrContent ?? '';
 }
 
@@ -46,6 +59,11 @@ export function getMediaType(msgType: number): 'text' | 'image' | 'voice' | 'vid
 }
 
 export function isFromGroup(toUserName: string): boolean {
+  // New format: group IDs typically contain '@chatroom' suffix
+  if (toUserName.includes('@chatroom') || toUserName.includes('@im.group')) {
+    return true;
+  }
+  // Old format: group IDs start with @@
   return toUserName.startsWith('@@');
 }
 

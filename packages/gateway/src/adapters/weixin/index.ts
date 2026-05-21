@@ -92,13 +92,23 @@ export class WeixinAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
 
   async start(config: PlatformConfig): Promise<void> {
-    console.log('[STARTUP] WeixinAdapter.start called, credentials keys:', Object.keys(config.credentials as Record<string, unknown>));
+    console.log('[STARTUP] WeixinAdapter.start called');
+    console.log('[STARTUP] WeixinAdapter: config.credentials =', JSON.stringify({
+      hasBotToken: !!config.credentials.botToken,
+      botTokenLength: config.credentials.botToken?.length ?? 0,
+      botTokenPrefix: config.credentials.botToken?.substring(0, 4) ?? 'none',
+      hasIlinkBotId: !!config.credentials.ilinkBotId,
+      ilinkBotId: config.credentials.ilinkBotId ?? 'none',
+      baseUrl: config.credentials.baseUrl ?? config.credentials.base_url ?? 'none',
+    }));
     const weixinOptions = config.options as WeChatConfigOptions | undefined;
     this.token = (config.credentials.botToken ?? config.credentials.token ?? config.credentials.bot_token ?? '') as string;
     this.accountId = (config.credentials.ilinkBotId ?? config.credentials.account_id ?? config.credentials.app_id ?? '') as string;
 
     if (!this.token) {
-      console.warn('[Weixin] No token configured');
+      console.warn('[Weixin] No token configured - adapter not starting');
+      console.warn('[Weixin] Available credentials keys:', Object.keys(config.credentials));
+      console.warn('[Weixin] Available credentials:', config.credentials);
       return;
     }
 
@@ -333,11 +343,18 @@ export class WeixinAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
 
   private startPollLoop(): void {
+    console.log('[Weixin] startPollLoop called, running flag:', this.running);
+
     const poll = async () => {
-      if (!this.running) return;
+      if (!this.running) {
+        console.log('[Weixin] poll: running is false, skipping');
+        return;
+      }
 
       try {
+        console.log('[Weixin] poll: calling wxApi.getUpdates, syncBuf length:', this.pollSyncBuf.length);
         const response = await wxApi.getUpdates(this.pollSyncBuf, LONG_POLL_TIMEOUT_MS);
+        console.log('[Weixin] poll: got response, ret:', response.ret, 'msgs count:', response.msgs?.length ?? 0);
 
         const newSyncBuf = response.get_updates_buf;
         if (newSyncBuf) {
@@ -345,6 +362,10 @@ export class WeixinAdapter extends BaseAdapter {
         }
 
         this.consecutiveFailures = 0;
+
+        if (response.msgs && response.msgs.length > 0) {
+          console.log('[Weixin] poll: processing', response.msgs.length, 'messages');
+        }
 
         for (const msg of response.msgs ?? []) {
           await this.processMessage(msg).catch((err) => {
@@ -355,11 +376,12 @@ export class WeixinAdapter extends BaseAdapter {
         this.consecutiveFailures++;
         console.error(
           `[Weixin] Poll error (${this.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`,
-          err,
+          err instanceof Error ? err.message : String(err),
         );
 
         if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           this.updateHealthError(err);
+          console.log(`[Weixin] Max failures reached, backing off for ${BACKOFF_DELAY_SECONDS}s`);
           this.consecutiveFailures = 0;
           this.pollTimer = setTimeout(poll, BACKOFF_DELAY_SECONDS * 1000);
           return;
@@ -371,6 +393,7 @@ export class WeixinAdapter extends BaseAdapter {
       }
     };
 
+    console.log('[Weixin] startPollLoop: calling poll()');
     poll();
   }
 
@@ -381,20 +404,21 @@ export class WeixinAdapter extends BaseAdapter {
   private async processMessage(raw: Record<string, unknown>): Promise<void> {
     const msg = raw as unknown as WeChatMessage;
 
-    const senderId = msg.FromUserName?.trim();
+    // Support both old format (MsgId, FromUserName) and new format (message_id, from_user_id)
+    const senderId = (msg.from_user_id ?? msg.FromUserName ?? '').trim();
     if (!senderId || senderId === this.accountId) return;
 
-    const msgId = msg.MsgId || msg.Int64;
+    const msgId = String(msg.message_id ?? msg.MsgId ?? msg.Int64 ?? '');
     if (!msgId || this.isWeixinDup(msgId)) return;
 
     this.markWeixinDup(msgId);
 
     const text = parseMessageContent(msg);
-    const isGroup = isFromGroup(msg.ToUserName ?? '');
-    const chatId = isGroup ? (msg.ToUserName ?? senderId) : senderId;
+    const isGroup = isFromGroup(msg.to_user_id ?? msg.ToUserName ?? '');
+    const chatId = isGroup ? (msg.to_user_id ?? msg.ToUserName ?? senderId) : senderId;
 
     // Skip non-text messages for now
-    if (!text && msg.MsgType !== WX_MSG_TYPES.TEXT) return;
+    if (!text && msg.message_type !== WX_MSG_TYPES.TEXT) return;
 
     if (!text) return;
 
@@ -404,7 +428,7 @@ export class WeixinAdapter extends BaseAdapter {
       platformChatId: chatId,
       platformMsgId: msgId,
       text,
-      ts: msg.CreateTime ? msg.CreateTime * 1000 : Date.now(),
+      ts: msg.create_time_ms ?? msg.CreateTime ? (msg.create_time_ms ?? msg.CreateTime!) * 1000 : Date.now(),
     };
 
     if (text.startsWith('/') && this.commandHandler) {
