@@ -155,4 +155,21 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     createdAt: 0,
     updatedAt: 0,
   },
+  {
+    id: 'gateway',
+    name: 'Gateway',
+    description: 'Gateway agent for handling bridge/channel messages from external platforms',
+    allowedTools: ['gateway:*', 'file:read*', 'search:*', 'shell:*'],
+    disallowedTools: ['canvas:*', 'show_widget'],
+    promptProfile: {
+      enableSections: ['generalTaskGuidance'],
+      disableSections: ['taskHandling', 'widgetGuidelines'],
+    },
+    promptSystem: 'general',
+    userVisible: false,
+    isPreset: true,
+    isEnabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
 ];

@@ -3,15 +3,29 @@
  */
 
 export interface WeChatMessage {
-  MsgId: string;
-  FromUserName: string;
-  ToUserName: string;
-  MsgType: number;
-  Content: string;
-  CreateTime: number;
+  message_id?: number;
+  seq?: number;
+  MsgId?: string;
+  Int64?: string;
+  from_user_id: string;
+  to_user_id: string;
+  create_time_ms: number;
+  message_type: number;
+  message_state: number;
+  item_list: Array<{
+    type: number;
+    text_item?: {
+      text: string;
+    };
+  }>;
+  context_token?: string;
+  MsgType?: number;
+  FromUserName?: string;
+  ToUserName?: string;
+  Content?: string;
+  CreateTime?: number;
   Status?: number;
   StrContent?: string;
-  Int64?: string;
 }
 
 export interface WeChatConfigOptions {
