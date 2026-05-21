@@ -144,7 +144,11 @@ export class VisionTool implements Tool, ToolExecutor {
         console.log('[VisionTool] Analysis is empty, returning error');
         return {
           id, name: this.name,
-          result: `Error: Vision model returned no analysis. The vision model may not support image inputs, or there was an API error. Check console logs for details.`,
+          result: `Error: Vision model returned no analysis. Possible causes:\n`
+            + `1. The configured vision model (Settings > Vision Model) may be unavailable or rate-limited\n`
+            + `2. The vision model API returned an error (check DevTools console logs)\n`
+            + `3. The image format (${mimeType}) may not be supported by the vision model\n`
+            + `\nFile: ${resolvedPath} (${(fileStats.size / 1024).toFixed(1)} KB, ${mimeType})`,
           error: true,
         };
       }

@@ -5,7 +5,8 @@
 
 import { createPromptCache } from '../cache.js'
 import { asSystemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../types.js'
-import type { PromptContext, PromptSection, SystemPrompt } from '../types.js'
+import type { PromptContext, PromptSection, SystemPrompt, PromptBuildContextOptions } from '../types.js'
+import { PromptSystem } from '../PromptSystem.js'
 import type { PromptProfile } from '../modes/types.js'
 import { getShellForPrompt } from '../../utils/shellDetector.js'
 
@@ -29,27 +30,24 @@ import {
  * Conductor Agent PromptSystem
  * Full-featured prompt system for canvas orchestrator tasks
  */
-export class ConductorPromptSystem {
-  protected cache = createPromptCache()
-  protected profile: PromptProfile
-
+export class ConductorPromptSystem extends PromptSystem {
   constructor(profile?: PromptProfile) {
-    this.profile = profile ?? { base: 'full' }
+    super(profile ?? { base: 'full' })
   }
 
-  getName(): string {
+  override getName(): string {
     return 'conductor'
   }
 
-  clearCache(): void {
+  override clearCache(): void {
     this.cache.clear()
   }
 
-  getProfile(): PromptProfile {
+  override getProfile(): PromptProfile {
     return { ...this.profile }
   }
 
-  setProfile(profile: PromptProfile): void {
+  override setProfile(profile: PromptProfile): void {
     this.profile = profile
     this.clearCache()
   }
@@ -57,7 +55,7 @@ export class ConductorPromptSystem {
   /**
    * Get static sections (cached)
    */
-  getStaticSections(
+  override getStaticSections(
     context: PromptContext,
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
@@ -90,7 +88,7 @@ export class ConductorPromptSystem {
   /**
    * Get dynamic sections (recomputed every turn)
    */
-  getDynamicSections(
+  override getDynamicSections(
     context: PromptContext,
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
@@ -121,7 +119,7 @@ export class ConductorPromptSystem {
   /**
    * Build the complete system prompt
    */
-  async buildSystemPrompt(
+  override async buildSystemPrompt(
     context: PromptContext,
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
@@ -144,7 +142,7 @@ export class ConductorPromptSystem {
   /**
    * Resolve static and dynamic sections
    */
-  protected async resolveSections(
+  protected override async resolveSections(
     staticSections: PromptSection[],
     dynamicSections: PromptSection[],
   ): Promise<{ staticContent: string[]; dynamicContent: string[] }> {
@@ -180,16 +178,7 @@ export class ConductorPromptSystem {
   /**
    * Build prompt context from options
    */
-  buildContext(options: {
-    workingDirectory?: string
-    modelId?: string
-    modelName?: string
-    enabledTools?: Set<string>
-    mcpServers?: PromptContext['mcpServers']
-    language?: string
-    outputStyleConfig?: PromptContext['outputStyleConfig']
-    communicationPlatform?: PromptContext['communicationPlatform']
-  }): PromptContext {
+  override buildContext(options: PromptBuildContextOptions): PromptContext {
     const workingDirectory = options.workingDirectory !== undefined && options.workingDirectory !== null
       ? options.workingDirectory
       : process.cwd()

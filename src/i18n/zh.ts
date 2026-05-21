@@ -852,6 +852,7 @@ const zh: Record<TranslationKey, string> = {
   'gateway.messages': '消息',
   'gateway.lastActivity': '最后活动',
   'gateway.noSessions': '暂无 Gateway 会话',
+  'gateway.noSessionsForChannel': '该频道暂无会话',
   'gateway.noSessionsDesc': '当用户通过频道发送消息时，会话将显示在这里',
   'gateway.justNow': '刚刚',
   'gateway.minutesAgo': '{minutes}分钟前',

@@ -25,7 +25,7 @@ export function getPrompt(): string {
 ## Notes
 
 - Plan mode is read-only by default
-- You can use TaskCreate to plan out work
+- You can use Task tool with action "create" to plan out work
 - Use ExitPlanMode when you're done planning
 `;
 }

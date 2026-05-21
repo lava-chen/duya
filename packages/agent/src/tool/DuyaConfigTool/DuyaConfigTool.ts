@@ -16,6 +16,10 @@ const actionSchema = z.enum([
   'vision_set',
   'style_get',
   'style_set',
+  'pairing_list',
+  'pairing_approve',
+  'pairing_revoke',
+  'pairing_is_approved',
 ]);
 
 const inputSchema = z.object({
@@ -35,6 +39,9 @@ const inputSchema = z.object({
   thinkingBudget: z.number().int().positive().optional(),
   provider: z.string().optional(),
   styleId: z.string().optional(),
+  platform: z.string().optional(),
+  code: z.string().optional(),
+  platformUserId: z.string().optional(),
 });
 
 function toolSuccess(result: unknown): ToolResult {
@@ -66,6 +73,7 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
           'providers_list', 'provider_add', 'provider_remove', 'provider_activate',
           'settings_get', 'settings_set', 'vision_get', 'vision_set',
           'style_get', 'style_set',
+          'pairing_list', 'pairing_approve', 'pairing_revoke', 'pairing_is_approved',
         ],
         description: 'Config action to perform',
       },
@@ -84,6 +92,9 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
       thinkingBudget: { type: 'number', description: 'Thinking token budget' },
       provider: { type: 'string', description: 'Vision provider name' },
       styleId: { type: 'string', description: 'Output style ID' },
+      platform: { type: 'string', description: 'Platform name (telegram, weixin, qq, feishu, discord, whatsapp)' },
+      code: { type: 'string', description: '8-character pairing code to approve' },
+      platformUserId: { type: 'string', description: 'Platform user ID to check or revoke' },
     },
     required: ['action'],
   };
@@ -193,6 +204,36 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
           if (!data.styleId) return toolError('styleId is required for style_set');
           const result = await configDb.outputStylesSet({ styleId: data.styleId });
           return toolSuccess({ ok: true, styleId: data.styleId, raw: result });
+        }
+
+        case 'pairing_list': {
+          const pending = await configDb.pairingListPending();
+          const approved = await configDb.pairingListApproved();
+          return toolSuccess({ pending, approved });
+        }
+
+        case 'pairing_approve': {
+          if (!data.platform || !data.code) {
+            return toolError('platform and code are required for pairing_approve');
+          }
+          const result = await configDb.pairingApprove(data.platform, data.code);
+          return toolSuccess(result);
+        }
+
+        case 'pairing_revoke': {
+          if (!data.platform || !data.platformUserId) {
+            return toolError('platform and platformUserId are required for pairing_revoke');
+          }
+          const result = await configDb.pairingRevoke(data.platform, data.platformUserId);
+          return toolSuccess({ revoked: result });
+        }
+
+        case 'pairing_is_approved': {
+          if (!data.platform || !data.platformUserId) {
+            return toolError('platform and platformUserId are required for pairing_is_approved');
+          }
+          const result = await configDb.pairingIsApproved(data.platform, data.platformUserId);
+          return toolSuccess(result);
         }
 
         default:

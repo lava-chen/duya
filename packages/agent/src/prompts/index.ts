@@ -13,6 +13,7 @@ export type {
   PromptManagerOptions,
   OutputStyleConfig,
   MCPServerConnection,
+  PromptBuildContextOptions,
 } from './types.js'
 
 export {
@@ -33,6 +34,10 @@ export { cachedPromptSection, volatilePromptSection, prependBullets } from './co
 
 // Manager
 export { PromptManager, getDefaultPromptManager, resetDefaultPromptManager } from './PromptManager.js'
+
+// Prompt System base + registry
+export { PromptSystem } from './PromptSystem.js'
+export { PromptsRegistry, resolvePromptSystemName } from './registry.js'
 
 // Modes & Profile
 export {

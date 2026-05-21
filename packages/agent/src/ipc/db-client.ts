@@ -458,6 +458,19 @@ export const configDb = {
 
   logsErrors: (lines: number) =>
     sendDbRequest('logs:errors', { lines }),
+
+  pairingListPending: () => sendDbRequest('pairing:listPending', {}),
+
+  pairingListApproved: (platform?: string) => sendDbRequest('pairing:listApproved', { platform }),
+
+  pairingApprove: (platform: string, code: string) =>
+    sendDbRequest('pairing:approve', { platform, code }),
+
+  pairingRevoke: (platform: string, platformUserId: string) =>
+    sendDbRequest('pairing:revoke', { platform, platformUserId }),
+
+  pairingIsApproved: (platform: string, platformUserId: string) =>
+    sendDbRequest('pairing:isApproved', { platform, platformUserId }),
 };
 
 // Initialize client on module load

@@ -139,6 +139,18 @@ function handleMessage(msg: MainToGatewayMessage): void {
       break;
     }
 
+    case 'reset': {
+      const sessionId = (msg as { type: 'reset'; sessionId: string }).sessionId;
+      gatewayManager?.onSessionReset(sessionId);
+      break;
+    }
+
+    case 'gateway:display_state': {
+      const ds = msg as { platform: string; platformChatId: string; state: string };
+      gatewayManager?.handleDisplayState(ds.platform, ds.platformChatId, ds.state);
+      break;
+    }
+
     default: {
       console.log(`[Gateway] Unknown message type: ${(msg as { type: string }).type}`);
     }

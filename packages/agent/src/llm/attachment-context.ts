@@ -14,7 +14,17 @@ export function buildAttachmentContext(attachments: FileAttachment[]): string | 
     const hasImageChunks = !!(doc.imageChunks && doc.imageChunks.length > 0);
     const isImage = doc.type.startsWith('image/');
 
-    if (!hasText && !isImage) continue;
+    if (isImage && !hasText && !hasImageChunks) continue;
+
+    if (!hasText && !isImage) {
+      const lines: string[] = [];
+      lines.push('[System Attached File - Not Parsed]');
+      lines.push(`Type: ${doc.type}`);
+      lines.push(`Path: ${doc.path || doc.url || doc.name || '(unknown)'}`);
+      lines.push('Warning: This file was attached but has not been processed yet. Ask the user to wait for parsing to complete or to resend the file.');
+      sections.push(lines.join('\n'));
+      continue;
+    }
 
     const lines: string[] = [];
     lines.push('[System Parsed File]');

@@ -443,7 +443,7 @@ Use the update action with blocks/blockedBy to set up dependencies:
 ## list - List all tasks
 - No parameters needed
 - Returns a summary of each task: id, subject, status, owner, blockedBy
-- Check TaskList first to avoid creating duplicate tasks
+- Check Task tool with action "list" first to avoid creating duplicate tasks
 - Prefer working on tasks in ID order (lowest ID first) when multiple are available, as earlier tasks often set up context for later ones
 
 ## update - Update a task
@@ -456,7 +456,7 @@ Use the update action with blocks/blockedBy to set up dependencies:
 - blocks: Array of task IDs this task blocks
 - blockedBy: Array of task IDs that must complete before this task
 - metadata: JSON metadata. Include "output" with a summary when completing.
-- After completing a task, call TaskList to check for newly unblocked work or claim the next available task
+- After completing a task, call Task tool with action "list" to check for newly unblocked work or claim the next available task
 
 ## output - Get output of a completed task
 - taskId (required): The ID of the completed task

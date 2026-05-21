@@ -20,6 +20,8 @@ export interface FileAttachment {
   imageChunks?: Array<{ base64: string; mediaType: string }>;
   /** Thumbnail preview for document files (base64 data URL) */
   thumbnail?: string;
+  /** Base64 data URL for image display (used when url is a file path) */
+  displayUrl?: string;
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
@@ -106,12 +108,15 @@ export function useFileAttachments() {
     if (isDocumentFile(file.name)) {
       // Document files (pdf, docx, etc.) — add a placeholder, then update in place
       // after parsing completes. All parsed data goes into the attachment itself.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filePath = (file as any).path || '';
       const placeholderId = crypto.randomUUID();
       setAttachedFiles((prev) => [...prev, {
         id: placeholderId,
         name: file.name,
         type: file.type,
-        url: '',
+        url: filePath,
+        path: filePath,
         size: file.size,
       }]);
 

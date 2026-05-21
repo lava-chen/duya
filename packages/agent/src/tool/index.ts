@@ -27,11 +27,7 @@ export { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
 export { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools exports
-export { taskGetTool } from './TaskGetTool/TaskGetTool.js';
-export { taskListTool } from './TaskListTool/TaskListTool.js';
-export { taskOutputTool } from './TaskOutputTool/TaskOutputTool.js';
-export { taskStopTool } from './TaskStopTool/TaskStopTool.js';
-export { taskUpdateTool } from './TaskUpdateTool/TaskUpdateTool.js';
+export { taskTool } from './TaskTool/TaskTool.js';
 export { enterWorktreeTool } from './EnterWorktreeTool/EnterWorktreeTool.js';
 export { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';

@@ -44,6 +44,13 @@ function isCDNImageUrl(url: string): boolean {
   return CDN_IMAGE_DOMAINS.some(pattern => pattern.test(url));
 }
 
+function stripCDNUrlsFromText(text: string): string {
+  for (const pattern of CDN_IMAGE_DOMAINS) {
+    text = text.replace(pattern, '');
+  }
+  return text;
+}
+
 /**
  * Scan OpenAI content parts for MiniMax CDN image URLs and strip them out.
  * The CDN URLs are MiniMax's internal representation of user-uploaded images.
@@ -115,8 +122,6 @@ function toOpenAIMessages(messages: Message[], includeToolCalls: boolean = true)
         result.push({ role: 'user', content: String(msg.content) });
       }
     } else if (msg.role === 'assistant') {
-      // For assistant messages: extract text content and tool_calls separately
-      // Parse content if it's a string representation of an array (from DB storage)
       const parsedContent = parseMessageContent(msg.content);
       const toolCalls = includeToolCalls ? extractToolCalls(parsedContent) : undefined;
       let textContent = '';
@@ -129,6 +134,7 @@ function toOpenAIMessages(messages: Message[], includeToolCalls: boolean = true)
           }
         }
       }
+      textContent = stripCDNUrlsFromText(textContent);
       const assistantMsg: OpenAI.Chat.ChatCompletionAssistantMessageParam = {
         role: 'assistant',
         content: textContent || undefined,

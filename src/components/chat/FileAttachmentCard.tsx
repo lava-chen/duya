@@ -17,22 +17,53 @@ export function FileAttachmentCard({
 }: FileAttachmentCardProps) {
   const ext = name.split('.').pop()?.toUpperCase() || 'FILE';
   const isPdf = ext === 'PDF';
+  const isImage = ['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'BMP', 'SVG'].includes(ext);
+  const isDoc = ['DOC', 'DOCX'].includes(ext);
   const hasThumbnail = !!thumbnail;
 
-  // For non-PDF files with thumbnail: show horizontal layout with name + ext badge + preview
-  const isHorizontalLayout = !isPdf && hasThumbnail;
+  // For image files with thumbnail: show square image preview
+  // For doc files: show horizontal layout with name + ext badge (like reference image)
+  // For PDFs with thumbnail: show vertical layout with thumbnail + PDF badge
+  // For other files without thumbnail: show vertical layout with ext label
 
-  if (isHorizontalLayout) {
+  // Image files: square preview with image filling the card
+  if (isImage && hasThumbnail) {
     return (
       <div
-        className="relative flex items-stretch rounded-lg border border-border/50 bg-muted/30 overflow-hidden"
-        style={{ width: width * 2.2 }}
+        className="relative rounded-2xl border border-border/50 overflow-hidden flex-shrink-0"
+        style={{ width, height: width }}
       >
         {onRemove && (
           <button
             type="button"
             onClick={() => onRemove(id)}
-            className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/40 flex items-center justify-center hover:bg-black/60 transition-colors"
+            className="absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
+          >
+            <XIcon size={10} className="text-white" />
+          </button>
+        )}
+        <img
+          src={thumbnail}
+          alt={name}
+          className="w-full h-full object-cover"
+          loading="lazy"
+        />
+      </div>
+    );
+  }
+
+  // Document files (DOCX, etc.): horizontal layout with name + ext badge
+  if (isDoc) {
+    return (
+      <div
+        className="relative flex items-stretch rounded-2xl border border-border/50 bg-muted/30 overflow-hidden"
+        style={{ width: width * 2.2, height: width }}
+      >
+        {onRemove && (
+          <button
+            type="button"
+            onClick={() => onRemove(id)}
+            className="absolute -top-1.5 -right-1.5 z-10 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
           >
             <XIcon size={10} className="text-white" />
           </button>
@@ -51,10 +82,45 @@ export function FileAttachmentCard({
           </div>
         </div>
 
-        {/* Right side: Thumbnail */}
+        {/* Right side: Thumbnail (if available) */}
+        {hasThumbnail && (
+          <div
+            className="flex-shrink-0 overflow-hidden border-l border-border/30"
+            style={{ width: width * 0.75, height: width }}
+          >
+            <img
+              src={thumbnail}
+              alt={name}
+              className="w-full h-full object-contain"
+              loading="lazy"
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // PDF or files with thumbnail: vertical layout with square preview
+  if (hasThumbnail) {
+    return (
+      <div
+        className="relative flex flex-col items-center rounded-2xl border border-border/50 bg-muted/30 overflow-hidden flex-shrink-0"
+        style={{ width }}
+      >
+        {onRemove && (
+          <button
+            type="button"
+            onClick={() => onRemove(id)}
+            className="absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
+          >
+            <XIcon size={10} className="text-white" />
+          </button>
+        )}
+
+        {/* Thumbnail Preview Area */}
         <div
-          className="flex-shrink-0 overflow-hidden"
-          style={{ width: width, height: width }}
+          className="flex-shrink-0 w-full overflow-hidden relative"
+          style={{ height: width }}
         >
           <img
             src={thumbnail}
@@ -62,64 +128,49 @@ export function FileAttachmentCard({
             className="w-full h-full object-cover"
             loading="lazy"
           />
+          {/* PDF badge overlay */}
+          {isPdf && (
+            <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md text-[10px] font-medium bg-white/90 text-gray-700 shadow-sm border border-gray-200">
+              PDF
+            </div>
+          )}
         </div>
       </div>
     );
   }
 
-  // PDF or files without thumbnail: vertical layout with square preview
+  // Files without thumbnail: vertical layout with ext label only
   return (
     <div
-      className="relative flex flex-col items-center rounded-lg border border-border/50 bg-muted/30 overflow-hidden"
+      className="relative flex flex-col items-center rounded-2xl border border-border/50 bg-muted/30 overflow-hidden flex-shrink-0"
       style={{ width }}
     >
       {onRemove && (
         <button
           type="button"
           onClick={() => onRemove(id)}
-          className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/40 flex items-center justify-center hover:bg-black/60 transition-colors"
+          className="absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
         >
           <XIcon size={10} className="text-white" />
         </button>
       )}
 
-      {/* Thumbnail / Preview Area */}
+      {/* Ext Label Area */}
       <div
-        className="flex-shrink-0 w-full flex items-center justify-center overflow-hidden relative"
-        style={{ height: width }}
+        className="w-full flex items-center justify-center"
+        style={{
+          height: width,
+          backgroundColor: isPdf
+            ? 'rgba(239, 68, 68, 0.08)'
+            : 'rgba(0, 0, 0, 0.04)',
+        }}
       >
-        {hasThumbnail ? (
-          <>
-            <img
-              src={thumbnail}
-              alt={name}
-              className="w-full h-full object-cover"
-              loading="lazy"
-            />
-            {/* PDF badge overlay */}
-            {isPdf && (
-              <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md text-[10px] font-medium bg-white/90 text-gray-700 shadow-sm border border-gray-200">
-                PDF
-              </div>
-            )}
-          </>
-        ) : (
-          <div
-            className="w-full h-full flex items-center justify-center"
-            style={{
-              backgroundColor: isPdf
-                ? 'rgba(239, 68, 68, 0.08)'
-                : 'rgba(0, 0, 0, 0.04)',
-            }}
-          >
-            <span
-              className="text-[11px] font-bold"
-              style={{ color: isPdf ? '#ef4444' : 'var(--muted)' }}
-            >
-              {ext}
-            </span>
-          </div>
-        )}
+        <span
+          className="text-[11px] font-bold"
+          style={{ color: isPdf ? '#ef4444' : 'var(--muted)' }}
+        >
+          {ext}
+        </span>
       </div>
     </div>
   );

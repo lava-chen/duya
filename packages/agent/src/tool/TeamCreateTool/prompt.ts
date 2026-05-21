@@ -37,16 +37,16 @@ This creates:
 ## Team Workflow
 
 1. **Create a team** with TeamCreate - this creates both the team and its task list
-2. **Create tasks** using the Task tools (TaskCreate, TaskList, etc.) - they automatically use the team's task list
+2. **Create tasks** using the Task tool with action "create" - it automatically uses the team's task list
 3. **Spawn teammates** using the Agent tool with \`team_name\` and \`name\` parameters to create teammates that join the team
-4. **Assign tasks** using TaskUpdate with \`owner\` to give tasks to idle teammates
-5. **Teammates work on assigned tasks** and mark them completed via TaskUpdate
+4. **Assign tasks** using Task tool with action "update" and \`owner\` to give tasks to idle teammates
+5. **Teammates work on assigned tasks** and mark them completed via Task tool with action "update"
 6. **Teammates go idle between turns** - after each turn, teammates automatically go idle and send a notification. IMPORTANT: Be patient with idle teammates! Don't comment on their idleness until it actually impacts your work.
 7. **Shutdown your team** - when the task is completed, gracefully shut down your teammates via SendMessage with \`message: {type: "shutdown_request"}\`.
 
 ## Task Ownership
 
-Tasks are assigned using TaskUpdate with the \`owner\` parameter. Any agent can set or change task ownership via TaskUpdate.
+Tasks are assigned using Task tool with action "update" and the \`owner\` parameter. Any agent can set or change task ownership via Task tool.
 
 ## Automatic Message Delivery
 
@@ -95,10 +95,10 @@ Use the Read tool to read ~/.duya/teams/{team-name}/config.json
 Teams share a task list that all teammates can access at \`~/.duya/tasks/{team-name}/\`.
 
 Teammates should:
-1. Check TaskList periodically, **especially after completing each task**, to find available work or see newly unblocked tasks
-2. Claim unassigned, unblocked tasks with TaskUpdate (set \`owner\` to your name). **Prefer tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
-3. Create new tasks with \`TaskCreate\` when identifying additional work
-4. Mark tasks as completed with \`TaskUpdate\` when done, then check TaskList for next work
+1. Check Task tool with action "list" periodically, **especially after completing each task**, to find available work or see newly unblocked tasks
+2. Claim unassigned, unblocked tasks with Task tool with action "update" (set \`owner\` to your name). **Prefer tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+3. Create new tasks with Task tool with action "create" when identifying additional work
+4. Mark tasks as completed with Task tool with action "update" when done, then check Task list for next work
 5. Coordinate with other teammates by reading the task list status
 6. If all available tasks are blocked, notify the team lead or help resolve blocking tasks
 
@@ -106,7 +106,7 @@ Teammates should:
 - Do not use terminal tools to view your team's activity; always send a message to your teammates (and remember, refer to them by name).
 - Your team cannot hear you if you do not use the SendMessage tool. Always send a message to your teammates if you are responding to them.
 - Do NOT send structured JSON status messages like \`{"type":"idle",...}\` or \`{"type":"task_completed",...}\`. Just communicate in plain text when you need to message teammates.
-- Use TaskUpdate to mark tasks completed.
+- Use Task tool with action "update" to mark tasks completed.
 - If you are an agent in the team, the system will automatically send idle notifications to the team lead when you stop.
 
 `.trim();

@@ -1,841 +1,760 @@
-/**
- * Feishu Adapter - PlatformAdapter implementation for Feishu
- *
- * Full-featured adapter with:
- * - Webhook HTTP server for inbound events
- * - Text/media batching for message splitting
- * - Group chat @mention gating
- * - Markdown to rich text conversion
- * - Processing status emoji feedback
- * - Session locks for serial message handling
- * - DM pairing with pairing codes
- * - QR code registration for app creation
- */
-
-import http from 'http';
-import crypto from 'crypto';
-import type {
-  PlatformConfig,
-  NormalizedMessage,
-  NormalizedReply,
-  SendResult,
-} from '../../types.js';
-import { BaseAdapter } from '../base-adapter.js';
-import { registerAdapterFactory } from '../base.js';
-import { proxyFetch } from '../../proxy-fetch.js';
-
-import type {
-  FeishuMessage,
-  FeishuEvent,
-  FeishuConfigOptions,
-  FeishuGroupRule,
-  FeishuBotInfo,
-} from './types.js';
-import { FEISHU_MESSAGE_TYPES, FEISHU_EVENT_TYPES } from './types.js';
-import { splitMessage, extractTextFromMessage, getMimeType } from './message-utils.js';
-import { FeishuWebhookServer } from './webhook-server.js';
-import { TextBatcher } from './text-batcher.js';
-import { MediaBatcher } from './media-batcher.js';
+﻿import { EventEmitter } from 'events';
+import { FeishuWSClient } from './websocket-client';
+import { FeishuWebhookServer } from './webhook-server';
+import { FeishuTextBatcher } from './text-batcher';
+import { FeishuMediaBatcher } from './media-batcher';
+import { FeishuCommentHandler } from './comment-handler';
+import { DedupPersistence } from './dedup-persistence';
 import {
-  checkGroupGating,
-  extractReplyContext,
-  getThreadId,
-  extractUserId,
-  isPrivateChat,
-  type GroupGatingOptions,
-} from './group-gating.js';
-import { buildOutboundPayload, stripMarkdown } from './markdown.js';
-import { FeishuCommentHandler, type CommentInboundMessage } from './comment-handler.js';
-import { getDedupPersistence } from './dedup-persistence.js';
-import { buildApprovalCard, buildTextCard, cardToPayload, parseCardActionCallback } from './card-builder.js';
-import { FeishuWebSocketClient } from './websocket-client.js';
-import { DmPairingHandler } from './dm-pairing.js';
-import { qrRegisterBegin, qrRegisterPoll, generateQrImage, probeBot, type QrRegistrationResult } from './qr-registration.js';
+  createPairingSession,
+  verifyPairingApproval,
+  approvePairingCode,
+  rejectPairingCode,
+  getPendingPairingSessions,
+  revokePairingSession,
+} from './dm-pairing';
+import {
+  checkUserAllowed,
+  isGroupChat,
+  isFreeResponseChat,
+  checkMentionRequirement,
+} from './group-gating';
+import {
+  buildPermissionRequestCard,
+  buildPairingApprovedCard,
+  buildPairingRejectedCard,
+  buildErrorCard,
+} from './card-builder';
+import { markdownToFeishuPost, buildPostContent, splitPostIfNeeded } from './markdown';
+import {
+  splitMessage,
+  parseFeishuContent,
+  extractRichText,
+  truncateDisplay,
+  isBotMentioned,
+  parseFileNameFromMessage,
+} from './message-utils';
+import type {
+  FeishuConfig,
+  FeishuDomain,
+  FeishuEvent,
+  FeishuMessage,
+  FeishuSender,
+  FeishuMention,
+  FeishuMsgType,
+  FeishuBotInfo,
+  FeishuTokenResponse,
+  FeishuAppAccessTokenResponse,
+  FeishuSendMessageResponse,
+  FeishuErrorResponse,
+  FeishuCardAction,
+  FeishuUserInfo,
+  FeishuAdapterOptions,
+  FeishuMessageElement,
+} from './types';
+import {
+  isRetryableFeishuError,
+  FEISHU_MSG_TYPE_LABELS,
+  getChatTypeLabel,
+} from './types';
 
-const FEISHU_API_BASE = 'https://open.feishu.cn/open-apis';
-const MAX_MESSAGE_LENGTH = 4000;
-const CHAT_RATE_LIMIT_MS = 1000;
-const DEDUP_MAX = 500;
-const MAX_SEND_RETRIES = 3;
-const SPLIT_THRESHOLD = 4000;
+const MESSAGE_SEND_RETRY_MAX = 2;
+const MESSAGE_SEND_RETRY_DELAY_MS = 800;
+const MAX_SINGLE_TEXT_SIZE = 8192;
+const ACCESS_TOKEN_REFRESH_MARGIN_MS = 300000;
+const USER_CACHE_TTL_MS = 600000;
+const CARD_ACTION_DEDUP_WINDOW_MS = 15000;
 
-export class FeishuAdapter extends BaseAdapter {
-  readonly platform = 'feishu' as const;
+interface CachedUser {
+  name: string;
+  avatar_url?: string;
+  fetchedAt: number;
+}
 
-  // Credentials
-  private appId = '';
-  private appSecret = '';
-  private verificationToken = '';
-  private encryptKey = '';
-  private domain: 'feishu' | 'lark' = 'feishu';
+export class FeishuChannel extends EventEmitter {
+  private _config: FeishuConfig;
+  private _options: FeishuAdapterOptions;
+  private _wsClient: FeishuWSClient | null = null;
+  private _webhookServer: FeishuWebhookServer | null = null;
+  private _textBatcher: FeishuTextBatcher;
+  private _mediaBatcher: FeishuMediaBatcher;
+  private _commentHandler: FeishuCommentHandler;
+  private _dedupPersistence: DedupPersistence;
+  private _tenantToken: string | null = null;
+  private _tenantTokenExpiresAt = 0;
+  private _appAccessToken: string | null = null;
+  private _appAccessTokenExpiresAt = 0;
+  private _botInfo: FeishuBotInfo | null = null;
+  private _userCache: Map<string, CachedUser> = new Map();
+  private _cardActionTokens: Map<string, number> = new Map();
+  private _running = false;
 
-  // Token management
-  private accessToken = '';
-  private tokenExpiresAt = 0;
-
-  // Bot identity
-  private botOpenId = '';
-  private botName = '';
-
-  // Session locks for serial processing
-  private chatLocks = new Map<string, { lock: Promise<void>; resolve: () => void }>();
-
-  // Webhook server
-  private webhookServer: FeishuWebhookServer | null = null;
-  private webhookPort = 8443;
-  private webhookPath = '/webhook/feishu';
-  private webhookHost = '0.0.0.0';
-
-  // Batching
-  private textBatcher: TextBatcher;
-  private mediaBatcher: MediaBatcher;
-
-  // Group gating
-  private groupGatingOptions: GroupGatingOptions = {};
-  private groupRules: Record<string, FeishuGroupRule> = {};
-
-  // Config
-  private baseUrl = FEISHU_API_BASE;
-  private requireMention = true;
-  private freeResponseChats: string[] = [];
-
-  // Config options from FeishuConfigOptions
-  private configOptions: FeishuConfigOptions = {};
-
-  // Comment handler
-  private commentHandler: FeishuCommentHandler;
-
-  // Comment event callback for IPC
-  private onCommentInbound: ((msg: CommentInboundMessage) => void) | null = null;
-
-  // Dedup persistence
-  private dedupPersistence = getDedupPersistence();
-
-  // WebSocket client
-  private wsClient: FeishuWebSocketClient | null = null;
-  private connectionMode: 'websocket' | 'webhook' = 'webhook';
-
-  // DM Pairing
-  private dmPairing: DmPairingHandler;
-
-  constructor() {
-    super({ rateLimitMs: CHAT_RATE_LIMIT_MS });
-
-    registerAdapterFactory('feishu', () => new FeishuAdapter());
-
-    // Initialize batchers
-    this.textBatcher = new TextBatcher((msg) => this.dispatchToHandler(msg), {
-      delayMs: 600,
-      splitDelayMs: 2000,
-      maxMessages: 8,
-      maxChars: 4000,
-      splitThreshold: SPLIT_THRESHOLD,
+  constructor(options: FeishuAdapterOptions) {
+    super();
+    this._config = options.config;
+    this._options = options;
+    this._textBatcher = new FeishuTextBatcher({
+      onFlush: async (batches) => {
+        for (const batch of batches) {
+          await this._sendTextMessage(batch.chatId, batch.content, batch.replyTo);
+        }
+      },
     });
-
-    this.mediaBatcher = new MediaBatcher((msg) => this.dispatchToHandler(msg), {
-      delayMs: 800,
+    this._mediaBatcher = new FeishuMediaBatcher({
+      onFlush: async (batches) => {
+        for (const batch of batches) {
+          await this._sendMediaMessage(batch.chatId, batch.mediaType, batch.mediaKey, batch.fileName, batch.replyTo);
+        }
+      },
     });
-
-    // Initialize comment handler
-    this.commentHandler = new FeishuCommentHandler();
-
-    // Initialize DM pairing handler
-    this.dmPairing = new DmPairingHandler({
-      baseUrl: FEISHU_API_BASE,
-      appId: '',
-      appSecret: '',
-      domain: 'feishu',
+    this._commentHandler = new FeishuCommentHandler({
+      onComment: async (_docId, _commentId, _userId, text) => {},
     });
+    this._dedupPersistence = new DedupPersistence();
   }
 
-  async start(config: PlatformConfig): Promise<void> {
-    if (this.running) return;
+  get config(): FeishuConfig { return this._config; }
+  get botInfo(): FeishuBotInfo | null { return this._botInfo; }
+  get tenantToken(): string | null { return this._tenantToken; }
+  get isRunning(): boolean { return this._running; }
+  get connectionMode(): 'websocket' | 'webhook' { return this._config.connectionMode || 'websocket'; }
+  get domain(): FeishuDomain { return this._config.domain || 'feishu'; }
 
-    // Load credentials
-    this.appId = config.credentials['app_id'] ?? '';
-    this.appSecret = config.credentials['app_secret'] ?? '';
-    this.verificationToken = config.credentials['verification_token'] ?? '';
-    this.encryptKey = config.credentials['encrypt_key'] ?? '';
-    this.domain = (config.credentials['domain'] as 'feishu' | 'lark') ?? 'feishu';
-    this.config = config;
+  private _getApiBase(): string {
+    return this.domain === 'lark' ? 'https://open.larksuite.com' : 'https://open.feishu.cn';
+  }
 
-    // Load config options
-    this.configOptions = config.options as FeishuConfigOptions ?? {};
-    this.webhookHost = this.configOptions.webhook_host ?? '0.0.0.0';
-    this.webhookPort = this.configOptions.webhook_port ?? 8443;
-    this.webhookPath = this.configOptions.webhook_path ?? '/webhook/feishu';
-    this.requireMention = this.configOptions.require_mention ?? true;
-    this.freeResponseChats = this.configOptions.free_response_chats ?? [];
-    this.groupRules = this.configOptions as Record<string, FeishuGroupRule> ?? {};
-    this.connectionMode = (this.configOptions.connection_mode as 'websocket' | 'webhook') ?? 'webhook';
-
-    // Update base URL for Lark domain
-    if (this.domain === 'lark') {
-      this.baseUrl = 'https://open.larksuite.com/open-apis';
+  private async _getTenantAccessToken(): Promise<string> {
+    const now = Date.now();
+    if (this._tenantToken && this._tenantTokenExpiresAt > now + ACCESS_TOKEN_REFRESH_MARGIN_MS) {
+      return this._tenantToken;
     }
-
-    // Configure comment handler
-    this.commentHandler.configure({
-      app_id: this.appId,
-      app_secret: this.appSecret,
-      domain: this.domain,
+    const base = this._getApiBase();
+    const res = await fetch(`${base}/open-apis/auth/v3/tenant_access_token/internal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ app_id: this._config.appId, app_secret: this._config.appSecret }),
     });
+    const data = await res.json() as FeishuTokenResponse;
+    if (data.code !== 0 || !data.tenant_access_token) {
+      throw new Error(`Failed to get tenant access token: ${data.msg || 'unknown error'}`);
+    }
+    this._tenantToken = data.tenant_access_token;
+    this._tenantTokenExpiresAt = now + (data.expire * 1000);
+    return this._tenantToken;
+  }
 
-    // Configure DM pairing handler
-    this.dmPairing.configure({
-      baseUrl: this.baseUrl,
-      appId: this.appId,
-      appSecret: this.appSecret,
-      domain: this.domain,
+  private async _getAppAccessToken(): Promise<string> {
+    const now = Date.now();
+    if (this._appAccessToken && this._appAccessTokenExpiresAt > now + ACCESS_TOKEN_REFRESH_MARGIN_MS) {
+      return this._appAccessToken;
+    }
+    const base = this._getApiBase();
+    const res = await fetch(`${base}/open-apis/auth/v3/app_access_token/internal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ app_id: this._config.appId, app_secret: this._config.appSecret }),
     });
+    const data = await res.json() as FeishuAppAccessTokenResponse;
+    if (data.code !== 0 || !data.app_access_token) {
+      throw new Error(`Failed to get app access token: ${data.msg || 'unknown error'}`);
+    }
+    this._appAccessToken = data.app_access_token;
+    this._appAccessTokenExpiresAt = now + (data.expire * 1000);
+    return this._appAccessToken;
+  }
 
-    // Set up comment inbound handler
-    this.commentHandler.setOnInboundMessage((msg) => {
-      if (this.onCommentInbound) {
-        this.onCommentInbound(msg);
+  private async _hydrateBotInfo(): Promise<void> {
+    try {
+      const appToken = await this._getAppAccessToken();
+      const base = this._getApiBase();
+      const res = await fetch(`${base}/open-apis/bot/v3/info`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${appToken}` },
+      });
+      const data = await res.json() as { code: number; msg: string; bot?: FeishuBotInfo };
+      if (data.code === 0 && data.bot) {
+        this._botInfo = data.bot;
       }
-    });
+    } catch {}
+  }
 
-    // Get access token
-    await this.getAccessToken();
-
-    // Hydrate bot identity
-    await this.hydrateBotIdentity();
-
-    // Update group gating options
-    this.groupGatingOptions = {
-      groupRules: this.groupRules,
-      requireMention: this.requireMention,
-      botOpenId: this.botOpenId,
-      allowFrom: this.configOptions.allow_from,
-      denyFrom: this.configOptions.deny_from,
-    };
-
-    // Start connection based on mode
-    if (this.connectionMode === 'websocket') {
-      console.log('[Feishu] Starting WebSocket mode...');
-      this.wsClient = new FeishuWebSocketClient(this, {
-        appId: this.appId,
-        appSecret: this.appSecret,
-        baseUrl: this.baseUrl,
-        reconnectInterval: (this.configOptions.ws_reconnect_interval ?? 120) * 1000,
-        pingInterval: (this.configOptions.ws_ping_interval ?? 30) * 1000,
+  private async _getUserName(openId: string): Promise<string> {
+    const cached = this._userCache.get(openId);
+    if (cached && Date.now() - cached.fetchedAt < USER_CACHE_TTL_MS) return cached.name;
+    try {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const res = await fetch(`${base}/open-apis/contact/v3/users/${openId}?user_id_type=open_id`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
       });
-      await this.wsClient.start();
-    } else {
-      // Start webhook server
-      console.log('[Feishu] Starting webhook mode...');
-      this.webhookServer = new FeishuWebhookServer(this, {
-        host: this.webhookHost,
-        port: this.webhookPort,
-        path: this.webhookPath,
-        verificationToken: this.verificationToken,
-        encryptKey: this.encryptKey,
-      });
-      await this.webhookServer.start();
+      const data = await res.json() as { code: number; msg: string; data?: { user?: FeishuUserInfo } };
+      if (data.code === 0 && data.data?.user) {
+        const name = data.data.user.name || data.data.user.nickname || openId;
+        this._userCache.set(openId, { name, avatar_url: data.data.user.avatar_url, fetchedAt: Date.now() });
+        return name;
+      }
+    } catch {}
+    return openId;
+  }
+
+  private async _getSenderName(sender: FeishuSender): Promise<string> {
+    const openId = sender.sender_id?.open_id;
+    if (!openId) return 'unknown';
+    const cached = this._userCache.get(openId);
+    if (cached && Date.now() - cached.fetchedAt < USER_CACHE_TTL_MS) return cached.name;
+    return this._getUserName(openId);
+  }
+
+  private _getChatId(event: FeishuEvent): string {
+    if (event.event?.chat_id) return event.event.chat_id;
+    if (event.event?.message?.chat_id) return event.event.message.chat_id;
+    if (event.event?.open_chat_id) return event.event.open_chat_id;
+    if (event.event?.open_id) return event.event.open_id;
+    return '';
+  }
+
+  private _getUserId(sender: FeishuSender): string {
+    return sender.sender_id?.open_id || '';
+  }
+
+  private async _isCardActionDup(actionToken: string): Promise<boolean> {
+    if (!actionToken) return false;
+    const now = Date.now();
+    const prev = this._cardActionTokens.get(actionToken);
+    if (prev && now - prev < CARD_ACTION_DEDUP_WINDOW_MS) return true;
+    this._cardActionTokens.set(actionToken, now);
+    for (const [key, time] of this._cardActionTokens) {
+      if (now - time > CARD_ACTION_DEDUP_WINDOW_MS) this._cardActionTokens.delete(key);
     }
+    return false;
+  }
 
-    this.updateHealthConnected();
-    this.running = true;
-    console.log(`[Feishu] Adapter started (bot: ${this.botName}, open_id: ${this.botOpenId}, mode: ${this.connectionMode})`);
+  async start(): Promise<void> {
+    if (this._running) return;
+    this._running = true;
+    this._dedupPersistence.start();
+    await this._hydrateBotInfo();
+
+    if (this.connectionMode === 'webhook') {
+      await this._startWebhookMode();
+    } else {
+      await this._startWebSocketMode();
+    }
+  }
+
+  private async _startWebSocketMode(): Promise<void> {
+    this._wsClient = new FeishuWSClient({
+      domain: this.domain,
+      appId: this._config.appId,
+      appSecret: this._config.appSecret,
+      onEvent: (wsEvent) => {
+        const event = wsEvent.data as FeishuEvent;
+        this._handleEvent(event).catch(() => {});
+      },
+      onStatusChange: (status) => {
+        const mapped = status === 'connecting' || status === 'reconnecting'
+          ? 'disconnected' as const : status === 'connected' ? 'connected' as const : 'disconnected' as const;
+        this._options.onStatusChange?.(mapped);
+      },
+    });
+    await this._wsClient.connect();
+  }
+
+  private async _startWebhookMode(): Promise<void> {
+    const port = this._config.webhook?.port || 8765;
+    const host = this._config.webhook?.host || '127.0.0.1';
+    const wp = this._config.webhook?.path || '/feishu/webhook';
+
+    this._webhookServer = new FeishuWebhookServer({
+      port, host, path: wp,
+      verificationToken: this._config.webhook?.verificationToken,
+      encryptKey: this._config.webhook?.encryptKey,
+      onEvent: async (event) => {
+        try { await this._handleEvent(event); } catch {}
+      },
+    });
+    await this._webhookServer.start();
   }
 
   async stop(): Promise<void> {
-    if (!this.running) return;
-
-    // Stop WebSocket client
-    if (this.wsClient) {
-      await this.wsClient.stop();
-      this.wsClient = null;
-    }
-
-    // Stop webhook server
-    if (this.webhookServer) {
-      await this.webhookServer.stop();
-      this.webhookServer = null;
-    }
-
-    // Flush dedup persistence
-    this.dedupPersistence.flush();
-
-    this.running = false;
-    this.health.connected = false;
-    console.log('[Feishu] Adapter stopped');
+    this._running = false;
+    if (this._wsClient) { await this._wsClient.disconnect(); this._wsClient = null; }
+    if (this._webhookServer) { await this._webhookServer.stop(); this._webhookServer = null; }
+    this._textBatcher.stop();
+    this._mediaBatcher.stop();
+    this._dedupPersistence.stop();
+    this._commentHandler.stop();
   }
 
-  isRunning(): boolean {
-    return this.running;
-  }
+  private async _handleEvent(event: FeishuEvent): Promise<void> {
+    const eventType = event.header?.event_type || event.event?.type || '';
+    const chatId = this._getChatId(event);
+    const sender = event.event?.sender;
+    const message = event.event?.message;
+    const messageId = message?.message_id || '';
 
-  getBotInfo(): FeishuBotInfo | null {
-    if (!this.botOpenId && !this.botName) return null;
-    return {
-      app_id: this.appId,
-      app_name: this.botName,
-      bot_open_id: this.botOpenId,
-    };
-  }
+    if (messageId && this._dedupPersistence.isDuplicate(messageId)) return;
+    if (messageId) this._dedupPersistence.markSeen(messageId);
 
-  /** Set callback for comment inbound messages */
-  setOnCommentInbound(callback: (msg: CommentInboundMessage) => void): void {
-    this.onCommentInbound = callback;
-  }
-
-  async sendReply(chatId: string, reply: NormalizedReply): Promise<SendResult> {
-    await this.waitForRateLimit(chatId);
-
-    // Build interactive card
-    if (reply.type === 'permission_request') {
-      const permReply = reply as { type: string; toolName?: string; toolInput?: Record<string, unknown>; permissionId?: string; text?: string };
-      const card = buildApprovalCard({
-        toolName: permReply.toolName ?? 'Unknown',
-        toolInput: permReply.toolInput ?? {},
-        permissionId: permReply.permissionId ?? '',
-        description: permReply.text,
-      });
-
-      return this.sendCardMessageToChat(chatId, card);
-    }
-
-    // Fall back to text
-    if ('text' in reply && reply.text) {
-      return this.sendTextMessage(chatId, reply.text);
-    }
-
-    return { ok: true };
-  }
-
-  private async sendTextMessage(chatId: string, text: string): Promise<SendResult> {
     try {
-      const payload = buildOutboundPayload(text);
+      switch (eventType) {
+        case 'im.message.receive_v1':
+          await this._handleMessageReceive(chatId, sender, message, event);
+          break;
+        case 'im.message.reaction.created_v1':
+          await this._handleReactionAdded(messageId, event, chatId, sender);
+          break;
+        case 'im.message.reaction.deleted_v1':
+          await this._handleReactionRemoved(messageId, event, chatId, sender);
+          break;
+        case 'card.action.trigger':
+          await this._handleCardAction(event);
+          break;
+        case 'im.message.recalled_v1':
+          await this._options.onMessageRecalled(messageId, chatId);
+          break;
+        case 'im.chat.member.user.added_v1':
+          await this._handleMemberAdded(chatId, event);
+          break;
+        case 'im.chat.member.user.withdrawn_v1':
+        case 'im.chat.member.user.deleted_v1':
+          if (sender?.sender_id?.open_id) {
+            await this._options.onMemberRemoved(chatId, sender.sender_id.open_id);
+          }
+          break;
+        case 'im.chat.member.bot.added_v1':
+          await this._options.onBotInvited?.(chatId, sender?.sender_id?.open_id || '');
+          break;
+        case 'im.chat.member.bot.deleted_v1':
+          await this._options.onBotRemoved?.(chatId, sender?.sender_id?.open_id || '');
+          break;
+      }
+    } catch {}
+  }
 
-      const response = await this._apiRequest<{
-        data?: { message_id?: string };
-        message_id?: string;
-      }>('/im/v1/messages', {
-        method: 'POST',
-        body: {
+  private async _handleMessageReceive(
+    chatId: string,
+    sender: FeishuSender | undefined,
+    message: FeishuMessage | undefined,
+    event: FeishuEvent,
+  ): Promise<void> {
+    if (!message || !chatId) return;
+
+    const userId = sender ? this._getUserId(sender) : '';
+    const msgType = (message.msg_type || 'unknown') as FeishuMsgType;
+    const threadId = message.thread_id || message.root_id || message.parent_id;
+    const content = parseFeishuContent(message.content);
+
+    if (!userId) return;
+
+    const userAllowed = checkUserAllowed(userId, this._config.allowedUsers);
+    const isGroup = isGroupChat(message.chat_type || '');
+    const isFree = isFreeResponseChat(chatId, this._config.freeResponseChatIds);
+
+    if (isGroup) {
+      if (!userAllowed && this._config.allowedUsers && this._config.allowedUsers.length > 0) return;
+      if (!isFree) {
+        const botOpenId = this._botInfo?.open_id || '';
+        const botMentioned = content
+          ? isBotMentioned(botOpenId, content, message.mentions)
+          : checkMentionRequirement(message.content, botOpenId);
+        if (!botMentioned) return;
+      }
+    } else {
+      if (!userAllowed && this._config.allowedUsers && this._config.allowedUsers.length > 0) {
+        await this._handleUnpairedDM(chatId, userId);
+        return;
+      }
+    }
+
+    switch (msgType) {
+      case 'text': {
+        const richText = content ? extractRichText(content, message.mentions) : { raw: message.content, content: message.content, mentions: [] };
+        if (threadId) {
+          await this._options.onThreadMessage?.(threadId, chatId, userId, richText.content, message.message_id);
+        } else {
+          await this._options.onMessage(chatId, userId, richText.content, message.message_id, threadId, richText.mentions);
+        }
+        break;
+      }
+      case 'post': {
+        if (content?.post) {
+          const post = content.post.zh_cn || content.post.en_us || content.post.ja_jp;
+          if (post) {
+            await this._options.onPostMessage(chatId, userId, post.title || '', post.content || [], message.message_id);
+          }
+        } else if (content?.elements) {
+          const richText = extractRichText(content, message.mentions);
+          await this._options.onMessage(chatId, userId, richText.content, message.message_id, threadId, richText.mentions);
+        }
+        break;
+      }
+      case 'image': {
+        const imageKey = content?.image_key || '';
+        if (imageKey) await this._options.onImageMessage(chatId, userId, imageKey, message.message_id);
+        break;
+      }
+      case 'file': {
+        const fileKey = content?.file_key || '';
+        const fileName = content ? parseFileNameFromMessage(content) : 'unknown_file';
+        if (fileKey) await this._options.onFileMessage(chatId, userId, fileKey, fileName, message.message_id);
+        break;
+      }
+      case 'audio': {
+        const audioKey = content?.audio_key || '';
+        if (audioKey) await this._options.onAudioMessage(chatId, userId, audioKey, content?.duration || 0, message.message_id);
+        break;
+      }
+    }
+  }
+
+  private async _handleUnpairedDM(chatId: string, userId: string): Promise<void> {
+    if (verifyPairingApproval(userId, chatId)) return;
+    const result = createPairingSession(userId, chatId);
+    if ('error' in result) {
+      await this.sendTextMessage(chatId, result.error);
+      return;
+    }
+    const card = buildPermissionRequestCard(result.code, userId);
+    await this.sendCardMessage(chatId, card);
+  }
+
+  private async _handleReactionAdded(
+    messageId: string, event: FeishuEvent, chatId: string, sender: FeishuSender | undefined,
+  ): Promise<void> {
+    const emojiType = event.event?.message?.content
+      ? (() => { try { const c = JSON.parse(event.event!.message!.content); return c.reaction_type?.emoji_type || ''; } catch { return ''; } })()
+      : '';
+    const userId = sender?.sender_id?.open_id || '';
+    if (emojiType && userId) await this._options.onReactionAdded(messageId, emojiType, userId, chatId);
+  }
+
+  private async _handleReactionRemoved(
+    messageId: string, event: FeishuEvent, chatId: string, sender: FeishuSender | undefined,
+  ): Promise<void> {
+    const emojiType = event.event?.message?.content
+      ? (() => { try { const c = JSON.parse(event.event!.message!.content); return c.reaction_type?.emoji_type || ''; } catch { return ''; } })()
+      : '';
+    const userId = sender?.sender_id?.open_id || '';
+    if (emojiType && userId) await this._options.onReactionRemoved(messageId, emojiType, userId, chatId);
+  }
+
+  private async _handleCardAction(event: FeishuEvent): Promise<void> {
+    const action = event.event?.action;
+    if (!action) return;
+
+    const actionToken = action.action_token || '';
+    if (await this._isCardActionDup(actionToken)) return;
+
+    const chatId = this._getChatId(event);
+
+    if (action.tag === 'approve_pairing') {
+      const code = action.value?.code as string | undefined;
+      if (code) {
+        const result = approvePairingCode(code);
+        if (result.success) {
+          await this._options.onStatusChange?.('connected');
+          await this.sendCardMessage(chatId, buildPairingApprovedCard());
+          await this.sendTextMessage(chatId, 'Pairing approved! You can now chat with the bot.');
+        } else {
+          await this.sendCardMessage(chatId, buildErrorCard(result.error || 'Approval failed'));
+        }
+      }
+    } else if (action.tag === 'reject_pairing') {
+      const code = action.value?.code as string | undefined;
+      if (code) {
+        rejectPairingCode(code);
+        await this.sendCardMessage(chatId, buildPairingRejectedCard());
+      }
+    } else {
+      await this._options.onCardAction(action, chatId);
+    }
+  }
+
+  private async _handleMemberAdded(chatId: string, event: FeishuEvent): Promise<void> {
+    const userIds: string[] = [];
+    if (event.event?.open_id) userIds.push(event.event.open_id);
+    if (event.event?.union_id) userIds.push(event.event.union_id);
+    if (event.event?.user_id) userIds.push(event.event.user_id);
+    if (userIds.length > 0) await this._options.onMemberAdded(chatId, userIds);
+  }
+
+  async setProcessingStatus(type: 'start' | 'done', messageId: string, chatId: string): Promise<void> {
+    if (!type || !messageId || !chatId) return;
+    try {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      if (type === 'start') {
+        await fetch(`${base}/open-apis/im/v1/messages/${messageId}/urgent_app`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ urgent_app: 'bot_notice' }),
+        });
+      }
+      await this._options.onProcessingStatus?.(type, messageId, chatId);
+    } catch {}
+  }
+
+  async sendTextMessage(chatId: string, content: string, replyTo?: string): Promise<string[]> {
+    return this._textBatcher.enqueue({ chatId, content, replyTo });
+  }
+
+  private async _sendTextMessage(chatId: string, content: string, replyTo?: string): Promise<string[]> {
+    const messageIds: string[] = [];
+    const chunks = splitMessage(content, MAX_SINGLE_TEXT_SIZE);
+    for (let i = 0; i < chunks.length; i++) {
+      const messageId = await this._sendWithRetry(async () => {
+        return this._doSendText(chatId, chunks[i], replyTo && i === 0 ? replyTo : undefined);
+      });
+      if (messageId) messageIds.push(messageId);
+    }
+    return messageIds;
+  }
+
+  private async _doSendText(chatId: string, text: string, replyTo?: string): Promise<string> {
+    const token = await this._getTenantAccessToken();
+    const base = this._getApiBase();
+    const body: Record<string, unknown> = {
+      receive_id: chatId,
+      msg_type: 'text',
+      content: JSON.stringify({ text }),
+    };
+    if (replyTo) body.root_id = replyTo;
+
+    const res = await fetch(`${base}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json() as FeishuSendMessageResponse;
+    if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+    return data.data?.message_id || '';
+  }
+
+  async sendPostMessage(chatId: string, title: string, elements: FeishuMessageElement[], replyTo?: string): Promise<string[]> {
+    const postChunks = splitPostIfNeeded(title, elements);
+    const messageIds: string[] = [];
+    for (let i = 0; i < postChunks.length; i++) {
+      const chunk = postChunks[i];
+      const messageId = await this._sendWithRetry(async () => {
+        const token = await this._getTenantAccessToken();
+        const base = this._getApiBase();
+        const postContent = buildPostContent(chunk.title, chunk.elements);
+        const body: Record<string, unknown> = {
           receive_id: chatId,
           msg_type: 'post',
-          content: JSON.stringify(payload),
-        },
-      });
+          content: postContent,
+        };
+        if (replyTo && i === 0) body.root_id = replyTo;
 
-      return { ok: true, platformMsgId: response.data?.message_id ?? response.message_id ?? '' };
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      console.error(`[Feishu] Send error: ${error}`);
-      return { ok: false, error };
+        const res = await fetch(`${base}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json() as FeishuSendMessageResponse;
+        if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+        return data.data?.message_id || '';
+      });
+      if (messageId) messageIds.push(messageId);
     }
+    return messageIds;
   }
 
-  private async sendCardMessageToChat(chatId: string, card: object): Promise<SendResult> {
-    try {
-      const payload = cardToPayload(card as Parameters<typeof cardToPayload>[0]);
+  async sendMarkdownMessage(chatId: string, markdown: string, replyTo?: string): Promise<string[]> {
+    const result = markdownToFeishuPost(markdown);
+    return this.sendPostMessage(chatId, result.title, result.elements, replyTo);
+  }
 
-      const response = await this._apiRequest<{
-        data?: { message_id?: string };
-        message_id?: string;
-      }>('/im/v1/messages', {
+  async sendImageMessage(chatId: string, imageKey: string, replyTo?: string): Promise<string> {
+    return this._sendWithRetry(async () => {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const body: Record<string, unknown> = {
+        receive_id: chatId,
+        msg_type: 'image',
+        content: JSON.stringify({ image_key: imageKey }),
+      };
+      if (replyTo) body.root_id = replyTo;
+
+      const res = await fetch(`${base}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
         method: 'POST',
-        body: {
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: (payload as { content: string }).content,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
       });
-
-      return { ok: true, platformMsgId: response.data?.message_id ?? response.message_id ?? '' };
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      console.error('[Feishu] Card send error:', error);
-      return { ok: false, error };
-    }
+      const data = await res.json() as FeishuSendMessageResponse;
+      if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+      return data.data?.message_id || '';
+    });
   }
 
-  async sendTyping(_chatId: string): Promise<void> {
-    // Feishu does not support typing indicators
-  }
+  async sendFileMessage(chatId: string, fileKey: string, _fileName: string, replyTo?: string): Promise<string> {
+    return this._sendWithRetry(async () => {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const body: Record<string, unknown> = {
+        receive_id: chatId,
+        msg_type: 'file',
+        content: JSON.stringify({ file_key: fileKey }),
+      };
+      if (replyTo) body.root_id = replyTo;
 
-  // ========================================================================
-  // Event Handlers (called by webhook server)
-  // ========================================================================
-
-  handleInboundMessage(msg: FeishuMessage): void {
-    const msgId = msg.message_id;
-
-    // Deduplication
-    if (this.isDuplicateMessage(msgId)) {
-      console.log(`[Feishu] Duplicate message: ${msgId}`);
-      return;
-    }
-
-    // Check if self-sent
-    if (this.isSelfSent(msg)) {
-      return;
-    }
-
-    // DM gating (only for private chats)
-    if (isPrivateChat(msg)) {
-      const senderId = extractUserId(msg.sender);
-      const senderName = this.extractSenderName(msg);
-      const dmPolicy = (this.configOptions.dm_policy as 'open' | 'allowlist' | 'pairing' | 'disabled') ?? 'open';
-      const accessResult = this.dmPairing.checkDmAccess(
-        senderId,
-        msg.chat_id,
-        senderName,
-        dmPolicy,
-        this.configOptions.allow_from
-      );
-
-      if (!accessResult.allowed) {
-        if (accessResult.pairingCode) {
-          // Send pairing code to user
-          this.sendTextMessage(msg.chat_id, `Your pairing code is: **${accessResult.pairingCode}**\n\nShare this code with the admin to get approved.`)
-            .catch((err: unknown) => console.error('[Feishu] Failed to send pairing code:', err));
-        }
-        return;
-      }
-    }
-
-    // Group gating
-    const gatingResult = checkGroupGating(msg, this.groupGatingOptions);
-    if (!gatingResult.allowed) {
-      console.log(`[Feishu] Group message rejected: ${gatingResult.reason}`);
-      return;
-    }
-
-    // Check free response chats
-    if (this.isFreeResponseChat(msg.chat_id)) {
-      // Skip mention check for free response chats
-    }
-
-    // Check if command
-    const text = extractTextFromMessage(msg.body);
-    const isCommand = text?.startsWith('/') ?? false;
-
-    if (isCommand && this.commandHandler) {
-      const normalized = this.normalizeMessage(msg);
-      this.commandHandler(normalized).catch((err) => {
-        console.error('[Feishu] Command handler error:', err);
-        if (this.messageHandler) this.messageHandler(normalized);
+      const res = await fetch(`${base}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
       });
-      return;
+      const data = await res.json() as FeishuSendMessageResponse;
+      if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+      return data.data?.message_id || '';
+    });
+  }
+
+  async sendAudioMessage(chatId: string, fileKey: string, _duration: number, replyTo?: string): Promise<string> {
+    return this._sendWithRetry(async () => {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const body: Record<string, unknown> = {
+        receive_id: chatId,
+        msg_type: 'audio',
+        content: JSON.stringify({ file_key: fileKey }),
+      };
+      if (replyTo) body.root_id = replyTo;
+
+      const res = await fetch(`${base}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json() as FeishuSendMessageResponse;
+      if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+      return data.data?.message_id || '';
+    });
+  }
+
+  async sendCardMessage(chatId: string, cardJson: unknown, replyTo?: string): Promise<string> {
+    return this._sendWithRetry(async () => {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const body: Record<string, unknown> = {
+        receive_id: chatId,
+        msg_type: 'interactive',
+        content: typeof cardJson === 'string' ? cardJson : JSON.stringify(cardJson),
+      };
+      if (replyTo) body.root_id = replyTo;
+
+      const res = await fetch(`${base}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json() as FeishuSendMessageResponse;
+      if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+      return data.data?.message_id || '';
+    });
+  }
+
+  async sendReaction(messageId: string, emojiType: string): Promise<void> {
+    try {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const res = await fetch(`${base}/open-apis/im/v1/messages/${messageId}/reactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ reaction_type: { emoji_type: emojiType } }),
+      });
+      await res.json();
+    } catch {}
+  }
+
+  async recallMessage(messageId: string): Promise<void> {
+    try {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      await fetch(`${base}/open-apis/im/v1/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {}
+  }
+
+  async getMessageInfo(messageId: string): Promise<FeishuMessage | null> {
+    try {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const res = await fetch(`${base}/open-apis/im/v1/messages/${messageId}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json() as { code: number; msg: string; data?: { items?: FeishuMessage[] } };
+      if (data.code === 0 && data.data?.items?.[0]) return data.data.items[0];
+    } catch {}
+    return null;
+  }
+
+  async getThreadMessages(threadId: string, pageSize: number = 20): Promise<FeishuMessage[]> {
+    try {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const res = await fetch(`${base}/open-apis/im/v1/messages/${threadId}/reply?page_size=${pageSize}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json() as { code: number; msg: string; data?: { items?: FeishuMessage[] } };
+      if (data.code === 0 && data.data?.items) return data.data.items;
+    } catch {}
+    return [];
+  }
+
+  private async _sendMediaMessage(
+    chatId: string, mediaType: 'image' | 'file' | 'audio',
+    mediaKey: string, fileName?: string, replyTo?: string,
+  ): Promise<string> {
+    switch (mediaType) {
+      case 'image': return this.sendImageMessage(chatId, mediaKey, replyTo);
+      case 'file': return this.sendFileMessage(chatId, mediaKey, fileName || 'file', replyTo);
+      case 'audio': return this.sendAudioMessage(chatId, mediaKey, 0, replyTo);
     }
-
-    // Route to batching based on message type
-    const normalized = this.normalizeMessage(msg);
-
-    if (this.isMediaMessage(msg)) {
-      this.mediaBatcher.enqueue(normalized);
-    } else {
-      this.textBatcher.enqueue(normalized);
-    }
   }
 
-  handleReactionCreated(_event: FeishuEvent): void {
-    // Handle reaction events if needed
-  }
-
-  handleReactionDeleted(_event: FeishuEvent): void {
-    // Handle reaction events if needed
-  }
-
-  handleBotAddedToChat(_event: FeishuEvent): void {
-    console.log('[Feishu] Bot added to chat');
-  }
-
-  handleBotRemovedFromChat(_event: FeishuEvent): void {
-    console.log('[Feishu] Bot removed from chat');
-  }
-
-  handleMessageRecalled(_event: FeishuEvent): void {
-    // Handle recalled messages if needed
-  }
-
-  handleP2pChatEntered(_event: FeishuEvent): void {
-    console.log('[Feishu] P2P chat entered');
-  }
-
-  handleCardAction(_event: FeishuEvent): void {
-    // Handle card button clicks for approval buttons
-    // Card action events are processed but we need the callbackData parsed
-    // The actual permission resolution is handled via IPC in GatewayManager
-  }
-
-  /** Parse card action and return callback data */
-  parseCardActionCallback(event: FeishuEvent): { permissionId: string; decision: string } | null {
-    const e = event.event as unknown as Record<string, unknown>;
-    if (!e) return null;
-
-    const action = e.action as Record<string, unknown> | undefined;
-    if (!action) return null;
-
-    const value = action.value as string | undefined;
-    if (!value) return null;
-
-    return parseCardActionCallback(value);
-  }
-
-  /** Handle document comment event */
-  async handleDriveComment(event: FeishuEvent): Promise<void> {
-    console.log('[Feishu] Handling drive comment event');
-    await this.commentHandler.handleCommentEvent(event, this.botOpenId);
-  }
-
-  // ========================================================================
-  // Private Methods
-  // ========================================================================
-
-  private normalizeMessage(msg: FeishuMessage): NormalizedMessage {
-    const text = extractTextFromMessage(msg.body);
-    const replyContext = extractReplyContext(msg);
-
-    return {
-      platform: 'feishu',
-      platformUserId: msg.sender.id,
-      platformChatId: msg.chat_id,
-      platformMsgId: msg.message_id,
-      text,
-      ts: parseInt(msg.create_time, 10) * 1000,
-      threadId: getThreadId(msg),
-      replyToMsgId: replyContext.replyToMsgId,
-      replyToText: replyContext.replyToText,
-    };
-  }
-
-  private dispatchToHandler(msg: NormalizedMessage): void {
-    // Acquire session lock
-    this.acquireSessionLock(msg.platformChatId, async () => {
-      this.incrementMessageCount();
-
-      // Add processing status
-      await this.addProcessingStatus(msg.platformChatId, msg.platformMsgId);
-
+  private async _sendWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= MESSAGE_SEND_RETRY_MAX; attempt++) {
       try {
-        if (this.commandHandler) {
-          const isCommand = msg.text?.startsWith('/') ?? false;
-          if (isCommand) {
-            const handled = await this.commandHandler(msg);
-            if (handled) {
-              await this.clearProcessingStatus(msg.platformChatId, msg.platformMsgId);
-              return;
-            }
-          }
-        }
-
-        this.messageHandler?.(msg);
+        return await fn();
       } catch (err) {
-        console.error('[Feishu] Message handling error:', err);
-        await this.addErrorStatus(msg.platformChatId, msg.platformMsgId);
-      } finally {
-        this.releaseSessionLock(msg.platformChatId);
+        lastError = err;
+        const feishuErr = err as FeishuErrorResponse;
+        if (!isRetryableFeishuError(feishuErr)) break;
+        if (attempt < MESSAGE_SEND_RETRY_MAX) {
+          await new Promise(resolve => setTimeout(resolve, MESSAGE_SEND_RETRY_DELAY_MS * (attempt + 1)));
+          this._tenantToken = null;
+          this._tenantTokenExpiresAt = 0;
+        }
       }
-    });
-  }
-
-  private acquireSessionLock(chatId: string, fn: () => void): void {
-    const existing = this.chatLocks.get(chatId);
-    if (existing) {
-      existing.lock.then(fn);
-      return;
     }
-
-    let resolve: () => void;
-    const lock = new Promise<void>((r) => { resolve = r; });
-    this.chatLocks.set(chatId, { lock, resolve: resolve! });
-    lock.then(fn).finally(() => {
-      this.chatLocks.delete(chatId);
-    });
+    throw lastError;
   }
 
-  private releaseSessionLock(chatId: string): void {
-    const entry = this.chatLocks.get(chatId);
-    if (entry) {
-      entry.resolve();
-    }
+  async getPendingPairings(): ReturnType<typeof getPendingPairingSessions> {
+    return getPendingPairingSessions();
   }
 
-  private async sendCardMessage(reply: NormalizedReply, chatId: string): Promise<SendResult> {
-    await this.waitForRateLimit(chatId);
-
-    // Build interactive card
-    if (reply.type === 'permission_request') {
-      const permReply = reply as { type: string; toolName?: string; toolInput?: Record<string, unknown>; permissionId?: string; text?: string };
-      const card = buildApprovalCard({
-        toolName: permReply.toolName ?? 'Unknown',
-        toolInput: permReply.toolInput ?? {},
-        permissionId: permReply.permissionId ?? '',
-        description: permReply.text,
-      });
-
-      return this.sendCardMessageToChat(chatId, card);
-    }
-
-    // Fall back to text
-    if ('text' in reply && reply.text) {
-      return this.sendTextMessage(chatId, reply.text);
-    }
-
-    return { ok: true };
+  async approvePairing(code: string): ReturnType<typeof approvePairingCode> {
+    return approvePairingCode(code);
   }
 
-  private async getAccessToken(): Promise<void> {
-    const now = Date.now();
-    if (this.accessToken && now < this.tokenExpiresAt - 60_000) {
-      return;
-    }
-
-    const response = await proxyFetch(`${this.baseUrl}/auth/v3/tenant_access_token/internal`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app_id: this.appId, app_secret: this.appSecret }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to get access token: ${response.status}`);
-    }
-
-    const data = (await response.json()) as {
-      tenant_access_token?: string;
-      expire: number;
-    };
-    this.accessToken = data.tenant_access_token ?? '';
-    this.tokenExpiresAt = now + data.expire * 1000;
-    console.log('[Feishu] Access token refreshed');
+  async rejectPairing(code: string): ReturnType<typeof rejectPairingCode> {
+    return rejectPairingCode(code);
   }
 
-  private async hydrateBotIdentity(): Promise<void> {
-    // Check environment variables first for overrides
-    const envBotOpenId = process.env.FEISHU_BOT_OPEN_ID;
-    const envBotName = process.env.FEISHU_BOT_NAME;
-
-    if (envBotOpenId && envBotName) {
-      this.botOpenId = envBotOpenId;
-      this.botName = envBotName;
-      this.setBotUsername(this.botName);
-      console.log(`[Feishu] Bot identity from env: ${this.botName} (${this.botOpenId})`);
-      return;
-    }
-
-    // Primary API call: /bot/v3/info
-    try {
-      const response = await this._apiRequest<{
-        bot?: { bot_open_id?: string; app_name?: string };
-      }>('/bot/v3/info', { method: 'GET' });
-
-      if (response.bot) {
-        this.botOpenId = response.bot.bot_open_id ?? '';
-        this.botName = response.bot.app_name ?? '';
-        this.setBotUsername(this.botName);
-        console.log(`[Feishu] Bot identity: ${this.botName} (${this.botOpenId})`);
-        return;
-      }
-    } catch (err) {
-      console.warn('[Feishu] Primary bot info API failed:', err);
-    }
-
-    // Fallback: try /application/v6/info
-    try {
-      const fallback = await this._apiRequest<{
-        app?: { name?: string };
-      }>('/application/v6/info', { method: 'GET' });
-
-      if (fallback.app?.name) {
-        this.botName = fallback.app.name;
-        this.setBotUsername(this.botName);
-        console.log(`[Feishu] Bot identity from fallback: ${this.botName}`);
-      }
-    } catch (err) {
-      console.warn('[Feishu] Fallback bot info API failed:', err);
-    }
-  }
-
-  private async _apiRequest<T>(
-    path: string,
-    options?: { method?: string; body?: unknown }
-  ): Promise<T> {
-    await this.getAccessToken();
-
-    const response = await proxyFetch(`${this.baseUrl}${path}`, {
-      method: options?.method ?? 'GET',
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: options?.body ? JSON.stringify(options.body) : undefined,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Feishu API error ${response.status}: ${errorText}`);
-    }
-
-    const data = (await response.json()) as T;
-    return data;
-  }
-
-  private isDuplicateMessage(msgId: string): boolean {
-    // Use persistent dedup with TTL
-    return this.dedupPersistence.checkAndAdd(msgId);
-  }
-
-  private isSelfSent(msg: FeishuMessage): boolean {
-    // Check if message is from the bot itself
-    return msg.sender.id_type === 'open_id' && msg.sender.id === this.botOpenId;
-  }
-
-  private isFreeResponseChat(chatId: string): boolean {
-    return this.freeResponseChats.includes(chatId);
-  }
-
-  private extractSenderName(msg: FeishuMessage): string {
-    // Try to get name from mentions or sender info
-    if (msg.mentions && msg.mentions.length > 0) {
-      const mention = msg.mentions[0];
-      if (mention.name) return mention.name;
-    }
-    // Return sender ID as fallback
-    return msg.sender.id_value ?? msg.sender.id ?? 'User';
-  }
-
-  private isMediaMessage(msg: FeishuMessage): boolean {
-    const type = msg.message_type?.toLowerCase();
-    return (
-      type === 'image' ||
-      type === 'audio' ||
-      type === 'video' ||
-      type === 'file' ||
-      type === 'sticker'
-    );
-  }
-
-  private async addProcessingStatus(chatId: string, msgId: string): Promise<void> {
-    // Add working emoji reaction
-    try {
-      await this._apiRequest('/im/v1/messages/' + msgId + '/reactions', {
-        method: 'POST',
-        body: {
-          reaction_type: {
-            emoji_type: 'EmojiTypeClock',
-          },
-        },
-      });
-    } catch {
-      // Ignore errors for status reactions
-    }
-  }
-
-  private async clearProcessingStatus(chatId: string, msgId: string): Promise<void> {
-    try {
-      await this._apiRequest('/im/v1/messages/' + msgId + '/reactions', {
-        method: 'POST',
-        body: {
-          reaction_type: {
-            emoji_type: 'EmojiTypeCheckMark',
-          },
-        },
-      });
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  private async addErrorStatus(chatId: string, msgId: string): Promise<void> {
-    try {
-      await this._apiRequest('/im/v1/messages/' + msgId + '/reactions', {
-        method: 'POST',
-        body: {
-          reaction_type: {
-            emoji_type: 'EmojiTypeCrossMark',
-          },
-        },
-      });
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  private isRetryableError(err: Error): boolean {
-    const msg = err.message.toLowerCase();
-    return (
-      msg.includes('230011') || // Message recalled
-      msg.includes('231003') || // Message deleted
-      msg.includes('rate limit') ||
-      msg.includes('too many requests')
-    );
-  }
-
-  // ========================================================================
-  // Pairing & QR Registration (Public API)
-  // ========================================================================
-
-  /** Start QR code registration flow - returns initial QR data */
-  async startQrRegistration(domain?: 'feishu' | 'lark'): Promise<{ qr_url: string; device_code: string; user_code: string } | null> {
-    const begin = await qrRegisterBegin(domain ?? this.domain);
-    if (!begin) return null;
-
-    return {
-      qr_url: begin.qr_url,
-      device_code: begin.device_code,
-      user_code: begin.user_code,
-    };
-  }
-
-  /** Generate QR code image for display */
-  async getQrImage(qrUrl: string): Promise<string | null> {
-    return generateQrImage(qrUrl);
-  }
-
-  /** Poll QR registration status */
-  async pollQrRegistration(
-    begin: { device_code: string; interval: number; expire_in: number },
-    domain?: 'feishu' | 'lark'
-  ): Promise<{ app_id: string; app_secret: string; open_id?: string } | null> {
-    const result = await qrRegisterPoll(
-      { device_code: begin.device_code, qr_url: '', user_code: '', interval: begin.interval, expire_in: begin.expire_in },
-      domain ?? this.domain
-    );
-    return result;
-  }
-
-  /** Probe bot with credentials */
-  async probeBotInfo(appId: string, appSecret: string, domain?: 'feishu' | 'lark'): Promise<{ bot_name: string; bot_open_id: string } | null> {
-    return probeBot(appId, appSecret, domain ?? this.domain);
-  }
-
-  /** Get pending pairing requests */
-  getPendingPairing(): Array<{ code: string; userName: string; platformUserId: string; expiresAt: number }> {
-    return this.dmPairing.getPending().map(p => ({
-      code: p.code,
-      userName: p.userName,
-      platformUserId: p.platformUserId,
-      expiresAt: p.expiresAt,
-    }));
-  }
-
-  /** Approve a pairing code */
-  approvePairing(code: string): { approved: boolean; user?: { userName: string; platformUserId: string } } {
-    const user = this.dmPairing.approveByCode(code);
-    if (user) {
-      return { approved: true, user: { userName: user.userName, platformUserId: user.platformUserId } };
-    }
-    return { approved: false };
-  }
-
-  /** Revoke user access */
-  revokeUser(platformUserId: string): boolean {
-    return this.dmPairing.revoke(platformUserId);
-  }
-
-  /** Get approved users */
-  getApprovedUsers(): Array<{ userName: string; platformUserId: string; approvedAt: number }> {
-    return this.dmPairing.getApproved().map(u => ({
-      userName: u.userName,
-      platformUserId: u.platformUserId,
-      approvedAt: u.approvedAt,
-    }));
+  async revokePairing(code: string): Promise<void> {
+    revokePairingSession(code);
   }
 }
 
-new FeishuAdapter();
+export function createFeishuChannel(options: FeishuAdapterOptions): FeishuChannel {
+  return new FeishuChannel(options);
+}

@@ -974,10 +974,15 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       messageContent = [...contentBlocks, ...imageBlocks];
     }
 
-    // Silently skip images that could not be auto-inlined.
-    // CDN URLs are inaccessible; local file read failures shouldn't
-    // prompt the LLM to try other tools (vision_analyze is deregistered,
-    // read_file can't handle images). The LLM simply won't see these images.
+    // Images that could not be auto-inlined (CDN URLs, local file read
+    // failures, or missing base64 data) are silently skipped. The LLM won't
+    // see these images as content blocks and buildAttachmentContext excludes
+    // pure image files, so no text reference is generated either.
+    // Pre-analysis text from the vision model (if configured) is still
+    // prepended to the prompt so the LLM has a text description.
+    //
+    // vision_analyze tool remains registered so the LLM can request
+    // re-analysis of previously analyzed or newly referenced images.
 
     // Assemble attachment context before passing to streamChat so LLM clients
     // receive fully assembled messages without needing attachment awareness

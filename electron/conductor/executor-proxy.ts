@@ -3,6 +3,11 @@
  *
  * Routes executor RPC requests to the appropriate database service.
  * This is the single entry point for agent-side tool execution.
+ *
+ * NOTE: This is infrastructure code. ConductorAgent does not yet emit
+ * `conductor:executor:rpc` messages; tool execution currently goes through
+ * the standard Agent loop. This proxy is pre-wired in main.ts and will be
+ * activated when the ConductorAgent is updated to use the RPC pattern.
  */
 
 import { ConductorDbService } from './db-service';

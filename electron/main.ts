@@ -208,7 +208,7 @@ if (gotTheLock) {
         const row = db.prepare("SELECT value FROM settings WHERE key = 'bridge_auto_start'").get() as { value: string } | undefined;
         if (row?.value === 'true') {
           const { startGateway } = await import('./gateway/message-bus');
-          startGateway();
+          await startGateway();
         }
       }
     } catch (error) {
@@ -249,6 +249,7 @@ if (gotTheLock) {
 
     const handleConductorMessage = async (data: unknown) => {
       const msg = data as { type: string; sessionId?: string; prompt?: string; snapshot?: unknown; model?: string };
+      const interruptedSessions = new Set<string>();
 
       if (msg.type === 'conductor:agent:start' && msg.sessionId && msg.prompt) {
         const conductorSessionId = msg.sessionId;
@@ -256,7 +257,7 @@ if (gotTheLock) {
         try {
           const { isNew } = await agentPool.acquire(conductorSessionId);
 
-          if (isNew) {
+          const setupAndStart = async () => {
             const configManager = getConfigManager();
 
             // Parse model: "[providerName] modelId" -> { providerName, modelId }
@@ -285,6 +286,7 @@ if (gotTheLock) {
             }
 
             if (!targetProvider) {
+              logger.error('No active provider configured for conductor agent', undefined, { sessionId: conductorSessionId }, LogComponent.Main);
               channelManager.sendToChannel('conductor', {
                 type: 'conductor:error',
                 sessionId: conductorSessionId,
@@ -300,6 +302,7 @@ if (gotTheLock) {
 
             const llmProvider = toLLMProvider(targetProvider.providerType);
 
+            logger.info('Sending conductor:init to agent process', { sessionId: conductorSessionId, model: providerModel, provider: llmProvider }, LogComponent.Main);
             const conductorInitSent = agentPool.send(conductorSessionId, {
               type: 'conductor:init',
               sessionId: conductorSessionId,
@@ -346,8 +349,12 @@ if (gotTheLock) {
                 });
               }
             });
+          };
 
-            // Wait for conductor:ready before sending start
+          if (isNew) {
+            await setupAndStart();
+
+            // Wait for conductor:ready before sending start (only for new processes)
             agentPool.waitForReady(conductorSessionId, 30000).then(() => {
               agentPool.send(conductorSessionId, {
                 type: 'conductor:agent:start',
@@ -356,14 +363,16 @@ if (gotTheLock) {
                 snapshot: msg.snapshot,
               });
             }).catch((err: Error) => {
-              channelManager.sendToChannel('conductor', {
-                type: 'conductor:error',
-                sessionId: conductorSessionId,
-                message: `Conductor agent ready timeout: ${err.message}`,
-              });
+              if (!interruptedSessions.has(conductorSessionId)) {
+                channelManager.sendToChannel('conductor', {
+                  type: 'conductor:error',
+                  sessionId: conductorSessionId,
+                  message: `Conductor agent ready timeout: ${err.message}`,
+                });
+              }
             });
           } else {
-            // Process already exists (subsequent message) — send start directly
+            // Existing process — agent already sent ready, start directly
             agentPool.send(conductorSessionId, {
               type: 'conductor:agent:start',
               sessionId: conductorSessionId,
@@ -380,6 +389,7 @@ if (gotTheLock) {
           });
         }
       } else if (msg.type === 'conductor:interrupt' && msg.sessionId) {
+        interruptedSessions.add(msg.sessionId);
         agentPool.send(msg.sessionId, { type: 'conductor:interrupt' });
         agentPool.release(msg.sessionId);
       }

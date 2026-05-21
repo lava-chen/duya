@@ -11,10 +11,7 @@ export function isAutoModeAllowlistedTool(_toolName: string): boolean {
     'Read',
     'Glob',
     'Grep',
-    'TaskCreate',
-    'TaskGet',
-    'TaskList',
-    'TaskStop',
+    'Task', // Unified task tool with actions: create, get, list, update, output, stop
     'TodoWrite',
   ])
   return SAFE_TOOLS.has(_toolName)

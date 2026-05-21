@@ -27,13 +27,9 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   session_search: ToolBatch.READ,
   SessionSearch: ToolBatch.READ,
 
-  // Task read tools — READ
-  task_get: ToolBatch.READ,
-  TaskGet: ToolBatch.READ,
-  task_list: ToolBatch.READ,
-  TaskList: ToolBatch.READ,
-  task_output: ToolBatch.READ,
-  TaskOutput: ToolBatch.READ,
+  // Task tool — READ (all actions go through the unified Task tool)
+  task: ToolBatch.READ,
+  Task: ToolBatch.READ,
 
   // MCP resource tools — READ
   list_mcp_resources: ToolBatch.READ,
@@ -49,20 +45,12 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   write: ToolBatch.WRITE,
   edit: ToolBatch.WRITE,
   cron: ToolBatch.WRITE,
-  task_create: ToolBatch.WRITE,
-  TaskCreate: ToolBatch.WRITE,
-  task_update: ToolBatch.WRITE,
-  TaskUpdate: ToolBatch.WRITE,
   memory: ToolBatch.WRITE,
   Memory: ToolBatch.WRITE,
 
   // SYSTEM batch — 独占执行
   bash: ToolBatch.SYSTEM,
   Agent: ToolBatch.SYSTEM,
-  task: ToolBatch.SYSTEM,
-  Task: ToolBatch.SYSTEM,
-  task_stop: ToolBatch.SYSTEM,
-  TaskStop: ToolBatch.SYSTEM,
   TeamCreate: ToolBatch.SYSTEM,
   TeamDelete: ToolBatch.SYSTEM,
   show_widget: ToolBatch.SYSTEM,

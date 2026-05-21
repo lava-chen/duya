@@ -20,6 +20,22 @@ export const DESCRIPTION = `Read or modify DUYA configuration. Use this to help 
 - **vision_set** — Update vision settings. Allowed fields: provider, model
 - **style_set** — Update output style. Allowed fields: styleId
 
+### Pairing management (DM access approval)
+- **pairing_list** — List all pending pairing requests and approved users across all platforms
+- **pairing_approve** — Approve a pairing code for a platform. Requires: platform, code
+- **pairing_revoke** — Revoke an approved user's access. Requires: platform, platformUserId
+- **pairing_is_approved** — Check if a user is approved on a platform. Requires: platform, platformUserId
+
+## Pairing system overview
+When a messaging platform's DM policy is set to "pairing", unknown users receive an 8-character pairing code.
+The admin must approve this code to grant access. Pairing codes:
+- Use unambiguous characters (no 0/O/1/I) for readability
+- Expire after 1 hour
+- Max 3 pending codes per platform
+- Rate limited (1 request per user per 10 minutes)
+- Lockout after 5 failed approval attempts (1 hour)
+- Approved users are stored persistently
+
 ## Security
 - API keys are stored encrypted and never returned in full
 - Only safe configuration paths are modifiable

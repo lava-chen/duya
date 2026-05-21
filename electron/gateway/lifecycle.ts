@@ -147,10 +147,17 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
     getLogger().error('Failed to start gateway', err, { pid: child.pid }, LogComponent.Gateway);
   });
 
+  child.stdout!.on('data', (data: Buffer) => {
+    const lines = data.toString().trim().split('\n');
+    for (const line of lines) {
+      if (line) console.log(`[gateway:stdout] ${line}`);
+    }
+  });
+
   child.stderr!.on('data', (data: Buffer) => {
     const lines = data.toString().trim().split('\n');
     for (const line of lines) {
-      if (line) getLogger().debug(`[gateway:stderr] ${line}`, undefined, LogComponent.Gateway);
+      if (line) console.error(`[gateway:stderr] ${line}`);
     }
   });
 

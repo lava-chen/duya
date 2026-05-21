@@ -61,7 +61,7 @@ export class EnterPlanModeTool implements Tool, ToolExecutor {
       id: crypto.randomUUID(),
       name: this.name,
       result: JSON.stringify({
-        message: 'Entered plan mode. Use TaskCreate to plan your work.',
+        message: 'Entered plan mode. Use Task tool with action "create" to plan your work.',
         planMode: true,
       }),
     };

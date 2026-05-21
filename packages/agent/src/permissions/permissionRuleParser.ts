@@ -8,7 +8,13 @@ import type { PermissionRuleValue } from './types.js'
 // Maps legacy tool names to their current canonical names.
 const LEGACY_TOOL_NAME_ALIASES: Record<string, string> = {
   Task: 'Agent',
-  KillShell: 'TaskStop',
+  KillShell: 'Task', // Unified task tool with action "stop"
+  TaskStop: 'Task', // Legacy TaskStop -> unified Task tool
+  TaskCreate: 'Task', // Legacy TaskCreate -> unified Task tool
+  TaskGet: 'Task', // Legacy TaskGet -> unified Task tool
+  TaskList: 'Task', // Legacy TaskList -> unified Task tool
+  TaskUpdate: 'Task', // Legacy TaskUpdate -> unified Task tool
+  TaskOutput: 'Task', // Legacy TaskOutput -> unified Task tool
 }
 
 export function normalizeLegacyToolName(name: string): string {

@@ -1308,28 +1308,26 @@ class StreamSessionManager {
       }
     }
 
-    // If we have tokenUsage and finalMessageContent, update the assistant message in the store
+    // If we have tokenUsage and finalMessageContent, update the assistant message in the store.
+    // Do NOT sync to database here — the agent is the authoritative source for message
+    // persistence. Saving the optimistic message would create a duplicate row with a
+    // different ID (optimistic-text-xxx vs agent's crypto.randomUUID()).
+    // App.tsx will call loadThreadMessages() to reload canonical messages from DB.
     if (s.tokenUsage && s.finalMessageContent) {
       const messages = useConversationStore.getState().messages[sessionId];
       if (messages && messages.length > 0) {
-        // Find the last assistant message and update it with tokenUsage
         const lastMsg = messages[messages.length - 1];
         if (lastMsg.role === 'assistant') {
-          const updatedMessage = {
-            ...lastMsg,
-            tokenUsage: s.tokenUsage,
-          };
-          // Update in store
           useConversationStore.setState((state) => ({
             messages: {
               ...state.messages,
               [sessionId]: state.messages[sessionId].map((m, i) =>
-                i === messages.length - 1 ? updatedMessage : m
+                i === messages.length - 1
+                  ? { ...m, tokenUsage: s.tokenUsage }
+                  : m
               ),
             },
           }));
-          // Sync to database
-          useConversationStore.getState().syncMessageToDatabase(sessionId, updatedMessage);
         }
       }
     }

@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import * as http from 'http';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getDatabase } from '../ipc/db-handlers';
 import { GatewayInitConfig } from './types';
@@ -7,6 +8,7 @@ import { GatewaySessionState } from './types';
 import { dispatchGatewayDbAction } from './db-bridge';
 import { execSync } from 'child_process';
 import { testBridgeChannel } from '../services/network/bridge-tester';
+import { getPairingStore } from './pairing';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
@@ -103,8 +105,19 @@ export function handleGatewayMessage(
       break;
     }
 
-    case 'ready':
+    case 'gateway:ready':
       getLogger().info('Gateway bridge ready', undefined, LogComponent.Gateway);
+      console.log('[STARTUP] gateway:ready received');
+      break;
+
+    case 'gateway:init:complete':
+      getLogger().info('Gateway init complete', { success: msg.success }, LogComponent.Gateway);
+      console.log('[STARTUP] gateway:init:complete', msg.success ? 'success' : 'failed', msg.error || '');
+      break;
+
+    case 'gateway:error':
+      getLogger().error('Gateway error', new Error(`${msg.error}`), undefined, LogComponent.Gateway);
+      console.error('[STARTUP] gateway:error', msg.error);
       break;
 
     case 'db:request': {
@@ -148,10 +161,151 @@ export function handleGatewayMessage(
       break;
     }
 
+    case 'gateway:inbound': {
+      // Forward inbound message from Gateway to Agent Server and receive SSE stream
+      const inboundMsg = msg as {
+        sessionId: string;
+        prompt: string;
+        platform: string;
+        platformMsgId: string;
+        platformChatId: string;
+        options?: Record<string, unknown>;
+      };
+
+      const port = getAgentServerPort();
+      if (!port) {
+        getLogger().error('Agent Server not running, cannot forward gateway:inbound', undefined, { sessionId: inboundMsg.sessionId }, LogComponent.Gateway);
+        break;
+      }
+
+      const sessionId = inboundMsg.sessionId;
+      const platform = inboundMsg.platform;
+      const platformChatId = inboundMsg.platformChatId;
+
+      // Accumulate text from chat:text events
+      let accumulatedText = '';
+      let sseBuffer = '';
+
+      const body = JSON.stringify({
+        prompt: inboundMsg.prompt,
+        options: {
+          ...inboundMsg.options,
+          platform,
+          platformMsgId: inboundMsg.platformMsgId,
+          platformChatId,
+        },
+      });
+
+      const req = require('http').request(
+        {
+          method: 'POST',
+          hostname: '127.0.0.1',
+          port,
+          path: `/sessions/${sessionId}/chat`,
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+            'Accept': 'text/event-stream',
+          },
+        },
+        (res: http.IncomingMessage) => {
+          res.on('data', (chunk: Buffer) => {
+            sseBuffer += chunk.toString();
+            const lines = sseBuffer.split('\n');
+            sseBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              const data = line.slice(6);
+              try {
+                const event = JSON.parse(data);
+
+                // Handle different event types
+                if (event.type === 'text') {
+                  const content = event.data?.content || '';
+                  accumulatedText += content;
+                  // Forward text event to Gateway immediately
+                  sendToGatewayProcess({
+                    type: 'gateway:outbound',
+                    sessionId,
+                    platform,
+                    platformChatId,
+                    event: { type: 'chat:text', content },
+                  });
+                } else if (event.type === 'thinking') {
+                  const content = event.data?.content || '';
+                  sendToGatewayProcess({
+                    type: 'gateway:outbound',
+                    sessionId,
+                    platform,
+                    platformChatId,
+                    event: { type: 'chat:thinking', content },
+                  });
+                } else if (event.type === 'done') {
+                  getLogger().debug('[gateway:inbound] done event received', {
+                    sessionId,
+                    accumulatedLength: accumulatedText.length,
+                  }, LogComponent.Gateway);
+
+                  // Send final content with accumulated text
+                  sendToGatewayProcess({
+                    type: 'gateway:outbound',
+                    sessionId,
+                    platform,
+                    platformChatId,
+                    event: {
+                      type: 'chat:done',
+                      finalContent: accumulatedText,
+                    },
+                  });
+                } else if (event.type === 'error') {
+                  const message = event.data?.message || 'Agent error';
+                  getLogger().error('[gateway:inbound] Agent error', new Error(message), { sessionId }, LogComponent.Gateway);
+                  sendToGatewayProcess({
+                    type: 'gateway:outbound',
+                    sessionId,
+                    platform,
+                    platformChatId,
+                    event: { type: 'chat:error', message },
+                  });
+                }
+              } catch (e) {
+                // Ignore parse errors for partial SSE data
+              }
+            }
+          });
+
+          res.on('end', () => {
+            getLogger().debug('[gateway:inbound] SSE stream ended', { sessionId }, LogComponent.Gateway);
+          });
+        }
+      );
+
+      req.on('error', (err: Error) => {
+        getLogger().error('Failed to forward gateway:inbound to Agent Server', err, { sessionId }, LogComponent.Gateway);
+      });
+
+      req.write(body);
+      req.end();
+
+      getLogger().debug('Forwarded gateway:inbound to Agent Server', { sessionId, promptLength: inboundMsg.prompt.length }, LogComponent.Gateway);
+      break;
+    }
+
     case 'bridge:permission':
     case 'bridge:platform_state':
     case 'bridge:status':
       break;
+
+    case 'gateway:getStatus:response': {
+      const request = _gatewayStatusRequests.get(msg.id as string);
+      if (request) {
+        clearTimeout(request.timeout);
+        _gatewayStatusRequests.delete(msg.id as string);
+        request.resolve(msg.status);
+      }
+      break;
+    }
 
     case 'bridge:error': {
       const message = msg.message as string || 'Unknown gateway error';
@@ -166,9 +320,29 @@ export function handleGatewayMessage(
 
     default:
       getLogger().debug('Unknown gateway message type', { type, sessionId }, LogComponent.Gateway);
+      console.log('[STARTUP] Unknown gateway msg:', type, 'sessionId:', sessionId);
       break;
   }
 }
+
+function requestGatewayStatus(): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      const proc = getGatewayProcess();
+      if (!proc || proc.killed) {
+        reject(new Error('Gateway not running'));
+        return;
+      }
+
+      const id = `status-${Date.now()}`;
+      const timeout = setTimeout(() => {
+        _gatewayStatusRequests.delete(id);
+        reject(new Error('Gateway status request timeout'));
+      }, 5000);
+
+      _gatewayStatusRequests.set(id, { resolve, reject, timeout });
+      proc.send({ type: 'gateway:getStatus', id });
+    });
+  }
 
 // Outbound functions
 export function sendToGatewayProcess(data: Record<string, unknown>): void {
@@ -216,6 +390,8 @@ export function isGatewaySession(sessionId: string): boolean {
 }
 
 // IPC handlers
+const _gatewayStatusRequests = new Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
+
 let _initConfig: GatewayInitConfig | undefined;
 
 function getOrBuildInitConfig(): GatewayInitConfig {
@@ -321,6 +497,7 @@ function getOrBuildInitConfig(): GatewayInitConfig {
     autoStart,
   };
 
+  console.log('[STARTUP] getOrBuildInitConfig:', JSON.stringify({ platforms: platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!Object.keys(p.credentials).length })), autoStart }));
   return _initConfig;
 }
 
@@ -328,6 +505,7 @@ export function registerGatewayIpcHandlers(): void {
   ipcMain.handle('gateway:start', async () => {
     try {
       const config = getOrBuildInitConfig();
+      console.log('[STARTUP] gateway:start called, platforms count:', config.platforms.length);
       const child = startGatewayProcess(config);
 
       child.on('message', (msg: Record<string, unknown>) => {
@@ -340,6 +518,8 @@ export function registerGatewayIpcHandlers(): void {
 
       try {
         await waitForGatewayReady(config, child, 30_000);
+        child.send({ type: 'init', config });
+        console.log('[STARTUP] UI gateway:start sent init');
         return { success: true };
       } catch (err) {
         getLogger().error('Gateway startup timeout', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
@@ -393,8 +573,19 @@ export function registerGatewayIpcHandlers(): void {
     };
   });
 
+  ipcMain.handle('gateway:pairing:list', async () => {
+    try {
+      const store = getPairingStore();
+      const pending = store.listAllPending();
+      const approved = store.listApproved();
+      return { pending, approved };
+    } catch (err) {
+      getLogger().error('Failed to list pairings', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+      return { pending: [], approved: [] };
+    }
+  });
+
   ipcMain.handle('gateway:getStatus', async () => {
-    // Get autoStart setting
     let autoStart = false;
     try {
       const db = getDatabase();
@@ -404,9 +595,19 @@ export function registerGatewayIpcHandlers(): void {
       }
     } catch { /* best effort */ }
 
+    const running = isGatewayRunning();
+    let adapters: Array<Record<string, unknown>> = [];
+
+    if (running) {
+      try {
+        const status = await requestGatewayStatus();
+        adapters = (status.adapters as Array<Record<string, unknown>>) || [];
+      } catch { /* best effort */ }
+    }
+
     return {
-      running: isGatewayRunning(),
-      adapters: [], // Bridge adapter status would come from gateway process
+      running,
+      adapters,
       autoStart,
       _orphaned: false,
     };
@@ -443,30 +644,72 @@ export function registerGatewayIpcHandlers(): void {
 
   ipcMain.handle('gateway:listSessions', () => {
     const db = getDatabase();
-    const sessions = Array.from(getSessionStates().values());
 
-    // Get thread titles from database
-    const sessionTitles = new Map<string, string>();
-    if (db && sessions.length > 0) {
+    // Get all gateway sessions from database
+    // Gateway sessions have 'gw-' prefix in their id
+    const sessions: Array<{
+      id: string;
+      title: string;
+      platform: string;
+      platformUserId: string;
+      platformChatId: string;
+      createdAt: number;
+      updatedAt: number;
+    }> = [];
+
+    if (db) {
       try {
-        const ids = sessions.map(s => s.sessionId).join("','");
-        const rows = db.prepare(`SELECT id, title FROM threads WHERE id IN ('${ids}')`).all() as Array<{ id: string; title: string }>;
+        // Query all gateway sessions (id starts with 'gw-')
+        const rows = db.prepare(`
+          SELECT id, title, created_at, updated_at
+          FROM threads
+          WHERE id LIKE 'gw-%'
+          ORDER BY updated_at DESC
+        `).all() as Array<{
+          id: string;
+          title: string;
+          created_at: number;
+          updated_at: number;
+        }>;
+
         for (const row of rows) {
-          sessionTitles.set(row.id, row.title || '');
+          // Try to get platform info from gateway_user_map
+          const mapping = db.prepare(`
+            SELECT platform, platform_user_id, platform_chat_id
+            FROM gateway_user_map
+            WHERE session_id = ?
+          `).get(row.id) as {
+            platform?: string;
+            platform_user_id?: string;
+            platform_chat_id?: string;
+          } | undefined;
+
+          // Extract platform from title if no mapping exists
+          // Title format: "{platform} {timestamp}" or "{platform} Reset {timestamp}"
+          let platform = mapping?.platform || 'unknown';
+          if (platform === 'unknown' && row.title) {
+            const titleParts = row.title.split(' ');
+            if (titleParts.length > 0 && titleParts[0]) {
+              platform = titleParts[0].toLowerCase();
+            }
+          }
+
+          sessions.push({
+            id: row.id,
+            title: row.title || '',
+            platform,
+            platformUserId: mapping?.platform_user_id || '',
+            platformChatId: mapping?.platform_chat_id || '',
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+          });
         }
-      } catch { /* best effort */ }
+      } catch (err) {
+        getLogger().error('Failed to list gateway sessions', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+      }
     }
 
-    // Map to frontend GatewaySession format
-    return sessions.map(s => ({
-      id: s.sessionId,
-      title: sessionTitles.get(s.sessionId) || '',
-      platform: s.bridgeChannel || 'unknown',
-      platformUserId: '',
-      platformChatId: s.sessionId,
-      createdAt: s.createdAt,
-      updatedAt: s.lastActivityAt,
-    }));
+    return sessions;
   });
 
   ipcMain.handle('gateway:getSession', (_event, sessionId: string) => {
@@ -564,7 +807,25 @@ export function registerGatewayIpcHandlers(): void {
   getLogger().info('Registered gateway IPC handlers', undefined, LogComponent.Gateway);
 }
 
-export function startGateway(): void {
+export async function startGateway(): Promise<void> {
+  console.log('[STARTUP] startGateway() called');
   const config = getOrBuildInitConfig();
-  startGatewayProcess(config);
+  const child = startGatewayProcess(config);
+
+  child.on('message', (msg: Record<string, unknown>) => {
+    handleGatewayMessage(msg, () => {
+      if (_initConfig) {
+        startGatewayProcess(_initConfig);
+      }
+    });
+  });
+
+  try {
+    await waitForGatewayReady(config, child, 30000);
+    console.log('[STARTUP] Gateway ready, sending init...');
+    child.send({ type: 'init', config });
+  } catch (err) {
+    getLogger().error('Gateway auto-start timeout', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+    console.error('[STARTUP] Gateway auto-start failed:', err);
+  }
 }

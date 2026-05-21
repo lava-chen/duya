@@ -1,172 +1,66 @@
-/**
- * Feishu Group Gating
- *
- * Controls which group messages are accepted based on policy rules.
- * Supports: disabled, open, admin_only, allowlist, blacklist
- */
+﻿import type { FeishuMessageContent, FeishuMention } from './types';
+import { parseFeishuContent, isBotMentioned } from './message-utils';
 
-import type { FeishuMessage, FeishuGroupRule } from './types.js';
-
-export type GroupPolicy = 'disabled' | 'open' | 'admin_only' | 'allowlist' | 'blacklist';
-
-export interface GroupGatingOptions {
-  /** Per-chat group rules */
-  groupRules?: Record<string, FeishuGroupRule>;
-  /** Global default policy */
-  defaultPolicy?: GroupPolicy;
-  /** Users in allowlist */
-  allowFrom?: string[];
-  /** Users in blacklist */
-  denyFrom?: string[];
-  /** Require @mention for group messages */
-  requireMention?: boolean;
-  /** Bot's open_id for mention detection */
-  botOpenId?: string;
+export function isGroupChat(chatType: string): boolean {
+  return chatType === 'group' || chatType === 'open_chat' || chatType === 'p2p' || chatType.startsWith('group');
 }
 
-/** Extract user ID from sender */
-export function extractUserId(sender: FeishuMessage['sender']): string {
-  // Prefer union_id for stability across apps
-  return sender.id;
+export function isPrivateChat(chatType: string): boolean {
+  return chatType === 'private' || chatType === 'p2p';
 }
 
-/** Check if message is from a group chat */
-export function isGroupChat(msg: FeishuMessage): boolean {
-  return msg.chat_id?.startsWith('oc_') ?? false;
+export function isFreeResponseChat(chatId: string, freeResponseChatIds?: string[]): boolean {
+  if (!freeResponseChatIds || freeResponseChatIds.length === 0) return false;
+  return freeResponseChatIds.some(id => id === chatId || id === '*');
 }
 
-/** Check if message is from a private chat */
-export function isPrivateChat(msg: FeishuMessage): boolean {
-  return msg.chat_id?.startsWith('p_') ?? false;
+export function checkUserAllowed(userId: string, allowedUsers?: string[]): boolean {
+  if (!allowedUsers || allowedUsers.length === 0) return true;
+  return allowedUsers.includes(userId) || allowedUsers.includes('*');
 }
 
-/** Check if the bot was mentioned */
-export function isBotMentioned(msg: FeishuMessage, botOpenId?: string): boolean {
-  // This would be populated from the message's mentions field
-  // For now, return based on content parsing
-  return false; // Actual implementation needs mention extraction
-}
-
-/** Get the group policy for a chat */
-export function getGroupPolicy(chatId: string, options: GroupGatingOptions): GroupPolicy {
-  const rule = options.groupRules?.[chatId];
-  if (rule) {
-    return rule.policy;
+export function checkMentionRequirement(messageContent: string, botOpenId: string): boolean {
+  if (!botOpenId) return false;
+  try {
+    const content = parseFeishuContent(messageContent);
+    if (content) return isBotMentioned(botOpenId, content);
+  } catch {}
+  if (typeof messageContent === 'string') {
+    const lower = messageContent.toLowerCase();
+    return lower.includes(botOpenId.toLowerCase()) || lower.includes('@bot');
   }
-
-  // Fall back to global default
-  return options.defaultPolicy ?? 'disabled';
+  return false;
 }
 
-/** Check if a user is allowed based on policy */
-export function isUserAllowed(
+export function shouldRespondInGroup(
+  chatId: string,
+  chatType: string,
   userId: string,
-  policy: GroupPolicy,
-  options: GroupGatingOptions,
-  rule?: FeishuGroupRule
-): boolean {
-  switch (policy) {
-    case 'disabled':
-      return false;
+  botOpenId: string,
+  messageContent: string,
+  mentions?: FeishuMention[],
+  allowedUsers?: string[],
+  freeResponseChatIds?: string[],
+): { canRespond: boolean; reason?: string } {
+  if (!isGroupChat(chatType)) return { canRespond: true };
 
-    case 'open':
-      return true;
+  const userAllowed = checkUserAllowed(userId, allowedUsers);
+  const isFree = isFreeResponseChat(chatId, freeResponseChatIds);
 
-    case 'admin_only':
-      // Admin check would require API call to get chat member role
-      return false;
-
-    case 'allowlist':
-      if (rule?.allowFrom?.includes(userId)) return true;
-      if (options.allowFrom?.includes(userId)) return true;
-      return false;
-
-    case 'blacklist':
-      if (rule?.denyFrom?.includes(userId)) return false;
-      if (options.denyFrom?.includes(userId)) return false;
-      return true;
-
-    default:
-      return false;
-  }
-}
-
-/** Main group gating check */
-export function checkGroupGating(
-  msg: FeishuMessage,
-  options: GroupGatingOptions
-): { allowed: boolean; reason?: string } {
-  // Private chats are always allowed
-  if (isPrivateChat(msg)) {
-    return { allowed: true };
+  if (!userAllowed && allowedUsers && allowedUsers.length > 0) {
+    return { canRespond: false, reason: 'User not in allowed list' };
   }
 
-  // Check group policy
-  const policy = getGroupPolicy(msg.chat_id, options);
-  const rule = options.groupRules?.[msg.chat_id];
+  if (isFree) return { canRespond: true };
 
-  const userId = extractUserId(msg.sender);
+  const content = parseFeishuContent(messageContent);
+  const botMentioned = content
+    ? isBotMentioned(botOpenId, content, mentions)
+    : checkMentionRequirement(messageContent, botOpenId);
 
-  // Check @_all (always allows)
-  const content = msg.body?.content ?? '';
-  if (content.includes('@_all')) {
-    return { allowed: true };
+  if (!botMentioned) {
+    return { canRespond: false, reason: 'Bot not mentioned' };
   }
 
-  // User permission check
-  if (!isUserAllowed(userId, policy, options, rule)) {
-    return { allowed: false, reason: 'User not allowed' };
-  }
-
-  // Admin only check
-  if (policy === 'admin_only') {
-    // Would need to verify via API
-    return { allowed: false, reason: 'Admin only policy' };
-  }
-
-  // Require mention check
-  if (options.requireMention && policy !== 'open') {
-    // Check if bot was mentioned
-    // This needs the actual mentions data from the message
-    // For now, we'll handle this in the main adapter
-    const hasMention = checkForMention(content, options.botOpenId);
-    if (!hasMention) {
-      return { allowed: false, reason: 'Mention required' };
-    }
-  }
-
-  return { allowed: true };
-}
-
-/** Check content for bot mention */
-function checkForMention(content: string, botOpenId?: string): boolean {
-  if (!content) return false;
-
-  // Look for @bot mention patterns
-  // Feishu mentions are typically in format: <at user_id="xxx">name</at>
-  const mentionPattern = /<at[^>]*user_id=["']([^"']+)["'][^>]*>/i;
-  const match = content.match(mentionPattern);
-
-  if (match && botOpenId) {
-    return match[1] === botOpenId;
-  }
-
-  // If no specific bot ID, any mention passes
-  return match !== null;
-}
-
-/** Extract reply context from message */
-export function extractReplyContext(msg: FeishuMessage): {
-  replyToMsgId?: string;
-  replyToText?: string;
-} {
-  return {
-    replyToMsgId: msg.parent_id ?? msg.root_id,
-    replyToText: undefined, // Would need API call to get replied message text
-  };
-}
-
-/** Extract thread/chat ID for threading */
-export function getThreadId(msg: FeishuMessage): string | undefined {
-  return msg.session_id;
+  return { canRespond: true };
 }
