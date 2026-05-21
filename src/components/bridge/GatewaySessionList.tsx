@@ -6,6 +6,7 @@ import {
   CircleNotchIcon,
   ChatCircleIcon,
 } from "@/components/icons";
+import { ChannelIcon, CHANNEL_COLORS } from "./ChannelIcon";
 import { useTranslation } from "@/hooks/useTranslation";
 import { listGatewaySessionsIPC, type GatewaySession } from "@/lib/ipc-client";
 import { getSnapshot, subscribeToPhase } from "@/lib/stream-session-manager";
@@ -15,11 +16,11 @@ import type { TranslationKey } from "@/i18n";
 const ACTIVE_PHASES: StreamPhase[] = ["starting", "streaming", "awaiting_permission", "persisting"];
 
 interface GatewaySessionListProps {
+  selectedChannel?: string | null;
   onSessionClick: (session: GatewaySession) => void;
-  channelFilter?: string | null;
 }
 
-export function GatewaySessionList({ onSessionClick, channelFilter }: GatewaySessionListProps) {
+export function GatewaySessionList({ selectedChannel, onSessionClick }: GatewaySessionListProps) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<GatewaySession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,6 +72,11 @@ export function GatewaySessionList({ onSessionClick, channelFilter }: GatewaySes
     };
   }, [fetchSessions]);
 
+  // Filter sessions by selected channel
+  const filteredSessions = selectedChannel
+    ? sessions.filter((s) => s.platform === selectedChannel || (selectedChannel === "weixin" && s.platform === "wechat"))
+    : sessions;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-8 text-xs" style={{ color: "var(--muted)" }}>
@@ -80,18 +86,17 @@ export function GatewaySessionList({ onSessionClick, channelFilter }: GatewaySes
     );
   }
 
-  if (sessions.length === 0) {
+  if (filteredSessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-10 text-center" style={{ color: "var(--muted)" }}>
         <ChatCircleIcon size={20} style={{ opacity: 0.3 }} />
-        <span className="text-xs">{t("gateway.noSessions")}</span>
+        <span className="text-xs">
+          {selectedChannel ? t("gateway.noSessionsForChannel") : t("gateway.noSessions")}
+        </span>
       </div>
     );
   }
 
-  const filteredSessions = channelFilter
-    ? sessions.filter((s) => s.platform === channelFilter)
-    : sessions;
   const activeSessions = filteredSessions.filter((s) => activeSessionIds.has(s.id));
   const historySessions = filteredSessions.filter((s) => !activeSessionIds.has(s.id));
 
@@ -109,35 +114,74 @@ export function GatewaySessionList({ onSessionClick, channelFilter }: GatewaySes
     return t("gateway.justNow");
   };
 
+  const getChannelInfo = (channel: string) => {
+    const ch = channel === "wechat" ? "weixin" : channel;
+    return {
+      color: CHANNEL_COLORS[ch]?.color || "var(--muted)",
+      bgColor: CHANNEL_COLORS[ch]?.bgColor || "var(--surface)",
+    };
+  };
+
+  const headerChannel = selectedChannel || "weixin";
+  const headerInfo = getChannelInfo(headerChannel);
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="session-list-header">
+        <div
+          className="session-list-header-icon"
+          style={{
+            backgroundColor: headerInfo.bgColor,
+            color: headerInfo.color,
+          }}
+        >
+          <ChannelIcon channel={headerChannel} size={20} />
+        </div>
+        <span className="session-list-header-title">{t("gateway.sessions")}</span>
+      </div>
+
       {activeSessions.length > 0 && (
-        <div className="flex flex-col gap-1">
-          {activeSessions.map((session) => (
-            <SessionItem
-              key={session.id}
-              session={session}
-              isActive
-              onClick={() => onSessionClick(session)}
-              formatRelativeTime={formatRelativeTime}
-              t={t}
-            />
-          ))}
+        <div className="flex flex-col gap-1.5">
+          <div className="session-section-header">
+            <span className="session-section-dot active" />
+            <span className="session-section-title active">
+              {t("gateway.active")} ({activeSessions.length})
+            </span>
+          </div>
+          <div className="flex flex-col">
+            {activeSessions.map((session) => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                isActive
+                onClick={() => onSessionClick(session)}
+                formatRelativeTime={formatRelativeTime}
+                t={t}
+              />
+            ))}
+          </div>
         </div>
       )}
 
       {historySessions.length > 0 && (
-        <div className="flex flex-col gap-1">
-          {historySessions.map((session) => (
-            <SessionItem
-              key={session.id}
-              session={session}
-              isActive={false}
-              onClick={() => onSessionClick(session)}
-              formatRelativeTime={formatRelativeTime}
-              t={t}
-            />
-          ))}
+        <div className="flex flex-col gap-1.5">
+          <div className="session-section-header">
+            <span className="session-section-title">
+              {t("gateway.history")} ({historySessions.length})
+            </span>
+          </div>
+          <div className="flex flex-col">
+            {historySessions.map((session) => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                isActive={false}
+                onClick={() => onSessionClick(session)}
+                formatRelativeTime={formatRelativeTime}
+                t={t}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

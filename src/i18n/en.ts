@@ -850,6 +850,7 @@ const en = {
   'gateway.messages': 'Messages',
   'gateway.lastActivity': 'Last Activity',
   'gateway.noSessions': 'No gateway sessions yet',
+  'gateway.noSessionsForChannel': 'No sessions for this channel',
   'gateway.noSessionsDesc': 'Sessions will appear here when users message through channels',
   'gateway.justNow': 'just now',
   'gateway.minutesAgo': '{minutes}m ago',

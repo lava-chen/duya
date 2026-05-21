@@ -18,7 +18,7 @@ import type {
 import { BaseAdapter } from '../base-adapter.js';
 import { registerAdapterFactory } from '../base.js';
 
-import type { TelegramMessage, TelegramCallbackQuery, TelegramUpdate } from './types.js';
+import type { TelegramMessage, TelegramCallbackQuery, TelegramUpdate, TelegramDmTopicsConfig } from './types.js';
 import { convertToMarkdownV2, escapeMarkdownV2 } from './markdown.js';
 import { splitMessage } from './message-utils.js';
 import {
@@ -47,6 +47,7 @@ const MAX_POLL_NETWORK_RETRIES = 10;
 const MAX_CONFLICT_RETRIES = 3;
 const CHAT_RATE_LIMIT_MS = 3000;
 const TYPING_INDICATOR_INTERVAL_MS = 4500;
+const CONFLICT_RETRY_DELAY_MS = 10000;
 
 export class TelegramAdapter extends BaseAdapter {
   readonly platform = 'telegram' as const;
@@ -55,7 +56,13 @@ export class TelegramAdapter extends BaseAdapter {
 
   // Polling state
   private offset = 0;
+  private pollConflictCount = 0;
   private pollNetworkRetryCount = 0;
+
+  // Config options
+  private replyToMode: 'first' | 'all' | 'off' = 'first';
+  private disableLinkPreviews = false;
+  private dmTopicsConfig: TelegramDmTopicsConfig[] = [];
 
   // Webhook mode
   private webhookServer: http.Server | null = null;
@@ -69,7 +76,7 @@ export class TelegramAdapter extends BaseAdapter {
   private mediaGroupBatcher: MediaGroupBatcher;
   private photoBurstBatcher: PhotoBurstBatcher;
 
-  // DM topics cache
+  // DM topics cache (key: chat_id, value: thread_id)
   private dmTopicCache = new Map<string, number>();
 
   constructor() {
@@ -102,6 +109,11 @@ export class TelegramAdapter extends BaseAdapter {
     this.webhookPath = webhookPath ?? `/webhook/telegram/${token.split(':')[0]}`;
     this.webhookSecret = webhookSecret ?? '';
 
+    // Read extended config options
+    this.replyToMode = (config.options?.['reply_to_mode'] as 'first' | 'all' | 'off') ?? 'first';
+    this.disableLinkPreviews = (config.options?.['disable_link_previews'] as boolean) ?? false;
+    this.dmTopicsConfig = (config.options?.['dm_topics_config'] as TelegramDmTopicsConfig[]) ?? [];
+
     await this.acquirePlatformLock();
 
     try {
@@ -116,6 +128,10 @@ export class TelegramAdapter extends BaseAdapter {
     }
 
     await this.registerCommands();
+
+    // Setup DM topics from config
+    await this._setupDmTopics();
+
     this.running = true;
 
     if (this.useWebhook) {
@@ -175,11 +191,12 @@ export class TelegramAdapter extends BaseAdapter {
               lastMsgId = reply.editTargetMsgId!;
             } else {
               await this.waitForRateLimit(chatId);
+              const shouldThread = this._shouldThreadReply(reply.replyToMsgId, i);
               const result = await this.sendMessageWithRetry(chatId, {
                 text: chunk,
                 parse_mode: parseMode,
-                reply_to_message_id: reply.replyToMsgId ? parseInt(reply.replyToMsgId, 10) : undefined,
-                disable_web_page_preview: (reply as { disableLinkPreview?: boolean }).disableLinkPreview,
+                reply_to_message_id: shouldThread ? parseInt(reply.replyToMsgId!, 10) : undefined,
+                disable_web_page_preview: (reply as { disableLinkPreview?: boolean }).disableLinkPreview ?? this.disableLinkPreviews,
               });
               lastMsgId = String(result.result.message_id);
               this.recordSendTime(chatId);
@@ -198,11 +215,14 @@ export class TelegramAdapter extends BaseAdapter {
           const chunks = splitMessage(text, MAX_MESSAGE_LENGTH);
           let lastMsgId = '';
 
-          for (const chunk of chunks) {
+          for (let i = 0; i < chunks.length; i++) {
             await this.waitForRateLimit(chatId);
+            const shouldThread = this._shouldThreadReply(reply.replyToMsgId, i);
             const result = await this.sendMessageWithRetry(chatId, {
-              text: chunk,
+              text: chunks[i],
               parse_mode: 'MarkdownV2',
+              reply_to_message_id: shouldThread && reply.replyToMsgId ? parseInt(reply.replyToMsgId, 10) : undefined,
+              disable_web_page_preview: this.disableLinkPreviews,
             });
             lastMsgId = String(result.result.message_id);
             this.recordSendTime(chatId);
@@ -219,9 +239,11 @@ export class TelegramAdapter extends BaseAdapter {
             }]),
           };
           await this.waitForRateLimit(chatId);
+          const shouldThread = this._shouldThreadReply(reply.replyToMsgId, 0);
           await this.sendMessageWithRetry(chatId, {
             text: reply.text,
             reply_markup: keyboard,
+            reply_to_message_id: shouldThread && reply.replyToMsgId ? parseInt(reply.replyToMsgId, 10) : undefined,
           });
           this.recordSendTime(chatId);
           return { ok: true };
@@ -233,6 +255,7 @@ export class TelegramAdapter extends BaseAdapter {
           await this.sendMessageWithRetry(chatId, {
             text,
             parse_mode: 'MarkdownV2',
+            disable_web_page_preview: true,
           });
           this.recordSendTime(chatId);
           return { ok: true };
@@ -258,10 +281,13 @@ export class TelegramAdapter extends BaseAdapter {
               }))
             ),
           };
+          const shouldThread = this._shouldThreadReply(reply.replyToMsgId, 0);
           const result = await this.sendMessageWithRetry(chatId, {
             text,
             parse_mode: parseMode,
             reply_markup: keyboard,
+            reply_to_message_id: shouldThread && reply.replyToMsgId ? parseInt(reply.replyToMsgId, 10) : undefined,
+            disable_web_page_preview: this.disableLinkPreviews,
           });
           this.recordSendTime(chatId);
           return { ok: true, platformMsgId: String(result.result.message_id) };
@@ -409,6 +435,108 @@ export class TelegramAdapter extends BaseAdapter {
 
   private async releasePlatformLock(): Promise<void> {
     console.log('[Telegram] Platform lock released');
+  }
+
+  private async _handlePollingConflict(): Promise<void> {
+    this.pollConflictCount++;
+    if (this.pollConflictCount <= MAX_CONFLICT_RETRIES) {
+      console.warn(
+        `[Telegram] Polling conflict (${this.pollConflictCount}/${MAX_CONFLICT_RETRIES}), retrying in ${CONFLICT_RETRY_DELAY_MS}ms`
+      );
+      try {
+        await this.telegramApiCall(`${TELEGRAM_API}${this.token}/deleteWebhook`, 'POST', { drop_pending_updates: true });
+      } catch (dwErr) {
+        console.error('[Telegram] Failed to clear webhook after conflict:', dwErr);
+      }
+      await this.delay(CONFLICT_RETRY_DELAY_MS);
+      return;
+    }
+
+    const message = 'Telegram polling conflict: Multiple instances may be using the same token';
+    console.error(`[Telegram] ${message}`);
+    this.health.connected = false;
+    this.running = false;
+    throw new Error(message);
+  }
+
+  private async _handleNetworkError(err: unknown): Promise<void> {
+    this.pollNetworkRetryCount++;
+    if (this.pollNetworkRetryCount > MAX_POLL_NETWORK_RETRIES) {
+      console.error(
+        `[Telegram] Too many poll network errors (${this.pollNetworkRetryCount}/${MAX_POLL_NETWORK_RETRIES}), stopping adapter`
+      );
+      this.health.connected = false;
+      this.running = false;
+      throw err;
+    }
+
+    const backoff = this.calcPollBackoff();
+    console.warn(
+      `[Telegram] Poll network error (attempt ${this.pollNetworkRetryCount}/${MAX_POLL_NETWORK_RETRIES}), backing off ${backoff}ms: ${err}`
+    );
+    await this.delay(backoff);
+  }
+
+  private async _setupDmTopics(): Promise<void> {
+    if (this.dmTopicsConfig.length === 0) return;
+
+    for (const config of this.dmTopicsConfig) {
+      const chatId = String(config.chat_id);
+      for (const topic of config.topics) {
+        const cacheKey = `${chatId}`;
+        if (topic.thread_id) {
+          this.dmTopicCache.set(cacheKey, topic.thread_id);
+          console.log(`[Telegram] DM topic loaded from config: ${topic.name} -> thread_id=${topic.thread_id}`);
+        } else {
+          try {
+            const threadId = await this._createDmTopic(config.chat_id, topic.name, topic.icon_color, topic.icon_custom_emoji_id);
+            if (threadId) {
+              this.dmTopicCache.set(cacheKey, threadId);
+            }
+          } catch (err) {
+            console.warn(`[Telegram] Failed to create DM topic ${topic.name}:`, err);
+          }
+        }
+      }
+    }
+  }
+
+  private async _createDmTopic(
+    chatId: number,
+    name: string,
+    iconColor?: number,
+    iconCustomEmojiId?: string
+  ): Promise<number | null> {
+    try {
+      const params: Record<string, unknown> = { chat_id: chatId, name };
+      if (iconColor !== undefined) params.icon_color = iconColor;
+      if (iconCustomEmojiId) params.icon_custom_emoji_id = iconCustomEmojiId;
+
+      const result = await this.telegramApiCall<{ message_thread_id: number }>(
+        `${TELEGRAM_API}${this.token}/createForumTopic`,
+        'POST',
+        params
+      );
+      console.log(`[Telegram] Created DM topic '${name}' in chat ${chatId} -> thread_id=${result.message_thread_id}`);
+      return result.message_thread_id;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.toLowerCase().includes('topic_name_duplicate') || msg.toLowerCase().includes('already')) {
+        console.log(`[Telegram] DM topic '${name}' already exists in chat ${chatId}`);
+      } else if (msg.toLowerCase().includes('not a forum') || msg.toLowerCase().includes('forums_disabled')) {
+        console.warn(`[Telegram] Cannot create DM topic '${name}': Topics mode not enabled`);
+      } else {
+        console.warn(`[Telegram] Failed to create DM topic '${name}':`, err);
+      }
+      return null;
+    }
+  }
+
+  private _shouldThreadReply(replyToMsgId: string | undefined, chunkIndex: number): boolean {
+    if (!replyToMsgId) return false;
+    if (this.replyToMode === 'off') return false;
+    if (this.replyToMode === 'all') return true;
+    return chunkIndex === 0;
   }
 
   private async registerCommands(): Promise<void> {
@@ -636,17 +764,12 @@ export class TelegramAdapter extends BaseAdapter {
         try {
           await this.poll();
           this.pollNetworkRetryCount = 0;
+          this.pollConflictCount = 0;
         } catch (err) {
           this.updateHealthError(err);
 
           if (this.isPollingConflict(err)) {
-            console.error('[Telegram] Polling conflict (409).');
-            try {
-              await this.telegramApiCall(`${TELEGRAM_API}${this.token}/deleteWebhook`, 'POST', { drop_pending_updates: true });
-            } catch (dwErr) {
-              console.error('[Telegram] Failed to clear webhook after conflict:', dwErr);
-            }
-            await this.delay(this.calcPollBackoff());
+            await this._handlePollingConflict();
             continue;
           }
 
@@ -658,16 +781,7 @@ export class TelegramAdapter extends BaseAdapter {
           }
 
           if (this.isNetworkError(err)) {
-            this.pollNetworkRetryCount++;
-            if (this.pollNetworkRetryCount > MAX_POLL_NETWORK_RETRIES) {
-              console.error('[Telegram] Too many poll network errors, marking adapter as failed');
-              this.health.connected = false;
-              this.running = false;
-              return;
-            }
-            const backoff = this.calcPollBackoff();
-            console.warn(`[Telegram] Poll network error (attempt ${this.pollNetworkRetryCount}/${MAX_POLL_NETWORK_RETRIES}), backing off ${backoff}ms`);
-            await this.delay(backoff);
+            await this._handleNetworkError(err);
             continue;
           }
 

@@ -53,6 +53,18 @@ export interface TelegramUpdate {
   callback_query?: TelegramCallbackQuery;
 }
 
+export interface TelegramDmTopic {
+  name: string;
+  icon_color?: number;
+  icon_custom_emoji_id?: string;
+  thread_id?: number;
+}
+
+export interface TelegramDmTopicsConfig {
+  chat_id: number;
+  topics: TelegramDmTopic[];
+}
+
 export interface TelegramConfigOptions {
   webhook_url?: string;
   webhook_port?: number;
@@ -61,8 +73,13 @@ export interface TelegramConfigOptions {
   commands?: Array<{ command: string; description: string }>;
   dm_topics?: boolean;
   dm_topics_group?: string;
+  dm_topics_config?: TelegramDmTopicsConfig[];
   free_response_chats?: string[];
   ignored_threads?: string[];
   require_mention?: boolean;
   mention_patterns?: string[];
+  reply_to_mode?: 'first' | 'all' | 'off';
+  disable_link_previews?: boolean;
+  http_pool_size?: number;
+  http_pool_timeout?: number;
 }

@@ -30,7 +30,7 @@ Every message you send is to the user. Worker results and system notifications a
 
 - **Agent** - Spawn a new worker
 - **SendMessage** - Continue an existing worker (send a follow-up to its \`to\` agent ID)
-- **TaskStop** - Stop a running worker
+- **Task tool with action "stop"** - Stop a running worker
 
 When calling Agent:
 - Do not use one worker to check on another. Workers will notify you when they are done.

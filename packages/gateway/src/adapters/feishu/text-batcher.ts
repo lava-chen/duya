@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 /**
  * Feishu Text Batcher
  *

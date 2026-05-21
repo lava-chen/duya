@@ -74,6 +74,8 @@ export class WeixinAdapter extends BaseAdapter {
 
   // Typing indicator
   private typingActive = new Map<string, boolean>();
+  private typingKeepalives = new Map<string, ReturnType<typeof setInterval>>();
+  private typingTickets = new Map<string, string>();
 
   constructor(options?: {
     rateLimitMs?: number;
@@ -90,24 +92,24 @@ export class WeixinAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
 
   async start(config: PlatformConfig): Promise<void> {
+    console.log('[STARTUP] WeixinAdapter.start called, credentials keys:', Object.keys(config.credentials as Record<string, unknown>));
     const weixinOptions = config.options as WeChatConfigOptions | undefined;
-    this.token = config.credentials.token ?? config.credentials.bot_token ?? '';
-    this.accountId = config.credentials.account_id ?? config.credentials.app_id ?? '';
+    this.token = (config.credentials.botToken ?? config.credentials.token ?? config.credentials.bot_token ?? '') as string;
+    this.accountId = (config.credentials.ilinkBotId ?? config.credentials.account_id ?? config.credentials.app_id ?? '') as string;
 
     if (!this.token) {
       console.warn('[Weixin] No token configured');
       return;
     }
 
-    this.baseUrl = (config.credentials.base_url as string) ?? ILINK_BASE_URL;
+    this.baseUrl = (config.credentials.baseUrl ?? config.credentials.base_url ?? ILINK_BASE_URL) as string;
+    console.log('[STARTUP] WeixinAdapter: token=%s, accountId=%s, baseUrl=%s', this.token ? this.token.substring(0, 8) + '...' : 'MISSING', this.accountId || 'MISSING', this.baseUrl);
     this.sendChunkDelaySeconds =
       (weixinOptions?.send_chunk_delay_seconds as number) ??
-      (config.credentials.send_chunk_delay_seconds as number) ??
-      DEFAULT_CHUNK_DELAY_SECONDS;
+      (Number(config.credentials.send_chunk_delay_seconds) || DEFAULT_CHUNK_DELAY_SECONDS);
     this.sendChunkRetries =
       (weixinOptions?.send_chunk_retries as number) ??
-      (config.credentials.send_chunk_retries as number) ??
-      DEFAULT_CHUNK_RETRIES;
+      (Number(config.credentials.send_chunk_retries) || DEFAULT_CHUNK_RETRIES);
     this.sendChunkRetryDelaySeconds =
       (weixinOptions?.send_chunk_retry_delay_seconds as number) ??
       DEFAULT_CHUNK_RETRY_DELAY_SECONDS;
@@ -149,6 +151,12 @@ export class WeixinAdapter extends BaseAdapter {
 
     this.recentMsgIds.clear();
     this.typingActive.clear();
+
+    for (const interval of this.typingKeepalives.values()) {
+      clearInterval(interval);
+    }
+    this.typingKeepalives.clear();
+    this.typingTickets.clear();
 
     console.log('[Weixin] Stopped');
   }
@@ -198,23 +206,48 @@ export class WeixinAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
 
   async sendTyping(chatId: string): Promise<void> {
-    if (this.typingActive.get(chatId)) return;
-    try {
-      await wxApi.sendTyping(chatId, TYPING_START);
-      this.typingActive.set(chatId, true);
-    } catch {
-      // Best-effort
+    if (this.typingKeepalives.has(chatId)) return;
+
+    let ticket = this.typingTickets.get(chatId);
+    if (!ticket) {
+      try {
+        const cfg = await wxApi.getConfig(chatId);
+        if (cfg && typeof cfg.typing_ticket === 'string') {
+          ticket = cfg.typing_ticket;
+          this.typingTickets.set(chatId, ticket);
+        }
+      } catch {
+        // Best-effort: proceed without ticket
+      }
     }
+
+    const doTyping = async () => {
+      try {
+        await wxApi.sendTyping(chatId, TYPING_START, ticket);
+        this.typingActive.set(chatId, true);
+      } catch {
+        // Best-effort
+      }
+    };
+
+    await doTyping();
+    this.typingKeepalives.set(chatId, setInterval(doTyping, 5000));
+    console.log('[WeChat] Typing started for:', chatId);
   }
 
   async stopTyping(chatId: string): Promise<void> {
-    if (!this.typingActive.get(chatId)) return;
+    const interval = this.typingKeepalives.get(chatId);
+    if (interval) {
+      clearInterval(interval);
+      this.typingKeepalives.delete(chatId);
+    }
     try {
       await wxApi.sendTyping(chatId, TYPING_STOP);
       this.typingActive.set(chatId, false);
     } catch {
       // Best-effort
     }
+    console.log('[WeChat] Typing stopped for:', chatId);
   }
 
   // ---------------------------------------------------------------------------
@@ -345,14 +378,16 @@ export class WeixinAdapter extends BaseAdapter {
   // Inbound message processing
   // ---------------------------------------------------------------------------
 
-  private async processMessage(msg: WeChatMessage): Promise<void> {
+  private async processMessage(raw: Record<string, unknown>): Promise<void> {
+    const msg = raw as unknown as WeChatMessage;
+
     const senderId = msg.FromUserName?.trim();
     if (!senderId || senderId === this.accountId) return;
 
     const msgId = msg.MsgId || msg.Int64;
-    if (!msgId || this.isDuplicate(msgId)) return;
+    if (!msgId || this.isWeixinDup(msgId)) return;
 
-    this.markDuplicate(msgId);
+    this.markWeixinDup(msgId);
 
     const text = parseMessageContent(msg);
     const isGroup = isFromGroup(msg.ToUserName ?? '');
@@ -372,9 +407,13 @@ export class WeixinAdapter extends BaseAdapter {
       ts: msg.CreateTime ? msg.CreateTime * 1000 : Date.now(),
     };
 
-    if (text.startsWith('/')) {
-      if (this.commandHandler) {
-        await this.commandHandler(normalizedMsg);
+    if (text.startsWith('/') && this.commandHandler) {
+      const handled = await this.commandHandler(normalizedMsg).catch((err) => {
+        console.error('[Weixin] Command handler error:', err);
+        return false;
+      });
+      if (!handled) {
+        this.messageHandler?.(normalizedMsg);
       }
     } else {
       this.messageHandler?.(normalizedMsg);
@@ -385,11 +424,11 @@ export class WeixinAdapter extends BaseAdapter {
   // Deduplication
   // ---------------------------------------------------------------------------
 
-  private isDuplicate(msgId: string): boolean {
+  private isWeixinDup(msgId: string): boolean {
     return this.recentMsgIds.has(msgId);
   }
 
-  private markDuplicate(msgId: string): void {
+  private markWeixinDup(msgId: string): void {
     this.recentMsgIds.add(msgId);
     if (this.recentMsgIds.size > this.dedupCapacity) {
       const toDelete: string[] = [];

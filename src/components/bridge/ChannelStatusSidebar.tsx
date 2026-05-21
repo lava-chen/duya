@@ -24,11 +24,6 @@ interface BridgeStatus {
     lastMessageAt?: number;
     error?: string;
     health?: AdapterHealth;
-    displayConfig?: {
-      streaming: boolean | null;
-      toolProgress: 'all' | 'new' | 'off';
-      showReasoning: boolean;
-    };
   }>;
   autoStart: boolean;
   _orphaned?: boolean;
@@ -69,12 +64,12 @@ const CHANNEL_INFO: Record<
 
 const ALL_CHANNELS = ["telegram", "feishu", "qq", "weixin"];
 
-interface ChannelStatusGridProps {
-  onChannelClick?: (channel: string) => void;
+interface ChannelStatusSidebarProps {
   selectedChannel?: string | null;
+  onChannelClick?: (channel: string) => void;
 }
 
-export function ChannelStatusGrid({ onChannelClick, selectedChannel }: ChannelStatusGridProps) {
+export function ChannelStatusSidebar({ selectedChannel, onChannelClick }: ChannelStatusSidebarProps) {
   const [status, setStatus] = useState<BridgeStatus | null>(null);
   const [settings, setSettings] = useState<ChannelSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,9 +105,9 @@ export function ChannelStatusGrid({ onChannelClick, selectedChannel }: ChannelSt
 
   if (loading) {
     return (
-      <div className="channel-status-bar">
-        <div className="flex items-center justify-center gap-2 py-2">
-          <SpinnerGapIcon size={14} className="animate-spin" />
+      <div className="gateway-channel-sidebar">
+        <div className="flex items-center justify-center gap-2 py-4">
+          <SpinnerGapIcon size={16} className="animate-spin" />
         </div>
       </div>
     );
@@ -124,7 +119,13 @@ export function ChannelStatusGrid({ onChannelClick, selectedChannel }: ChannelSt
   });
 
   if (enabledChannels.length === 0) {
-    return null;
+    return (
+      <div className="gateway-channel-sidebar">
+        <div className="py-6 text-xs text-center" style={{ color: "var(--muted)" }}>
+          No channels
+        </div>
+      </div>
+    );
   }
 
   const adapterMap = new Map(
@@ -132,7 +133,7 @@ export function ChannelStatusGrid({ onChannelClick, selectedChannel }: ChannelSt
   );
 
   return (
-    <div className="channel-status-bar">
+    <div className="gateway-channel-sidebar">
       {enabledChannels.map((ch) => {
         const info = CHANNEL_INFO[ch] || {
           name: ch,
@@ -141,43 +142,27 @@ export function ChannelStatusGrid({ onChannelClick, selectedChannel }: ChannelSt
         };
         const adapter = adapterMap.get(ch);
         const isConnected = adapter?.health?.connected ?? false;
-        const isRunning = adapter?.running ?? false;
-        const displayConfig = adapter?.displayConfig;
-        const totalMessages = adapter?.health?.totalMessages ?? 0;
 
         const isSelected = selectedChannel === ch;
-
-        const tooltipParts: string[] = [info.name];
-        if (displayConfig) {
-          const features: string[] = [];
-          if (displayConfig.streaming === false) features.push('no-stream');
-          if (displayConfig.toolProgress === 'off') features.push('no-tools');
-          if (displayConfig.toolProgress === 'new') features.push('tools-new');
-          if (displayConfig.showReasoning) features.push('reasoning');
-          if (features.length > 0) tooltipParts.push(`(${features.join(',')})`);
-        }
-        if (isConnected) tooltipParts.push(`msgs:${totalMessages}`);
-        if (!isConnected && isRunning) tooltipParts.push('connecting...');
-        if (adapter?.error) tooltipParts.push(`err:${adapter.error.slice(0, 30)}`);
 
         return (
           <button
             key={ch}
             onClick={() => onChannelClick?.(ch)}
-            className={`channel-status-bar-item ${isSelected ? "selected" : ""}`}
-            title={tooltipParts.join(' ')}
+            className={`gateway-channel-sidebar-item ${isSelected ? "selected" : ""}`}
+            title={info.name}
           >
             <div
-              className="channel-status-bar-icon"
+              className="gateway-channel-sidebar-icon"
               style={{
                 backgroundColor: info.bgColor,
                 color: info.color,
               }}
             >
-              <ChannelIcon channel={ch} size={18} />
+              <ChannelIcon channel={ch} size={20} />
             </div>
             <span
-              className={`channel-status-bar-dot ${isConnected ? "connected" : "disconnected"}`}
+              className={`gateway-channel-sidebar-dot ${isConnected ? "connected" : "disconnected"}`}
             />
           </button>
         );

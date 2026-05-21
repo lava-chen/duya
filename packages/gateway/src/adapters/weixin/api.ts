@@ -165,12 +165,15 @@ export const wxApi = {
     }
   },
 
-  async sendTyping(toUserId: string, status: number): Promise<SendTypingResponse> {
-    const payload = {
+  async sendTyping(toUserId: string, status: number, typingTicket?: string): Promise<SendTypingResponse> {
+    const payload: Record<string, unknown> = {
       ...baseInfo(),
       ilink_user_id: toUserId,
       status,
     };
+    if (typingTicket) {
+      payload.typing_ticket = typingTicket;
+    }
     const body = jsonEncode(payload);
     const url = `${_config.baseUrl}/${EP_SEND_TYPING}`;
 

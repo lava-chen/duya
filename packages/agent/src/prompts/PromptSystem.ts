@@ -8,6 +8,7 @@ import type {
   PromptSection,
   SystemPrompt,
   ToolPromptContribution,
+  PromptBuildContextOptions,
 } from './types.js'
 import {
   asSystemPrompt,
@@ -39,6 +40,9 @@ export abstract class PromptSystem {
 
   /** Returns the system name (e.g., 'code', 'general', 'conductor') */
   abstract getName(): string
+
+  /** Build the prompt context from options */
+  abstract buildContext(options: PromptBuildContextOptions): PromptContext
 
   /** Build the complete system prompt from all sections */
   abstract buildSystemPrompt(

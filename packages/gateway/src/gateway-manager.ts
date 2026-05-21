@@ -55,6 +55,7 @@ export class GatewayManager {
    */
   async init(config: GatewayInitConfig): Promise<void> {
     this.autoStart = config.autoStart;
+    console.log('[STARTUP] GatewayManager.init, platforms:', config.platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: p.credentials && Object.keys(p.credentials).length > 0 })));
 
     if (config.proxyUrl) {
       setProxyUrl(config.proxyUrl);
@@ -79,8 +80,10 @@ export class GatewayManager {
    */
   async start(): Promise<void> {
     if (this.running) return;
+    this.running = true;
 
-    console.log('[GatewayManager] Starting adapters...');
+    console.log('[GatewayManager] Starting adapters, configs:', Array.from(this.adapterConfigs.keys()));
+    console.log('[STARTUP] adapterConfigs details:', Array.from(this.adapterConfigs.entries()).map(([platform, config]) => ({ platform, hasCredentials: !!config.credentials, credentialsKeys: config.credentials ? Object.keys(config.credentials) : [] })));
 
     for (const [platform, config] of this.adapterConfigs) {
       try {
@@ -104,7 +107,6 @@ export class GatewayManager {
       }
     }
 
-    this.running = true;
     console.log(`[GatewayManager] Running with ${this.adapters.size} adapter(s)`);
   }
 
@@ -335,6 +337,9 @@ export class GatewayManager {
         platformChatId: msg.platformChatId,
         options,
       });
+
+      const adapter = this.adapters.get(msg.platform);
+      adapter?.sendTyping?.(msg.platformChatId);
     } catch (err) {
       console.error('[GatewayManager] Error handling inbound message:', err);
       this.ipc.send({

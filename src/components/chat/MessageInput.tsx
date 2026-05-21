@@ -701,7 +701,7 @@ export function MessageInput({
                   key={file.id}
                   id={file.id}
                   name={file.name}
-                  thumbnail={file.thumbnail}
+                  thumbnail={file.displayUrl || file.thumbnail}
                   onRemove={removeFile}
                   width={104}
                 />

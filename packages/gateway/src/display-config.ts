@@ -16,7 +16,7 @@
  *   Tier 4 (minimal): Batch/non-interactive — email, sms
  */
 
-import type { PlatformType } from '../types.js';
+import type { PlatformType } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Display settings type
@@ -48,6 +48,7 @@ export interface DisplayUserConfig {
   toolProgress?: 'all' | 'new' | 'off';
   showReasoning?: boolean;
   toolPreviewLength?: number;
+  streaming?: boolean | null;
   platforms?: Partial<Record<PlatformType, DisplayOverrides>>;
 }
 

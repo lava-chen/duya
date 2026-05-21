@@ -101,12 +101,14 @@ export interface StreamChunkReply {
 export interface StreamEndReply {
   type: 'stream_end';
   finalText: string;
+  replyToMsgId?: string;
 }
 
 export interface PermissionRequestReply {
   type: 'permission_request';
   text: string;
   buttons: PermissionButton[];
+  replyToMsgId?: string;
 }
 
 export interface ErrorReply {
@@ -136,6 +138,8 @@ export interface InlineKeyboardReply {
   rows: InlineKeyboardButton[][];
   /** Parse mode for text */
   parseMode?: 'Markdown' | 'HTML' | 'plain';
+  /** Reply to message ID */
+  replyToMsgId?: string;
 }
 
 export interface InlineKeyboardButton {
@@ -259,7 +263,9 @@ export type MainToGatewayMessage =
   | { type: 'gateway:permission_request'; sessionId: string; permission: { id: string; toolName: string; toolInput: Record<string, unknown> } }
   | { type: 'db:response'; id: string; success: boolean; result?: unknown; error?: string }
   | { type: 'gateway:create_session:response'; sessionId: string; error?: string }
-  | { type: 'gateway:reset_session:response'; sessionId: string; oldSessionId?: string; platformMsgId?: string; error?: string };
+  | { type: 'gateway:reset_session:response'; sessionId: string; oldSessionId?: string; platformMsgId?: string; error?: string }
+  | { type: 'gateway:display_state'; sessionId: string; platform: string; platformChatId: string; state: 'typing_start' | 'typing_stop' }
+  | { type: 'reset'; sessionId: string };
 
 export interface GatewayInitConfig {
   platforms: Array<{

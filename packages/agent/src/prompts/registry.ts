@@ -26,4 +26,14 @@ PromptsRegistry.register('code', codeFactory)
 PromptsRegistry.register('general', generalFactory)
 PromptsRegistry.register('conductor', conductorFactory)
 
+/**
+ * Resolve the prompt system name from an agent profile.
+ * Defaults to 'general' if no promptSystem is specified.
+ */
+export function resolvePromptSystemName(
+  promptSystem?: 'general' | 'code' | 'conductor',
+): string {
+  return promptSystem ?? 'general'
+}
+
 export { PromptsRegistry }

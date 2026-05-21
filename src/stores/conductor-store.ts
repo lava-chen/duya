@@ -252,6 +252,8 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
             syncStatusText: "",
           });
         }
+        // Dual-write handled — skip standalone element.create check below
+        return;
       }
 
       // widget.delete -> remove widget by widgetId and element by elementId
@@ -274,8 +276,17 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           updatedAt: Date.now(),
         });
         const rpPos = resultPatch.position as any;
+        const { elements: moveEls } = get();
+        const existingEl = moveEls.find(e => e.id === patch.widgetId);
         get().updateElement(patch.widgetId as string, {
-          position: { x: rpPos.x ?? 0, y: rpPos.y ?? 0, w: rpPos.w ?? 4, h: rpPos.h ?? 3, zIndex: 0, rotation: 0 },
+          position: {
+            x: rpPos.x ?? 0,
+            y: rpPos.y ?? 0,
+            w: rpPos.w ?? 4,
+            h: rpPos.h ?? 3,
+            zIndex: existingEl?.position?.zIndex ?? 0,
+            rotation: existingEl?.position?.rotation ?? 0,
+          },
           updatedAt: Date.now(),
         });
         set({
@@ -647,7 +658,12 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
   getCanvasContents: () => {
     const { elements, widgets } = get();
-    if (elements.length > 0) return elements;
+    if (elements.length > 0) {
+      const elementIds = new Set(elements.map(e => e.id));
+      const orphanWidgets = widgets.filter(w => !elementIds.has(w.id));
+      if (orphanWidgets.length === 0) return elements;
+      return [...elements, ...orphanWidgets.map(w => widgetToElementAdapter(w))];
+    }
     return widgets.map(w => widgetToElementAdapter(w));
   },
 }));

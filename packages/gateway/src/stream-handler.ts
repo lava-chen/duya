@@ -142,12 +142,14 @@ export class StreamHandler {
       for (const reply of replies) {
         await adapter.sendReply(state.chatId, reply);
       }
+      adapter.stopTyping?.(state.chatId);
       this.activeStreams.delete(sessionId);
     } else if (directChatId) {
       const replies = await strategy.finalizeStream(directChatId, finalText);
       for (const reply of replies) {
         await adapter.sendReply(directChatId, reply);
       }
+      adapter.stopTyping?.(directChatId);
     } else {
       const chatId = await this.getChatIdForSession(sessionId);
       if (chatId) {
@@ -155,6 +157,7 @@ export class StreamHandler {
         for (const reply of replies) {
           await adapter.sendReply(chatId, reply);
         }
+        adapter.stopTyping?.(chatId);
       }
     }
   }
@@ -172,6 +175,7 @@ export class StreamHandler {
     if (chatId) {
       const reply = strategy.handleError(chatId, message);
       await adapter.sendReply(chatId, reply);
+      adapter.stopTyping?.(chatId);
       this.activeStreams.delete(sessionId);
     }
   }

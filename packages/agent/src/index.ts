@@ -19,7 +19,8 @@ import type {
   ToolResultContent,
   AgentProgressEvent,
 } from './types.js';
-import { PromptManager, asSystemPrompt, getPromptProfileForAgentProfile } from './prompts/index.js';
+import { PromptManager, asSystemPrompt, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from './prompts/index.js';
+import type { PromptSystem } from './prompts/index.js';
 import { getMemoryManager } from './memory/index.js';
 import { compactHistory } from './compact/compact.js';
 import type { CompactResult, TokenEstimation } from './compact/compact.js';
@@ -288,14 +289,14 @@ export class duyaAgent {
     logger.info(`[duyaAgent] Vision config check: enabled=${options.visionConfig?.enabled}, provider=${options.visionConfig?.provider}, model=${options.visionConfig?.model}`);
     if (options.visionConfig?.enabled) {
       this.visionConfig = options.visionConfig;
-      const visionProvider = (options.visionConfig.provider as 'anthropic' | 'openai' | 'ollama') || 'openai';
+      const visionProvider = inferProvider(options.visionConfig.baseURL || '', options.visionConfig.provider);
       try {
         this.visionClient = createLLMClient(visionProvider, {
           apiKey: options.visionConfig.apiKey,
           baseURL: options.visionConfig.baseURL || this.getDefaultBaseURL(visionProvider),
           model: options.visionConfig.model,
         });
-        logger.info(`[duyaAgent] Vision model initialized: ${options.visionConfig.model} (${visionProvider})`);
+        logger.info(`[duyaAgent] Vision model initialized: ${options.visionConfig.model} (resolved provider: ${visionProvider})`);
       } catch (err) {
         logger.warn(`[duyaAgent] Failed to initialize vision model: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -497,11 +498,12 @@ export class duyaAgent {
     const agentDefinitions = getAgentDefinitions();
     logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
 
-    // Apply prompt profile from agent profile (before building system prompt)
-    if (appliedProfile?.promptProfile) {
-      const promptProfile = getPromptProfileForAgentProfile(appliedProfile);
-      this.promptManager.setPromptProfile(promptProfile);
-      logger.info(`[Agent] Applying prompt profile with sections: disabled=${promptProfile.overrides?.disableSections?.join(', ') || 'none'}`);
+    // Determine which prompt system to use based on agent profile
+    let promptSystem: PromptSystem | undefined;
+    if (appliedProfile) {
+      const sysName = resolvePromptSystemName(appliedProfile.promptSystem);
+      promptSystem = PromptsRegistry.get(sysName);
+      logger.info(`[Agent] Using prompt system '${sysName}' for profile: ${appliedProfile.name}`);
     }
 
     // Apply output style config if provided
@@ -517,6 +519,17 @@ export class duyaAgent {
       logger.info('[Agent] streamChat: System prompt disabled (empty)');
     } else if (options?.systemPrompt) {
       systemPromptContent = options.systemPrompt;
+    } else if (promptSystem) {
+      const enabledToolNames = tools.map(t => t.name);
+      const context = promptSystem.buildContext({
+        workingDirectory: this.workingDirectory,
+        modelId: this.model,
+        modelName: this.model,
+        enabledTools: new Set(enabledToolNames),
+        outputStyleConfig: options?.outputStyleConfig,
+      });
+      const systemPromptResult = await promptSystem.buildSystemPrompt(context);
+      systemPromptContent = [...systemPromptResult].join('\n\n');
     } else {
       const enabledToolNames = tools.map(t => t.name);
       const systemPromptResult = await this.promptManager.buildSystemPrompt(new Set(enabledToolNames));

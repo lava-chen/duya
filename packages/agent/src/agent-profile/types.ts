@@ -38,6 +38,12 @@ export interface AgentProfile {
   /** Prompt sections control */
   promptProfile?: PromptProfileOverride;
 
+  /**
+   * Which prompt system to use: 'general', 'code', or 'conductor'.
+   * Defaults to 'general' if not specified.
+   */
+  promptSystem?: 'general' | 'code' | 'conductor';
+
   /** Whether this profile is selectable by users in the UI */
   userVisible: boolean;
   /** Whether this is a preset profile */
@@ -61,6 +67,7 @@ export interface AgentProfileDbRow {
   allowed_tools: string | null;
   disallowed_tools: string | null;
   default_model: string | null;
+  prompt_system: string | null;
   user_visible: number;
   is_preset: number;
   is_enabled: number;
@@ -83,6 +90,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       enableSections: ['generalTaskGuidance'],
       disableSections: ['taskHandling'],
     },
+    promptSystem: 'general',
     userVisible: true,
     isPreset: true,
     isEnabled: true,
@@ -95,6 +103,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     description: 'Code development and software engineering',
     allowedTools: ['*'],
     disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'skill_manage', 'memory', 'SessionSearch'],
+    promptSystem: 'code',
     userVisible: true,
     isPreset: true,
     isEnabled: true,

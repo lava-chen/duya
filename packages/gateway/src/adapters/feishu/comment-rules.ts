@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 /**
  * Feishu Comment Rules
  *

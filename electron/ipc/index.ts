@@ -43,4 +43,5 @@ export function registerAllIpcHandlers(): void {
   registerConductorHandlers();
   registerAgentHandlers();
   registerNetHandlers();
+  registerAgentServerHandlers();
 }

@@ -8,8 +8,10 @@ import type {
   PromptSection,
   SystemPrompt,
   ToolPromptContribution,
+  PromptBuildContextOptions,
 } from '../types.js'
 import { asSystemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../types.js'
+import { PromptSystem } from '../PromptSystem.js'
 import { PromptCache, createPromptCache } from '../cache.js'
 import { cachedPromptSection, volatilePromptSection } from '../constants/promptSections.js'
 import type { PromptProfile } from '../modes/types.js'
@@ -43,32 +45,28 @@ import { getMemorySection } from './sections/dynamic/memory.js'
  * General Agent PromptSystem
  * Full-featured prompt system for general-purpose tasks
  */
-export class GeneralPromptSystem {
-  protected cache: PromptCache
-  protected profile: PromptProfile
-
+export class GeneralPromptSystem extends PromptSystem {
   constructor(profile?: PromptProfile) {
-    this.cache = createPromptCache()
-    this.profile = profile ?? DEFAULT_PROMPT_PROFILE
+    super(profile ?? DEFAULT_PROMPT_PROFILE)
   }
 
-  getName(): string {
+  override getName(): string {
     return 'general'
   }
 
-  clearCache(): void {
+  override clearCache(): void {
     this.cache.clear()
   }
 
-  getCache(): PromptCache {
+  override getCache(): PromptCache {
     return this.cache
   }
 
-  getProfile(): PromptProfile {
+  override getProfile(): PromptProfile {
     return { ...this.profile }
   }
 
-  setProfile(profile: PromptProfile): void {
+  override setProfile(profile: PromptProfile): void {
     this.profile = profile
     this.clearCache()
   }
@@ -76,7 +74,7 @@ export class GeneralPromptSystem {
   /**
    * Get static sections (cached)
    */
-  getStaticSections(
+  override getStaticSections(
     context: PromptContext,
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
@@ -104,7 +102,7 @@ export class GeneralPromptSystem {
   /**
    * Get dynamic sections (recomputed every turn)
    */
-  getDynamicSections(
+  override getDynamicSections(
     context: PromptContext,
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
@@ -124,7 +122,7 @@ export class GeneralPromptSystem {
   /**
    * Build the complete system prompt
    */
-  async buildSystemPrompt(
+  override async buildSystemPrompt(
     context: PromptContext,
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
@@ -150,7 +148,7 @@ export class GeneralPromptSystem {
   /**
    * Resolve static and dynamic sections
    */
-  protected async resolveSections(
+  protected override async resolveSections(
     staticSections: PromptSection[],
     dynamicSections: PromptSection[],
   ): Promise<{ staticContent: string[]; dynamicContent: string[] }> {
@@ -186,33 +184,14 @@ export class GeneralPromptSystem {
   /**
    * Get tool prompt contributions
    */
-  protected getToolContributions(): ToolPromptContribution[] {
+  protected override getToolContributions(): ToolPromptContribution[] {
     return []
   }
 
   /**
    * Build prompt context from options
    */
-  buildContext(options: {
-    workingDirectory?: string
-    additionalWorkingDirectories?: string[]
-    modelId?: string
-    modelName?: string
-    enabledTools?: Set<string>
-    mcpServers?: PromptContext['mcpServers']
-    language?: string
-    userType?: 'ant' | 'external'
-    outputStyleConfig?: PromptContext['outputStyleConfig']
-    communicationPlatform?: PromptContext['communicationPlatform']
-    isWorktree?: boolean
-    isNonInteractiveSession?: boolean
-    isReplModeEnabled?: boolean
-    hasEmbeddedSearchTools?: boolean
-    isForkSubagentEnabled?: boolean
-    isVerificationAgentEnabled?: boolean
-    isSkillSearchEnabled?: boolean
-    scratchpadDir?: string
-  }): PromptContext {
+  override buildContext(options: PromptBuildContextOptions): PromptContext {
     const workingDirectory = options.workingDirectory !== undefined && options.workingDirectory !== null
       ? options.workingDirectory
       : process.cwd()

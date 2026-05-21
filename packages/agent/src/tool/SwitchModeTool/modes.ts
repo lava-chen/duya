@@ -28,11 +28,7 @@ const ALWAYS_ALLOWED_TOOLS = new Set([
   'ReadMcpResource',
   'WebSearch',
   'WebFetch',
-  'TaskCreate',
-  'TaskGet',
-  'TaskList',
-  'TaskOutput',
-  'TaskUpdate',
+  'Task', // Unified task tool with actions: create, get, list, update, output, stop
   'EnterPlanMode',
   'ExitPlanMode',
   'SwitchMode',
@@ -78,7 +74,7 @@ You are in PLAN mode. You are STRICTLY PROHIBITED from:
 - Deleting files (no rm)
 - Moving or copying files (no mv, cp)
 
-Your role is EXCLUSIVELY to explore the codebase and design implementation plans. Use TaskCreate to plan your work.`,
+Your role is EXCLUSIVELY to explore the codebase and design implementation plans. Use Task tool with action "create" to plan your work.`,
   },
   explore: {
     readOnly: true,

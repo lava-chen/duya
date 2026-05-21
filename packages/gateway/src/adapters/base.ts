@@ -59,6 +59,12 @@ export interface PlatformAdapter {
    * Some platforms support showing "bot is typing..." status
    */
   sendTyping?(chatId: string): Promise<void>;
+
+  /**
+   * Stop typing indicator (optional)
+   * Cancels the "bot is typing..." status
+   */
+  stopTyping?(chatId: string): Promise<void>;
 }
 
 /**

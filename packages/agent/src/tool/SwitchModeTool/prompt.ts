@@ -20,7 +20,7 @@ Read-only planning mode. Use when you need to:
 - Analyze architecture and dependencies
 - Plan a refactoring or major change
 
-In plan mode, you can only read files and use exploration tools. Use TaskCreate to outline your plan.
+In plan mode, you can only read files and use exploration tools. Use Task tool with action "create" to outline your plan.
 
 ### explore
 Fast read-only exploration mode. Use when you need to:

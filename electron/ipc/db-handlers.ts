@@ -1137,10 +1137,10 @@ export function registerDbHandlers(): void {
     const id = (data.id as string) || crypto.randomUUID();
     db!.prepare(`
       INSERT INTO agent_profiles (
-        id, name, description, allowed_tools, disallowed_tools, default_model,
+        id, name, description, allowed_tools, disallowed_tools, prompt_system, default_model,
         user_visible, is_preset, is_enabled, created_at, updated_at
       ) VALUES (
-        @id, @name, @description, @allowed_tools, @disallowed_tools, @default_model,
+        @id, @name, @description, @allowed_tools, @disallowed_tools, @prompt_system, @default_model,
         @user_visible, @is_preset, @is_enabled, @created_at, @updated_at
       )
     `).run({
@@ -1149,6 +1149,7 @@ export function registerDbHandlers(): void {
       description: data.description ?? null,
       allowed_tools: data.allowed_tools ? JSON.stringify(data.allowed_tools) : null,
       disallowed_tools: data.disallowed_tools ? JSON.stringify(data.disallowed_tools) : null,
+      prompt_system: (data.prompt_system as string) ?? null,
       default_model: data.default_model ?? null,
       user_visible: data.user_visible !== undefined ? (data.user_visible ? 1 : 0) : 1,
       is_preset: data.is_preset !== undefined ? (data.is_preset ? 1 : 0) : 0,
@@ -1169,6 +1170,7 @@ export function registerDbHandlers(): void {
       description: ['description', v => v ?? null],
       allowed_tools: ['allowed_tools', v => v ? JSON.stringify(v) : null],
       disallowed_tools: ['disallowed_tools', v => v ? JSON.stringify(v) : null],
+      prompt_system: ['prompt_system', v => (v as string) ?? null],
       default_model: ['default_model', v => v ?? null],
       is_enabled: ['is_enabled', v => v !== undefined ? (v ? 1 : 0) : 1],
     };

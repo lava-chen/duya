@@ -1,214 +1,102 @@
-/**
- * Feishu Interactive Card Builder
- *
- * Builds Feishu Interactive Card payloads for:
- * - Permission approval requests (Allow Once / Session / Always / Deny)
- * - General interactive cards with buttons
- */
+﻿import type { FeishuCard, FeishuCardElement, FeishuCardText } from './types';
 
-export interface CardElement {
-  tag: string;
-  [key: string]: unknown;
+function text(content: string, tag: 'plain_text' | 'lark_md' = 'lark_md'): FeishuCardText {
+  return { tag, content };
 }
 
-export interface CardAction {
-  tag: 'action';
-  actions: CardElement[];
+function button(textStr: string, actionTag: string, value: Record<string, unknown>, type: string = 'primary'): FeishuCardElement {
+  return { tag: 'button', text: text(textStr), type, value, action_tag: actionTag } as FeishuCardElement;
 }
 
-export interface CardText {
-  tag: 'div';
-  text: {
-    tag: 'lark_md';
-    content: string;
-  };
+function divider(): FeishuCardElement {
+  return { tag: 'hr' };
 }
 
-export interface CardButton {
-  tag: 'button';
-  text: {
-    tag: 'lark_md';
-    content: string;
-  };
-  value?: Record<string, unknown>;
+function note(content: string): FeishuCardElement {
+  return { tag: 'note', elements: [text(content, 'plain_text')] };
 }
 
-/** Build a permission approval card */
-export function buildApprovalCard(options: {
-  toolName: string;
-  toolInput: Record<string, unknown>;
-  permissionId: string;
-  title?: string;
-  description?: string;
-}): CardElement {
-  const {
-    toolName,
-    toolInput,
-    permissionId,
-    title = 'Permission Required',
-    description = `The AI agent wants to run this tool:`,
-  } = options;
-
-  // Sanitize input for display
-  const inputStr = JSON.stringify(toolInput, null, 2);
-  const truncatedInput = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
-
-  const elements: CardElement[] = [
-    {
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: `**${title}**\n\n${description}`,
-      },
-    },
-    {
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: `**Tool:** \`${toolName}\``,
-      },
-    },
-    {
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: `\`\`\`\n${truncatedInput}\n\`\`\``,
-      },
-    },
-    {
-      tag: 'hr',
-    },
-  ];
-
-  // Action buttons
-  const actions: CardElement[] = [
-    {
-      tag: 'button',
-      text: {
-        tag: 'lark_md',
-        content: '✅ Allow Once',
-      },
-      value: JSON.stringify({ permissionId, decision: 'once' }),
-    },
-    {
-      tag: 'button',
-      text: {
-        tag: 'lark_md',
-        content: '🔓 Allow Session',
-      },
-      value: JSON.stringify({ permissionId, decision: 'session' }),
-    },
-    {
-      tag: 'button',
-      text: {
-        tag: 'lark_md',
-        content: '🔒 Always Allow',
-      },
-      value: JSON.stringify({ permissionId, decision: 'always' }),
-    },
-    {
-      tag: 'button',
-      text: {
-        tag: 'lark_md',
-        content: '❌ Deny',
-      },
-      value: JSON.stringify({ permissionId, decision: 'deny' }),
-    },
-  ];
-
-  elements.push({
-    tag: 'action',
-    actions,
-  });
-
+export function buildPermissionRequestCard(pairingCode: string, userId: string): FeishuCard {
   return {
-    tag: 'card',
-    header: {
-      title: {
-        tag: 'plain_text',
-        content: '🔐 Permission Request',
-      },
-      template: 'warning',
-    },
-    elements,
-  };
-}
-
-/** Build a simple text card */
-export function buildTextCard(content: string): CardElement {
-  return {
-    tag: 'card',
+    config: { wide_screen_mode: true, enable_forward: false },
+    header: { title: text('New Connection Request', 'plain_text'), template: 'blue' },
     elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content,
-        },
-      },
+      { tag: 'div', text: text(`A user wants to start a private conversation with the bot.\n\nPairing Code: **${pairingCode}**\nUser: ${userId}\n\nTo approve, click the button below or use the CLI command:\`hermes pairing approve ${pairingCode}\``) },
+      divider(),
+      { tag: 'action', actions: [
+        button('Approve', 'approve_pairing', { code: pairingCode, user: userId }, 'primary'),
+        button('Reject', 'reject_pairing', { code: pairingCode, user: userId }, 'danger'),
+      ]},
+      note('This code expires in 1 hour. Only 3 pending requests are allowed at a time.'),
     ],
   };
 }
 
-/** Build a card with multiple actions */
-export function buildActionCard(options: {
-  title: string;
-  content: string;
-  buttons: Array<{ label: string; value: string; variant?: 'primary' | 'danger' }>;
-}): CardElement {
-  const { title, content, buttons } = options;
-
-  const actions: CardElement[] = buttons.map((btn) => ({
-    tag: 'button',
-    text: {
-      tag: 'lark_md',
-      content: btn.label,
-    },
-    value: btn.value,
-  }));
-
+export function buildPairingApprovedCard(): FeishuCard {
   return {
-    tag: 'card',
-    header: {
-      title: {
-        tag: 'plain_text',
-        content: title,
-      },
-      template: 'info',
-    },
+    config: { wide_screen_mode: true, enable_forward: false },
+    header: { title: text('Connection Approved', 'plain_text'), template: 'green' },
+    elements: [{ tag: 'div', text: text('The pairing request has been approved. You can now send messages to the bot.') }],
+  };
+}
+
+export function buildPairingRejectedCard(): FeishuCard {
+  return {
+    config: { wide_screen_mode: true, enable_forward: false },
+    header: { title: text('Connection Rejected', 'plain_text'), template: 'red' },
+    elements: [{ tag: 'div', text: text('The pairing request has been rejected.') }],
+  };
+}
+
+export function buildErrorCard(message: string): FeishuCard {
+  return {
+    config: { wide_screen_mode: false, enable_forward: false },
+    header: { title: text('Error', 'plain_text'), template: 'red' },
+    elements: [{ tag: 'div', text: text(message) }],
+  };
+}
+
+export function buildStatusCard(title: string, status: 'success' | 'error' | 'warning' | 'info', detail: string): FeishuCard {
+  const templateMap: Record<string, string> = { success: 'green', error: 'red', warning: 'yellow', info: 'blue' };
+  return {
+    config: { wide_screen_mode: true, enable_forward: false },
+    header: { title: text(title, 'plain_text'), template: templateMap[status] || 'blue' },
+    elements: [{ tag: 'div', text: text(detail) }],
+  };
+}
+
+export function buildConfirmationCard(
+  title: string, message: string,
+  confirmLabel: string = 'Confirm', cancelLabel: string = 'Cancel',
+  actionTag: string = 'confirm', value: Record<string, unknown> = {},
+): FeishuCard {
+  return {
+    config: { wide_screen_mode: true, enable_forward: false },
+    header: { title: text(title, 'plain_text') },
     elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content,
-        },
-      },
-      {
-        tag: 'action',
-        actions,
-      },
+      { tag: 'div', text: text(message) },
+      divider(),
+      { tag: 'action', actions: [
+        button(confirmLabel, actionTag, value, 'primary'),
+        button(cancelLabel, `${actionTag}_cancel`, value, 'default'),
+      ]},
     ],
   };
 }
 
-/** Parse card action callback data */
-export function parseCardActionCallback(value: string): { permissionId: string; decision: string } | null {
-  try {
-    const data = JSON.parse(value);
-    if (data.permissionId && data.decision) {
-      return data as { permissionId: string; decision: string };
+export function buildSimpleMessageCard(title: string, sections: { heading?: string; body: string }[]): FeishuCard {
+  const elements: FeishuCardElement[] = [];
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i];
+    if (section.heading) {
+      elements.push({ tag: 'div', text: text(`**${section.heading}**`) });
     }
-    return null;
-  } catch {
-    return null;
+    elements.push({ tag: 'div', text: text(section.body) });
+    if (i < sections.length - 1) elements.push(divider());
   }
-}
-
-/** Convert card element to API payload */
-export function cardToPayload(card: CardElement): object {
   return {
-    msg_type: 'interactive',
-    content: JSON.stringify(card),
+    config: { wide_screen_mode: true },
+    header: { title: text(title, 'plain_text') },
+    elements,
   };
 }

@@ -10,14 +10,14 @@ export function getToolUsageSection(
   toolContributions: ToolPromptContribution[],
 ): string {
   const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.AGENT)
-  const hasTaskTool = ctx.enabledTools.has(TOOL_NAMES.TASK_CREATE) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
+  const hasTaskTool = ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
   const isReplModeEnabled = ctx.isReplModeEnabled ?? false
 
   if (isReplModeEnabled) {
     const items = [
       hasTaskTool
-        ? `Break down and manage your work with the ${ctx.enabledTools.has(TOOL_NAMES.TASK_CREATE) ? TOOL_NAMES.TASK_CREATE : TOOL_NAMES.TODO_WRITE} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`
+        ? `Break down and manage your work with the ${ctx.enabledTools.has(TOOL_NAMES.TASK) ? TOOL_NAMES.TASK : TOOL_NAMES.TODO_WRITE} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`
         : null,
     ].filter(item => item !== null)
     if (items.length === 0) return ''
@@ -43,7 +43,7 @@ ${items.map(item => ` - ${item}`).join('\n')}`
     `Do NOT use the ${TOOL_NAMES.BASH} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL to assisting the user:`,
     providedToolSubitems,
     hasTaskTool
-      ? `Break down and manage your work with the ${ctx.enabledTools.has(TOOL_NAMES.TASK_CREATE) ? TOOL_NAMES.TASK_CREATE : TOOL_NAMES.TODO_WRITE} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`
+      ? `Break down and manage your work with the ${ctx.enabledTools.has(TOOL_NAMES.TASK) ? TOOL_NAMES.TASK : TOOL_NAMES.TODO_WRITE} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`
       : null,
     `You can call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between them, make all independent tool calls in parallel. Maximize use of parallel tool calls where possible to increase efficiency. However, if some tool calls depend on previous calls to inform dependent values, do NOT call these tools in parallel and instead call them sequentially instead. For instance, if one operation must complete before another starts, run these operations sequentially instead.`,
   ].filter(item => item !== null)

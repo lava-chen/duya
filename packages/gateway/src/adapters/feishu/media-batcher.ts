@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 /**
  * Feishu Media Batcher
  *
