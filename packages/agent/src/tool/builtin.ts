@@ -17,12 +17,7 @@ import { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
 import { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools imports
-import { taskCreateTool } from './TaskCreateTool/TaskCreateTool.js';
-import { taskGetTool } from './TaskGetTool/TaskGetTool.js';
-import { taskListTool } from './TaskListTool/TaskListTool.js';
-import { taskOutputTool } from './TaskOutputTool/TaskOutputTool.js';
-import { taskStopTool } from './TaskStopTool/TaskStopTool.js';
-import { taskUpdateTool } from './TaskUpdateTool/TaskUpdateTool.js';
+import { taskTool } from './TaskTool/TaskTool.js';
 import { enterWorktreeTool } from './EnterWorktreeTool/EnterWorktreeTool.js';
 import { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 import { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
@@ -44,10 +39,7 @@ import { cronTool } from './CronTool/index.js';
 import { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from '../conductor/CanvasOrchestratorProfile.js';
 import { duyaInfoTool } from './DuyaInfoTool/index.js';
 import { duyaConfigTool } from './DuyaConfigTool/index.js';
-import { duyaRestartTool } from './DuyaRestartTool/index.js';
 import { duyaHealthTool } from './DuyaHealthTool/index.js';
-import { duyaSessionsTool } from './DuyaSessionsTool/index.js';
-import { duyaLogsTool } from './DuyaLogsTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 
 /**
@@ -103,13 +95,8 @@ export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig)
   registry.register(teamCreateTool, teamCreateTool);
   registry.register(teamDeleteTool, teamDeleteTool);
 
-  // Phase 5: Task tools
-  registry.register(taskCreateTool, taskCreateTool);
-  registry.register(taskGetTool, taskGetTool);
-  registry.register(taskListTool, taskListTool);
-  registry.register(taskOutputTool, taskOutputTool);
-  registry.register(taskStopTool, taskStopTool);
-  registry.register(taskUpdateTool, taskUpdateTool);
+  // Phase 5: Task tool (unified)
+  registry.register(taskTool.toTool(), taskTool);
 
   // Phase 5: Worktree tools
   registry.register(enterWorktreeTool, enterWorktreeTool);
@@ -141,10 +128,7 @@ export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig)
   // Self-management tools
   registry.register(duyaInfoTool.toTool(), duyaInfoTool);
   registry.register(duyaConfigTool.toTool(), duyaConfigTool);
-  registry.register(duyaRestartTool.toTool(), duyaRestartTool);
   registry.register(duyaHealthTool.toTool(), duyaHealthTool);
-  registry.register(duyaSessionsTool.toTool(), duyaSessionsTool);
-  registry.register(duyaLogsTool.toTool(), duyaLogsTool);
 
   // Memory tool
   const memoryTool = getMemoryTool();
@@ -168,7 +152,17 @@ Layer 1 — Intent Recognition: use when user asks for visual content ("draw", "
 
 Layer 2 — Proactive Triggering: use when explaining hierarchical structures, sequential flows, comparisons, step-by-step processes, or any concept where a diagram is clearer than text.
 
-When in doubt, choose the diagram over text.`,
+When in doubt, choose the diagram over text.
+
+## Guidelines
+
+- Use CDN-whitelisted libraries only: Chart.js, D3.js (SVG mode), ApexCharts, or ECharts
+- Include required scripts from CDN (e.g., https://cdn.jsdelivr.net/npm/chart.js)
+- Use dark-friendly colors where possible (#4f8cff for primary, #ff6b6b for errors)
+- Keep widgets self-contained - embed all data and styling inline
+- Specify fixed dimensions (e.g., width=600, height=400) for reliability
+- Avoid external API calls from widgets to prevent network errors
+- Test widget rendering after creation - verify it loads without errors`,
       input_schema: {
         type: 'object',
         properties: {
@@ -217,12 +211,7 @@ export { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
 export { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools exports
-export { taskCreateTool } from './TaskCreateTool/TaskCreateTool.js';
-export { taskGetTool } from './TaskGetTool/TaskGetTool.js';
-export { taskListTool } from './TaskListTool/TaskListTool.js';
-export { taskOutputTool } from './TaskOutputTool/TaskOutputTool.js';
-export { taskStopTool } from './TaskStopTool/TaskStopTool.js';
-export { taskUpdateTool } from './TaskUpdateTool/TaskUpdateTool.js';
+export { taskTool } from './TaskTool/TaskTool.js';
 export { enterWorktreeTool } from './EnterWorktreeTool/EnterWorktreeTool.js';
 export { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
@@ -240,7 +229,4 @@ export { VisionTool } from './VisionTool/VisionTool.js';
 export { cronTool } from './CronTool/index.js';
 export { duyaInfoTool } from './DuyaInfoTool/index.js';
 export { duyaConfigTool } from './DuyaConfigTool/index.js';
-export { duyaRestartTool } from './DuyaRestartTool/index.js';
 export { duyaHealthTool } from './DuyaHealthTool/index.js';
-export { duyaSessionsTool } from './DuyaSessionsTool/index.js';
-export { duyaLogsTool } from './DuyaLogsTool/index.js';
