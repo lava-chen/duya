@@ -1,1 +1,0 @@
-export const DUYA_LOGS_TOOL_NAME = 'duya_logs';
