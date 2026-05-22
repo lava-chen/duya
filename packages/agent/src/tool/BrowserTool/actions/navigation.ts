@@ -9,11 +9,14 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
   operation: 'navigate',
   schema: navigateSchema,
   async execute(data, ctx) {
+    console.log('[NavigateAction] Starting, platformHookManager:', !!ctx.platformHookManager);
+
     if (ctx.mode !== 'extension' && ctx.checkDomainBlocked(data.url)) {
       throw new Error(`Navigation blocked: ${data.url} is in the domain blocklist`);
     }
 
     if (ctx.cdp) {
+      console.log('[NavigateAction] Using CDP path');
       await ctx.cdp.navigate(data.url);
 
       const url = await ctx.cdp.getUrl();
