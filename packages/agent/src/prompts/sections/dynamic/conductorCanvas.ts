@@ -18,10 +18,19 @@ export function setConductorCanvasState(snapshot: ConductorCanvasSnapshot | null
   currentSnapshot = snapshot;
 }
 
+const CANVAS_TOOL_DESCRIPTIONS: Record<string, string> = {
+  canvas_create_element: '- **canvas_create_element**: Create any element — diagrams, charts, cards, shapes, mini-apps, widgets. Supports vizSpec for structured rendering.',
+  canvas_update_element: '- **canvas_update_element**: Update an element\'s vizSpec, position, or config.',
+  canvas_delete_element: '- **canvas_delete_element**: Remove an element from the canvas.',
+  canvas_arrange_elements: '- **canvas_arrange_elements**: Batch reposition multiple elements at once.',
+  canvas_get_snapshot: '- **canvas_get_snapshot**: Re-read current canvas state.',
+};
+
 export function buildConductorCanvasSection(context: PromptContext): string | null {
   if (!currentSnapshot) return null;
 
   const { canvasId, canvasName, elements } = currentSnapshot;
+  const enabledTools = context.enabledTools;
 
   const elementDetails = elements.map((el) => {
     const pos = `(${el.position.x}, ${el.position.y}) ${el.position.w}x${el.position.h}`;
@@ -29,18 +38,25 @@ export function buildConductorCanvasSection(context: PromptContext): string | nu
     return `- ${el.id} (kind: ${el.kind}) at ${pos}${viz}`;
   }).join('\n');
 
+  const availableToolsLines: string[] = [];
+  for (const [toolName, description] of Object.entries(CANVAS_TOOL_DESCRIPTIONS)) {
+    if (!enabledTools || enabledTools.has(toolName)) {
+      availableToolsLines.push(description);
+    }
+  }
+
+  const availableToolsSection = availableToolsLines.length > 0
+    ? `### Available Tools
+${availableToolsLines.join('\n')}`
+    : '';
+
   return `## Canvas Workspace: "${canvasName}" (canvasId: ${canvasId})
 - ${elements.length} elements currently on canvas
 
 ### Element State
 ${elementDetails || '(empty canvas — no elements yet)'}
 
-### Available Tools
-- **canvas_create_element**: Create any element — diagrams, charts, cards, shapes, mini-apps, widgets. Supports vizSpec for structured rendering.
-- **canvas_update_element**: Update an element's vizSpec, position, or config.
-- **canvas_delete_element**: Remove an element from the canvas.
-- **canvas_arrange_elements**: Batch reposition multiple elements at once.
-- **canvas_get_snapshot**: Re-read current canvas state.
+${availableToolsSection}
 
 ### Guidelines for Canvas Management
 

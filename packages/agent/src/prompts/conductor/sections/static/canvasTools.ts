@@ -3,10 +3,10 @@
  * Detailed schema descriptions for all Canvas Orchestrator tools
  */
 
-export function getCanvasToolsSection(): string {
-  return `## Available Canvas Tools
+import type { PromptContext } from '../../../types.js';
 
-### canvas_create_element
+const CANVAS_TOOL_DEFINITIONS: Record<string, string> = {
+  canvas_create_element: `### canvas_create_element
 Create any element on the canvas. Supports these kinds:
 - **diagram/svg** — Flowchart, architecture diagram, sequence diagram (Mermaid format)
 - **chart/bar**, **chart/line**, **chart/pie** — Data visualizations with chartType, labels, datasets
@@ -18,35 +18,50 @@ Create any element on the canvas. Supports these kinds:
 - **app/mini-app** — Interactive mini-application with html, js, css
 - **widget/task-list**, **widget/note-pad**, **widget/pomodoro**, **widget/news-board** — Structured widgets
 
-Parameters: canvasId, kind, position {x, y, w, h, zIndex}, vizSpec (kind-specific), config
+Parameters: canvasId, kind, position {x, y, w, h, zIndex}, vizSpec (kind-specific), config`,
 
-### canvas_update_element
+  canvas_update_element: `### canvas_update_element
 Update an existing element's vizSpec, position, or config. Only specify the fields you want to change.
 
-Parameters: canvasId, elementId, vizSpec?, position?, config?
+Parameters: canvasId, elementId, vizSpec?, position?, config?`,
 
-### canvas_delete_element
+  canvas_delete_element: `### canvas_delete_element
 Remove an element from the canvas. High-risk: confirm with user before calling unless explicitly instructed.
 
-Parameters: canvasId, elementId
+Parameters: canvasId, elementId`,
 
-### canvas_arrange_elements
+  canvas_arrange_elements: `### canvas_arrange_elements
 Batch reposition multiple elements at once. Use for layout reorganization.
 
-Parameters: canvasId, layout: [{elementId, position {x, y, w, h}}]
+Parameters: canvasId, layout: [{elementId, position {x, y, w, h}}]`,
 
-### canvas_align
+  canvas_align: `### canvas_align
 Align a single element to a canvas position (top-left, top-right, bottom-left, bottom-right, center).
 
-Parameters: canvasId, elementId, alignment, margin?
+Parameters: canvasId, elementId, alignment, margin?`,
 
-### canvas_layout_grid
+  canvas_layout_grid: `### canvas_layout_grid
 Arrange elements in a grid pattern (columns, gap, cellWidth, cellHeight).
 
-Parameters: canvasId, elementIds, columns?, gap?, cellWidth?, cellHeight?
+Parameters: canvasId, elementIds, columns?, gap?, cellWidth?, cellHeight?`,
 
-### canvas_get_snapshot
+  canvas_get_snapshot: `### canvas_get_snapshot
 Read-only: get current canvas state with all elements, positions, and vizSpecs.
 
-Parameters: canvasId`
+Parameters: canvasId`,
+};
+
+export function getCanvasToolsSection(context?: PromptContext): string {
+  const enabledTools = context?.enabledTools;
+
+  const lines: string[] = ['## Available Canvas Tools'];
+
+  for (const [toolName, toolDescription] of Object.entries(CANVAS_TOOL_DEFINITIONS)) {
+    if (!enabledTools || enabledTools.has(toolName)) {
+      lines.push('');
+      lines.push(toolDescription);
+    }
+  }
+
+  return lines.join('\n');
 }
