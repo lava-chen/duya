@@ -781,6 +781,11 @@ export class duyaAgent {
             // Track skill_manage usage for self-improvement
             if (event.data.name === 'skill_manage') {
               this.selfImprover.onSkillManageUsed();
+              this.compactionManager.cacheSkillContext([{
+                name: (event.data.input as Record<string, unknown>)?.name as string || 'unknown',
+                description: (event.data.input as Record<string, unknown>)?.description as string || '',
+                invokedAt: Date.now(),
+              }]);
             }
 
             // Add tool to executor for background execution
