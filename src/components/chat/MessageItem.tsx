@@ -10,6 +10,8 @@ import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/mes
 import { parseAllShowWidgets } from '@/lib/widget-parser';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
+import { CompactBoundary } from './CompactBoundary';
+import { CompactSummary } from './CompactSummary';
 
 function formatMessageTime(timestamp: number): string {
   const date = new Date(timestamp);
@@ -421,6 +423,29 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
   const hasAttachments = message.attachments && message.attachments.length > 0;
   const imageAttachments = message.attachments?.filter(a => a.type.startsWith('image/')) || [];
   const fileAttachments = message.attachments?.filter(a => !a.type.startsWith('image/')) || [];
+
+  if (message.isCompactBoundary) {
+    return (
+      <CompactBoundary
+        compactedMessageCount={message.compactedMessageCount || 0}
+        timestamp={message.timestamp}
+      />
+    );
+  }
+
+  if (message.isCompactSummary) {
+    const summaryContent = typeof message.content === 'string'
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content.map((b: any) => b.text || '').join('')
+        : '';
+    return (
+      <CompactSummary
+        content={summaryContent}
+        compactedMessageCount={message.compactedMessageCount || 0}
+      />
+    );
+  }
 
   if (isUser) {
     return (
