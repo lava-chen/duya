@@ -163,6 +163,13 @@ export function handleGatewayMessage(
       }
 
       const actionObj = { action, payload } as { type?: string; action?: string; payload?: Record<string, unknown>; id?: string };
+
+      console.log('[Main] db:request payload debug:', {
+        action,
+        payloadKeys: payload ? Object.keys(payload as object) : 'null/undefined',
+        payloadStr: JSON.stringify(payload).slice(0, 200)
+      });
+
       const result = dispatchGatewayDbAction(actionObj);
 
       console.log('[Main] db:request result:', result ? 'ok' : 'null');
@@ -400,6 +407,36 @@ export function handleGatewayMessage(
       break;
     }
 
+    case 'gateway:feishu:qr:begin:response': {
+      console.log('[Main] gateway:feishu:qr:begin:response received, id:', msg.id, 'msg:', JSON.stringify(msg));
+      const request = _gatewayStatusRequests.get(msg.id as string);
+      if (request) {
+        clearTimeout(request.timeout);
+        _gatewayStatusRequests.delete(msg.id as string);
+        const result = msg.result as Record<string, unknown> | null;
+        const error = msg.error as string | undefined;
+        request.resolve({ result: result ?? undefined, error });
+      } else {
+        console.log('[Main] gateway:feishu:qr:begin:response: no pending request for id:', msg.id);
+      }
+      break;
+    }
+
+    case 'gateway:feishu:qr:poll:response': {
+      console.log('[Main] gateway:feishu:qr:poll:response received, id:', msg.id, 'msg:', JSON.stringify(msg));
+      const request = _gatewayStatusRequests.get(msg.id as string);
+      if (request) {
+        clearTimeout(request.timeout);
+        _gatewayStatusRequests.delete(msg.id as string);
+        const result = msg.result as Record<string, unknown> | null;
+        const error = msg.error as string | undefined;
+        request.resolve({ result: result ?? undefined, error });
+      } else {
+        console.log('[Main] gateway:feishu:qr:poll:response: no pending request for id:', msg.id);
+      }
+      break;
+    }
+
     case 'gateway:create_session': {
       // Handle gateway:create_session from Gateway subprocess
       const data = msg as {
@@ -413,7 +450,7 @@ export function handleGatewayMessage(
       const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       createOrResetGatewaySession(sessionId, data.platform);
 
-      // Save session to threads table
+      // Save session to threads table and chat_sessions table
       const db = getDatabase();
       if (db) {
         try {
@@ -424,14 +461,22 @@ export function handleGatewayMessage(
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
           `).run(sessionId, title, 'gateway', '', now, now);
+          // Also insert into chat_sessions so messages can be persisted via replaceMessages
+          db.prepare(`
+            INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+          `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
         } catch (err) {
           getLogger().error('Failed to save gateway session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
         }
       }
 
       // Send response back to Gateway
+      console.log('[Main] Sending gateway:create_session:response, id:', data.id, 'sessionId:', sessionId);
       sendToGatewayProcess({
         type: 'gateway:create_session:response',
+        id: data.id,
         sessionId,
       });
       break;
@@ -462,7 +507,7 @@ export function handleGatewayMessage(
       const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       createOrResetGatewaySession(sessionId, data.platform);
 
-      // Save new session to threads table
+      // Save new session to threads table and chat_sessions table
       const db = getDatabase();
       if (db) {
         try {
@@ -473,6 +518,12 @@ export function handleGatewayMessage(
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
           `).run(sessionId, title, 'gateway', '', now, now);
+          // Also insert into chat_sessions so messages can be persisted via replaceMessages
+          db.prepare(`
+            INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+          `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
         } catch (err) {
           getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
         }
@@ -481,6 +532,7 @@ export function handleGatewayMessage(
       // Send response back to Gateway
       sendToGatewayProcess({
         type: 'gateway:reset_session:response',
+        id: data.id,
         sessionId,
         oldSessionId,
       });
@@ -570,7 +622,7 @@ export function isGatewaySession(sessionId: string): boolean {
 }
 
 // IPC handlers
-const _gatewayStatusRequests = new Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
+const _gatewayStatusRequests = new Map<string, { resolve: (value: any) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
 
 let _initConfig: GatewayInitConfig | undefined;
 
@@ -784,7 +836,12 @@ export function registerGatewayIpcHandlers(): void {
 
     if (running) {
       try {
-        const status = await requestGatewayStatus();
+        const status = await Promise.race([
+          requestGatewayStatus(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Gateway status timeout')), 2000)
+          ),
+        ]);
         adapters = (status.adapters as Array<Record<string, unknown>>) || [];
       } catch { /* best effort */ }
     }
@@ -812,11 +869,88 @@ export function registerGatewayIpcHandlers(): void {
     return { success: true };
   });
 
+  ipcMain.handle('gateway:feishu:qr:begin', async (_event, _domain?: string) => {
+    const proc = getGatewayProcess();
+    console.log('[Main] gateway:feishu:qr:begin called, proc:', proc ? 'exists' : 'null', proc?.killed ? 'killed' : 'running');
+    if (!proc || proc.killed) {
+      console.log('[Main] gateway:feishu:qr:begin: Gateway not running');
+      return { success: false, error: 'Gateway not running' };
+    }
+    return new Promise((resolve) => {
+      const id = `feishu-qr-begin-${Date.now()}`;
+      console.log('[Main] gateway:feishu:qr:begin: sending message with id:', id);
+      const timeout = setTimeout(() => {
+        _gatewayStatusRequests.delete(id);
+        console.log('[Main] gateway:feishu:qr:begin: timeout for id:', id);
+        resolve({ success: false, error: 'Gateway QR begin timeout' });
+      }, 15000);
+      _gatewayStatusRequests.set(id, {
+        resolve: (value: unknown) => {
+          clearTimeout(timeout);
+          _gatewayStatusRequests.delete(id);
+          console.log('[Main] gateway:feishu:qr:begin: resolved for id:', id, value);
+          const v = value as { result?: Record<string, unknown>; error?: string };
+          if (v.error) {
+            resolve({ success: false, error: v.error });
+          } else if (v.result) {
+            resolve({ success: true, ...v.result });
+          } else {
+            resolve({ success: false, error: 'Unknown error' });
+          }
+        },
+        reject: (err) => {
+          clearTimeout(timeout);
+          _gatewayStatusRequests.delete(id);
+          console.log('[Main] gateway:feishu:qr:begin: rejected for id:', id, err.message);
+          resolve({ success: false, error: err.message });
+        },
+        timeout,
+      } as { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> });
+      proc.send({ type: 'gateway:feishu:qr:begin', id, domain: _domain || 'feishu' });
+      console.log('[Main] gateway:feishu:qr:begin: message sent to gateway');
+    });
+  });
+
+  ipcMain.handle('gateway:feishu:qr:poll', async (_event, begin: { device_code: string; interval: number; expire_in: number }, _domain?: string) => {
+    const proc = getGatewayProcess();
+    if (!proc || proc.killed) {
+      return { success: false, error: 'Gateway not running' };
+    }
+    return new Promise((resolve) => {
+      const id = `feishu-qr-poll-${Date.now()}`;
+      const timeout = setTimeout(() => {
+        _gatewayStatusRequests.delete(id);
+        resolve({ success: false, error: 'Gateway QR poll timeout' });
+      }, 300000);
+      _gatewayStatusRequests.set(id, {
+        resolve: (value: unknown) => {
+          clearTimeout(timeout);
+          _gatewayStatusRequests.delete(id);
+          const v = value as { result?: Record<string, unknown>; error?: string };
+          if (v.error) {
+            resolve({ success: false, error: v.error });
+          } else if (v.result) {
+            resolve({ success: true, ...v.result });
+          } else {
+            resolve({ success: false, error: 'Unknown error' });
+          }
+        },
+        reject: (err) => {
+          clearTimeout(timeout);
+          _gatewayStatusRequests.delete(id);
+          resolve({ success: false, error: err.message });
+        },
+        timeout,
+      } as { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> });
+      proc.send({ type: 'gateway:feishu:qr:poll', id, begin, domain: _domain || 'feishu' });
+    });
+  });
+
   ipcMain.handle('gateway:create_session', (_event, data: { platform: string; platformUserId: string; platformChatId: string }) => {
     const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     createOrResetGatewaySession(sessionId, data.platform);
 
-    // Save session to threads table so it appears in gateway session list
+    // Save session to threads table and chat_sessions table
     const db = getDatabase();
     if (db) {
       try {
@@ -827,6 +961,12 @@ export function registerGatewayIpcHandlers(): void {
           VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
         `).run(sessionId, title, 'gateway', '', now, now);
+        // Also insert into chat_sessions so messages can be persisted via replaceMessages
+        db.prepare(`
+          INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+          ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+        `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
       } catch (err) {
         getLogger().error('Failed to save gateway session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
       }
@@ -846,7 +986,7 @@ export function registerGatewayIpcHandlers(): void {
     const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     createOrResetGatewaySession(sessionId, data.platform);
 
-    // Save session to threads table so it appears in gateway session list
+    // Save session to threads table and chat_sessions table
     const db = getDatabase();
     if (db) {
       try {
@@ -857,6 +997,12 @@ export function registerGatewayIpcHandlers(): void {
           VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
         `).run(sessionId, title, 'gateway', '', now, now);
+        // Also insert into chat_sessions so messages can be persisted via replaceMessages
+        db.prepare(`
+          INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+          ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+        `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
       } catch (err) {
         getLogger().error('Failed to save gateway reset session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
       }

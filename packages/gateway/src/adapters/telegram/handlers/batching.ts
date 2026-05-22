@@ -26,6 +26,16 @@ export class TextBatcher {
   }
 
   enqueue(msg: NormalizedMessage): void {
+    if (!msg.platform || !msg.platformChatId) {
+      console.warn('[Telegram] TextBatcher.enqueue: missing required fields', {
+        platform: msg.platform,
+        platformChatId: msg.platformChatId,
+        text: msg.text?.slice(0, 50),
+        platformMsgId: msg.platformMsgId
+      });
+      return;
+    }
+
     const key = getBatchKey(
       msg.platformChatId,
       msg.platformUserId,
@@ -73,9 +83,10 @@ export class TextBatcher {
   }
 
   private flush(key: string): void {
-    const msg = this.pending.get(key);
-    if (!msg) return;
+    const batchState = (this.pending as unknown as Map<string, BatchState<NormalizedMessage>>).get(key);
+    if (!batchState) return;
 
+    const msg = batchState.message;
     this.pending.delete(key);
     this.timers.delete(key);
 
