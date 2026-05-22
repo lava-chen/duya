@@ -269,7 +269,7 @@ export default function BridgeSection() {
     } catch { /* ignore */ }
   };
 
-  const updateSetting = async (key: string, value: string) => {
+  const updateSetting = async (key: string, value: string, skipReload = false) => {
     setLoading(true);
     setError(null);
     const channel = keyToChannel(key);
@@ -283,7 +283,7 @@ export default function BridgeSection() {
     try {
       await window.electronAPI?.settingsDb?.set(key, value);
       await fetchSettings();
-      if (status?.running) {
+      if (status?.running && !skipReload) {
         try {
           await window.electronAPI?.gateway?.reload();
           await fetchStatus();
@@ -713,6 +713,16 @@ export default function BridgeSection() {
                 testResult={testResults['feishu']}
                 settings={settings}
                 updateSetting={updateSetting}
+                onSettingsChange={async () => {
+                  if (status?.running) {
+                    try {
+                      await window.electronAPI?.gateway?.reload();
+                      await fetchStatus();
+                    } catch (err) {
+                      console.error('[Channels] Failed to reload gateway:', err);
+                    }
+                  }
+                }}
               />
             )}
 
@@ -1372,6 +1382,7 @@ function FeishuSettingsPanel({
   testResult,
   settings,
   updateSetting,
+  onSettingsChange,
 }: {
   enabled: boolean;
   running?: boolean;
@@ -1379,7 +1390,8 @@ function FeishuSettingsPanel({
   testing: boolean;
   testResult?: TestResult;
   settings: BridgeSettings | null;
-  updateSetting: (key: string, value: string) => Promise<void>;
+  updateSetting: (key: string, value: string, skipReload?: boolean) => Promise<void>;
+  onSettingsChange?: () => void;
 }) {
   const { t } = useTranslation();
   const [qrImage, setQrImage] = useState<string | null>(null);
@@ -1395,26 +1407,51 @@ function FeishuSettingsPanel({
     };
   }, []);
 
+  const [qrError, setQrError] = useState<string | null>(null);
+
   const startQrLogin = async () => {
     setQrLoading(true);
     setQrStatus('');
+    setQrError(null);
     try {
-      const data = await window.electronAPI?.gateway?.feishuQrBegin();
-      if (!data || !data.success || !data.device_code) {
+      console.log('[Feishu] Starting QR login...');
+      const data = await window.electronAPI?.gateway?.feishuQrBegin() as {
+        success: boolean;
+        device_code?: string;
+        qr_url?: string;
+        user_code?: string;
+        interval?: number;
+        expire_in?: number;
+        error?: string;
+      } | undefined;
+      console.log('[Feishu] QR begin response:', data);
+      if (!data?.success || !data.device_code) {
         throw new Error(data?.error || 'Failed to start QR registration');
       }
       setQrStatus('waiting');
+      // Generate QR code image from URL
+      if (data.qr_url) {
+        // Clean up qr_url - remove any surrounding backticks and whitespace
+        const cleanQrUrl = data.qr_url.replace(/^[`\s]+|[`\s]+$/g, '');
+        const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(cleanQrUrl)}`;
+        console.log('[Feishu] Setting QR image URL:', qrApiUrl);
+        setQrImage(qrApiUrl);
+      } else {
+        console.warn('[Feishu] No qr_url in response');
+      }
 
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       pollTimerRef.current = setInterval(() => pollQrStatus(data), 3000);
     } catch (err) {
+      console.error('[Feishu] QR login error:', err);
       setQrStatus('failed');
+      setQrError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setQrLoading(false);
     }
   };
 
-  const pollQrStatus = async (begin: { qr_url?: string; device_code?: string; user_code?: string; success: boolean; error?: string }) => {
+  const pollQrStatus = async (begin: { qr_url?: string; device_code?: string; user_code?: string }) => {
     try {
       if (!begin.device_code) {
         setQrStatus('failed');
@@ -1424,32 +1461,37 @@ function FeishuSettingsPanel({
         device_code: begin.device_code,
         interval: 5,
         expire_in: 600,
-      });
-      if (!data) {
+      }) as {
+        success: boolean;
+        app_id?: string;
+        app_secret?: string;
+        open_id?: string;
+        domain?: string;
+        error?: string;
+      } | undefined;
+      if (!data?.success) {
         setQrStatus('failed');
         return;
       }
 
-      if (data.success && data.app_id) {
+      if (data.app_id) {
         if (pollTimerRef.current) {
           clearInterval(pollTimerRef.current);
           pollTimerRef.current = null;
         }
         setQrStatus('confirmed');
-        updateSetting('bridge_feishu_app_id', data.app_id);
-        updateSetting('bridge_feishu_app_secret', data.app_secret ?? '');
+        // Save all settings without reload
+        await updateSetting('bridge_feishu_enabled', 'true', true);
+        await updateSetting('bridge_feishu_app_id', data.app_id, true);
+        await updateSetting('bridge_feishu_app_secret', data.app_secret ?? '', true);
+        // Notify parent to reload gateway once after all settings are saved
+        onSettingsChange?.();
         setTimeout(() => {
           setQrImage(null);
           setQrStatus('');
         }, 2000);
-      } else if (data.status === 'pending') {
+      } else {
         setQrStatus('waiting');
-        // Use the QR URL for display
-        if (begin.qr_url && !qrImage) {
-          setQrImage(begin.qr_url);
-        }
-      } else if (data.error) {
-        setQrStatus('failed');
       }
     } catch {
       setQrStatus('failed');
@@ -1465,7 +1507,8 @@ function FeishuSettingsPanel({
     setQrStatus('');
   };
 
-  const hasAppId = !!(settings?.['bridge_feishu_app_id']);
+  const hasValidAppId = !!(settings?.['bridge_feishu_app_id']) &&
+    !settings?.['bridge_feishu_app_id']?.startsWith('cli_xxxx');
 
   return (
     <div className="p-6">
@@ -1532,7 +1575,7 @@ function FeishuSettingsPanel({
       )}
 
       {/* QR Registration - Only shown when no App ID configured */}
-      {!hasAppId && !qrImage ? (
+      {!hasValidAppId && !qrImage ? (
         <div className="mb-6">
           <p className="text-sm text-muted-foreground mb-3">Scan QR code to create a Feishu app automatically:</p>
           <button
@@ -1543,8 +1586,11 @@ function FeishuSettingsPanel({
             {qrLoading ? <SpinnerGapIcon size={16} className="animate-spin" /> : <GlobeIcon size={16} />}
             {t('bridge.feishuQrRegister')}
           </button>
+          {qrError && (
+            <p className="text-xs text-destructive mt-2">{qrError}</p>
+          )}
         </div>
-      ) : !hasAppId ? (
+      ) : !hasValidAppId ? (
         <div className="mb-6 rounded-lg border border-border/50 p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium flex items-center gap-2">
@@ -1564,6 +1610,13 @@ function FeishuSettingsPanel({
               src={qrImage ?? ''}
               alt="Feishu QR Code"
               className="w-48 h-48 rounded-lg border border-border/30"
+              onError={(e) => {
+                // If QR image fails to load, show a fallback message
+                const target = e.target as HTMLImageElement;
+                if (target.src !== qrImage) {
+                  target.style.display = 'none';
+                }
+              }}
             />
           </div>
 
@@ -1651,6 +1704,26 @@ function FeishuSettingsPanel({
           checked={settings?.['bridge_feishu_thread_session'] === 'true'}
           onCheckedChange={(checked) => updateSetting('bridge_feishu_thread_session', checked ? 'true' : 'false')}
         />
+
+        {/* Reconfigure button - shown when already configured */}
+        {hasValidAppId && !qrImage && (
+          <div className="pt-4 border-t border-border/30">
+            <p className="text-sm text-muted-foreground mb-3">Want to switch to a different Feishu account?</p>
+            <button
+              onClick={async () => {
+                // Clear current credentials
+                await updateSetting('bridge_feishu_enabled', 'false', true);
+                await updateSetting('bridge_feishu_app_id', '', true);
+                await updateSetting('bridge_feishu_app_secret', '', true);
+                onSettingsChange?.();
+              }}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500/20 transition-all"
+            >
+              <ArrowsClockwiseIcon size={16} />
+              Reconfigure Feishu Account
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

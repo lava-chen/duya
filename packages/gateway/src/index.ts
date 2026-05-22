@@ -19,6 +19,11 @@ export { getProxyStatus } from './proxy-fetch.js';
 export { resolveDisplayConfig, resolveDisplaySetting, supportsStreamingEdit, showToolProgress } from './display-config.js';
 export type { DisplayConfig, DisplayOverrides, DisplayUserConfig } from './display-config.js';
 
+// Command system
+export { resolveCommand, getCommandNamesForPlatform, isGatewayKnownCommand, COMMAND_REGISTRY } from './commands/registry.js';
+export { generateHelpText, getCommandHelp } from './commands/help.js';
+export { dispatchCommand, getHelpReply, getStatusReply, getNewSessionReply, shouldInterceptCommand } from './commands/dispatcher.js';
+
 // ---------------------------------------------------------------------------
 // Subprocess entry point (when run via child_process.fork)
 // ---------------------------------------------------------------------------
@@ -33,6 +38,7 @@ import type {
 
 // Register adapter imports (side-effect registration)
 import './adapters/index.js';
+import { qrRegisterBegin, qrRegisterPoll } from './adapters/feishu/qr-registration.js';
 
 let gatewayManager: GatewayManager | null = null;
 
@@ -52,7 +58,10 @@ function handleMessage(msg: MainToGatewayMessage): void {
       if (!gatewayManager) {
         gatewayManager = new GatewayManager();
       }
-      gatewayManager.init(msg.config).then(() => {
+      gatewayManager.init(msg.config).then(async () => {
+        // Auto-start adapters after init
+        console.log('[Gateway] init complete, starting adapters...');
+        await gatewayManager!.start();
         send({ type: 'gateway:init:complete', success: true });
       }).catch((err) => {
         send({ type: 'gateway:init:complete', success: false, error: String(err) });
@@ -148,6 +157,31 @@ function handleMessage(msg: MainToGatewayMessage): void {
     case 'gateway:display_state': {
       const ds = msg as { platform: string; platformChatId: string; state: string };
       gatewayManager?.handleDisplayState(ds.platform, ds.platformChatId, ds.state);
+      break;
+    }
+
+    case 'gateway:feishu:qr:begin': {
+      const qrMsg = msg as { id: string; domain?: string };
+      const domain = (qrMsg.domain as 'feishu' | 'lark') || 'feishu';
+      console.log('[Gateway] gateway:feishu:qr:begin received, id:', qrMsg.id, 'domain:', domain);
+      qrRegisterBegin(domain).then((result) => {
+        console.log('[Gateway] gateway:feishu:qr:begin result:', result);
+        send({ type: 'gateway:feishu:qr:begin:response', id: qrMsg.id, result });
+      }).catch((err) => {
+        console.error('[Gateway] gateway:feishu:qr:begin error:', err);
+        send({ type: 'gateway:feishu:qr:begin:response', id: qrMsg.id, result: null, error: String(err) });
+      });
+      break;
+    }
+
+    case 'gateway:feishu:qr:poll': {
+      const qrMsg = msg as { id: string; begin: { device_code: string; interval: number; expire_in: number }; domain?: string };
+      const domain = (qrMsg.domain as 'feishu' | 'lark') || 'feishu';
+      qrRegisterPoll(qrMsg.begin, domain).then((result) => {
+        send({ type: 'gateway:feishu:qr:poll:response', id: qrMsg.id, result });
+      }).catch((err) => {
+        send({ type: 'gateway:feishu:qr:poll:response', id: qrMsg.id, result: null, error: String(err) });
+      });
       break;
     }
 

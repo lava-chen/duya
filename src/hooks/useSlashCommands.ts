@@ -2,7 +2,8 @@
 
 import { useCallback, useMemo } from 'react';
 import type { PopoverItem, PopoverMode, CommandBadge } from '@/types/slash-command';
-import { detectPopoverTrigger, resolveItemSelection, BUILT_IN_COMMANDS } from '@/lib/message-input-logic';
+import { detectPopoverTrigger, resolveItemSelection } from '@/lib/message-input-logic';
+import { getCommandsForPlatform } from '@/lib/commands';
 import {
   Terminal,
   Question,
@@ -18,6 +19,14 @@ const COMMAND_ICONS: Record<string, React.ComponentType<{ size?: number; classNa
   '/clear': Eraser,
   '/cost': ChartLine,
   '/compact': Brain,
+};
+
+// Category icons mapping
+const CATEGORY_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
+  info: Question,
+  session: Terminal,
+  tools: Brain,
+  config: GlobeSimple,
 };
 
 export interface UseSlashCommandsReturn {
@@ -61,15 +70,18 @@ export function useSlashCommands(opts: {
     sessionId,
   } = opts;
 
-  // Enrich built-in commands with icons
-  const enrichedBuiltIns = useMemo(
-    () =>
-      BUILT_IN_COMMANDS.map((cmd) => ({
-        ...cmd,
-        icon: COMMAND_ICONS[cmd.value],
-      })),
-    [],
-  );
+  // Get commands from registry
+  const registryCommands = useMemo(() => {
+    const cmds = getCommandsForPlatform('app');
+    return cmds.map((cmd) => ({
+      label: `/${cmd.name}`,
+      value: `/${cmd.name}`,
+      description: cmd.description,
+      icon: CATEGORY_ICONS[cmd.category] ?? Terminal,
+      builtIn: true,
+      kind: 'slash_command' as const,
+    }));
+  }, []);
 
   // Insert selected item
   const insertItem = useCallback(
@@ -104,9 +116,9 @@ export function useSlashCommands(opts: {
     [triggerPos, popoverMode, closePopover, onCommand, inputValue, popoverFilter, textareaRef, setInputValue, setBadge],
   );
 
-  // Fetch skills for / command (built-in commands + agent skills from registry)
+  // Fetch skills for / command (registry commands + agent skills from settings)
   const fetchSkills = useCallback(async () => {
-    const builtIns = enrichedBuiltIns;
+    const builtIns = registryCommands;
 
     if (!sessionId) {
       return builtIns;
@@ -134,7 +146,7 @@ export function useSlashCommands(opts: {
       console.error('[useSlashCommands] Error fetching skills:', error);
       return builtIns;
     }
-  }, [enrichedBuiltIns, sessionId]);
+  }, [registryCommands, sessionId]);
 
   // Handle input changes to detect @ and /
   const handleInputChange = useCallback(

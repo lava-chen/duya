@@ -1,5 +1,5 @@
 import https from 'https';
-import HttpsProxyAgent = require('https-proxy-agent');
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { getDatabase } from '../ipc/db-handlers';
 
 export function detectWindowsSystemProxy(): string | undefined {

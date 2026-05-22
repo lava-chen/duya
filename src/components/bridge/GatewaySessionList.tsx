@@ -6,7 +6,6 @@ import {
   CircleNotchIcon,
   ChatCircleIcon,
 } from "@/components/icons";
-import { ChannelIcon, CHANNEL_COLORS } from "./ChannelIcon";
 import { useTranslation } from "@/hooks/useTranslation";
 import { listGatewaySessionsIPC, type GatewaySession } from "@/lib/ipc-client";
 import { getSnapshot, subscribeToPhase } from "@/lib/stream-session-manager";
@@ -114,76 +113,18 @@ export function GatewaySessionList({ selectedChannel, onSessionClick }: GatewayS
     return t("gateway.justNow");
   };
 
-  const getChannelInfo = (channel: string) => {
-    const ch = channel === "wechat" ? "weixin" : channel;
-    return {
-      color: CHANNEL_COLORS[ch]?.color || "var(--muted)",
-      bgColor: CHANNEL_COLORS[ch]?.bgColor || "var(--surface)",
-    };
-  };
-
-  const headerChannel = selectedChannel || "weixin";
-  const headerInfo = getChannelInfo(headerChannel);
-
   return (
-    <div className="flex flex-col gap-4">
-      <div className="session-list-header">
-        <div
-          className="session-list-header-icon"
-          style={{
-            backgroundColor: headerInfo.bgColor,
-            color: headerInfo.color,
-          }}
-        >
-          <ChannelIcon channel={headerChannel} size={20} />
-        </div>
-        <span className="session-list-header-title">{t("gateway.sessions")}</span>
-      </div>
-
-      {activeSessions.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <div className="session-section-header">
-            <span className="session-section-dot active" />
-            <span className="session-section-title active">
-              {t("gateway.active")} ({activeSessions.length})
-            </span>
-          </div>
-          <div className="flex flex-col">
-            {activeSessions.map((session) => (
-              <SessionItem
-                key={session.id}
-                session={session}
-                isActive
-                onClick={() => onSessionClick(session)}
-                formatRelativeTime={formatRelativeTime}
-                t={t}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {historySessions.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <div className="session-section-header">
-            <span className="session-section-title">
-              {t("gateway.history")} ({historySessions.length})
-            </span>
-          </div>
-          <div className="flex flex-col">
-            {historySessions.map((session) => (
-              <SessionItem
-                key={session.id}
-                session={session}
-                isActive={false}
-                onClick={() => onSessionClick(session)}
-                formatRelativeTime={formatRelativeTime}
-                t={t}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+    <div className="flex flex-col gap-1.5">
+      {filteredSessions.map((session) => (
+        <SessionItem
+          key={session.id}
+          session={session}
+          isActive={activeSessionIds.has(session.id)}
+          onClick={() => onSessionClick(session)}
+          formatRelativeTime={formatRelativeTime}
+          t={t}
+        />
+      ))}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-﻿import WebSocket from 'ws';
+﻿﻿import WebSocket from 'ws';
 import type { FeishuDomain } from './types';
 
 const PING_INTERVAL_MS = 30000;

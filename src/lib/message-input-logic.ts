@@ -6,10 +6,11 @@
  */
 
 import type { PopoverItem, PopoverMode, CommandBadge, InsertResult, TriggerResult } from '@/types/slash-command';
+import { getCommandsForPlatform } from '@/lib/commands';
 
 export { InsertResult, TriggerResult };
 
-// Built-in commands
+// Built-in commands (derived from registry for UI display)
 export interface BuiltInCommand {
   label: string;
   value: string;
@@ -19,25 +20,27 @@ export interface BuiltInCommand {
   kind?: 'slash_command' | 'agent_command' | 'agent_skill' | 'sdk_command' | 'cli_tool';
 }
 
+// Get built-in commands from registry (immediate=true commands only for popover)
 export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
-  // Info & Help
-  { label: '/help', value: '/help', description: 'Show available commands and skills', immediate: true, builtIn: true },
-  { label: '/cost', value: '/cost', description: 'Show token usage statistics and estimated costs', immediate: true, builtIn: true },
-
-  // Session Management
-  { label: '/clear', value: '/clear', description: 'Clear conversation history', immediate: true, builtIn: true },
-  { label: '/compact', value: '/compact', description: 'Compress conversation context to save tokens', kind: 'agent_command', builtIn: true },
-  { label: '/memory', value: '/memory', description: 'View or manage session memory', kind: 'agent_command', builtIn: true },
-  { label: '/export', value: '/export', description: 'Export conversation to markdown/json/html', kind: 'agent_command', builtIn: true },
-
-  // Code Quality
-  { label: '/review', value: '/review', description: 'Review code changes with detailed feedback', kind: 'agent_skill', builtIn: true },
-  { label: '/simplify', value: '/simplify', description: 'Simplify and refactor complex code', kind: 'agent_skill', builtIn: true },
-  { label: '/doctor', value: '/doctor', description: 'Diagnose project issues and suggest fixes', kind: 'agent_skill', builtIn: true },
-
-  // Git & Workflow
-  { label: '/commit', value: '/commit', description: 'Generate smart Git commit messages', kind: 'agent_skill', builtIn: true },
-  { label: '/plan', value: '/plan', description: 'Enter planning mode for complex tasks', kind: 'agent_skill', builtIn: true },
+  ...getCommandsForPlatform('app')
+    .filter((cmd) => cmd.category === 'info' || cmd.name === 'clear')
+    .map((cmd) => ({
+      label: `/${cmd.name}`,
+      value: `/${cmd.name}`,
+      description: cmd.description,
+      immediate: true,
+      builtIn: true,
+    })),
+  // Session commands that need badge mode
+  { label: '/compact', value: '/compact', description: 'Compress conversation context to save tokens', builtIn: true, kind: 'agent_command' as const },
+  { label: '/memory', value: '/memory', description: 'View or manage session memory', builtIn: true, kind: 'agent_command' as const },
+  { label: '/export', value: '/export', description: 'Export conversation to markdown/json/html', builtIn: true, kind: 'agent_command' as const },
+  // Skill commands
+  { label: '/review', value: '/review', description: 'Review code changes with detailed feedback', builtIn: true, kind: 'agent_skill' as const },
+  { label: '/simplify', value: '/simplify', description: 'Simplify and refactor complex code', builtIn: true, kind: 'agent_skill' as const },
+  { label: '/doctor', value: '/doctor', description: 'Diagnose project issues and suggest fixes', builtIn: true, kind: 'agent_skill' as const },
+  { label: '/commit', value: '/commit', description: 'Generate smart Git commit messages', builtIn: true, kind: 'agent_skill' as const },
+  { label: '/plan', value: '/plan', description: 'Enter planning mode for complex tasks', builtIn: true, kind: 'agent_skill' as const },
 ];
 
 /**

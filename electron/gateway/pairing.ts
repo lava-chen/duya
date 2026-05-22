@@ -118,8 +118,8 @@ export class PairingStore {
       return { code: '', error: 'too_many_pending' };
     }
 
-    const lockoutKey = `pairing:fail:${platform}`;
-    const failState = this.failedAttempts.get(lockoutKey);
+    const rateKey = `${platform}:${platformUserId}`;
+    const failState = this.failedAttempts.get(rateKey);
     if (failState && now < failState.lockUntil) {
       return { code: '', error: 'locked_out' };
     }
@@ -158,7 +158,7 @@ export class PairingStore {
     const match = pending.find(p => p.code === code);
 
     if (!match) {
-      this.recordFailedAttempt(platform);
+      this.recordFailedAttempt(platform, code);
       return { approved: false, error: 'invalid_code' };
     }
 
@@ -166,8 +166,8 @@ export class PairingStore {
       return { approved: false, error: 'expired' };
     }
 
-    const lockoutKey = `pairing:fail:${platform}`;
-    const failState = this.failedAttempts.get(lockoutKey);
+    const rateKey = `${platform}:${match.platformUserId}`;
+    const failState = this.failedAttempts.get(rateKey);
     if (failState && now < failState.lockUntil) {
       return { approved: false, error: 'locked_out' };
     }
@@ -187,7 +187,7 @@ export class PairingStore {
       `).run(`pairing:approved:${platform}:${match.platformUserId}`, JSON.stringify(approved), now);
 
       db.prepare("DELETE FROM settings WHERE key = ?").run(`pairing:${platform}:${match.platformUserId}`);
-      this.failedAttempts.delete(lockoutKey);
+      this.failedAttempts.delete(rateKey);
     }
 
     getLogger().info('Pairing approved', { platform, platformUserId: match.platformUserId }, LogComponent.Gateway);
@@ -220,14 +220,13 @@ export class PairingStore {
     return result;
   }
 
-  recordFailedAttempt(platform: string): void {
-    const rateKey = `pairing:fail:${platform}`;
+  recordFailedAttempt(platform: string, platformUserId: string): void {
+    const rateKey = `${platform}:${platformUserId}`;
     const state = this.failedAttempts.get(rateKey) || { count: 0, lockUntil: 0 };
     state.count++;
     if (state.count >= MAX_FAILED_ATTEMPTS) {
       state.lockUntil = Date.now() + LOCKOUT_DURATION_MS;
-      state.count = 0;
-      getLogger().warn('Pairing locked out after max failed attempts', { platform, count: MAX_FAILED_ATTEMPTS }, LogComponent.Gateway);
+      getLogger().warn('Pairing locked out after max failed attempts', { platform, platformUserId, count: state.count }, LogComponent.Gateway);
     }
     this.failedAttempts.set(rateKey, state);
   }

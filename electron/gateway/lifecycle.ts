@@ -99,6 +99,7 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
   const gatewayPath = getGatewayProcessPath();
   const agentServerPort = initConfig.agentServerPort ?? (process.env.DUYA_AGENT_SERVER_PORT ? parseInt(process.env.DUYA_AGENT_SERVER_PORT, 10) : 0);
   getLogger().info('Starting gateway process', { path: gatewayPath, platforms: initConfig.platforms?.length ?? 0 }, LogComponent.Gateway);
+  console.log('[STARTUP] startGatewayProcess: platforms =', JSON.stringify(initConfig.platforms?.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!(p.credentials && Object.keys(p.credentials).length > 0), credentialsKeys: Object.keys(p.credentials || {}) }))));
 
   if (gatewayProcess && !gatewayProcess.killed) {
     getLogger().info('Gateway already running, stopping first', undefined, LogComponent.Gateway);

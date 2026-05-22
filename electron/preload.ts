@@ -270,8 +270,8 @@ export interface GatewayAPI {
   pairingList: () => Promise<{ pending: unknown[]; approved: unknown[] }>
   pairingApprove: (platform: string, code: string) => Promise<{ approved: boolean; error?: string }>
   pairingRevoke: (platform: string, platformUserId: string) => Promise<{ revoked: boolean }>
-  feishuQrBegin: () => Promise<{ success: boolean; qr_url?: string; device_code?: string; user_code?: string; error?: string }>
-  feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) => Promise<{ success: boolean; app_id?: string; app_secret?: string; open_id?: string; status?: string; error?: string }>
+  feishuQrBegin: () => Promise<{ success: boolean; result?: { qr_url?: string; device_code?: string; user_code?: string; interval?: number; expire_in?: number }; error?: string }>
+  feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) => Promise<{ success: boolean; result?: { app_id?: string; app_secret?: string; open_id?: string; domain?: string }; error?: string }>
 }
 
 export interface AutomationAPI {

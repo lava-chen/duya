@@ -250,7 +250,9 @@ export type GatewayToMainMessage =
   | { type: 'gateway:start:response'; id?: string; success: boolean; error?: string }
   | { type: 'gateway:stop:response'; id?: string; success: boolean; error?: string }
   | { type: 'gateway:getStatus:response'; id?: string; status: GatewayStatus }
-  | { type: 'gateway:reset_session'; id?: string; platform: PlatformType; platformChatId: string; platformUserId: string; platformMsgId: string };
+  | { type: 'gateway:reset_session'; id?: string; platform: PlatformType; platformChatId: string; platformUserId: string; platformMsgId: string }
+  | { type: 'gateway:feishu:qr:begin:response'; id?: string; result: QrRegistrationBegin | null; error?: string }
+  | { type: 'gateway:feishu:qr:poll:response'; id?: string; result: QrRegistrationResult | null; error?: string };
 
 /** Main Process → Gateway */
 export type MainToGatewayMessage =
@@ -265,7 +267,31 @@ export type MainToGatewayMessage =
   | { type: 'gateway:create_session:response'; sessionId: string; error?: string }
   | { type: 'gateway:reset_session:response'; sessionId: string; oldSessionId?: string; platformMsgId?: string; error?: string }
   | { type: 'gateway:display_state'; sessionId: string; platform: string; platformChatId: string; state: 'typing_start' | 'typing_stop' }
+  | { type: 'gateway:feishu:qr:begin'; id: string; domain?: string }
+  | { type: 'gateway:feishu:qr:poll'; id: string; begin: QrPollInput; domain?: string }
   | { type: 'reset'; sessionId: string };
+
+/** QR Registration types */
+export interface QrRegistrationBegin {
+  device_code: string;
+  qr_url: string;
+  user_code: string;
+  interval: number;
+  expire_in: number;
+}
+
+export interface QrPollInput {
+  device_code: string;
+  interval: number;
+  expire_in: number;
+}
+
+export interface QrRegistrationResult {
+  app_id: string;
+  app_secret: string;
+  domain: 'feishu' | 'lark';
+  open_id?: string;
+}
 
 export interface GatewayInitConfig {
   platforms: Array<{

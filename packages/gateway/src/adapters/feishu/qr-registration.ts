@@ -12,21 +12,9 @@
  */
 
 import { randomBytes } from 'crypto';
+import type { QrRegistrationResult, QrRegistrationBegin, QrPollInput } from '../../types.js';
 
-export interface QrRegistrationResult {
-  app_id: string;
-  app_secret: string;
-  domain: 'feishu' | 'lark';
-  open_id?: string;
-}
-
-export interface QrRegistrationBegin {
-  device_code: string;
-  qr_url: string;
-  user_code: string;
-  interval: number;
-  expire_in: number;
-}
+export { QrRegistrationResult, QrRegistrationBegin, QrPollInput };
 
 const ACCOUNTS_URLS = {
   feishu: 'https://accounts.feishu.cn',
@@ -120,7 +108,7 @@ export async function qrRegisterBegin(domain: 'feishu' | 'lark' = 'feishu'): Pro
 
 /** Poll until user scans QR code */
 export async function qrRegisterPoll(
-  begin: QrRegistrationBegin,
+  begin: QrPollInput,
   domain: 'feishu' | 'lark' = 'feishu',
   onProgress?: (status: string) => void
 ): Promise<QrRegistrationResult | null> {

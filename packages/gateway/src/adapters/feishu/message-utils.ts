@@ -1,4 +1,4 @@
-﻿import type { FeishuMessageContent, FeishuPostParagraph, FeishuMention, FeishuRichText } from './types';
+﻿﻿import type { FeishuMessageContent, FeishuPostParagraph, FeishuMention, FeishuRichText } from './types';
 
 const MAX_MESSAGE_LENGTH = 4000;
 

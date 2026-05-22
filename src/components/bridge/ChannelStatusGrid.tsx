@@ -19,7 +19,7 @@ interface AdapterHealth {
 interface BridgeStatus {
   running: boolean;
   adapters: Array<{
-    channelType: string;
+    platform: string;
     running: boolean;
     lastMessageAt?: number;
     error?: string;
@@ -128,7 +128,7 @@ export function ChannelStatusGrid({ onChannelClick, selectedChannel }: ChannelSt
   }
 
   const adapterMap = new Map(
-    status?.adapters.map((a) => [a.channelType, a]) ?? []
+    status?.adapters.map((a) => [a.platform, a]) ?? []
   );
 
   return (
@@ -174,7 +174,7 @@ export function ChannelStatusGrid({ onChannelClick, selectedChannel }: ChannelSt
                 color: info.color,
               }}
             >
-              <ChannelIcon channel={ch} size={18} />
+              <ChannelIcon channel={ch} size={26} />
             </div>
             <span
               className={`channel-status-bar-dot ${isConnected ? "connected" : "disconnected"}`}
