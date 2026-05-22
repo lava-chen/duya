@@ -6,6 +6,7 @@
  * 2. Environment variables (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY)
  * 3. Windows system proxy via registry query
  * 4. Fallback IP transport for api.telegram.org when DNS is blocked/unreachable
+ * 5. Auto-disable proxy on connection failure (falls back to direct connection)
  *
  * Uses https-proxy-agent for HTTP/HTTPS proxy support.
  */
@@ -17,6 +18,12 @@ import { execSync } from 'child_process';
 let proxyAgent: HttpsProxyAgent<string> | undefined;
 let proxyDetected = false;
 let configuredProxyUrl: string | undefined;
+
+// Issue: Auto-disable proxy on failure
+let proxyDisabledDueToFailure = false;
+let proxyFailureCount = 0;
+const PROXY_FAILURE_THRESHOLD = 3;
+let lastProxyUrl: string | undefined;
 
 // Issue #9: Fallback IP transport
 const FALLBACK_IPS = ['149.154.167.220', '149.154.167.221'];
@@ -91,6 +98,8 @@ export function setProxyUrl(url: string | undefined): void {
   configuredProxyUrl = url;
   proxyDetected = false;
   proxyAgent = undefined;
+  proxyDisabledDueToFailure = false;
+  proxyFailureCount = 0;
 }
 
 /**
@@ -103,6 +112,7 @@ export function initProxy(): void {
   const proxyUrl = detectProxy();
   if (proxyUrl) {
     proxyAgent = new HttpsProxyAgent(proxyUrl);
+    lastProxyUrl = proxyUrl;
     console.log(`[Proxy] Using proxy: ${proxyUrl}`);
   } else {
     console.log('[Proxy] No proxy detected');
@@ -110,10 +120,62 @@ export function initProxy(): void {
 }
 
 /**
+ * Check if the error is a proxy connection failure
+ */
+function isProxyConnectionError(err: Error): boolean {
+  const message = err.message.toLowerCase();
+  return (
+    message.includes('econnrefused') ||
+    message.includes('etimedout') ||
+    message.includes('enotfound') ||
+    message.includes('socket hang up') ||
+    message.includes('proxy connection failed') ||
+    message.includes('tunneling socket could not be established')
+  );
+}
+
+/**
+ * Disable proxy due to connection failure
+ */
+function disableProxyDueToFailure(): void {
+  if (proxyDisabledDueToFailure) return;
+
+  proxyDisabledDueToFailure = true;
+  proxyAgent = undefined;
+  console.log('[Proxy] Proxy disabled due to connection failure. Falling back to direct connection.');
+  console.log(`[Proxy] To re-enable, restart the application or check your proxy server at ${lastProxyUrl}`);
+}
+
+/**
+ * Record proxy failure and disable if threshold reached
+ */
+function recordProxyFailure(err: Error): void {
+  if (!isProxyConnectionError(err)) return;
+
+  proxyFailureCount++;
+  console.warn(`[Proxy] Connection failure ${proxyFailureCount}/${PROXY_FAILURE_THRESHOLD}: ${err.message}`);
+
+  if (proxyFailureCount >= PROXY_FAILURE_THRESHOLD) {
+    disableProxyDueToFailure();
+  }
+}
+
+/**
+ * Reset proxy failure count on successful request
+ */
+function resetProxyFailure(): void {
+  if (proxyFailureCount > 0) {
+    proxyFailureCount = 0;
+    console.log('[Proxy] Connection successful, resetting failure count');
+  }
+}
+
+/**
  * Get the currently effective proxy URL (configured, env, or system)
- * Returns undefined if no proxy is configured
+ * Returns undefined if no proxy is configured or if proxy is disabled due to failure
  */
 export function getEffectiveProxyUrl(): string | undefined {
+  if (proxyDisabledDueToFailure) return undefined;
   return detectProxy();
 }
 
@@ -125,6 +187,8 @@ export function getProxyStatus(): {
   env: string | undefined;
   system: string | undefined;
   effective: string | undefined;
+  disabledDueToFailure: boolean;
+  failureCount: number;
 } {
   const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy
     || process.env.HTTP_PROXY || process.env.http_proxy
@@ -136,7 +200,9 @@ export function getProxyStatus(): {
     configured: configuredProxyUrl,
     env: envProxy,
     system: systemProxy,
-    effective: detectProxy(),
+    effective: getEffectiveProxyUrl(),
+    disabledDueToFailure: proxyDisabledDueToFailure,
+    failureCount: proxyFailureCount,
   };
 }
 
@@ -146,7 +212,13 @@ export function getProxyStatus(): {
  */
 function resolveTelegramHost(targetUrl: string): { host: string; ip?: string } {
   if (!targetUrl.includes(TELEGRAM_API_HOST)) {
-    return { host: TELEGRAM_API_HOST };
+    // For non-Telegram URLs, extract host from URL
+    try {
+      const url = new URL(targetUrl);
+      return { host: url.hostname };
+    } catch {
+      return { host: TELEGRAM_API_HOST };
+    }
   }
 
   if (stickyFallbackIp) {
@@ -261,12 +333,13 @@ export function cancelBatch(sessionId: string, chatId: string): void {
  * Proxy-aware fetch wrapper using https-proxy-agent
  * Issue #9: Falls back to alternative IPs when Telegram API is unreachable
  * Issue #16: Supports batched sends for rate limit management
+ * Issue: Auto-disables proxy on repeated connection failures
  */
 export async function proxyFetch(
   url: string,
   init?: RequestInit,
 ): Promise<Response> {
-  if (!proxyAgent) {
+  if (!proxyAgent && !proxyDisabledDueToFailure) {
     initProxy();
   }
 
@@ -274,10 +347,28 @@ export async function proxyFetch(
   const { host: resolvedHost, ip } = resolveTelegramHost(url);
   const isTelegram = isTelegramApiUrl(url);
 
-  if (proxyAgent) {
-    return proxyFetchWithAgent(url, resolvedHost, ip, proxyAgent, init, isTelegram);
+  // Use proxy if available and not disabled
+  if (proxyAgent && !proxyDisabledDueToFailure) {
+    try {
+      const response = await proxyFetchWithAgent(url, resolvedHost, ip, proxyAgent, init, isTelegram);
+      resetProxyFailure();
+      return response;
+    } catch (err) {
+      // Check if this is a proxy connection error
+      if (err instanceof Error && isProxyConnectionError(err)) {
+        recordProxyFailure(err);
+
+        // If proxy is now disabled, fall through to direct connection
+        if (proxyDisabledDueToFailure) {
+          console.log('[Proxy] Retrying with direct connection...');
+          return proxyFetchDirect(url, resolvedHost, ip, init, isTelegram);
+        }
+      }
+      throw err;
+    }
   }
 
+  // Direct connection (no proxy or proxy disabled)
   return proxyFetchDirect(url, resolvedHost, ip, init, isTelegram);
 }
 

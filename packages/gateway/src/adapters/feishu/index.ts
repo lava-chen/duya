@@ -1,4 +1,4 @@
-﻿import { EventEmitter } from 'events';
+﻿﻿import { EventEmitter } from 'events';
 import { FeishuWSClient } from './websocket-client';
 import { FeishuWebhookServer } from './webhook-server';
 import { FeishuTextBatcher } from './text-batcher';

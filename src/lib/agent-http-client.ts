@@ -273,20 +273,23 @@ export class AgentServerClient {
   }
 
   private emit(sessionId: string, event: AgentEvent): void {
-    // Deduplicate by message ID to avoid duplicates when SSE replays events
+    // Deduplicate by (eventType + id) to avoid duplicates when SSE replays events.
+    // Using id alone is incorrect: tool_use and tool_result share the same id
+    // (the tool_use_id), so a tool_result would be falsely dropped as duplicate.
     const eventData = event.data as Record<string, unknown> | undefined;
-    const eventId = eventData?.id as string | undefined;
-    if (eventId) {
+    const rawId = eventData?.id as string | undefined;
+    if (rawId) {
+      const dedupKey = `${event.type}:${rawId}`;
       let ids = this.receivedMessageIds.get(sessionId);
       if (!ids) {
         ids = new Set();
         this.receivedMessageIds.set(sessionId, ids);
       }
-      if (ids.has(eventId)) {
-        console.log('[agent-http-client] Skipping duplicate event:', eventId);
+      if (ids.has(dedupKey)) {
+        console.log('[agent-http-client] Skipping duplicate event:', dedupKey);
         return;
       }
-      ids.add(eventId);
+      ids.add(dedupKey);
     }
 
     const handlers = this.eventHandlers.get(sessionId);

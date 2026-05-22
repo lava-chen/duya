@@ -30,6 +30,7 @@ import type { WeChatMessage, WeChatConfigOptions } from './types.js';
 import { WX_MSG_TYPES } from './types.js';
 import { parseMessageContent, isFromGroup } from './message-utils.js';
 import { wxApi } from './api.js';
+import type { IpcClient } from '../../ipc-client.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -67,6 +68,10 @@ export class WeixinAdapter extends BaseAdapter {
   private splitMultilineMessages = false;
   private pollSyncBuf = '';
   private consecutiveFailures = 0;
+
+  // DM policy
+  private dmPolicy: 'open' | 'allowlist' | 'disabled' | 'pairing' = 'open';
+  private allowFrom: Set<string> = new Set();
 
   // Deduplication (timestamp-based for WeChat)
   private recentMsgIds = new Set<string>();
@@ -127,6 +132,18 @@ export class WeixinAdapter extends BaseAdapter {
     this.splitMultilineMessages =
       (weixinOptions?.split_multiline_messages as boolean) ??
       false;
+
+    // DM policy configuration
+    const dmPolicyRaw = (weixinOptions?.dm_policy as string) ??
+      (config.credentials.dm_policy as string) ?? 'open';
+    this.dmPolicy = ['open', 'allowlist', 'disabled', 'pairing'].includes(dmPolicyRaw)
+      ? (dmPolicyRaw as 'open' | 'allowlist' | 'disabled' | 'pairing')
+      : 'open';
+
+    const allowFromRaw = weixinOptions?.allow_from as string[] | undefined;
+    if (allowFromRaw) {
+      this.allowFrom = new Set(allowFromRaw);
+    }
 
     this.running = true;
     this.consecutiveFailures = 0;
@@ -422,6 +439,12 @@ export class WeixinAdapter extends BaseAdapter {
 
     if (!text) return;
 
+    // DM policy check
+    if (!this.isDmAllowed(senderId)) {
+      console.log('[Weixin] DM blocked by policy:', senderId, 'policy:', this.dmPolicy);
+      return;
+    }
+
     const normalizedMsg: NormalizedMessage = {
       platform: 'weixin',
       platformUserId: senderId,
@@ -474,6 +497,40 @@ export class WeixinAdapter extends BaseAdapter {
         this.recentMsgIds.clear();
       }
     }, MESSAGE_DEDUP_TTL_MS);
+  }
+
+  // ---------------------------------------------------------------------------
+  // DM Policy
+  // ---------------------------------------------------------------------------
+
+  private isDmAllowed(senderId: string): boolean {
+    if (this.dmPolicy === 'disabled') {
+      return false;
+    }
+    if (this.dmPolicy === 'allowlist') {
+      return this.allowFrom.has(senderId);
+    }
+    if (this.dmPolicy === 'pairing') {
+      // Check if user is approved
+      if (verifyPairingApproval(senderId)) {
+        return true;
+      }
+      // Generate pairing code for new user
+      const result = createPairingSession(senderId, senderId);
+      if ('error' in result) {
+        console.log('[Weixin] Pairing session error:', result.error);
+        return false;
+      }
+      // Send pairing code to user
+      const code = result.code;
+      const msg = `📱 请将此配对码发送给管理员进行审批：\n\n**${code}**\n\n配对码有效期1小时。`;
+      this.sendText(senderId, msg).catch((err) => {
+        console.error('[Weixin] Failed to send pairing code:', err);
+      });
+      return false;
+    }
+    // 'open' policy
+    return true;
   }
 }
 

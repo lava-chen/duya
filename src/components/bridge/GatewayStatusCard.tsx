@@ -51,7 +51,7 @@ export function GatewayStatusCard() {
         setStatus(data as BridgeStatus);
       }
     } catch {
-      // Ignore network errors
+      // Ignore network errors — still clear loading to avoid infinite spinner
     } finally {
       setLoading(false);
     }
@@ -75,11 +75,25 @@ export function GatewayStatusCard() {
   useEffect(() => {
     fetchStatus();
     fetchSessionStats();
+
+    // Safety timeout: force clear loading if initial fetch hangs
+    const safetyTimeout = setTimeout(() => {
+      setLoading((prev) => {
+        if (prev) {
+          return false;
+        }
+        return prev;
+      });
+    }, 3000);
+
     const interval = setInterval(() => {
       fetchStatus();
       fetchSessionStats();
     }, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(safetyTimeout);
+      clearInterval(interval);
+    };
   }, [fetchStatus, fetchSessionStats]);
 
   const controlBridge = async (action: "start" | "stop") => {

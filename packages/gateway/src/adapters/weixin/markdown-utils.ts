@@ -229,6 +229,9 @@ export function looksLikeChattyLineForWeixin(line: string): boolean {
   if (_TABLE_RULE_RE.exec(stripped)) return false;
   if (/^\*\*[^*]+\*\*$/.exec(stripped)) return false;
   if (/^\d+\.\s/.exec(stripped)) return false;
+  // Lines with inline code markers or key-value format are not chatty lines
+  if (stripped.includes('`')) return false;
+  if (/^[^:]+:\s/.exec(stripped)) return false;
   return true;
 }
 
