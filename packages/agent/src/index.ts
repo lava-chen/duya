@@ -311,15 +311,19 @@ export class duyaAgent {
       language: options.language,
     });
 
-    // Load memory for session (memory manager is a singleton)
+    // Load memory for session (memory manager is a singleton).
+    // Deferred to next tick so agent construction returns immediately.
+    // Memory snapshot defaults to empty; populated before first streamChat.
     const memoryManager = getMemoryManager();
     const projectPath = options.workingDirectory || process.cwd();
     if (!memoryManager.isLoadedForPath(projectPath)) {
-      try {
-        memoryManager.loadForSession(projectPath);
-      } catch (err) {
-        logger.warn(`[duyaAgent] Memory load failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      setImmediate(() => {
+        try {
+          memoryManager.loadForSession(projectPath);
+        } catch (err) {
+          logger.warn(`[duyaAgent] Memory load failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      });
     }
 
     this.compactionManager = createCompactionManager();
@@ -499,12 +503,10 @@ export class duyaAgent {
     logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
 
     // Determine which prompt system to use based on agent profile
-    let promptSystem: PromptSystem | undefined;
-    if (appliedProfile) {
-      const sysName = resolvePromptSystemName(appliedProfile.promptSystem);
-      promptSystem = PromptsRegistry.get(sysName);
-      logger.info(`[Agent] Using prompt system '${sysName}' for profile: ${appliedProfile.name}`);
-    }
+    // Default to 'general' prompt system if no profile is specified
+    const sysName = resolvePromptSystemName(appliedProfile?.promptSystem);
+    const promptSystem = PromptsRegistry.get(sysName) ?? PromptsRegistry.get('general')!;
+    logger.info(`[Agent] Using prompt system '${sysName}'${appliedProfile ? ` for profile: ${appliedProfile.name}` : ' (default)'}`);
 
     // Apply output style config if provided
     if (options?.outputStyleConfig) {
@@ -519,7 +521,7 @@ export class duyaAgent {
       logger.info('[Agent] streamChat: System prompt disabled (empty)');
     } else if (options?.systemPrompt) {
       systemPromptContent = options.systemPrompt;
-    } else if (promptSystem) {
+    } else {
       const enabledToolNames = tools.map(t => t.name);
       const context = promptSystem.buildContext({
         workingDirectory: this.workingDirectory,
@@ -529,10 +531,6 @@ export class duyaAgent {
         outputStyleConfig: options?.outputStyleConfig,
       });
       const systemPromptResult = await promptSystem.buildSystemPrompt(context);
-      systemPromptContent = [...systemPromptResult].join('\n\n');
-    } else {
-      const enabledToolNames = tools.map(t => t.name);
-      const systemPromptResult = await this.promptManager.buildSystemPrompt(new Set(enabledToolNames));
       systemPromptContent = [...systemPromptResult].join('\n\n');
     }
 

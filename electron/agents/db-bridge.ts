@@ -189,6 +189,39 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         'SELECT * FROM chat_sessions WHERE is_deleted = 0 AND parent_id = ? ORDER BY created_at ASC'
       ).all(p.parentId);
 
+    case 'session:loadMessages': {
+      const sessionId = p.sessionId as string;
+      const messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC').all(sessionId);
+      const attachmentRows = db.prepare(
+        "SELECT * FROM message_attachments WHERE session_id = ? AND attachment_type = 'parsed_document' ORDER BY created_at ASC"
+      ).all(sessionId) as Array<{
+        id: string;
+        message_id: string;
+        session_id: string;
+        data: string;
+        original_url: string | null;
+        created_at: number;
+      }>;
+
+      const parsedDocuments = attachmentRows.map((row) => {
+        const parsed = JSON.parse(row.data);
+        return {
+          id: row.id,
+          message_id: row.message_id,
+          session_id: row.session_id,
+          filename: parsed.filename || '',
+          filePath: parsed.filePath || row.original_url || '',
+          charCount: parsed.charCount || 0,
+          extractMethod: parsed.extractMethod || null,
+          text: parsed.text || '',
+          imageChunks: parsed.imageChunks ? JSON.stringify(parsed.imageChunks) : null,
+          created_at: row.created_at,
+        };
+      });
+
+      return { messages, parsedDocuments };
+    }
+
     // ==================== Message actions ====================
     case 'message:add': {
       const attachments = p.attachments
