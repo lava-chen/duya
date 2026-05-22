@@ -526,7 +526,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
 
   return (
     <div data-message-id={message.id} className="py-3 px-4">
-      <div className={hasWidgets ? 'max-w-[95%]' : 'max-w-[90%] lg:max-w-[85%]'}>
+      <div className="w-full">
         {hasWidgets ? (
           <>
             {hasToolActions && (

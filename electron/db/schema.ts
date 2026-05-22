@@ -44,7 +44,6 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       tool_profile_id TEXT DEFAULT 'full',
       allowed_tools TEXT,
       disallowed_tools TEXT,
-      prompt_system TEXT,
       default_model TEXT,
       mcp_servers TEXT,
       skills TEXT,

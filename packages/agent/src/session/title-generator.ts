@@ -473,42 +473,48 @@ export async function generateSessionTitle(
 
       let title = '';
       let eventCount = 0;
+      let thinkingContent = '';
       for await (const event of stream) {
         eventCount++;
         if (event.type === 'text') {
           title += event.data;
           console.log(`[TitleGenerator] Stream event ${eventCount}: type=text, text length=${event.data.length}`);
         } else if (event.type === 'thinking') {
-          // MiniMax puts the actual response in 'thinking' events, not in 'text' events
-          // Extract the title from thinking content - MiniMax generates Chinese titles
-          const content = typeof event.data === 'string' ? event.data : (event.data as { content?: string })?.content || '';
-          title += content;
-          console.log(`[TitleGenerator] Stream event ${eventCount}: type=thinking, extracting content length=${content.length}`);
+          // MiniMax wraps response in <think> tags - extract JSON from thinking if text is empty
+          thinkingContent += typeof event.data === 'string' ? event.data : JSON.stringify(event.data);
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=thinking, len=${thinkingContent.length}`);
+        } else if (event.type === 'done') {
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=done`);
         } else if (event.type === 'error') {
           console.log(`[TitleGenerator] Stream event ${eventCount}: type=error, message=${event.data}`);
           throw new Error(event.data);
-        } else if (event.type === 'done') {
-          console.log(`[TitleGenerator] Stream event ${eventCount}: type=done`);
         } else {
-          console.log(`[TitleGenerator] Stream event ${eventCount}: type=${event.type}`);
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=${event.type} (ignored)`);
         }
       }
-      console.log(`[TitleGenerator] Stream iteration done, eventCount=${eventCount}, title="${title}"`);
+      console.log(`[TitleGenerator] Stream iteration done, eventCount=${eventCount}, title_len=${title.length}, thinking_len=${thinkingContent.length}`);
 
       clearTimeout(timeoutId);
 
-      // Try to parse JSON response
+      // Try to parse JSON from text, then from thinking content
       let cleanedTitle: string | null = null;
-      try {
-        const jsonMatch = title.match(/\{[^}]*\}/s);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]!);
-          if (parsed.title && typeof parsed.title === 'string') {
-            cleanedTitle = validateTitle(parsed.title);
+      for (const source of [title, thinkingContent]) {
+        if (cleanedTitle) break;
+        try {
+          const jsonMatch = source.match(/\{[^}]*\}/s);
+          console.log(`[TitleGenerator] JSON match attempt: source=${source === title ? 'text' : 'thinking'}, matched=${!!jsonMatch}`);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]!);
+            if (parsed.title && typeof parsed.title === 'string') {
+              cleanedTitle = validateTitle(parsed.title);
+              console.log(`[TitleGenerator] JSON parsed from ${source === title ? 'text' : 'thinking'}, title="${cleanedTitle}"`);
+            } else {
+              console.log(`[TitleGenerator] JSON matched but no valid title field: keys=${Object.keys(parsed)}`);
+            }
           }
+        } catch (e) {
+          console.log(`[TitleGenerator] JSON parse failed for ${source === title ? 'text' : 'thinking'}: ${e instanceof Error ? e.message : String(e)}, content_len=${source.length}`);
         }
-      } catch {
-        console.log('[TitleGenerator] JSON parse failed');
       }
 
       if (!cleanedTitle) {
