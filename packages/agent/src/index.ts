@@ -1193,11 +1193,35 @@ export class duyaAgent {
 
     const maxMessagesToKeep = options?.maxMessagesToKeep ?? 50;
 
-    // Call LLM-based compactHistory
+    // Call LLM-based compactHistory with the agent's LLM summarizer
     const result = await compactHistory(this.messages, {
-      apiKey: this.apiKey,
-      baseURL: this.baseURL,
-      model: options?.model ?? this._model,
+      summarize: async (text: string, prompt: string): Promise<string> => {
+        const summaryMessages: Message[] = [
+          {
+            role: 'user',
+            content: text,
+          },
+        ];
+
+        const chunks: string[] = [];
+        const stream = this.llmClient.streamChat(summaryMessages, {
+          systemPrompt: prompt,
+          maxTokens: 4096,
+          temperature: 0.3,
+          signal: new AbortController().signal,
+        });
+
+        for await (const event of stream) {
+          if (event.type === 'text') {
+            chunks.push(event.data);
+          }
+          if (event.type === 'done' || event.type === 'error') {
+            break;
+          }
+        }
+
+        return chunks.join('').trim();
+      },
       maxMessagesToKeep,
     });
 

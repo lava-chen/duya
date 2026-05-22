@@ -1,18 +1,21 @@
 /**
- * context-compressor.ts - Context compression integration for API routes
+ * context-compressor.ts - DEPRECATED Context compression integration
  *
- * This module provides the bridge between the API route and the compact module,
- * handling automatic context compression when the conversation exceeds 80% of
- * the context window.
+ * This module is kept for backward compatibility but is no longer the primary
+ * compaction path. The new compaction system uses CompactionManager with LLM
+ * summarization wired through the Agent constructor.
+ *
+ * The agent process's `compact` handler (agent-process-entry.ts) uses
+ * `agent.compact()` which goes through CompactionManager.
+ *
+ * @deprecated Use CompactionManager via Agent.compact() instead.
  */
 
 import {
   estimateContextTokens,
   needsCompression,
-  compactHistory,
   DEFAULT_CONTEXT_WINDOW,
   COMPRESSION_THRESHOLD,
-  type CompactResult,
 } from '@duya/agent';
 
 /**
@@ -68,10 +71,9 @@ export function incrementCompressionFailure(sessionId: string): boolean {
 export async function checkAndCompress(
   messages: Array<{ role: string; content: string }>,
   sessionId: string,
-  apiKey: string,
-  model?: string
-): Promise<{ didCompress: boolean; result?: CompactResult; error?: string }> {
-  // Check circuit breaker
+  _apiKey: string,
+  _model?: string
+): Promise<{ didCompress: boolean; result?: { summary: string; messagesCompressed: number; estimatedTokensSaved: number }; error?: string }> {
   const failureCount = getCompressionFailureCount(sessionId);
   if (failureCount >= MAX_CONSECUTIVE_FAILURES) {
     return {
@@ -80,65 +82,17 @@ export async function checkAndCompress(
     };
   }
 
-  // Estimate context tokens
   const estimate = estimateContextTokens(messages);
-  const contextCheck: CompressionCheckResult = {
-    shouldCompress: needsCompression(estimate),
-    estimatedTokens: estimate.totalTokens,
-    contextWindow: estimate.contextWindow,
-    percentFull: estimate.percentFull,
-  };
 
-  // Log for debugging
-  console.log(`[Context Compressor] Session ${sessionId}: ${contextCheck.percentFull.toFixed(1)}% full (${contextCheck.estimatedTokens} / ${contextCheck.contextWindow} tokens)`);
+  console.log(`[Context Compressor DEPRECATED] Session ${sessionId}: ${estimate.percentFull.toFixed(1)}% full. Use CompactionManager via Agent.compact() instead.`);
 
-  // Only compress if needed
-  if (!contextCheck.shouldCompress) {
-    return { didCompress: false };
-  }
-
-  // Perform compression
-  try {
-    const result = await compactHistory(
-      messages as Parameters<typeof compactHistory>[0],
-      {
-        apiKey,
-        model: model || '', // Must provide model explicitly
-        maxMessagesToKeep: 20, // Preserve recent messages
-      }
-    );
-
-    // Reset failure counter on success
-    resetCompressionFailure(sessionId);
-
-    return {
-      didCompress: true,
-      result,
-    };
-  } catch (error) {
-    // Increment failure counter
-    const circuitBroken = incrementCompressionFailure(sessionId);
-
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(`[Context Compressor] Compression failed for session ${sessionId}: ${errorMessage}`);
-
-    if (circuitBroken) {
-      console.error(`[Context Compressor] Circuit breaker opened for session ${sessionId} after ${MAX_CONSECUTIVE_FAILURES} consecutive failures`);
-    }
-
-    return {
-      didCompress: false,
-      error: circuitBroken
-        ? `Compression circuit breaker opened after ${MAX_CONSECUTIVE_FAILURES} failures`
-        : errorMessage,
-    };
-  }
+  return { didCompress: false };
 }
 
 /**
  * Gets a summary message describing the compression result.
  */
-export function getCompressionSummaryMessage(result: CompactResult): string {
+export function getCompressionSummaryMessage(result: { messagesCompressed: number; estimatedTokensSaved: number }): string {
   return `Context compressed. ${result.messagesCompressed} messages condensed, approximately ${Math.round(result.estimatedTokensSaved / 4)} tokens saved.`;
 }
 
