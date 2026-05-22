@@ -107,6 +107,11 @@ export class GatewayManager {
         // Wire up command handler (for /new, /help, etc.)
         adapter.setCommandHandler(async (msg) => this.handleCommand(msg));
 
+        // Wire up IpcClient for pairing checks (via BaseAdapter.getIpcClient)
+        if ('getIpcClient' in adapter) {
+          (adapter as { getIpcClient?: () => IpcClient }).getIpcClient = () => this.ipc;
+        }
+
         await adapter.start(config);
         this.adapters.set(platform, adapter);
         console.log(`[GatewayManager] Adapter started: ${platform}`);
