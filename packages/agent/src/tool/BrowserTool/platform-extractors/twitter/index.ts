@@ -33,24 +33,30 @@ export class TwitterExtractor extends BaseExtractor {
       return this.error('tweet', 'Invalid URL');
     }
 
-    // Extract tweet ID from URL
-    const tweetId = this.extractTweetId(parsed.pathname);
-    if (!tweetId) {
-      return this.error('tweet', 'Could not extract tweet ID from URL');
-    }
-
     try {
-      // First ensure we're on the page
-      await this.ensureOnPage(cdp, url);
+      // Detect page type
+      const pathname = parsed.pathname;
 
-      // Extract tweet content
-      const result = await this.extractTweet(cdp, tweetId, options);
-
-      if (result.kind !== 'ok' || !result.text) {
-        return this.error('tweet', result.detail || 'Failed to extract tweet');
+      if (pathname.match(/\/(?:[^/]+|i)\/status\/[0-9]+/)) {
+        // Tweet page
+        const tweetId = this.extractTweetId(pathname);
+        if (tweetId) {
+          await this.ensureOnPage(cdp, url);
+          const result = await this.extractTweet(cdp, tweetId, options);
+          if (result.kind === 'ok' && result.text) {
+            return this.success('tweet', result.text, undefined, { title: result.title });
+          }
+        }
       }
 
-      return this.success('tweet', result.text, undefined, { title: result.title });
+      // Try to extract user profile or generic content
+      const result = await this.extractProfile(cdp, url, options);
+      if (result.kind === 'ok' && result.text) {
+        return this.success('thread', result.text, undefined, { title: result.title });
+      }
+
+      // Fallback to generic extraction
+      return this.extractGeneric(cdp, url, options);
     } catch (e) {
       return this.error('tweet', `Extraction failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -255,6 +261,195 @@ export class TwitterExtractor extends BaseExtractor {
         kind: 'error',
         detail: `Evaluation error: ${e instanceof Error ? e.message : String(e)}`,
       };
+    }
+  }
+
+  private async extractProfile(cdp: ICDPClient, url: string, options?: ExtractionOptions): Promise<TwitterResult> {
+    const maxLength = options?.maxLength ?? 10000;
+
+    const script = `
+      (async () => {
+        const maxLength = ${maxLength};
+
+        // Get profile info
+        const nameEl = document.querySelector('[data-testid="UserName"] span') ||
+                       document.querySelector('h1 span') ||
+                       document.querySelector('[role="heading"] span');
+        const username = window.location.pathname.split('/')[1] || '';
+        const name = nameEl?.textContent?.trim() || username;
+
+        // Get bio
+        const bioEl = document.querySelector('[data-testid="UserDescription"]') ||
+                     document.querySelector('[data-testid="UserBio"]');
+        const bio = bioEl?.textContent?.trim() || '';
+
+        // Get stats
+        const statEls = document.querySelectorAll('[data-testid="UserProfileHeader_Items"] span');
+        let followers = '';
+        let following = '';
+        for (const el of statEls) {
+          const text = el.textContent || '';
+          if (text.includes('Followers') || text.includes('关注')) {
+            followers = text;
+          }
+          if (text.includes('Following') || text.includes('关注中')) {
+            following = text;
+          }
+        }
+
+        // Get recent tweets
+        const tweets = [];
+        const tweetEls = document.querySelectorAll('[data-testid="tweet"]');
+
+        for (let i = 0; i < Math.min(tweetEls.length, 10); i++) {
+          const el = tweetEls[i];
+          const textEl = el.querySelector('[data-testid="tweetText"]') || el.querySelector('div[lang]');
+          const timeEl = el.querySelector('time');
+          const metricsEl = el.querySelectorAll('[data-testid="tweetButton"] span');
+
+          const text = textEl?.textContent?.trim() || '';
+          const time = timeEl?.textContent?.trim() || timeEl?.getAttribute('datetime') || '';
+
+          // Get engagement metrics
+          let likes = '0';
+          let reposts = '0';
+          const allText = el.textContent || '';
+          const likesMatch = allText.match(/([\\d,.]+)\\s*(?:like|赞)/i);
+          const repostsMatch = allText.match(/([\\d,.]+)\\s*(?:repost|转)/i);
+          if (likesMatch) likes = likesMatch[1];
+          if (repostsMatch) reposts = repostsMatch[1];
+
+          if (text && text.length > 5) {
+            tweets.push({ text: text.substring(0, 500), time, likes, reposts });
+          }
+        }
+
+        // Build output
+        const lines = [];
+        lines.push('# @' + username + (name !== username ? ' (' + name + ')' : ''));
+        lines.push('');
+        lines.push('**Profile:** ' + url);
+        lines.push('');
+
+        if (bio) {
+          lines.push('## Bio');
+          lines.push('');
+          lines.push(bio.substring(0, 500));
+          lines.push('');
+        }
+
+        if (followers || following) {
+          lines.push('**Stats:** ' + [followers, following].filter(Boolean).join(' | '));
+          lines.push('');
+        }
+
+        if (tweets.length > 0) {
+          lines.push('---');
+          lines.push('');
+          lines.push('## Recent Tweets (' + tweets.length + ')');
+          lines.push('');
+
+          for (let i = 0; i < tweets.length; i++) {
+            const t = tweets[i];
+            lines.push('### Tweet ' + (i + 1) + (t.time ? ' - ' + t.time : ''));
+            lines.push('');
+            lines.push(t.text);
+            if (t.likes !== '0' || t.reposts !== '0') {
+              lines.push('');
+              lines.push('❤️ ' + t.likes + ' | 🔁 ' + t.reposts);
+            }
+            lines.push('');
+          }
+        } else {
+          lines.push('*No tweets found - may need to log in or scroll to load*');
+        }
+
+        let text = lines.join('\\n');
+        if (text.length > maxLength) {
+          text = text.substring(0, maxLength) + '\\n\\n*[Content truncated]*';
+        }
+
+        return {
+          kind: 'ok',
+          text: text,
+          title: '@' + username + ' on X'
+        };
+      })()
+    `;
+
+    try {
+      const result = await cdp.evaluate(script);
+      if (!result || typeof result !== 'object') {
+        return { kind: 'error', detail: 'No result from page evaluation' };
+      }
+      return result as TwitterResult;
+    } catch (e) {
+      return {
+        kind: 'error',
+        detail: `Evaluation error: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+  }
+
+  private async extractGeneric(cdp: ICDPClient, url: string, options?: ExtractionOptions): Promise<PlatformContent> {
+    const maxLength = options?.maxLength ?? 5000;
+
+    const script = `
+      (async () => {
+        const maxLength = ${maxLength};
+        const title = document.title || 'X';
+
+        // Try to get any visible content
+        const mainEl = document.querySelector('main') || document.querySelector('[role="main"]') || document.body;
+        const clone = mainEl.cloneNode(true);
+        clone.querySelectorAll('script, style, nav, [data-testid="sidebarColumn"], [data-testid="primaryColumn"] aside').forEach(el => el.remove());
+
+        // Get tweets
+        const tweets = [];
+        const tweetEls = document.querySelectorAll('[data-testid="tweet"], article');
+
+        for (let i = 0; i < Math.min(tweetEls.length, 5); i++) {
+          const el = tweetEls[i];
+          const textEl = el.querySelector('[data-testid="tweetText"], [lang]');
+          const text = textEl?.textContent?.trim() || el.textContent?.trim() || '';
+          if (text.length > 20) {
+            tweets.push(text.substring(0, 300));
+          }
+        }
+
+        const lines = [];
+        lines.push('# ' + title);
+        lines.push('');
+        lines.push('**URL:** ' + url);
+        lines.push('');
+
+        if (tweets.length > 0) {
+          lines.push('## Content');
+          lines.push('');
+          for (const t of tweets) {
+            lines.push('- ' + t);
+          }
+        }
+
+        let text = lines.join('\\n');
+        if (text.length > maxLength) {
+          text = text.substring(0, maxLength) + '\\n\\n*[Content truncated]*';
+        }
+
+        return { kind: 'ok', text, title };
+      })()
+    `;
+
+    try {
+      const result = await cdp.evaluate(script);
+      if (result && typeof result === 'object' && 'kind' in result) {
+        return this.success('tweet', (result as TwitterResult).text || '', undefined, {
+          title: (result as TwitterResult).title
+        });
+      }
+      return this.error('tweet', 'Unexpected result format');
+    } catch (e) {
+      return this.error('tweet', `Evaluation error: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 }
