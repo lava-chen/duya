@@ -25,7 +25,29 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
 
       let compactSnapshot: string | null = null;
       let interactiveElements: Array<{ ref: number; tag: string; text: string }> = [];
-      if (ctx.snapshotEngine) {
+      let platformType: string | undefined;
+
+      // Try platform extractor first if available
+      if (ctx.platformHookManager && ctx.platformHookManager.hasExtractor(url)) {
+        const platformContent = await ctx.platformHookManager.extractContent(ctx.cdp, url, {
+          maxLength: 50000,
+          includeInteractive: true,
+        });
+
+        if (platformContent && platformContent.success && platformContent.text) {
+          console.log(`[NavigateAction] Using ${platformContent.type} extractor for ${url}`);
+          compactSnapshot = platformContent.text;
+          interactiveElements = (platformContent.interactiveElements || []).map(el => ({
+            ref: el.ref,
+            tag: el.tag,
+            text: el.text,
+          }));
+          platformType = platformContent.type;
+        }
+      }
+
+      // Fallback to snapshot engine if no platform extractor
+      if (!compactSnapshot && ctx.snapshotEngine) {
         try {
           const snap = await ctx.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: false });
           compactSnapshot = snap.snapshot;
@@ -43,7 +65,7 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
         status: 'loaded',
         mode: ctx.mode,
         ...(compactSnapshot !== null && compactSnapshot.length > 50
-          ? { compactSnapshot, interactiveElements }
+          ? { compactSnapshot, interactiveElements, platformType }
           : { snapshotNote: 'Use snapshot operation for full DOM view' }),
       };
     }

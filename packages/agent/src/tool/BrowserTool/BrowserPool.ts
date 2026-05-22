@@ -15,6 +15,7 @@
 import type { ICDPClient } from './CDPClient.js';
 import { createCDPClient } from './CDPClient.js';
 import { SnapshotEngine } from './SnapshotEngine.js';
+import { PlatformHookManager } from './platform-hooks/PlatformHookManager.js';
 
 export interface InvestigationTask {
   /** Task identifier for result mapping */
@@ -49,6 +50,7 @@ interface BrowserSession {
   id: string;
   client: ICDPClient;
   snapshotEngine: SnapshotEngine;
+  platformHookManager: PlatformHookManager;
   busy: boolean;
 }
 
@@ -165,10 +167,43 @@ export class BrowserPool {
         };
       }
 
-      const snapshot = await session.snapshotEngine.capture({
-        maxLength: task.selector ? 50000 : 100000,
-        interactiveOnly: false,
-      });
+      // Try platform extractor first
+      const currentUrl = await client.getUrl();
+      let snapshotText = '';
+      let interactiveElements: Array<{ ref: number; tag: string; text: string }> = [];
+      let platformType: string | undefined;
+
+      if (session.platformHookManager.hasExtractor(currentUrl)) {
+        const platformContent = await session.platformHookManager.extractContent(client, currentUrl, {
+          maxLength: 100000,
+          includeInteractive: true,
+        });
+
+        if (platformContent && platformContent.success && platformContent.text) {
+          console.log(`[BrowserPool] Using ${platformContent.type} extractor for ${currentUrl}`);
+          snapshotText = platformContent.text;
+          interactiveElements = (platformContent.interactiveElements || []).map(el => ({
+            ref: el.ref,
+            tag: el.tag,
+            text: el.text,
+          }));
+          platformType = platformContent.type;
+        }
+      }
+
+      // Fallback to snapshot engine
+      if (!snapshotText && session.snapshotEngine) {
+        const snapshot = await session.snapshotEngine.capture({
+          maxLength: task.selector ? 50000 : 100000,
+          interactiveOnly: false,
+        });
+        snapshotText = snapshot.snapshot;
+        interactiveElements = snapshot.interactiveElements.map(el => ({
+          ref: el.ref,
+          tag: el.tag,
+          text: el.text,
+        }));
+      }
 
       let evaluateResult: unknown;
       if (task.evaluate) {
@@ -185,17 +220,14 @@ export class BrowserPool {
 
       return {
         id: task.id,
-        url: snapshot.url,
-        title: snapshot.title,
-        snapshot: snapshot.snapshot,
-        interactiveElements: snapshot.interactiveElements.map(el => ({
-          ref: el.ref,
-          tag: el.tag,
-          text: el.text,
-        })),
+        url: currentUrl,
+        title: await client.getTitle(),
+        snapshot: snapshotText,
+        interactiveElements,
         evaluateResult,
         success: true,
         durationMs: Date.now() - startTime,
+        ...(platformType && { platformType }),
       };
     } catch (error) {
       return {
@@ -237,11 +269,13 @@ export class BrowserPool {
     // Create new session — prefer Extension CDP, fallback to Playwright → FallbackBrowser
     const client = await createCDPClient(sessionId);
     const snapshotEngine = new SnapshotEngine(client);
+    const platformHookManager = new PlatformHookManager();
 
     const session: BrowserSession = {
       id: sessionId,
       client,
       snapshotEngine,
+      platformHookManager,
       busy: true,
     };
 

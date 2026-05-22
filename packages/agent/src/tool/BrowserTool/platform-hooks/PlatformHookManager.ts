@@ -11,8 +11,13 @@ import { youtubeHooks } from './platforms/youtube.js';
 import { weixinMpHooks } from './platforms/weixin-mp.js';
 import { twitterHooks } from './platforms/twitter.js';
 
+// Platform extractors
+import type { PlatformExtractor, PlatformContent, ExtractionOptions } from '../platform-extractors/types.js';
+import { platformExtractors } from '../platform-extractors/index.js';
+
 export class PlatformHookManager {
   private hooks: Map<string, PlatformHooks> = new Map();
+  private extractors: PlatformExtractor[] = platformExtractors;
 
   constructor() {
     this.registerPlatform('bilibili.com', bilibiliHooks);
@@ -119,5 +124,58 @@ export class PlatformHookManager {
     } catch (error) {
       console.warn(`[PlatformHookManager] Pre-scroll hook failed for ${url}:`, error);
     }
+  }
+
+  // ─── Platform Extractors ────────────────────────────────────────────────
+
+  /**
+   * Check if there's a content extractor for this URL
+   */
+  hasExtractor(url: string): boolean {
+    return this.getExtractor(url) !== null;
+  }
+
+  /**
+   * Get content extractor for a URL
+   */
+  getExtractor(url: string): PlatformExtractor | null {
+    for (const extractor of this.extractors) {
+      if (extractor.matches(url)) {
+        return extractor;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Extract content using platform-specific extractor
+   */
+  async extractContent(
+    cdp: ICDPClient,
+    url: string,
+    options?: ExtractionOptions
+  ): Promise<PlatformContent | null> {
+    const extractor = this.getExtractor(url);
+    if (!extractor) {
+      return null;
+    }
+
+    try {
+      console.log(`[PlatformHookManager] Using ${extractor.name} extractor for ${url}`);
+      const content = await extractor.extract(cdp, url, options);
+      return content;
+    } catch (error) {
+      console.warn(`[PlatformHookManager] Extraction failed for ${url}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Register a custom extractor (for testing or custom platforms)
+   */
+  registerExtractor(extractor: PlatformExtractor): void {
+    // Remove existing extractor for same platform
+    this.extractors = this.extractors.filter((e) => e.name !== extractor.name);
+    this.extractors.push(extractor);
   }
 }

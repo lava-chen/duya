@@ -10,6 +10,31 @@ export const snapshotAction: ActionHandler<z.infer<typeof snapshotSchema>> = {
   operation: 'snapshot',
   schema: snapshotSchema,
   async execute(data, ctx) {
+    // Get current URL
+    const url = ctx.cdp ? await ctx.cdp.getUrl() : '';
+
+    // Try platform extractor first if available
+    if (ctx.platformHookManager && ctx.cdp && ctx.platformHookManager.hasExtractor(url)) {
+      const platformContent = await ctx.platformHookManager.extractContent(ctx.cdp, url, {
+        maxLength: data.maxLength,
+        includeInteractive: true,
+      });
+
+      if (platformContent && platformContent.success && platformContent.text) {
+        console.log(`[SnapshotAction] Using ${platformContent.type} extractor for ${url}`);
+        return {
+          url,
+          title: platformContent.metadata?.title as string || '',
+          snapshot: platformContent.text,
+          interactiveElements: platformContent.interactiveElements || [],
+          truncated: platformContent.text.length > (data.maxLength ?? 100000),
+          mode: ctx.mode,
+          platformType: platformContent.type,
+        };
+      }
+    }
+
+    // Fallback to standard snapshot engine
     if (ctx.snapshotEngine) {
       const snapshot = await ctx.snapshotEngine.capture({
         maxLength: data.maxLength,
