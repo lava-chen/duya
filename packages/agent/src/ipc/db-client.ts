@@ -170,6 +170,9 @@ export const messageDb = {
 
   append: (sessionId: string, messages: unknown[]) =>
     sendDbRequest('message:append', { sessionId, messages }),
+
+  loadMessages: (sessionId: string) =>
+    sendDbRequest('session:loadMessages', { sessionId }),
 };
 
 // ==================== Lock Operations ====================

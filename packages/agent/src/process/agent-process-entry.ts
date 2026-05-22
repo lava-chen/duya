@@ -18,7 +18,7 @@
 
 import { randomUUID } from 'crypto';
 import { readFile } from 'node:fs/promises';
-import { appendMessages, storeParsedDocumentAttachment, getParsedDocumentAttachmentsForSession } from '../session/db.js';
+import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js';
 import { buildAttachmentContext } from '../llm/attachment-context.js';
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
@@ -472,14 +472,11 @@ function validateMessageHistory(messages: Message[]): Message[] {
 // Agent Initialization
 // ============================================================================
 
-async function initAgent(config: InitMessage['providerConfig'], workDir?: string, sysPrompt?: string, skillPaths?: string[], blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string): Promise<void> {
+async function initAgent(config: InitMessage['providerConfig'], workDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string): Promise<void> {
   // Dynamic import - .js extension required for NodeNext moduleResolution
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const agentModule = await import('../index.js') as any;
-  // duyaAgent is exported as 'default' in index.js, not a named export
   const duyaAgent = agentModule.default;
-  const loadSkills = agentModule.loadSkills;
-  const getSkillRegistry = agentModule.getSkillRegistry;
   const setSandboxEnabled = agentModule.setSandboxEnabled as ((enabled: boolean) => void) | undefined;
   const buildSandboxImage = agentModule.buildSandboxImage as ((onProgress?: (msg: string) => void) => Promise<boolean>) | undefined;
 
@@ -512,8 +509,15 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
     buildSandboxImage((msg: string) => log(msg)).catch(() => {});
   }
 
-  // Load skills - always sync bundled skills, then load from user directory
-  // workDir is used for project-level skills and as fallback for cwd
+  log('[Agent-Process] Agent core initialized');
+}
+
+async function loadAgentSkills(workDir?: string, skillPaths?: string[]): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const agentModule = await import('../index.js') as any;
+  const loadSkills = agentModule.loadSkills;
+  const getSkillRegistry = agentModule.getSkillRegistry;
+
   try {
     const loadOptions: { additionalPaths?: string[]; syncBundled?: boolean; securityBypassSkills?: string[] } = {
       syncBundled: true,
@@ -555,8 +559,6 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
       error: errMsg,
     });
   }
-
-  log('[Agent-Process] Agent initialized');
 }
 
 // ============================================================================
@@ -1475,10 +1477,16 @@ async function main(): Promise<void> {
             } : 'MISSING!',
           });
           try {
-            await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.systemPrompt, initMsg.skillPaths, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform);
+            await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform);
 
             try {
-              const existingRows = await messageDb.getBySession(sessionId!) as MessageRow[];
+              // Parallel: skills loading (disk I/O) + DB message loading (IPC)
+              // Skills errors are handled inside loadAgentSkills; DB errors caught below
+              const [_, loadedData] = await Promise.all([
+                loadAgentSkills(initMsg.workingDirectory, initMsg.skillPaths),
+                messageDb.loadMessages(sessionId!) as Promise<{ messages: MessageRow[]; parsedDocuments: ParsedDocumentAttachment[] }>,
+              ]);
+              const existingRows = loadedData.messages;
               debugLog('loaded history rows', { sessionId, rows: existingRows.length });
               if (existingRows.length > 0) {
                 // Load attachments for CDN URL rehydration
@@ -1488,18 +1496,15 @@ async function main(): Promise<void> {
                 } catch {
                   // attachmentMap stays undefined, messages load without rehydration
                 }
-                // Load parsed document attachments for restoring doc text on restart
+                // Build parsed doc map from combined IPC response (saves 1 round trip)
                 let parsedDocMap: Map<string, ParsedDocumentAttachment[]> | undefined;
-                try {
-                  const parsedDocs = getParsedDocumentAttachmentsForSession(sessionId!);
+                if (loadedData.parsedDocuments?.length) {
                   parsedDocMap = new Map<string, ParsedDocumentAttachment[]>();
-                  for (const doc of parsedDocs) {
+                  for (const doc of loadedData.parsedDocuments) {
                     const existing = parsedDocMap.get(doc.message_id) || [];
                     existing.push(doc);
                     parsedDocMap.set(doc.message_id, existing);
                   }
-                } catch {
-                  // parsedDocMap stays undefined, messages load without doc text
                 }
                 let existingMessages = existingRows.map(row => messageRowToMessage(row, attachmentMap, parsedDocMap));
 
