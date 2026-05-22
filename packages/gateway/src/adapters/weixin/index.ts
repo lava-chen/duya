@@ -439,8 +439,9 @@ export class WeixinAdapter extends BaseAdapter {
 
     if (!text) return;
 
-    // DM policy check
-    if (!this.isDmAllowed(senderId)) {
+    // DM policy check (async for pairing)
+    const dmAllowed = await this.isDmAllowedAsync(senderId);
+    if (!dmAllowed) {
       console.log('[Weixin] DM blocked by policy:', senderId, 'policy:', this.dmPolicy);
       return;
     }
@@ -503,7 +504,7 @@ export class WeixinAdapter extends BaseAdapter {
   // DM Policy
   // ---------------------------------------------------------------------------
 
-  private isDmAllowed(senderId: string): boolean {
+  private async isDmAllowedAsync(senderId: string): Promise<boolean> {
     if (this.dmPolicy === 'disabled') {
       return false;
     }
@@ -511,23 +512,36 @@ export class WeixinAdapter extends BaseAdapter {
       return this.allowFrom.has(senderId);
     }
     if (this.dmPolicy === 'pairing') {
-      // Check if user is approved
-      if (verifyPairingApproval(senderId)) {
-        return true;
+      // Check pairing via IPC
+      const ipc = this.getIpcClient?.();
+      if (ipc) {
+        try {
+          const result = await ipc.checkPairing('weixin', senderId) as { approved?: boolean };
+          if (result?.approved) {
+            return true;
+          }
+          // Generate pairing code via IPC
+          const genResult = await ipc.generatePairingCode(
+            'weixin',
+            senderId,
+            senderId,
+            ''
+          ) as { code?: string; error?: string };
+          if (genResult?.code) {
+            const msg = `📱 请将此配对码发送给管理员进行审批：\n\n**${genResult.code}**\n\n配对码有效期1小时。`;
+            this.sendText(senderId, msg).catch((err) => {
+              console.error('[Weixin] Failed to send pairing code:', err);
+            });
+          }
+          return false;
+        } catch (err) {
+          console.error('[Weixin] Pairing check error:', err);
+          return false;
+        }
       }
-      // Generate pairing code for new user
-      const result = createPairingSession(senderId, senderId);
-      if ('error' in result) {
-        console.log('[Weixin] Pairing session error:', result.error);
-        return false;
-      }
-      // Send pairing code to user
-      const code = result.code;
-      const msg = `📱 请将此配对码发送给管理员进行审批：\n\n**${code}**\n\n配对码有效期1小时。`;
-      this.sendText(senderId, msg).catch((err) => {
-        console.error('[Weixin] Failed to send pairing code:', err);
-      });
-      return false;
+      // If IPC not available, use open policy (fail open for development)
+      console.warn('[Weixin] IPC not available, using open policy');
+      return true;
     }
     // 'open' policy
     return true;

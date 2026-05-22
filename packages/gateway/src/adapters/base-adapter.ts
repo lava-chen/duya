@@ -127,6 +127,12 @@ export abstract class BaseAdapter implements PlatformAdapter {
     this.commandHandler = handler;
   }
 
+  /**
+   * Get IpcClient for subprocess communication (pairing, etc.)
+   * Must be called after the adapter is registered with GatewayManager
+   */
+  protected getIpcClient?(): import('../../ipc-client.js').IpcClient;
+
   // ---------------------------------------------------------------------------
   // PlatformAdapter interface (sendReply must be implemented by subclass)
   // ---------------------------------------------------------------------------
