@@ -1105,8 +1105,8 @@ export class SnapshotEngine {
 
     if (depth > 50) return '';
 
-    // Skip script/style/comment nodes
-    if (['SCRIPT', 'STYLE', 'COMMENT', '#comment', 'LINK', 'META', 'HEAD'].includes(node.nodeName)) {
+    // Skip script/style/comment/noscript nodes
+    if (['SCRIPT', 'STYLE', 'COMMENT', '#comment', 'LINK', 'META', 'HEAD', 'NOSCRIPT'].includes(node.nodeName)) {
       return '';
     }
 
