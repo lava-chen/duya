@@ -26,6 +26,7 @@ export class IpcClient {
    */
   async request(type: string, data: Record<string, unknown> = {}): Promise<unknown> {
     const id = `gw-${++this.requestId}-${Date.now()}`;
+    console.log('[IpcClient] request:', { type, id, dataKeys: Object.keys(data) });
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -44,7 +45,53 @@ export class IpcClient {
    * Send a one-way message to Main Process (no response expected)
    */
   send(message: GatewayToMainMessage): void {
+    console.log('[IpcClient] send:', { type: message.type, hasId: 'id' in message });
     process.send?.(message);
+  }
+
+  /**
+   * Check if a user is approved for a platform
+   */
+  async checkPairing(platform: string, platformUserId: string): Promise<{ approved: boolean }> {
+    return this.request('gateway:pairing:check', { platform, platformUserId }) as Promise<{ approved: boolean }>;
+  }
+
+  /**
+   * Generate a pairing code for a user
+   */
+  async generatePairingCode(
+    platform: string,
+    platformUserId: string,
+    platformChatId: string,
+    userName: string
+  ): Promise<{ code: string; error?: string }> {
+    return this.request('gateway:pairing:generate', {
+      platform,
+      platformUserId,
+      platformChatId,
+      userName,
+    }) as Promise<{ code: string; error?: string }>;
+  }
+
+  /**
+   * Approve a pairing code
+   */
+  async approvePairingCode(platform: string, code: string): Promise<{ approved: boolean; error?: string }> {
+    return this.request('gateway:pairing:approve', { platform, code }) as Promise<{ approved: boolean; error?: string }>;
+  }
+
+  /**
+   * Revoke a user's pairing
+   */
+  async revokePairing(platform: string, platformUserId: string): Promise<{ revoked: boolean }> {
+    return this.request('gateway:pairing:revoke', { platform, platformUserId }) as Promise<{ revoked: boolean }>;
+  }
+
+  /**
+   * List all pairings
+   */
+  async listPairings(): Promise<{ pending: unknown[]; approved: unknown[] }> {
+    return this.request('gateway:pairing:list', {}) as Promise<{ pending: unknown[]; approved: unknown[] }>;
   }
 
   /**
@@ -54,37 +101,49 @@ export class IpcClient {
   handleResponse(msg: MainToGatewayMessage & { id?: string }): void {
     const msgId = (msg as { id?: string }).id;
     const msgType = msg.type;
+    console.log('[IpcClient] handleResponse:', { msgId, msgType, hasSuccess: 'success' in msg });
 
     // Handle db:response - match by ID
     if (msgType === 'db:response' && msgId) {
+      console.log('[IpcClient] db:response matched, searching pending request...');
       const pending = this.pendingRequests.get(msgId);
       if (pending) {
+        console.log('[IpcClient] Found pending request:', pending.type);
         clearTimeout(pending.timeout);
         this.pendingRequests.delete(msgId);
-        if (msg.success) {
-          pending.resolve(msg.result);
+        if ((msg as { success?: boolean }).success) {
+          console.log('[IpcClient] Resolving with result:', (msg as { result?: unknown }).result);
+          pending.resolve((msg as { result?: unknown }).result);
         } else {
-          pending.reject(new Error(msg.error ?? 'Unknown db error'));
+          console.log('[IpcClient] Rejecting with error:', (msg as { error?: string }).error);
+          pending.reject(new Error((msg as { error?: string }).error ?? 'Unknown db error'));
         }
+      } else {
+        console.warn('[IpcClient] No pending request found for id:', msgId);
       }
       return;
     }
 
     // Handle gateway:create_session:response - match by type since ID may not be echoed
     if (msgType === 'gateway:create_session:response') {
+      const sessionId = (msg as { sessionId?: string }).sessionId;
+      console.log('[IpcClient] gateway:create_session:response sessionId:', sessionId);
       // Find the first pending gateway:create_session request
       for (const [id, pending] of this.pendingRequests) {
         if (pending.type === 'gateway:create_session') {
           clearTimeout(pending.timeout);
           this.pendingRequests.delete(id);
-          if (msg.error) {
-            pending.reject(new Error(msg.error));
+          if ((msg as { error?: string }).error) {
+            console.log('[IpcClient] Rejecting gateway:create_session due to error:', (msg as { error?: string }).error);
+            pending.reject(new Error((msg as { error?: string }).error));
           } else {
-            pending.resolve((msg as { sessionId?: string }).sessionId);
+            console.log('[IpcClient] Resolving gateway:create_session with sessionId:', sessionId);
+            pending.resolve(sessionId);
           }
           return;
         }
       }
+      console.warn('[IpcClient] No pending gateway:create_session request found');
       return;
     }
 
@@ -94,11 +153,36 @@ export class IpcClient {
         if (pending.type === 'gateway:reset_session') {
           clearTimeout(pending.timeout);
           this.pendingRequests.delete(id);
-          if (msg.error) {
-            pending.reject(new Error(msg.error));
+          if ((msg as { error?: string }).error) {
+            pending.reject(new Error((msg as { error?: string }).error));
           } else {
             pending.resolve(msg as { sessionId?: string; platformMsgId?: string });
           }
+          return;
+        }
+      }
+      return;
+    }
+
+    // Handle pairing responses
+    if (msgType === 'gateway:pairing:check:response') {
+      for (const [id, pending] of this.pendingRequests) {
+        if (pending.type === 'gateway:pairing:check') {
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(id);
+          pending.resolve(msg);
+          return;
+        }
+      }
+      return;
+    }
+
+    if (msgType === 'gateway:pairing:generate:response') {
+      for (const [id, pending] of this.pendingRequests) {
+        if (pending.type === 'gateway:pairing:generate') {
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(id);
+          pending.resolve(msg);
           return;
         }
       }
