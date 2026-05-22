@@ -3,15 +3,11 @@
  * Uses claude-code-haha's compact prompt strategy for context window management
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import type { Message } from '../types.js'
 import { getCompactPrompt, getCompactUserSummaryMessage } from './prompt.js'
 import { estimateMessagesTokens, withSafetyMargin } from './tokenBudget.js'
 import { DEFAULT_CONTEXT_WINDOW, COMPACTION_THRESHOLDS } from './types.js'
 export { DEFAULT_CONTEXT_WINDOW } from './types.js'
-
-const MAX_COMPACT_RETRIES = 2
-const COMPACT_MAX_TOKENS = 4096
 
 /**
  * Compression threshold (aligned with MICRO threshold for proactive compression)
@@ -134,20 +130,12 @@ function extractTextFromMessages(messages: Message[]): string {
 }
 
 /**
- * Generates a summary of the conversation using LLM
+ * Generates a summary of the conversation using the provided summarizer
  */
 async function generateSummary(
-  apiKey: string,
-  baseURL: string | undefined,
-  model: string,
+  summarize: (text: string, prompt: string) => Promise<string>,
   messages: Message[],
 ): Promise<string> {
-  const client = new Anthropic({
-    apiKey,
-    ...(baseURL && { baseURL }),
-  })
-
-  // Strip images and extract text
   const cleanedMessages = stripImagesFromMessages(messages)
   const conversationText = extractTextFromMessages(cleanedMessages)
 
@@ -157,42 +145,12 @@ async function generateSummary(
 
   const compactPrompt = getCompactPrompt()
 
-  let lastError: Error | null = null
-
-  for (let attempt = 0; attempt < MAX_COMPACT_RETRIES; attempt++) {
-    try {
-      const response = await client.messages.create({
-        model,
-        max_tokens: COMPACT_MAX_TOKENS,
-        temperature: 0.3, // Lower temperature for consistent summarization
-        system: compactPrompt,
-        messages: [
-          {
-            role: 'user',
-            content: `Please summarize the following conversation:\n\n${conversationText}`,
-          },
-        ],
-      })
-
-      const text = response.content
-        .filter(block => block.type === 'text')
-        .map(block => (block as { type: 'text'; text: string }).text)
-        .join('')
-
-      if (text.trim()) {
-        return text.trim()
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-      // Wait before retry
-      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)))
-    }
+  try {
+    return await summarize(conversationText, compactPrompt)
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    return `[Summary generation failed: ${errorMessage}]`
   }
-
-  // If all retries failed, return a placeholder
-  return lastError
-    ? `[Summary generation failed: ${lastError.message}]`
-    : '[Summary generation failed for unknown reason]'
 }
 
 /**
@@ -201,16 +159,12 @@ async function generateSummary(
 export async function compactHistory(
   messages: Message[],
   options: {
-    apiKey: string
-    baseURL?: string
-    model?: string
+    summarize: (text: string, prompt: string) => Promise<string>
     maxMessagesToKeep?: number
   },
 ): Promise<CompactResult> {
   const {
-    apiKey,
-    baseURL,
-    model = '',
+    summarize,
     maxMessagesToKeep = 20,
   } = options
 
@@ -259,7 +213,7 @@ export async function compactHistory(
   const estimatedTokensSaved = estimateMessagesTokens(olderMessages)
 
   // Generate summary of older messages
-  const summary = await generateSummary(apiKey, baseURL, model, olderMessages)
+  const summary = await generateSummary(summarize, olderMessages)
 
   // Create summary message
   const summaryMessage: Message = {
