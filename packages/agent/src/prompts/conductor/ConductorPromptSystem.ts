@@ -78,7 +78,7 @@ export class ConductorPromptSystem extends PromptSystem {
       },
       {
         name: 'canvasTools',
-        compute: () => getCanvasToolsSection(),
+        compute: () => getCanvasToolsSection(context),
         volatile: false,
       },
     ]
