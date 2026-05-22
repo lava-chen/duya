@@ -29,13 +29,14 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
 
       // Try platform extractor first if available
       if (ctx.platformHookManager && ctx.platformHookManager.hasExtractor(url)) {
+        console.log(`[NavigateAction] Found extractor for ${url}`);
         const platformContent = await ctx.platformHookManager.extractContent(ctx.cdp, url, {
           maxLength: 50000,
           includeInteractive: true,
         });
 
         if (platformContent && platformContent.success && platformContent.text) {
-          console.log(`[NavigateAction] Using ${platformContent.type} extractor for ${url}`);
+          console.log(`[NavigateAction] Using ${platformContent.type} extractor, got ${platformContent.text.length} chars`);
           compactSnapshot = platformContent.text;
           interactiveElements = (platformContent.interactiveElements || []).map(el => ({
             ref: el.ref,
@@ -43,7 +44,11 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
             text: el.text,
           }));
           platformType = platformContent.type;
+        } else {
+          console.log(`[NavigateAction] Extractor failed or returned empty:`, platformContent?.error);
         }
+      } else {
+        console.log(`[NavigateAction] No extractor found for ${url}`);
       }
 
       // Fallback to snapshot engine if no platform extractor
