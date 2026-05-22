@@ -5383,3 +5383,72 @@ html.compact .panel-zone {
 .widget-shimmer {
   animation: widget-shimmer-spin 0.8s linear infinite;
 }
+
+/* ============================================
+   Compact Boundary & Summary Styles
+   ============================================ */
+
+.compact-boundary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  opacity: 0.55;
+}
+
+.compact-boundary-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.compact-boundary-text {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+}
+
+.compact-summary {
+  margin: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.compact-summary-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.compact-summary-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.compact-summary-icon {
+  font-size: 10px;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.compact-summary-content {
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  border-top: 1px solid var(--border);
+  max-height: 260px;
+  overflow-y: auto;
+}

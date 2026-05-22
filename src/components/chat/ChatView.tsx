@@ -315,16 +315,19 @@ export function ChatView({
     if (!sessionId) return;
     setIsCompacting(true);
     compactContext(sessionId, {
-      onDone: () => {
+      onDone: (result) => {
         setIsCompacting(false);
-        setCompressionNotification('Context compressed successfully.');
+        const removedMsg = result.removedCount != null ? `${result.removedCount} messages compacted` : 'Context compressed';
+        const tokenMsg = result.tokenReduction != null ? `, ~${Math.round(result.tokenReduction)} tokens saved` : '';
+        setCompressionNotification(`${removedMsg}${tokenMsg}.`);
+        loadThreadMessages(sessionId);
       },
       onError: (error) => {
         setIsCompacting(false);
         setCompressionNotification(`Compression failed: ${error}`);
       },
     });
-  }, [sessionId]);
+  }, [sessionId, loadThreadMessages]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
