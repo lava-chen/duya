@@ -1105,9 +1105,25 @@ export class SnapshotEngine {
 
     if (depth > 50) return '';
 
-    // Skip script/style/comment/noscript nodes
+    // Skip script/style/comment/noscript nodes, but process their children
     if (['SCRIPT', 'STYLE', 'COMMENT', '#comment', 'LINK', 'META', 'HEAD', 'NOSCRIPT'].includes(node.nodeName)) {
-      return '';
+      // Process children for these tags (they might contain semantic children)
+      const children = node.children || [];
+      let result = '';
+      for (const child of children) {
+        result += this.buildSnapshot(child, { ...options, depth: 0 });
+      }
+      return result;
+    }
+
+    // Skip #document root but process its children
+    if (node.nodeName === '#document' || node.nodeName === 'HTML') {
+      const children = node.children || [];
+      let result = '';
+      for (const child of children) {
+        result += this.buildSnapshot(child, { ...options, depth });
+      }
+      return result;
     }
 
     const indent = '  '.repeat(depth);
