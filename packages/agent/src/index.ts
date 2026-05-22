@@ -25,6 +25,7 @@ import { getMemoryManager } from './memory/index.js';
 import { compactHistory } from './compact/compact.js';
 import type { CompactResult, TokenEstimation } from './compact/compact.js';
 import { estimateContextTokens, needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD } from './compact/compact.js';
+import { microCleanupMessages } from './compact/microCompactCleanup.js';
 import { createLLMClient, createRetryableLLMClient, inferProvider, isMiniMaxURL, LLMClientWrapper } from './llm/index.js';
 import type { LLMClient, RetryConfig } from './llm/index.js';
 import { StreamingToolExecutor } from './tool/StreamingToolExecutor.js';
@@ -738,6 +739,9 @@ export class duyaAgent {
       let toolCallCountThisTurn = 0;  // Track tool calls for self-improvement trigger
 
       yield { type: 'turn_start', data: { turnCount } };
+
+      // Lightweight tool result cleanup before each turn
+      messages = microCleanupMessages(messages);
 
       // Proactive context compaction before each LLM call
       if (this.shouldCompact()) {
