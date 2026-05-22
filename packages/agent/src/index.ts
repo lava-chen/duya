@@ -326,7 +326,38 @@ export class duyaAgent {
       });
     }
 
-    this.compactionManager = createCompactionManager();
+    this.compactionManager = createCompactionManager({
+      enableReinjection: true,
+    });
+
+    // Wire up the LLM summarizer so strategies can generate summaries
+    this.compactionManager.setSummarizer(async (text: string, prompt: string): Promise<string> => {
+      const summaryMessages: Message[] = [
+        {
+          role: 'user',
+          content: text,
+        },
+      ];
+
+      const result: string[] = [];
+      const stream = this.llmClient.streamChat(summaryMessages, {
+        systemPrompt: prompt,
+        maxTokens: 4096,
+        temperature: 0.3,
+        signal: new AbortController().signal,
+      });
+
+      for await (const event of stream) {
+        if (event.type === 'text') {
+          result.push(event.data);
+        }
+        if (event.type === 'done' || event.type === 'error') {
+          break;
+        }
+      }
+
+      return result.join('').trim();
+    });
 
     // Initialize permission system
     this.permissionMode = options.permissionMode || 'default';
