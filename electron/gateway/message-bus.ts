@@ -539,6 +539,38 @@ export function handleGatewayMessage(
       break;
     }
 
+    case 'gateway:pairing:check': {
+      const data = msg as { id: string; platform: string; platformUserId: string };
+      try {
+        const store = getPairingStore();
+        const approved = store.isApproved(data.platform, data.platformUserId);
+        sendToGatewayProcess({ type: 'gateway:pairing:check:response', id: data.id, approved });
+      } catch (err) {
+        getLogger().error('Failed to check pairing', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+        sendToGatewayProcess({ type: 'gateway:pairing:check:response', id: data.id, approved: false });
+      }
+      break;
+    }
+
+    case 'gateway:pairing:generate': {
+      const data = msg as {
+        id: string;
+        platform: string;
+        platformUserId: string;
+        platformChatId: string;
+        userName: string;
+      };
+      try {
+        const store = getPairingStore();
+        const result = store.generateCode(data.platform, data.platformUserId, data.platformChatId, data.userName);
+        sendToGatewayProcess({ type: 'gateway:pairing:generate:response', id: data.id, ...result });
+      } catch (err) {
+        getLogger().error('Failed to generate pairing code', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+        sendToGatewayProcess({ type: 'gateway:pairing:generate:response', id: data.id, code: '', error: 'internal_error' });
+      }
+      break;
+    }
+
     case 'bridge:error': {
       const message = msg.message as string || 'Unknown gateway error';
       getLogger().error(`Gateway bridge error: ${message}`, undefined, { sessionId, error: msg.error }, LogComponent.Gateway);
@@ -818,6 +850,52 @@ export function registerGatewayIpcHandlers(): void {
     } catch (err) {
       getLogger().error('Failed to list pairings', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
       return { pending: [], approved: [] };
+    }
+  });
+
+  ipcMain.handle('gateway:pairing:check', async (_event, platform: string, platformUserId: string) => {
+    try {
+      const store = getPairingStore();
+      return { approved: store.isApproved(platform, platformUserId) };
+    } catch (err) {
+      getLogger().error('Failed to check pairing', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+      return { approved: false };
+    }
+  });
+
+  ipcMain.handle('gateway:pairing:generate', async (
+    _event,
+    platform: string,
+    platformUserId: string,
+    platformChatId: string,
+    userName: string,
+  ) => {
+    try {
+      const store = getPairingStore();
+      return store.generateCode(platform, platformUserId, platformChatId, userName);
+    } catch (err) {
+      getLogger().error('Failed to generate pairing code', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+      return { code: '', error: 'internal_error' };
+    }
+  });
+
+  ipcMain.handle('gateway:pairing:approve', async (_event, platform: string, code: string) => {
+    try {
+      const store = getPairingStore();
+      return store.approve(platform, code);
+    } catch (err) {
+      getLogger().error('Failed to approve pairing', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+      return { approved: false, error: 'internal_error' };
+    }
+  });
+
+  ipcMain.handle('gateway:pairing:revoke', async (_event, platform: string, platformUserId: string) => {
+    try {
+      const store = getPairingStore();
+      return { revoked: store.revoke(platform, platformUserId) };
+    } catch (err) {
+      getLogger().error('Failed to revoke pairing', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+      return { revoked: false };
     }
   });
 

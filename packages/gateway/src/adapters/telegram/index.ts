@@ -37,6 +37,7 @@ import {
   checkGroupGating,
   extractReplyContext,
 } from './handlers/group-gating.js';
+import { COMMAND_REGISTRY } from '../../commands/registry.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_MESSAGE_LENGTH = 4096;
@@ -541,22 +542,28 @@ export class TelegramAdapter extends BaseAdapter {
 
   private async registerCommands(): Promise<void> {
     try {
+      // Build commands from registry
+      const commands = COMMAND_REGISTRY.map((cmd) => ({
+        command: cmd.name,
+        description: cmd.description,
+      }));
+
+      // Add custom commands from config
       const customCommands = this.config?.options?.['commands'] as
         Array<{ command: string; description: string }> | undefined;
+      if (customCommands?.length) {
+        for (const cmd of customCommands) {
+          if (!commands.some((c) => c.command === cmd.command)) {
+            commands.push(cmd);
+          }
+        }
+      }
 
-      const defaultCommands = [
-        { command: 'new', description: 'Start a fresh session' },
-        { command: 'reset', description: 'Reset session (alias for /new)' },
-        { command: 'help', description: 'Show available commands' },
-        { command: 'status', description: 'Show current session info' },
-      ];
+      // Limit to Telegram's max of 100 commands
+      const limitedCommands = commands.slice(0, 100);
 
-      const commands = customCommands?.length
-        ? [...defaultCommands, ...customCommands]
-        : defaultCommands;
-
-      await this.telegramApiCall(`${TELEGRAM_API}${this.token}/setMyCommands`, 'POST', { commands });
-      console.log(`[Telegram] Commands registered (${commands.length} commands)`);
+      await this.telegramApiCall(`${TELEGRAM_API}${this.token}/setMyCommands`, 'POST', { commands: limitedCommands });
+      console.log(`[Telegram] Commands registered (${limitedCommands.length} commands)`);
     } catch (err) {
       console.warn('[Telegram] Failed to register commands:', err);
     }
@@ -734,6 +741,10 @@ export class TelegramAdapter extends BaseAdapter {
           this.handleMessage(update.message).catch((err) => console.error('[Telegram] Webhook handler error:', err));
         } else if (update.edited_message) {
           this.handleMessage(update.edited_message).catch((err) => console.error('[Telegram] Webhook handler error:', err));
+        } else if (update.channel_post) {
+          this.handleChannelPost(update.channel_post).catch((err) => console.error('[Telegram] Webhook handler error:', err));
+        } else if (update.edited_channel_post) {
+          this.handleChannelPost(update.edited_channel_post).catch((err) => console.error('[Telegram] Webhook handler error:', err));
         } else if (update.callback_query) {
           this.handleCallbackQuery(update.callback_query);
         }
@@ -830,6 +841,10 @@ export class TelegramAdapter extends BaseAdapter {
         await this.handleMessage(update.message);
       } else if (update.edited_message) {
         await this.handleMessage(update.edited_message);
+      } else if (update.channel_post) {
+        await this.handleChannelPost(update.channel_post);
+      } else if (update.edited_channel_post) {
+        await this.handleChannelPost(update.edited_channel_post);
       } else if (update.callback_query) {
         this.handleCallbackQuery(update.callback_query);
       }
@@ -847,6 +862,29 @@ export class TelegramAdapter extends BaseAdapter {
     this.incrementMessageCount();
 
     const threadId = getThreadId(msg);
+
+    // Check pairing requirement for private chats
+    const requirePairing = this.config?.options?.['require_pairing'] as boolean | undefined;
+    if (requirePairing && isPrivateChat(msg)) {
+      const userId = String(msg.from?.id ?? 0);
+      // Check pairing via IPC - if not approved, show pairing message
+      const ipc = this.getIpcClient?.();
+      if (ipc) {
+        try {
+          const result = await ipc.checkPairing('telegram', userId) as { approved?: boolean };
+          if (!result?.approved) {
+            await this.sendTextMessage(String(msg.chat.id),
+              '🔒 *Pairing Required*\n\n' +
+              'This bot requires approval before use.\n\n' +
+              'Use /pair to request access, then share the code with the admin.'
+            );
+            return;
+          }
+        } catch {
+          // On error, allow message through (best effort)
+        }
+      }
+    }
 
     if (isGroupChat(msg)) {
       const gatingOptions = extractGroupGatingOptions(this.config);
@@ -894,6 +932,75 @@ export class TelegramAdapter extends BaseAdapter {
 
     if (msg.photo && !msg.document && !msg.video && !msg.audio && !msg.voice) {
       const key = `${msg.chat.id}:${msg.from?.id ?? 0}:${threadId ?? 'main'}`;
+      this.photoBurstBatcher.enqueue(key, normalized);
+      return;
+    }
+
+    if (msg.text && !hasMedia) {
+      const cmdText = normalized.text ?? '';
+      if (cmdText.startsWith('/') && this.commandHandler) {
+        const handled = await this.commandHandler(normalized).catch((err) => {
+          console.error('[Telegram] Command handler error:', err);
+          return false;
+        });
+        if (!handled && this.messageHandler) {
+          this.messageHandler(normalized);
+        }
+        return;
+      }
+      this.textBatcher.enqueue(normalized);
+      return;
+    }
+
+    if (this.messageHandler) {
+      this.messageHandler(normalized);
+    }
+  }
+
+  /**
+   * Handle channel posts (messages sent in channels)
+   * Channel posts have similar structure but `from` is typically the channel itself
+   */
+  private async handleChannelPost(msg: TelegramMessage): Promise<void> {
+    const hasMedia = msg.photo || msg.document || msg.video || msg.audio || msg.voice;
+    if (!msg.text && !msg.caption && !hasMedia) return;
+
+    this.incrementMessageCount();
+
+    const threadId = getThreadId(msg);
+
+    const imagePaths = await this.downloadMedia(msg);
+    const textInjection = (msg as { _textInjection?: string })._textInjection;
+
+    let text = msg.text ?? msg.caption;
+    if (textInjection) {
+      text = text ? `${text}\n${textInjection}` : textInjection;
+    }
+
+    // For channel posts, use chat.id as the user identifier since there's no individual user
+    const normalized: NormalizedMessage = {
+      platform: 'telegram',
+      platformUserId: String(msg.from?.id ?? msg.chat.id ?? 0),
+      platformChatId: String(msg.chat.id),
+      platformMsgId: String(msg.message_id),
+      text,
+      ...extractReplyContext(msg),
+      ts: (msg.date ?? 0) * 1000,
+      imagePaths,
+      images: undefined,
+      files: undefined,
+      threadId,
+    };
+
+    const mediaGroupId = (msg as { media_group_id?: string }).media_group_id;
+
+    if (mediaGroupId) {
+      this.mediaGroupBatcher.enqueue(mediaGroupId, normalized);
+      return;
+    }
+
+    if (msg.photo && !msg.document && !msg.video && !msg.audio && !msg.voice) {
+      const key = `${msg.chat.id}:${msg.from?.id ?? msg.chat.id ?? 0}:${threadId ?? 'main'}`;
       this.photoBurstBatcher.enqueue(key, normalized);
       return;
     }

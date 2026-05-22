@@ -55,15 +55,22 @@ export class GatewayManager {
    */
   async init(config: GatewayInitConfig): Promise<void> {
     this.autoStart = config.autoStart;
-    console.log('[STARTUP] GatewayManager.init, platforms:', config.platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: p.credentials && Object.keys(p.credentials).length > 0 })));
+    console.log('[STARTUP] GatewayManager.init received config:');
+    console.log('[STARTUP]   autoStart:', config.autoStart);
+    console.log('[STARTUP]   platforms count:', config.platforms.length);
+    for (const p of config.platforms) {
+      console.log('[STARTUP]   platform:', p.platform, 'enabled:', p.enabled, 'hasCredentials:', !!(p.credentials && Object.keys(p.credentials).length > 0), 'credentialsKeys:', Object.keys(p.credentials || {}));
+    }
 
     if (config.proxyUrl) {
       setProxyUrl(config.proxyUrl);
     }
     initProxy();
 
+    this.adapterConfigs.clear();
     for (const platformConfig of config.platforms) {
       if (platformConfig.enabled) {
+        console.log('[STARTUP] GatewayManager storing config for:', platformConfig.platform);
         this.adapterConfigs.set(platformConfig.platform, {
           platform: platformConfig.platform,
           credentials: platformConfig.credentials,
@@ -73,6 +80,7 @@ export class GatewayManager {
     }
 
     console.log(`[GatewayManager] Init complete, autoStart=${this.autoStart}, platforms=${this.adapterConfigs.size}`);
+    console.log('[STARTUP] adapterConfigs after init:', Array.from(this.adapterConfigs.entries()).map(([k, v]) => ({ platform: k, credentialsKeys: Object.keys(v.credentials) })));
   }
 
   /**
@@ -350,78 +358,139 @@ export class GatewayManager {
   }
 
   /**
+   * Get current model info from settings
+   */
+  private async getModelInfo(): Promise<{ model?: string; provider?: string }> {
+    try {
+      const result = await this.ipc.request('db:request', {
+        action: 'settings:get',
+        payload: { key: 'gatewayModel' },
+      });
+      const model = typeof result === 'string' ? result : (result as { result?: string })?.result;
+      return { model: model as string | undefined };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
    * Handle a slash command (e.g., /new, /help, /status).
    * Returns true if the command was recognized and handled.
    */
   async handleCommand(msg: NormalizedMessage): Promise<boolean> {
     const text = msg.text ?? '';
-    const parts = text.slice(1).split(/\s+/); // strip leading /
-    const command = parts[0]?.toLowerCase() ?? '';
+    if (!text.startsWith('/')) return false;
+
+    const parts = text.slice(1).split(/\s+/);
+    const commandName = parts[0]?.toLowerCase() ?? '';
     const args = parts.slice(1);
 
     const adapter = this.adapters.get(msg.platform);
     if (!adapter) return false;
 
     try {
-      if (command === 'new' || command === 'reset') {
-        // /new or /reset: create a fresh session for the same platformChatId
-        const { newSessionId } = await this.resetSession(msg);
-        await adapter.sendReply(msg.platformChatId, {
-          type: 'text',
-          text: `✨ Session reset! Starting fresh.\n\nNew session: \`${newSessionId}\``,
-          parseMode: 'Markdown',
-        });
-        return true;
+      // Use shared command registry
+      const { resolveCommand } = await import('./commands/registry.js');
+      const { generateHelpText } = await import('./commands/help.js');
+      const cmd = resolveCommand(text);
+
+      if (!cmd) {
+        // Unknown command - pass through to agent
+        return false;
       }
 
-      if (command === 'help') {
-        // /help: show available commands
-        await adapter.sendReply(msg.platformChatId, {
-          type: 'text',
-          text: [
-            '*Available Commands:*',
-            '',
-            '`/new` - Start a fresh session (same as /reset)',
-            '`/help` - Show this help message',
-            '`/status` - Show current session info',
-            '',
-            'All other messages are sent to the AI agent.',
-          ].join('\n'),
-          parseMode: 'Markdown',
-        });
-        return true;
-      }
+      // Handle commands based on registry definition
+      switch (cmd.name) {
+        case 'new':
+        case 'reset': {
+          const { newSessionId } = await this.resetSession(msg);
+          const { model } = await this.getModelInfo();
+          const lines = [
+            '✨ Session reset! Starting fresh.',
+            `Session: \`${newSessionId}\``,
+          ];
+          if (model) {
+            lines.push(`Model: \`${model}\``);
+          }
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: lines.join('\n\n'),
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
 
-      if (command === 'status') {
-        // /status: show session info
-        const mapping2 = await this.ipc.request('db:request', {
-          action: 'gateway_user:getMapping',
-          payload: { platform: msg.platform, platformChatId: msg.platformChatId },
-        }) as { session_id?: string } | null;
-        const sessionId = mapping2?.session_id ?? '(no active session)';
-        await adapter.sendReply(msg.platformChatId, {
-          type: 'text',
-          text: [
+        case 'help': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: generateHelpText('gateway'),
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'status': {
+          const mapping2 = await this.ipc.request('db:request', {
+            action: 'gateway_user:getMapping',
+            payload: { platform: msg.platform, platformChatId: msg.platformChatId },
+          }) as { session_id?: string } | null;
+          const sessionId = mapping2?.session_id ?? '(no active session)';
+          const { model } = await this.getModelInfo();
+
+          const lines = [
             '*Session Status*',
             '',
             `Platform: ${msg.platform}`,
             `Chat ID: \`${msg.platformChatId}\``,
             `Session: \`${sessionId}\``,
+            `Model: \`${model ?? 'default'}\``,
             `Running: ${this.running ? 'Yes' : 'No'}`,
-          ].join('\n'),
-          parseMode: 'Markdown',
-        });
-        return true;
-      }
+          ];
 
-      return false; // Unknown command
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: lines.join('\n'),
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'pair': {
+          // Generate pairing code for this user
+          const userName = `User_${msg.platformUserId}`;
+          const result = await this.ipc.generatePairingCode(
+            msg.platform,
+            msg.platformUserId,
+            msg.platformChatId,
+            userName
+          ) as { code?: string; error?: string };
+
+          if (result.error) {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: `❌ Pairing error: ${result.error}`,
+            });
+          } else {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: `🔑 *Pairing Code*\n\nYour code: \`${result.code}\`\n\nShare this code with the admin to get approved. Code expires in 1 hour.\n\nUse /status to check your approval status.`,
+              parseMode: 'Markdown',
+            });
+          }
+          return true;
+        }
+
+        default:
+          // Command is known but has no local handler - pass to agent
+          return false;
+      }
     } catch (err) {
       console.error('[GatewayManager] Error handling command:', err);
       await adapter.sendReply(msg.platformChatId, {
         type: 'error',
         message: `Command failed: ${err instanceof Error ? err.message : String(err)}`,
       });
-      return true; // Still return true to prevent the unknown-command path
+      return true;
     }
   }
 }
