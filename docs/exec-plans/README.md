@@ -1,0 +1,143 @@
+# Execution Plans
+
+> **This is the first place to check before any work!** See workflow below.
+
+---
+
+## Quick Workflow
+
+```
+1. Check this README for current work status
+2. Find relevant plan in Active Plans table
+3. Read the plan file to understand progress
+4. Implement following the plan's phases
+5. Complete: mark [x] checkboxes, move to completed/ if done
+```
+
+---
+
+## Structure
+
+```
+exec-plans/
+├── active/           # Plans currently being executed
+├── completed/        # Finished plans with decision logs
+└── tech-debt-tracker.md
+```
+
+## Active Plans
+
+Plans in `active/` are being executed with clear phases and checkpoints.
+
+### Agent Feature Parity Plans
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [25-skills-completion-plan](./active/25-skills-completion-plan.md) | 官方 Skill 补全计划 (hermes-agent 等) | P1 | 进行中 |
+| [30-mcp-loading-implementation](./active/30-mcp-loading-implementation.md) | MCP 服务器加载与连接实现 | P0 | Phase 1-3 ✅ |
+| [38-mcp-marketplace-install](./active/38-mcp-marketplace-install.md) | MCP 市场与一键安装实现 | P1 | 待开始 |
+| [38-chat-generative-ui](./active/38-chat-generative-ui.md) | Chat Generative UI — Widget 系统 V2 升级 | P1 | Phase 1-4 ✅  Phase 5 🔴 |
+
+### Infrastructure & Architecture Plans
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [15-bash-worker-implementation](./active/15-bash-worker-implementation.md) | Bash Worker 多进程实现 | P0 | 设计完成 |
+| [27-logging-and-auto-update](./active/27-logging-and-auto-update.md) | 日志系统与自动更新功能 | P1 | 代码完成，待 UI 集成 |
+| [28-multi-source-update-fallback](./active/28-multi-source-update-fallback.md) | 自动更新多源回退方案 | P1 | 待实现 |
+| [31-conductor-overview](./active/31-conductor-overview.md) | Conductor 动态 Agent 工作台总览 | P0 | 待开始 |
+| [32-conductor-foundation](./active/32-conductor-foundation.md) | Conductor 数据、通信与架构护栏 | P0 | Phase 1 ✅ |
+| [33-conductor-canvas-ui](./active/33-conductor-canvas-ui.md) | Conductor 画布 UI 与内置 Widget V1 | P0 | Phase 1-4 ✅ |
+| [35-conductor-widget-extensibility](./active/35-conductor-widget-extensibility.md) | Conductor Widget 扩展性与动态安全边界 | P1 | 待开始 |
+| [36-conductor-blueprint-implementation](./active/36-conductor-blueprint-implementation.md) | Conductor 蓝图交互闭环实施 | P0 | 进行中 |
+| [37-subagent-nested-session](./active/37-subagent-nested-session.md) | SubAgent 嵌套会话侧边栏展示 | P1 | Planning |
+| [39-beta-launch-preparation](./active/39-beta-launch-preparation.md) | Beta 发布准备 | P0 | 进行中 |
+| [48-canvas-element-data-model](./active/48-canvas-element-data-model.md) | Canvas Elements 类型系统 | P0 | 设计阶段 |
+| [54-electron-directory-restructure](./active/54-electron-directory-restructure.md) | Electron 目录架构重构 | P1 | Phase 1 ✅, Phase 2 🔴 |
+| [60-research-mode](./active/60-research-mode.md) | Research Mode — 迭代研究工作流 + Interactive Report | P1 | 规划中 |
+| [62-gateway-ipc-refactor](./active/62-gateway-ipc-refactor.md) | Gateway ↔ IPC 架构重整 | P0 | 进行中 |
+| [64-browser-parallel-isolation](./active/64-browser-parallel-isolation.md) | 浏览器多 Tab 隔离与并行执行 | P0 | 进行中 |
+
+### Compact System Fix Plans
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [03-compact-critical-fix](./completed/03-compact-critical-fix.md) | Compact 系统关键修复（LLM摘要、Boundary、前端渲染） | P0 | ✅ Complete |
+
+### First Test Bug Fix Plans (Beta Launch Blockers)
+
+Source: [problems-analysis.md](./problems-analysis.md) — 10 个首次测试问题分析
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | 引导流程大修 | P0 | 待开始 |
+| [42-document-parser-service](./active/42-document-parser-service.md) | 文档解析服务 | P1 | Phase 1 待开始 |
+| [44-skills-sync-fix](./active/44-skills-sync-fix.md) | Skills 同步修复 | P0 | In Progress |
+
+### Wiki Agent — Persistent Knowledge Network
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [56-wiki-agent-overview](./active/56-wiki-agent-overview.md) | Wiki Agent 架构总览与实施路线 | P1 | 待开始 |
+| [57-wiki-agent-core](./active/57-wiki-agent-core.md) | Phase 1: 核心实现（类型、NodeStore、GraphManager、Profile） | P1 | 待开始 |
+| [58-wiki-agent-listener](./active/58-wiki-agent-listener.md) | Phase 2: Listener 被动提取（会话结束→提取→建链） | P1 | 待开始 |
+| [59-wiki-agent-gardener](./active/59-wiki-agent-gardener.md) | Phase 3: Gardener 主动巡检（六项检查，Scheduler 注册） | P2 | 待开始 |
+| [61-wiki-agent-deep-research](./active/61-wiki-agent-deep-research.md) | Phase 4: Deep Research 双向集成（增量规划） | P2 | 待开始 |
+
+## Completed Plans
+
+Moved here when finished. Each includes:
+- Original goal and outcome
+- Key decisions made during execution
+- Lessons learned
+
+| Plan | Description | Completed |
+|------|-------------|-----------|
+| [02-context-compaction-system](./completed/02-context-compaction-system.md) | Context Compression 系统 | 2026-04-09 |
+| [skill-system](./completed/skill-system.md) | Skill System Phase 2 | 2026-04-09 |
+| [cli-tool-fix](./completed/cli-tool-fix.md) | CLI 工具调用问题修复 | 2026-04-09 |
+| [03-query-engine-separation](./completed/03-query-engine-separation.md) | QueryEngine 分离 | 2026-04-15 |
+| [10-openharness-comparison-and-improvement](./completed/10-openharness-comparison-and-improvement.md) | OpenHarness 对比与 CLI 增强 | 2026-04-15 |
+| [problems](./completed/problems.md) | 打包后遇到的问题修复 | 2026-04-15 |
+| [12-config-manager-implementation](./completed/12-config-manager-implementation.md) | ConfigManager 实现 | 2026-04-18 |
+| [13-message-port-lifecycle](./completed/13-message-port-lifecycle.md) | MessagePort 生命周期管理 | 2026-04-20 |
+| [14-tool-stream-buffer](./completed/14-tool-stream-buffer.md) | Tool Stream Buffer 实现 | 2026-04-20 |
+| [16-sse-to-messageport-unification](./completed/16-sse-to-messageport-unification.md) | SSE → MessagePort 统一通信 | 2026-04-22 |
+| [18-api-routes-to-ipc-migration](./completed/18-api-routes-to-ipc-migration.md) | API Routes → IPC 迁移 | 2026-04-22 |
+| [18-zero-router-architecture](./completed/18-zero-router-architecture.md) | Zero Router 架构实施 | 2026-04-22 |
+| [21-nextjs-to-vite-migration](./completed/21-nextjs-to-vite-migration.md) | Next.js → Vite 前端迁移 | 2026-04-22 |
+| [22-singleton-daemon-architecture](./completed/22-singleton-daemon-architecture.md) | 单例守护进程架构 | 2026-04-23 |
+| [23-data-persistence-fixes](./completed/23-data-persistence-fixes.md) | 数据持久化修复 | 2026-04-24 |
+| [24-self-improvement-system](./completed/24-self-improvement-system.md) | 自我提升 Skill 质量控制 | 2026-04-24 |
+| [11-messageport-architecture](./completed/11-messageport-architecture.md) | MessagePort 架构实施 | 2026-05-08 |
+| [14-database-architecture-refactor](./completed/14-database-architecture-refactor.md) | Golden Trident 数据架构重构 | 2026-05-08 |
+| [19-database-ownership-unification](./completed/19-database-ownership-unification.md) | 数据库所有权统一 | 2026-05-08 |
+| [21-automation-cronjob-workflow](./completed/21-automation-cronjob-workflow.md) | 自动化定时任务系统 | 2026-05-08 |
+| [25-platform-gateway](./completed/25-platform-gateway.md) | 平台网关 | 2026-05-08 |
+| [25-streaming-state-architecture-refactor](./completed/25-streaming-state-architecture-refactor.md) | 流式状态架构重构 | 2026-05-08 |
+| [26-prompt-mode-architecture](./completed/26-prompt-mode-architecture.md) | PromptMode 架构设计 | 2026-05-08 |
+| [28-telegram-enhancement](./completed/28-telegram-enhancement.md) | Telegram 功能增强 | 2026-05-08 |
+| [01-tool-interface-enhancement](./completed/01-tool-interface-enhancement.md) | Tool 接口增强 | 2026-05-08 |
+| [06-abort-controller-propagation](./completed/06-abort-controller-propagation.md) | AbortController 传播链 | 2026-05-08 |
+| [05-tool-orchestration-enhancement](./completed/05-tool-orchestration-enhancement.md) | Tool Orchestration 增强 | 2026-05-08 |
+| [29-multi-agent-profile-system](./completed/29-multi-agent-profile-system.md) | 多 Agent Profile 系统 | 2026-05-16 |
+| [34-conductor-agent-orchestration](./completed/34-conductor-agent-orchestration.md) | Conductor Agent 感知与编排 | 2026-05-16 |
+| [40-agent-self-management](./completed/40-agent-self-management.md) | Agent 自管理工具 | 2026-05-16 |
+| [42-extension-install-ux](./completed/42-extension-install-ux.md) | 扩展安装用户体验优化 | 2026-05-16 |
+| [43-chat-input-paste-fix](./completed/43-chat-input-paste-fix.md) | 粘贴内容删除修复 | 2026-05-16 |
+| [45-subagent-live-rendering-sidebar](./completed/45-subagent-live-rendering-sidebar.md) | 子 Agent 实时渲染 | 2026-05-16 |
+| [46-parallel-agent-orchestration](./completed/46-parallel-agent-orchestration.md) | 并行 Agent 编排恢复 | 2026-05-16 |
+| [49-canvas-agent-free-form-tools](./completed/49-canvas-agent-free-form-tools.md) | Canvas Agent 工具重构 | 2026-05-16 |
+| [52-deepseek-tui-feature-parity](./completed/52-deepseek-tui-feature-parity.md) | DeepSeek-TUI 功能对齐 | 2026-05-12 |
+| [53-agent-communication-architecture-v2](./completed/53-agent-communication-architecture-v2.md) | Agent 通信架构 V2 | 2026-05-16 |
+| [55-agent-directory-restructuring](./completed/55-agent-directory-restructuring.md) | Agent 目录结构重组 | 2026-05-16 |
+
+## Tech Debt
+
+See [tech-debt-tracker.md](./tech-debt-tracker.md) for known technical debt items.
+
+## Principle
+
+> "Plans are first-class artifacts. Lightweight plans for small changes; complex work is documented in execution plans with progress and decision logs committed to the repository."
+
+This enables agents to run without relying on external context.
