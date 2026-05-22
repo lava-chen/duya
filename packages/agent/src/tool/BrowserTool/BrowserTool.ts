@@ -55,18 +55,22 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   }
 
   private ensureConnection = async (): Promise<void> => {
+    console.log('[BrowserTool.ensureConnection] checking connection, cdp:', !!this.cdp, 'fallback:', !!this.fallbackBrowser);
     if (this.cdp || this.fallbackBrowser) return;
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    console.log('[BrowserTool.ensureConnection] creating new connection, sessionId:', sessionId);
 
     try {
       const cdp = await createCDPClient(sessionId);
       const health = await cdp.health();
+      console.log('[BrowserTool.ensureConnection] health:', health);
       if (health.status === 'ok') {
         this.cdp = cdp;
         this.snapshotEngine = new SnapshotEngine(cdp);
         this.mode = health.mode === 'extension' ? 'extension' : 'playwright';
         this.extensionAvailable = health.mode === 'extension';
+        console.log('[BrowserTool.ensureConnection] using CDP, mode:', this.mode);
         return;
       }
     } catch (error) {
@@ -76,6 +80,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
 
     this.fallbackBrowser = new FallbackBrowser();
     this.mode = 'fallback';
+    console.log('[BrowserTool.ensureConnection] using fallback browser');
   };
 
   private buildContext(): ActionContext {
@@ -97,6 +102,8 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
 
   async execute(input: Record<string, unknown>, _workingDirectory?: string, _context?: ToolUseContext): Promise<ToolResult> {
     const operation = input['operation'] as string;
+    console.log('[BrowserTool.execute] operation:', operation);
+
     if (!operation) {
       return { id: crypto.randomUUID(), name: this.name, result: JSON.stringify({ error: 'Missing operation' }), error: true };
     }
@@ -104,6 +111,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     try {
       await this.ensureConnection();
       const ctx = this.buildContext();
+      console.log('[BrowserTool.execute] built context, about to execute:', operation);
       const result = await this.actionRegistry.execute(operation, input, ctx);
 
       return {
