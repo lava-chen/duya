@@ -65,12 +65,32 @@ export class GoogleSearchExtractor extends BaseExtractor {
       (async () => {
         const maxLength = ${maxLength};
 
+        // Wait for page to load
+        await new Promise(r => setTimeout(r, 500));
+
+        // Check if we're on a Google search page
+        const isGoogleSearch = window.location.hostname.includes('google') &&
+                              window.location.pathname.includes('/search');
+        if (!isGoogleSearch) {
+          return { kind: 'error', detail: 'Not a Google search page' };
+        }
+
         // Get search info
         const searchInfo = document.querySelector('#result-stats')?.textContent?.trim() || '';
 
-        // Get main results
+        // Get main results - try multiple selectors
         const results = [];
-        const resultEls = document.querySelectorAll('div.g, div[data-snf="nPlmc"]');
+        let resultEls = document.querySelectorAll('div.g');
+
+        // If no results, try alternative selectors
+        if (resultEls.length === 0) {
+          resultEls = document.querySelectorAll('[data-sncf], [data-hveid]');
+        }
+
+        // Try more selectors
+        if (resultEls.length === 0) {
+          resultEls = document.querySelectorAll('div[data-hveid]');
+        }
 
         for (let i = 0; i < Math.min(resultEls.length, 20); i++) {
           const el = resultEls[i];
