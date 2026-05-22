@@ -1105,15 +1105,9 @@ export class SnapshotEngine {
 
     if (depth > 50) return '';
 
-    // Skip script/style/comment/noscript nodes, but process their children
+    // Skip script/style/comment/noscript/link nodes (completely ignore them)
     if (['SCRIPT', 'STYLE', 'COMMENT', '#comment', 'LINK', 'META', 'HEAD', 'NOSCRIPT'].includes(node.nodeName)) {
-      // Process children for these tags (they might contain semantic children)
-      const children = node.children || [];
-      let result = '';
-      for (const child of children) {
-        result += this.buildSnapshot(child, { ...options, depth: 0 });
-      }
-      return result;
+      return '';
     }
 
     // Skip #document root but process its children
@@ -1309,6 +1303,11 @@ export class SnapshotEngine {
   private getTextContent(node: DOMNode): string {
     if (node.nodeName === '#text') {
       return node.nodeValue || '';
+    }
+
+    // Skip style and script content (CSS/JS)
+    if (['STYLE', 'SCRIPT', 'LINK', 'META'].includes(node.nodeName)) {
+      return '';
     }
 
     let text = '';
