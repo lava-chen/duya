@@ -402,10 +402,15 @@ export class MicroCompactStrategy implements CompactionStrategy {
     }
 
     // Create summary message with continuation instruction
+    const boundaryId = crypto.randomUUID();
+
     const summaryMessage: Message = {
       role: 'system',
       content: getSummaryMessage(summaryText),
       timestamp: Date.now(),
+      isCompactSummary: true,
+      compactBoundaryId: boundaryId,
+      compactedMessageCount: olderMessages.length,
     }
 
     // Build compressed history: system + summary + recent

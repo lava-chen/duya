@@ -404,6 +404,8 @@ ${summaryText}
 
 Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the memory, do not recap what was happening. Pick up the last task as if the break never happened.`,
       timestamp: Date.now(),
+      isCompactSummary: true,
+      compactedMessageCount: olderMessages.length,
       metadata: {
         strategy: 'session_memory',
         messagesCompressed: olderMessages.length,
