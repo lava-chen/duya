@@ -30,6 +30,7 @@ export type PlatformContentType =
   | 'bilibili-video'
   | 'github-repo'
   | 'wechat-article'
+  | 'google-search'
   | 'article';
 
 /**

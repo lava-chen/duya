@@ -17,6 +17,7 @@ export { YouTubeExtractor, youtubeExtractor } from './youtube/index.js';
 export { BilibiliExtractor, bilibiliExtractor } from './bilibili/index.js';
 export { WeChatArticleExtractor, weChatArticleExtractor } from './wechat-article/index.js';
 export { GitHubExtractor, githubExtractor } from './github/index.js';
+export { GoogleSearchExtractor, googleSearchExtractor } from './google-search/index.js';
 
 // Import extractors for manager
 import type { PlatformExtractor } from './types.js';
@@ -27,6 +28,7 @@ import { youtubeExtractor } from './youtube/index.js';
 import { bilibiliExtractor } from './bilibili/index.js';
 import { weChatArticleExtractor } from './wechat-article/index.js';
 import { githubExtractor } from './github/index.js';
+import { googleSearchExtractor } from './google-search/index.js';
 
 /**
  * All registered platform extractors
@@ -39,4 +41,5 @@ export const platformExtractors: PlatformExtractor[] = [
   bilibiliExtractor,
   weChatArticleExtractor,
   githubExtractor,
+  googleSearchExtractor,
 ];
