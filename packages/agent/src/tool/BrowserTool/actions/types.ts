@@ -4,6 +4,7 @@ import type { ICDPClient } from '../CDPClient.js';
 import type { SnapshotEngine } from '../SnapshotEngine.js';
 import type { FallbackBrowser } from '../FallbackBrowser.js';
 import type { BrowserMode } from '../types.js';
+import type { PlatformContent, ExtractionOptions } from '../platform-extractors/types.js';
 
 export interface ActionContext {
   cdp: ICDPClient | null;
@@ -14,6 +15,8 @@ export interface ActionContext {
   platformHookManager: {
     shouldApplyHooks(url: string): boolean;
     applyPostNavigateHooks(cdp: ICDPClient, url: string): Promise<void>;
+    hasExtractor(url: string): boolean;
+    extractContent(cdp: ICDPClient, url: string, options?: ExtractionOptions): Promise<PlatformContent | null>;
   };
   checkDomainBlocked(url: string): boolean;
   getBrowserPool(): import('../BrowserPool.js').BrowserPool;
