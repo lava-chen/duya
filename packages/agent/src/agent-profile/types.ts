@@ -102,7 +102,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     name: 'Code',
     description: 'Code development and software engineering',
     allowedTools: ['*'],
-    disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'skill_manage', 'memory', 'SessionSearch'],
+    disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'memory', 'SessionSearch'],
     promptSystem: 'code',
     userVisible: true,
     isPreset: true,
