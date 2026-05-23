@@ -8,6 +8,9 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { PanelProvider } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
 
+// Custom event for triggering onboarding reset
+const RESET_ONBOARDING_EVENT = "duya:reset-onboarding";
+
 // Lazily import OnboardingFlow to avoid loading issues with @lobehub/icons
 const OnboardingFlow = lazy(() => import("@/components/onboarding/OnboardingFlow").then((mod) => ({ default: mod.OnboardingFlow })));
 
@@ -82,6 +85,17 @@ export function AppShell({ children }: AppShellProps) {
       }
     }
   }, [isHydrated]);
+
+  // Listen for reset onboarding event from Settings
+  useEffect(() => {
+    const handleResetOnboarding = () => {
+      localStorage.removeItem("duya-onboarding-completed");
+      setShowOnboarding(true);
+    };
+
+    window.addEventListener(RESET_ONBOARDING_EVENT, handleResetOnboarding);
+    return () => window.removeEventListener(RESET_ONBOARDING_EVENT, handleResetOnboarding);
+  }, []);
 
   return (
     <PanelProvider>

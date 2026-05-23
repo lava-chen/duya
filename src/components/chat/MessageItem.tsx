@@ -6,12 +6,15 @@ import { ToolActionsGroup, pairTools, type ActionItem, type ToolAction } from '.
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { CopyIcon, CheckIcon, NotePencilIcon } from '@/components/icons';
 import { FileAttachmentCard } from './FileAttachmentCard';
+import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
 import { parseAllShowWidgets } from '@/lib/widget-parser';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
 import { CompactBoundary } from './CompactBoundary';
 import { CompactSummary } from './CompactSummary';
+import { useConversationStore } from '@/stores/conversation-store';
+import type { FileAttachment } from '@/types/message';
 
 function formatMessageTime(timestamp: number): string {
   const date = new Date(timestamp);
@@ -320,6 +323,11 @@ function sortMessagesByOrder(messages: Message[]): Message[] {
 
 export function MessageItem({ message, toolResults = [], onToolResult, mergedMessages = [] }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
+  // Preview modal state
+  const [previewAttachment, setPreviewAttachment] = useState<FileAttachment | null>(null);
+  const [previewPastedContent, setPreviewPastedContent] = useState<{ id: string; content: string; preview: string } | null>(null);
+
+  const isSubAgentSession = !!useConversationStore(s => s.parentSessionId);
 
   // Build tool result map for quick lookup
   const toolResultMap = useMemo(() => {
@@ -418,6 +426,22 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
     } catch { /* ignore */ }
   };
 
+  // Preview handlers
+  const handleOpenAttachmentPreview = (attachment: FileAttachment) => {
+    setPreviewAttachment(attachment);
+    setPreviewPastedContent(null);
+  };
+
+  const handleOpenPastedPreview = (content: PastedContentInfo) => {
+    setPreviewPastedContent({ id: content.id, content: content.fullContent, preview: content.preview });
+    setPreviewAttachment(null);
+  };
+
+  const handleClosePreview = () => {
+    setPreviewAttachment(null);
+    setPreviewPastedContent(null);
+  };
+
   const isUser = message.role === 'user';
   const hasPastedContents = allPastedContents.length > 0;
   const hasAttachments = message.attachments && message.attachments.length > 0;
@@ -461,6 +485,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
                   name={attachment.name}
                   thumbnail={attachment.thumbnail}
                   width={120}
+                  onClick={() => handleOpenAttachmentPreview(attachment)}
                 />
               ))}
             </div>
@@ -469,11 +494,18 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
           {imageAttachments.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">
               {imageAttachments.map((attachment) => (
-                <div key={attachment.id} className="relative group/image">
+                <div
+                  key={attachment.id}
+                  className="relative group/image cursor-pointer"
+                  onClick={() => handleOpenAttachmentPreview(attachment)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenAttachmentPreview(attachment); }}
+                >
                   <img
                     src={attachment.displayUrl || attachment.url}
                     alt={attachment.name}
-                    className="max-w-[200px] max-h-[150px] rounded-lg object-cover border border-border/50"
+                    className="max-w-[200px] max-h-[150px] rounded-lg object-cover border border-border/50 hover:border-accent/50 transition-colors"
                     loading="lazy"
                   />
                   <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[10px] px-2 py-0.5 rounded-b-lg opacity-0 group-hover/image:opacity-100 transition-opacity truncate">
@@ -487,7 +519,14 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
           {hasPastedContents && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">
               {allPastedContents.map((content) => (
-                <div key={content.id} className="message-pasted-content-item">
+                <div
+                  key={content.id}
+                  className="message-pasted-content-item cursor-pointer hover:border-accent-soft hover:bg-surface-hover transition-all"
+                  onClick={() => handleOpenPastedPreview(content)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenPastedPreview(content); }}
+                >
                   <div className="message-pasted-content-preview">
                     {content.preview}
                   </div>
@@ -517,6 +556,13 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
             </button>
           </div>
         </div>
+
+        {/* Preview Modal */}
+        <AttachmentPreviewModal
+          attachment={previewAttachment}
+          pastedContent={previewPastedContent}
+          onClose={handleClosePreview}
+        />
       </div>
     );
   }
@@ -557,6 +603,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
             {hasToolActions && (
               <ToolActionsGroup
                 actions={toolOnlyActions}
+                flat={isSubAgentSession}
               />
             )}
             <InterleavedContent actions={actions} />
@@ -569,6 +616,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
             {hasActions && (
               <ToolActionsGroup
                 actions={actions}
+                flat={isSubAgentSession}
               />
             )}
             {finalText && (

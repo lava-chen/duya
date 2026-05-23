@@ -5,6 +5,7 @@ interface FileAttachmentCardProps {
   name: string;
   thumbnail?: string;
   onRemove?: (id: string) => void;
+  onClick?: () => void;
   width?: number;
 }
 
@@ -13,6 +14,7 @@ export function FileAttachmentCard({
   name,
   thumbnail,
   onRemove,
+  onClick,
   width = 120,
 }: FileAttachmentCardProps) {
   const ext = name.split('.').pop()?.toUpperCase() || 'FILE';
@@ -20,6 +22,7 @@ export function FileAttachmentCard({
   const isImage = ['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'BMP', 'SVG'].includes(ext);
   const isDoc = ['DOC', 'DOCX'].includes(ext);
   const hasThumbnail = !!thumbnail;
+  const isClickable = !!onClick;
 
   // For image files with thumbnail: show square image preview
   // For doc files: show horizontal layout with name + ext badge (like reference image)
@@ -30,13 +33,17 @@ export function FileAttachmentCard({
   if (isImage && hasThumbnail) {
     return (
       <div
-        className="relative rounded-2xl border border-border/50 overflow-hidden flex-shrink-0"
+        className={`relative rounded-2xl border border-border/50 overflow-hidden flex-shrink-0 ${isClickable ? 'cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all' : ''}`}
         style={{ width, height: width }}
+        onClick={onClick}
+        role={isClickable ? 'button' : undefined}
+        tabIndex={isClickable ? 0 : undefined}
+        onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
       >
         {onRemove && (
           <button
             type="button"
-            onClick={() => onRemove(id)}
+            onClick={(e) => { e.stopPropagation(); onRemove(id); }}
             className="absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
           >
             <XIcon size={10} className="text-white" />
@@ -56,13 +63,17 @@ export function FileAttachmentCard({
   if (isDoc) {
     return (
       <div
-        className="relative flex items-stretch rounded-2xl border border-border/50 bg-muted/30 overflow-hidden"
+        className={`relative flex items-stretch rounded-2xl border border-border/50 bg-muted/30 overflow-hidden ${isClickable ? 'cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all' : ''}`}
         style={{ width: width * 2.2, height: width }}
+        onClick={onClick}
+        role={isClickable ? 'button' : undefined}
+        tabIndex={isClickable ? 0 : undefined}
+        onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
       >
         {onRemove && (
           <button
             type="button"
-            onClick={() => onRemove(id)}
+            onClick={(e) => { e.stopPropagation(); onRemove(id); }}
             className="absolute -top-1.5 -right-1.5 z-10 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
           >
             <XIcon size={10} className="text-white" />
@@ -104,13 +115,17 @@ export function FileAttachmentCard({
   if (hasThumbnail) {
     return (
       <div
-        className="relative flex flex-col items-center rounded-2xl border border-border/50 bg-muted/30 overflow-hidden flex-shrink-0"
+        className={`relative flex flex-col items-center rounded-2xl border border-border/50 bg-muted/30 overflow-hidden flex-shrink-0 ${isClickable ? 'cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all' : ''}`}
         style={{ width }}
+        onClick={onClick}
+        role={isClickable ? 'button' : undefined}
+        tabIndex={isClickable ? 0 : undefined}
+        onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
       >
         {onRemove && (
           <button
             type="button"
-            onClick={() => onRemove(id)}
+            onClick={(e) => { e.stopPropagation(); onRemove(id); }}
             className="absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
           >
             <XIcon size={10} className="text-white" />
@@ -142,13 +157,17 @@ export function FileAttachmentCard({
   // Files without thumbnail: vertical layout with ext label only
   return (
     <div
-      className="relative flex flex-col items-center rounded-2xl border border-border/50 bg-muted/30 overflow-hidden flex-shrink-0"
+      className={`relative flex flex-col items-center rounded-2xl border border-border/50 bg-muted/30 overflow-hidden flex-shrink-0 ${isClickable ? 'cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all' : ''}`}
       style={{ width }}
+      onClick={onClick}
+      role={isClickable ? 'button' : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
     >
       {onRemove && (
         <button
           type="button"
-          onClick={() => onRemove(id)}
+          onClick={(e) => { e.stopPropagation(); onRemove(id); }}
           className="absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
         >
           <XIcon size={10} className="text-white" />

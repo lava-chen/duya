@@ -19,9 +19,12 @@ export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
   // Only show title in chat view with active thread
   const showThreadInfo = currentView === 'chat' && activeThreadId;
 
-  const spacerStyle = { width: sidebarWidth };
-
   const activeThread = threads.find((t) => t.id === activeThreadId);
+  const hasWorkingDirectory = !!activeThread?.workingDirectory;
+
+  // Only show file tree toggle when in a project
+  const showFileTreeToggle = hasWorkingDirectory;
+
   const threadTitle = activeThread?.title || "New Thread";
   const projectName = activeThread?.projectName || "No Project";
 
@@ -58,7 +61,7 @@ export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
           BETA
         </span>
       </div>
-      <div className="titlebar-spacer" style={spacerStyle} />
+      <div className="titlebar-spacer" style={{ width: sidebarWidth }} />
       <div className="titlebar-content-area">
         {showThreadInfo && activeThread && (
           <>
@@ -69,19 +72,21 @@ export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
       </div>
       {/* Right side actions - next to window controls */}
       <div className="titlebar-actions">
-        <button
-          type="button"
-          className={`titlebar-action-btn${fileTreeOpen ? ' active' : ''}`}
-          onClick={toggleFileTree}
-          title="Toggle File Tree"
-          aria-label="Toggle File Tree"
-        >
-          {fileTreeOpen ? (
-            <IconLayoutSidebarLeftCollapse size={16} />
-          ) : (
-            <IconLayoutSidebarLeftExpand size={16} />
-          )}
-        </button>
+        {showFileTreeToggle && (
+          <button
+            type="button"
+            className={`titlebar-action-btn${fileTreeOpen ? ' active' : ''}`}
+            onClick={toggleFileTree}
+            title="Toggle File Tree"
+            aria-label="Toggle File Tree"
+          >
+            {fileTreeOpen ? (
+              <IconLayoutSidebarLeftCollapse size={16} />
+            ) : (
+              <IconLayoutSidebarLeftExpand size={16} />
+            )}
+          </button>
+        )}
       </div>
     </div>
   );
