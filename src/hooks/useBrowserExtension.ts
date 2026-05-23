@@ -4,6 +4,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 export type ExtensionStatus = 'checking' | 'connected' | 'disconnected' | 'error';
 
+// Chrome Web Store extension URL
+const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
+
 export interface ExtensionHealth {
   status: 'ok' | 'unavailable';
   extensionConnected: boolean;
@@ -21,12 +24,40 @@ export interface UseBrowserExtensionReturn {
   isInstalled: boolean;
   checkExtension: () => Promise<void>;
   lastChecked: Date | null;
+  storeAvailable: boolean | null;
+  checkStoreAvailability: () => Promise<boolean>;
 }
 
 const CHECK_INTERVAL = 30000; // Check every 30 seconds
 
+// Timeout for store availability check (5 seconds)
+const STORE_CHECK_TIMEOUT = 5000;
+
 function getElectronAPI() {
   return (window as unknown as { electronAPI?: { browserExtension?: { getStatus: () => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }> } } }).electronAPI;
+}
+
+/**
+ * Check if Chrome Web Store is accessible
+ * Uses no-cors mode - we only care if the request succeeds (no network error)
+ */
+async function checkStoreAvailabilityInternal(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), STORE_CHECK_TIMEOUT);
+
+  try {
+    // Use no-cors mode - we can't read the response, but we can detect network errors
+    await fetch(CHROME_STORE_URL, {
+      method: 'HEAD',
+      mode: 'no-cors',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return true;
+  } catch {
+    clearTimeout(timeoutId);
+    return false;
+  }
 }
 
 /**
@@ -41,7 +72,14 @@ export function useBrowserExtension(
   const [status, setStatus] = useState<ExtensionStatus>('checking');
   const [health, setHealth] = useState<ExtensionHealth | null>(null);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [storeAvailable, setStoreAvailable] = useState<boolean | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const checkStoreAvailability = useCallback(async (): Promise<boolean> => {
+    const available = await checkStoreAvailabilityInternal();
+    setStoreAvailable(available);
+    return available;
+  }, []);
 
   const checkExtension = useCallback(async () => {
     setStatus('checking');
@@ -146,6 +184,8 @@ export function useBrowserExtension(
     isInstalled: status === 'connected',
     checkExtension,
     lastChecked,
+    storeAvailable,
+    checkStoreAvailability,
   };
 }
 

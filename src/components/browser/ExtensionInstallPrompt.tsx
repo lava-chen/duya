@@ -18,6 +18,27 @@ import {
 // Chrome Web Store extension URL
 const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
 
+/**
+ * Check if Chrome Web Store is accessible
+ */
+async function checkStoreAvailabilityInternal(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    await fetch(CHROME_STORE_URL, {
+      method: 'HEAD',
+      mode: 'no-cors',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return true;
+  } catch {
+    clearTimeout(timeoutId);
+    return false;
+  }
+}
+
 interface ExtensionInstallPromptProps {
   isOpen: boolean;
   onClose: () => void;
@@ -43,10 +64,23 @@ export function ExtensionInstallPrompt({
   const [showManualInstall, setShowManualInstall] = useState(false);
   const [extensionPath, setExtensionPath] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [storeAvailable, setStoreAvailable] = useState<boolean | null>(null);
+  const [checkingStore, setCheckingStore] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setShowManualInstall(false);
+      setStoreAvailable(null);
+      setCheckingStore(true);
+      // Check store availability in background
+      checkStoreAvailabilityInternal().then((available) => {
+        setStoreAvailable(available);
+        setCheckingStore(false);
+        // If store is not available, show manual install by default
+        if (!available) {
+          setShowManualInstall(true);
+        }
+      });
     }
   }, [isOpen]);
 
@@ -63,36 +97,51 @@ export function ExtensionInstallPrompt({
   const storeInstallSteps: InstallStep[] = [
     {
       number: 1,
-      title: t('extensionInstall.storeStep1Title') || 'Go to Chrome Web Store',
-      description: t('extensionInstall.storeStep1Desc') || 'Click the button below to open the Chrome Web Store',
+      title: t('extensionInstall.storeStep1Title') || 'Open Chrome Web Store',
+      description: t('extensionInstall.storeStep1Desc') || 'Click the "Install from Chrome Web Store" button below to open the store page',
     },
     {
       number: 2,
       title: t('extensionInstall.storeStep2Title') || 'Add to Chrome',
-      description: t('extensionInstall.storeStep2Desc') || 'Click "Add to Chrome" button on the store page',
+      description: t('extensionInstall.storeStep2Desc') || 'Click the "Add to Chrome" button on the DUYA Browser Bridge page',
     },
     {
       number: 3,
       title: t('extensionInstall.storeStep3Title') || 'Confirm Installation',
-      description: t('extensionInstall.storeStep3Desc') || 'Click "Add extension" in the popup to complete installation',
+      description: t('extensionInstall.storeStep3Desc') || 'Click "Add extension" in the popup dialog to complete installation',
+    },
+    {
+      number: 4,
+      title: t('extensionInstall.storeStep4Title') || 'Verify Installation',
+      description: t('extensionInstall.storeStep4Desc') || 'Return to DUYA and click "Refresh" to verify the extension is connected',
     },
   ];
 
   const manualInstallSteps: InstallStep[] = [
     {
       number: 1,
-      title: t('extensionInstall.step1Title') || 'Open Chrome Extensions',
-      description: t('extensionInstall.step1Desc') || 'Navigate to chrome://extensions/ in your Chrome browser',
+      title: t('extensionInstall.step1Title') || 'Open Chrome Extensions Page',
+      description: t('extensionInstall.step1Desc') || 'In Chrome, navigate to chrome://extensions/',
     },
     {
       number: 2,
       title: t('extensionInstall.step2Title') || 'Enable Developer Mode',
-      description: t('extensionInstall.step2Desc') || 'Toggle "Developer mode" switch in the top right corner',
+      description: t('extensionInstall.step2Desc') || 'Toggle the "Developer mode" switch in the top right corner of the extensions page',
     },
     {
       number: 3,
       title: t('extensionInstall.step3Title') || 'Load Unpacked Extension',
-      description: t('extensionInstall.step3Desc') || 'Click "Load unpacked" and select the extension folder',
+      description: t('extensionInstall.step3Desc') || 'Click "Load unpacked" at the top, then select the extension folder shown below',
+    },
+    {
+      number: 4,
+      title: t('extensionInstall.step4Title') || 'Select Extension Folder',
+      description: t('extensionInstall.step4Desc') || 'In the folder picker, navigate to the extension folder and click "Select Folder"',
+    },
+    {
+      number: 5,
+      title: t('extensionInstall.step5Title') || 'Verify Installation',
+      description: t('extensionInstall.step5Desc') || 'The DUYA Browser Bridge extension should now appear in your extensions list',
     },
   ];
 
@@ -235,10 +284,13 @@ export function ExtensionInstallPrompt({
           {/* Installation steps */}
           <div className="mb-6">
             <h4 className="text-sm font-medium mb-3" style={{ color: 'var(--text)' }}>
-              {showManualInstall 
+              {showManualInstall
                 ? (t('extensionInstall.manualStepsTitle') || 'Manual Installation Steps')
                 : (t('extensionInstall.stepsTitle') || 'Installation Steps')
               }
+              {checkingStore && (
+                <span className="ml-2 text-xs text-muted-foreground"> (checking store...)</span>
+              )}
             </h4>
             <div className="space-y-2">
               {installSteps.map((step) => (

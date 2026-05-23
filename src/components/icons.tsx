@@ -95,6 +95,7 @@ import {
   GithubLogoIcon,
   FeatherIcon,
   DownloadSimpleIcon,
+  ArrowCounterClockwiseIcon,
 } from "@phosphor-icons/react";
 
 // Tabler Icons - Agent icons & Channel icons
@@ -210,6 +211,8 @@ export {
   IconRobot as TablerRobotIcon,
   // Tabler Icons - Channel icons
   IconMessageCircle as ChannelIcon,
+  // Reset icon
+  ArrowCounterClockwiseIcon,
 };
 
 // Aliases for backward compatibility

@@ -2,12 +2,19 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
-import { TrashIcon, FolderOpenIcon, DownloadSimpleIcon, ExternalLinkIcon } from "@/components/icons";
+import { TrashIcon, FolderOpenIcon, DownloadSimpleIcon, ExternalLinkIcon, ArrowCounterClockwiseIcon } from "@/components/icons";
 import {
   SettingsSection,
   SettingsCard,
   SettingsRow,
 } from "@/components/settings/ui";
+
+// Custom event for triggering onboarding reset
+const RESET_ONBOARDING_EVENT = "duya:reset-onboarding";
+
+export function resetOnboarding() {
+  window.dispatchEvent(new CustomEvent(RESET_ONBOARDING_EVENT));
+}
 
 export function SupportSection() {
   const { t } = useTranslation();
@@ -173,6 +180,20 @@ export function SupportSection() {
                 <ExternalLinkIcon size={14} />
                 {t("settings.support.about.docsLink")}
               </a>
+            }
+          />
+          <SettingsRow
+            label={t("settings.support.about.resetOnboarding")}
+            description={t("settings.support.about.resetOnboardingDesc")}
+            action={
+              <button
+                type="button"
+                onClick={resetOnboarding}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent)]/10 rounded-md transition-colors cursor-pointer"
+              >
+                <ArrowCounterClockwiseIcon size={14} />
+                {t("settings.support.about.resetOnboarding")}
+              </button>
             }
           />
         </SettingsCard>

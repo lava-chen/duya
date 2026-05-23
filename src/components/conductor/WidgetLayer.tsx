@@ -5,6 +5,7 @@ import { ResponsiveGridLayout, useContainerWidth } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import { useConductorStore } from "@/stores/conductor-store";
+import { widgetRegistry } from "@/conductor/widgets/registry";
 import { WidgetShell } from "./WidgetShell";
 import type { ConductorWidget, CanvasElement } from "@/types/conductor";
 import { executeAction } from "@/lib/conductor-ipc";
@@ -19,19 +20,42 @@ interface WidgetLayerProps {
 }
 
 function elementToConductorWidget(el: CanvasElement): ConductorWidget {
+  const widgetType = el.elementKind.replace("widget/", "");
+  const def = widgetRegistry.get(widgetType);
+
+  let widgetData: Record<string, unknown> = {};
+  let widgetConfig: Record<string, unknown> = el.config;
+
+  if (def) {
+    const configKeySet = new Set(Object.keys(def.defaultConfig));
+    const data: Record<string, unknown> = {};
+    const config: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(el.config)) {
+      if (configKeySet.has(key)) {
+        config[key] = value;
+      } else {
+        data[key] = value;
+      }
+    }
+
+    widgetData = Object.keys(data).length > 0 ? data : (def.defaultData as Record<string, unknown>);
+    widgetConfig = { ...def.defaultConfig, ...config };
+  }
+
   return {
     id: el.id,
     canvasId: el.canvasId,
     kind: "builtin",
-    type: el.elementKind.replace("widget/", ""),
+    type: widgetType,
     position: {
       x: el.position.x,
       y: el.position.y,
       w: el.position.w,
       h: el.position.h,
     },
-    config: el.config,
-    data: (el.vizSpec?.payload as Record<string, unknown>) ?? {},
+    config: widgetConfig,
+    data: widgetData,
     dataVersion: el.dataVersion,
     sourceCode: el.sourceCode,
     state: el.state === "error" ? "error" : el.state === "loading" ? "loading" : "idle",
