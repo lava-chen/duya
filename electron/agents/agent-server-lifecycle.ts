@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { app } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
 import { handleDbRequest } from './db-bridge';
+import { killProcessTree } from '../lib/process-cleanup';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -52,15 +53,9 @@ export function spawnAgentServer(): Promise<number> {
     let command: string;
     let args: string[];
 
-    if (app.isPackaged) {
-      command = process.execPath;
-      args = [serverPath];
-      env.ELECTRON_RUN_AS_NODE = '1';
-    } else {
-      command = process.execPath;
-      args = [serverPath];
-      env.ELECTRON_RUN_AS_NODE = '1';
-    }
+    command = process.execPath;
+    args = [serverPath];
+    env.ELECTRON_RUN_AS_NODE = '1';
 
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
@@ -91,8 +86,8 @@ export function spawnAgentServer(): Promise<number> {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
-        // Log all output for debugging
-        console.log('[agent-server-lifecycle] stdout:', trimmed);
+        // Log debug output to file only
+        logger.debug(`[agent-server-lifecycle] stdout: ${trimmed}`, undefined, LogComponent.Main);
 
         try {
           const parsed = JSON.parse(trimmed);
@@ -150,6 +145,26 @@ export function spawnAgentServer(): Promise<number> {
         reject(new Error(`Agent Server exited immediately with code ${code}, signal ${signal}`));
       }
 
+      // Flush any remaining stdout data before clearing state
+      if (stdoutBuffer.trim()) {
+        try {
+          const parsed = JSON.parse(stdoutBuffer.trim());
+          if (parsed.component && typeof parsed.component === 'string') {
+            const msg = parsed.msg as string;
+            const level = parsed.level as string;
+            if (level === 'error') {
+              logger.error(`[agent-server] ${msg}`, undefined, undefined, LogComponent.Main);
+            } else if (level === 'warn') {
+              logger.warn(`[agent-server] ${msg}`, undefined, LogComponent.Main);
+            } else {
+              logger.info(`[agent-server] ${msg}`, undefined, LogComponent.Main);
+            }
+          }
+        } catch {
+          // Last buffer line was not valid JSON
+        }
+      }
+
       agentServerProcess = null;
       agentServerPort = null;
 
@@ -162,7 +177,7 @@ export function spawnAgentServer(): Promise<number> {
       if (!settled) {
         settled = true;
         logger.error('Agent Server startup timeout after 15s, killing', undefined, undefined, LogComponent.Main);
-        child.kill('SIGTERM');
+        killProcessTree(child, { force: true });
         reject(new Error('Agent Server startup timeout'));
       }
     }, 15000);
@@ -205,21 +220,9 @@ export async function stopAgentServer(): Promise<void> {
 
   if (!agentServerProcess) return;
 
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      if (agentServerProcess) {
-        agentServerProcess.kill('SIGKILL');
-      }
-      resolve();
-    }, 5000);
+  const child = agentServerProcess;
+  agentServerProcess = null;
+  agentServerPort = null;
 
-    agentServerProcess!.on('exit', () => {
-      clearTimeout(timeout);
-      agentServerProcess = null;
-      agentServerPort = null;
-      resolve();
-    });
-
-    agentServerProcess!.kill('SIGTERM');
-  });
+  return killProcessTree(child, { force: true, timeoutMs: 5000 });
 }

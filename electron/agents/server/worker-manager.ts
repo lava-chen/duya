@@ -120,18 +120,30 @@ export class WorkerManager {
   // Internal kill that accepts the child directly, used by spawnWorker during replace
   private killWorkerImpl(sessionId: string, child: ChildProcess): void {
     workerLogger.info('Killing worker', { sessionId, pid: child.pid });
-    child.kill('SIGTERM');
 
-    const timeout = setTimeout(() => {
-      if (!child.killed) {
-        workerLogger.warn('Worker did not exit gracefully, force killing', { sessionId, pid: child.pid });
-        child.kill('SIGKILL');
-      }
-    }, 3000);
+    if (process.platform === 'win32') {
+      child.kill();
+    } else {
+      child.kill('SIGTERM');
+
+      const timeout = setTimeout(() => {
+        if (!child.killed) {
+          workerLogger.warn('Worker did not exit gracefully, force killing', { sessionId, pid: child.pid });
+          child.kill('SIGKILL');
+        }
+      }, 3000);
+
+      child.on('exit', () => {
+        clearTimeout(timeout);
+        if (this.workers.get(sessionId) === child) {
+          this.workers.delete(sessionId);
+          workerLogger.info('Worker terminated', { sessionId });
+        }
+      });
+      return;
+    }
 
     child.on('exit', () => {
-      clearTimeout(timeout);
-      // Only delete if this child is still the one in the map (guard against stale deletion)
       if (this.workers.get(sessionId) === child) {
         this.workers.delete(sessionId);
         workerLogger.info('Worker terminated', { sessionId });
@@ -139,16 +151,16 @@ export class WorkerManager {
     });
   }
 
-  sendCommand(sessionId: string, cmd: Record<string, unknown>): void {
+  sendCommand(sessionId: string, cmd: Record<string, unknown>): boolean {
     const child = this.workers.get(sessionId);
-    if (!child) {
-      console.error('[worker-manager] Worker not found for session:', sessionId);
-      throw new Error(`Worker ${sessionId} not found`);
+    if (!child || child.killed || !child.stdin) {
+      workerLogger.warn('Worker not available for command', { sessionId, commandType: cmd.type, hasWorker: !!child, killed: child?.killed, hasStdin: !!child?.stdin });
+      return false;
     }
 
-    console.log('[worker-manager] Sending command to worker:', cmd.type, 'session:', sessionId);
-    // Worker reads commands from stdin via parseStdin() in worker-protocol.ts
-    child.stdin!.write(JSON.stringify(cmd) + '\n');
+    workerLogger.debug('Sending command to worker', { sessionId, commandType: cmd.type });
+    child.stdin.write(JSON.stringify(cmd) + '\n');
+    return true;
   }
 
   getWorker(sessionId: string): ChildProcess | undefined {

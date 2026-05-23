@@ -1,6 +1,25 @@
 import { autoUpdater, UpdateInfo } from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
-import { getLogger } from '../logging/logger'
+import { getLogger, LogComponent } from '../logging/logger'
+
+/**
+ * Sync bundled skills after update is installed
+ */
+async function syncSkillsOnUpdate(): Promise<void> {
+  try {
+    // Import dynamically to avoid circular deps and only load when needed
+    const { syncBundledSkills } = await import('../../packages/agent/src/skills/skillsSync.js')
+    const result = await syncBundledSkills()
+    if (result.added.length > 0 || result.updated.length > 0) {
+      logger.info('[Updater] Bundled skills synced after update', {
+        added: result.added,
+        updated: result.updated,
+      }, LogComponent.Skills)
+    }
+  } catch (err) {
+    logger.warn('[Updater] Failed to sync bundled skills after update', { error: String(err) }, LogComponent.Skills)
+  }
+}
 
 /**
  * Auto Updater - Silent background updates (Obsidian-style)
@@ -105,7 +124,7 @@ function setupEventHandlers(): void {
   })
 
   // Update downloaded - notify renderer it's ready
-  autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+  autoUpdater.on('update-downloaded', async (info: UpdateInfo) => {
     logger.info(`[Updater] Download complete: ${info.version}`)
     state.isDownloading = false
     state.updateInfo = info
@@ -113,6 +132,8 @@ function setupEventHandlers(): void {
       version: info.version,
       releaseNotes: info.releaseNotes,
     })
+    // Sync bundled skills after update is downloaded
+    await syncSkillsOnUpdate()
   })
 
   // Error handling - silent failure, don't disturb user
