@@ -81,6 +81,11 @@ export class FeishuCommentHandler {
     this.baseUrl = this.domain === 'lark' ? 'https://open.larksuite.com/open-apis' : 'https://open.feishu.cn/open-apis';
   }
 
+  /** Stop handler and cleanup */
+  stop(): void {
+    this.sessionCache.clear();
+  }
+
   setOnInboundMessage(handler: (msg: CommentInboundMessage) => void): void {
     this.onInboundMessage = handler;
   }

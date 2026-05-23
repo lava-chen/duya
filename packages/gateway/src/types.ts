@@ -269,7 +269,11 @@ export type MainToGatewayMessage =
   | { type: 'gateway:display_state'; sessionId: string; platform: string; platformChatId: string; state: 'typing_start' | 'typing_stop' }
   | { type: 'gateway:feishu:qr:begin'; id: string; domain?: string }
   | { type: 'gateway:feishu:qr:poll'; id: string; begin: QrPollInput; domain?: string }
-  | { type: 'reset'; sessionId: string };
+  | { type: 'reset'; sessionId: string }
+  | { type: 'gateway:pairing:check'; id: string; platform: string; userId: string }
+  | { type: 'gateway:pairing:generate'; id: string; platform: string; userId: string }
+  | { type: 'gateway:pairing:check:response'; id: string; approved: boolean }
+  | { type: 'gateway:pairing:generate:response'; id: string; code: string; error?: string };
 
 /** QR Registration types */
 export interface QrRegistrationBegin {

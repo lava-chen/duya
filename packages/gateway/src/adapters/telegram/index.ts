@@ -873,11 +873,12 @@ export class TelegramAdapter extends BaseAdapter {
         try {
           const result = await ipc.checkPairing('telegram', userId) as { approved?: boolean };
           if (!result?.approved) {
-            await this.sendTextMessage(String(msg.chat.id),
-              '🔒 *Pairing Required*\n\n' +
-              'This bot requires approval before use.\n\n' +
-              'Use /pair to request access, then share the code with the admin.'
-            );
+            await this.sendMessageWithRetry(String(msg.chat.id), {
+              text: '🔒 *Pairing Required*\n\n' +
+                'This bot requires approval before use.\n\n' +
+                'Use /pair to request access, then share the code with the admin.',
+              parse_mode: 'MarkdownV2',
+            });
             return;
           }
         } catch {

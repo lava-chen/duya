@@ -1,5 +1,5 @@
 ﻿﻿import http from 'http';
-import type { FeishuEvent } from './types';
+import type { FeishuEvent } from './types.js';
 
 interface WebhookServerOptions {
   port: number;

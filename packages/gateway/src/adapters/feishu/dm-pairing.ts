@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { PairingSession, PairingState } from './types';
+import type { PairingSession, PairingState } from './types.js';
 
 const PAIRING_CODE_LENGTH = 8;
 const SESSION_EXPIRE_MS = 60 * 60 * 1000;
