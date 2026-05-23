@@ -30,6 +30,7 @@ import { ContextUsageRing } from './ContextUsageRing';
 import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
+import { RecapBanner } from './RecapBanner';
 
 interface ChatViewProps {
   sessionId: string;
@@ -80,6 +81,7 @@ export function ChatView({
   const [agentMode, setAgentMode] = useState<AgentMode>('main');
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
+  const [recapBanner, setRecapBanner] = useState<string | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
 
   // Project state derived from store threads
@@ -329,6 +331,31 @@ export function ChatView({
     });
   }, [sessionId, loadThreadMessages]);
 
+  const handleRecapCommand = useCallback(async (command: string) => {
+    if (command === '/recap' && sessionId) {
+      const result = await window.electronAPI?.recap.request(sessionId);
+      if (result?.success && result.recap) {
+        setRecapBanner(result.recap);
+      }
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    window.electronAPI?.recap.setActiveSession(sessionId);
+  }, [sessionId]);
+
+  useEffect(() => {
+    const cleanup = window.electronAPI?.recap.onRecapResult((data) => {
+      if (data.recap) {
+        setRecapBanner(data.recap);
+      }
+    });
+    return () => {
+      cleanup?.();
+    };
+  }, []);
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       ((window as unknown) as Record<string, unknown>).__widgetSendMessage = (text: string) => {
@@ -379,6 +406,16 @@ export function ChatView({
         <ContextCompressionToast message={compressionNotification} />
       )}
 
+      {/* Recap banner */}
+      {recapBanner && (
+        <div className="max-w-[800px] mx-auto px-4 pt-3">
+          <RecapBanner
+            recap={recapBanner}
+            onDismiss={() => setRecapBanner(null)}
+          />
+        </div>
+      )}
+
       {/* Agent error banner with retry */}
       {(phase === 'error' || streamingError) && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
@@ -419,6 +456,7 @@ export function ChatView({
                 <div className="w-full welcome-message-input">
                   <MessageInput
                     onSend={handleSend}
+                    onCommand={handleRecapCommand}
                     onStop={handleStop}
                     disabled={false}
                     isStreaming={isStreaming}
@@ -532,6 +570,7 @@ export function ChatView({
 
             <MessageInput
               onSend={handleSend}
+              onCommand={handleRecapCommand}
               onStop={handleStop}
               disabled={false}
               isStreaming={isStreaming}

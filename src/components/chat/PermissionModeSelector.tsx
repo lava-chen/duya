@@ -54,7 +54,7 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
           flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium
           ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
           ${isBypass
-            ? 'bg-error-soft text-error border border-error/30'
+            ? 'bg-warning-soft text-warning border border-warning/30'
             : 'text-muted-foreground border border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50'
           }
         `}

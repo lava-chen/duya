@@ -11,6 +11,7 @@ import {
   ChartLineIcon,
   BrainIcon,
   GlobeSimpleIcon,
+  ClockCounterClockwiseIcon,
 } from '@/components/icons';
 
 interface SlashCommandPopoverProps {
@@ -37,6 +38,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ size?: number; className?: 
   '/clear': EraserIcon,
   '/cost': ChartLineIcon,
   '/compact': BrainIcon,
+  '/recap': ClockCounterClockwiseIcon,
 };
 
 export function SlashCommandPopover({
