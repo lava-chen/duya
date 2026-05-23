@@ -1,5 +1,5 @@
 ﻿﻿import WebSocket from 'ws';
-import type { FeishuDomain } from './types';
+import type { FeishuDomain } from './types.js';
 
 const PING_INTERVAL_MS = 30000;
 const PONG_TIMEOUT_MS = 10000;
@@ -90,7 +90,7 @@ export class FeishuWSClient {
     const base = this._domain === 'lark'
       ? 'https://open.larksuite.com'
       : 'https://open.feishu.cn';
-    return `${base}/open-apis/ws`;
+    return `${base}/callback/ws/endpoint`;
   }
 
   private _getTokenUrl(): string {
@@ -106,6 +106,18 @@ export class FeishuWSClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_id: this._appId, app_secret: this._appSecret }),
     });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Access token request failed with HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Access token response returned non-JSON (${contentType}): ${text.slice(0, 200)}`);
+    }
+
     const data = await res.json() as { code: number; msg: string; app_access_token?: string };
     if (data.code !== 0 || !data.app_access_token) {
       throw new Error(`Failed to get access token: ${data.msg || 'unknown error'}`);
@@ -114,19 +126,31 @@ export class FeishuWSClient {
   }
 
   private async _getConnectionInfo(): Promise<{ url: string; connection_id: string }> {
-    const token = await this._getAccessToken();
     const res = await fetch(this._getWsUrl(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        'locale': 'zh',
       },
+      body: JSON.stringify({ AppID: this._appId, AppSecret: this._appSecret }),
     });
-    const data = await res.json() as { code: number; msg: string; data?: { url?: string; connection_id?: string } };
-    if (data.code !== 0 || !data.data?.url) {
-      throw new Error(`Failed to get WebSocket connection info: ${data.msg || 'unknown error'}`);
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`WebSocket connection info request failed with HTTP ${res.status}: ${text.slice(0, 200)}`);
     }
-    return { url: data.data.url, connection_id: data.data.connection_id || '' };
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`WebSocket connection info returned non-JSON response (${contentType}): ${text.slice(0, 200)}`);
+    }
+
+    const data = await res.json() as { code: number; msg: string; data?: { URL?: string; device_id?: string; service_id?: string } };
+    if (data.code !== 0 || !data.data?.URL) {
+      throw new Error(`Failed to get WebSocket connection info: ${data.msg || 'unknown error'} (code: ${data.code})`);
+    }
+    return { url: data.data.URL, connection_id: data.data.device_id || '' };
   }
 
   private _resetPingPong(): void {
@@ -183,9 +207,12 @@ export class FeishuWSClient {
   }
 
   async connect(): Promise<void> {
+    const appIdPreview = this._appId ? `${this._appId.slice(0, 8)}...` : 'undefined';
+    console.log(`[Feishu WS] Acquiring app lock for ${appIdPreview}...`);
     if (!this._acquireAppLock()) {
-      return;
+      throw new Error(`Failed to acquire app lock for ${this._appId}. Another instance may be running.`);
     }
+    console.log(`[Feishu WS] App lock acquired`);
 
     this._shouldReconnect = true;
     this._running = true;
@@ -193,13 +220,16 @@ export class FeishuWSClient {
     try {
       this._lastDisconnectTime = Date.now();
       this._onStatusChange?.('connecting');
+      console.log(`[Feishu WS] Getting connection info from ${this._getWsUrl()}...`);
 
       const { url, connection_id } = await this._getConnectionInfo();
       this._connectionId = connection_id;
+      console.log(`[Feishu WS] Got connection URL, connecting...`);
 
       this._ws = new WebSocket(url);
 
       this._ws.on('open', () => {
+        console.log(`[Feishu WS] WebSocket opened, connectionId: ${this._connectionId.slice(0, 16)}...`);
         this._onStatusChange?.('connected');
         this._startPing();
       });
@@ -223,16 +253,21 @@ export class FeishuWSClient {
       });
 
       this._ws.on('close', (code: number) => {
+        console.log(`[Feishu WS] WebSocket closed with code: ${code}`);
         this._stopPing();
         this._onStatusChange?.('disconnected');
         const isNormal = code === 1000 || code === 1001;
         this._scheduleReconnect(isNormal);
       });
 
-      this._ws.on('error', () => {});
-    } catch {
+      this._ws.on('error', (err: Error) => {
+        console.error(`[Feishu WS] WebSocket error:`, err.message);
+      });
+    } catch (err) {
+      console.error(`[Feishu WS] Connection failed:`, err instanceof Error ? err.message : String(err));
       this._onStatusChange?.('reconnecting');
       this._scheduleReconnect(false);
+      throw err;
     }
   }
 

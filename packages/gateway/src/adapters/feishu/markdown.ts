@@ -1,4 +1,4 @@
-﻿﻿import type { FeishuMessageElement } from './types';
+﻿﻿import type { FeishuMessageElement } from './types.js';
 
 const POST_CONTENT_LIMIT = 30000;
 
@@ -167,7 +167,7 @@ function inlineTokensToElements(tokens: InlineToken[]): FeishuMessageElement[] {
         break;
       case 'link':
         flushText();
-        elements.push({ tag: 'a', text: token.text || '', href: token.url });
+        elements.push({ tag: 'a', text: token.text || '', url: token.url });
         break;
     }
   }

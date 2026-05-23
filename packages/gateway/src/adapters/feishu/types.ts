@@ -1,4 +1,5 @@
-import type { PlatformAdapter, PlatformConfig } from '../../types';
+import type { PlatformConfig } from '../../types.js';
+import type { PlatformAdapter } from '../base.js';
 
 export interface FeishuMessageContent {
   text?: string;
@@ -337,6 +338,10 @@ export interface FeishuAdapterOptions {
 export interface FeishuBatchText { chatId: string; content: string; replyTo?: string; }
 export interface FeishuBatchMedia { chatId: string; mediaType: 'image' | 'file' | 'audio'; mediaKey: string; fileName?: string; replyTo?: string; }
 export interface FeishuRichText { raw: string; content: string; mentions: FeishuMention[]; }
+
+// Batcher callback types
+export type FeishuTextBatchCallback = (batches: FeishuBatchText[]) => Promise<void>;
+export type FeishuMediaBatchCallback = (batches: FeishuBatchMedia[]) => Promise<void>;
 
 export const RETRYABLE_FEISHU_ERROR_CODES = new Set([
   10001, 10003, 10004, 10005, 102510000, 102510004,

@@ -152,6 +152,26 @@ export class DedupPersistence {
   getFilePath(): string {
     return this.filePath;
   }
+
+  /** Start tracking (loads from disk) */
+  start(): void {
+    this.load();
+  }
+
+  /** Stop and save */
+  stop(): void {
+    this.flush();
+  }
+
+  /** Check if message ID is duplicate */
+  isDuplicate(msgId: string): boolean {
+    return this.checkAndAdd(msgId);
+  }
+
+  /** Mark message as seen */
+  markSeen(msgId: string): void {
+    this.checkAndAdd(msgId);
+  }
 }
 
 // Global instance

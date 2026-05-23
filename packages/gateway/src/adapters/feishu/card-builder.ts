@@ -1,4 +1,4 @@
-﻿﻿import type { FeishuCard, FeishuCardElement, FeishuCardText } from './types';
+﻿﻿import type { FeishuCard, FeishuCardElement, FeishuCardText } from './types.js';
 
 function text(content: string, tag: 'plain_text' | 'lark_md' = 'lark_md'): FeishuCardText {
   return { tag, content };

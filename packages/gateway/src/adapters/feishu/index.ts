@@ -1,10 +1,10 @@
-﻿﻿import { EventEmitter } from 'events';
-import { FeishuWSClient } from './websocket-client';
-import { FeishuWebhookServer } from './webhook-server';
-import { FeishuTextBatcher } from './text-batcher';
-import { FeishuMediaBatcher } from './media-batcher';
-import { FeishuCommentHandler } from './comment-handler';
-import { DedupPersistence } from './dedup-persistence';
+import { EventEmitter } from 'events';
+import { FeishuWSClient } from './websocket-client.js';
+import { FeishuWebhookServer } from './webhook-server.js';
+import { TextBatcher } from './text-batcher.js';
+import { MediaBatcher } from './media-batcher.js';
+import { FeishuCommentHandler } from './comment-handler.js';
+import { DedupPersistence } from './dedup-persistence.js';
 import {
   createPairingSession,
   verifyPairingApproval,
@@ -12,20 +12,20 @@ import {
   rejectPairingCode,
   getPendingPairingSessions,
   revokePairingSession,
-} from './dm-pairing';
+} from './dm-pairing.js';
 import {
   checkUserAllowed,
   isGroupChat,
   isFreeResponseChat,
   checkMentionRequirement,
-} from './group-gating';
+} from './group-gating.js';
 import {
   buildPermissionRequestCard,
   buildPairingApprovedCard,
   buildPairingRejectedCard,
   buildErrorCard,
-} from './card-builder';
-import { markdownToFeishuPost, buildPostContent, splitPostIfNeeded } from './markdown';
+} from './card-builder.js';
+import { markdownToFeishuPost, buildPostContent, splitPostIfNeeded } from './markdown.js';
 import {
   splitMessage,
   parseFeishuContent,
@@ -33,7 +33,7 @@ import {
   truncateDisplay,
   isBotMentioned,
   parseFileNameFromMessage,
-} from './message-utils';
+} from './message-utils.js';
 import type {
   FeishuConfig,
   FeishuDomain,
@@ -51,12 +51,17 @@ import type {
   FeishuUserInfo,
   FeishuAdapterOptions,
   FeishuMessageElement,
-} from './types';
+  PairingSession,
+  FeishuWebhookConfig,
+} from './types.js';
+import type { PlatformType, PlatformConfig, AdapterHealth } from '../../types.js';
+import type { PlatformAdapter } from '../base.js';
+import type { NormalizedMessage, NormalizedReply, SendResult } from '../../types.js';
 import {
   isRetryableFeishuError,
   FEISHU_MSG_TYPE_LABELS,
   getChatTypeLabel,
-} from './types';
+} from './types.js';
 
 const MESSAGE_SEND_RETRY_MAX = 2;
 const MESSAGE_SEND_RETRY_DELAY_MS = 800;
@@ -76,8 +81,8 @@ export class FeishuChannel extends EventEmitter {
   private _options: FeishuAdapterOptions;
   private _wsClient: FeishuWSClient | null = null;
   private _webhookServer: FeishuWebhookServer | null = null;
-  private _textBatcher: FeishuTextBatcher;
-  private _mediaBatcher: FeishuMediaBatcher;
+  private _textBatcher: TextBatcher;
+  private _mediaBatcher: MediaBatcher;
   private _commentHandler: FeishuCommentHandler;
   private _dedupPersistence: DedupPersistence;
   private _tenantToken: string | null = null;
@@ -88,28 +93,32 @@ export class FeishuChannel extends EventEmitter {
   private _userCache: Map<string, CachedUser> = new Map();
   private _cardActionTokens: Map<string, number> = new Map();
   private _running = false;
+  private _connected = false;
+  private _lastConnectedAt?: number;
+  private _lastErrorAt?: number;
+  private _lastError?: string;
+  private _consecutiveErrors = 0;
+  private _totalMessages = 0;
 
   constructor(options: FeishuAdapterOptions) {
     super();
     this._config = options.config;
     this._options = options;
-    this._textBatcher = new FeishuTextBatcher({
-      onFlush: async (batches) => {
+    this._textBatcher = new TextBatcher(
+      async (batches) => {
         for (const batch of batches) {
           await this._sendTextMessage(batch.chatId, batch.content, batch.replyTo);
         }
       },
-    });
-    this._mediaBatcher = new FeishuMediaBatcher({
-      onFlush: async (batches) => {
+    );
+    this._mediaBatcher = new MediaBatcher(
+      async (batches) => {
         for (const batch of batches) {
           await this._sendMediaMessage(batch.chatId, batch.mediaType, batch.mediaKey, batch.fileName, batch.replyTo);
         }
       },
-    });
-    this._commentHandler = new FeishuCommentHandler({
-      onComment: async (_docId, _commentId, _userId, text) => {},
-    });
+    );
+    this._commentHandler = new FeishuCommentHandler();
     this._dedupPersistence = new DedupPersistence();
   }
 
@@ -119,6 +128,18 @@ export class FeishuChannel extends EventEmitter {
   get isRunning(): boolean { return this._running; }
   get connectionMode(): 'websocket' | 'webhook' { return this._config.connectionMode || 'websocket'; }
   get domain(): FeishuDomain { return this._config.domain || 'feishu'; }
+  get isConnected(): boolean { return this._connected; }
+  get health() {
+    return {
+      connected: this._connected,
+      lastConnectedAt: this._lastConnectedAt,
+      lastErrorAt: this._lastErrorAt,
+      lastError: this._lastError,
+      consecutiveErrors: this._consecutiveErrors,
+      totalMessages: this._totalMessages,
+      botUsername: this._botInfo?.app_name,
+    };
+  }
 
   private _getApiBase(): string {
     return this.domain === 'lark' ? 'https://open.larksuite.com' : 'https://open.feishu.cn';
@@ -245,6 +266,8 @@ export class FeishuChannel extends EventEmitter {
   }
 
   private async _startWebSocketMode(): Promise<void> {
+    const appIdPreview = this._config.appId ? `${this._config.appId.slice(0, 8)}...` : 'undefined';
+    console.log(`[Feishu] Starting WebSocket mode, domain: ${this.domain}, appId: ${appIdPreview}`);
     this._wsClient = new FeishuWSClient({
       domain: this.domain,
       appId: this._config.appId,
@@ -254,12 +277,20 @@ export class FeishuChannel extends EventEmitter {
         this._handleEvent(event).catch(() => {});
       },
       onStatusChange: (status) => {
+        console.log(`[Feishu] WebSocket status changed: ${status}`);
+        const isConnected = status === 'connected';
+        this._connected = isConnected;
+        if (isConnected) {
+          this._lastConnectedAt = Date.now();
+          this._consecutiveErrors = 0;
+        }
         const mapped = status === 'connecting' || status === 'reconnecting'
           ? 'disconnected' as const : status === 'connected' ? 'connected' as const : 'disconnected' as const;
         this._options.onStatusChange?.(mapped);
       },
     });
     await this._wsClient.connect();
+    console.log(`[Feishu] WebSocket connected successfully`);
   }
 
   private async _startWebhookMode(): Promise<void> {
@@ -276,10 +307,15 @@ export class FeishuChannel extends EventEmitter {
       },
     });
     await this._webhookServer.start();
+    // Webhook mode is considered connected when server starts successfully
+    this._connected = true;
+    this._lastConnectedAt = Date.now();
+    this._options.onStatusChange?.('connected');
   }
 
   async stop(): Promise<void> {
     this._running = false;
+    this._connected = false;
     if (this._wsClient) { await this._wsClient.disconnect(); this._wsClient = null; }
     if (this._webhookServer) { await this._webhookServer.stop(); this._webhookServer = null; }
     this._textBatcher.stop();
@@ -296,7 +332,10 @@ export class FeishuChannel extends EventEmitter {
     const messageId = message?.message_id || '';
 
     if (messageId && this._dedupPersistence.isDuplicate(messageId)) return;
-    if (messageId) this._dedupPersistence.markSeen(messageId);
+    if (messageId) {
+      this._dedupPersistence.markSeen(messageId);
+      this._totalMessages++;
+    }
 
     try {
       switch (eventType) {
@@ -498,7 +537,33 @@ export class FeishuChannel extends EventEmitter {
   }
 
   async sendTextMessage(chatId: string, content: string, replyTo?: string): Promise<string[]> {
-    return this._textBatcher.enqueue({ chatId, content, replyTo });
+    this._textBatcher.enqueue({ chatId, content, replyTo });
+    return [];
+  }
+
+  async sendReply(chatId: string, reply: NormalizedReply): Promise<SendResult> {
+    try {
+      switch (reply.type) {
+        case 'text': {
+          const result = await this.sendPostMessage(chatId, '', [
+            { tag: 'text', text: reply.text },
+          ], reply.replyToMsgId);
+          return { ok: result.length > 0, platformMsgId: result[0] };
+        }
+        case 'error': {
+          await this.sendTextMessage(chatId, `Error: ${reply.message}`);
+          return { ok: true };
+        }
+        case 'media': {
+          await this.sendTextMessage(chatId, `[Media not fully supported: ${reply.filePath}]`);
+          return { ok: true };
+        }
+        default:
+          return { ok: false, error: `Unsupported reply type: ${reply.type}` };
+      }
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
   }
 
   private async _sendTextMessage(chatId: string, content: string, replyTo?: string): Promise<string[]> {
@@ -738,15 +803,15 @@ export class FeishuChannel extends EventEmitter {
     throw lastError;
   }
 
-  async getPendingPairings(): ReturnType<typeof getPendingPairingSessions> {
+  async getPendingPairings(): Promise<PairingSession[]> {
     return getPendingPairingSessions();
   }
 
-  async approvePairing(code: string): ReturnType<typeof approvePairingCode> {
+  async approvePairing(code: string): Promise<{ success: boolean; session?: PairingSession; error?: string }> {
     return approvePairingCode(code);
   }
 
-  async rejectPairing(code: string): ReturnType<typeof rejectPairingCode> {
+  async rejectPairing(code: string): Promise<{ success: boolean; error?: string }> {
     return rejectPairingCode(code);
   }
 
@@ -758,3 +823,95 @@ export class FeishuChannel extends EventEmitter {
 export function createFeishuChannel(options: FeishuAdapterOptions): FeishuChannel {
   return new FeishuChannel(options);
 }
+
+// Wrapper that implements PlatformAdapter interface
+class FeishuAdapterWrapper implements PlatformAdapter {
+  readonly platform: PlatformType = 'feishu';
+  private _messageHandler: ((msg: NormalizedMessage) => void) | null = null;
+  private _commandHandler: ((msg: NormalizedMessage) => Promise<boolean>) | null = null;
+  private _channel: FeishuChannel | null = null;
+
+  start(config: PlatformConfig): Promise<void> {
+    if (!this._channel) {
+      // Build FeishuConfig from PlatformConfig (credentials + options)
+      const feishuConfig: FeishuConfig = {
+        platform: 'feishu',
+        credentials: config.credentials,
+        options: config.options,
+        appId: config.credentials.appId || '',
+        appSecret: config.credentials.appSecret || '',
+        domain: (config.options?.domain as 'feishu' | 'lark') || 'feishu',
+        connectionMode: (config.options?.connectionMode as 'websocket' | 'webhook') || 'websocket',
+        allowedUsers: config.options?.allowedUsers as string[] | undefined,
+        groupPolicy: config.options?.groupPolicy as 'open' | 'disabled' | undefined,
+        webhook: config.options?.webhook as FeishuWebhookConfig | undefined,
+        freeResponseChatIds: config.options?.freeResponseChatIds as string[] | undefined,
+        verbose: config.options?.verbose as boolean | undefined,
+      };
+      console.log('[FeishuAdapter] Starting with config:', {
+        appId: feishuConfig.appId ? `${feishuConfig.appId.slice(0, 8)}...` : 'missing',
+        appSecret: feishuConfig.appSecret ? 'present' : 'missing',
+        domain: feishuConfig.domain,
+        connectionMode: feishuConfig.connectionMode,
+      });
+      this._channel = new FeishuChannel({
+        config: feishuConfig,
+        onMessage: async (chatId: string, userId: string, text: string, msgId: string, threadId?: string, mentions?: FeishuMention[]) => {
+          if (this._messageHandler) {
+            this._messageHandler({
+              platform: 'feishu',
+              platformUserId: userId,
+              platformChatId: chatId,
+              platformMsgId: msgId,
+              text,
+              threadId,
+              ts: Date.now(),
+            });
+          }
+        },
+        onImageMessage: async () => {},
+        onFileMessage: async () => {},
+        onAudioMessage: async () => {},
+        onPostMessage: async () => {},
+        onCardAction: async () => {},
+        onReactionAdded: async () => {},
+        onReactionRemoved: async () => {},
+        onMemberAdded: async () => {},
+        onMemberRemoved: async () => {},
+        onMessageRecalled: async () => {},
+      } as unknown as FeishuAdapterOptions);
+    }
+    return this._channel.start();
+  }
+
+  async stop(): Promise<void> {
+    return this._channel?.stop() ?? Promise.resolve();
+  }
+
+  isRunning(): boolean {
+    return this._channel?.isRunning ?? false;
+  }
+
+  getHealth(): AdapterHealth {
+    return this._channel?.health ?? {
+      connected: false,
+      consecutiveErrors: 0,
+      totalMessages: 0,
+    };
+  }
+
+  onMessage(handler: (msg: NormalizedMessage) => void): void {
+    this._messageHandler = handler;
+  }
+
+  setCommandHandler(handler: (msg: NormalizedMessage) => Promise<boolean>): void {
+    this._commandHandler = handler;
+  }
+
+  sendReply(chatId: string, reply: NormalizedReply): Promise<SendResult> {
+    return this._channel?.sendReply(chatId, reply) ?? Promise.resolve({ ok: false, error: 'No channel' });
+  }
+}
+
+import { registerAdapterFactory } from '../base.js';
+registerAdapterFactory('feishu', () => new FeishuAdapterWrapper());
