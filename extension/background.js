@@ -758,7 +758,6 @@ async function handleType(id, msg) {
 
 async function handleScroll(id, msg) {
   const { tabId, direction = 'down', amount = 300 } = msg;
-  const debuggee = await getOrAttachTab(tabId);
 
   const scrollMap = {
     up: [0, -amount],
@@ -770,11 +769,26 @@ async function handleScroll(id, msg) {
   const [deltaX, deltaY] = scrollMap[direction] || [0, amount];
 
   try {
+    const debuggee = await getOrAttachTab(tabId);
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
       type: 'mouseWheel', x: 0, y: 0, deltaX, deltaY,
     });
     sendResult(id, { ok: true });
   } catch (error) {
+    if (error.message?.includes('not attached') || error.message?.includes('Detached')) {
+      try {
+        attachedTabs.delete(String(tabId));
+        const newDebuggee = await attachTab(tabId);
+        await chrome.debugger.sendCommand(newDebuggee, 'Input.dispatchMouseEvent', {
+          type: 'mouseWheel', x: 0, y: 0, deltaX, deltaY,
+        });
+        sendResult(id, { ok: true });
+        return;
+      } catch (retryError) {
+        sendResult(id, { ok: false, error: retryError.message });
+        return;
+      }
+    }
     sendResult(id, { ok: false, error: error.message });
   }
 }
