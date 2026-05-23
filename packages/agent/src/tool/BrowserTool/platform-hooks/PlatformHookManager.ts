@@ -140,7 +140,9 @@ export class PlatformHookManager {
    */
   getExtractor(url: string): PlatformExtractor | null {
     for (const extractor of this.extractors) {
-      if (extractor.matches(url)) {
+      const matched = extractor.matches(url);
+      console.log(`[PlatformHookManager] Checking extractor "${extractor.name}" for "${url}": ${matched}`);
+      if (matched) {
         return extractor;
       }
     }

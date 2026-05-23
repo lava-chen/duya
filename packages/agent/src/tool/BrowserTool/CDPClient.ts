@@ -441,14 +441,31 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
 
     if (result.ok !== false) return;
 
-    if (result.error?.includes('Unknown action')) {
-      const deltaMap = { up: [0, -amount], down: [0, amount], left: [-amount, 0], right: [amount, 0] };
-      const [deltaX, deltaY] = deltaMap[direction] || [0, amount];
-      await this.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 0, y: 0, deltaX, deltaY });
+    if (result.error?.includes('Unknown action') || result.error?.includes('not supported')) {
+      await this._cdpScrollFallback(direction, amount);
       return;
     }
 
-    if (result.error) throw new Error(result.error);
+    // CDP fallback for any extension scroll error
+    if (result.error) {
+      try {
+        await this._cdpScrollFallback(direction, amount);
+        return;
+      } catch {
+        throw new Error(result.error);
+      }
+    }
+  }
+
+  private async _cdpScrollFallback(direction: string, amount: number): Promise<void> {
+    const deltaMap: Record<string, [number, number]> = {
+      up: [0, -amount],
+      down: [0, amount],
+      left: [-amount, 0],
+      right: [amount, 0],
+    };
+    const [deltaX, deltaY] = deltaMap[direction] || [0, amount];
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 0, y: 0, deltaX, deltaY });
   }
 
   async goBack(): Promise<void> {

@@ -21,7 +21,8 @@ import type {
 } from './types.js';
 import { PromptManager, asSystemPrompt, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from './prompts/index.js';
 import type { PromptSystem } from './prompts/index.js';
-import { getMemoryManager } from './memory/index.js';
+import { getMemoryManager } from './memory/index.js'
+import { createMemoryReviewService } from './memory/index.js';
 import { compactHistory } from './compact/compact.js';
 import type { CompactResult, TokenEstimation } from './compact/compact.js';
 import { estimateContextTokens, needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD } from './compact/compact.js';
@@ -30,6 +31,8 @@ import { createLLMClient, createRetryableLLMClient, inferProvider, isMiniMaxURL,
 import type { LLMClient, RetryConfig } from './llm/index.js';
 import { StreamingToolExecutor } from './tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from './tool/StreamingToolExecutor.js';
+import { backgroundTaskRegistry } from './tool/AgentTool/BackgroundTaskRegistry.js';
+import type { BackgroundTask } from './tool/AgentTool/BackgroundTaskRegistry.js';
 import { createHasPermissionsToUseTool } from './permissions/permissions.js';
 import type { ToolPermissionCheckContext } from './permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode } from './permissions/types.js';
@@ -199,9 +202,62 @@ export {
   getIdentityLabel,
 } from './agent-profile/index.js';
 
+// Mode System exports
+import './modes/research-mode/index.js';
+export { ModeRegistry, BaseMode } from './modes/index.js';
+export type {
+  ModeContext,
+  ModeConstructor,
+  ClarificationQuestion,
+  ClarificationAnswer,
+} from './modes/index.js';
+export {
+  OrchestratorPhase,
+  ResearchMode,
+} from './modes/research-mode/index.js';
+export type {
+  ResearchQuestion,
+  ResearchFinding,
+  FindingContradiction,
+  ResearchEntity,
+} from './modes/research-mode/index.js';
+
 import { ToolRegistry } from './tool/registry.js';
 import { CompactionManager, createCompactionManager } from './compact/CompactionManager.js';
 import type { CompactOptions } from './compact/types.js';
+
+function buildBackgroundTaskNotification(task: BackgroundTask): string {
+  const header = task.status === 'completed'
+    ? `[Background agent completed: ${task.agentName || task.agentType}]`
+    : `[Background agent failed: ${task.agentName || task.agentType}]`
+
+  if (task.status === 'failed') {
+    return `${header}\n\nError: ${task.error || 'Unknown error'}`
+  }
+
+  const contentText = task.result?.content
+    .map((b) => {
+      if (b.type === 'text' && typeof (b as { text: string }).text === 'string') {
+        return (b as { text: string }).text
+      }
+      return ''
+    })
+    .join('\n') || ''
+
+  const durationInfo = task.result?.totalDurationMs
+    ? ` (completed in ${(task.result.totalDurationMs / 1000).toFixed(1)}s`
+    : ''
+  const toolInfo = task.result?.totalToolUseCount
+    ? `, ${task.result.totalToolUseCount} tool calls`
+    : ''
+  const suffix = durationInfo || toolInfo ? `${durationInfo}${toolInfo})` : ''
+
+  const preview = contentText.length > 8000
+    ? contentText.slice(0, 8000) + '\n[... output truncated]'
+    : contentText
+
+  return `${header}${suffix}\n\n${preview}`
+}
 
 /**
  * duyaAgent 类
@@ -359,6 +415,41 @@ export class duyaAgent {
 
       return result.join('').trim();
     });
+
+    // Wire up background memory review service
+    const memoryReviewService = createMemoryReviewService(memoryManager, {
+      enabled: true,
+      nudgeInterval: 10,
+    });
+
+    memoryReviewService.setSummarizer(async (prompt: string): Promise<string> => {
+      const reviewMessages: Message[] = [
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ];
+
+      const result: string[] = [];
+      const stream = this.llmClient.streamChat(reviewMessages, {
+        maxTokens: 2048,
+        temperature: 0.2,
+        signal: new AbortController().signal,
+      });
+
+      for await (const event of stream) {
+        if (event.type === 'text') {
+          result.push(event.data);
+        }
+        if (event.type === 'done' || event.type === 'error') {
+          break;
+        }
+      }
+
+      return result.join('').trim();
+    });
+
+    memoryManager.setupReviewService(memoryReviewService);
 
     // Initialize permission system
     this.permissionMode = options.permissionMode || 'default';
@@ -918,6 +1009,21 @@ export class duyaAgent {
               `[Agent] Turn ${turnCount}: getRemainingResults completed, toolResultMessageCount=${toolResultMessageCount}`
             );
 
+            // Check for completed background sub-agents and inject their results
+            const completedBackgroundTasks = backgroundTaskRegistry.getCompleted()
+            if (completedBackgroundTasks.length > 0) {
+              for (const task of completedBackgroundTasks) {
+                const notificationText = buildBackgroundTaskNotification(task)
+                messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'user',
+                  content: notificationText,
+                  timestamp: Date.now(),
+                })
+              }
+              needsFollowUp = true
+            }
+
             // Do NOT yield the LLM's 'done' event to the SSE client here.
             // In multi-turn conversations, the LLM client yields a 'done' event
             // at the end of each turn. Forwarding it would cause the client to
@@ -966,6 +1072,12 @@ export class duyaAgent {
           // Trigger background skill review if needed
           yield* this._triggerBackgroundReviewWithEvents();
 
+          // Trigger background memory review
+          const assistantLength = assistantContent
+            .filter(b => b.type === 'text')
+            .reduce((sum, b) => sum + ((b as { text: string }).text?.length || 0), 0)
+          this._syncMemoryReview(messages, assistantLength)
+
           yield { type: 'done', reason: 'max_turns' };
           return;
         }
@@ -981,6 +1093,12 @@ export class duyaAgent {
 
           // Trigger background skill review if needed
           yield* this._triggerBackgroundReviewWithEvents();
+
+          // Trigger background memory review
+          const assistantLength = assistantContent
+            .filter(b => b.type === 'text')
+            .reduce((sum, b) => sum + ((b as { text: string }).text?.length || 0), 0)
+          this._syncMemoryReview(messages, assistantLength)
 
           yield { type: 'done', reason: 'completed' };
           return;
@@ -1099,6 +1217,54 @@ export class duyaAgent {
       },
       this.workingDirectory
     );
+  }
+
+  /**
+   * Trigger background memory review when due.
+   *
+   * Extracts recent conversation text and fires off a lightweight LLM review
+   * pass to identify durable facts worth persisting to MEMORY.md files.
+   * Fire-and-forget: does not block the user's next turn.
+   */
+  private _syncMemoryReview(messages: Message[], assistantResponseLength: number): void {
+    try {
+      const memoryManager = getMemoryManager()
+      if (!memoryManager.getReviewService()) return
+
+      const conversationText = this._extractConversationText(messages, 30)
+      const estimatedTokens = Math.max(1, Math.floor(assistantResponseLength / 3))
+
+      memoryManager.syncTurn(conversationText, estimatedTokens)
+    } catch {
+      // Best-effort — silence all errors
+    }
+  }
+
+  private _extractConversationText(messages: Message[], maxMessages: number): string {
+    const recent = messages.slice(-maxMessages)
+    return recent
+      .map(msg => {
+        const role = msg.role.toUpperCase()
+        if (typeof msg.content === 'string') {
+          return `[${role}]: ${msg.content.slice(0, 2000)}`
+        }
+        if (Array.isArray(msg.content)) {
+          const textContent = msg.content
+            .filter(block => block.type === 'text')
+            .map(block => (block as { type: 'text'; text: string }).text)
+            .join('\n')
+          const toolUses = msg.content
+            .filter((b: { type: string; name?: string }) => b.type === 'tool_use')
+            .map((b: { type: string; name?: string }) => `[Tool: ${b.name}]`)
+            .join(', ')
+          let result = `[${role}]: ${textContent.slice(0, 2000)}`
+          if (toolUses) result += `\n${toolUses}`
+          return result
+        }
+        return ''
+      })
+      .filter(Boolean)
+      .join('\n\n')
   }
 
   /**

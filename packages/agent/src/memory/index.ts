@@ -45,3 +45,7 @@ export { MemoryTool, getMemoryTool } from './tool.js'
 // Session Memory Service
 export { SessionMemoryService, createSessionMemoryService } from './SessionMemoryService.js'
 export type { SessionMemoryConfig, ExtractionResult } from './SessionMemoryService.js'
+
+// Memory Review Service
+export { MemoryReviewService, createMemoryReviewService } from './MemoryReviewService.js'
+export type { MemoryReviewConfig, MemoryReviewAction, MemoryReviewResult } from './MemoryReviewService.js'

@@ -1,10 +1,7 @@
-import * as cheerio from "cheerio";
-
-interface CheerioElement {
-  tagName?: string;
-  nodeName?: string;
-  attribs?: Record<string, string>;
-}
+/**
+ * HTML Sanitizer - XSS protection for dynamic widgets
+ * Uses regex-based parsing instead of cheerio for Node.js 18 compatibility
+ */
 
 export interface HtmlSanitizeResult {
   safe: boolean;
@@ -20,239 +17,160 @@ export interface SanitizeBlockedEntry {
 }
 
 const ALLOWED_TAGS = new Set([
-  "div",
-  "span",
-  "p",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "ul",
-  "ol",
-  "li",
-  "a",
-  "strong",
-  "b",
-  "em",
-  "i",
-  "u",
-  "s",
-  "del",
-  "br",
-  "hr",
-  "blockquote",
-  "pre",
-  "code",
-  "table",
-  "thead",
-  "tbody",
-  "tr",
-  "th",
-  "td",
-  "img",
-  "svg",
-  "path",
-  "circle",
-  "rect",
-  "line",
-  "polyline",
-  "polygon",
-  "ellipse",
-  "g",
-  "defs",
-  "linearGradient",
-  "radialGradient",
-  "stop",
-  "text",
-  "tspan",
-  "title",
-  "desc",
-  "use",
-  "symbol",
-  "section",
-  "header",
-  "footer",
-  "nav",
-  "main",
-  "article",
-  "aside",
-  "figure",
-  "figcaption",
-  "details",
-  "summary",
-  "mark",
-  "time",
-  "abbr",
-  "cite",
-  "small",
-  "sub",
-  "sup",
-  "dl",
-  "dt",
-  "dd",
+  "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+  "ul", "ol", "li", "a", "strong", "b", "em", "i", "u", "s", "del",
+  "br", "hr", "blockquote", "pre", "code",
+  "table", "thead", "tbody", "tr", "th", "td",
+  "img", "svg", "path", "circle", "rect", "line", "polyline", "polygon", "ellipse",
+  "g", "defs", "linearGradient", "radialGradient", "stop",
+  "text", "tspan", "title", "desc", "use", "symbol",
+  "section", "header", "footer", "nav", "main", "article", "aside",
+  "figure", "figcaption", "details", "summary",
+  "mark", "time", "abbr", "cite", "small", "sub", "sup",
+  "dl", "dt", "dd",
 ]);
 
 const ALLOWED_ATTRIBUTES = new Set([
-  "class",
-  "id",
-  "style",
-  "href",
-  "src",
-  "alt",
-  "title",
-  "width",
-  "height",
-  "target",
-  "rel",
-  "colspan",
-  "rowspan",
-  "type",
-  "start",
-  "reversed",
-  "datetime",
-  "lang",
-  "dir",
-  "fill",
-  "stroke",
-  "stroke-width",
-  "stroke-linecap",
-  "stroke-linejoin",
-  "d",
-  "cx",
-  "cy",
-  "r",
-  "rx",
-  "ry",
-  "x",
-  "y",
-  "x1",
-  "y1",
-  "x2",
-  "y2",
-  "points",
-  "viewBox",
-  "preserveAspectRatio",
-  "transform",
-  "opacity",
-  "font-family",
-  "font-size",
-  "text-anchor",
-  "dominant-baseline",
-  "data-widget-id",
-  "data-widget-role",
+  "class", "id", "style",
+  "href", "src", "alt", "title",
+  "width", "height", "target", "rel",
+  "colspan", "rowspan",
+  "type", "start", "reversed", "datetime", "lang", "dir",
+  "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
+  "d", "cx", "cy", "r", "rx", "ry", "x", "y", "x1", "y1", "x2", "y2", "points",
+  "viewBox", "preserveAspectRatio", "transform", "opacity",
+  "font-family", "font-size", "text-anchor", "dominant-baseline",
+  "data-widget-id", "data-widget-role",
 ]);
 
-const BLOCKED_TAG_PATTERNS: Array<{
-  tag: string;
-  reason: string;
-}> = [
-  { tag: "script", reason: "Script execution not allowed in dynamic widgets" },
-  { tag: "iframe", reason: "Nested iframes not allowed in dynamic widgets" },
-  { tag: "object", reason: "Object embeds not allowed in dynamic widgets" },
-  { tag: "embed", reason: "Embeds not allowed in dynamic widgets" },
-  { tag: "form", reason: "Forms not allowed in dynamic widgets" },
-  { tag: "input", reason: "Form inputs not allowed in dynamic widgets" },
-  { tag: "button", reason: "Buttons not allowed in dynamic widgets (use a tag with href instead)" },
-  { tag: "select", reason: "Select inputs not allowed in dynamic widgets" },
-  { tag: "textarea", reason: "Text inputs not allowed in dynamic widgets" },
-  { tag: "link", reason: "External stylesheets not allowed in dynamic widgets" },
-  { tag: "meta", reason: "Meta tags not allowed in dynamic widgets" },
-  { tag: "base", reason: "Base tag not allowed in dynamic widgets" },
-  { tag: "applet", reason: "Applet not allowed in dynamic widgets" },
-  { tag: "audio", reason: "Audio not allowed in dynamic widgets" },
-  { tag: "video", reason: "Video not allowed in dynamic widgets" },
-  { tag: "source", reason: "Media sources not allowed in dynamic widgets" },
-  { tag: "track", reason: "Media tracks not allowed in dynamic widgets" },
-  { tag: "canvas", reason: "Canvas not allowed in dynamic widgets" },
-  { tag: "style", reason: "Style tags not allowed in dynamic widgets (use inline style attribute)" },
-];
-
-const EVENT_HANDLER_PATTERN = /^on\w+/i;
-
-const DANGEROUS_URL_SCHEMES = ["javascript:", "data:text/html", "vbscript:"];
-
-const DANGEROUS_CSS_PATTERNS: Array<{
-  pattern: RegExp;
-  reason: string;
-}> = [
-  { pattern: /url\s*\(\s*["']?\s*(?:javascript|data)/i, reason: "CSS url() with dangerous scheme" },
-  { pattern: /expression\s*\(/i, reason: "CSS expression() is dangerous" },
-  { pattern: /behavior\s*:/i, reason: "CSS behavior is dangerous" },
-  { pattern: /-moz-binding/i, reason: "CSS -moz-binding is dangerous" },
-];
+const BLOCKED_TAGS = new Set([
+  "script", "iframe", "object", "embed", "form", "input", "button",
+  "select", "textarea", "link", "meta", "base", "applet",
+  "audio", "video", "source", "track", "canvas", "style",
+]);
 
 const SVG_DANGEROUS_TAGS = new Set([
-  "script",
-  "foreignObject",
-  "use",  // allowed but restricted
-  "animate",
-  "set",
-  "animateMotion",
-  "animateTransform",
-  "handler",
+  "script", "foreignObject", "animate", "set", "animateMotion", "animateTransform", "handler",
 ]);
+
+const EVENT_HANDLER_PATTERN = /^on\w+/i;
+const DANGEROUS_URL_SCHEMES = ["javascript:", "data:text/html", "vbscript:"];
+const DANGEROUS_CSS_PATTERNS = [
+  /url\s*\(\s*["']?\s*(?:javascript|data)/i,
+  /expression\s*\(/i,
+  /behavior\s*:/i,
+  /-moz-binding/i,
+];
+
+interface ParsedTag {
+  tagName: string;
+  attributes: Record<string, string>;
+  selfClosing: boolean;
+  raw: string;
+}
+
+function parseTag(tagStr: string): ParsedTag | null {
+  const match = tagStr.match(/^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^>]*?)\/?(\s+[^>]*)?>$/);
+  if (!match) return null;
+
+  const closingSlash = match[1];
+  const tagName = match[2].toLowerCase();
+  const rest = match[3] || '';
+  const attributes: Record<string, string> = {};
+
+  // Parse attributes
+  const attrRegex = /([a-zA-Z][a-zA-Z0-9-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+  let attrMatch;
+  while ((attrMatch = attrRegex.exec(rest + (match[4] || ''))) !== null) {
+    const name = attrMatch[1].toLowerCase();
+    const value = attrMatch[2] ?? attrMatch[3] ?? attrMatch[4] ?? '';
+    attributes[name] = value;
+  }
+
+  return {
+    tagName,
+    attributes,
+    selfClosing: tagStr.endsWith('/>'),
+    raw: tagStr,
+  };
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function sanitizeTagName(tagName: string): string | null {
+  return ALLOWED_TAGS.has(tagName) ? tagName : null;
+}
 
 export function sanitizeHtml(html: string): HtmlSanitizeResult {
   const warnings: string[] = [];
   const blocked: SanitizeBlockedEntry[] = [];
 
   if (!html || typeof html !== "string") {
-    return {
-      safe: true,
-      sanitized: "",
-      warnings: [],
-      blocked: [],
-    };
+    return { safe: true, sanitized: "", warnings: [], blocked: [] };
   }
 
-  let $: cheerio.CheerioAPI;
-  try {
-    $ = cheerio.load(html, { xml: { xmlMode: false } }, false);
-  } catch {
-    return {
-      safe: false,
-      sanitized: "",
-      warnings: ["Failed to parse HTML content"],
-      blocked: [{ element: "root", reason: "Invalid HTML structure" }],
-    };
-  }
+  const result: string[] = [];
+  const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^>]*?)(\/?)>/gi;
+  let lastIndex = 0;
+  let match;
 
-  $("*").each((_index, element) => {
-    const el = $(element);
-    const elem = element as unknown as CheerioElement;
-    const tagName = (elem.tagName || elem.nodeName || "").toLowerCase();
+  while ((match = tagRegex.exec(html)) !== null) {
+    const before = html.slice(lastIndex, match.index);
+    if (before) result.push(before);
 
-    if (!tagName || tagName === "html" || tagName === "head" || tagName === "body" || tagName === "#document") {
-      return;
+    const isClosing = match[1] === '/';
+    const tagName = match[2].toLowerCase();
+    const attrStr = match[3];
+    const isSelfClosing = match[4] === '/';
+
+    // Parse attributes
+    const attributes: Record<string, string> = {};
+    const attrRegex = /([a-zA-Z][a-zA-Z0-9-]*)(?:\s*=\s*"(?:[^"]*)"|\s*=\s*'(?:[^']*)'|\s*=\s*[^\s>]+)?/gi;
+    let attrMatch;
+    while ((attrMatch = attrRegex.exec(attrStr)) !== null) {
+      const name = attrMatch[1].toLowerCase();
+      const valueMatch = attrStr.slice(attrMatch.index).match(/=\s*"(.*?)"/) ||
+                         attrStr.slice(attrMatch.index).match(/=\s*'(.*?)'/) ||
+                         attrStr.slice(attrMatch.index).match(/=\s*([^\s>]+)/);
+      attributes[name] = valueMatch ? valueMatch[1] : '';
+    }
+
+    // Skip structural tags
+    if (tagName === "html" || tagName === "head" || tagName === "body" || tagName === "#document") {
+      lastIndex = match.index + match[0].length;
+      continue;
     }
 
     // Check blocked tags
-    const blockedTag = BLOCKED_TAG_PATTERNS.find((p) => p.tag === tagName);
-    if (blockedTag) {
-      blocked.push({ element: tagName, reason: blockedTag.reason });
-      el.remove();
-      return;
+    if (BLOCKED_TAGS.has(tagName)) {
+      blocked.push({ element: tagName, reason: getBlockedReason(tagName) });
+      lastIndex = match.index + match[0].length;
+      continue;
     }
 
-    // Check SVG-specific dangerous tags
+    // Check SVG dangerous tags
     if (SVG_DANGEROUS_TAGS.has(tagName)) {
       blocked.push({ element: tagName, reason: `SVG element "${tagName}" not allowed in dynamic widgets` });
-      el.remove();
-      return;
+      lastIndex = match.index + match[0].length;
+      continue;
     }
 
     // Check allowed tags
     if (!ALLOWED_TAGS.has(tagName)) {
       warnings.push(`Removed unknown tag: <${tagName}>`);
-      el.replaceWith(el.html() || "");
-      return;
+      lastIndex = match.index + match[0].length;
+      continue;
     }
 
-    // Check and clean attributes
-    const attrs: Record<string, string> = elem.attribs || {};
-    for (const [attrName, attrValue] of Object.entries(attrs)) {
+    // Clean attributes
+    let cleanAttrs = '';
+    for (const [attrName, attrValue] of Object.entries(attributes)) {
       // Block event handlers
       if (EVENT_HANDLER_PATTERN.test(attrName)) {
         blocked.push({
@@ -260,65 +178,71 @@ export function sanitizeHtml(html: string): HtmlSanitizeResult {
           attribute: attrName,
           reason: `Inline event handler "${attrName}" not allowed`,
         });
-        el.removeAttr(attrName);
         continue;
       }
 
       // Check allowed attributes
-      if (!ALLOWED_ATTRIBUTES.has(attrName) && !attrName.startsWith("data-") && !attrName.startsWith("aria-")) {
+      if (!ALLOWED_ATTRIBUTES.has(attrName) && !attrName.startsWith('data-') && !attrName.startsWith('aria-')) {
         warnings.push(`Removed attribute "${attrName}" from <${tagName}>`);
-        el.removeAttr(attrName);
         continue;
       }
 
-      // Check URL attributes for dangerous schemes
-      if ((attrName === "href" || attrName === "src") && attrValue) {
+      // Check dangerous URL schemes
+      if ((attrName === 'href' || attrName === 'src') && attrValue) {
         const lowerValue = attrValue.toLowerCase().trim();
-        const hasDangerousScheme = DANGEROUS_URL_SCHEMES.some((scheme) =>
-          lowerValue.startsWith(scheme)
-        );
-        if (hasDangerousScheme) {
+        if (DANGEROUS_URL_SCHEMES.some(scheme => lowerValue.startsWith(scheme))) {
           blocked.push({
             element: tagName,
             attribute: attrName,
             reason: `Dangerous URL scheme in "${attrName}" attribute`,
           });
-          el.attr(attrName, "#blocked");
+          continue;
         }
       }
 
       // Check style attribute for dangerous CSS
-      if (attrName === "style" && attrValue) {
-        for (const { pattern, reason } of DANGEROUS_CSS_PATTERNS) {
+      if (attrName === 'style' && attrValue) {
+        for (const pattern of DANGEROUS_CSS_PATTERNS) {
           if (pattern.test(attrValue)) {
             blocked.push({
               element: tagName,
-              attribute: "style",
-              reason,
+              attribute: 'style',
+              reason: pattern.source.includes('url') ? 'CSS url() with dangerous scheme' :
+                      pattern.source.includes('expression') ? 'CSS expression() is dangerous' :
+                      'Dangerous CSS pattern',
             });
-            el.removeAttr("style");
-            break;
+            continue;
           }
         }
       }
 
       // Validate target attribute on links
-      if (attrName === "target" && tagName === "a") {
-        if (attrValue !== "_blank") {
+      if (attrName === 'target' && tagName === 'a') {
+        if (attrValue !== '_blank') {
           warnings.push(`Non-standard target "${attrValue}" on <a> reset to "_blank"`);
-          el.attr("target", "_blank");
+          continue;
         }
       }
-    }
-  });
 
-  const sanitized = $.html()
-    .replace(/<html>/gi, "")
-    .replace(/<\/html>/gi, "")
-    .replace(/<head>[\s\S]*?<\/head>/gi, "")
-    .replace(/<body>/gi, "")
-    .replace(/<\/body>/gi, "")
-    .trim();
+      cleanAttrs += ` ${attrName}="${escapeHtml(attrValue)}"`;
+    }
+
+    // Build clean tag
+    if (isClosing) {
+      result.push(`</${tagName}>`);
+    } else {
+      result.push(`<${tagName}${cleanAttrs}${isSelfClosing ? ' />' : '>'}`);
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining content
+  if (lastIndex < html.length) {
+    result.push(html.slice(lastIndex));
+  }
+
+  const sanitized = result.join('');
 
   return {
     safe: blocked.length === 0,
@@ -326,6 +250,31 @@ export function sanitizeHtml(html: string): HtmlSanitizeResult {
     warnings,
     blocked,
   };
+}
+
+function getBlockedReason(tagName: string): string {
+  const reasons: Record<string, string> = {
+    script: "Script execution not allowed in dynamic widgets",
+    iframe: "Nested iframes not allowed in dynamic widgets",
+    object: "Object embeds not allowed in dynamic widgets",
+    embed: "Embeds not allowed in dynamic widgets",
+    form: "Forms not allowed in dynamic widgets",
+    input: "Form inputs not allowed in dynamic widgets",
+    button: "Buttons not allowed in dynamic widgets (use a tag with href instead)",
+    select: "Select inputs not allowed in dynamic widgets",
+    textarea: "Text inputs not allowed in dynamic widgets",
+    link: "External stylesheets not allowed in dynamic widgets",
+    meta: "Meta tags not allowed in dynamic widgets",
+    base: "Base tag not allowed in dynamic widgets",
+    applet: "Applet not allowed in dynamic widgets",
+    audio: "Audio not allowed in dynamic widgets",
+    video: "Video not allowed in dynamic widgets",
+    source: "Media sources not allowed in dynamic widgets",
+    track: "Media tracks not allowed in dynamic widgets",
+    canvas: "Canvas not allowed in dynamic widgets",
+    style: "Style tags not allowed in dynamic widgets (use inline style attribute)",
+  };
+  return reasons[tagName] || "Tag not allowed in dynamic widgets";
 }
 
 export function sanitizeSvg(svgContent: string): HtmlSanitizeResult {

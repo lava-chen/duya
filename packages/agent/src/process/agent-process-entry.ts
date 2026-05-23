@@ -1083,6 +1083,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
       const agentMsg = convertSSEToAgentMessage(event);
       if (agentMsg) {
+        if (agentMsg.type === 'chat:done') {
+          // Defer chat:done until after persistence completes
+          // to avoid race condition where SSE closes before messages are saved
+          continue;
+        }
         if (DEBUG_IPC && (
           agentMsg.type === 'chat:tool_use'
           || agentMsg.type === 'chat:tool_result'
@@ -1152,12 +1157,17 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         }
 
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: result.success, messageCount: agentMessages.length });
+        // Send chat:done AFTER persistence completes to ensure messages are saved
+        // before the SSE stream closes (router.ts starts 2s timeout on done event)
+        sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
       } catch (err) {
         log('[Agent-Process] appendMessages error:', err);
+        sendToMain({ type: 'chat:done', sessionId: msg.sessionId, error: err instanceof Error ? err.message : String(err) });
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: false, reason: err instanceof Error ? err.message : String(err) });
       }
     } else {
       warn(`[Agent-Process] No messages to save for session ${msg.sessionId}`);
+      sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
     }
 
     // Background title generation: generate if never generated before (no message limit)
@@ -1235,9 +1245,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       })();
     }
 
-    // Note: 'chat:done' is already sent inside the for-await loop above
-    // when the stream generator yields { type: 'done' }.
-    // Do NOT send another 'chat:done' here to avoid duplicate final messages.
+    // Note: 'chat:done' is sent AFTER persistence completes above.
+    // It is intentionally deferred from the for-await loop to ensure
+    // messages are saved to DB before the SSE stream closes.
 
   } catch (err) {
     log('[Agent-Process] Chat error:', err);
@@ -1246,6 +1256,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       sessionId: msg.sessionId,
       message: err instanceof Error ? err.message : String(err),
     });
+    // Ensure the SSE stream closes even on error
+    sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
   } finally {
     stopChatHeartbeat();
   }
@@ -1772,7 +1784,17 @@ async function performCleanup(): Promise<void> {
 }
 
 function exitAfterCleanup(code: number): void {
+  const safetyTimeout = setTimeout(() => {
+    log('[Agent-Process] Cleanup timed out, force exiting');
+    process.exit(code);
+  }, 5000);
+
   void performCleanup().then(() => {
+    clearTimeout(safetyTimeout);
+    process.exit(code);
+  }).catch((err) => {
+    log('[Agent-Process] Cleanup failed:', err);
+    clearTimeout(safetyTimeout);
     process.exit(code);
   });
 }
@@ -1805,7 +1827,6 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason) => {
   log('[Agent-Process] Unhandled rejection:', reason);
-  exitAfterCleanup(1);
 });
 
 // Start the main loop

@@ -13,7 +13,8 @@ import type { AgentDefinition } from './loadAgentsDir.js';
 import { getBuiltInAgents } from './builtInAgents.js';
 import { formatAgentLine, getPrompt } from './prompt.js';
 import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
-import { sessionDb } from '../../ipc/db-client.js';
+import { backgroundTaskRegistry, type BackgroundTaskResult } from './BackgroundTaskRegistry.js';
+import { sessionDb, messageDb } from '../../ipc/db-client.js';
 
 export { formatAgentLine }
 
@@ -174,6 +175,13 @@ export class AgentTool extends BaseTool {
           agent_type: 'sub-agent',
           agent_name: subAgentName,
         });
+        await messageDb.add({
+          id: crypto.randomUUID(),
+          session_id: subAgentSessionId,
+          role: 'user',
+          content: agentInput.prompt,
+          msg_type: 'text',
+        });
       } catch (err) {
         console.warn('[AgentTool] Failed to create sub-agent session in DB:', err);
       }
@@ -191,6 +199,19 @@ export class AgentTool extends BaseTool {
         : undefined;
 
       if (agentInput.run_in_background) {
+        const startTime = Date.now()
+        const taskId = crypto.randomUUID()
+
+        backgroundTaskRegistry.register({
+          taskId,
+          sessionId: subAgentSessionId,
+          agentType: agentDefinition.agentType,
+          agentName: agentInput.name,
+          status: 'running',
+          startedAt: Date.now(),
+          onProgress,
+        })
+
         const agentGenerator = runAgent({
           agentDefinition,
           promptMessages,
@@ -206,20 +227,50 @@ export class AgentTool extends BaseTool {
 
         (async () => {
           try {
-            let lastMessage: Message | undefined;
+            let lastMessage: Message | undefined
             for await (const message of agentGenerator) {
-              lastMessage = message;
+              lastMessage = message
             }
             try {
               await sessionDb.update(subAgentSessionId, {
                 status: 'completed',
                 updated_at: Date.now(),
-              });
+              })
             } catch (err) {
-              console.warn('[AgentTool] Failed to update sub-agent session status:', err);
+              console.warn('[AgentTool] Failed to update sub-agent session status:', err)
+            }
+
+            if (lastMessage) {
+              const content = Array.isArray(lastMessage.content)
+                ? lastMessage.content.filter(
+                    (b): b is { type: 'text'; text: string } =>
+                      b.type === 'text' && typeof (b as { text: string }).text === 'string'
+                  )
+                : typeof lastMessage.content === 'string'
+                  ? [{ type: 'text' as const, text: lastMessage.content }]
+                  : [{ type: 'text' as const, text: String(lastMessage.content) }]
+
+              const metadata = (lastMessage as { metadata?: Record<string, unknown> }).metadata || {}
+              const result: BackgroundTaskResult = {
+                content,
+                totalTokens: 0,
+                totalDurationMs: (metadata.agentDurationMs as number) || 0,
+                totalToolUseCount: (metadata.agentToolCallCount as number) || 0,
+              }
+              backgroundTaskRegistry.complete(taskId, result)
+            } else {
+              backgroundTaskRegistry.complete(taskId, {
+                content: [{ type: 'text', text: `[Agent ${agentDefinition.agentType}] completed with no output.` }],
+                totalTokens: 0,
+                totalDurationMs: Date.now() - startTime,
+                totalToolUseCount: 0,
+              })
             }
           } catch (err) {
-            onProgress?.({ type: 'error', data: err instanceof Error ? err.message : 'Unknown error' });
+            backgroundTaskRegistry.fail(
+              taskId,
+              err instanceof Error ? err.message : 'Unknown error'
+            )
           }
         })();
 
@@ -232,6 +283,7 @@ export class AgentTool extends BaseTool {
             description: agentInput.description || agentInput.name,
             content: `[Agent launched in background: ${subAgentName}]`,
             sessionId: subAgentSessionId,
+            taskId,
             background: true,
           }),
         };

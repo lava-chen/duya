@@ -80,6 +80,7 @@ export const parallelFetchAction: ActionHandler<z.infer<typeof parallelFetchSche
         success: r.success,
         title: r.title,
         content: r.content,
+        interactiveCount: r.interactiveCount,
         error: r.error,
         durationMs: r.durationMs,
       })),

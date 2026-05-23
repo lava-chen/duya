@@ -15,6 +15,7 @@ import { MEMORY_CHAR_LIMITS, type MemoryToolResult, type MemoryToolInput } from 
 import { MemoryEntry } from './memoryParser.js'
 import { scoreMemoryEntries, formatScoredEntries, type ScoredEntry } from './scoring.js'
 import { buildMemoryContextBlock } from './contextBuilder.js'
+import type { MemoryReviewService } from './MemoryReviewService.js'
 
 // =============================================================================
 // Memory Manager
@@ -48,6 +49,9 @@ export class MemoryManager {
     globalUser: MemoryEntry[]
     project: MemoryEntry[]
   } = { globalMemory: [], globalUser: [], project: [] }
+
+  // Background memory review service (optional — wired by agent at init)
+  private _reviewService: MemoryReviewService | null = null
 
   constructor() {
     // Initialize global stores
@@ -311,16 +315,51 @@ export class MemoryManager {
     return buildMemoryContextBlock(formatted)
   }
 
+  // ===========================================================================
+  // Memory Review Service
+  // ===========================================================================
+
   /**
-   * Sync after a turn completes.
-   * Currently a no-op placeholder for future SessionMemoryService integration.
+   * Wire up the background memory review service.
+   * Called by the agent at initialization time.
+   */
+  setupReviewService(reviewService: MemoryReviewService): void {
+    this._reviewService = reviewService
+  }
+
+  /**
+   * Get the review service (for stats inspection).
+   */
+  getReviewService(): MemoryReviewService | null {
+    return this._reviewService
+  }
+
+  /**
+   * Sync after a turn completes — triggers background memory review when due.
    *
-   * @param _userContent - User message content
-   * @param _assistantContent - Assistant response content
+   * This is a fire-and-forget call: the review runs asynchronously in the
+   * background and does not block the user's next turn. Failures are silent.
+   *
+   * @param conversationText - Formatted conversation text for review
+   * @param assistantTokens - Estimated token count of assistant response
+   */
+  syncTurn(conversationText: string, assistantTokens: number): void {
+    const service = this._reviewService
+    if (!service) return
+
+    if (!service.shouldReview(assistantTokens)) return
+
+    // Fire-and-forget: don't await, don't block the user
+    service.review(conversationText).catch(() => {
+      // Best-effort — failures are silent
+    })
+  }
+
+  /**
+   * @deprecated Use syncTurn() instead.
    */
   sync_turn(_userContent: string, _assistantContent: string): void {
-    // Reserved for future SessionMemoryService integration
-    // Could be used for automatic memory extraction based on conversation
+    // Legacy no-op — replaced by syncTurn + MemoryReviewService
   }
 
   // ===========================================================================
