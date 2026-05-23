@@ -83,6 +83,14 @@ const BUILT_IN_COMMANDS: CommandDef[] = [
     platforms: ['app'],
     requiresSession: true,
   },
+  {
+    name: 'recap',
+    aliases: ['summary', 'catchup'],
+    description: 'Show a recap of the current conversation',
+    category: 'info',
+    platforms: ['app'],
+    requiresSession: true,
+  },
 
   // ========================================================================
   // Config
