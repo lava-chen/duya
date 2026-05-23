@@ -43,13 +43,14 @@ function isValidDomainInput(input: string): boolean {
 export default function BrowserExtensionSection() {
   const { t } = useTranslation();
   const { settings, loading: settingsLoading, saving, save } = useSettings();
-  const { status, health, isInstalled, checkExtension, lastChecked } = useBrowserExtension({
+  const { status, health, isInstalled, checkExtension, lastChecked, storeAvailable, checkStoreAvailability } = useBrowserExtension({
     autoCheck: true,
     interval: 30000,
   });
   const [copied, setCopied] = useState(false);
   const [showManualInstall, setShowManualInstall] = useState(false);
   const [extensionPath, setExtensionPath] = useState('');
+  const [checkingStore, setCheckingStore] = useState(false);
 
   // Browser Security state
   const [blockedDomains, setBlockedDomains] = useState<string[]>([]);
@@ -64,6 +65,18 @@ export default function BrowserExtensionSection() {
       setDomainError(null);
     }
   }, [settings.blockedDomains]);
+
+  useEffect(() => {
+    // Check store availability on mount if extension not installed
+    if (!isInstalled && storeAvailable === null && !checkingStore) {
+      setCheckingStore(true);
+      checkStoreAvailability().finally(() => setCheckingStore(false));
+    }
+    // If store is not available, show manual install by default
+    if (storeAvailable === false && !showManualInstall) {
+      setShowManualInstall(true);
+    }
+  }, [isInstalled, storeAvailable, checkStoreAvailability, checkingStore, showManualInstall]);
 
   useEffect(() => {
     if (showManualInstall) {
@@ -269,9 +282,10 @@ export default function BrowserExtensionSection() {
               <SettingsSection title={t('browserExtension.storeInstallTitle') || 'Install from Chrome Web Store'}>
                 <SettingsCard>
                   {[
-                    t('browserExtension.storeStep1') || 'Click the button below to open Chrome Web Store',
-                    t('browserExtension.storeStep2') || 'Click "Add to Chrome" on the store page',
-                    t('browserExtension.storeStep3') || 'Confirm by clicking "Add extension"',
+                    t('browserExtension.storeStep1') || 'Click the "Install from Chrome Web Store" button below',
+                    t('browserExtension.storeStep2') || 'Click "Add to Chrome" on the DUYA Browser Bridge page',
+                    t('browserExtension.storeStep3') || 'Confirm by clicking "Add extension" in the popup',
+                    t('browserExtension.storeStep4') || 'Return here and click "Refresh" to verify connection',
                   ].map((step, idx) => (
                     <div key={idx} className="flex items-start gap-3 px-4 py-3">
                       <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold bg-accent/10 text-accent shrink-0">
@@ -300,9 +314,11 @@ export default function BrowserExtensionSection() {
               <SettingsSection title={t('browserExtension.manualInstallTitle') || 'Manual Installation'}>
                 <SettingsCard>
                   {[
-                    t('browserExtension.step1') || 'Open Chrome and navigate to chrome://extensions/',
-                    t('browserExtension.step2') || 'Enable "Developer mode" in the top right corner',
-                    t('browserExtension.step3') || 'Click "Load unpacked" and select the extension folder',
+                    t('browserExtension.step1') || 'Open Chrome and go to chrome://extensions/',
+                    t('browserExtension.step2') || 'Enable "Developer mode" toggle in the top right corner',
+                    t('browserExtension.step3') || 'Click "Load unpacked" at the top of the page',
+                    t('browserExtension.step4') || 'Select the extension folder shown below',
+                    t('browserExtension.step5') || 'Verify the extension appears in your extensions list',
                   ].map((step, idx) => (
                     <div key={idx} className="flex items-start gap-3 px-4 py-3">
                       <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold bg-accent/10 text-accent shrink-0">

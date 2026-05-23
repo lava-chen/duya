@@ -17,6 +17,12 @@ import {
   Timer,
   CheckSquare,
   Newspaper,
+  ChartBar,
+  Image,
+  Table,
+  Cube,
+  Minus,
+  Lightning,
 } from "@phosphor-icons/react";
 
 const WIDGET_ICONS: Record<string, typeof SquaresFour> = {
@@ -24,6 +30,12 @@ const WIDGET_ICONS: Record<string, typeof SquaresFour> = {
   "note-pad": Note,
   pomodoro: Timer,
   "news-board": Newspaper,
+  "metric-card": ChartBar,
+  "image-card": Image,
+  "data-table": Table,
+  "group-box": Cube,
+  divider: Minus,
+  "quick-action": Lightning,
 };
 
 function widgetPickerPosition() {
