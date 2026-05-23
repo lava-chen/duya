@@ -365,6 +365,14 @@ export interface DocumentParserAPI {
   isReady: () => Promise<boolean>
 }
 
+export interface RecapAPI {
+  request: (sessionId: string) => Promise<{ success: boolean; recap: string | null; error?: string }>
+  setActiveSession: (sessionId: string) => Promise<void>
+  getSettings: () => Promise<{ enabled: boolean; inactivityThreshold: number }>
+  setSettings: (settings: { enabled?: boolean; inactivityThreshold?: number }) => Promise<void>
+  onRecapResult: (callback: (data: { sessionId: string; recap: string; timestamp: number }) => void) => () => void
+}
+
 export interface ElectronAPI {
   versions: {
     electron: string
@@ -442,6 +450,7 @@ export interface ElectronAPI {
   browserExtension: BrowserExtensionAPI
   parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
+  recap: RecapAPI
   // Agent Server API
   agentServer: {
     getPort: () => Promise<number | null>
@@ -1131,6 +1140,19 @@ const electronAPI: ElectronAPI = {
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('db:agentProfile:create', data),
     update: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:agentProfile:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('db:agentProfile:delete', id),
+  },
+  recap: {
+    request: (sessionId: string) => ipcRenderer.invoke('recap:request', sessionId),
+    setActiveSession: (sessionId: string) => ipcRenderer.invoke('recap:setActiveSession', sessionId),
+    getSettings: () => ipcRenderer.invoke('recap:getSettings'),
+    setSettings: (settings) => ipcRenderer.invoke('recap:setSettings', settings),
+    onRecapResult: (callback: (data: { sessionId: string; recap: string; timestamp: number }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; recap: string; timestamp: number }) => callback(data);
+      ipcRenderer.on('recap:result', handler);
+      return () => {
+        ipcRenderer.removeListener('recap:result', handler);
+      };
+    },
   },
   // Agent Server API
   agentServer: {

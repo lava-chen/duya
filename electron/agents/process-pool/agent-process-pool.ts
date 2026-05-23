@@ -8,6 +8,7 @@
  */
 
 import type { ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { getConfigManager, toLLMProvider } from '../../config/manager.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
@@ -137,7 +138,6 @@ export class AgentProcessPool {
 
     return new Promise((resolve, reject) => {
       try {
-        const { spawn } = require('child_process');
         const child: ChildProcess = spawn(runtime.command, runtime.args, {
           stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
           env: runtime.env,
@@ -206,11 +206,8 @@ export class AgentProcessPool {
       } catch (err) {
         this.logger.error('Failed to start process', err instanceof Error ? err : new Error(String(err)), {
           sessionId, runtimeCommand: runtime.command,
-        }, 'AgentProcessPool');
-        this.logger.error('Failed to start process', err instanceof Error ? err : new Error(String(err)), {
-          sessionId, runtimeCommand: runtime.command,
-        }, 'AgentProcessPool');
-        reject(err);
+        }, LogComponent.AgentProcessPool);
+        reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
   }
@@ -222,7 +219,20 @@ export class AgentProcessPool {
       this.running.delete(sessionId);
     }
 
-    this.queue = this.queue.filter(item => item.sessionId !== sessionId);
+    this.busySessions.delete(sessionId);
+    this.interruptedSessions.delete(sessionId);
+    this.providerReinitLock.delete(sessionId);
+    this.router.clearSession(sessionId);
+
+    const remainingQueue: QueueItem[] = [];
+    for (const item of this.queue) {
+      if (item.sessionId === sessionId) {
+        item.reject(new Error(`Process released for session ${sessionId}`));
+      } else {
+        remainingQueue.push(item);
+      }
+    }
+    this.queue = remainingQueue;
     this.processQueue();
   }
 
@@ -282,19 +292,35 @@ export class AgentProcessPool {
     for (const [sessionId, proc] of this.running) {
       if (proc.child.exitCode !== null) {
         this.running.delete(sessionId);
+        this.busySessions.delete(sessionId);
+        this.interruptedSessions.delete(sessionId);
+        this.providerReinitLock.delete(sessionId);
+        this.router.clearSession(sessionId);
+        this.processQueue();
         continue;
       }
 
       const elapsed = now - proc.lastPong;
       if (elapsed > timeout) {
+        this.logger.warn('Process timed out, killing', { sessionId, elapsed, timeout }, LogComponent.AgentProcessPool);
+        this.router.broadcastDisconnect(sessionId, null, null);
         void killProcessTree(proc.child, { force: true });
         this.running.delete(sessionId);
+        this.busySessions.delete(sessionId);
+        this.interruptedSessions.delete(sessionId);
+        this.providerReinitLock.delete(sessionId);
+        this.router.clearSession(sessionId);
         this.processQueue();
       } else if (elapsed > pingThreshold) {
         try {
           proc.child.send({ type: 'ping' });
         } catch {
           this.running.delete(sessionId);
+          this.busySessions.delete(sessionId);
+          this.interruptedSessions.delete(sessionId);
+          this.providerReinitLock.delete(sessionId);
+          this.router.clearSession(sessionId);
+          this.processQueue();
         }
       }
     }
@@ -435,12 +461,26 @@ export class AgentProcessPool {
       this.heartbeatInterval = null;
     }
 
+    for (const [sessionId] of this.running) {
+      this.router.broadcastDisconnect(sessionId, null, null);
+    }
+
     const killPromises: Promise<void>[] = [];
     for (const [, proc] of this.running) {
       killPromises.push(killProcessTree(proc.child, { force: true }));
     }
     await Promise.all(killPromises);
+
+    const remaining = Array.from(this.running.entries());
+    for (const [sessionId] of remaining) {
+      this.router.clearSession(sessionId);
+    }
+
     this.running.clear();
+    this.busySessions.clear();
+    this.interruptedSessions.clear();
+    this.providerReinitLock.clear();
+    this.pendingMessages.clear();
 
     for (const item of this.queue) {
       item.reject(new Error('Process pool shutdown'));

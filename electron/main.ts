@@ -11,6 +11,8 @@ import { initConfigManager, getConfigManager, toLLMProvider, resolveDatabasePath
 import { initChannelManager, getChannelManager } from './messaging/index';
 import { initPerformanceMonitor } from './services/performance-monitor';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
+import { RecapService } from './services/recap/recap-service';
+import { registerRecapHandlers } from './ipc/recap-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
 import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus } from './services/browser/daemon';
 import { getAutomationScheduler, initAutomationScheduler } from './automation/Scheduler';
@@ -152,6 +154,10 @@ if (gotTheLock) {
 
     initPerformanceMonitor();
     initSessionManager();
+
+    // Recap service for session context recovery
+    const recapService = new RecapService(getDatabase, getConfigManager, getSessionManager);
+    registerRecapHandlers(recapService);
 
     registerAgentHandlers();
     registerNetHandlers();
@@ -396,11 +402,15 @@ if (gotTheLock) {
     };
 
     await createWindow(handleConductorMessage);
+    recapService.init(getMainWindow()!);
     createTray();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow(handleConductorMessage);
+        createWindow(handleConductorMessage).then(() => {
+          const mw = getMainWindow();
+          if (mw) recapService.init(mw);
+        });
       } else {
         const mw = getMainWindow();
         if (mw) mw.show();

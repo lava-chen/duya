@@ -84,7 +84,6 @@ async function handlePostChat(
     httpLogger.info('Resetting session state for new chat', { sessionId, from: session.state });
     try {
       sessionManager.transitionState(sessionId, SessionState.IDLE);
-      session.state = SessionState.IDLE;
     } catch {
       // State transition may already have been handled
     }
@@ -428,25 +427,20 @@ function handlePostChatSSE(
           }
           httpLogger.info('Chat flow: done', { sessionId, seqNum });
           res.write(`event: done\nid: ${seqNum}\ndata: ${JSON.stringify(sseEvent)}\n\n`);
-          // Don't close immediately - title_generated events may still come after done
-          // Close after 2 seconds to allow title generation to complete
-          setTimeout(() => {
-            if (!res.writableEnded) {
-              doneReceived = true;
-              res.end();
-              console.log('[agent-server] SSE connection closed after done+timeout');
-            }
-          }, 2000);
+          // Don't set doneReceived=true here - title_generated event may still come after done
+          // We close the connection when title_generated is received (or on error/close)
           return;
         }
 
         if (eventType === 'title_generated') {
-          // Send title generated event, keep SSE open
+          // Send title generated event and close SSE connection
           seqNum++;
           sessionManager.updateLastEventId(sessionId, seqNum);
           sessionManager.recordEvent(sessionId, 'title_generated', sseEvent, seqNum);
           res.write(`event: title_generated\nid: ${seqNum}\ndata: ${JSON.stringify(sseEvent)}\n\n`);
-          console.log('[agent-server] Sent title_generated event, SSE still open');
+          console.log('[agent-server] Sent title_generated event, closing SSE');
+          doneReceived = true;
+          res.end();
           return;
         }
 

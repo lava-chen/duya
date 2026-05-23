@@ -38,44 +38,55 @@ export function killProcessTree(
 
 /**
  * Windows: use taskkill /F /T to kill the entire process tree.
- * /F = force | /T = terminate children
+ * /F = force | /T = terminate children.
+ *
+ * On Windows, non-force termination (without /F) is unreliable, so we
+ * always use /F. After taskkill exits, we poll to verify the process
+ * is truly dead before resolving.
  */
-function killWindowsProcessTree(pid: number, force: boolean): Promise<void> {
+function killWindowsProcessTree(pid: number, _force: boolean): Promise<void> {
   return new Promise((resolve) => {
-    const args = force ? ['/F', '/T', '/PID', String(pid)] : ['/T', '/PID', String(pid)];
-    const taskkill = spawn('taskkill', args, { windowsHide: true });
+    const doKill = (): void => {
+      const taskkill = spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { windowsHide: true });
 
-    let stdout = '';
-    let stderr = '';
+      let stderr = '';
 
-    taskkill.stdout?.on('data', (d) => { stdout += d.toString(); });
-    taskkill.stderr?.on('data', (d) => { stderr += d.toString(); });
+      taskkill.stderr?.on('data', (d) => { stderr += d.toString(); });
 
-    taskkill.on('close', (code) => {
-      if (code !== 0) {
-        console.warn(`[ProcessCleanup] taskkill exited with code ${code}, stderr: ${stderr.trim()}`);
-        // Even if taskkill reports an error, the process may already be gone.
-        // Try force kill as fallback.
-        if (!force) {
-          const fallback = spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { windowsHide: true });
-          fallback.on('close', () => resolve());
-          fallback.on('error', () => resolve());
+      taskkill.on('close', (code) => {
+        if (code !== 0) {
+          console.warn(`[ProcessCleanup] taskkill exited with code ${code}, stderr: ${stderr.trim()}`);
+        }
+        waitForDeath();
+      });
+
+      taskkill.on('error', (err) => {
+        console.error(`[ProcessCleanup] taskkill spawn error:`, err.message);
+        waitForDeath();
+      });
+    };
+
+    const waitForDeath = (): void => {
+      let attempts = 0;
+      const maxAttempts = 20; // 2 seconds total
+      const check = (): void => {
+        if (attempts >= maxAttempts) {
+          console.warn(`[ProcessCleanup] Process ${pid} may still be alive after max attempts`);
+          resolve();
           return;
         }
-      }
-      resolve();
-    });
+        const result = isProcessRunning(pid);
+        if (!result) {
+          resolve();
+          return;
+        }
+        attempts++;
+        setTimeout(check, 100);
+      };
+      check();
+    };
 
-    taskkill.on('error', (err) => {
-      console.error(`[ProcessCleanup] taskkill spawn error:`, err.message);
-      resolve();
-    });
-
-    // Safety timeout
-    setTimeout(() => {
-      console.warn(`[ProcessCleanup] taskkill timeout for pid ${pid}, giving up`);
-      resolve();
-    }, 10000);
+    doKill();
   });
 }
 
