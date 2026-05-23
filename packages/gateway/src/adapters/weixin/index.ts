@@ -29,14 +29,16 @@ import {
 import type { WeChatMessage, WeChatConfigOptions } from './types.js';
 import { WX_MSG_TYPES } from './types.js';
 import { parseMessageContent, isFromGroup } from './message-utils.js';
-import { wxApi } from './api.js';
+import { wxApi, getMimeFromFilename } from './api.js';
 import type { IpcClient } from '../../ipc-client.js';
+import path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com';
+const DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
 const LONG_POLL_TIMEOUT_MS = 35_000;
 const API_TIMEOUT_MS = 15_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -61,6 +63,7 @@ export class WeixinAdapter extends BaseAdapter {
 
   private accountId = '';
   private baseUrl = ILINK_BASE_URL;
+  private cdnBaseUrl = DEFAULT_CDN_BASE_URL;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private sendChunkDelaySeconds: number = DEFAULT_CHUNK_DELAY_SECONDS;
   private sendChunkRetries: number = DEFAULT_CHUNK_RETRIES;
@@ -149,10 +152,12 @@ export class WeixinAdapter extends BaseAdapter {
     this.consecutiveFailures = 0;
     this.updateHealthConnected();
 
+    this.cdnBaseUrl = (config.credentials.cdnBaseUrl ?? config.credentials.cdn_base_url ?? DEFAULT_CDN_BASE_URL) as string;
     wxApi.configure({
       baseUrl: this.baseUrl,
       token: this.token,
       timeoutMs: API_TIMEOUT_MS,
+      cdnBaseUrl: this.cdnBaseUrl,
     });
 
     this.startPollLoop();
@@ -222,7 +227,7 @@ export class WeixinAdapter extends BaseAdapter {
     }
 
     if (reply.type === 'media') {
-      return { ok: false, error: 'Media not yet supported for weixin' };
+      return this.sendMedia(chatId, reply);
     }
 
     return { ok: false, error: `Unsupported reply type: ${(reply as NormalizedReply).type}` };
@@ -353,6 +358,45 @@ export class WeixinAdapter extends BaseAdapter {
     }
 
     return { ok: false, error: lastError?.message ?? 'Send failed' };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Media sending
+  // ---------------------------------------------------------------------------
+
+  private async sendMedia(
+    chatId: string,
+    reply: { 
+      mediaType: 'photo' | 'voice' | 'video' | 'document'; 
+      filePath: string; 
+      caption?: string;
+    }
+  ): Promise<SendResult> {
+    try {
+      const { mediaType, filePath, caption } = reply;
+      const fileName = path.basename(filePath);
+      const mime = getMimeFromFilename(filePath);
+      
+      console.log(`[Weixin] Sending ${mediaType}: ${filePath} to ${chatId}`);
+
+      let uploaded;
+      if (mime.startsWith('image/')) {
+        uploaded = await wxApi.uploadImageToWeixin({ filePath, toUserId: chatId });
+        await wxApi.sendImageMessage({ to: chatId, text: caption, uploaded });
+      } else if (mime.startsWith('video/')) {
+        uploaded = await wxApi.uploadVideoToWeixin({ filePath, toUserId: chatId });
+        await wxApi.sendVideoMessage({ to: chatId, text: caption, uploaded });
+      } else {
+        uploaded = await wxApi.uploadFileAttachmentToWeixin({ filePath, toUserId: chatId });
+        await wxApi.sendFileMessage({ to: chatId, text: caption, fileName, uploaded });
+      }
+
+      this.incrementMessageCount();
+      return { ok: true };
+    } catch (err) {
+      console.error('[Weixin] Failed to send media:', err);
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   // ---------------------------------------------------------------------------
