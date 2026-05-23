@@ -11,6 +11,7 @@ import {
   ChartLine,
   Brain,
   GlobeSimple,
+  ClockCounterClockwise,
 } from '@phosphor-icons/react';
 
 // Command icons mapping
@@ -19,6 +20,7 @@ const COMMAND_ICONS: Record<string, React.ComponentType<{ size?: number; classNa
   '/clear': Eraser,
   '/cost': ChartLine,
   '/compact': Brain,
+  '/recap': ClockCounterClockwise,
 };
 
 // Category icons mapping
