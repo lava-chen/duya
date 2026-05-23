@@ -1474,6 +1474,13 @@ export class StreamingToolExecutor {
         break
       }
 
+      // If only background tools remain unfinished, exit the wait loop.
+      // Background sub-agents run asynchronously; results are delivered
+      // via BackgroundTaskRegistry and injected back into the main loop.
+      if (this.onlyBackgroundToolsRemain()) {
+        break
+      }
+
       await this.processQueue()
 
       for (const result of this.getCompletedResults()) {
@@ -1525,6 +1532,19 @@ export class StreamingToolExecutor {
     for (const result of this.getCompletedResults()) {
       yield result
     }
+  }
+
+  /**
+   * Returns true when all unfinished tools are background sub-agents
+   * that are still running. The executor should NOT block on them —
+   * results will be delivered asynchronously via BackgroundTaskRegistry.
+   */
+  private onlyBackgroundToolsRemain(): boolean {
+    for (const tool of this.tools) {
+      if (tool.background && !tool.backgroundDone) continue
+      if (tool.status !== 'yielded') return false
+    }
+    return true
   }
 
   // ==========================================================================

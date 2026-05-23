@@ -262,6 +262,8 @@ export interface ChatOptions {
   requestPermission?: (request: PermissionRequestEvent) => Promise<'allow' | 'deny'>;
   /** Agent profile ID to use for this chat turn */
   agentProfileId?: string | null;
+  /** Mode ID for this chat turn (e.g. 'research'). When set, a BaseMode handles execution instead of default tool-use loop. */
+  mode?: string;
   /** Output style configuration for this chat turn */
   outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
   /**

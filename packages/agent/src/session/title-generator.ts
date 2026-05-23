@@ -13,7 +13,7 @@ import type { LLMClient } from '../llm/index.js';
 import type { Message, MessageContent } from '../types.js';
 
 const MAX_INPUT_LENGTH = 300;
-const TITLE_MAX_LENGTH = 40;
+const TITLE_MAX_LENGTH = 50; // Allow 5-15 Chinese chars or 5-15 English words
 const TITLE_MIN_LENGTH = 4;
 const TITLE_TIMEOUT_MS = 10000; // 10s timeout, generous for slow models
 const KEYWORD_OVERLAP_THRESHOLD = 0.4;
@@ -216,7 +216,7 @@ function validateTitle(title: string | null | undefined): string | null {
   cleaned = cleaned.trim();
 
   // Reject empty, too long, or too many words (likely preamble leakage)
-  const MAX_TITLE_WORDS = 10;
+  const MAX_TITLE_WORDS = 15;
   if (cleaned.length === 0 || cleaned.length >= 100) return null;
   if (cleaned.split(/\s+/).length > MAX_TITLE_WORDS) return null;
 
@@ -229,25 +229,32 @@ function validateTitle(title: string | null | undefined): string | null {
   return cleaned;
 }
 
-const TITLE_GENERATION_PROMPT = `CRITICAL: You must output ONLY a JSON object, no explanations or thinking.
+const TITLE_GENERATION_PROMPT = `You are a conversation title generation assistant. Your task is to create concise and informative titles for conversations. Follow these rules:
 
-Correct output examples:
-{"title":"纽博格林耐力赛新闻"}
-{"title":"trendradar开源项目搜索"}
+1. Generate the title based on the content of the conversation, capturing the main topic, key problem, discussion intent, or solution discussed.
+2. The title language must match the conversation language. English conversations get English titles; Chinese conversations get Chinese titles.
+3. The title should be human-like and natural, not a simple label. Use proper words to summarize the conversation clearly.
+4. Length should be adaptive:
+   - If the conversation is short or simple, keep the title concise (3-8 words).
+   - If the conversation is long and detailed, include important aspects such as the system, method, problem, or design solution discussed (up to ~12 words).
+   - If the conversation is extremely short, generate a concise but meaningful title reflecting the user's question or statement.
 
-INCORRECT outputs (will be rejected):
-- "Let me think about this..." ❌
-- "Based on the conversation..." ❌
-- "The title is: ..." ❌
-- "Here is the JSON: ..." ❌
+Always return output strictly in JSON format:
+   {"title": "your title here"}
 
-Rules:
-1. Chinese conversation → Chinese title
-2. 4-6 words maximum
-3. NEVER write explanations, only the JSON
+Examples:
 
-Output now:
+Example 1:
+Conversation: Discussion about designing an AI agent to improve news search performance, including algorithm optimization, response speed, and overall solution design.
+JSON Output:
+{"title": "AI Agent News Search Performance and Solution Design"}
 
+Example 2:
+Conversation: Troubleshooting Electron app deployment issues on Windows, covering blank windows, server startup failures, and automatic update workflow problems.
+JSON Output:
+{"title": "Electron Deployment and Update Workflow Issue Analysis"}
+
+Now, generate a title for the following conversation:
 Conversation:
 `;
 
@@ -465,9 +472,8 @@ export async function generateSessionTitle(
           { role: 'user', content: `${TITLE_GENERATION_PROMPT}${input}`, timestamp: Date.now() },
         ],
         {
-          systemPrompt: 'You are a title generator. Output ONLY JSON, no explanations.',
-          maxTokens: 50,
-          temperature: 0.3,
+          maxTokens: 500,
+          temperature: 0.1,
         },
       );
 
@@ -482,7 +488,7 @@ export async function generateSessionTitle(
         } else if (event.type === 'thinking') {
           // MiniMax wraps response in <think> tags - extract JSON from thinking if text is empty
           thinkingContent += typeof event.data === 'string' ? event.data : JSON.stringify(event.data);
-          console.log(`[TitleGenerator] Stream event ${eventCount}: type=thinking, len=${thinkingContent.length}`);
+          console.log(`[TitleGenerator] Stream event ${eventCount}: type=thinking, thinkingContent total len=${thinkingContent.length}, current delta len=${typeof event.data === 'string' ? event.data.length : 0}`);
         } else if (event.type === 'done') {
           console.log(`[TitleGenerator] Stream event ${eventCount}: type=done`);
         } else if (event.type === 'error') {

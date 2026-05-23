@@ -373,6 +373,12 @@ export async function* runAgent({
   const duration = Date.now() - startTime
   console.log(`[AgentTool] Agent ${agentDefinition.agentType} completed in ${duration}ms with ${toolCalls} tool calls`)
 
+  const resultMetadata: Record<string, unknown> = {
+    agentToolCallCount: toolCalls,
+    agentDurationMs: duration,
+    agentStartTime: startTime,
+  }
+
   // Build content blocks including thinking if present
   const contentBlocks: MessageContent[] = []
   if (thinkingParts.length > 0) {
@@ -393,7 +399,8 @@ export async function* runAgent({
     role: 'assistant',
     content: contentBlocks,
     timestamp: Date.now(),
-  }
+    metadata: resultMetadata,
+  } as Message
 
   // Persist sub-agent messages to its DB session so the session can be replayed
   if (sessionId) {

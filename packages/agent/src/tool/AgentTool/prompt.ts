@@ -101,8 +101,9 @@ ${whenNotToUseSection}
 
 Usage notes:
 - Always include a short description (3-5 words) summarizing what the agent will do
-- You can optionally run agents in the background using the run_in_background parameter. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
-- **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.
+- Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks
+- You can optionally run agents in the background using the run_in_background parameter. When an agent runs in the background, the tool returns immediately and you continue working — you will be automatically notified when it completes. Do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
+- Foreground vs background: Use foreground (default) when you need the agent's results before you can proceed. Use background when you have genuinely independent work to do in parallel — you can launch it and keep working, and when it finishes the results will appear in the conversation automatically.
 - To continue a previously spawned agent, use ${SEND_MESSAGE_TOOL_NAME} with the agent's ID or name as the \`to\` field. The agent resumes with its full context preserved. Each Agent invocation starts fresh — provide a complete task description.
 - The agent's outputs should generally be trusted
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent

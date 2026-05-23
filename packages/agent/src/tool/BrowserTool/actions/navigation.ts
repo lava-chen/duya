@@ -38,7 +38,14 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
           includeInteractive: true,
         });
 
-        if (platformContent && platformContent.success && platformContent.text) {
+        console.log(`[NavigateAction] Extractor result:`, JSON.stringify({
+          success: platformContent?.success,
+          textLength: platformContent?.text?.length,
+          error: platformContent?.error,
+          type: platformContent?.type
+        }));
+
+        if (platformContent && platformContent.success && platformContent.text && platformContent.text.length > 0) {
           console.log(`[NavigateAction] Using ${platformContent.type} extractor, got ${platformContent.text.length} chars`);
           compactSnapshot = platformContent.text;
           interactiveElements = (platformContent.interactiveElements || []).map(el => ({
@@ -56,8 +63,11 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
 
       // Fallback to snapshot engine if no platform extractor
       if (!compactSnapshot && ctx.snapshotEngine) {
+        console.log(`[NavigateAction] Using snapshot engine fallback`);
         try {
           const snap = await ctx.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: false });
+          console.log(`[NavigateAction] Snapshot engine result, snapshot length:`, snap.snapshot.length);
+          console.log(`[NavigateAction] Snapshot preview (first 500 chars):`, snap.snapshot.substring(0, 500));
           compactSnapshot = snap.snapshot;
           interactiveElements = snap.interactiveElements.map(el => ({
             ref: el.ref,
@@ -72,7 +82,7 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
         title,
         status: 'loaded',
         mode: ctx.mode,
-        ...(compactSnapshot !== null && compactSnapshot.length > 50
+        ...(compactSnapshot !== null && compactSnapshot.length > 10
           ? { compactSnapshot, interactiveElements, platformType }
           : { snapshotNote: 'Use snapshot operation for full DOM view' }),
       };
