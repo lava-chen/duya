@@ -50,6 +50,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [33-conductor-canvas-ui](./active/33-conductor-canvas-ui.md) | Conductor 画布 UI 与内置 Widget V1 | P0 | Phase 1-4 ✅ |
 | [35-conductor-widget-extensibility](./active/35-conductor-widget-extensibility.md) | Conductor Widget 扩展性与动态安全边界 | P1 | 待开始 |
 | [36-conductor-blueprint-implementation](./active/36-conductor-blueprint-implementation.md) | Conductor 蓝图交互闭环实施 | P0 | 进行中 |
+| [66-async-nonblocking-subagent](./active/66-async-nonblocking-subagent.md) | Async Non-Blocking SubAgent 执行 — 子Agent非阻塞启动，主Agent可并行工作 | P0 | Planning |
 | [37-subagent-nested-session](./active/37-subagent-nested-session.md) | SubAgent 嵌套会话侧边栏展示 | P1 | Planning |
 | [39-beta-launch-preparation](./active/39-beta-launch-preparation.md) | Beta 发布准备 | P0 | 进行中 |
 | [48-canvas-element-data-model](./active/48-canvas-element-data-model.md) | Canvas Elements 类型系统 | P0 | 设计阶段 |
@@ -57,6 +58,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [60-research-mode](./active/60-research-mode.md) | Research Mode — 迭代研究工作流 + Interactive Report | P1 | 规划中 |
 | [62-gateway-ipc-refactor](./active/62-gateway-ipc-refactor.md) | Gateway ↔ IPC 架构重整 | P0 | 进行中 |
 | [64-browser-parallel-isolation](./active/64-browser-parallel-isolation.md) | 浏览器多 Tab 隔离与并行执行 | P0 | 进行中 |
+| [65-recap-feature](./active/65-recap-feature.md) | Session Recap — 离开回来后自动显示会话摘要 | P1 | Planning |
 
 ### Compact System Fix Plans
 

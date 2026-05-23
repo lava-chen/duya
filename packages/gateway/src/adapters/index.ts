@@ -1,3 +1,4 @@
+import './feishu/index.js';
 import './telegram/index.js';
 import './weixin/index.js';
 import './discord/index.js';
