@@ -326,6 +326,7 @@ function isActivePhase(phase: StreamPhase): boolean {
 class StreamSessionManager {
   private sessions: Map<string, SessionState> = new Map();
   private conductorSessions: Map<string, ConductorSessionState> = new Map();
+  private pendingMessages: Map<string, StartStreamParams[]> = new Map();
   private textEmitInterval = 300; // Increased from 100ms to reduce UI flickering
   private idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
   private debugIpc = typeof process !== 'undefined' && process.env?.DUYA_DEBUG_IPC === 'true';
@@ -638,6 +639,35 @@ class StreamSessionManager {
       this.sessions.set(sessionId, state);
     }
     return buildSnapshot(state);
+  }
+
+  enqueueMessage(sessionId: string, params: StartStreamParams): void {
+    const queue = this.pendingMessages.get(sessionId) || [];
+    queue.push(params);
+    this.pendingMessages.set(sessionId, queue);
+  }
+
+  getPendingMessages(sessionId: string): StartStreamParams[] {
+    return this.pendingMessages.get(sessionId) || [];
+  }
+
+  clearQueuedMessages(sessionId: string): void {
+    this.pendingMessages.set(sessionId, []);
+  }
+
+  hasQueuedMessages(sessionId: string): boolean {
+    const queue = this.pendingMessages.get(sessionId);
+    return !!queue && queue.length > 0;
+  }
+
+  private autoStartQueuedStream(sessionId: string): void {
+    const queue = this.pendingMessages.get(sessionId);
+    if (!queue || queue.length === 0) return;
+    const next = queue.shift()!;
+    this.pendingMessages.set(sessionId, queue);
+    setTimeout(() => {
+      void this.startStream(next);
+    }, 0);
   }
 
   /**
@@ -1242,6 +1272,7 @@ class StreamSessionManager {
     this.flushPendingText(sessionId, streamId);
     this.notifyListeners(sessionId);
     this.clearIdleTimeout(sessionId);
+    this.autoStartQueuedStream(sessionId);
     showMessageCompletionNotification(sessionId).catch(() => {
       // Ignore notification errors
     });
@@ -1258,6 +1289,7 @@ class StreamSessionManager {
     this.notifyCompletedAtListeners(sessionId, s.completedAt);
     this.notifyListeners(sessionId);
     this.clearIdleTimeout(sessionId);
+    this.autoStartQueuedStream(sessionId);
   }
 
   private handleDbPersistedEvent(
@@ -1829,6 +1861,10 @@ export const ensureSession = (sessionId: string) => streamSessionManager.ensureS
 export const startStream = (params: StartStreamParams) => streamSessionManager.startStream(params);
 export const stopStream = (sessionId: string, reason?: string) => streamSessionManager.stopStream(sessionId, reason);
 export const canSend = (sessionId: string) => streamSessionManager.canSend(sessionId);
+export const enqueueMessage = (sessionId: string, params: StartStreamParams) => streamSessionManager.enqueueMessage(sessionId, params);
+export const getPendingMessages = (sessionId: string) => streamSessionManager.getPendingMessages(sessionId);
+export const clearQueuedMessages = (sessionId: string) => streamSessionManager.clearQueuedMessages(sessionId);
+export const hasQueuedMessages = (sessionId: string) => streamSessionManager.hasQueuedMessages(sessionId);
 export const registerLoadedMessages = (sessionId: string, messages: ReadonlyArray<{ role: string; content: string | unknown[]; msgType?: string }>) =>
   streamSessionManager.registerLoadedMessages(sessionId, messages);
 

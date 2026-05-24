@@ -20,6 +20,7 @@ interface MessageListProps {
   onScrollStateChange?: (isNearBottom: boolean) => void;
   error?: string | null;
   sessionId: string;
+  onRewindToMessage?: (messageId: string) => void;
 }
 
 interface GroupedMessage {
@@ -38,6 +39,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   onScrollStateChange,
   error,
   sessionId,
+  onRewindToMessage,
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -357,6 +359,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             message={group.message}
             toolResults={group.toolResults}
             mergedMessages={group.mergedMessages}
+            onRewindToMessage={onRewindToMessage}
           />
         ))}
 

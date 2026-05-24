@@ -233,6 +233,7 @@ async function handlePostChat(
         workingDirectory: workingDirectory || '',
         systemPrompt: parsed.systemPrompt,
         language: 'zh',
+        communicationPlatform: parsed.options?.platform,
       });
 
       try {

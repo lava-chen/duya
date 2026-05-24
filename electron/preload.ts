@@ -90,10 +90,16 @@ export interface ThreadAPI {
   updateTask: (id: string, data: Record<string, unknown>) => Promise<unknown>
 }
 
+export interface SessionAPI {
+  saveDraft: (sessionId: string, draft: string) => Promise<void>
+  getDraft: (sessionId: string) => Promise<string>
+}
+
 export interface MessageAPI {
   add: (data: Record<string, unknown>) => Promise<unknown>
   getBySession: (sessionId: string) => Promise<unknown[]>
   replace: (sessionId: string, messages: unknown[], generation: number) => Promise<unknown>
+  truncateAfter: (sessionId: string, messageId: string) => Promise<{ deletedCount: number }>
 }
 
 export interface SettingsAPI {
@@ -432,6 +438,7 @@ export interface ElectronAPI {
     redo: (canvasId: string) => Promise<unknown>
   }
   thread: ThreadAPI
+  session: SessionAPI
   message: MessageAPI
   settingsDb: SettingsAPI
   migration: MigrationAPI
@@ -1008,11 +1015,17 @@ const electronAPI: ElectronAPI = {
     getTasks: (sessionId: string) => ipcRenderer.invoke('db:task:getBySession', sessionId),
     updateTask: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:task:update', id, data),
   },
+  session: {
+    saveDraft: (sessionId: string, draft: string) => ipcRenderer.invoke('db:session:saveDraft', sessionId, draft),
+    getDraft: (sessionId: string) => ipcRenderer.invoke('db:session:getDraft', sessionId),
+  },
   message: {
     add: (data: Record<string, unknown>) => ipcRenderer.invoke('db:message:add', data),
     getBySession: (sessionId: string) => ipcRenderer.invoke('db:message:getBySession', sessionId),
     replace: (sessionId: string, messages: unknown[], generation: number) =>
       ipcRenderer.invoke('db:message:replace', sessionId, messages, generation),
+    truncateAfter: (sessionId: string, messageId: string) =>
+      ipcRenderer.invoke('db:message:truncateAfter', sessionId, messageId),
   },
   settingsDb: {
     get: (key: string) => ipcRenderer.invoke('db:setting:get', key),

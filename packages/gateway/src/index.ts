@@ -59,10 +59,17 @@ function handleMessage(msg: MainToGatewayMessage): void {
         gatewayManager = new GatewayManager();
       }
       gatewayManager.init(msg.config).then(async () => {
-        // Auto-start adapters after init
         console.log('[Gateway] init complete, starting adapters...');
         await gatewayManager!.start();
-        send({ type: 'gateway:init:complete', success: true });
+        const status = gatewayManager!.getStatus();
+        const activeCount = status.adapters.filter(a => a.running).length;
+        const totalCount = status.adapters.length;
+        console.log(`[Gateway] Init complete: ${activeCount}/${totalCount} adapters running`);
+        send({
+          type: 'gateway:init:complete',
+          success: true,
+          adapters: status.adapters,
+        });
       }).catch((err) => {
         send({ type: 'gateway:init:complete', success: false, error: String(err) });
       });

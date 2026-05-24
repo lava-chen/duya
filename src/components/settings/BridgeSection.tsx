@@ -376,203 +376,6 @@ export default function BridgeSection() {
         </div>
       )}
 
-      {/* Pairing Section */}
-      <SettingsSection title="Pairing" description="Approve users from messaging platforms to interact with the agent">
-        <SettingsCard>
-          {/* Pending pairing requests */}
-          {pairingPending.length > 0 && (
-            <div className="px-4 pt-3 pb-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                Pending Requests ({pairingPending.length})
-              </p>
-              <div className="space-y-1.5">
-                {pairingPending.map((p, i) => (
-                  <div key={`${p.platform}-${p.platformUserId}-${i}`}
-                    className="flex items-center justify-between rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="text-xs font-mono font-bold text-warning bg-warning/10 px-1.5 py-0.5 rounded">
-                        {p.code}
-                      </span>
-                      <span className="text-xs text-muted-foreground capitalize">{p.platform}</span>
-                      <span className="text-xs text-muted-foreground/70 truncate max-w-[140px]">
-                        {p.platformUserId}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => { setPairingCode(p.code); setPairingPlatform(p.platform); handlePairingApprove(); }}
-                      className="text-xs px-2 py-1 rounded bg-warning/20 text-warning hover:bg-warning/30 transition-colors shrink-0"
-                    >
-                      Approve
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Manual pairing code input */}
-          <div className="px-4 py-3">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Enter Pairing Code
-            </p>
-            <div className="flex items-center gap-2">
-              <select
-                value={pairingPlatform}
-                onChange={(e) => setPairingPlatform(e.target.value)}
-                className="h-9 rounded-lg border border-border/50 bg-background px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-              >
-                <option value="weixin">WeChat</option>
-                <option value="telegram">Telegram</option>
-                <option value="qq">QQ</option>
-                <option value="feishu">Feishu</option>
-                <option value="discord">Discord</option>
-                <option value="whatsapp">WhatsApp</option>
-              </select>
-              <input
-                type="text"
-                value={pairingCode}
-                onChange={(e) => { setPairingCode(e.target.value); setPairingError(null); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') handlePairingApprove(); }}
-                placeholder="8-character code"
-                maxLength={8}
-                className="flex-1 h-9 rounded-lg border border-border/50 bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-accent"
-              />
-              <button
-                onClick={handlePairingApprove}
-                disabled={pairingLoading || !pairingCode.trim()}
-                className="h-9 px-4 rounded-lg text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/90 transition-all disabled:opacity-50 shrink-0"
-              >
-                {pairingLoading ? <SpinnerGapIcon size={14} className="animate-spin" /> : 'Approve'}
-              </button>
-            </div>
-            {pairingError && (
-              <p className="text-xs text-destructive mt-1.5">{pairingError}</p>
-            )}
-          </div>
-
-          {/* Approved users */}
-          {pairingApproved.length > 0 && (
-            <div className="px-4 pb-3 pt-1 border-t border-border/30">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                Approved Users ({pairingApproved.length})
-              </p>
-              <div className="space-y-1.5">
-                {pairingApproved.map((a, i) => (
-                  <div key={`${a.platform}-${a.platformUserId}-${i}`}
-                    className="flex items-center justify-between rounded-lg border border-success/30 bg-success/5 px-3 py-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <CheckCircleIcon size={12} className="text-green-500 shrink-0" />
-                      <span className="text-xs text-muted-foreground capitalize">{a.platform}</span>
-                      <span className="text-xs text-muted-foreground/70 truncate max-w-[180px]">
-                        {a.platformUserId}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => handlePairingRevoke(a.platform, a.platformUserId)}
-                      className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
-                    >
-                      Revoke
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {pairingPending.length === 0 && pairingApproved.length === 0 && (
-            <div className="px-4 py-4 text-center">
-              <p className="text-xs text-muted-foreground">
-                No pairing requests yet. When someone DMs the bot (with DM policy set to "pairing"), their code will appear here.
-              </p>
-            </div>
-          )}
-        </SettingsCard>
-      </SettingsSection>
-
-      {/* Bridge Control Section */}
-      <SettingsSection title={t('bridge.bridgeControl')} description={t('bridge.bridgeControlDesc')}>
-        <SettingsCard>
-          <SettingsRow
-            label={t('bridge.status')}
-            description={t("bridge.bridgeConnectionStatus")}
-            action={
-              <div className="flex items-center gap-2">
-                <span
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${
-                    status?.running
-                      ? "bg-green-500/10 text-green-500 border border-green-500/20"
-                      : "bg-muted text-muted-foreground border border-border/20"
-                  }`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full ${status?.running ? "bg-green-500" : "bg-muted-foreground"}`} />
-                  {status?.running ? t("bridge.running") : t("bridge.stopped")}
-                </span>
-                <button
-                  onClick={() => controlBridge(status?.running ? 'stop' : 'start')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                    status?.running
-                      ? "border-red-500/30 text-red-500 hover:bg-red-500/10"
-                      : "border-green-500/30 text-green-500 hover:bg-green-500/10"
-                  }`}
-                >
-                  {status?.running ? <StopIcon size={14} /> : <PlayCircleIcon size={14} />}
-                  {status?.running ? t("bridge.stop") : t("bridge.start")}
-                </button>
-              </div>
-            }
-          />
-          <SettingsToggle
-            label={t("bridge.autoStart")}
-            description={t("bridge.autoStartDesc")}
-            checked={status?.autoStart ?? false}
-            onCheckedChange={() => controlBridge('auto-start')}
-          />
-          <SettingsInput
-            label={t("bridge.proxyUrl")}
-            description={t("bridge.proxyUrlDesc")}
-            value={settings?.['bridge_proxy_url'] || ''}
-            onChange={(v) => updateSetting('bridge_proxy_url', v)}
-            placeholder="http://127.0.0.1:7890"
-            action={
-              <button
-                onClick={fetchProxyStatus}
-                className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors shrink-0"
-                title="Refresh proxy detection"
-              >
-                <ArrowsClockwiseIcon size={14} />
-              </button>
-            }
-          />
-          {proxyStatus && (
-            <div className="px-4 pb-3.5">
-              {proxyStatus.effective ? (
-                <div className="flex items-center gap-2 text-xs">
-                  <GlobeHemisphereWestIcon size={12} className="text-green-500" />
-                  <span className="text-green-500">Active: {proxyStatus.effective}</span>
-                  {proxyStatus.configured && <span className="text-muted-foreground">(configured)</span>}
-                  {!proxyStatus.configured && proxyStatus.env && <span className="text-muted-foreground">(from env)</span>}
-                  {!proxyStatus.configured && !proxyStatus.env && proxyStatus.system && (
-                    <span className="text-muted-foreground">(system)</span>
-                  )}
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <GlobeHemisphereWestIcon size={12} />
-                  <span>No proxy detected — direct connection</span>
-                </div>
-              )}
-            </div>
-          )}
-          <SettingsInput
-            label={t('bridge.defaultWorkspace')}
-            description={t('bridge.defaultWorkspaceDesc')}
-            value={settings?.['bridge_workspace'] || ''}
-            onChange={(v) => updateSetting('bridge_workspace', v)}
-            placeholder="~/.duya/workspace"
-          />
-        </SettingsCard>
-      </SettingsSection>
-
       {/* Channels Section with Sidebar Layout */}
       <SettingsSection title={t('bridge.channels')} description={t('bridge.configureMessagingPlatforms')} className="flex-1 min-h-0">
         <div className="flex h-full min-h-[400px] border border-border/50 rounded-xl overflow-hidden bg-card">
@@ -740,6 +543,203 @@ export default function BridgeSection() {
             )}
           </div>
         </div>
+      </SettingsSection>
+
+      {/* Bridge Control Section */}
+      <SettingsSection title={t('bridge.bridgeControl')} description={t('bridge.bridgeControlDesc')}>
+        <SettingsCard>
+          <SettingsRow
+            label={t('bridge.status')}
+            description={t("bridge.bridgeConnectionStatus")}
+            action={
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${
+                    status?.running
+                      ? "bg-green-500/10 text-green-500 border border-green-500/20"
+                      : "bg-muted text-muted-foreground border border-border/20"
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${status?.running ? "bg-green-500" : "bg-muted-foreground"}`} />
+                  {status?.running ? t("bridge.running") : t("bridge.stopped")}
+                </span>
+                <button
+                  onClick={() => controlBridge(status?.running ? 'stop' : 'start')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    status?.running
+                      ? "border-red-500/30 text-red-500 hover:bg-red-500/10"
+                      : "border-green-500/30 text-green-500 hover:bg-green-500/10"
+                  }`}
+                >
+                  {status?.running ? <StopIcon size={14} /> : <PlayCircleIcon size={14} />}
+                  {status?.running ? t("bridge.stop") : t("bridge.start")}
+                </button>
+              </div>
+            }
+          />
+          <SettingsToggle
+            label={t("bridge.autoStart")}
+            description={t("bridge.autoStartDesc")}
+            checked={status?.autoStart ?? false}
+            onCheckedChange={() => controlBridge('auto-start')}
+          />
+          <SettingsInput
+            label={t("bridge.proxyUrl")}
+            description={t("bridge.proxyUrlDesc")}
+            value={settings?.['bridge_proxy_url'] || ''}
+            onChange={(v) => updateSetting('bridge_proxy_url', v)}
+            placeholder="http://127.0.0.1:7890"
+            action={
+              <button
+                onClick={fetchProxyStatus}
+                className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors shrink-0"
+                title="Refresh proxy detection"
+              >
+                <ArrowsClockwiseIcon size={14} />
+              </button>
+            }
+          />
+          {proxyStatus && (
+            <div className="px-4 pb-3.5">
+              {proxyStatus.effective ? (
+                <div className="flex items-center gap-2 text-xs">
+                  <GlobeHemisphereWestIcon size={12} className="text-green-500" />
+                  <span className="text-green-500">Active: {proxyStatus.effective}</span>
+                  {proxyStatus.configured && <span className="text-muted-foreground">(configured)</span>}
+                  {!proxyStatus.configured && proxyStatus.env && <span className="text-muted-foreground">(from env)</span>}
+                  {!proxyStatus.configured && !proxyStatus.env && proxyStatus.system && (
+                    <span className="text-muted-foreground">(system)</span>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <GlobeHemisphereWestIcon size={12} />
+                  <span>No proxy detected — direct connection</span>
+                </div>
+              )}
+            </div>
+          )}
+          <SettingsInput
+            label={t('bridge.defaultWorkspace')}
+            description={t('bridge.defaultWorkspaceDesc')}
+            value={settings?.['bridge_workspace'] || ''}
+            onChange={(v) => updateSetting('bridge_workspace', v)}
+            placeholder="~/.duya/workspace"
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Pairing Section */}
+      <SettingsSection title="Pairing" description="Approve users from messaging platforms to interact with the agent">
+        <SettingsCard>
+          {/* Pending pairing requests */}
+          {pairingPending.length > 0 && (
+            <div className="px-4 pt-3 pb-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                Pending Requests ({pairingPending.length})
+              </p>
+              <div className="space-y-1.5">
+                {pairingPending.map((p, i) => (
+                  <div key={`${p.platform}-${p.platformUserId}-${i}`}
+                    className="flex items-center justify-between rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="text-xs font-mono font-bold text-warning bg-warning/10 px-1.5 py-0.5 rounded">
+                        {p.code}
+                      </span>
+                      <span className="text-xs text-muted-foreground capitalize">{p.platform}</span>
+                      <span className="text-xs text-muted-foreground/70 truncate max-w-[140px]">
+                        {p.platformUserId}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => { setPairingCode(p.code); setPairingPlatform(p.platform); handlePairingApprove(); }}
+                      className="text-xs px-2 py-1 rounded bg-warning/20 text-warning hover:bg-warning/30 transition-colors shrink-0"
+                    >
+                      Approve
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Manual pairing code input */}
+          <div className="px-4 py-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+              Enter Pairing Code
+            </p>
+            <div className="flex items-center gap-2">
+              <select
+                value={pairingPlatform}
+                onChange={(e) => setPairingPlatform(e.target.value)}
+                className="h-9 rounded-lg border border-border/50 bg-background px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
+              >
+                <option value="weixin">WeChat</option>
+                <option value="telegram">Telegram</option>
+                <option value="qq">QQ</option>
+                <option value="feishu">Feishu</option>
+                <option value="discord">Discord</option>
+                <option value="whatsapp">WhatsApp</option>
+              </select>
+              <input
+                type="text"
+                value={pairingCode}
+                onChange={(e) => { setPairingCode(e.target.value); setPairingError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handlePairingApprove(); }}
+                placeholder="8-character code"
+                maxLength={8}
+                className="flex-1 h-9 rounded-lg border border-border/50 bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-accent"
+              />
+              <button
+                onClick={handlePairingApprove}
+                disabled={pairingLoading || !pairingCode.trim()}
+                className="h-9 px-4 rounded-lg text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/90 transition-all disabled:opacity-50 shrink-0"
+              >
+                {pairingLoading ? <SpinnerGapIcon size={14} className="animate-spin" /> : 'Approve'}
+              </button>
+            </div>
+            {pairingError && (
+              <p className="text-xs text-destructive mt-1.5">{pairingError}</p>
+            )}
+          </div>
+
+          {/* Approved users */}
+          {pairingApproved.length > 0 && (
+            <div className="px-4 pb-3 pt-1 border-t border-border/30">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                Approved Users ({pairingApproved.length})
+              </p>
+              <div className="space-y-1.5">
+                {pairingApproved.map((a, i) => (
+                  <div key={`${a.platform}-${a.platformUserId}-${i}`}
+                    className="flex items-center justify-between rounded-lg border border-success/30 bg-success/5 px-3 py-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CheckCircleIcon size={12} className="text-green-500 shrink-0" />
+                      <span className="text-xs text-muted-foreground capitalize">{a.platform}</span>
+                      <span className="text-xs text-muted-foreground/70 truncate max-w-[180px]">
+                        {a.platformUserId}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handlePairingRevoke(a.platform, a.platformUserId)}
+                      className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {pairingPending.length === 0 && pairingApproved.length === 0 && (
+            <div className="px-4 py-4 text-center">
+              <p className="text-xs text-muted-foreground">
+                No pairing requests yet. When someone DMs the bot (with DM policy set to "pairing"), their code will appear here.
+              </p>
+            </div>
+          )}
+        </SettingsCard>
       </SettingsSection>
     </div>
   );

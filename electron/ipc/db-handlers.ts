@@ -248,6 +248,17 @@ export function registerDbHandlers(): void {
     ).all(parentId);
   });
 
+  ipcMain.handle('db:session:saveDraft', (_event, sessionId: string, draft: string) => {
+    db!.prepare('UPDATE chat_sessions SET draft_message = ?, updated_at = ? WHERE id = ?')
+      .run(draft, Date.now(), sessionId);
+  });
+
+  ipcMain.handle('db:session:getDraft', (_event, sessionId: string) => {
+    const row = db!.prepare('SELECT draft_message FROM chat_sessions WHERE id = ?')
+      .get(sessionId) as { draft_message: string } | undefined;
+    return row?.draft_message ?? '';
+  });
+
   // ==================== Message Handlers ====================
 
   ipcMain.handle('db:message:add', (_event, data: {
@@ -469,6 +480,22 @@ export function registerDbHandlers(): void {
       dbLogger.error('replaceMessages failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DB);
       return { success: false, reason: error instanceof Error ? error.message : String(error) };
     }
+  });
+
+  ipcMain.handle('db:message:truncateAfter', (_event, sessionId: string, messageId: string) => {
+    const result = db!.prepare(
+      'SELECT created_at FROM messages WHERE id = ? AND session_id = ?'
+    ).get(messageId, sessionId) as { created_at: number } | undefined;
+
+    if (!result) return { deletedCount: 0 };
+
+    const deleteResult = db!.prepare(
+      'DELETE FROM messages WHERE session_id = ? AND created_at > ?'
+    ).run(sessionId, result.created_at);
+
+    db!.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
+
+    return { deletedCount: deleteResult.changes };
   });
 
   // ==================== Lock Handlers ====================
@@ -1763,6 +1790,155 @@ export function registerConductorHandlers(): void {
           const actionId = writeActionLog(action, null, { layout }, resultPatch);
           broadcastPatch({ canvasId, actionId, resultPatch });
           return { success: true, actionId, resultPatch };
+        }
+
+        case 'element.create_native': {
+          const elementId = randomUUID();
+          const nodeType = request.nodeType as string;
+          const position = request.position as Record<string, unknown>;
+          const content = (request.content as Record<string, unknown>) || {};
+          const style = (request.style as Record<string, unknown>) || {};
+          const nativeKind = nodeType;
+          const elementKind = `native/${nodeType}`;
+          const permissions = {
+            agentCanRead: true,
+            agentCanWrite: true,
+            agentCanDelete: true,
+          };
+          const config = { ...content, style };
+          const metadata = {
+            label: (content.label as string) || nodeType,
+            tags: [] as string[],
+            createdBy: actor as string,
+            parentId: null,
+            childIds: [] as string[],
+          };
+
+          d.prepare(
+            `INSERT INTO conductor_elements (id, canvas_id, element_kind, native_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'idle', 1, ?, ?, ?, ?)`
+          ).run(elementId, canvasId, elementKind, nativeKind, JSON.stringify(position), JSON.stringify(config), JSON.stringify(permissions), JSON.stringify(metadata), now, now);
+
+          const element = {
+            id: elementId,
+            canvasId,
+            elementKind,
+            position,
+            config,
+            vizSpec: null,
+            state: 'idle',
+            dataVersion: 1,
+            permissions,
+            metadata,
+            sourceCode: null,
+            createdAt: now,
+            updatedAt: now,
+          };
+
+          const resultPatch = { element };
+          const actionId = writeActionLog(action, elementId, { nodeType, position, content, style }, resultPatch);
+          broadcastPatch({ canvasId, elementId, actionId, resultPatch });
+          return { success: true, actionId, elementId, resultPatch };
+        }
+
+        case 'connector.create': {
+          const elementId = randomUUID();
+          const source = request.source as Record<string, unknown>;
+          const target = request.target as Record<string, unknown>;
+          const curvature = (request.curvature as number) || 0.4;
+          const style = (request.style as Record<string, unknown>) || {};
+          const nativeKind = 'connector';
+          const elementKind = 'native/connector';
+          const position = { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 };
+          const permissions = {
+            agentCanRead: true,
+            agentCanWrite: true,
+            agentCanDelete: true,
+          };
+          const config = { source, target, curvature, routingMode: 'bezier', style };
+          const metadata = {
+            label: 'Connector',
+            tags: [] as string[],
+            createdBy: actor as string,
+            parentId: null,
+            childIds: [] as string[],
+          };
+
+          d.prepare(
+            `INSERT INTO conductor_elements (id, canvas_id, element_kind, native_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'idle', 1, ?, ?, ?, ?)`
+          ).run(elementId, canvasId, elementKind, nativeKind, JSON.stringify(position), JSON.stringify(config), JSON.stringify(permissions), JSON.stringify(metadata), now, now);
+
+          const element = {
+            id: elementId,
+            canvasId,
+            elementKind,
+            position,
+            config,
+            vizSpec: null,
+            state: 'idle',
+            dataVersion: 1,
+            permissions,
+            metadata,
+            sourceCode: null,
+            createdAt: now,
+            updatedAt: now,
+          };
+
+          const resultPatch = { element };
+          const actionId = writeActionLog(action, elementId, { source, target, curvature, style }, resultPatch);
+          broadcastPatch({ canvasId, elementId, actionId, resultPatch });
+          return { success: true, actionId, elementId, resultPatch };
+        }
+
+        case 'element.update_content': {
+          const elementId = request.elementId as string;
+          const content = request.content as Record<string, unknown>;
+          const prev = d.prepare('SELECT config FROM conductor_elements WHERE id = ? AND canvas_id = ?').get(elementId, canvasId) as any;
+          if (!prev) throw new Error(`Element ${elementId} not found`);
+
+          const prevConfig = JSON.parse(prev.config);
+          d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(content), now, elementId);
+
+          const resultPatch = { config: content, prevConfig };
+          const actionId = writeActionLog(action, elementId, { content }, resultPatch);
+          broadcastPatch({ canvasId, elementId, actionId, resultPatch });
+          return { success: true, actionId, elementId, resultPatch };
+        }
+
+        case 'element.reparent': {
+          const elementId = request.elementId as string;
+          const parentId = request.parentId as string | null;
+          const prev = d.prepare('SELECT metadata FROM conductor_elements WHERE id = ? AND canvas_id = ?').get(elementId, canvasId) as any;
+          if (!prev) throw new Error(`Element ${elementId} not found`);
+
+          const prevMetadata = JSON.parse(prev.metadata);
+          const prevParentId = prevMetadata.parentId || null;
+
+          const newMetadata = { ...prevMetadata, parentId };
+          if (prevParentId) {
+            const oldParent = d.prepare('SELECT metadata FROM conductor_elements WHERE id = ? AND canvas_id = ?').get(prevParentId, canvasId) as any;
+            if (oldParent) {
+              const oldParentMeta = JSON.parse(oldParent.metadata);
+              oldParentMeta.childIds = (oldParentMeta.childIds || []).filter((id: string) => id !== elementId);
+              d.prepare('UPDATE conductor_elements SET metadata = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(oldParentMeta), now, prevParentId);
+            }
+          }
+          if (parentId) {
+            const newParent = d.prepare('SELECT metadata FROM conductor_elements WHERE id = ? AND canvas_id = ?').get(parentId, canvasId) as any;
+            if (newParent) {
+              const newParentMeta = JSON.parse(newParent.metadata);
+              newParentMeta.childIds = [...(newParentMeta.childIds || []), elementId];
+              d.prepare('UPDATE conductor_elements SET metadata = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(newParentMeta), now, parentId);
+            }
+          }
+
+          d.prepare('UPDATE conductor_elements SET metadata = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(newMetadata), now, elementId);
+
+          const resultPatch = { metadata: newMetadata, prevMetadata };
+          const actionId = writeActionLog(action, elementId, { parentId }, resultPatch);
+          broadcastPatch({ canvasId, elementId, actionId, resultPatch });
+          return { success: true, actionId, elementId, resultPatch };
         }
 
         default:

@@ -14,6 +14,7 @@ import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getBrowserExtensionStatus } from '../services/browser/daemon';
 import { getDatabase } from './db-handlers';
 import { setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from '../services/auto-start';
+import { getGatewayProxyConfig, setGatewayProxyConfig, GatewayProxyConfig } from '../db/queries/settings';
 
 export function registerSettingsHandlers(): void {
   // Auto-start settings
@@ -135,6 +136,29 @@ export function registerSettingsHandlers(): void {
       const logger = getLogger();
       logger.error('agent:reinit-provider failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Main);
       return { success: false, reason: String(error) };
+    }
+  });
+
+  // Gateway per-channel proxy configuration
+  ipcMain.handle('settings:get-gateway-proxy-config', async () => {
+    try {
+      const config = getGatewayProxyConfig();
+      return { success: true, config };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to get gateway proxy config', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('settings:set-gateway-proxy-config', async (_event, config: GatewayProxyConfig) => {
+    try {
+      setGatewayProxyConfig(config);
+      return { success: true };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to set gateway proxy config', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
+      return { success: false, error: String(error) };
     }
   });
 }

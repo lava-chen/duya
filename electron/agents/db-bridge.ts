@@ -313,7 +313,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
           const effectiveContent = msg.content;
           let contentStr: string;
-          let msgType = msg.msg_type || null;
+          let msgType = msg.msg_type || 'text';
           let thinking: string | null = msg.thinking || null;
           let toolName: string | null = msg.tool_name || null;
           let toolInput: string | null = msg.tool_input || null;

@@ -21,7 +21,6 @@ export class UserMapper {
    * Get or create a DUYA session for an inbound platform message
    */
   async getOrCreateSession(msg: NormalizedMessage): Promise<string> {
-    // Validate required fields
     if (!msg.platform || !msg.platformChatId) {
       throw new Error(`Missing required fields: platform=${msg.platform}, platformChatId=${msg.platformChatId}`);
     }
@@ -39,34 +38,12 @@ export class UserMapper {
       return existing.session_id;
     }
 
-    // 2. No existing mapping - request Main to create a new session
+    // 2. Request Main to create session + mapping atomically (single IPC round-trip)
     const sessionId = await this.ipc.request('gateway:create_session', {
       platform: msg.platform,
       platformUserId: msg.platformUserId,
       platformChatId: msg.platformChatId,
     }) as string;
-
-    // 3. Write mapping via db:request
-    const mappingResult = await this.ipc.request('db:request', {
-      action: 'gateway_user:createMapping',
-      payload: {
-        platform: msg.platform,
-        platformUserId: msg.platformUserId,
-        platformChatId: msg.platformChatId,
-        sessionId,
-      },
-    }) as { error?: string } | null;
-
-    // Check if mapping creation failed
-    if (mappingResult?.error) {
-      console.error('[UserMapper] Failed to create user mapping:', mappingResult.error, {
-        platform: msg.platform,
-        platformChatId: msg.platformChatId,
-        sessionId,
-      });
-      // Still return the sessionId - the session exists, even if mapping failed
-      // This allows the conversation to continue, but the mapping will be retried on next message
-    }
 
     return sessionId;
   }

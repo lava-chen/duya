@@ -3,7 +3,7 @@
  *
  * Lifecycle:
  * 1. Receive init config from Main Process
- * 2. Start enabled adapters with their credentials
+ * 2. Start enabled adapters in parallel with independent timeouts
  * 3. Route inbound messages → Main Process (via IPC)
  * 4. Route outbound messages → Platform adapters
  */
@@ -12,6 +12,7 @@ import type {
   PlatformType,
   PlatformConfig,
   GatewayInitConfig,
+  GatewayProxyConfig,
   GatewayStatus,
   AdapterStatus,
   NormalizedMessage,
@@ -27,6 +28,9 @@ import { setProxyUrl, initProxy } from './proxy-fetch.js';
 import { buildImageAttachments } from './attachment-builder.js';
 import { resolveDisplayConfig, type DisplayUserConfig } from './display-config.js';
 
+const ADAPTER_START_TIMEOUT_MS = 30_000;
+const ADAPTER_STOP_TIMEOUT_MS = 10_000;
+
 export class GatewayManager {
   private running = false;
   private adapters = new Map<PlatformType, PlatformAdapter>();
@@ -36,6 +40,7 @@ export class GatewayManager {
   private streamHandler: StreamHandler;
   private permissionBroker: PermissionBroker;
   private autoStart = false;
+  private proxyConfig?: GatewayProxyConfig;
 
   constructor() {
     this.ipc = new IpcClient();
@@ -55,9 +60,11 @@ export class GatewayManager {
    */
   async init(config: GatewayInitConfig): Promise<void> {
     this.autoStart = config.autoStart;
+    this.proxyConfig = config.proxyConfig;
     console.log('[STARTUP] GatewayManager.init received config:');
     console.log('[STARTUP]   autoStart:', config.autoStart);
     console.log('[STARTUP]   platforms count:', config.platforms.length);
+    console.log('[STARTUP]   proxyConfig:', config.proxyConfig ? { globalEnabled: config.proxyConfig.globalEnabled, channels: Object.keys(config.proxyConfig.channels) } : 'undefined');
     for (const p of config.platforms) {
       console.log('[STARTUP]   platform:', p.platform, 'enabled:', p.enabled, 'hasCredentials:', !!(p.credentials && Object.keys(p.credentials).length > 0), 'credentialsKeys:', Object.keys(p.credentials || {}));
     }
@@ -70,77 +77,133 @@ export class GatewayManager {
     this.adapterConfigs.clear();
     for (const platformConfig of config.platforms) {
       if (platformConfig.enabled) {
-        console.log('[STARTUP] GatewayManager storing config for:', platformConfig.platform);
+        // Determine if this platform should use proxy based on per-channel config
+        const useProxy = this.shouldUseProxyForPlatform(platformConfig.platform);
+        console.log('[STARTUP] GatewayManager storing config for:', platformConfig.platform, 'useProxy:', useProxy);
         this.adapterConfigs.set(platformConfig.platform, {
           platform: platformConfig.platform,
           credentials: platformConfig.credentials,
           options: platformConfig.options,
+          useProxy,
         });
       }
     }
 
     console.log(`[GatewayManager] Init complete, autoStart=${this.autoStart}, platforms=${this.adapterConfigs.size}`);
-    console.log('[STARTUP] adapterConfigs after init:', Array.from(this.adapterConfigs.entries()).map(([k, v]) => ({ platform: k, credentialsKeys: Object.keys(v.credentials) })));
+    console.log('[STARTUP] adapterConfigs after init:', Array.from(this.adapterConfigs.entries()).map(([k, v]) => ({ platform: k, credentialsKeys: Object.keys(v.credentials), useProxy: v.useProxy })));
   }
 
   /**
-   * Start all configured adapters
+   * Determine if a platform should use proxy based on per-channel configuration
+   */
+  private shouldUseProxyForPlatform(platform: PlatformType): boolean {
+    if (!this.proxyConfig) {
+      return true; // Default to using proxy if no config
+    }
+    // Check per-channel setting first, fallback to global
+    const channelSetting = this.proxyConfig.channels[platform];
+    if (channelSetting !== undefined) {
+      return channelSetting;
+    }
+    return this.proxyConfig.globalEnabled;
+  }
+
+  /**
+   * Start all configured adapters in parallel.
+   * Each adapter starts independently with its own timeout.
+   * One adapter failing or hanging does NOT block others.
    */
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
 
-    console.log('[GatewayManager] Starting adapters, configs:', Array.from(this.adapterConfigs.keys()));
+    console.log('[GatewayManager] Starting adapters in parallel, configs:', Array.from(this.adapterConfigs.keys()));
     console.log('[STARTUP] adapterConfigs details:', Array.from(this.adapterConfigs.entries()).map(([platform, config]) => ({ platform, hasCredentials: !!config.credentials, credentialsKeys: config.credentials ? Object.keys(config.credentials) : [] })));
 
-    for (const [platform, config] of this.adapterConfigs) {
-      try {
-        const adapter = createAdapter(platform);
-        if (!adapter) {
-          console.warn(`[GatewayManager] No adapter registered for platform: ${platform}`);
-          continue;
+    const startTasks = Array.from(this.adapterConfigs).map(
+      async ([platform, config]): Promise<{ platform: PlatformType; adapter: PlatformAdapter | null; error?: unknown }> => {
+        const platformType = platform as PlatformType;
+        try {
+          const adapter = createAdapter(platform);
+          if (!adapter) {
+            console.warn(`[GatewayManager] No adapter registered for platform: ${platform}`);
+            return { platform: platformType, adapter: null };
+          }
+
+          adapter.onMessage((msg) => this.handleInboundMessage(msg));
+          adapter.setCommandHandler(async (msg) => this.handleCommand(msg));
+
+          if ('getIpcClient' in adapter) {
+            (adapter as { getIpcClient?: () => IpcClient }).getIpcClient = () => this.ipc;
+          }
+
+          await Promise.race([
+            adapter.start(config),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Adapter start timeout after ${ADAPTER_START_TIMEOUT_MS}ms`)), ADAPTER_START_TIMEOUT_MS)
+            ),
+          ]);
+
+          console.log(`[GatewayManager] Adapter started: ${platform}`);
+          return { platform: platformType, adapter };
+        } catch (err) {
+          console.error(`[GatewayManager] Failed to start adapter ${platform}:`, err);
+          return { platform: platformType, adapter: null, error: err };
         }
+      }
+    );
 
-        // Wire up inbound message handler
-        adapter.onMessage((msg) => this.handleInboundMessage(msg));
+    const results = await Promise.allSettled(startTasks);
 
-        // Wire up command handler (for /new, /help, etc.)
-        adapter.setCommandHandler(async (msg) => this.handleCommand(msg));
+    let startedCount = 0;
+    let failedCount = 0;
 
-        // Wire up IpcClient for pairing checks (via BaseAdapter.getIpcClient)
-        if ('getIpcClient' in adapter) {
-          (adapter as { getIpcClient?: () => IpcClient }).getIpcClient = () => this.ipc;
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        const { platform, adapter } = result.value;
+        if (adapter) {
+          this.adapters.set(platform, adapter);
+          startedCount++;
         }
-
-        await adapter.start(config);
-        this.adapters.set(platform, adapter);
-        console.log(`[GatewayManager] Adapter started: ${platform}`);
-      } catch (err) {
-        console.error(`[GatewayManager] Failed to start adapter ${platform}:`, err);
+      } else {
+        console.error('[GatewayManager] Unexpected adapter start rejection:', result.reason);
+        failedCount++;
       }
     }
 
-    console.log(`[GatewayManager] Running with ${this.adapters.size} adapter(s)`);
+    console.log(`[GatewayManager] Started ${startedCount}/${this.adapterConfigs.size} adapter(s)` + (failedCount > 0 ? `, ${failedCount} failed` : ''));
   }
 
   /**
-   * Stop all adapters
+   * Stop all adapters in parallel.
+   * Each adapter stops independently with its own timeout.
    */
   async stop(): Promise<void> {
-    console.log('[GatewayManager] Stopping adapters...');
+    console.log('[GatewayManager] Stopping adapters in parallel...');
 
-    for (const [platform, adapter] of this.adapters) {
-      try {
-        await adapter.stop();
-        console.log(`[GatewayManager] Adapter stopped: ${platform}`);
-      } catch (err) {
-        console.error(`[GatewayManager] Error stopping adapter ${platform}:`, err);
+    const stopTasks = Array.from(this.adapters).map(
+      async ([platform, adapter]) => {
+        try {
+          await Promise.race([
+            adapter.stop(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Adapter stop timeout after ${ADAPTER_STOP_TIMEOUT_MS}ms`)), ADAPTER_STOP_TIMEOUT_MS)
+            ),
+          ]);
+          console.log(`[GatewayManager] Adapter stopped: ${platform}`);
+        } catch (err) {
+          console.error(`[GatewayManager] Error stopping adapter ${platform}:`, err);
+        }
       }
-    }
+    );
+
+    await Promise.allSettled(stopTasks);
 
     this.adapters.clear();
     this.streamHandler.cleanupAll();
     this.running = false;
+
+    console.log('[GatewayManager] All adapters stopped');
   }
 
   /**

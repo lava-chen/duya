@@ -12,7 +12,7 @@ import { SettingsView } from "@/components/settings/SettingsView";
 import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
 import { FontProvider } from "@/contexts/FontContext";
-import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, subscribeToDbPersisted, canSend } from "@/lib/stream-session-manager";
+import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, subscribeToDbPersisted, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages } from "@/lib/stream-session-manager";
 import { useSettings } from "@/hooks/useSettings";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
@@ -90,6 +90,7 @@ export function App() {
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingSnapshot, setStreamingSnapshot] = useState<SessionStreamSnapshot | null>(null);
+  const lastCancelTimeRef = useRef(0);
   const prevPhaseRef = useRef<StreamPhase>('idle');
 
   // Subscribe to stream snapshot updates with optimistic message injection
@@ -166,7 +167,21 @@ export function App() {
 
   const handleSendMessage = useCallback(
     (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => {
-    if (!activeThreadId || !canSend(activeThreadId)) return;
+    if (!activeThreadId) return;
+
+    if (!canSend(activeThreadId)) {
+      enqueueMessage(activeThreadId, {
+        sessionId: activeThreadId,
+        content,
+        permissionMode: uiPermissionMode === 'bypass' ? 'bypassPermissions' : 'default',
+        model,
+        files,
+        agentProfileId,
+        outputStyleConfig: outputStyleConfig ?? undefined,
+        titleGenerationModel: settings.titleGenerationModel,
+      });
+      return;
+    }
 
     const now = Date.now();
 
@@ -225,12 +240,26 @@ export function App() {
   }, [activeThreadId, addMessage, settings.titleGenerationModel]);
 
   const handleInterrupt = useCallback(() => {
-    if (activeThreadId) {
-      stopStream(activeThreadId);
-      // Send interrupt to Agent Server to kill the agent subprocess
+    if (!activeThreadId) return;
+    const now = Date.now();
+
+    if (isStreaming) {
+      stopStream(activeThreadId, 'Interrupted by user');
       void interruptChat(activeThreadId);
+      lastCancelTimeRef.current = now;
+      return;
     }
-  }, [activeThreadId]);
+
+    // Second press within 3s: clear queued messages
+    if (hasQueuedMessages(activeThreadId) && now - lastCancelTimeRef.current < 3000) {
+      clearQueuedMessages(activeThreadId);
+      lastCancelTimeRef.current = 0;
+      return;
+    }
+
+    // First press while idle: no-op
+    lastCancelTimeRef.current = now;
+  }, [activeThreadId, isStreaming]);
 
   const threadMessages = activeThreadId ? (messages[activeThreadId] ?? []) : [];
   const chatEverMountedRef = useRef(false);
@@ -254,6 +283,7 @@ export function App() {
               onSendMessage={handleSendMessage}
               onInterrupt={handleInterrupt}
               isStreaming={isStreaming}
+              hasQueuedMessages={hasQueuedMessages(activeThreadId)}
             />
           )}
           {currentView === 'skills' && <SkillsView />}

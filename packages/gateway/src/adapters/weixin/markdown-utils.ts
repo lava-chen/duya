@@ -12,6 +12,7 @@
 
 const _HEADER_RE = /^(#{1,6})\s+(.+?)\s*$/;
 const _TABLE_RULE_RE = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+const _TABLE_HEADER_RE = /^\s*\|[^|]+(\|[^|]+)+\|\s*$/;
 const _FENCE_RE = /^```([^\n`]*)\s*$/;
 const _MARKDOWN_LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/;
 
@@ -334,9 +335,12 @@ export function formatMessage(content: string): string {
   let inTable = false;
   let tableLines: string[] = [];
 
-  for (const rawLine of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
     const line = rawLine.trimEnd();
-    if (_FENCE_RE.exec(line.trim())) {
+    const trimmedLine = line.trim();
+
+    if (_FENCE_RE.exec(trimmedLine)) {
       if (inTable) {
         formattedLines.push(rewriteTableBlockForWeixin(tableLines));
         tableLines = [];
@@ -352,7 +356,18 @@ export function formatMessage(content: string): string {
       continue;
     }
 
-    if (_TABLE_RULE_RE.exec(line.trim())) {
+    // Check if this is a table header row (starts a new table)
+    if (_TABLE_HEADER_RE.exec(trimmedLine) && !inTable) {
+      // Check if next line is a table separator (confirming it's a markdown table)
+      const nextLine = lines[i + 1]?.trim() ?? '';
+      if (_TABLE_RULE_RE.exec(nextLine)) {
+        inTable = true;
+        tableLines = [line];
+        continue;
+      }
+    }
+
+    if (_TABLE_RULE_RE.exec(trimmedLine)) {
       if (tableLines.length > 0) {
         tableLines.push(line);
       }
@@ -361,7 +376,7 @@ export function formatMessage(content: string): string {
     }
 
     if (inTable) {
-      if (!line.trim()) {
+      if (!trimmedLine) {
         formattedLines.push(rewriteTableBlockForWeixin(tableLines));
         tableLines = [];
         inTable = false;

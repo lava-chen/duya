@@ -33,6 +33,7 @@ import { StreamingToolExecutor } from './tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from './tool/StreamingToolExecutor.js';
 import { backgroundTaskRegistry } from './tool/AgentTool/BackgroundTaskRegistry.js';
 import type { BackgroundTask } from './tool/AgentTool/BackgroundTaskRegistry.js';
+import { dequeueAllMatching, enqueuePendingNotification } from './queue/index.js';
 import { createHasPermissionsToUseTool } from './permissions/permissions.js';
 import type { ToolPermissionCheckContext } from './permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode } from './permissions/types.js';
@@ -1024,6 +1025,23 @@ export class duyaAgent {
               needsFollowUp = true
             }
 
+            // Mid-turn queue consumption: inject pending task notifications
+            // These may come from IPC or other async sources
+            const pendingNotifications = dequeueAllMatching<BackgroundTask>(
+              (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
+            );
+            if (pendingNotifications.length > 0) {
+              for (const cmd of pendingNotifications) {
+                messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'user',
+                  content: typeof cmd.value === 'string' ? cmd.value : String(cmd.value),
+                  timestamp: Date.now(),
+                });
+              }
+              needsFollowUp = true;
+            }
+
             // Do NOT yield the LLM's 'done' event to the SSE client here.
             // In multi-turn conversations, the LLM client yields a 'done' event
             // at the end of each turn. Forwarding it would cause the client to
@@ -1161,6 +1179,38 @@ export class duyaAgent {
         this.sessionInfo.updatedAt = Date.now();
 
         if (error instanceof Error && error.name === 'AbortError') {
+          // Generate synthetic tool_results for any pending tool_use blocks
+          // This prevents "missing tool_result" API errors on the next turn
+          const lastAssistantMsg = messages.at(-1);
+          if (lastAssistantMsg && lastAssistantMsg.role === 'assistant' && Array.isArray(lastAssistantMsg.content)) {
+            for (const block of lastAssistantMsg.content) {
+              if (block.type === 'tool_use' && 'id' in block && typeof block.id === 'string') {
+                const toolId = block.id;
+                const hasResult = messages.some(m =>
+                  (m.role === 'tool' && m.tool_call_id === toolId) ||
+                  (Array.isArray(m.content) && m.content.some(
+                    (c: MessageContent) =>
+                      c.type === 'tool_result' &&
+                      'tool_use_id' in c &&
+                      (c as { tool_use_id: string }).tool_use_id === toolId
+                  ))
+                );
+                if (!hasResult) {
+                  messages.push({
+                    id: crypto.randomUUID(),
+                    role: 'user',
+                    content: [{
+                      type: 'tool_result',
+                      tool_use_id: toolId,
+                      content: 'Interrupted by user',
+                      is_error: true,
+                    }],
+                    timestamp: Date.now(),
+                  });
+                }
+              }
+            }
+          }
           yield { type: 'done', reason: 'aborted' };
         } else {
           yield {

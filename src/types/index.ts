@@ -4,6 +4,7 @@ export * from './message';
 export * from './stream';
 export * from './slash-command';
 export * from './automation';
+export * from './canvas-node';
 
 // Extended thread type with project support
 export interface Thread {
@@ -46,6 +47,7 @@ export interface MCPServerConfig {
   args?: string[];
   env?: Record<string, string>;
   enabled: boolean;
+  allowedAgentIds?: string[];
 }
 
 export interface AppSettings {

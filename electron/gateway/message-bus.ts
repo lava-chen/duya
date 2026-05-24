@@ -2,7 +2,7 @@ import { ipcMain } from 'electron';
 import * as http from 'http';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getDatabase } from '../ipc/db-handlers';
-import { GatewayInitConfig } from './types';
+import { GatewayInitConfig, GatewayProxyConfig } from './types';
 import { startGatewayProcess, stopGatewayProcess, waitForGatewayReady, isGatewayRunning, getGatewayProcess } from './lifecycle';
 import { GatewaySessionState } from './types';
 import { dispatchGatewayDbAction } from './db-bridge';
@@ -10,8 +10,64 @@ import { execSync } from 'child_process';
 import { testBridgeChannel } from '../services/network/bridge-tester';
 import { getPairingStore } from './pairing';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
+import { getGatewayProxyConfig } from '../db/queries/settings';
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
+
+// Cached provider config to avoid DB reads on every gateway:inbound
+let _cachedProviderConfig: Record<string, unknown> | null = null;
+let _cachedProviderConfigAt = 0;
+const PROVIDER_CONFIG_TTL_MS = 30_000;
+
+function getCachedProviderConfig(): Record<string, unknown> | undefined {
+  const now = Date.now();
+  if (_cachedProviderConfig && (now - _cachedProviderConfigAt) < PROVIDER_CONFIG_TTL_MS) {
+    return _cachedProviderConfig;
+  }
+
+  const db = getDatabase();
+  if (!db) {
+    _cachedProviderConfig = null;
+    _cachedProviderConfigAt = now;
+    return undefined;
+  }
+
+  try {
+    const { getConfigManager } = require('../config/manager');
+    const configManager = getConfigManager();
+    const activeProvider = configManager?.getActiveProvider();
+
+    const getSetting = (key: string): string | undefined => {
+      const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+      if (row) {
+        try { return JSON.parse(row.value); } catch { return row.value; }
+      }
+      return undefined;
+    };
+
+    const gatewayModelSetting = getSetting('gatewayModel');
+    const modelFromProvider = activeProvider?.options?.defaultModel || activeProvider?.options?.model || '';
+    const resolvedModel = gatewayModelSetting || modelFromProvider;
+
+    if (activeProvider) {
+      _cachedProviderConfig = {
+        apiKey: activeProvider.apiKey,
+        baseURL: activeProvider.baseUrl || undefined,
+        model: resolvedModel,
+        provider: activeProvider.providerType,
+        authStyle: 'api_key',
+      };
+    } else {
+      _cachedProviderConfig = null;
+    }
+  } catch (err) {
+    console.error('[Gateway] Failed to get provider config for cache:', err);
+    _cachedProviderConfig = null;
+  }
+
+  _cachedProviderConfigAt = now;
+  return _cachedProviderConfig ?? undefined;
+}
 
 export function getSessionStates(): Map<string, GatewaySessionState> {
   const g = globalThis as Record<string, unknown>;
@@ -240,44 +296,11 @@ export function handleGatewayMessage(
       const platform = inboundMsg.platform;
       const platformChatId = inboundMsg.platformChatId;
 
-      // Get default provider config for gateway sessions
-      let providerConfig: Record<string, unknown> | undefined;
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { getConfigManager } = require('../config/manager');
-        const db = require('../db/connection').getDatabase();
-        const configManager = getConfigManager();
-        const activeProvider = configManager?.getActiveProvider();
-
-        // Helper to read from settings DB (same as gateway:get_config handler)
-        const getSetting = (key: string): string | undefined => {
-          if (!db) return undefined;
-          const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
-          if (row) {
-            try { return JSON.parse(row.value); } catch { return row.value; }
-          }
-          return undefined;
-        };
-
-        // Get model from settings DB first (set by Settings UI), fallback to provider options
-        const gatewayModelSetting = getSetting('gatewayModel');
-        const modelFromProvider = activeProvider?.options?.defaultModel || activeProvider?.options?.model || '';
-        const resolvedModel = gatewayModelSetting || modelFromProvider;
-
-        if (activeProvider) {
-          providerConfig = {
-            apiKey: activeProvider.apiKey,
-            baseURL: activeProvider.baseUrl || undefined,
-            model: resolvedModel,
-            provider: activeProvider.providerType,
-            authStyle: 'api_key',
-          };
-          console.log('[Main] gateway:inbound: using provider config, provider:', activeProvider.providerType, 'model:', resolvedModel || '(empty)');
-        } else {
-          console.warn('[Main] gateway:inbound: no active provider configured');
-        }
-      } catch (err) {
-        console.error('[Main] gateway:inbound: failed to get provider config:', err);
+      const providerConfig = getCachedProviderConfig();
+      if (providerConfig) {
+        console.log('[Main] gateway:inbound: using cached provider config, provider:', providerConfig.provider, 'model:', providerConfig.model || '(empty)');
+      } else {
+        console.warn('[Main] gateway:inbound: no active provider configured');
       }
 
       // Accumulate text from chat:text events
@@ -447,7 +470,8 @@ export function handleGatewayMessage(
       };
       console.log('[Main] gateway:create_session received, id:', data.id);
 
-      const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      // Use platform + platformChatId as sessionId to ensure conversation history is preserved
+      const sessionId = `gw-${data.platform}-${data.platformChatId}`;
       createOrResetGatewaySession(sessionId, data.platform);
 
       // Save session to threads table and chat_sessions table
@@ -461,12 +485,18 @@ export function handleGatewayMessage(
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
           `).run(sessionId, title, 'gateway', '', now, now);
-          // Also insert into chat_sessions so messages can be persisted via replaceMessages
           db.prepare(`
             INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
           `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
+
+          // Create user mapping atomically (saves one IPC round-trip from Gateway)
+          db.prepare(`
+            INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
+          `).run(`${data.platform}:${data.platformChatId}`, data.platform, data.platformUserId, data.platformChatId, sessionId, now, now);
         } catch (err) {
           getLogger().error('Failed to save gateway session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
         }
@@ -493,18 +523,18 @@ export function handleGatewayMessage(
       };
       console.log('[Main] gateway:reset_session received, platform:', data.platform);
 
-      // Find and reset existing session for this platform
+      // Use platform + platformChatId as sessionId to ensure conversation history is preserved
+      const sessionId = `gw-${data.platform}-${data.platformChatId}`;
+      
+      // Find and reset existing session if any
       const states = getSessionStates();
-      let oldSessionId = '';
       for (const [id, state] of states) {
-        if (state.bridgeChannel === data.platform) {
+        if (id === sessionId) {
           resetGatewaySession(id);
-          oldSessionId = id;
           break;
         }
       }
 
-      const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       createOrResetGatewaySession(sessionId, data.platform);
 
       // Save new session to threads table and chat_sessions table
@@ -760,9 +790,13 @@ function getOrBuildInitConfig(): GatewayInitConfig {
     autoStart = autoStartRow?.value === 'true';
   }
 
+  // Load per-channel proxy configuration
+  const proxyConfig = getGatewayProxyConfig();
+
   _initConfig = {
     platforms,
     autoStart,
+    proxyConfig,
   };
 
   console.log('[STARTUP] getOrBuildInitConfig:', JSON.stringify({ platforms: platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!Object.keys(p.credentials).length })), autoStart }));

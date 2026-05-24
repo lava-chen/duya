@@ -109,6 +109,25 @@ function getMarketingNameForModel(modelId: string): string | null {
   return null
 }
 
+function getCurrentDateTime(): string {
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  })
+  const timeStr = now.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+  const tzStr = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const tzOffset = now.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop() ?? ''
+  return `${dateStr}, ${timeStr} (${tzStr}, ${tzOffset})`
+}
+
 export async function getEnvironmentSection(ctx: PromptContext): Promise<string> {
   const hasWorkingDir = ctx.workingDirectory && ctx.workingDirectory.trim() !== ''
   const isGit = hasWorkingDir ? await isGitRepo(ctx.workingDirectory) : false
@@ -141,6 +160,7 @@ export async function getEnvironmentSection(ctx: PromptContext): Promise<string>
     `Platform: ${ctx.platform}`,
     getShellInfoLine(ctx.shell, ctx.platform),
     `OS Version: ${unameSR}`,
+    `Current date and time: ${getCurrentDateTime()}`,
     modelDescription,
     knowledgeCutoffMessage,
     `Duya is available as a CLI in the terminal, desktop app (Mac/Windows).`,

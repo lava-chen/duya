@@ -188,8 +188,10 @@ const RECEIVER_SCRIPT = /* js */ `
         case 'widget:theme':
           if (e.data.theme === 'dark') {
             document.documentElement.style.colorScheme = 'dark';
+            document.documentElement.dataset.theme = 'dark';
           } else {
             document.documentElement.style.colorScheme = 'light';
+            document.documentElement.dataset.theme = 'light';
           }
           break;
         case 'widget:update':
@@ -203,6 +205,12 @@ const RECEIVER_SCRIPT = /* js */ `
           break;
       }
     });
+
+    window.sendPrompt = function(text) {
+      if (typeof text === 'string' && text.trim()) {
+        window.parent.postMessage({ type: 'widget:sendMessage', text: text }, '*');
+      }
+    };
 
     window.addEventListener('load', reportHeight);
     reportHeight();
@@ -244,6 +252,7 @@ export function buildReceiverSrcdoc(
   widgetCode: string,
   isStreaming: boolean,
   cssBridge: string,
+  themeDarkCss: string,
 ): string {
   const sanitizedCode = isStreaming
     ? sanitizeForStreaming(widgetCode)
@@ -267,6 +276,7 @@ export function buildReceiverSrcdoc(
   :root {
     ${cssBridge}
   }
+  ${themeDarkCss}
   html {
     width: 100%;
     margin: 0;
@@ -351,6 +361,13 @@ export function buildReceiverSrcdoc(
   .widget-root img { max-width: 100%; height: auto; }
   table { border-collapse: collapse; width: 100%; }
   th, td { padding: 6px 8px; border: 1px solid var(--color-border-tertiary, rgba(255,255,255,0.1)); }
+  /* === Tag / Badge Classes === */
+  .tag { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; line-height: 1.4; }
+  .tag-t { background: var(--success-soft); color: var(--success); }
+  .tag-a { background: var(--warning-soft); color: var(--warning); }
+  .tag-r { background: var(--error-soft); color: var(--error); }
+  .tag-p { background: var(--accent-soft); color: var(--accent); }
+  .tag-gray { background: var(--color-background-secondary); color: var(--color-text-secondary); }
   /* === SVG Diagram Semantic Classes === */
   /* Container fills (color → meaning) */
   .s-plat { fill: rgb(12,68,124); stroke: rgb(133,183,235); }

@@ -17,6 +17,7 @@ export interface MCPConfigItem {
   args?: string[];
   env?: Record<string, string>;
   enabled: boolean;
+  allowedAgentIds?: string[];
 }
 
 /**
@@ -185,4 +186,16 @@ export function validateMCPConfig(config: MCPServerConfig): { valid: boolean; er
   }
 
   return { valid: true };
+}
+
+export function filterMcpServersForAgent(
+  configs: MCPConfigItem[],
+  agentProfileId: string
+): MCPConfigItem[] {
+  return configs.filter((config) => {
+    if (!config.allowedAgentIds || config.allowedAgentIds.length === 0) {
+      return true;
+    }
+    return config.allowedAgentIds.includes(agentProfileId);
+  });
 }

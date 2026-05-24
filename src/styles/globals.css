@@ -119,6 +119,7 @@
   --foreground: #1a1a1a;
   --muted: #6b6b6b;
   --border: rgba(0, 0, 0, 0.06);
+  --grid-dot: rgba(0, 0, 0, 0.06);
   --accent: #7c3aed;
   --accent-soft: rgba(124, 58, 237, 0.2);
   --accent-shadow: rgba(124, 58, 237, 0.42);
@@ -147,6 +148,7 @@
   --foreground: #ffffff;
   --muted: #8a8a8a;
   --border: rgba(255, 255, 255, 0.08);
+  --grid-dot: rgba(255, 255, 255, 0.08);
   --accent: #a78bfa;
   --accent-soft: rgba(167, 139, 250, 0.24);
   --accent-shadow: rgba(167, 139, 250, 0.5);
