@@ -49,6 +49,34 @@ export class ConductorExecutorProxy {
         case 'element.layout_grid':
           return this.dbService.layoutGridElements(payload);
 
+        case 'element.create_native':
+          return this.dbService.createNativeElement(payload);
+
+        case 'connector.create':
+          return this.dbService.createConnector(payload);
+
+        case 'mindmap.create':
+          return this.dbService.createMindMap(payload);
+
+        case 'mindmap.add_node': {
+          const mindmapId = payload.mindmapId as string;
+          const parentId = payload.parentId as string;
+          const newNode = payload.newNode as Record<string, unknown>;
+          return this.dbService.mindmapAddNode(mindmapId, parentId, newNode);
+        }
+
+        case 'mindmap.remove_node': {
+          const mindmapId = payload.mindmapId as string;
+          const nodeId = payload.nodeId as string;
+          return this.dbService.mindmapRemoveNode(mindmapId, nodeId);
+        }
+
+        case 'mindmap.toggle_collapse': {
+          const mindmapId = payload.mindmapId as string;
+          const nodeId = payload.nodeId as string;
+          return this.dbService.mindmapToggleCollapse(mindmapId, nodeId);
+        }
+
         default:
           return {
             success: false,

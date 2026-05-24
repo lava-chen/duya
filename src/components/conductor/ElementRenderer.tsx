@@ -4,11 +4,13 @@ import React from "react";
 import type { CanvasElement } from "@/types/conductor";
 import { getElement, getElementLabel } from "@/conductor/elements/ElementRegistry";
 import { ElementChrome } from "./ElementChrome";
+import { NativeElementRenderer } from "./native/NativeElementRenderer";
 
 interface ElementRendererProps {
   element: CanvasElement;
   readOnly: boolean;
   onDelete?: (id: string) => void;
+  onPositionChange?: (id: string) => void;
 }
 
 function UnknownElementFallback({ element }: { element: CanvasElement }) {
@@ -23,7 +25,16 @@ export const ElementRenderer: React.FC<ElementRendererProps> = ({
   element,
   readOnly,
   onDelete,
+  onPositionChange,
 }) => {
+  const nodeType = element.elementKind.startsWith("native/")
+    ? element.elementKind.replace("native/", "")
+    : null;
+
+  if (nodeType) {
+    return <NativeElementRenderer element={element} nodeType={nodeType} onPositionChange={onPositionChange} />;
+  }
+
   const def = getElement(element.elementKind);
   if (!def) {
     return (

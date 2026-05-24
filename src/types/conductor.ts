@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ConnectorEndpoint } from './canvas-node';
 
 export const WidgetKind = {
   builtin: 'builtin',
@@ -56,7 +57,7 @@ export const ElementKind = {
   'shape/connector': 'shape/connector',
   'app/mini-app': 'app/mini-app',
 } as const;
-export type ElementKind = (typeof ElementKind)[keyof typeof ElementKind];
+export type ElementKind = (typeof ElementKind)[keyof typeof ElementKind] | `native/${string}`;
 
 export const RenderMode = {
   react: 'react',
@@ -67,6 +68,7 @@ export const RenderMode = {
 export type RenderMode = (typeof RenderMode)[keyof typeof RenderMode];
 
 export function getRenderModeForKind(kind: ElementKind): RenderMode {
+  if (kind.startsWith('native/')) return 'svg-native';
   if (kind.startsWith('widget/')) return 'react';
   if (kind.startsWith('diagram/') || kind.startsWith('chart/')) return 'iframe';
   if (kind.startsWith('shape/')) return 'svg-native';
@@ -108,12 +110,15 @@ export interface ElementMetadata {
   tags: string[];
   createdBy: 'user' | 'agent';
   sourceActionId?: number;
+  parentId?: string | null;
+  childIds?: string[];
 }
 
 export interface CanvasElement {
   id: string;
   canvasId: string;
   elementKind: ElementKind;
+  native_kind?: string;
   position: CanvasPosition;
   config: Record<string, unknown>;
   state: ElementState;
@@ -192,7 +197,11 @@ export type ConductorActionRequest =
   | { action: 'element.update'; elementId: string; canvasId: string; vizSpec?: VizSpec | null; position?: Partial<CanvasPosition>; config?: Record<string, unknown> }
   | { action: 'element.delete'; elementId: string; canvasId: string }
   | { action: 'element.move'; elementId: string; canvasId: string; position: CanvasPosition }
-  | { action: 'element.arrange'; canvasId: string; layout: Array<{ elementId: string; position: CanvasPosition }> };
+  | { action: 'element.arrange'; canvasId: string; layout: Array<{ elementId: string; position: CanvasPosition }> }
+  | { action: 'element.create_native'; canvasId: string; nodeType: string; position: CanvasPosition; content: Record<string, unknown>; style?: Record<string, unknown> }
+  | { action: 'connector.create'; canvasId: string; source: ConnectorEndpoint; target: ConnectorEndpoint; curvature?: number; style?: Record<string, unknown> }
+  | { action: 'element.update_content'; elementId: string; canvasId: string; content: Record<string, unknown> }
+  | { action: 'element.reparent'; elementId: string; canvasId: string; parentId: string | null };
 
 export const DbConductorCanvas = {
   id: '',
@@ -248,6 +257,7 @@ export interface DbConductorElement {
   id: string;
   canvas_id: string;
   element_kind: string;
+  native_kind: string | null;
   position: string;
   config: string;
   viz_spec: string | null;
@@ -289,6 +299,11 @@ const VizSpecSchema = z.object({
   payload: z.record(z.string(), z.unknown()),
 });
 
+const ConnectorEndpointSchema = z.object({
+  nodeId: z.string(),
+  anchorId: z.enum(['top', 'bottom', 'left', 'right', 'center']),
+});
+
 export const ConductorActionRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('canvas.rename'), canvasId: z.string(), name: z.string().min(1) }),
   z.object({ action: z.literal('widget.create'), canvasId: z.string(), kind: z.enum(['builtin', 'template', 'dynamic']), type: z.string(), position: PositionSchema, config: z.record(z.string(), z.unknown()).optional(), data: z.record(z.string(), z.unknown()).optional(), permissions: WidgetPermissionsSchema.optional() }),
@@ -303,6 +318,10 @@ export const ConductorActionRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('element.delete'), elementId: z.string(), canvasId: z.string() }),
   z.object({ action: z.literal('element.move'), elementId: z.string(), canvasId: z.string(), position: CanvasPositionSchema }),
   z.object({ action: z.literal('element.arrange'), canvasId: z.string(), layout: z.array(z.object({ elementId: z.string(), position: CanvasPositionSchema })) }),
+  z.object({ action: z.literal('element.create_native'), canvasId: z.string(), nodeType: z.string(), position: CanvasPositionSchema, content: z.record(z.string(), z.unknown()), style: z.record(z.string(), z.unknown()).optional() }),
+  z.object({ action: z.literal('connector.create'), canvasId: z.string(), source: ConnectorEndpointSchema, target: ConnectorEndpointSchema, curvature: z.number().optional(), style: z.record(z.string(), z.unknown()).optional() }),
+  z.object({ action: z.literal('element.update_content'), elementId: z.string(), canvasId: z.string(), content: z.record(z.string(), z.unknown()) }),
+  z.object({ action: z.literal('element.reparent'), elementId: z.string(), canvasId: z.string(), parentId: z.string().nullable() }),
 ]);
 
 export function validateActionRequest(data: unknown): ConductorActionRequest {
@@ -360,6 +379,7 @@ export function elementFromDb(row: DbConductorElement): CanvasElement {
     id: row.id,
     canvasId: row.canvas_id,
     elementKind: row.element_kind as ElementKind,
+    native_kind: row.native_kind ?? undefined,
     position: JSON.parse(row.position),
     config: JSON.parse(row.config),
     state: row.state as ElementState,

@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { buildReceiverSrcdoc } from "@/lib/widget-sanitizer";
-import { WIDGET_CSS_BRIDGE } from "@/lib/widget-css-bridge";
+import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from "@/lib/widget-css-bridge";
 
 interface MiniSandboxProps {
   html: string;
@@ -19,7 +19,7 @@ function buildSandboxSrcdoc(html: string, css?: string, js?: string): string {
   const extraCss = css ? `<style>${css}</style>` : "";
   const extraJs = js ? `<script>${js}</script>` : "";
   const combined = `${extraCss}\n${html}\n${extraJs}`;
-  return buildReceiverSrcdoc(combined, false, WIDGET_CSS_BRIDGE);
+  return buildReceiverSrcdoc(combined, false, WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS);
 }
 
 export const MiniSandbox: React.FC<MiniSandboxProps> = ({
