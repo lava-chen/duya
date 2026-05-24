@@ -12,6 +12,7 @@ import {
   addMessageIPC,
   getActiveProviderIPC,
   updateThreadIPC,
+  truncateMessagesAfterIPC,
 } from '@/lib/ipc-client';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { registerLoadedMessages } from '@/lib/stream-session-manager';
@@ -76,6 +77,7 @@ interface ConversationState {
   goToParentSession: () => void;
   addMessage: (threadId: string, message: Message) => void;
   clearMessages: (threadId: string) => void;
+  rewindToMessage: (threadId: string, messageId: string) => Promise<void>;
   updateThreadTitle: (id: string, title: string) => void;
   setThreadWorkingDirectory: (id: string, workingDirectory: string, projectName: string) => void;
   toggleProjectExpanded: (workingDirectory: string) => void;
@@ -434,6 +436,15 @@ export const useConversationStore = create<ConversationState>()(
             [threadId]: [],
           },
         }));
+      },
+
+      rewindToMessage: async (threadId, messageId) => {
+        const result = await truncateMessagesAfterIPC(threadId, messageId);
+        if (result.deletedCount === 0) return;
+        set((state) => ({
+          messages: { ...state.messages, [threadId]: [] },
+        }));
+        await get().loadThreadMessages(threadId);
       },
 
       updateThreadTitle: (id, title) => {

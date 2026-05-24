@@ -23,6 +23,8 @@ export interface PlatformConfig {
   credentials: Record<string, string>;
   /** Platform-specific options (dm_policy, group_policy, domain, etc.) */
   options?: Record<string, unknown>;
+  /** Whether to use proxy for this platform (defaults to global setting) */
+  useProxy?: boolean;
 }
 
 // =============================================================================
@@ -242,7 +244,7 @@ export interface PermissionDecision {
 /** Gateway → Main Process */
 export type GatewayToMainMessage =
   | { type: 'gateway:ready' }
-  | { type: 'gateway:init:complete'; success: boolean; error?: string }
+  | { type: 'gateway:init:complete'; success: boolean; error?: string; adapters?: AdapterStatus[] }
   | { type: 'gateway:inbound'; sessionId: string; prompt: string; platform: PlatformType; platformMsgId: string; platformChatId: string; options?: Record<string, unknown> }
   | { type: 'gateway:permission_resolve'; permissionId: string; decision: 'allow' | 'allow_once' | 'deny' }
   | { type: 'db:request'; id: string; action: string; payload: unknown }
@@ -297,6 +299,11 @@ export interface QrRegistrationResult {
   open_id?: string;
 }
 
+export interface GatewayProxyConfig {
+  globalEnabled: boolean;
+  channels: Record<string, boolean>;
+}
+
 export interface GatewayInitConfig {
   platforms: Array<{
     platform: PlatformType;
@@ -306,4 +313,5 @@ export interface GatewayInitConfig {
   }>;
   autoStart: boolean;
   proxyUrl?: string;
+  proxyConfig?: GatewayProxyConfig;
 }

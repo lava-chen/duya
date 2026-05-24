@@ -20,6 +20,10 @@ const actionSchema = z.enum([
   'pairing_approve',
   'pairing_revoke',
   'pairing_is_approved',
+  'mcp_server_list',
+  'mcp_server_add',
+  'mcp_server_remove',
+  'mcp_server_assign',
 ]);
 
 const inputSchema = z.object({
@@ -42,6 +46,11 @@ const inputSchema = z.object({
   platform: z.string().optional(),
   code: z.string().optional(),
   platformUserId: z.string().optional(),
+  serverName: z.string().optional(),
+  mcpCommand: z.string().optional(),
+  mcpArgs: z.array(z.string()).optional(),
+  mcpEnv: z.record(z.string(), z.string()).optional(),
+  agentIds: z.array(z.string()).optional(),
 });
 
 function toolSuccess(result: unknown): ToolResult {
@@ -74,6 +83,7 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
           'settings_get', 'settings_set', 'vision_get', 'vision_set',
           'style_get', 'style_set',
           'pairing_list', 'pairing_approve', 'pairing_revoke', 'pairing_is_approved',
+          'mcp_server_list', 'mcp_server_add', 'mcp_server_remove', 'mcp_server_assign',
         ],
         description: 'Config action to perform',
       },
@@ -95,6 +105,11 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
       platform: { type: 'string', description: 'Platform name (telegram, weixin, qq, feishu, discord, whatsapp)' },
       code: { type: 'string', description: '8-character pairing code to approve' },
       platformUserId: { type: 'string', description: 'Platform user ID to check or revoke' },
+      serverName: { type: 'string', description: 'MCP server name (unique identifier)' },
+      mcpCommand: { type: 'string', description: 'Command to run the MCP server (npx, uvx, node, etc.)' },
+      mcpArgs: { type: 'array', items: { type: 'string' }, description: 'Command arguments array' },
+      mcpEnv: { type: 'object', description: 'Environment variables (key-value object)' },
+      agentIds: { type: 'array', items: { type: 'string' }, description: 'Agent profile IDs allowed to use this server. Empty means all agents.' },
     },
     required: ['action'],
   };
@@ -234,6 +249,90 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
           }
           const result = await configDb.pairingIsApproved(data.platform, data.platformUserId);
           return toolSuccess(result);
+        }
+
+        case 'mcp_server_list': {
+          const settings = await configDb.agentGetSettings();
+          const mcpServers = (settings as Record<string, unknown>)?.mcpServers ?? {};
+          return toolSuccess({ mcpServers });
+        }
+
+        case 'mcp_server_add': {
+          if (!data.serverName || !data.mcpCommand) {
+            return toolError('serverName and mcpCommand are required for mcp_server_add');
+          }
+          const settings = await configDb.agentGetSettings();
+          const currentServers = Array.isArray((settings as Record<string, unknown>)?.mcpServers)
+            ? (settings as Record<string, unknown>).mcpServers as Array<Record<string, unknown>>
+            : [];
+
+          const exists = currentServers.some((s) => s.name === data.serverName);
+          if (exists) {
+            return toolError(`MCP server "${data.serverName}" already exists. Use mcp_server_assign to modify.`);
+          }
+
+          const newServer: Record<string, unknown> = {
+            name: data.serverName,
+            command: data.mcpCommand,
+            enabled: true,
+          };
+          if (data.mcpArgs && data.mcpArgs.length > 0) newServer.args = data.mcpArgs;
+          if (data.mcpEnv && Object.keys(data.mcpEnv).length > 0) newServer.env = data.mcpEnv;
+          if (data.agentIds && data.agentIds.length > 0) newServer.allowedAgentIds = data.agentIds;
+
+          const updatedServers = [...currentServers, newServer];
+          await configDb.agentSetSettings({ mcpServers: updatedServers });
+          return toolSuccess({ ok: true, server: newServer });
+        }
+
+        case 'mcp_server_remove': {
+          if (!data.serverName) {
+            return toolError('serverName is required for mcp_server_remove');
+          }
+          const settings = await configDb.agentGetSettings();
+          const currentServers = Array.isArray((settings as Record<string, unknown>)?.mcpServers)
+            ? (settings as Record<string, unknown>).mcpServers as Array<Record<string, unknown>>
+            : [];
+
+          const filtered = currentServers.filter((s) => s.name !== data.serverName);
+          if (filtered.length === currentServers.length) {
+            return toolError(`MCP server "${data.serverName}" not found.`);
+          }
+
+          await configDb.agentSetSettings({ mcpServers: filtered });
+          return toolSuccess({ ok: true, removed: data.serverName });
+        }
+
+        case 'mcp_server_assign': {
+          if (!data.serverName) {
+            return toolError('serverName is required for mcp_server_assign');
+          }
+          const settings = await configDb.agentGetSettings();
+          const currentServers = Array.isArray((settings as Record<string, unknown>)?.mcpServers)
+            ? (settings as Record<string, unknown>).mcpServers as Array<Record<string, unknown>>
+            : [];
+
+          const serverIndex = currentServers.findIndex((s) => s.name === data.serverName);
+          if (serverIndex === -1) {
+            return toolError(`MCP server "${data.serverName}" not found.`);
+          }
+
+          const updatedServer = { ...currentServers[serverIndex] };
+          if (data.agentIds && data.agentIds.length > 0) {
+            updatedServer.allowedAgentIds = data.agentIds;
+          } else {
+            delete updatedServer.allowedAgentIds;
+          }
+
+          const updatedServers = [...currentServers];
+          updatedServers[serverIndex] = updatedServer;
+
+          await configDb.agentSetSettings({ mcpServers: updatedServers });
+          return toolSuccess({
+            ok: true,
+            server: data.serverName,
+            allowedAgentIds: data.agentIds && data.agentIds.length > 0 ? data.agentIds : 'all',
+          });
         }
 
         default:

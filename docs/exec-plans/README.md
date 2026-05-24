@@ -60,6 +60,18 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [64-browser-parallel-isolation](./active/64-browser-parallel-isolation.md) | 浏览器多 Tab 隔离与并行执行 | P0 | 进行中 |
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — 离开回来后自动显示会话摘要 | P1 | Planning |
 
+### Canvas V2 Whimsical 风格重设计
+
+> Design doc: [docs/design-docs/conductor-canvas-v2-whimsical.md](../design-docs/conductor-canvas-v2-whimsical.md)
+
+| Plan | Description | Priority | Depends On |
+|------|-------------|----------|-----------|
+| [70-canvas-v2-type-system](./active/70-conductor-canvas-v2-type-system.md) | Phase 1: 统一节点模型 + 类型系统 + DB + IPC + Store | P0 | — |
+| [71-canvas-v2-native-rendering](./active/71-conductor-canvas-v2-native-rendering.md) | Phase 2: Shape + Text + Sticky + Section 原生渲染 | P0 | 70 |
+| [72-canvas-v2-connector](./active/72-conductor-canvas-v2-connector.md) | Phase 3: Connector 系统 (Bezier 曲线 + 端点绑定) | P0 | 70, 71 |
+| [73-canvas-v2-mindmap-frame](./active/73-conductor-canvas-v2-mindmap-frame-toolbar.md) | Phase 4-6: MindMap + Frame + 工具栏 + 交互 | P0 | 71, 72 |
+| [74-canvas-v2-agent-integration](./active/74-conductor-canvas-v2-agent-integration.md) | Phase 7-8: Agent 工具 + Image + 主题 + 轻量外壳 | P0 | 70, 71, 72, 73 |
+
 ### Compact System Fix Plans
 
 | Plan | Description | Priority | Status |

@@ -320,6 +320,7 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       id TEXT PRIMARY KEY,
       canvas_id TEXT NOT NULL,
       element_kind TEXT NOT NULL,
+      native_kind TEXT,
       position TEXT NOT NULL DEFAULT '{"x":0,"y":0,"w":4,"h":3,"zIndex":0,"rotation":0}',
       config TEXT NOT NULL DEFAULT '{}',
       viz_spec TEXT,
@@ -357,6 +358,10 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_undone ON conductor_actions(undone_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_canvas ON conductor_elements(canvas_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_kind ON conductor_elements(element_kind)`);
+
+  // Migration: add native_kind column for existing databases
+  try { db.exec(`ALTER TABLE conductor_elements ADD COLUMN native_kind TEXT`); } catch { /* already exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_native_kind ON conductor_elements(canvas_id, native_kind)`);
 
   // Additional indexes for query optimization
   // messages table indexes
@@ -1119,6 +1124,7 @@ const migrations: Migration[] = [
           id           TEXT PRIMARY KEY,
           canvas_id    TEXT NOT NULL REFERENCES conductor_canvases(id) ON DELETE CASCADE,
           element_kind TEXT NOT NULL,
+          native_kind  TEXT,
           position     TEXT NOT NULL DEFAULT '{"x":0,"y":0,"w":4,"h":3,"zIndex":0,"rotation":0}',
           config       TEXT NOT NULL DEFAULT '{}',
           viz_spec     TEXT,
@@ -1133,6 +1139,7 @@ const migrations: Migration[] = [
       `);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_canvas ON conductor_elements(canvas_id)`);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_kind ON conductor_elements(element_kind)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_native_kind ON conductor_elements(canvas_id, native_kind)`);
 
       const widgetRows = db.prepare('SELECT id, canvas_id, kind, type, position, config, data, data_version, source_code, state, permissions, created_at, updated_at FROM conductor_widgets WHERE id NOT IN (SELECT id FROM conductor_elements)').all() as Array<{
         id: string;
@@ -1189,6 +1196,29 @@ const migrations: Migration[] = [
       const columns = tableInfo.map(col => col.name);
       if (!columns.includes('attachments')) {
         db.exec(`ALTER TABLE messages ADD COLUMN attachments TEXT`);
+      }
+    },
+  },
+  {
+    id: 24,
+    name: 'add_native_kind_to_conductor_elements',
+    migrate: (db) => {
+      const tableInfo = db.prepare('PRAGMA table_info(conductor_elements)').all() as Array<{ name: string }>;
+      const columns = tableInfo.map(col => col.name);
+      if (!columns.includes('native_kind')) {
+        db.exec(`ALTER TABLE conductor_elements ADD COLUMN native_kind TEXT`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_native_kind ON conductor_elements(canvas_id, native_kind)`);
+      }
+    },
+  },
+  {
+    id: 25,
+    name: 'add_draft_message_to_chat_sessions',
+    migrate: (db) => {
+      const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
+      const columns = tableInfo.map(col => col.name);
+      if (!columns.includes('draft_message')) {
+        db.exec(`ALTER TABLE chat_sessions ADD COLUMN draft_message TEXT NOT NULL DEFAULT ''`);
       }
     },
   },

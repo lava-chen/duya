@@ -132,6 +132,22 @@ export function deleteMessagesBySession(sessionId: string): number {
   return result.changes;
 }
 
+export function truncateMessagesAfter(sessionId: string, messageId: string): number {
+  const target = db().prepare(
+    'SELECT created_at FROM messages WHERE id = ? AND session_id = ?'
+  ).get(messageId, sessionId) as { created_at: number } | undefined;
+
+  if (!target) return 0;
+
+  const result = db().prepare(
+    'DELETE FROM messages WHERE session_id = ? AND created_at > ?'
+  ).run(sessionId, target.created_at);
+
+  db().prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
+
+  return result.changes;
+}
+
 export interface ReplaceMessagesResult {
   success: boolean;
   newGeneration?: number;

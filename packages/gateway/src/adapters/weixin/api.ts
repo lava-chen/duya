@@ -24,6 +24,7 @@ export interface WxApiConfig {
   baseUrl: string;
   token: string;
   timeoutMs: number;
+  useProxy?: boolean;
 }
 
 interface BaseInfo {
@@ -187,6 +188,7 @@ const CHANNEL_VERSION = '1.0.2';
 const ILINK_APP_ID = 'bot';
 const ILINK_APP_CLIENT_VERSION = (2 << 16) | (2 << 8) | 0;
 const DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
+const HTTPS_POST_TIMEOUT_MS = 8_000;
 
 const EP_GET_UPDATES = 'ilink/bot/getupdates';
 const EP_SEND_MESSAGE = 'ilink/bot/sendmessage';
@@ -196,6 +198,8 @@ const EP_GET_UPLOAD_URL = 'ilink/bot/getuploadurl';
 
 // Retry constants
 const MAX_CONSECUTIVE_FAILURES = 3;
+const MAX_TOTAL_RETRIES = 10;
+const MAX_BACKOFF_CYCLES = 3;
 const RETRY_DELAY_SECONDS = 2;
 const BACKOFF_DELAY_SECONDS = 30;
 const SESSION_EXPIRED_ERRCODE = -14;
@@ -424,18 +428,20 @@ async function httpsPost(
     body: string;
     timeoutMs: number;
     token?: string;
+    useProxy?: boolean;
   },
 ): Promise<{ data: string; status: number }> {
-  const { headers: reqHeaders, body, timeoutMs } = options;
+  const { headers: reqHeaders, body, timeoutMs, useProxy = true } = options;
   const urlObj = new URL(url);
-  const proxyUrl = detectProxy();
+  const proxyUrl = useProxy ? detectProxy() : undefined;
   console.log(`[Weixin] httpsPost: url=${urlObj.hostname}, proxy=${proxyUrl || 'none'}`);
   let consecutiveFailures = 0;
+  let totalRetries = 0;
+  let backoffCycles = 0;
 
-  while (true) {
+  while (totalRetries < MAX_TOTAL_RETRIES && backoffCycles < MAX_BACKOFF_CYCLES) {
     try {
       const result = await new Promise<{ data: string; status: number }>((resolve, reject) => {
-        // Use HTTP CONNECT tunneling for HTTPS through proxy
         if (proxyUrl && proxyUrl.startsWith('http://')) {
           console.log(`[Weixin] Using proxy tunnel to ${urlObj.hostname}`);
           const proxyUrlObj = new URL(proxyUrl);
@@ -455,7 +461,6 @@ async function httpsPost(
 
           proxyReq.on('connect', (res, socket: Socket, head) => {
             if (res.statusCode === 200) {
-              // Tunnel established, now make the actual request
               const tunnel = https.request({
                 hostname: urlObj.hostname,
                 port: urlObj.port || 443,
@@ -489,7 +494,6 @@ async function httpsPost(
           });
           proxyReq.end();
         } else {
-          // Direct connection (no proxy or non-HTTP proxy)
           console.log(`[Weixin] Direct connection to ${urlObj.hostname}`);
           const requestOptions: https.RequestOptions = {
             hostname: urlObj.hostname,
@@ -521,20 +525,25 @@ async function httpsPost(
       });
 
       consecutiveFailures = 0;
+      totalRetries = 0;
+      backoffCycles = 0;
       console.log(`[Weixin] httpsPost success: status=${result.status}, dataLen=${result.data.length}`);
       return result;
     } catch (err) {
       console.warn(`[Weixin] httpsPost error: ${(err as Error).message}`);
+      totalRetries++;
+
       if (!isNetworkError(err as Error)) {
         throw err;
       }
 
       consecutiveFailures++;
-      console.warn(`[Weixin] HTTPS request failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${(err as Error).message}`);
+      console.warn(`[Weixin] HTTPS request failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}, total=${totalRetries}/${MAX_TOTAL_RETRIES}): ${(err as Error).message}`);
 
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         const waitMs = BACKOFF_DELAY_SECONDS * 1000;
-        console.warn(`[Weixin] Max failures reached, backing off for ${waitMs}ms`);
+        backoffCycles++;
+        console.warn(`[Weixin] Max failures reached, backing off for ${waitMs}ms (cycle ${backoffCycles}/${MAX_BACKOFF_CYCLES})`);
         await sleep(waitMs);
         consecutiveFailures = 0;
       } else {
@@ -542,6 +551,8 @@ async function httpsPost(
       }
     }
   }
+
+  throw new Error(`HTTPS request failed after ${totalRetries} total retries and ${backoffCycles} backoff cycles`);
 }
 
 // ---------------------------------------------------------------------------
@@ -560,11 +571,12 @@ async function uploadBufferToCdn(params: {
   cdnBaseUrl: string;
   label: string;
   aeskey: Buffer;
+  useProxy?: boolean;
 }): Promise<{ downloadParam: string }> {
-  const { buf, uploadParam, filekey, cdnBaseUrl, label, aeskey } = params;
+  const { buf, uploadParam, filekey, cdnBaseUrl, label, aeskey, useProxy = true } = params;
   const ciphertext = encryptAesEcb(buf, aeskey);
   const cdnUrl = buildCdnUploadUrl({ cdnBaseUrl, uploadParam, filekey });
-  console.debug(`${label}: CDN POST url=${cdnUrl}, ciphertextSize=${ciphertext.length}`);
+  console.debug(`${label}: CDN POST url=${cdnUrl}, ciphertextSize=${ciphertext.length}, useProxy=${useProxy}`);
 
   let downloadParam: string | undefined;
   let lastError: unknown;
@@ -573,7 +585,7 @@ async function uploadBufferToCdn(params: {
     try {
       const res = await new Promise<{ data: string; status: number }>((resolve, reject) => {
         const urlObj = new URL(cdnUrl);
-        const proxyUrl = detectProxy();
+        const proxyUrl = useProxy ? detectProxy() : undefined;
 
         if (proxyUrl && proxyUrl.startsWith('http://')) {
           const proxyUrlObj = new URL(proxyUrl);
@@ -692,7 +704,7 @@ async function uploadBufferToCdn(params: {
 let _config: WxApiConfig & { cdnBaseUrl?: string } = {
   baseUrl: 'https://ilinkai.weixin.qq.com',
   token: '',
-  timeoutMs: 15_000,
+  timeoutMs: HTTPS_POST_TIMEOUT_MS,
   cdnBaseUrl: DEFAULT_CDN_BASE_URL,
 };
 
@@ -713,6 +725,7 @@ export const wxApi = {
       headers: headers(_config.token, body),
       body,
       timeoutMs,
+      useProxy: _config.useProxy,
     });
 
     const response = JSON.parse(data) as GetUpdatesResponse;
@@ -725,8 +738,6 @@ export const wxApi = {
     return response;
   },
 
-  async sendMessage(to: string, text: string): Promise<SendMessageResponse>;
-  async sendMessage(req: SendMessageRequest): Promise<SendMessageResponse>;
   async sendMessage(arg0: string | SendMessageRequest, arg1?: string): Promise<SendMessageResponse> {
     let request: SendMessageRequest;
     let to: string;
@@ -757,6 +768,7 @@ export const wxApi = {
       headers: headers(_config.token, body),
       body,
       timeoutMs: _config.timeoutMs,
+      useProxy: _config.useProxy,
     });
 
     if (status < 200 || status >= 300) {
@@ -782,6 +794,7 @@ export const wxApi = {
       headers: headers(_config.token, body),
       body,
       timeoutMs: _config.timeoutMs,
+      useProxy: _config.useProxy,
     });
 
     if (responseStatus < 200 || responseStatus >= 300) {
@@ -806,6 +819,7 @@ export const wxApi = {
     const { data, status } = await httpsPost(url, {
       headers: headers(_config.token, body),
       body,
+      useProxy: _config.useProxy,
       timeoutMs: _config.timeoutMs,
     });
 
@@ -825,6 +839,7 @@ export const wxApi = {
       headers: headers(_config.token, body),
       body,
       timeoutMs: _config.timeoutMs,
+      useProxy: _config.useProxy,
     });
 
     if (status < 200 || status >= 300) {
@@ -882,6 +897,7 @@ export const wxApi = {
       cdnBaseUrl: _config.cdnBaseUrl || DEFAULT_CDN_BASE_URL,
       aeskey,
       label: `${label}[orig filekey=${filekey}]`,
+      useProxy: _config.useProxy,
     });
 
     return {

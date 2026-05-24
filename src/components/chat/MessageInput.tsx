@@ -27,6 +27,7 @@ import { PastedContentList } from './PastedContentAttachment';
 import { FileAttachmentCard } from './FileAttachmentCard';
 import { useTranslation } from '@/hooks/useTranslation';
 import { listProvidersIPC, listOutputStylesIPC, type Provider } from '@/lib/ipc-client';
+import { saveDraftIPC, getDraftIPC } from '@/lib/ipc-client';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { AttachmentMenu } from './AttachmentMenu';
@@ -49,6 +50,7 @@ interface MessageInputProps {
   onStop?: () => void;
   disabled?: boolean;
   isStreaming?: boolean;
+  hasQueuedMessages?: boolean;
   sessionId?: string;
   modelName?: string;
   onModelChange?: (model: string) => void;
@@ -114,6 +116,7 @@ export function MessageInput({
   onStop,
   disabled = false,
   isStreaming = false,
+  hasQueuedMessages = false,
   sessionId,
   modelName,
   onModelChange,
@@ -142,6 +145,9 @@ export function MessageInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasFetchedModels = useRef(false);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevSessionIdRef = useRef<string | undefined>(sessionId);
+  const draftLoadedRef = useRef(false);
 
   // File chips from file tree
   const [fileChips, setFileChips] = useState<FileChip[]>([]);
@@ -429,6 +435,67 @@ export function MessageInput({
     fetchSkillsAndMcp();
   }, [sessionId]);
 
+  // Load draft when session changes
+  useEffect(() => {
+    const prevId = prevSessionIdRef.current;
+    prevSessionIdRef.current = sessionId;
+    draftLoadedRef.current = false;
+
+    if (!sessionId) return;
+
+    getDraftIPC(sessionId)
+      .then((draft) => {
+        if (draft && prevSessionIdRef.current === sessionId) {
+          setInputValue(draft);
+          draftLoadedRef.current = true;
+          requestAnimationFrame(() => adjustTextareaHeight());
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // Debounced draft save on input change
+  useEffect(() => {
+    if (!sessionId || !draftLoadedRef.current) return;
+
+    if (draftTimerRef.current) {
+      clearTimeout(draftTimerRef.current);
+    }
+
+    draftTimerRef.current = setTimeout(() => {
+      saveDraftIPC(sessionId, inputValue).catch(() => {});
+    }, 300);
+
+    return () => {
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputValue, sessionId]);
+
+  // Save draft on window close
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (sessionId && inputValue) {
+        saveDraftIPC(sessionId, inputValue).catch(() => {});
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [sessionId, inputValue]);
+
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current;
     if (textarea) {
@@ -524,6 +591,13 @@ export function MessageInput({
       if (!hasContent) return;
       if (disabled || isStreaming) return;
 
+      const clearDraft = () => {
+        draftLoadedRef.current = false;
+        if (sessionId) {
+          saveDraftIPC(sessionId, '').catch(() => {});
+        }
+      };
+
       // Build content with file chip paths
       const contentWithChips = buildContentWithChips(trimmedValue);
 
@@ -544,6 +618,7 @@ export function MessageInput({
       if (badge) {
         const { prompt, displayLabel } = dispatchBadge(badge, plainContent);
         setBadge(null);
+        clearDraft();
         setInputValue('');
         setFileChips([]);
         clearPastedContents();
@@ -561,6 +636,7 @@ export function MessageInput({
         const cmd = slashResult.commandValue;
         if (cmd === '/clear') {
           onClearMessages?.();
+          clearDraft();
           setInputValue('');
           setFileChips([]);
           clearPastedContents();
@@ -571,12 +647,14 @@ export function MessageInput({
           // Show command result as a message
           onSend(result.content, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
         }
+        clearDraft();
         setInputValue('');
         setFileChips([]);
         clearPastedContents();
         clearFiles();
         return;
       } else if (slashResult.action === 'set_badge') {
+        clearDraft();
         setBadge(slashResult.badge);
         setInputValue('');
         return;
@@ -586,6 +664,7 @@ export function MessageInput({
       const cliAppend = buildCliAppend(cliBadge);
       if (cliBadge) setCliBadge(null);
 
+      clearDraft();
       onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
       setInputValue('');
       setFileChips([]);
@@ -595,7 +674,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles],
+    [inputValue, disabled, isStreaming, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId],
   );
 
   const handleKeyDown = useCallback(
@@ -883,6 +962,11 @@ export function MessageInput({
 
             {/* Right: Send/Stop Button */}
             <div className="flex items-center gap-1">
+              {hasQueuedMessages && !isStreaming && (
+                <span className="text-xs text-muted-foreground bg-accent/20 px-1.5 py-0.5 rounded-full select-none">
+                  +{1}
+                </span>
+              )}
               {isStreaming && onStop ? (
                 <button
                   type="button"

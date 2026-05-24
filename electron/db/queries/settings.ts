@@ -52,3 +52,22 @@ export function setJsonSetting(key: string, value: unknown): void {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
   `).run(key, JSON.stringify(value), now);
 }
+
+// Gateway per-channel proxy configuration
+export interface GatewayProxyConfig {
+  globalEnabled: boolean;
+  channels: Record<string, boolean>;
+}
+
+const DEFAULT_GATEWAY_PROXY_CONFIG: GatewayProxyConfig = {
+  globalEnabled: true,
+  channels: {},
+};
+
+export function getGatewayProxyConfig(): GatewayProxyConfig {
+  return getJsonSetting<GatewayProxyConfig>('gatewayProxyConfig', DEFAULT_GATEWAY_PROXY_CONFIG);
+}
+
+export function setGatewayProxyConfig(config: GatewayProxyConfig): void {
+  setJsonSetting('gatewayProxyConfig', config);
+}

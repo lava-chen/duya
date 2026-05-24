@@ -41,6 +41,7 @@ import { duyaInfoTool } from './DuyaInfoTool/index.js';
 import { duyaConfigTool } from './DuyaConfigTool/index.js';
 import { duyaHealthTool } from './DuyaHealthTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
+import { moduleTool } from './ModuleTool/ModuleTool.js';
 
 /**
  * BashTool instance
@@ -137,6 +138,10 @@ export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig)
   // AskUserQuestion tool - prompt the user with multi-choice questions
   registry.register(askUserQuestionTool.toTool(), askUserQuestionTool);
 
+  // ModuleTool - load design specification modules on demand
+  // Agent calls read_module BEFORE show_widget or canvas tools to get style guides
+  registry.register(moduleTool.toTool(), moduleTool);
+
   // Skill management tool - for creating/updating skills
   registry.register(skillManageTool, skillManageTool);
 
@@ -154,6 +159,16 @@ Layer 2 — Proactive Triggering: use when explaining hierarchical structures, s
 
 When in doubt, choose the diagram over text.
 
+## Before calling show_widget for the first time
+
+Call \`read_module\` to load the design specification for your rendering approach:
+- **diagram** — SVG flowcharts, architecture, structure diagrams
+- **mockup** — HTML cards, dashboards, comparison tables, data displays
+- **chart** — Chart.js / D3 data visualizations
+- **interactive** — Interactive calculators, mini-apps, explainers
+
+You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This is YOUR decision — no hook triggers it automatically.
+
 ## Guidelines
 
 - Use CDN-whitelisted libraries only: Chart.js, D3.js (SVG mode), ApexCharts, or ECharts
@@ -161,14 +176,13 @@ When in doubt, choose the diagram over text.
 - Use dark-friendly colors where possible (#4f8cff for primary, #ff6b6b for errors)
 - Keep widgets self-contained - embed all data and styling inline
 - Specify fixed dimensions (e.g., width=600, height=400) for reliability
-- Avoid external API calls from widgets to prevent network errors
-- Test widget rendering after creation - verify it loads without errors`,
+- Avoid external API calls from widgets to prevent network errors`,
       input_schema: {
         type: 'object',
         properties: {
           widget_code: {
             type: 'string',
-            description: 'Raw HTML/SVG/JS content. Use injected CSS classes: s-plat, s-proc, s-agent, s-msg, s-err, s-chk, s-sub, s-sub-dark (containers); t-dark, t-dim-dark, t-light, t-dim, t-green, t-gray, t-gray-dim, td-on-dark, td-on-dark-dim (text); tt, td (typography); c-bx, n-box (layout); arr-line (arrows). ViewBox: "0 0 680 H". Safe area x∈[30,650]. Outer containers x=30 w=620. Node gap≥16px, pad 16px. Single-line 44px, dual-line 60px.',
+            description: 'Raw HTML/SVG/JS content. For SVG diagrams, use injected CSS classes as defined in the design modules (loaded via read_module). Output order: <style> → content HTML → <script>.',
           },
         },
         required: ['widget_code'],

@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { buildReceiverSrcdoc, sanitizeForStreaming } from '@/lib/widget-sanitizer';
-import { WIDGET_CSS_BRIDGE } from '@/lib/widget-css-bridge';
+import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from '@/lib/widget-css-bridge';
 import { CopyIcon, CheckIcon, DownloadSimpleIcon } from '@/components/icons';
 
 interface WidgetRendererProps {
@@ -165,7 +165,7 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
   }, [cacheKey]);
 
   const buildSrcdoc = useCallback((code: string, streaming: boolean) => {
-    return buildReceiverSrcdoc(code, streaming, WIDGET_CSS_BRIDGE);
+    return buildReceiverSrcdoc(code, streaming, WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS);
   }, []);
 
   const buildSrcdocRef = useRef(buildSrcdoc);

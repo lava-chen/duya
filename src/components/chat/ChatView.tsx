@@ -38,6 +38,7 @@ interface ChatViewProps {
   onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
+  hasQueuedMessages?: boolean;
 }
 
 /**
@@ -71,6 +72,7 @@ export function ChatView({
   onSendMessage,
   onInterrupt,
   isStreaming = false,
+  hasQueuedMessages = false,
 }: ChatViewProps) {
   const { t } = useTranslation();
   const { settings, save: saveSettings } = useSettings();
@@ -88,6 +90,7 @@ export function ChatView({
   const storeThreads = useConversationStore(s => s.threads);
   const setThreadWorkingDirectory = useConversationStore(s => s.setThreadWorkingDirectory);
   const setActiveThread = useConversationStore(s => s.setActiveThread);
+  const rewindToMessage = useConversationStore(s => s.rewindToMessage);
 
   const selectedProject = useMemo(() => {
     const thread = storeThreads.find(t => t.id === sessionId);
@@ -313,6 +316,15 @@ export function ChatView({
     }
   }, [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]);
 
+  const handleRewindToMessage = useCallback((messageId: string) => {
+    if (isStreaming) return;
+    const targetIndex = messages.findIndex(m => m.id === messageId);
+    if (targetIndex === -1 || targetIndex === messages.length - 1) return;
+    const confirmed = window.confirm('回退到此消息后，该消息之后的所有对话将被删除，是否继续？');
+    if (!confirmed) return;
+    rewindToMessage(sessionId, messageId);
+  }, [isStreaming, messages, sessionId, rewindToMessage]);
+
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
     setIsCompacting(true);
@@ -460,6 +472,7 @@ export function ChatView({
                     onStop={handleStop}
                     disabled={false}
                     isStreaming={isStreaming}
+                    hasQueuedMessages={hasQueuedMessages}
                     sessionId={sessionId}
                     modelName={sessionModel}
                     onModelChange={handleModelChange}
@@ -509,6 +522,7 @@ export function ChatView({
               onForceStop={handleStop}
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
+              onRewindToMessage={handleRewindToMessage}
             />
           </div>
         )}
@@ -574,6 +588,7 @@ export function ChatView({
               onStop={handleStop}
               disabled={false}
               isStreaming={isStreaming}
+              hasQueuedMessages={hasQueuedMessages}
               sessionId={sessionId}
               modelName={sessionModel}
               onModelChange={handleModelChange}

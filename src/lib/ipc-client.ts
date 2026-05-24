@@ -368,6 +368,14 @@ export async function deleteThreadIPC(id: string): Promise<boolean> {
   return window.electronAPI!.thread!.delete(id) as Promise<boolean>
 }
 
+export async function saveDraftIPC(sessionId: string, draft: string): Promise<void> {
+  return window.electronAPI!.session!.saveDraft(sessionId, draft) as Promise<void>
+}
+
+export async function getDraftIPC(sessionId: string): Promise<string> {
+  return window.electronAPI!.session!.getDraft(sessionId) as Promise<string>
+}
+
 // Message operations
 export async function addMessageIPC(data: {
   id: string
@@ -426,6 +434,15 @@ export async function replaceMessagesIPC(
 export async function getMessagesBySessionIPC(sessionId: string): Promise<Message[]> {
   const dbMessages = await window.electronAPI!.message!.getBySession(sessionId) as DbMessage[]
   return dbMessages.map(dbMessageToMessage)
+}
+
+export async function truncateMessagesAfterIPC(
+  sessionId: string,
+  messageId: string
+): Promise<{ deletedCount: number }> {
+  return window.electronAPI!.message!.truncateAfter(sessionId, messageId) as Promise<{
+    deletedCount: number
+  }>
 }
 
 // Provider operations

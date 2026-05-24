@@ -114,12 +114,13 @@ export class VisionTool implements Tool, ToolExecutor {
       const base64Data = fileBuffer.toString('base64');
 
       const analyzeImage = context?.options?.analyzeImage;
-      console.log('[VisionTool] analyzeImage callback:', analyzeImage ? 'present' : 'MISSING');
-      console.log('[VisionTool] context.options:', JSON.stringify(Object.keys(context?.options || {})));
       if (!analyzeImage) {
+        // Hermes-style: return a clear message so the agent can inform the user
+        // instead of a cryptic "callback missing" error
         return {
-          id, name: this.name,
-          result: `Error: Vision model is not configured. Please configure a vision model in Settings > Vision Model to enable image analysis.`,
+          id,
+          name: this.name,
+          result: `Vision model is not configured or not available. Please configure a vision model in Settings > Vision Model to enable image analysis, or use a multimodal model that supports images natively.`,
           error: true,
         };
       }

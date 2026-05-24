@@ -25,6 +25,16 @@ import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../se
 import type { Message, MessageContent } from '../types.js';
 import { messageDb } from '../ipc/db-client.js';
 import { IncrementalSaveQueue } from './incremental-save-queue.js';
+import {
+  enqueue,
+  enqueuePendingNotification,
+  dequeue,
+  dequeueAllMatching,
+  hasCommandsInQueue,
+  clearCommandQueue,
+  getCommandQueueLength,
+} from '../queue/index.js';
+import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
 import { getDefaultPromptManager } from '../prompts/PromptManager.js';
 import type { PromptProfile } from '../prompts/modes/types.js';
@@ -136,7 +146,8 @@ let agent: any = null;
 let sessionId: string | null = null;
 let initializing = false;
 let chatInProgress = false;
-let pendingChatQueue: ChatStartMessage[] = [];
+let lastInterruptTime = 0;
+const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
 let sessionSystemPrompt: string | undefined = undefined;
 let existingMessageCount = 0;
 // Track title generation per session (Map<sessionId, lastGeneratedTitle>)
@@ -1427,6 +1438,23 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
   }
 }
 
+async function drainQueuedChatStart(): Promise<void> {
+  while (!chatInProgress) {
+    const next = dequeue<ChatStartMessage>(
+      (cmd: QueuedCommand<ChatStartMessage>) => cmd.agentId === undefined && cmd.mode === 'prompt'
+    );
+    if (!next) break;
+
+    log('[Agent-Process] Draining queued chat:start from priority queue');
+    chatInProgress = true;
+    try {
+      await handleChatStart(next.rawMessage);
+    } finally {
+      chatInProgress = false;
+    }
+  }
+}
+
 // stderr wrapper to prevent stdout pollution of JSON-RPC protocol
 // Use console.error/console.warn directly since log/warn aren't defined yet
 const log = (...args: unknown[]): void => { console.error('[Agent-Process]', ...args); };
@@ -1535,17 +1563,7 @@ async function main(): Promise<void> {
             }
           } finally {
             initializing = false;
-            // Process any chat:start messages that were queued during init
-            if (pendingChatQueue.length > 0 && !chatInProgress) {
-              const next = pendingChatQueue.shift()!;
-              log('[Agent-Process] Processing queued chat:start after init');
-              chatInProgress = true;
-              try {
-                await handleChatStart(next);
-              } finally {
-                chatInProgress = false;
-              }
-            }
+            await drainQueuedChatStart();
           }
 
           sendEvent({ type: 'ready', sessionId });
@@ -1555,12 +1573,15 @@ async function main(): Promise<void> {
         case 'chat:start': {
           const chatMsg = msg as unknown as ChatStartMessage;
           log('[Agent-Process] Received chat:start for session:', chatMsg.sessionId, 'initInProgress:', initializing);
-          // Guard against race condition: init handler yields during await initAgent(),
-          // and chat:start may arrive before agent.setMessages() loads DB history.
-          // Queue the request so it gets processed after init completes.
           if (initializing || chatInProgress) {
             log('[Agent-Process] Init in progress or chat in progress, queuing chat:start');
-            pendingChatQueue.push(chatMsg);
+            enqueue({
+              value: chatMsg.prompt,
+              mode: 'prompt',
+              priority: 'next',
+              agentId: undefined,
+              rawMessage: chatMsg,
+            });
             break;
           }
           chatInProgress = true;
@@ -1568,25 +1589,38 @@ async function main(): Promise<void> {
             await handleChatStart(chatMsg);
           } finally {
             chatInProgress = false;
-            // Process any queued messages
-            if (pendingChatQueue.length > 0) {
-              const next = pendingChatQueue.shift()!;
-              log('[Agent-Process] Processing queued chat:start');
-              chatInProgress = true;
-              try {
-                await handleChatStart(next);
-              } finally {
-                chatInProgress = false;
-              }
-            }
+            await drainQueuedChatStart();
           }
           break;
         }
 
         case 'chat:interrupt': {
-          log('[Agent-Process] Received chat:interrupt');
-          if (agent && agent.interrupt) {
-            agent.interrupt();
+          const now = Date.now();
+          log('[Agent-Process] Received chat:interrupt, chatInProgress:', chatInProgress);
+
+          if (chatInProgress) {
+            // First press: abort current chat
+            if (agent && agent.interrupt) {
+              agent.interrupt();
+            }
+            lastInterruptTime = now;
+            break;
+          }
+
+          // Second press within window OR no chat running: clear queued messages
+          if (hasCommandsInQueue() && (now - lastInterruptTime < DOUBLE_INTERRUPT_WINDOW_MS || !chatInProgress)) {
+            log('[Agent-Process] Double interrupt: clearing command queue');
+            clearCommandQueue();
+            lastInterruptTime = 0;
+          } else if (hasCommandsInQueue()) {
+            // First press while idle with queued messages: pop the front of the queue
+            const popped = dequeue<ChatStartMessage>(
+              (cmd: QueuedCommand<ChatStartMessage>) => cmd.agentId === undefined
+            );
+            if (popped) {
+              log('[Agent-Process] Interrupt popped queued command from queue, remaining:', getCommandQueueLength());
+            }
+            lastInterruptTime = now;
           }
           break;
         }

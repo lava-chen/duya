@@ -26,6 +26,11 @@ export interface WorkerSpawnConfig {
   envVars?: Record<string, string>;
 }
 
+export interface GatewayProxyConfig {
+  globalEnabled: boolean;
+  channels: Record<string, boolean>;
+}
+
 export interface GatewayInitConfig {
   platforms: Array<{
     platform: string;
@@ -35,6 +40,7 @@ export interface GatewayInitConfig {
   }>;
   autoStart: boolean;
   proxyUrl?: string;
+  proxyConfig?: GatewayProxyConfig;
   // Legacy fields (for backward compatibility with lifecycle.ts)
   tempDir?: string;
   gatewayWorkerTempDir?: string;

@@ -40,7 +40,7 @@ import path from 'node:path';
 const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com';
 const DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
 const LONG_POLL_TIMEOUT_MS = 35_000;
-const API_TIMEOUT_MS = 15_000;
+const API_TIMEOUT_MS = 8_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const RETRY_DELAY_SECONDS = 2;
 const BACKOFF_DELAY_SECONDS = 30;
@@ -158,6 +158,7 @@ export class WeixinAdapter extends BaseAdapter {
       token: this.token,
       timeoutMs: API_TIMEOUT_MS,
       cdnBaseUrl: this.cdnBaseUrl,
+      useProxy: config.useProxy ?? true,
     });
 
     this.startPollLoop();

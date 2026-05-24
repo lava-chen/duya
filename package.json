@@ -88,6 +88,7 @@
     "clsx": "^2.1.1",
     "croner": "^9.1.0",
     "diff": "^9.0.0",
+    "docx": "^9.6.1",
     "electron-updater": "^6.8.3",
     "es-toolkit": "^1.45.1",
     "framer-motion": "^12.38.0",

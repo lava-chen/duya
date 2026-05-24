@@ -4,7 +4,7 @@ import React, { useState, useMemo } from 'react';
 import type { Message, ToolUseInfo, ToolResultInfo } from '@/types';
 import { ToolActionsGroup, pairTools, type ActionItem, type ToolAction } from './ToolActionsGroup';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { CopyIcon, CheckIcon, NotePencilIcon } from '@/components/icons';
+import { CopyIcon, CheckIcon, NotePencilIcon, ArrowCounterClockwiseIcon } from '@/components/icons';
 import { FileAttachmentCard } from './FileAttachmentCard';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
@@ -54,6 +54,7 @@ interface MessageItemProps {
   onToolResult?: (toolUseId: string, approved: boolean) => void;
   // Messages merged from the same round (thinking + tool_use + text)
   mergedMessages?: Message[];
+  onRewindToMessage?: (messageId: string) => void;
 }
 
 function parseMessageContent(content: string | unknown[], msgType?: string): {
@@ -321,7 +322,7 @@ function sortMessagesByOrder(messages: Message[]): Message[] {
   });
 }
 
-export function MessageItem({ message, toolResults = [], onToolResult, mergedMessages = [] }: MessageItemProps) {
+export function MessageItem({ message, toolResults = [], onToolResult, mergedMessages = [], onRewindToMessage }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
   // Preview modal state
   const [previewAttachment, setPreviewAttachment] = useState<FileAttachment | null>(null);
@@ -554,6 +555,15 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
             >
               {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
             </button>
+            {onRewindToMessage && (
+              <button
+                onClick={() => onRewindToMessage(message.id)}
+                className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
+                title="回退到此处"
+              >
+                <ArrowCounterClockwiseIcon size={12} />
+              </button>
+            )}
           </div>
         </div>
 
