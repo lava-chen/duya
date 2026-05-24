@@ -15,6 +15,8 @@ import {
   deleteElement,
   writeActionLog,
   getElement,
+  findElementsByType,
+  findAttachedConnectors,
 } from '../db/queries/conductors';
 import type {
   ExecutorRpcResponse,
@@ -341,4 +343,379 @@ export class ConductorDbService {
 
     return { success: true, result };
   }
+
+  createNativeElement(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const nodeType = payload.nodeType as string;
+    const position = payload.position as Record<string, unknown>;
+    const content = (payload.content as Record<string, unknown>) || {};
+    const style = (payload.style as Record<string, unknown>) || {};
+    const parentId = payload.parentId as string | null | undefined;
+
+    const elementId = randomUUID();
+    const now = Date.now();
+    const nativeKind = nodeType;
+    const elementKind = `native/${nodeType}`;
+    const config = { ...content, style };
+    const metadata = {
+      label: content.label || nodeType,
+      tags: [],
+      createdBy: ACTOR,
+      parentId: parentId || null,
+      childIds: [],
+    };
+    const permissions = { agentCanRead: true, agentCanWrite: true, agentCanDelete: true };
+
+    insertElement(elementId, canvasId, elementKind, position, config, null, permissions, metadata, now, nativeKind);
+
+    writeActionLog({
+      canvasId,
+      widgetId: null,
+      actor: ACTOR,
+      actionType: 'element.create_native',
+      payload: { nodeType, position, content, style, parentId },
+      resultPatch: { elementId, elementKind, config, metadata },
+    });
+
+    return {
+      success: true,
+      result: {
+        diff: {
+          type: 'element.create_native',
+          targetId: elementId,
+          canvasId,
+          element: {
+            id: elementId,
+            canvasId,
+            elementKind,
+            position,
+            config,
+            state: 'idle',
+            dataVersion: 1,
+            permissions,
+            metadata,
+            createdAt: now,
+            updatedAt: now,
+          },
+          actionId: 0,
+          timestamp: now,
+        },
+      },
+    };
+  }
+
+  createConnector(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const source = payload.source as Record<string, unknown>;
+    const target = payload.target as Record<string, unknown>;
+    const curvature = (payload.curvature as number) || 0.4;
+    const style = (payload.style as Record<string, unknown>) || {};
+
+    const elementId = randomUUID();
+    const now = Date.now();
+    const nativeKind = 'connector';
+    const elementKind = 'native/connector';
+    const position = { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 };
+    const config = { source, target, curvature, routingMode: 'bezier', style };
+    const metadata = {
+      label: 'Connector',
+      tags: [],
+      createdBy: ACTOR,
+      parentId: null,
+      childIds: [],
+    };
+    const permissions = { agentCanRead: true, agentCanWrite: true, agentCanDelete: true };
+
+    insertElement(elementId, canvasId, elementKind, position, config, null, permissions, metadata, now, nativeKind);
+
+    writeActionLog({
+      canvasId,
+      widgetId: null,
+      actor: ACTOR,
+      actionType: 'connector.create',
+      payload: { source, target, curvature, style },
+      resultPatch: { elementId, elementKind, config, metadata },
+    });
+
+    return {
+      success: true,
+      result: {
+        diff: {
+          type: 'connector.create',
+          targetId: elementId,
+          canvasId,
+          element: {
+            id: elementId,
+            canvasId,
+            elementKind,
+            position,
+            config,
+            state: 'idle',
+            dataVersion: 1,
+            permissions,
+            metadata,
+            createdAt: now,
+            updatedAt: now,
+          },
+          actionId: 0,
+          timestamp: now,
+        },
+      },
+    };
+  }
+
+  createMindMap(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const position = (payload.position as Record<string, unknown>) || {
+      x: 0, y: 0, w: 16, h: 12, zIndex: 0, rotation: 0,
+    };
+    const rootNode = payload.rootNode || {
+      id: 'root',
+      text: 'Mind Map',
+      children: [],
+    };
+    const layoutDirection = (payload.layoutDirection as string) || 'right';
+    const branchColors = (payload.branchColors as string[]) || undefined;
+
+    const elementId = randomUUID();
+    const now = Date.now();
+    const nativeKind = 'mindmap';
+    const elementKind = 'native/mindmap';
+    const config: Record<string, unknown> = {
+      kind: 'mindmap',
+      rootNode,
+      layoutDirection,
+    };
+    if (branchColors) {
+      config.branchColors = branchColors;
+    }
+    const metadata = {
+      label: 'Mind Map',
+      tags: [],
+      createdBy: ACTOR,
+      parentId: null,
+      childIds: [],
+    };
+    const permissions = { agentCanRead: true, agentCanWrite: true, agentCanDelete: true };
+
+    insertElement(elementId, canvasId, elementKind, position, config, null, permissions, metadata, now, nativeKind);
+
+    writeActionLog({
+      canvasId,
+      widgetId: null,
+      actor: ACTOR,
+      actionType: 'element.create_native',
+      payload: { nodeType: 'mindmap', position, content: config },
+      resultPatch: { elementId, elementKind, config, metadata },
+    });
+
+    return {
+      success: true,
+      result: {
+        diff: {
+          type: 'element.create_native',
+          targetId: elementId,
+          canvasId,
+          element: {
+            id: elementId,
+            canvasId,
+            elementKind,
+            position,
+            config,
+            state: 'idle',
+            dataVersion: 1,
+            permissions,
+            metadata,
+            createdAt: now,
+            updatedAt: now,
+          },
+          actionId: 0,
+          timestamp: now,
+        },
+      },
+    };
+  }
+
+  mindmapAddNode(mindmapId: string, parentId: string, newNode: Record<string, unknown>): ExecutorRpcResponse {
+    const element = getElement(mindmapId, '');
+    if (!element) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `MindMap ${mindmapId} not found` },
+      };
+    }
+
+    const config = element.config as Record<string, unknown>;
+    const rootNode = config.rootNode as Record<string, unknown>;
+
+    const updatedRoot = addMindMapNode(rootNode, parentId, {
+      id: newNode.id as string || randomUUID(),
+      text: newNode.text as string || 'New node',
+      children: (newNode.children as Array<Record<string, unknown>>) || [],
+      collapsed: newNode.collapsed as boolean || false,
+    });
+
+    const newConfig = { ...config, rootNode: updatedRoot };
+    const now = Date.now();
+
+    updateElementConfig(mindmapId, newConfig, now);
+
+    const canvasId = element.canvasId as string;
+    writeActionLog({
+      canvasId,
+      widgetId: null,
+      actor: ACTOR,
+      actionType: 'mindmap.add_node',
+      payload: { mindmapId, parentId, newNode },
+      resultPatch: { config: newConfig },
+    });
+
+    return {
+      success: true,
+      result: {
+        diff: {
+          type: 'element.update',
+          targetId: mindmapId,
+          canvasId,
+          changes: { config: newConfig, prevConfig: config },
+          actionId: 0,
+          timestamp: now,
+        },
+      },
+    };
+  }
+
+  mindmapRemoveNode(mindmapId: string, nodeId: string): ExecutorRpcResponse {
+    const element = getElement(mindmapId, '');
+    if (!element) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `MindMap ${mindmapId} not found` },
+      };
+    }
+
+    const config = element.config as Record<string, unknown>;
+    const rootNode = config.rootNode as Record<string, unknown>;
+
+    const updatedRoot = removeMindMapNode(rootNode, nodeId);
+    if (!updatedRoot) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'Cannot remove root node' },
+      };
+    }
+
+    const newConfig = { ...config, rootNode: updatedRoot };
+    const now = Date.now();
+
+    updateElementConfig(mindmapId, newConfig, now);
+
+    const canvasId = element.canvasId as string;
+    writeActionLog({
+      canvasId,
+      widgetId: null,
+      actor: ACTOR,
+      actionType: 'mindmap.remove_node',
+      payload: { mindmapId, nodeId },
+      resultPatch: { config: newConfig },
+    });
+
+    return {
+      success: true,
+      result: {
+        diff: {
+          type: 'element.update',
+          targetId: mindmapId,
+          canvasId,
+          changes: { config: newConfig, prevConfig: config },
+          actionId: 0,
+          timestamp: now,
+        },
+      },
+    };
+  }
+
+  mindmapToggleCollapse(mindmapId: string, nodeId: string): ExecutorRpcResponse {
+    const element = getElement(mindmapId, '');
+    if (!element) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `MindMap ${mindmapId} not found` },
+      };
+    }
+
+    const config = element.config as Record<string, unknown>;
+    const rootNode = config.rootNode as Record<string, unknown>;
+
+    function toggleInTree(node: Record<string, unknown>): Record<string, unknown> {
+      if (node.id === nodeId) {
+        return { ...node, collapsed: !node.collapsed };
+      }
+      const children = (node.children as Array<Record<string, unknown>>) || [];
+      return {
+        ...node,
+        children: children.map(toggleInTree),
+      };
+    }
+
+    const updatedRoot = toggleInTree(rootNode);
+    const newConfig = { ...config, rootNode: updatedRoot };
+    const now = Date.now();
+
+    updateElementConfig(mindmapId, newConfig, now);
+
+    const canvasId = element.canvasId as string;
+    writeActionLog({
+      canvasId,
+      widgetId: null,
+      actor: ACTOR,
+      actionType: 'mindmap.toggle_collapse',
+      payload: { mindmapId, nodeId },
+      resultPatch: { config: newConfig },
+    });
+
+    return {
+      success: true,
+      result: {
+        diff: {
+          type: 'element.update',
+          targetId: mindmapId,
+          canvasId,
+          changes: { config: newConfig, prevConfig: config },
+          actionId: 0,
+          timestamp: now,
+        },
+      },
+    };
+  }
+}
+
+function addMindMapNode(
+  root: Record<string, unknown>,
+  parentId: string,
+  newNode: Record<string, unknown>
+): Record<string, unknown> {
+  if (root.id === parentId) {
+    const children = (root.children as Array<Record<string, unknown>>) || [];
+    return { ...root, collapsed: false, children: [...children, newNode] };
+  }
+  const children = (root.children as Array<Record<string, unknown>>) || [];
+  return {
+    ...root,
+    children: children.map((child) => addMindMapNode(child, parentId, newNode)),
+  };
+}
+
+function removeMindMapNode(
+  root: Record<string, unknown>,
+  nodeId: string
+): Record<string, unknown> | null {
+  if (root.id === nodeId) return null;
+  const children = (root.children as Array<Record<string, unknown>>) || [];
+  return {
+    ...root,
+    children: children
+      .map((child) => removeMindMapNode(child, nodeId))
+      .filter((child): child is Record<string, unknown> => child !== null),
+  };
 }

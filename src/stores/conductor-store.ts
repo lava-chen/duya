@@ -40,6 +40,9 @@ interface ConductorState {
   uiStatus: ConductorUiStatus;
   selectedWidgetId: string | null;
   selectedElementId: string | null;
+  activeTool: string | null;
+  editingElementId: string | null;
+  selectedElementIds: string[];
   syncStatusText: string;
   uiError: string | null;
   bridgeUnsubscribe: (() => void) | null;
@@ -54,8 +57,20 @@ interface ConductorState {
   canvasZoom: number;
   setCanvasZoom: (zoom: number) => void;
 
+  // Canvas viewport (for toolbar placement calculation)
+  canvasScrollX: number;
+  canvasScrollY: number;
+  canvasViewportW: number;
+  canvasViewportH: number;
+  setCanvasScroll: (x: number, y: number) => void;
+  setCanvasViewportSize: (w: number, h: number) => void;
+
   // Unified canvas contents getter
   getCanvasContents: () => CanvasElement[];
+
+  // Native element selectors
+  getNativeNodes: () => CanvasElement[];
+  getConnectors: () => CanvasElement[];
 
   // Canvas
   setCanvases: (canvases: ConductorCanvas[]) => void;
@@ -103,6 +118,11 @@ interface ConductorState {
   setUiStatus: (status: ConductorUiStatus, syncStatusText?: string) => void;
   setSelectedWidgetId: (widgetId: string | null) => void;
   setSelectedElementId: (elementId: string | null) => void;
+  toggleElementSelection: (elementId: string) => void;
+  setSelectedElementIds: (elementIds: string[]) => void;
+  setActiveTool: (tool: string | null) => void;
+  setEditingElementId: (elementId: string | null) => void;
+  clearSelection: () => void;
   setSyncStatusText: (text: string) => void;
   setUiError: (message: string | null) => void;
 
@@ -129,6 +149,9 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   uiStatus: "idle",
   selectedWidgetId: null,
   selectedElementId: null,
+  activeTool: null,
+  editingElementId: null,
+  selectedElementIds: [],
   syncStatusText: "",
   uiError: null,
   bridgeUnsubscribe: null,
@@ -137,6 +160,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   conductorProviderId: null,
   conductorModelsLoading: false,
   canvasZoom: 1,
+  canvasScrollX: 0,
+  canvasScrollY: 0,
+  canvasViewportW: 0,
+  canvasViewportH: 0,
 
   setCanvases: (canvases) => set({ canvases }),
 
@@ -532,7 +559,21 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   setUiStatus: (uiStatus, syncStatusText = "") => set({ uiStatus, syncStatusText }),
 
   setSelectedWidgetId: (selectedWidgetId) => set({ selectedWidgetId }),
-  setSelectedElementId: (selectedElementId) => set({ selectedElementId }),
+  setSelectedElementId: (selectedElementId) => set({ selectedElementId, selectedElementIds: selectedElementId ? [selectedElementId] : [] }),
+  toggleElementSelection: (elementId) =>
+    set((state) => {
+      const exists = state.selectedElementIds.includes(elementId);
+      return {
+        selectedElementIds: exists
+          ? state.selectedElementIds.filter((id) => id !== elementId)
+          : [...state.selectedElementIds, elementId],
+        selectedElementId: exists ? state.selectedElementId : elementId,
+      };
+    }),
+  setSelectedElementIds: (selectedElementIds) => set({ selectedElementIds }),
+  setActiveTool: (activeTool) => set({ activeTool }),
+  setEditingElementId: (editingElementId) => set({ editingElementId }),
+  clearSelection: () => set({ selectedElementIds: [], selectedElementId: null, selectedWidgetId: null, editingElementId: null }),
 
   setSyncStatusText: (syncStatusText) => set({ syncStatusText }),
 
@@ -656,6 +697,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
   setCanvasZoom: (zoom) => set({ canvasZoom: zoom }),
 
+  setCanvasScroll: (x, y) => set({ canvasScrollX: x, canvasScrollY: y }),
+
+  setCanvasViewportSize: (w, h) => set({ canvasViewportW: w, canvasViewportH: h }),
+
   getCanvasContents: () => {
     const { elements, widgets } = get();
     if (elements.length > 0) {
@@ -666,4 +711,22 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
     }
     return widgets.map(w => widgetToElementAdapter(w));
   },
+
+  getNativeNodes: () => {
+    const { elements } = get();
+    return elements.filter((e) => e.elementKind.startsWith('native/') && e.elementKind !== 'native/connector');
+  },
+
+  getConnectors: () => {
+    const { elements } = get();
+    return elements.filter((e) => e.elementKind === 'native/connector');
+  },
 }));
+
+export function getAbsolutePosition(node: CanvasElement, allNodes: CanvasElement[]): { x: number; y: number } {
+  if (!node.metadata?.parentId) return { x: node.position.x, y: node.position.y };
+  const parent = allNodes.find((n) => n.id === node.metadata.parentId);
+  if (!parent) return { x: node.position.x, y: node.position.y };
+  const parentAbs = getAbsolutePosition(parent, allNodes);
+  return { x: parentAbs.x + node.position.x, y: parentAbs.y + node.position.y };
+}

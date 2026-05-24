@@ -408,11 +408,11 @@ export function getElement(elementId: string, canvasId: string): ConductorElemen
   };
 }
 
-export function insertElement(elementId: string, canvasId: string, elementKind: string, position: Record<string, unknown>, config: Record<string, unknown>, vizSpec: Record<string, unknown> | null, permissions: Record<string, unknown>, metadata: Record<string, unknown>, now: number): void {
+export function insertElement(elementId: string, canvasId: string, elementKind: string, position: Record<string, unknown>, config: Record<string, unknown>, vizSpec: Record<string, unknown> | null, permissions: Record<string, unknown>, metadata: Record<string, unknown>, now: number, nativeKind: string | null = null): void {
   db().prepare(
-    `INSERT INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, 'idle', 1, ?, ?, ?, ?)`
-  ).run(elementId, canvasId, elementKind, JSON.stringify(position), JSON.stringify(config), vizSpec ? JSON.stringify(vizSpec) : null, JSON.stringify(permissions), JSON.stringify(metadata), now, now);
+    `INSERT INTO conductor_elements (id, canvas_id, element_kind, native_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'idle', 1, ?, ?, ?, ?)`
+  ).run(elementId, canvasId, elementKind, nativeKind, JSON.stringify(position), JSON.stringify(config), vizSpec ? JSON.stringify(vizSpec) : null, JSON.stringify(permissions), JSON.stringify(metadata), now, now);
 }
 
 export function insertRestoredElement(elementId: string, canvasId: string, elementKind: string, position: Record<string, unknown>, config: Record<string, unknown>, vizSpec: Record<string, unknown> | null, state: string, dataVersion: number, permissions: Record<string, unknown>, metadata: Record<string, unknown>, createdAt: number, now: number): void {
@@ -436,6 +436,52 @@ export function updateElementVizSpec(elementId: string, vizSpec: Record<string, 
 
 export function deleteElement(elementId: string): void {
   db().prepare('DELETE FROM conductor_elements WHERE id = ?').run(elementId);
+}
+
+export function findElementsByType(canvasId: string, nodeTypes: string[]): ConductorElement[] {
+  const placeholders = nodeTypes.map(() => '?').join(',');
+  const rows = db().prepare(
+    `SELECT * FROM conductor_elements WHERE canvas_id = ? AND native_kind IN (${placeholders})`
+  ).all(canvasId, ...nodeTypes) as any[];
+  return rows.map((e: any) => ({
+    id: e.id,
+    canvasId: e.canvas_id,
+    elementKind: e.element_kind,
+    position: JSON.parse(e.position),
+    config: JSON.parse(e.config),
+    vizSpec: e.viz_spec ? JSON.parse(e.viz_spec) : null,
+    sourceCode: e.source_code,
+    state: e.state,
+    dataVersion: e.data_version,
+    permissions: JSON.parse(e.permissions),
+    metadata: JSON.parse(e.metadata),
+    createdAt: e.created_at,
+    updatedAt: e.updated_at,
+  }));
+}
+
+export function findAttachedConnectors(canvasId: string, nodeId: string): ConductorElement[] {
+  const rows = db().prepare(
+    `SELECT * FROM conductor_elements
+     WHERE canvas_id = ? AND native_kind = 'connector'
+       AND (json_extract(config, '$.source.nodeId') = ?
+            OR json_extract(config, '$.target.nodeId') = ?)`
+  ).all(canvasId, nodeId, nodeId) as any[];
+  return rows.map((e: any) => ({
+    id: e.id,
+    canvasId: e.canvas_id,
+    elementKind: e.element_kind,
+    position: JSON.parse(e.position),
+    config: JSON.parse(e.config),
+    vizSpec: e.viz_spec ? JSON.parse(e.viz_spec) : null,
+    sourceCode: e.source_code,
+    state: e.state,
+    dataVersion: e.data_version,
+    permissions: JSON.parse(e.permissions),
+    metadata: JSON.parse(e.metadata),
+    createdAt: e.created_at,
+    updatedAt: e.updated_at,
+  }));
 }
 
 // ============================================================

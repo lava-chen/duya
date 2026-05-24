@@ -11,7 +11,9 @@ export type ExecutorAction =
   | 'element.delete'
   | 'element.arrange'
   | 'element.align'
-  | 'element.layout_grid';
+  | 'element.layout_grid'
+  | 'element.create_native'
+  | 'connector.create';
 
 export interface ExecutorRpcRequest {
   requestId: string;

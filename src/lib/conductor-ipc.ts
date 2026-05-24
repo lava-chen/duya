@@ -1,4 +1,5 @@
 import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot } from "../types/conductor";
+import type { ConnectorEndpoint } from "../types/canvas-node";
 
 function getConductorAPI() {
   const conductor = (window as any).electronAPI?.conductor;
@@ -118,6 +119,74 @@ export async function createElement(
     position,
     vizSpec: vizSpec as any,
     config,
+  });
+}
+
+export async function createNativeElement(
+  canvasId: string,
+  nodeType: string,
+  position: { x: number; y: number; w: number; h: number; zIndex: number; rotation: number },
+  content: Record<string, unknown>,
+  style?: Record<string, unknown>,
+): Promise<any> {
+  const api = getConductorAPI();
+  if (!api) return;
+  return api.action({
+    action: 'element.create_native',
+    canvasId,
+    nodeType,
+    position,
+    content,
+    style,
+  });
+}
+
+export async function createConnector(
+  canvasId: string,
+  source: ConnectorEndpoint,
+  target: ConnectorEndpoint,
+  curvature?: number,
+  style?: Record<string, unknown>,
+): Promise<any> {
+  const api = getConductorAPI();
+  if (!api) return;
+  return api.action({
+    action: 'connector.create',
+    canvasId,
+    source,
+    target,
+    curvature,
+    style,
+  });
+}
+
+export async function updateElementContent(
+  elementId: string,
+  canvasId: string,
+  content: Record<string, unknown>,
+): Promise<any> {
+  const api = getConductorAPI();
+  if (!api) return;
+  return api.action({
+    action: 'element.update_content',
+    elementId,
+    canvasId,
+    content,
+  });
+}
+
+export async function reparentElement(
+  elementId: string,
+  canvasId: string,
+  parentId: string | null,
+): Promise<any> {
+  const api = getConductorAPI();
+  if (!api) return;
+  return api.action({
+    action: 'element.reparent',
+    elementId,
+    canvasId,
+    parentId,
   });
 }
 
