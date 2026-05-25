@@ -79,3 +79,21 @@ export interface ListCronRunsInput {
   limit?: number;
   offset?: number;
 }
+
+export interface AutomationTemplate {
+  id: string;
+  icon: string;
+  label_en: string;
+  label_zh: string;
+  description_en: string;
+  description_zh: string;
+  prompt: string;
+  defaultSchedule: CronSchedule;
+  defaultModel?: string;
+  tags: string[];
+}
+
+export interface AutomationTemplateConfig {
+  version: string;
+  templates: AutomationTemplate[];
+}
