@@ -51,6 +51,7 @@ function imageChunkToFileAttachment(base64: string, mediaType: string): FileAtta
 export function useFileAttachments() {
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
   const [parseErrors, setParseErrors] = useState<Map<string, string>>(new Map());
+  const [isParsing, setIsParsing] = useState(false);
   const parsingRef = useRef(false);
 
   /**
@@ -122,6 +123,7 @@ export function useFileAttachments() {
 
       if (!parsingRef.current) {
         parsingRef.current = true;
+        setIsParsing(true);
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const filePath = (file as any).path;
@@ -187,6 +189,7 @@ export function useFileAttachments() {
           });
         } finally {
           parsingRef.current = false;
+          setIsParsing(false);
         }
       }
     } else {
@@ -278,6 +281,7 @@ export function useFileAttachments() {
   return {
     attachedFiles,
     parseErrors,
+    isParsing,
     addFile,
     removeFile,
     clearFiles,

@@ -11,6 +11,10 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string | ContentBlock[];
+  /** Original prompt without synthetic context (pre-analysis, attachment text).
+   *  When set, the UI renders displayContent instead of content for user messages.
+   *  Content still contains the full assembled context sent to the LLM. */
+  displayContent?: string | ContentBlock[];
   name?: string;
   tool_call_id?: string;
   timestamp: number;

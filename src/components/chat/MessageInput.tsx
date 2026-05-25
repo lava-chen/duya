@@ -205,7 +205,7 @@ export function MessageInput({
   });
 
   // File attachments
-  const { attachedFiles, parseErrors, addFile, removeFile, clearFiles, handleFileInput } = useFileAttachments();
+  const { attachedFiles, parseErrors, isParsing, addFile, removeFile, clearFiles, handleFileInput } = useFileAttachments();
 
   // Pasted content attachments
   const {
@@ -591,6 +591,11 @@ export function MessageInput({
       if (!hasContent) return;
       if (disabled || isStreaming) return;
 
+      // Block sending while document parsing is in progress — the parsed
+      // text would be missing and the agent would see "Not Parsed" warnings.
+      const hasUnparsedDocs = attachedFiles.some(f => f.path && !f.text && !f.type.startsWith('image/'));
+      if (isParsing && hasUnparsedDocs) return;
+
       const clearDraft = () => {
         draftLoadedRef.current = false;
         if (sessionId) {
@@ -674,7 +679,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId],
+    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId],
   );
 
   const handleKeyDown = useCallback(
