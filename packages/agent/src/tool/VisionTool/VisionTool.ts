@@ -115,8 +115,6 @@ export class VisionTool implements Tool, ToolExecutor {
 
       const analyzeImage = context?.options?.analyzeImage;
       if (!analyzeImage) {
-        // Hermes-style: return a clear message so the agent can inform the user
-        // instead of a cryptic "callback missing" error
         return {
           id,
           name: this.name,
@@ -135,24 +133,24 @@ export class VisionTool implements Tool, ToolExecutor {
         hasPrompt: !!prompt,
         promptPreview: prompt?.substring(0, 100),
       });
-      const analysis = await analyzeImage(base64Data, mimeType, prompt);
+
+      let analysis: string;
+      try {
+        analysis = await analyzeImage(base64Data, mimeType, prompt);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log('[VisionTool] analyzeImage threw error:', errMsg);
+        return {
+          id, name: this.name,
+          result: `Error: ${errMsg}\n\nFile: ${resolvedPath} (${(fileStats.size / 1024).toFixed(1)} KB, ${mimeType})`,
+          error: true,
+        };
+      }
+
       console.log('[VisionTool] analyzeImage returned:', {
         analysisLength: analysis.length,
         analysisPreview: analysis.substring(0, 200),
       });
-
-      if (!analysis) {
-        console.log('[VisionTool] Analysis is empty, returning error');
-        return {
-          id, name: this.name,
-          result: `Error: Vision model returned no analysis. Possible causes:\n`
-            + `1. The configured vision model (Settings > Vision Model) may be unavailable or rate-limited\n`
-            + `2. The vision model API returned an error (check DevTools console logs)\n`
-            + `3. The image format (${mimeType}) may not be supported by the vision model\n`
-            + `\nFile: ${resolvedPath} (${(fileStats.size / 1024).toFixed(1)} KB, ${mimeType})`,
-          error: true,
-        };
-      }
 
       const resultParts: string[] = [];
       resultParts.push(`Image analyzed: ${resolvedPath}`);

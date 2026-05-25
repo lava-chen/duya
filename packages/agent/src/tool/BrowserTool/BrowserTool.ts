@@ -18,7 +18,7 @@ import { getPrompt } from './prompt.js';
 import { PlatformHookManager } from './platform-hooks/PlatformHookManager.js';
 import { isUrlBlocked, getEffectiveBlockedDomains, type DomainBlockerConfig } from './DomainBlocker.js';
 import { ActionRegistry, SchemaGenerator, getAllActions, type ActionContext } from './actions/index.js';
-import type { BrowserMode } from './types.js';
+import type { BrowserMode, NetworkEnvironment } from './types.js';
 
 export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   readonly name = BROWSER_TOOL_NAME;
@@ -36,6 +36,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   private mode: BrowserMode = 'extension';
   private extensionAvailable = false;
   private domainBlockerConfig: DomainBlockerConfig | undefined;
+  private networkEnvironment: NetworkEnvironment | undefined;
 
   constructor(domainBlockerConfig?: DomainBlockerConfig) {
     super();
@@ -52,6 +53,14 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
 
   setDomainBlockerConfig(config: DomainBlockerConfig): void {
     this.domainBlockerConfig = config;
+  }
+
+  setNetworkEnvironment(env: NetworkEnvironment): void {
+    this.networkEnvironment = env;
+  }
+
+  getNetworkEnvironment(): NetworkEnvironment | undefined {
+    return this.networkEnvironment;
   }
 
   private ensureConnection = async (): Promise<void> => {
@@ -148,7 +157,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   }
 
   getPrompt(): string {
-    return getPrompt();
+    return getPrompt(this.networkEnvironment);
   }
 }
 

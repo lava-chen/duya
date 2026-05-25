@@ -61,15 +61,32 @@ export class DuyaInfoTool implements Tool, ToolExecutor {
           ]);
           const providers = allProviders as Record<string, Record<string, unknown>> | undefined;
           const providerList = providers
-            ? Object.values(providers).map((p) => ({
-                id: p.id,
-                name: p.name,
-                providerType: p.providerType,
-                isActive: p.isActive,
-                maskedKey: typeof p.apiKey === 'string'
-                  ? `${p.apiKey.slice(0, 6)}...${p.apiKey.slice(-4)}`
-                  : undefined,
-              }))
+            ? Object.values(providers).map((p) => {
+                // Parse options for model info
+                let enabledModels: string[] = [];
+                let defaultModel: string | undefined;
+                let baseUrl = '';
+                try {
+                  const options = typeof p.options === 'string' ? JSON.parse(p.options) : (p.options || {});
+                  enabledModels = options.enabled_models || [];
+                  defaultModel = options.defaultModel || options.model || (Array.isArray(enabledModels) && enabledModels[0]);
+                  baseUrl = options.baseUrl || (p as Record<string, unknown>).baseUrl as string || '';
+                } catch {
+                  // ignore parse errors
+                }
+                return {
+                  id: p.id,
+                  name: p.name,
+                  providerType: p.providerType,
+                  isActive: p.isActive,
+                  maskedKey: typeof p.apiKey === 'string'
+                    ? `${p.apiKey.slice(0, 6)}...${p.apiKey.slice(-4)}`
+                    : undefined,
+                  baseUrl,
+                  defaultModel,
+                  enabledModels: enabledModels.slice(0, 10), // Limit to first 10 models for readability
+                };
+              })
             : [];
           result.providers = {
             count: providerList.length,
