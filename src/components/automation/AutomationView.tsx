@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import type {
   AutomationCron,
   AutomationCronRun,
+  AutomationTemplate,
   ConcurrencyPolicy,
   CreateAutomationCronInput,
   CronScheduleKind,
@@ -11,6 +12,7 @@ import {
   deleteAutomationCronIPC,
   listAutomationCronRunsIPC,
   listAutomationCronsIPC,
+  listAutomationTemplatesIPC,
   runAutomationCronIPC,
   updateAutomationCronIPC,
 } from '@/lib/automation-ipc';
@@ -18,6 +20,9 @@ import { CronChatModal } from './CronChatModal';
 import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector';
 import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-client';
 import { Plus, Play, PencilSimple, Trash, Clock, Calendar, Timer, SlidersHorizontal, WarningCircle, CheckCircle, XCircle, SpinnerGap, Gear, ChatCircle, Robot } from '@phosphor-icons/react';
+import { AutomationEmptyState } from './AutomationEmptyState';
+import { NLCreateModal } from './NLCreateModal';
+import { TemplateMarketModal } from './TemplateMarketModal';
 
 type EditorState = {
   id?: string;
@@ -108,6 +113,12 @@ export function AutomationView() {
   const [runs, setRuns] = useState<AutomationCronRun[]>([]);
   const [isCreating, setIsCreating] = useState(false);
 
+  // NL & Template state
+  const [nlModalOpen, setNlModalOpen] = useState(false);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templates, setTemplates] = useState<AutomationTemplate[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<AutomationTemplate | null>(null);
+
   // Cron chat modal state
   const [chatModalOpen, setChatModalOpen] = useState(false);
   const [selectedRun, setSelectedRun] = useState<AutomationCronRun | null>(null);
@@ -197,6 +208,19 @@ export function AutomationView() {
     }
   }, [hasElectronApi, fetchModels]);
 
+  useEffect(() => {
+    if (hasElectronApi) {
+      void (async () => {
+        try {
+          const list = await listAutomationTemplatesIPC();
+          setTemplates(list);
+        } catch {
+          setTemplates([]);
+        }
+      })();
+    }
+  }, [hasElectronApi]);
+
   const handleOpenChat = (run: AutomationCronRun) => {
     if (run.session_id) {
       setSelectedRun(run);
@@ -255,6 +279,55 @@ export function AutomationView() {
     setSelectedCronId(null);
   }
 
+  function handleChatCreate(): void {
+    setSelectedTemplate(null);
+    setNlModalOpen(true);
+  }
+
+  function handleQuickTemplate(template: AutomationTemplate): void {
+    setSelectedTemplate(template);
+    setNlModalOpen(true);
+  }
+
+  function handleManualCreate(): void {
+    setIsCreating(true);
+    setSelectedCronId(null);
+  }
+
+  function handleViewTemplates(): void {
+    setTemplateModalOpen(true);
+  }
+
+  function handleTemplateSelect(template: AutomationTemplate): void {
+    setSelectedTemplate(template);
+    setTemplateModalOpen(false);
+    setNlModalOpen(true);
+  }
+
+  function handleTemplateManualSetup(): void {
+    setTemplateModalOpen(false);
+    setSelectedTemplate(null);
+    setNlModalOpen(true);
+  }
+
+  function handleNLCreate(data: CreateAutomationCronInput): void {
+    if (!hasElectronApi) return;
+    void (async () => {
+      try {
+        setSaving(true);
+        setError(null);
+        const created = await createAutomationCronIPC(data);
+        setNlModalOpen(false);
+        setSelectedTemplate(null);
+        await reloadCrons(created.id);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSaving(false);
+      }
+    })();
+  }
+
   function handleSelectCron(cron: AutomationCron): void {
     setIsCreating(false);
     setSelectedCronId(cron.id);
@@ -292,28 +365,65 @@ export function AutomationView() {
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4">
         <h2 className="automation-title-copernicus" style={{ color: 'var(--text)' }}>Automation</h2>
-        <button
-          className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
-          style={{
-            background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
-            color: '#ffffff',
-          }}
-          onClick={handleCreateNew}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.opacity = '0.9';
-            e.currentTarget.style.transform = 'translateY(-1px)';
-            e.currentTarget.style.boxShadow = '0 4px 12px var(--accent-shadow)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.opacity = '1';
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = 'none';
-          }}
-          type="button"
-        >
-          <Plus size={16} weight="bold" />
-          New Cron
-        </button>
+        <div className="flex items-center gap-2">
+          {crons.length > 0 && (
+            <>
+              <button
+                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
+                style={{
+                  background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
+                  color: '#ffffff',
+                }}
+                onClick={handleChatCreate}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.opacity = '0.9';
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px var(--accent-shadow)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.opacity = '1';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                type="button"
+              >
+                <ChatCircle size={16} weight="bold" />
+                Create via Chat
+              </button>
+              <button
+                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
+                style={{
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  border: '1px solid var(--border)',
+                }}
+                onClick={handleManualCreate}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+                type="button"
+              >
+                <Plus size={16} weight="bold" />
+                Manual
+              </button>
+            </>
+          )}
+          {(hasElectronApi && crons.length > 0) && (
+            <button
+              className="px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
+              style={{
+                background: 'var(--surface)',
+                color: 'var(--text)',
+                border: '1px solid var(--border)',
+              }}
+              onClick={handleViewTemplates}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+              type="button"
+            >
+              View Templates
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Error Banner */}
@@ -325,8 +435,19 @@ export function AutomationView() {
       )}
 
       {/* Main Content */}
-      <div className="flex-1 overflow-hidden px-6 pb-6">
-        <div className="h-full grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {!loading && crons.length === 0 && !isCreating ? (
+        <div className="flex-1 overflow-hidden">
+          <AutomationEmptyState
+            templates={templates}
+            onQuickTemplate={handleQuickTemplate}
+            onChatCreate={handleChatCreate}
+            onManualCreate={handleManualCreate}
+            onViewTemplates={handleViewTemplates}
+          />
+        </div>
+      ) : (
+        <div className="flex-1 overflow-hidden px-6 pb-6">
+          <div className="h-full grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Cron Jobs List - Left Side */}
           <section className="flex flex-col h-full lg:col-span-1">
             <div className="flex-1 overflow-y-auto scrollbar-thin">
@@ -437,6 +558,33 @@ export function AutomationView() {
           </section>
         </div>
       </div>
+      )}
+
+      {/* NL Create Modal */}
+      <NLCreateModal
+        isOpen={nlModalOpen}
+        onClose={() => {
+          setNlModalOpen(false);
+          setSelectedTemplate(null);
+        }}
+        onCreate={handleNLCreate}
+        onOpenTemplates={() => {
+          setNlModalOpen(false);
+          setTemplateModalOpen(true);
+        }}
+        initialTemplate={selectedTemplate}
+        availableModels={availableModels}
+        modelsLoading={modelsLoading}
+      />
+
+      {/* Template Market Modal */}
+      <TemplateMarketModal
+        isOpen={templateModalOpen}
+        onClose={() => setTemplateModalOpen(false)}
+        onSelectTemplate={handleTemplateSelect}
+        onManualSetup={handleTemplateManualSetup}
+        templates={templates}
+      />
 
       {/* Cron Chat Modal */}
       {chatModalOpen && selectedRun && selectedCron && (
