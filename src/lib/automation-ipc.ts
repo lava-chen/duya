@@ -1,6 +1,7 @@
 import type {
   AutomationCron,
   AutomationCronRun,
+  AutomationTemplate,
   CreateAutomationCronInput,
   UpdateAutomationCronInput,
 } from '@/types/automation';
@@ -27,4 +28,8 @@ export async function runAutomationCronIPC(id: string): Promise<AutomationCronRu
 
 export async function listAutomationCronRunsIPC(cronId: string, limit = 20, offset = 0): Promise<AutomationCronRun[]> {
   return window.electronAPI.automation.listCronRuns({ cronId, limit, offset }) as Promise<AutomationCronRun[]>;
+}
+
+export async function listAutomationTemplatesIPC(): Promise<AutomationTemplate[]> {
+  return window.electronAPI.automation.listTemplates() as Promise<AutomationTemplate[]>;
 }
