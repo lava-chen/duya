@@ -162,7 +162,7 @@ function validateApiProvider(key: string, value: unknown): { valid: boolean; err
     if (!provider.name || typeof provider.name !== 'string') {
       return { valid: false, error: `Provider ${id} must have a name` };
     }
-    if (!['anthropic', 'openai', 'ollama', 'openai-compatible'].includes(provider.providerType)) {
+    if (!['anthropic', 'openai', 'ollama', 'openai-compatible', 'openrouter', 'bedrock', 'vertex', 'gemini-image', 'google'].includes(provider.providerType)) {
       return { valid: false, error: `Provider ${id} must have valid providerType` };
     }
   }

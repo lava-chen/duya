@@ -287,6 +287,7 @@ export interface AutomationAPI {
   deleteCron: (id: string) => Promise<{ success: boolean }>
   runCron: (id: string) => Promise<unknown>
   listCronRuns: (input: { cronId: string; limit?: number; offset?: number }) => Promise<unknown[]>
+  listTemplates: () => Promise<unknown[]>
 }
 
 export interface FileTreeNode {
@@ -1113,6 +1114,7 @@ const electronAPI: ElectronAPI = {
     runCron: (id: string) => ipcRenderer.invoke('automation:cron:run', id),
     listCronRuns: (input: { cronId: string; limit?: number; offset?: number }) =>
       ipcRenderer.invoke('automation:cron:runs', input),
+    listTemplates: () => ipcRenderer.invoke('automation:template:list'),
   },
   safeMode: {
     getStatus: () => ipcRenderer.invoke('db:safeModeStatus'),
