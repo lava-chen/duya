@@ -344,10 +344,11 @@ export class duyaAgent {
     this.model = options.model;
 
     // Initialize vision model client if configured
-    logger.info(`[duyaAgent] Vision config check: enabled=${options.visionConfig?.enabled}, provider=${options.visionConfig?.provider}, model=${options.visionConfig?.model}`);
+    logger.info(`[duyaAgent] Vision config check: enabled=${options.visionConfig?.enabled}, provider=${options.visionConfig?.provider}, model=${options.visionConfig?.model}, baseURL=${options.visionConfig?.baseURL}`);
     if (options.visionConfig?.enabled) {
       this.visionConfig = options.visionConfig;
       const visionProvider = inferProvider(options.visionConfig.baseURL || '', options.visionConfig.provider);
+      logger.info(`[duyaAgent] Vision provider inferred: provider=${options.visionConfig.provider}, baseURL=${options.visionConfig.baseURL} -> resolved=${visionProvider}`);
       try {
         this.visionClient = createLLMClient(visionProvider, {
           apiKey: options.visionConfig.apiKey,
@@ -490,7 +491,8 @@ export class duyaAgent {
 
   /**
    * Analyze an image using the configured vision model.
-   * Returns text description of the image, or empty string if vision is unavailable.
+   * Returns text description of the image.
+   * Throws an error if vision is unavailable or the API call fails.
    */
   async analyzeImage(imageBase64: string, mediaType: string, customPrompt?: string): Promise<string> {
     console.log('[duyaAgent] analyzeImage called:', {
@@ -503,8 +505,7 @@ export class duyaAgent {
 
     if (!this.visionClient) {
       logger.warn('[duyaAgent] analyzeImage: No vision client configured');
-      console.log('[duyaAgent] analyzeImage: returning empty string - no vision client');
-      return '';
+      throw new Error('Vision model is not configured. Please configure a vision model in Settings > Vision Model.');
     }
 
     const prompt = customPrompt || 'Please describe this image in detail. What do you see? Include any text, colors, shapes, objects, people, and the overall scene.';
@@ -521,6 +522,7 @@ export class duyaAgent {
     };
 
     const result: string[] = [];
+    let lastError: string | null = null;
     try {
       console.log('[duyaAgent] Starting vision stream...');
       const stream = this.visionClient.streamChat([userMessage], {
@@ -537,21 +539,36 @@ export class duyaAgent {
           result.push(event.data);
           console.log('[duyaAgent] Vision text event:', event.data?.substring(0, 100));
         }
-        if (event.type === 'done' || event.type === 'error') {
-          console.log('[duyaAgent] Vision stream ended:', event.type);
+        if (event.type === 'error') {
+          lastError = event.data as string;
+          console.log('[duyaAgent] Vision stream error event:', lastError);
+          break;
+        }
+        if (event.type === 'done') {
+          console.log('[duyaAgent] Vision stream ended: done');
           break;
         }
       }
       console.log('[duyaAgent] Vision stream finished, events:', eventCount);
     } catch (err) {
-      console.log('[duyaAgent] Vision analysis exception:', err instanceof Error ? err.message : String(err));
-      logger.warn(`[duyaAgent] Vision analysis failed: ${err instanceof Error ? err.message : String(err)}`);
-      return '';
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.log('[duyaAgent] Vision analysis exception:', errMsg);
+      logger.warn(`[duyaAgent] Vision analysis failed: ${errMsg}`);
+      throw new Error(`Vision model API error: ${errMsg}`);
+    }
+
+    if (lastError) {
+      throw new Error(`Vision model returned an error: ${lastError}`);
     }
 
     const analysis = result.join('').trim();
     console.log('[duyaAgent] Vision analysis complete:', { resultLength: analysis.length, preview: analysis.substring(0, 100) });
     logger.info(`[duyaAgent] Vision analysis complete: ${analysis.length} chars`);
+
+    if (!analysis) {
+      throw new Error('Vision model returned empty analysis. The model may not support image input, or the image format may be unsupported.');
+    }
+
     return analysis;
   }
 

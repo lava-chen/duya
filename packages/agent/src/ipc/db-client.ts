@@ -387,6 +387,15 @@ export const researchSessionDb = {
     sendDbRequest('researchSession:listByStatus', { status }),
 };
 
+// ==================== Model Capability Operations ====================
+
+export const modelCapabilityDb = {
+  get: (modelName: string) => sendDbRequest('modelCapability:get', { modelName }),
+  set: (modelName: string, isMultimodal: boolean, method: string) =>
+    sendDbRequest('modelCapability:set', { modelName, isMultimodal, method }),
+  delete: (modelName: string) => sendDbRequest('modelCapability:delete', { modelName }),
+};
+
 // ==================== Automation Operations ====================
 
 export const automationDb = {

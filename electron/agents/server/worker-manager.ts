@@ -92,6 +92,9 @@ export class WorkerManager {
       const line = data.toString().trim();
       if (!line) return;
 
+      // Direct output to console for debugging - this is from agent process
+      console.error(`[worker:${sessionId.slice(0, 8)}] ${line}`);
+
       // Parse log level from message - worker uses [LEVEL] prefix
       if (line.startsWith('[ERROR]') || line.includes('Error:')) {
         workerLogger.error('Worker stderr', new Error(line), { sessionId, pid: workerPid });
