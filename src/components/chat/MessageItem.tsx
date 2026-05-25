@@ -340,14 +340,19 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
   }, [toolResults]);
 
   // Parse main message content (including pasted content markers)
+  // For user messages with displayContent, render the original prompt
+  // instead of the full assembled context (pre-analysis + attachment text)
   const { text: mainText, pastedContents } = useMemo(() => {
-    const parsed = parseMessageContent(message.content, message.msgType);
+    const displaySource = message.role === 'user' && message.displayContent !== undefined
+      ? message.displayContent
+      : message.content;
+    const parsed = parseMessageContent(displaySource, message.msgType);
     const withPasted = parseMessageContentWithPasted(parsed.text);
     return {
       text: withPasted.text,
       pastedContents: withPasted.pastedContents,
     };
-  }, [message.content, message.msgType]);
+  }, [message.content, message.displayContent, message.msgType, message.role]);
 
   // Build ordered action items from all messages in this round
   const { actions, finalText, allPastedContents } = useMemo(() => {
@@ -421,7 +426,10 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
 
   const copyToClipboard = async () => {
     try {
-      await navigator.clipboard.writeText(typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2));
+      const copyContent = message.role === 'user' && message.displayContent !== undefined
+        ? message.displayContent
+        : message.content;
+      await navigator.clipboard.writeText(typeof copyContent === 'string' ? copyContent : JSON.stringify(copyContent, null, 2));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* ignore */ }

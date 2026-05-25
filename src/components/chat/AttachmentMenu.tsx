@@ -228,7 +228,7 @@ export function AttachmentMenu({
             <button
               type="button"
               onClick={handleAddFiles}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-white/5"
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
             >
               <span style={{ color: 'var(--muted)' }}>
                 <PaperclipIcon size={16} />
@@ -246,7 +246,7 @@ export function AttachmentMenu({
             >
               <button
                 type="button"
-                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-white/5"
+                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-3">
                   <span style={{ color: 'var(--muted)' }}>
@@ -268,7 +268,7 @@ export function AttachmentMenu({
             >
               <button
                 type="button"
-                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-white/5"
+                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-3">
                   <span style={{ color: 'var(--muted)' }}>
@@ -291,7 +291,7 @@ export function AttachmentMenu({
               >
                 <button
                   type="button"
-                  className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-white/5"
+                  className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
                 >
                   <div className="flex items-center gap-3">
                     <span style={{ color: 'var(--muted)' }}>
@@ -319,7 +319,7 @@ export function AttachmentMenu({
             >
               <button
                 type="button"
-                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-white/5"
+                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-3">
                   <span style={{ color: 'var(--muted)' }}>
@@ -360,7 +360,7 @@ export function AttachmentMenu({
                       key={skill.name}
                       type="button"
                       onClick={() => handleSelectSkill(skill.name)}
-                      className="w-full px-3 py-2 text-left transition-colors hover:bg-white/5"
+                      className="w-full px-3 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
                     >
                       <div className="text-sm" style={{ color: 'var(--foreground)' }}>
                         {skill.name}
@@ -385,7 +385,7 @@ export function AttachmentMenu({
                       setIsOpen(false);
                       setHoveredSubmenu(null);
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-white/5"
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
                   >
                     <WrenchIcon size={14} style={{ color: 'var(--muted)' }} />
                     <span style={{ color: 'var(--foreground)' }}>
@@ -401,7 +401,7 @@ export function AttachmentMenu({
                       setIsOpen(false);
                       setHoveredSubmenu(null);
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-white/5"
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
                   >
                     <PlusIcon size={14} style={{ color: 'var(--muted)' }} />
                     <span style={{ color: 'var(--foreground)' }}>
@@ -437,7 +437,7 @@ export function AttachmentMenu({
                   mcpServers.map((server) => (
                     <div
                       key={server.name}
-                      className="flex items-center justify-between px-3 py-2 hover:bg-white/5"
+                      className="flex items-center justify-between px-3 py-2 hover:bg-[var(--surface-hover)]"
                     >
                       <div className="flex-1 min-w-0">
                         <div className="text-sm" style={{ color: 'var(--foreground)' }}>
@@ -492,7 +492,7 @@ export function AttachmentMenu({
                     key={option.value || 'auto'}
                     type="button"
                     onClick={() => handleSelectThinkingEffort(option.value)}
-                    className="w-full flex items-center gap-3 px-3 py-2 transition-colors hover:bg-white/5"
+                    className="w-full flex items-center gap-3 px-3 py-2 transition-colors hover:bg-[var(--surface-hover)]"
                   >
                     <div className="flex-1 text-left">
                       <div
@@ -545,7 +545,7 @@ export function AttachmentMenu({
                       key={style.id}
                       type="button"
                       onClick={() => handleSelectStyle(style.id)}
-                      className="w-full flex items-center gap-3 px-3 py-2 transition-colors hover:bg-white/5"
+                      className="w-full flex items-center gap-3 px-3 py-2 transition-colors hover:bg-[var(--surface-hover)]"
                     >
                       {style.icon && (
                         <span style={{ color: 'var(--muted)' }}>{style.icon}</span>
@@ -586,7 +586,7 @@ export function AttachmentMenu({
                       setIsOpen(false);
                       setHoveredSubmenu(null);
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-white/5"
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
                   >
                     <PlusIcon size={14} style={{ color: 'var(--muted)' }} />
                     <span style={{ color: 'var(--foreground)' }}>
