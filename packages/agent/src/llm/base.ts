@@ -19,6 +19,7 @@ export interface LLMClient {
       }>;
       maxTokens?: number;
       temperature?: number;
+      disableThinking?: boolean;
       signal?: AbortSignal;
     }
   ): AsyncGenerator<SSEEvent, void, unknown>;

@@ -209,6 +209,7 @@ export class OllamaClient implements LLMClient {
       topP?: number;
       presencePenalty?: number;
       frequencyPenalty?: number;
+      disableThinking?: boolean;
       signal?: AbortSignal;
     }
   ): AsyncGenerator<SSEEvent, void, unknown> {
@@ -253,7 +254,7 @@ export class OllamaClient implements LLMClient {
     // Only enable thinking for models known to support it
     // Models like qwq, deepseek-r1, etc. support thinking
     // Other models may fail or behave unexpectedly with think: true
-    const modelSupportsThinking = /^(qwq|deepseek-r1|qwen3|llama3\.3|mistral-small)/i.test(this.model);
+    const modelSupportsThinking = !options?.disableThinking && /^(qwq|deepseek-r1|qwen3|llama3\.3|mistral-small)/i.test(this.model);
     const requestBody: Record<string, unknown> = {
       model: this.model,
       messages: ollamaMessages,

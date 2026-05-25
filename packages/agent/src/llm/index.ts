@@ -134,11 +134,25 @@ export function createRetryableLLMClient(
  * Both implementations must be kept consistent.
  */
 export function inferProvider(baseURL: string, providerType?: string): LLMProvider {
+  // If providerType is explicitly specified, use it (unless it's ambiguous)
+  // This allows users to override baseURL detection in Vision Settings
+  if (providerType) {
+    const pt = providerType.toLowerCase();
+    if (pt === 'openrouter' || pt === 'openai-compatible' || pt === 'openai') {
+      return 'openai';
+    }
+    if (pt === 'ollama') {
+      return 'ollama';
+    }
+    if (pt === 'anthropic') {
+      return 'anthropic';
+    }
+  }
+
   if (baseURL) {
     const url = baseURL.toLowerCase();
 
-    // If baseUrl clearly indicates a specific provider, use it regardless of providerType
-    // This handles misconfigured providerType with correct baseUrl
+    // If baseUrl clearly indicates a specific provider, use it
     if (url.includes('openrouter')) {
       return 'openai';
     }
@@ -164,13 +178,6 @@ export function inferProvider(baseURL: string, providerType?: string): LLMProvid
     }
   }
 
-  // Fall back to providerType for explicit type settings
-  if (providerType === 'openrouter' || providerType === 'openai-compatible') {
-    return 'openai';
-  }
-  if (providerType === 'ollama') {
-    return 'ollama';
-  }
-
+  // Fall back to anthropic as default
   return 'anthropic';
 }
