@@ -127,6 +127,8 @@ export function spawnAgentServer(): Promise<number> {
     child.stderr?.on('data', (data: Buffer) => {
       const line = data.toString().trim();
       if (line) {
+        // Also output to console for debugging
+        console.error(`[agent-server] ${line}`);
         logger.error(`Agent Server error: ${line}`, undefined, undefined, LogComponent.Main);
       }
     });

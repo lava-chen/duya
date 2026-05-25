@@ -45,6 +45,10 @@ import { sendEvent, parseStdin } from './worker-protocol.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
+import { isModelLikelyMultimodal } from '../llm/multimodal-detection.js';
+import { detectModelCapability } from '../llm/model-capability-cache.js';
+import type { ProbeConfig } from '../llm/model-capability-cache.js';
+import { VisionTool } from '../tool/VisionTool/VisionTool.js';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -150,6 +154,10 @@ let lastInterruptTime = 0;
 const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
 let sessionSystemPrompt: string | undefined = undefined;
 let existingMessageCount = 0;
+// Track the main model name for multimodal detection
+let mainModelName = '';
+let probeConfig: ProbeConfig | null = null;
+const visionTool = new VisionTool();
 // Track title generation per session (Map<sessionId, lastGeneratedTitle>)
 const titleGeneratedBySession = new Map<string, string>();
 // Title generation model config (from settings)
@@ -494,6 +502,16 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
   // Store system prompt for use in chat
   sessionSystemPrompt = sysPrompt;
 
+  // Store model name for multimodal detection
+  mainModelName = config.model;
+  probeConfig = {
+    model: config.model,
+    provider: (config.provider || 'openai') as ProbeConfig['provider'],
+    apiKey: config.apiKey || '',
+    baseURL: config.baseURL || '',
+    authStyle: config.authStyle as ProbeConfig['authStyle'],
+  };
+
   agent = new duyaAgent({
     apiKey: config.apiKey,
     baseURL: config.baseURL,
@@ -780,73 +798,256 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // Document files (pdf, docx, etc.) carry their parsed text and imageChunks
     // directly on the FileAttachment objects (path, text, extractMethod, imageChunks).
     const files = msg.options?.files;
-    console.error('[DEBUG] first file text length:', msg.options?.files?.[0]?.text?.length);
-    console.error('[DEBUG] docFiles count:', (msg.options?.files || []).filter((f: FileAttachment) => f.path || f.text).length);
+    console.error('[IMAGE-DETAIL] === Image Processing Start ===');
+    console.error('[IMAGE-DETAIL] Files count:', files?.length ?? 0);
+    console.error('[IMAGE-DETAIL] Files details:', files?.map(f => ({
+      name: f.name,
+      type: f.type,
+      urlPrefix: f.url?.substring(0, 30),
+      hasBase64: !!(f as unknown as Record<string, unknown>).base64,
+      urlStartsWithData: f.url?.startsWith('data:') ?? false,
+    })) ?? 'none');
+
     const docFiles = (files || []).filter(f => f.path || f.text);
     const imageFiles = (files || []).filter(f => f.type.startsWith('image/') || f.type.startsWith('img/'));
-    console.error('[DEBUG] imageFiles count:', imageFiles.length, 'types:', imageFiles.map(f => f.type));
+    console.error('[IMAGE-DETAIL] docFiles count:', docFiles.length);
+    console.error('[IMAGE-DETAIL] imageFiles count:', imageFiles.length, 'types:', imageFiles.map(f => f.type));
 
     // Pre-analyze user-attached images with the configured vision model.
     // Mirrors hermes-agent design: a dedicated vision model analyzes images
     // and the text description is passed to the main LLM as context.
-    // Original image content blocks are still included for natively
-    // multimodal-capable models (e.g. Claude, GPT-4V).
+    //
+    // Image content blocks are only included for natively multimodal-capable
+    // models (e.g. Claude, GPT-4V). For text-only models, pre-analysis text
+    // is the sole image context.
+    // Model capability detection — checks regex heuristics, DB cache, then API probe
+    const modelIsMultimodal = probeConfig
+      ? await detectModelCapability(probeConfig)
+      : isModelLikelyMultimodal(mainModelName);
+    log(`[Image-Processing] Model multimodal detection: ${mainModelName} → ${modelIsMultimodal} (${probeConfig ? 'probed' : 'regex-only fallback'})`);
+
     console.error('[DEBUG] Vision config check:', {
       hasAgent: !!agent,
       hasAnalyzeImage: agent ? typeof (agent as Record<string, unknown>).analyzeImage === 'function' : false,
       imageFilesCount: imageFiles.length,
+      modelIsMultimodal,
+      mainModelName,
     });
-    let preAnalysisText = '';
-    let visionAnalysisFailed = false;
-    if (imageFiles.length > 0 && agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function') {
-      for (const file of imageFiles) {
-        let base64Data = '';
-        if (file.url.startsWith('data:')) {
-          base64Data = file.url.split(',')[1] || '';
-        } else if ((file as unknown as Record<string, string>).base64) {
-          base64Data = (file as unknown as Record<string, string>).base64;
-        } else if (file.url && !file.url.startsWith('data:') && !isCDNImageUrl(file.url)) {
-          try {
-            const imgBuffer = await readFile(file.url);
-            // Compress image if needed before vision analysis
-            if (needsResizing(imgBuffer)) {
-              try {
-                const resized = await resizeImageBuffer(imgBuffer);
-                base64Data = resized.buffer.toString('base64');
-                log(`[Agent-Process] Compressed image "${file.name}": ${imgBuffer.length} → ${resized.buffer.length} bytes`);
-              } catch (resizeErr) {
-                warn(`[Agent-Process] Image compression failed for "${file.name}", using original:`, resizeErr);
-                base64Data = imgBuffer.toString('base64');
-              }
-            } else {
+
+    // Phase 1: Read and compress all image files once.
+    // Cache base64 data to avoid double-read (vision analysis + content block).
+    interface CachedImageData {
+      base64: string;
+      mediaType: string;
+    }
+    const imageDataCache = new Map<string, CachedImageData>();
+    const readFailedFiles: string[] = [];
+
+    for (const file of imageFiles) {
+      let base64Data = '';
+      let mediaType = file.type;
+      console.error('[IMAGE-DETAIL] Processing image file:', file.name, 'url:', file.url?.substring(0, 50), 'type:', file.type);
+
+      if (file.url.startsWith('data:')) {
+        base64Data = file.url.split(',')[1] || '';
+        console.error('[IMAGE-DETAIL] Extracted from data: URL, length:', base64Data.length);
+      } else if ((file as unknown as Record<string, string>).base64) {
+        base64Data = (file as unknown as Record<string, string>).base64;
+        console.error('[IMAGE-DETAIL] Extracted from base64 field, length:', base64Data.length);
+      } else if (file.url && !file.url.startsWith('data:') && !isCDNImageUrl(file.url)) {
+        console.error('[IMAGE-DETAIL] Trying to read file from path:', file.url);
+        try {
+          const imgBuffer = await readFile(file.url);
+          console.error('[IMAGE-DETAIL] File read successfully, size:', imgBuffer.length, 'bytes');
+          if (needsResizing(imgBuffer)) {
+            try {
+              const resized = await resizeImageBuffer(imgBuffer, TARGET_IMAGE_SIZE_BYTES);
+              base64Data = resized.buffer.toString('base64');
+              mediaType = resized.mediaType;
+              log(`[Agent-Process] Compressed image "${file.name}": ${imgBuffer.length} → ${resized.buffer.length} bytes`);
+            } catch (resizeErr) {
+              warn(`[Agent-Process] Image compression failed for "${file.name}", using original:`, resizeErr);
               base64Data = imgBuffer.toString('base64');
             }
-          } catch {
-            // ignore read failure, image block is still added below
+          } else {
+            base64Data = imgBuffer.toString('base64');
+            console.error('[IMAGE-DETAIL] Image did not need resizing, base64 length:', base64Data.length);
           }
+        } catch (readErr) {
+          console.error('[IMAGE-DETAIL] FAILED to read file:', readErr);
+          readFailedFiles.push(file.name);
         }
+      } else {
+        console.error('[IMAGE-DETAIL] Skipped - CDN URL or no valid source:', {
+          hasUrl: !!file.url,
+          isDataUrl: file.url?.startsWith('data:'),
+          isCDN: file.url ? isCDNImageUrl(file.url) : 'N/A'
+        });
+      }
 
-        if (base64Data) {
-          try {
-            const result = await (agent as unknown as { analyzeImage: (b64: string, mt: string) => Promise<string> }).analyzeImage(base64Data, file.type);
-            if (result) {
-              preAnalysisText += `\n\n[Image: "${file.name}"]\n${result}`;
-              log(`[Agent-Process] Vision analysis: "${file.name}" — ${result.length} chars`);
-            }
-          } catch (err) {
-            // Mark vision analysis as failed so we can notify the user
-            visionAnalysisFailed = true;
-            warn(`[Agent-Process] Vision analysis failed for "${file.name}":`, err);
-          }
+      if (base64Data) {
+        imageDataCache.set(file.name, { base64: base64Data, mediaType });
+        console.error('[IMAGE-DETAIL] Cached image:', file.name, 'base64 length:', base64Data.length);
+      } else {
+        console.error('[IMAGE-DETAIL] FAILED to get base64 for:', file.name);
+        if (!isCDNImageUrl(file.url)) {
+          readFailedFiles.push(file.name);
+        }
+      }
+    }
+    console.error('[IMAGE-DETAIL] imageDataCache entries:', imageDataCache.size);
+    console.error('[IMAGE-DETAIL] Cache keys:', [...imageDataCache.keys()]);
+    console.error('[IMAGE-DETAIL] readFailedFiles:', readFailedFiles);
+
+    // Phase 2: Vision pre-analysis using the configured vision model.
+    // Uses the cached base64 data from Phase 1.
+    let preAnalysisText = '';
+    let visionAnalysisFailed = false;
+    let visionAnalysisError: string | null = null;
+    if (imageFiles.length > 0 && agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function') {
+      for (const file of imageFiles) {
+        const cached = imageDataCache.get(file.name);
+        if (!cached) continue;
+
+        try {
+          const result = await (agent as unknown as { analyzeImage: (b64: string, mt: string) => Promise<string> }).analyzeImage(cached.base64, cached.mediaType);
+          preAnalysisText += `\n\n[Image: "${file.name}"]\n${result}`;
+          log(`[Agent-Process] Vision analysis: "${file.name}" — ${result.length} chars`);
+        } catch (err) {
+          visionAnalysisFailed = true;
+          visionAnalysisError = err instanceof Error ? err.message : String(err);
+          warn(`[Agent-Process] Vision analysis failed for "${file.name}": ${visionAnalysisError}`);
         }
       }
     }
 
     let effectivePrompt = msg.prompt;
+    console.error('[IMAGE-DETAIL] Initial prompt length:', msg.prompt?.length ?? 0);
     if (preAnalysisText) {
       effectivePrompt = msg.prompt
         ? `${msg.prompt}\n\n--- Image Analysis (auto-generated) ---${preAnalysisText}`
         : `The user sent an image. Here is a detailed description generated by an AI vision model:\n${preAnalysisText}\n\nPlease help the user based on the image description above.`;
+      console.error('[IMAGE-DETAIL] Added preAnalysisText to prompt, length:', preAnalysisText.length);
+    } else {
+      console.error('[IMAGE-DETAIL] No preAnalysisText (vision analysis not available or failed)');
+    }
+
+    // Fallback: if direct pre-analysis failed for non-multimodal models,
+    // run a controlled vision_analyze tool pass and append its output.
+    if (
+      imageFiles.length > 0 &&
+      !modelIsMultimodal &&
+      (!preAnalysisText || visionAnalysisFailed)
+    ) {
+      const toolPassResults: string[] = [];
+      for (const file of imageFiles) {
+        const cached = imageDataCache.get(file.name);
+        const imagePath = (file.path || file.url || '').trim();
+
+        // Skip CDN URLs (no local data available)
+        if (isCDNImageUrl(imagePath)) {
+          continue;
+        }
+
+        try {
+          let toolResult: { error?: boolean; result?: unknown };
+
+          if (cached) {
+            // For data: URLs and already-read files, use analyzeImage directly
+            // with the cached base64 to avoid double-read
+            const analyzeImage = (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string) => Promise<string> })?.analyzeImage;
+            if (!analyzeImage) {
+              continue;
+            }
+            const question = msg.prompt?.trim()
+              ? `Analyze this image for the user's request: ${msg.prompt.trim()}`
+              : 'Describe this image in detail.';
+            const analysis = await analyzeImage(cached.base64, cached.mediaType, question);
+            toolResult = { result: analysis };
+          } else if (imagePath && !imagePath.startsWith('data:')) {
+            // For local file paths, use VisionTool which reads the file
+            toolResult = await visionTool.execute(
+              {
+                image_path: imagePath,
+                question: msg.prompt?.trim()
+                  ? `Analyze this image for the user's request: ${msg.prompt.trim()}`
+                  : 'Describe this image in detail.',
+              },
+              undefined,
+              {
+                options: {
+                  analyzeImage: (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string) => Promise<string> })?.analyzeImage,
+                },
+              } as unknown as import('../types.js').ToolUseContext,
+            );
+          } else {
+            continue;
+          }
+
+          if (!toolResult.error && typeof toolResult.result === 'string' && toolResult.result.trim()) {
+            const normalized = toolResult.result.replace(/\r\n/g, '\n');
+            const marker = '\n\n';
+            const body = normalized.includes(marker)
+              ? normalized.slice(normalized.indexOf(marker) + marker.length).trim()
+              : normalized.trim();
+            if (body) {
+              toolPassResults.push(`[Image: "${file.name}"]\n${body}`);
+            }
+          }
+        } catch (err) {
+          warn(`[Agent-Process] vision_analyze fallback failed for "${file.name}":`, err);
+        }
+      }
+      if (toolPassResults.length > 0) {
+        const fallbackText = toolPassResults.join('\n\n');
+        effectivePrompt = effectivePrompt
+          ? `${effectivePrompt}\n\n--- Image Analysis (vision_analyze fallback) ---\n${fallbackText}`
+          : `The user sent image(s). Here is a detailed analysis generated by vision_analyze:\n\n${fallbackText}`;
+        preAnalysisText = fallbackText;
+        visionAnalysisFailed = false;
+      }
+    }
+
+    // When vision analysis failed and the main model doesn't support
+    // multimodal, warn the user that images cannot be analyzed.
+    if (visionAnalysisFailed && imageFiles.length > 0 && !modelIsMultimodal) {
+      const errorDetail = visionAnalysisError ? ` Error: ${visionAnalysisError}` : '';
+      const warnMsg = `\n\n[System: Image analysis is unavailable.${errorDetail} `
+        + 'The configured vision model failed to analyze the uploaded image(s), '
+        + 'and the main model does not support direct image input. '
+        + 'Please check your vision model settings or switch to a multimodal model '
+        + '(e.g. Claude, GPT-4V, Gemini).]';
+      effectivePrompt = effectivePrompt
+        ? `${effectivePrompt}${warnMsg}`
+        : `The user sent image(s) but image analysis is unavailable. ${warnMsg}`;
+    }
+
+    // When images exist but the agent cannot see them at all (model not
+    // multimodal and no vision analyzer configured), at minimum include
+    // the image file names in the prompt so the agent knows they exist.
+    const hasVisionAnalyzer = agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function';
+    if (imageFiles.length > 0 && !modelIsMultimodal && !hasVisionAnalyzer && !visionAnalysisFailed) {
+      const imageNames = imageFiles.map(f => f.name).join(', ');
+      const parts: string[] = [];
+      parts.push(`\n\n[System: The user sent ${imageFiles.length} image file(s): ${imageNames}.`);
+      parts.push('This model cannot view images directly and no vision model is configured.');
+      if (readFailedFiles.length > 0) {
+        parts.push(`Unable to read from disk: ${readFailedFiles.join(', ')}.`);
+      }
+      parts.push('Please configure a vision model in Settings or use a multimodal model (e.g. Claude, GPT-4V, Gemini) to process images.]');
+      const imageInfo = parts.join(' ');
+      effectivePrompt = effectivePrompt
+        ? `${effectivePrompt}${imageInfo}`
+        : `The user sent image(s): ${imageNames}. ${imageInfo}`;
+    }
+
+    // Image read failures that still have some cached data (multimodal model
+    // will see the image blocks, but add a note about failed files)
+    if (readFailedFiles.length > 0 && modelIsMultimodal) {
+      const failedInfo = `\n\n[System: Note: ${readFailedFiles.length} image file(s) could not be read from disk (${readFailedFiles.join(', ')}). Only successfully read images are shown.]`;
+      effectivePrompt = effectivePrompt
+        ? `${effectivePrompt}${failedInfo}`
+        : failedInfo;
     }
 
     // When files are attached but no text prompt, provide a default instruction
@@ -866,100 +1067,67 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         contentBlocks.push({ type: 'text', text: effectivePrompt });
       }
 
+      // Phase 3: Build image content blocks using cached data.
+      // Only send image blocks to multimodal-capable models.
+    console.error('[IMAGE-DETAIL] Phase 3: Building content blocks. modelIsMultimodal:', modelIsMultimodal);
+    console.error('[IMAGE-DETAIL] Files to process:', files.map(f => ({ name: f.name, type: f.type })));
+    console.error('[IMAGE-DETAIL] Available in cache:', [...imageDataCache.keys()]);
+
       for (const file of files) {
         if (file.type.startsWith('image/') || file.type.startsWith('img/')) {
-          console.error('[DEBUG] Processing image file:', {
-            name: file.name,
-            urlPrefix: file.url.substring(0, 50),
-            hasDataUrl: file.url.startsWith('data:'),
-            hasBase64: !!file.base64,
-            hasUrl: !!file.url,
-            isCDN: isCDNImageUrl(file.url),
-            path: file.path,
-          });
+          const cached = imageDataCache.get(file.name);
+          console.error('[IMAGE-DETAIL] Processing file:', file.name, 'cached:', !!cached, 'modelMultimodal:', modelIsMultimodal);
 
-          let imageBase64: string | null = null;
-          let imageMediaType = file.type;
-
-          // Check if we have base64 data or data URL
-          if (file.url.startsWith('data:')) {
-            // Legacy: data URL with base64
-            imageBase64 = file.url.split(',')[1];
-            console.error('[DEBUG] Added image via data URL, base64 length:', imageBase64?.length);
-          } else if (file.base64) {
-            // Legacy: explicit base64 field
-            imageBase64 = file.base64;
-            console.error('[DEBUG] Added image via base64 field');
-          } else if (file.url && !file.url.startsWith('data:')) {
-            // File path - check if it's a CDN/external URL (not supported as image)
-            if (isCDNImageUrl(file.url)) {
-              warn('[Agent-Process] Skipping CDN image URL:', file.name);
-              console.error('[DEBUG] Skipped CDN image URL:', file.url);
+          if (cached) {
+            if (modelIsMultimodal) {
+              imageBlocks.push({
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: cached.mediaType,
+                  data: cached.base64,
+                },
+              });
+              log(`[Agent-Process] Added image block: "${file.name}"`);
             } else {
-              // Local file path - read and inline as image content block
-              try {
-                console.error('[DEBUG] Reading local image from path:', file.url);
-                const imgBuffer = await readFile(file.url);
-
-                // Compress image if needed to meet API limits
-                if (needsResizing(imgBuffer)) {
-                  try {
-                    const resized = await resizeImageBuffer(imgBuffer, TARGET_IMAGE_SIZE_BYTES);
-                    imageBase64 = resized.buffer.toString('base64');
-                    imageMediaType = resized.mediaType;
-                    log(`[Agent-Process] Compressed image "${file.name}": ${imgBuffer.length} → ${resized.buffer.length} bytes`);
-                    console.error('[DEBUG] Compressed local image, base64 length:', imageBase64.length);
-                  } catch (resizeErr) {
-                    warn(`[Agent-Process] Image compression failed for "${file.name}", using original:`, resizeErr);
-                    imageBase64 = imgBuffer.toString('base64');
-                  }
-                } else {
-                  imageBase64 = imgBuffer.toString('base64');
-                }
-                log('[Agent-Process] Inlined local image:', file.name);
-                console.error('[DEBUG] Successfully read local image, base64 length:', imageBase64.length);
-              } catch (err) {
-                warn('[Agent-Process] Failed to read local image:', file.name, err);
-                console.error('[DEBUG] Failed to read local image:', err);
-              }
+              log(`[Agent-Process] Skipping image block, model not multimodal: "${file.name}"`);
             }
+          } else if (isCDNImageUrl(file.url)) {
+            warn('[Agent-Process] Skipping CDN image URL:', file.name);
           } else {
-            warn('[Agent-Process] Image file has no URL or base64 data:', file.name);
-            console.error('[DEBUG] Image has no URL or base64, name:', file.name);
-          }
-
-          // Add image block if we have data
-          if (imageBase64) {
-            imageBlocks.push({
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: imageMediaType,
-                data: imageBase64,
-              },
-            });
+            warn('[Agent-Process] Image file has no cached base64 data:', file.name);
           }
         }
       }
+    console.error('[IMAGE-DETAIL] Final imageBlocks count:', imageBlocks.length);
 
       // Also add document-extracted images (e.g. scanned PDF with embedded images)
-      for (const doc of docFiles) {
-        if (doc.imageChunks) {
-          for (const img of doc.imageChunks) {
-            imageBlocks.push({
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: img.mediaType,
-                data: img.base64,
-              },
-            });
+      // Only for multimodal-capable models
+      if (modelIsMultimodal) {
+        for (const doc of docFiles) {
+          if (doc.imageChunks) {
+            for (const img of doc.imageChunks) {
+              imageBlocks.push({
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: img.mediaType,
+                  data: img.base64,
+                },
+              });
+            }
           }
         }
       }
 
       // Assemble: text first, then images
       messageContent = [...contentBlocks, ...imageBlocks];
+      console.error('[IMAGE-DETAIL] Final messageContent:', {
+        isArray: Array.isArray(messageContent),
+        blockCount: Array.isArray(messageContent) ? messageContent.length : 0,
+        textBlockCount: contentBlocks.length,
+        imageBlockCount: imageBlocks.length,
+      });
     } else if (docFiles.some(d => d.imageChunks?.length)) {
       // No direct file attachments, but parsed documents contain extracted images
       const contentBlocks: MessageContent[] = [];
@@ -971,7 +1139,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
 
       for (const doc of docFiles) {
-        if (doc.imageChunks) {
+        if (doc.imageChunks && modelIsMultimodal) {
           for (const img of doc.imageChunks) {
             imageBlocks.push({
               type: 'image',
@@ -989,8 +1157,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     // Images that could not be auto-inlined (CDN URLs, local file read
     // failures, or missing base64 data) are silently skipped. The LLM won't
-    // see these images as content blocks and buildAttachmentContext excludes
-    // pure image files, so no text reference is generated either.
+    // see these images as content blocks. buildAttachmentContext includes
+    // image files and generates a brief text reference ("This image file
+    // is attached in this message") so the LLM knows they exist.
+    //
+    // For non-multimodal models, image content blocks are intentionally
+    // omitted — pre-analysis text from the vision model (if configured)
+    // is the sole image context.
     // Pre-analysis text from the vision model (if configured) is still
     // prepended to the prompt so the LLM has a text description.
     //
@@ -1025,6 +1198,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       agentProfileId: msg.options?.agentProfileId,
       outputStyleConfig: msg.options?.outputStyleConfig,
       attachments: files,
+      displayContent: msg.prompt, // Store original prompt without synthetic pre-analysis/attachment context
     });
 
     log('[Agent-Process] streamChat started, iterating events...');

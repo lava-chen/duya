@@ -152,11 +152,14 @@ export class AgentProcessPool {
 
         this.logger.info(`Agent process started: ${runtime.command} ${runtime.args.join(' ')}`, undefined, LogComponent.AgentProcessPool);
 
-        // Capture stderr for debugging
+        // Capture stderr for debugging - output in real-time + buffer for exit logging
         const stderrChunks: string[] = [];
         if (child.stderr) {
           child.stderr.on('data', (chunk: Buffer) => {
-            stderrChunks.push(chunk.toString());
+            const line = chunk.toString();
+            // Real-time output to console
+            process.stderr.write(`[agent:${sessionId.slice(0, 8)}] ${line}`);
+            stderrChunks.push(line);
           });
         }
 
