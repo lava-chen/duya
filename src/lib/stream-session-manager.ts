@@ -107,6 +107,65 @@ async function getProviderConfigById(providerId: string, model: string): Promise
   }
 }
 
+// Check if model string looks like "providerId:modelName" format
+function looksLikeProviderModelFormat(model: string): boolean {
+  // Pattern: starts with alphanumeric provider ID followed by colon, then model name
+  // e.g., "openrouter:anthropic/claude-3.5-sonnet" or "anthropic:claude-opus-4-6"
+  const parts = model.split(':');
+  if (parts.length < 2) return false;
+  // First part should look like a provider ID (short, alphanumeric with hyphens)
+  const providerId = parts[0]!;
+  if (providerId.length > 30) return false; // Provider IDs are typically short
+  // Model name should have something beyond just simple word (contains slash, hyphen with version, etc.)
+  const modelPart = parts.slice(1).join(':');
+  return modelPart.includes('/') || /\d/.test(modelPart);
+}
+
+// Get provider config for a specific model (which may be in "providerId:modelName" format)
+// This allows users to select different provider models from the UI
+async function getProviderConfigForModel(model: string | undefined): Promise<ProviderConfig | null> {
+  if (!model) {
+    return getActiveProviderConfig();
+  }
+
+  // Check if model looks like "providerId:modelName" format
+  if (!looksLikeProviderModelFormat(model)) {
+    // Regular model name - use active provider with this model
+    const activeConfig = await getActiveProviderConfig();
+    if (activeConfig) {
+      activeConfig.model = model;
+      console.log('[stream-session-manager] Using active provider with model override:', { provider: activeConfig.provider, model: activeConfig.model });
+    }
+    return activeConfig;
+  }
+
+  // Model is in "providerId:modelName" format - extract and resolve provider
+  const parts = model.split(':');
+  if (parts.length < 2) {
+    return getActiveProviderConfig();
+  }
+
+  const providerId = parts[0]!;
+  const modelName = parts.slice(1).join(':');
+  console.log(`[stream-session-manager] Model format detected: providerId="${providerId}", model="${modelName}"`);
+
+  const resolved = await getProviderConfigById(providerId, modelName);
+  if (resolved) {
+    console.log('[stream-session-manager] Resolved provider config for session model:', { provider: resolved.provider, model: resolved.model });
+    return {
+      apiKey: resolved.apiKey,
+      baseURL: resolved.baseURL,
+      model: resolved.model,
+      provider: resolved.provider,
+      authStyle: 'api_key',
+    };
+  }
+
+  // Fallback to active provider if resolution fails
+  console.warn('[stream-session-manager] Failed to resolve provider, falling back to active provider');
+  return getActiveProviderConfig();
+}
+
 const ACTIVE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 
 interface PersistEvent {
@@ -817,7 +876,8 @@ class StreamSessionManager {
 
     // Use Agent Server HTTP for streaming
     // Get provider config for agent initialization
-    const providerConfig = await getActiveProviderConfig();
+    // If model is in "providerId:modelName" format, resolve the specific provider
+    const providerConfig = await getProviderConfigForModel(model);
     if (providerConfig) {
       console.log('[stream-session-manager] Using provider config:', { provider: providerConfig.provider, model: providerConfig.model });
     } else {
