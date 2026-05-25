@@ -138,7 +138,7 @@ export function computeBezierPath(
   curvature = 0.4,
 ): string {
   const dist = Math.hypot(tgt.x - src.x, tgt.y - src.y);
-  const tension = dist * curvature;
+  const tension = Math.max(28, dist * curvature);
   const cp1 = {
     x: src.x + directionVector[srcDir].x * tension,
     y: src.y + directionVector[srcDir].y * tension,
@@ -148,6 +148,37 @@ export function computeBezierPath(
     y: tgt.y + directionVector[tgtDir].y * tension,
   };
   return `M ${src.x} ${src.y} C ${cp1.x} ${cp1.y} ${cp2.x} ${cp2.y} ${tgt.x} ${tgt.y}`;
+}
+
+export function evaluateBezierPoint(
+  src: Point,
+  srcDir: Direction,
+  tgt: Point,
+  tgtDir: Direction,
+  curvature: number,
+  t: number,
+): Point {
+  const dist = Math.hypot(tgt.x - src.x, tgt.y - src.y);
+  const tension = Math.max(28, dist * curvature);
+  const cp1 = {
+    x: src.x + directionVector[srcDir].x * tension,
+    y: src.y + directionVector[srcDir].y * tension,
+  };
+  const cp2 = {
+    x: tgt.x + directionVector[tgtDir].x * tension,
+    y: tgt.y + directionVector[tgtDir].y * tension,
+  };
+
+  const u = 1 - t;
+  const tt = t * t;
+  const uu = u * u;
+  const uuu = uu * u;
+  const ttt = tt * t;
+
+  return {
+    x: (uuu * src.x) + (3 * uu * t * cp1.x) + (3 * u * tt * cp2.x) + (ttt * tgt.x),
+    y: (uuu * src.y) + (3 * uu * t * cp1.y) + (3 * u * tt * cp2.y) + (ttt * tgt.y),
+  };
 }
 
 export function computeStraightPath(

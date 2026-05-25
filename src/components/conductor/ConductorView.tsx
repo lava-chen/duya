@@ -114,7 +114,7 @@ export function ConductorView() {
   }
 
   return (
-    <div className="h-full w-full overflow-hidden bg-[var(--main-bg)]">
+    <div className="h-full w-full overflow-hidden bg-[var(--main-bg)] -m-4">
       <div className="relative h-full">
         {/* Header with Canvas Selector */}
         <div className="absolute top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-2">

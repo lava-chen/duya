@@ -1,14 +1,13 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useCallback } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useConductorStore } from "@/stores/conductor-store";
-import { createNativeElement } from "@/lib/conductor-ipc";
 import * as Icons from "@phosphor-icons/react";
 import { ELEMENT_ICONS } from "./toolbar/element-icons";
 
 type ToolId =
   | "select" | "text" | "sticky" | "shape"
-  | "connector" | "frame" | "section";
+  | "connector" | "mindmap" | "frame" | "section";
 
 interface Tool {
   id: ToolId;
@@ -25,6 +24,7 @@ const TOOLS: Tool[] = [
   { id: "sticky", icon: ELEMENT_ICONS.sticky, label: "Sticky note", shortcut: "N", group: 1, hasSubmenu: true },
   { id: "shape", icon: ELEMENT_ICONS.shape, label: "Shape", shortcut: "S", group: 1, hasSubmenu: true },
   { id: "connector", icon: ELEMENT_ICONS.connector, label: "Connector", shortcut: "C", group: 1 },
+  { id: "mindmap", icon: ELEMENT_ICONS.mindmap, label: "Mind Map", shortcut: "M", group: 1 },
   { id: "frame", icon: ELEMENT_ICONS.frame, label: "Frame", shortcut: "F", group: 2 },
   { id: "section", icon: ELEMENT_ICONS.section, label: "Section", group: 2 },
 ];
@@ -46,6 +46,11 @@ const STICKY_COLORS = [
   { color: "gray", hex: "#E0E0E0" },
 ];
 
+function createToolValue(type: string, extra?: Record<string, unknown>): string {
+  const encoded = extra ? `:${encodeURIComponent(JSON.stringify(extra))}` : "";
+  return `create:${type}${encoded}`;
+}
+
 interface SubmenuProps {
   toolId: ToolId;
   anchorY: number;
@@ -61,59 +66,75 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
-    setTimeout(() => document.addEventListener("mousedown", handler), 0);
+    window.setTimeout(() => document.addEventListener("mousedown", handler), 0);
     return () => document.removeEventListener("mousedown", handler);
   }, [onClose]);
 
-  const baseClass = "absolute left-[52px] bg-[var(--sidebar-bg)] border border-[var(--border)] rounded-xl py-1 min-w-[156px] z-[200] shadow-2xl";
+  const baseClass = "absolute left-[62px] bg-[var(--sidebar-bg)]/96 backdrop-blur-md border border-[var(--border)] rounded-2xl py-1.5 min-w-[176px] z-[200] shadow-[0_18px_40px_rgba(0,0,0,0.24)]";
 
-  if (toolId === "sticky") return (
-    <div ref={ref} className={baseClass} style={{ top: anchorY }}>
-      <div className="flex gap-1.5 px-3 py-2.5">
-        {STICKY_COLORS.map((c) => (
-          <button
-            key={c.color}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              setStickyColor(c.color);
-              onSelect("sticky", { color: c.color });
-            }}
-            className="w-[18px] h-[18px] rounded-[4px] transition-transform hover:scale-110 flex-shrink-0"
-            style={{
-              background: c.hex,
-              outline: stickyColor === c.color ? "2px solid rgba(255,255,255,0.6)" : "none",
-              outlineOffset: 1,
-            }}
-            aria-label={c.color}
-          />
-        ))}
+  if (toolId === "sticky") {
+    return (
+      <div ref={ref} className={baseClass} style={{ top: anchorY }}>
+        <div className="flex gap-1.5 px-3 py-2.5">
+          {STICKY_COLORS.map((c) => (
+            <button
+              key={c.color}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "copy";
+                e.dataTransfer.setData("application/x-conductor-tool", "sticky");
+                e.dataTransfer.setData("application/x-conductor-extra", JSON.stringify({ color: c.color }));
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setStickyColor(c.color);
+                onSelect("sticky", { color: c.color });
+              }}
+              className="w-[20px] h-[20px] rounded-[6px] transition-transform hover:scale-110 flex-shrink-0"
+              style={{
+                background: c.hex,
+                outline: stickyColor === c.color ? "2px solid var(--accent)" : "none",
+                outlineOffset: 1,
+              }}
+              aria-label={c.color}
+            />
+          ))}
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
 
-  if (toolId === "shape") return (
-    <div ref={ref} className={baseClass} style={{ top: anchorY }}>
-      {SHAPE_ITEMS.map((item) => {
-        const Icon = item.icon;
-        return (
-          <button
-            key={item.type}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onSelect("shape", { shapeType: item.type });
-            }}
-            className="flex items-center gap-2.5 w-full px-3 py-1.5 text-left text-[12px] text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors"
-          >
-            <Icon size={14} className="text-[var(--muted)] flex-shrink-0" />
-            <span className="flex-1">{item.label}</span>
-            {item.shortcut && (
-              <span className="text-[10px] text-[var(--muted)] font-mono">{item.shortcut}</span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
+  if (toolId === "shape") {
+    return (
+      <div ref={ref} className={baseClass} style={{ top: anchorY }}>
+        {SHAPE_ITEMS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.type}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "copy";
+                e.dataTransfer.setData("application/x-conductor-tool", "shape");
+                e.dataTransfer.setData("application/x-conductor-extra", JSON.stringify({ shapeType: item.type }));
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onSelect("shape", { shapeType: item.type });
+              }}
+              className="flex items-center gap-2.5 w-full px-3.5 py-2 text-left text-[12px] text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors rounded-xl mx-1"
+            >
+              <Icon size={14} className="text-[var(--muted)] flex-shrink-0" />
+              <span className="flex-1">{item.label}</span>
+              {item.shortcut && (
+                <span className="text-[10px] text-[var(--muted)] font-mono">{item.shortcut}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   return null;
 }
@@ -135,20 +156,13 @@ function ToolbarTooltip({ label, shortcut, children }: ToolbarTooltipProps) {
 
     const handleEnter = () => {
       const rect = btn.getBoundingClientRect();
-      setPos({
-        top: rect.top + rect.height / 2,
-        left: rect.right + 10,
-      });
+      setPos({ top: rect.top + rect.height / 2, left: rect.right + 10 });
       setVisible(true);
     };
-
-    const handleLeave = () => {
-      setVisible(false);
-    };
+    const handleLeave = () => setVisible(false);
 
     btn.addEventListener("mouseenter", handleEnter);
     btn.addEventListener("mouseleave", handleLeave);
-
     return () => {
       btn.removeEventListener("mouseenter", handleEnter);
       btn.removeEventListener("mouseleave", handleLeave);
@@ -163,7 +177,7 @@ function ToolbarTooltip({ label, shortcut, children }: ToolbarTooltipProps) {
           className="fixed z-[300] pointer-events-none"
           style={{ top: pos.top, left: pos.left, transform: "translateY(-50%)" }}
         >
-          <div className="px-2.5 py-1.5 rounded-md bg-[var(--sidebar-bg)] text-[var(--text)] text-xs whitespace-nowrap shadow-xl border border-[var(--border)] flex items-center gap-2">
+          <div className="px-3 py-1.5 rounded-lg bg-[var(--sidebar-bg)]/96 backdrop-blur-sm text-[var(--text)] text-xs whitespace-nowrap shadow-lg border border-[var(--border)] flex items-center gap-2">
             <span>{label}</span>
             {shortcut && <span className="text-[var(--muted)] text-[10px] font-mono">{shortcut}</span>}
           </div>
@@ -187,24 +201,25 @@ function ToolButton({ tool, isActive, isSubmenuOpen, onClick, onDragStart }: Too
       <ToolbarTooltip label={tool.label} shortcut={tool.shortcut}>
         <button
           type="button"
-          draggable={!tool.hasSubmenu && tool.id !== "connector" && tool.id !== "select"}
+          draggable={tool.id !== "connector" && tool.id !== "select"}
           onClick={(e) => onClick(tool, e)}
           onDragStart={(e) => {
-            if (tool.hasSubmenu || tool.id === "connector" || tool.id === "select") {
+            if (tool.id === "connector" || tool.id === "select") {
               e.preventDefault();
               return;
             }
             onDragStart(e, tool.id);
           }}
-          className={`flex items-center justify-center w-10 h-10 rounded-xl transition-all ${
-          isActive || isSubmenuOpen
-            ? "bg-[var(--surface-hover)] text-[var(--text)] shadow-lg"
-            : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
-        }`}
+          className={`group relative flex items-center justify-center w-11 h-11 rounded-2xl transition-all duration-150 ${
+            isActive || isSubmenuOpen
+              ? "bg-[var(--surface-hover)] text-[var(--text)] shadow-[inset_0_0_0_1px_var(--accent),0_8px_18px_rgba(0,0,0,0.18)]"
+              : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] hover:shadow-[inset_0_0_0_1px_var(--border)]"
+          }`}
         >
-          <div className="w-5 h-5">
-            {tool.icon}
-          </div>
+          <div className="w-[21px] h-[21px]">{tool.icon}</div>
+          {(isActive || isSubmenuOpen) && (
+            <span className="absolute -right-0.5 top-1/2 -translate-y-1/2 h-4 w-[2.5px] rounded-full bg-[var(--accent)]" />
+          )}
         </button>
       </ToolbarTooltip>
     </div>
@@ -214,133 +229,72 @@ function ToolButton({ tool, isActive, isSubmenuOpen, onClick, onDragStart }: Too
 export function CanvasToolbar() {
   const activeTool = useConductorStore((s) => s.activeTool);
   const setActiveTool = useConductorStore((s) => s.setActiveTool);
-  const activeCanvasId = useConductorStore((s) => s.activeCanvasId);
-  const setUiError = useConductorStore((s) => s.setUiError);
   const editMode = useConductorStore((s) => s.editMode);
   const toggleEditMode = useConductorStore((s) => s.toggleEditMode);
   const toggleHistory = useConductorStore((s) => s.toggleHistory);
-  const canvasScrollX = useConductorStore((s) => s.canvasScrollX);
-  const canvasScrollY = useConductorStore((s) => s.canvasScrollY);
-  const canvasViewportW = useConductorStore((s) => s.canvasViewportW);
-  const canvasViewportH = useConductorStore((s) => s.canvasViewportH);
-  const canvasZoom = useConductorStore((s) => s.canvasZoom);
 
   const barRef = useRef<HTMLDivElement>(null);
   const [openSubmenu, setOpenSubmenu] = useState<ToolId | null>(null);
   const [submenuAnchorY, setSubmenuAnchorY] = useState(0);
 
-  const handleDragStart = useCallback(
-    (e: React.DragEvent, toolId: string) => {
-      e.dataTransfer.effectAllowed = "copy";
-      e.dataTransfer.setData("application/x-conductor-tool", toolId);
-    },
-    []
-  );
+  const handleDragStart = useCallback((e: React.DragEvent, toolId: string) => {
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("application/x-conductor-tool", toolId);
+  }, []);
 
-  const handleClick = useCallback(
-    (tool: Tool, e: React.MouseEvent) => {
-      if (tool.hasSubmenu) {
-        if (barRef.current) {
-          const btn = (e.currentTarget as HTMLElement).closest("button");
-          if (btn) {
-            const barTop = barRef.current.getBoundingClientRect().top;
-            const btnTop = btn.getBoundingClientRect().top;
-            setSubmenuAnchorY(btnTop - barTop);
-          }
+  const handleSubmenuSelect = useCallback((type: string, extra?: Record<string, unknown>) => {
+    setActiveTool(createToolValue(type, extra));
+    setOpenSubmenu(null);
+  }, [setActiveTool]);
+
+  const handleClick = useCallback((tool: Tool, e: React.MouseEvent) => {
+    if (tool.hasSubmenu) {
+      if (barRef.current) {
+        const btn = (e.currentTarget as HTMLElement).closest("button");
+        if (btn) {
+          const barTop = barRef.current.getBoundingClientRect().top;
+          const btnTop = btn.getBoundingClientRect().top;
+          setSubmenuAnchorY(btnTop - barTop);
         }
-        setOpenSubmenu((prev) => (prev === tool.id ? null : tool.id));
-        return;
       }
+      setOpenSubmenu((prev) => (prev === tool.id ? null : tool.id));
+      return;
+    }
 
-      if (tool.id === "connector") {
-        setActiveTool(activeTool === "connector" ? null : "connector");
-        return;
-      }
+    if (tool.id === "connector") {
+      setActiveTool(activeTool === "connector" ? null : "connector");
+      return;
+    }
 
-      if (tool.id === "select") {
-        setActiveTool(null);
-        return;
-      }
-    },
-    [activeTool, setActiveTool]
-  );
+    if (tool.id === "select") {
+      setActiveTool(null);
+      return;
+    }
 
-  const GRID_PX = 80;
-
-  const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
-    text: { w: 4, h: 2, zIndex: 0 },
-    sticky: { w: 3, h: 3, zIndex: 0 },
-    shape: { w: 4, h: 3, zIndex: 0 },
-    frame: { w: 8, h: 6, zIndex: 0 },
-    section: { w: 6, h: 4, zIndex: -1 },
-  };
-
-  function getViewportCenter(
-    scrollX: number, scrollY: number, vpW: number, vpH: number, zoom: number
-  ): { cx: number; cy: number } | null {
-    if (vpW <= 0 || vpH <= 0) return null;
-    return {
-      cx: (scrollX + vpW / 2) / zoom,
-      cy: (scrollY + vpH / 2) / zoom,
-    };
-  }
-
-  const handleSubmenuSelect = useCallback(
-    (type: string, extra?: Record<string, unknown>) => {
-      if (!activeCanvasId) {
-        setOpenSubmenu(null);
-        return;
-      }
-      const center = getViewportCenter(canvasScrollX, canvasScrollY, canvasViewportW, canvasViewportH, canvasZoom);
-      if (!center) {
-        setOpenSubmenu(null);
-        return;
-      }
-      const defaults = NATIVE_DEFAULTS[type] || { w: 4, h: 3, zIndex: 0 };
-      const pxW = defaults.w * GRID_PX;
-      const pxH = defaults.h * GRID_PX;
-      const position = {
-        x: center.cx - pxW / 2,
-        y: center.cy - pxH / 2,
-        w: defaults.w,
-        h: defaults.h,
-        zIndex: defaults.zIndex,
-        rotation: 0,
-      };
-      createNativeElement(activeCanvasId, type, position, extra || {})
-        .then(() => {
-          // success — store will pick up via bridge
-        })
-        .catch((err) => {
-          setUiError(`Failed to create ${type}: ${err}`);
-        });
-      setOpenSubmenu(null);
-    },
-    [activeCanvasId, canvasScrollX, canvasScrollY, canvasViewportW, canvasViewportH, canvasZoom, setUiError]
-  );
+    setActiveTool(createToolValue(tool.id));
+  }, [activeTool, setActiveTool]);
 
   const groups = TOOLS.reduce<Map<number, Tool[]>>((acc, tool) => {
-    const g = acc.get(tool.group) || [];
-    g.push(tool);
-    acc.set(tool.group, g);
+    const group = acc.get(tool.group) || [];
+    group.push(tool);
+    acc.set(tool.group, group);
     return acc;
   }, new Map());
 
   return (
     <div
       ref={barRef}
-      className="absolute left-4 top-1/2 -translate-y-1/2 z-20 select-none flex flex-col items-center gap-1 py-3 px-2 bg-[var(--sidebar-bg)] border border-[var(--border)] rounded-2xl shadow-2xl"
+      className="absolute left-0 top-1/2 -translate-y-1/2 z-20 select-none flex flex-col items-center gap-1.5 py-4 px-2.5 bg-[var(--sidebar-bg)]/92 backdrop-blur-lg border border-[var(--border)] rounded-r-[22px] shadow-[0_20px_50px_rgba(0,0,0,0.2)]"
       onMouseDown={(e) => e.stopPropagation()}
     >
       {Array.from(groups.entries()).map(([group, tools]) => (
         <div key={group} className="flex flex-col">
-          {group > 0 && <div className="w-6 h-px bg-[var(--border)] my-2 mx-auto" />}
-          <div className="flex flex-col items-center gap-1">
+          {group > 0 && <div className="w-7 h-px bg-[var(--border)]/80 my-2.5 mx-auto" />}
+          <div className="flex flex-col items-center gap-1.5">
             {tools.map((tool) => {
-              const isActive =
-                tool.id === "connector"
-                  ? activeTool === "connector"
-                  : tool.id === activeTool;
+              const isActive = tool.id === "connector"
+                ? activeTool === "connector"
+                : activeTool === tool.id || Boolean(activeTool?.startsWith(`create:${tool.id}`));
               const isSubmenuOpen = openSubmenu === tool.id;
 
               return (
@@ -358,26 +312,26 @@ export function CanvasToolbar() {
         </div>
       ))}
 
-      <div className="w-6 h-px bg-[var(--border)] my-2" />
+      <div className="w-7 h-px bg-[var(--border)]/80 my-2.5" />
 
       <button
         type="button"
         onClick={toggleHistory}
-        className="flex items-center justify-center w-10 h-10 rounded-xl text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+        className="flex items-center justify-center w-11 h-11 rounded-2xl text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] hover:shadow-[inset_0_0_0_1px_var(--border)] transition-all duration-150"
         title="History"
       >
         <Icons.ClockCounterClockwise size={20} />
       </button>
 
-      <div className="w-6 h-px bg-[var(--border)] my-2" />
+      <div className="w-7 h-px bg-[var(--border)]/80 my-2.5" />
 
       <button
         type="button"
         onClick={toggleEditMode}
-        className={`flex items-center justify-center w-10 h-10 rounded-xl transition-all ${
+        className={`flex items-center justify-center w-11 h-11 rounded-2xl transition-all duration-150 ${
           editMode
-            ? "bg-[var(--surface-hover)] text-[var(--text)] shadow-lg"
-            : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            ? "bg-[var(--surface-hover)] text-[var(--text)] shadow-[inset_0_0_0_1px_var(--accent),0_8px_18px_rgba(0,0,0,0.18)]"
+            : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] hover:shadow-[inset_0_0_0_1px_var(--border)]"
         }`}
         title={editMode ? "View mode" : "Edit mode"}
       >
