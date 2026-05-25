@@ -26,6 +26,8 @@ Use this when you need to:
 
 The tool returns a DOM snapshot with interactive elements marked with [ref] IDs.
 Use these refs for click and type operations.
+Prefer direct URL navigation over search when the target URL is known.
+Use parallel_fetch for multi-source research tasks.
 
 Example workflow:
 1. browser_navigate → Load a page (gets compact snapshot automatically)

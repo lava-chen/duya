@@ -4,6 +4,8 @@
  * Platform-specific capabilities are discovered via Skills
  */
 
+import type { NetworkEnvironment } from './types.js';
+
 export const DESCRIPTION = `Navigate and interact with web pages using a real browser.
 
 This tool provides generic web browsing capabilities:
@@ -41,10 +43,87 @@ Example workflow:
 4. browser_type ref="@1" text="hello" → Type into an input
 `;
 
-export function getPrompt(): string {
+function buildStrategySection(networkEnv?: NetworkEnvironment): string {
+  const envBlock = buildNetworkEnvBlock(networkEnv);
+
+  return `### Search Strategy (Read Before Acting)
+
+**Step 0 — Do you even need the browser?**
+- If your training data answers the question with high confidence (stable facts,
+  well-known APIs, language syntax, historical events), answer directly without
+  the browser. The browser is slow — only use it when freshness or interactivity
+  is required.
+- If the question requires real-time information (current news, live prices,
+  latest docs) or interaction (forms, login, dynamic content), use the browser.
+
+**Step 1 — Direct URL vs Search**
+- You already know the exact URL (official docs domain, GitHub repo, npm page,
+  specific article you've visited before)? → Use \`browser_navigate\` to go
+  there directly. Do NOT search for it first.
+- You need to discover where the information lives? → Search. One query,
+  read 2-3 results at most, then stop.
+
+**Step 2 — Task budget**
+
+| Task type | Max queries | Max pages | When to stop |
+|-----------|------------|-----------|--------------|
+| Single fact check | 1 | Read the key section | Answer found |
+| Code problem / how-to | 1 | Scan 2-3 results | Working solution found |
+| Comparison / research | Up to 3 | Up to 6 | Report, don't keep browsing |
+
+Report what you found after each search cycle. Do NOT silently keep browsing.
+
+**Step 3 — Engine selection**
+${envBlock}
+
+**Step 4 — Failure recovery (non-negotiable)**
+- Page load exceeds 15 seconds OR returns an error → abandon that URL
+  immediately. Do NOT retry the same URL.
+- Execute Plan B in this order:
+  1. Switch to an alternative search engine or platform for the same query
+  2. Try a cached version (webcache.googleusercontent.com, archive.org)
+  3. Try a different source that likely has the same information
+- Two consecutive failures on the same goal → stop and tell the user what you
+  tried. Ask whether to continue and how.`;
+}
+
+function buildNetworkEnvBlock(networkEnv?: NetworkEnvironment): string {
+  switch (networkEnv) {
+    case 'domestic':
+      return `**Current network: Mainland China — Google, GitHub, YouTube are likely blocked.**
+
+Decision order:
+- Chinese content → Baidu (百度) directly, or direct URLs to Zhihu (知乎), CSDN, Juejin (掘金)
+- English technical docs → try the official domain directly (many are accessible). Fallback: Bing CN (cn.bing.com)
+- English code Q&A → Bing CN search. Avoid going to Stack Overflow directly
+- If an international URL fails once → switch immediately. Do NOT retry it`;
+
+    case 'overseas':
+      return `**Current network: Overseas — full global access available.**
+
+Decision order:
+- English content → Google, or the official domain directly
+- Chinese content → either Baidu or Google, both accessible
+- Technical docs → always try the official domain first (faster than search)`;
+
+    default:
+      return `**Current network: Unknown.**
+
+Decision order:
+- English content → try the official domain directly first. Fallback to search
+- Chinese content → Baidu (百度) or direct platform URLs
+- If a page fails to load → switch to an alternative source immediately`;
+  }
+}
+
+export function getPrompt(networkEnv?: NetworkEnvironment): string {
+  const strategySection = buildStrategySection(networkEnv);
+
   return `## Browser Tool
 
 The browser tool allows you to navigate and interact with web pages using a real Chrome browser.
+
+${strategySection}
 
 ### Operations
 
