@@ -428,6 +428,15 @@ function initializeSchema(db: BetterSqlite3.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON message_attachments(message_id);
     CREATE INDEX IF NOT EXISTS idx_attachments_session_id ON message_attachments(session_id);
+
+    -- Model capabilities cache for multimodal detection
+    -- Stores API-probed or regex-detected multimodal support per model
+    CREATE TABLE IF NOT EXISTS model_capabilities (
+      id TEXT PRIMARY KEY,
+      is_multimodal INTEGER NOT NULL,
+      detected_at INTEGER NOT NULL,
+      detection_method TEXT NOT NULL DEFAULT 'unknown'
+    );
   `);
 
   // Initialize FTS5 for session search
@@ -549,6 +558,24 @@ function initializeSchema(db: BetterSqlite3.Database): void {
     }
   } catch (error) {
     logger.error('Migration failed: creating message_attachments table', error instanceof Error ? error : undefined, undefined, 'DB');
+  }
+
+  // Schema migration: Create model_capabilities table for multimodal detection cache
+  try {
+    const mcTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='model_capabilities'").get();
+    if (!mcTableInfo) {
+      db.exec(`
+        CREATE TABLE model_capabilities (
+          id TEXT PRIMARY KEY,
+          is_multimodal INTEGER NOT NULL,
+          detected_at INTEGER NOT NULL,
+          detection_method TEXT NOT NULL DEFAULT 'unknown'
+        )
+      `);
+      logger.info('Migration: Created model_capabilities table', undefined, 'DB');
+    }
+  } catch (error) {
+    logger.error('Migration failed: creating model_capabilities table', error instanceof Error ? error : undefined, undefined, 'DB');
   }
 
   // Schema migration: Create research_sessions table for Research Mode (Plan 60)
@@ -1655,8 +1682,7 @@ export async function replaceMessages(
         let toolInput: string | null = msg.tool_input || null;
         let parentToolCallId: string | null = msg.parent_tool_call_id || null;
         let vizSpec: string | null = msg.viz_spec || null;
-        // Use displayContent for DB when set (original prompt without synthetic doc context)
-        const effectiveContent = msg.displayContent !== undefined ? msg.displayContent : msg.content;
+        const effectiveContent = msg.content;
         let contentStr: string;
         if (typeof effectiveContent === 'string') {
           contentStr = effectiveContent;
@@ -2121,4 +2147,52 @@ export function listResearchSessionsByStatus(status: 'active' | 'completed' | 'a
 
   const db = getDb();
   return db.prepare('SELECT * FROM research_sessions WHERE status = ? ORDER BY updated_at DESC').all(status) as ResearchSessionRow[];
+}
+
+// ── Model Capabilities Cache ──────────────────────────────────────────
+
+export interface ModelCapabilityRow {
+  id: string;
+  is_multimodal: number;
+  detected_at: number;
+  detection_method: string;
+}
+
+export function getModelCapability(modelName: string): ModelCapabilityRow | null {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.modelCapabilityDb.get(modelName) as unknown as ModelCapabilityRow | null;
+  }
+
+  const db = getDb();
+  const normalized = modelName.trim().toLowerCase();
+  return db.prepare('SELECT * FROM model_capabilities WHERE id = ?').get(normalized) as ModelCapabilityRow | null;
+}
+
+export function setModelCapability(
+  modelName: string,
+  isMultimodal: boolean,
+  method: string,
+): void {
+  if (USE_IPC_MODE && getIpcClient()) {
+    getIpcClient()!.modelCapabilityDb.set(modelName, isMultimodal, method);
+    return;
+  }
+
+  const db = getDb();
+  const normalized = modelName.trim().toLowerCase();
+  db.prepare(`
+    INSERT OR REPLACE INTO model_capabilities (id, is_multimodal, detected_at, detection_method)
+    VALUES (?, ?, ?, ?)
+  `).run(normalized, isMultimodal ? 1 : 0, Date.now(), method);
+}
+
+export function deleteModelCapability(modelName: string): boolean {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.modelCapabilityDb.delete(modelName) as unknown as boolean;
+  }
+
+  const db = getDb();
+  const normalized = modelName.trim().toLowerCase();
+  const result = db.prepare('DELETE FROM model_capabilities WHERE id = ?').run(normalized);
+  return result.changes > 0;
 }
