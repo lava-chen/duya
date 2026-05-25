@@ -3,11 +3,13 @@
 import React, { useCallback, useEffect, useRef } from "react";
 import type { CanvasElement } from "@/types/conductor";
 import { useConductorStore } from "@/stores/conductor-store";
+import { canvasTransformState } from "../CanvasArea";
 
 type HandleDirection = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 const HANDLE_SIZE = 8;
 const MIN_SIZE_GRID = 1;
+const GRID_UNIT = 80;
 
 interface NativeChromeProps {
   element: CanvasElement;
@@ -16,15 +18,15 @@ interface NativeChromeProps {
 }
 
 export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, onPositionChange }) => {
-  const {
-    selectedElementId,
-    setSelectedElementId,
-    editingElementId,
-    setEditingElementId,
-    updateElement,
-  } = useConductorStore();
+  const selectedElementId = useConductorStore((state) => state.selectedElementId);
+  const selectedElementIds = useConductorStore((state) => state.selectedElementIds);
+  const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
+  const editingElementId = useConductorStore((state) => state.editingElementId);
+  const setEditingElementId = useConductorStore((state) => state.setEditingElementId);
+  const updateElement = useConductorStore((state) => state.updateElement);
 
-  const isSelected = selectedElementId === element.id;
+  const isSelected = selectedElementId === element.id || selectedElementIds.includes(element.id);
+  const isEditing = editingElementId === element.id;
 
   const resizeRef = useRef<{
     dir: HandleDirection;
@@ -34,53 +36,54 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     origH: number;
     origX: number;
     origY: number;
+    rafId: number | null;
+    lastMouseX: number;
+    lastMouseY: number;
   } | null>(null);
 
-  const handleClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (isSelected) {
-        setEditingElementId(element.id);
-      } else {
-        setSelectedElementId(element.id);
-      }
-    },
-    [isSelected, element.id, setSelectedElementId, setEditingElementId]
-  );
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedElementId(element.id);
+  }, [element.id, setSelectedElementId]);
 
-  const handleResizeStart = useCallback(
-    (e: React.MouseEvent, dir: HandleDirection) => {
-      e.preventDefault();
-      e.stopPropagation();
-      resizeRef.current = {
-        dir,
-        startMouseX: e.clientX,
-        startMouseY: e.clientY,
-        origW: element.position.w,
-        origH: element.position.h,
-        origX: element.position.x,
-        origY: element.position.y,
-      };
-    },
-    [element.position]
-  );
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingElementId(element.id);
+  }, [element.id, setEditingElementId]);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent, dir: HandleDirection) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeRef.current = {
+      dir,
+      startMouseX: e.clientX,
+      startMouseY: e.clientY,
+      origW: element.position.w,
+      origH: element.position.h,
+      origX: element.position.x,
+      origY: element.position.y,
+      rafId: null,
+      lastMouseX: e.clientX,
+      lastMouseY: e.clientY,
+    };
+  }, [element.position]);
 
   useEffect(() => {
-    const handleGlobalMouseMove = (e: MouseEvent) => {
+    const flushResizeFrame = () => {
       const r = resizeRef.current;
       if (!r) return;
+      r.rafId = null;
 
-      const dx = e.clientX - r.startMouseX;
-      const dy = e.clientY - r.startMouseY;
-      const gridUnit = 80;
+      const zoom = canvasTransformState.zoom || 1;
+      const dx = (r.lastMouseX - r.startMouseX) / zoom;
+      const dy = (r.lastMouseY - r.startMouseY) / zoom;
+      const dw = Math.round(dx / GRID_UNIT);
+      const dh = Math.round(dy / GRID_UNIT);
 
       let newW = r.origW;
       let newH = r.origH;
       let newX = r.origX;
       let newY = r.origY;
-
-      const dw = Math.round(dx / gridUnit);
-      const dh = Math.round(dy / gridUnit);
 
       switch (r.dir) {
         case "e":
@@ -130,12 +133,25 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       });
     };
 
-    const handleGlobalMouseUp = () => {
-      const wasResizing = resizeRef.current !== null;
-      resizeRef.current = null;
-      if (wasResizing && onPositionChange) {
-        onPositionChange(element.id);
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      const r = resizeRef.current;
+      if (!r) return;
+      r.lastMouseX = e.clientX;
+      r.lastMouseY = e.clientY;
+      if (r.rafId === null) {
+        r.rafId = window.requestAnimationFrame(flushResizeFrame);
       }
+    };
+
+    const handleGlobalMouseUp = () => {
+      const r = resizeRef.current;
+      if (!r) return;
+      if (r.rafId !== null) {
+        window.cancelAnimationFrame(r.rafId);
+        flushResizeFrame();
+      }
+      resizeRef.current = null;
+      onPositionChange?.(element.id);
     };
 
     window.addEventListener("mousemove", handleGlobalMouseMove);
@@ -144,7 +160,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       window.removeEventListener("mousemove", handleGlobalMouseMove);
       window.removeEventListener("mouseup", handleGlobalMouseUp);
     };
-  }, [element.id, element.position, updateElement]);
+  }, [element.id, element.position, onPositionChange, updateElement]);
 
   const handleStyle: React.CSSProperties = {
     position: "absolute",
@@ -156,8 +172,6 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     zIndex: 10,
     pointerEvents: "auto",
   };
-
-  const isEditing = editingElementId === element.id;
 
   return (
     <div
@@ -172,51 +186,20 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
         cursor: isEditing ? "text" : "default",
       }}
       onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
     >
       {children}
 
       {isSelected && !isEditing && (
         <>
-          <div
-            data-resize-handle="nw"
-            style={{ ...handleStyle, top: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2, cursor: "nwse-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "nw")}
-          />
-          <div
-            data-resize-handle="n"
-            style={{ ...handleStyle, top: -HANDLE_SIZE / 2, left: "calc(50% - 4px)", cursor: "ns-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "n")}
-          />
-          <div
-            data-resize-handle="ne"
-            style={{ ...handleStyle, top: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2, cursor: "nesw-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "ne")}
-          />
-          <div
-            data-resize-handle="e"
-            style={{ ...handleStyle, top: "calc(50% - 4px)", right: -HANDLE_SIZE / 2, cursor: "ew-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "e")}
-          />
-          <div
-            data-resize-handle="se"
-            style={{ ...handleStyle, bottom: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2, cursor: "nwse-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "se")}
-          />
-          <div
-            data-resize-handle="s"
-            style={{ ...handleStyle, bottom: -HANDLE_SIZE / 2, left: "calc(50% - 4px)", cursor: "ns-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "s")}
-          />
-          <div
-            data-resize-handle="sw"
-            style={{ ...handleStyle, bottom: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2, cursor: "nesw-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "sw")}
-          />
-          <div
-            data-resize-handle="w"
-            style={{ ...handleStyle, top: "calc(50% - 4px)", left: -HANDLE_SIZE / 2, cursor: "ew-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "w")}
-          />
+          <div data-resize-handle="nw" style={{ ...handleStyle, top: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2, cursor: "nwse-resize" }} onMouseDown={(e) => handleResizeStart(e, "nw")} />
+          <div data-resize-handle="n" style={{ ...handleStyle, top: -HANDLE_SIZE / 2, left: "calc(50% - 4px)", cursor: "ns-resize" }} onMouseDown={(e) => handleResizeStart(e, "n")} />
+          <div data-resize-handle="ne" style={{ ...handleStyle, top: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2, cursor: "nesw-resize" }} onMouseDown={(e) => handleResizeStart(e, "ne")} />
+          <div data-resize-handle="e" style={{ ...handleStyle, top: "calc(50% - 4px)", right: -HANDLE_SIZE / 2, cursor: "ew-resize" }} onMouseDown={(e) => handleResizeStart(e, "e")} />
+          <div data-resize-handle="se" style={{ ...handleStyle, bottom: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2, cursor: "nwse-resize" }} onMouseDown={(e) => handleResizeStart(e, "se")} />
+          <div data-resize-handle="s" style={{ ...handleStyle, bottom: -HANDLE_SIZE / 2, left: "calc(50% - 4px)", cursor: "ns-resize" }} onMouseDown={(e) => handleResizeStart(e, "s")} />
+          <div data-resize-handle="sw" style={{ ...handleStyle, bottom: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2, cursor: "nesw-resize" }} onMouseDown={(e) => handleResizeStart(e, "sw")} />
+          <div data-resize-handle="w" style={{ ...handleStyle, top: "calc(50% - 4px)", left: -HANDLE_SIZE / 2, cursor: "ew-resize" }} onMouseDown={(e) => handleResizeStart(e, "w")} />
         </>
       )}
     </div>

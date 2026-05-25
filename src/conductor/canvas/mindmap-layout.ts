@@ -23,6 +23,8 @@ export interface MindMapLayoutOptions {
   nodeHeight?: number;
   direction?: LayoutDirection;
   branchColors?: string[];
+  branchStrokeWidth?: number;
+  branchStyle?: "curve" | "elbow";
 }
 
 export interface LayoutNode {
@@ -42,7 +44,7 @@ export interface LayoutNode {
 
 export interface MindMapLayoutResult {
   nodes: LayoutNode[];
-  edges: Array<{ from: LayoutNode; to: LayoutNode; color: string }>;
+  edges: Array<{ from: LayoutNode; to: LayoutNode; color: string; strokeWidth: number }>;
   totalWidth: number;
   totalHeight: number;
 }
@@ -150,7 +152,10 @@ export function layoutMindMap(
     nodeHeight = DEFAULT_NODE_HEIGHT,
     direction = "right",
     branchColors = DEFAULT_BRANCH_COLORS,
+    branchStrokeWidth = 3,
+    branchStyle = "curve",
   } = options;
+  void branchStyle;
 
   const fullOptions: Required<MindMapLayoutOptions> = {
     levelGap,
@@ -159,6 +164,8 @@ export function layoutMindMap(
     nodeHeight,
     direction,
     branchColors,
+    branchStrokeWidth,
+    branchStyle,
   };
 
   const precomputed = new Map<string, Precomputed>();
@@ -258,12 +265,17 @@ export function layoutMindMap(
   const minY = Math.min(...allY);
   const maxY = Math.max(...allY);
 
-  const edges: Array<{ from: LayoutNode; to: LayoutNode; color: string }> = [];
+  const edges: Array<{ from: LayoutNode; to: LayoutNode; color: string; strokeWidth: number }> = [];
 
   function collectEdges(node: LayoutNode) {
     for (const child of node.children) {
       if (child.text || child.children.length > 0) {
-        edges.push({ from: node, to: child, color: child.branchColor });
+        edges.push({
+          from: node,
+          to: child,
+          color: child.branchColor,
+          strokeWidth: Math.max(2, branchStrokeWidth - Math.min(1.2, child.depth * 0.35)),
+        });
       }
       collectEdges(child);
     }
@@ -290,10 +302,21 @@ export function computeBezierBranchPath(
   direction: "right" | "left"
 ): string {
   const sign = direction === "right" ? 1 : -1;
-  const midX = fromX + (toX - fromX) * 0.5;
   const cp1x = fromX + Math.abs(toX - fromX) * 0.4 * sign;
   const cp1y = fromY;
   const cp2x = toX - Math.abs(toX - fromX) * 0.4 * sign;
   const cp2y = toY;
   return `M ${fromX} ${fromY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${toX} ${toY}`;
+}
+
+export function computeElbowBranchPath(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  direction: "right" | "left"
+): string {
+  const offset = Math.min(34, Math.abs(toX - fromX) * 0.42);
+  const midX = direction === "right" ? fromX + offset : fromX - offset;
+  return `M ${fromX} ${fromY} L ${midX} ${fromY} L ${midX} ${toY} L ${toX} ${toY}`;
 }

@@ -17,31 +17,105 @@ const ZOOM_STEP = 0.1;
 const GRID_PX = 80;
 const SNAP_GRID = 20;
 const DRAG_THRESHOLD = 3;
+const ALIGN_THRESHOLD = 8;
+
+type RenderGuide = { type: "vertical" | "horizontal"; value: number };
 
 function snapToGrid(value: number, grid = SNAP_GRID): number {
   return Math.round(value / grid) * grid;
 }
 
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
-  text:    { w: 4, h: 2, zIndex: 0 },
-  sticky:  { w: 3, h: 3, zIndex: 0 },
-  shape:   { w: 4, h: 3, zIndex: 0 },
-  frame:   { w: 8, h: 6, zIndex: 0 },
+  text: { w: 4, h: 2, zIndex: 0 },
+  sticky: { w: 3, h: 3, zIndex: 0 },
+  shape: { w: 4, h: 3, zIndex: 0 },
+  mindmap: { w: 8, h: 6, zIndex: 0 },
+  frame: { w: 8, h: 6, zIndex: 0 },
   section: { w: 6, h: 4, zIndex: -1 },
 };
 
-function isWidgetKind(el: CanvasElement) { return el.elementKind.startsWith("widget/"); }
+export const canvasTransformState = { panX: 0, panY: 0, zoom: 1 };
+
+function parseCreateTool(activeTool: string | null): { type: string; extra: Record<string, unknown> } | null {
+  if (!activeTool?.startsWith("create:")) return null;
+  const [, type, encodedExtra] = activeTool.split(":");
+  if (!type) return null;
+  if (!encodedExtra) return { type, extra: {} };
+
+  try {
+    return { type, extra: JSON.parse(decodeURIComponent(encodedExtra)) as Record<string, unknown> };
+  } catch {
+    return { type, extra: {} };
+  }
+}
+
+function isWidgetKind(el: CanvasElement) {
+  return el.elementKind.startsWith("widget/");
+}
+
 function isConnectorKind(el: CanvasElement) {
   return el.elementKind === "shape/connector" || el.elementKind === "native/connector";
 }
 
-function hasNativeChrome(el: CanvasElement): boolean {
-  return (
-    el.elementKind === "native/shape" ||
-    el.elementKind === "native/text" ||
-    el.elementKind === "native/sticky" ||
-    el.elementKind === "native/section"
-  );
+function getElementBounds(element: CanvasElement, x = element.position.x, y = element.position.y) {
+  const w = element.position.w * GRID_PX;
+  const h = element.position.h * GRID_PX;
+  return {
+    left: x,
+    right: x + w,
+    centerX: x + w / 2,
+    top: y,
+    bottom: y + h,
+    centerY: y + h / 2,
+  };
+}
+
+function computeAlignmentSnap(
+  moving: CanvasElement,
+  allElements: CanvasElement[],
+  skippedIds: Set<string>,
+): { dx: number; dy: number; guides: RenderGuide[] } {
+  const movingBounds = getElementBounds(moving);
+  let bestDx: { delta: number; value: number } | null = null;
+  let bestDy: { delta: number; value: number } | null = null;
+
+  const movingVertical = [movingBounds.left, movingBounds.centerX, movingBounds.right];
+  const movingHorizontal = [movingBounds.top, movingBounds.centerY, movingBounds.bottom];
+
+  for (const other of allElements) {
+    if (skippedIds.has(other.id) || isConnectorKind(other)) continue;
+    const otherBounds = getElementBounds(other);
+    const otherVertical = [otherBounds.left, otherBounds.centerX, otherBounds.right];
+    const otherHorizontal = [otherBounds.top, otherBounds.centerY, otherBounds.bottom];
+
+    for (const movingValue of movingVertical) {
+      for (const otherValue of otherVertical) {
+        const delta = otherValue - movingValue;
+        if (Math.abs(delta) <= ALIGN_THRESHOLD && (!bestDx || Math.abs(delta) < Math.abs(bestDx.delta))) {
+          bestDx = { delta, value: otherValue };
+        }
+      }
+    }
+
+    for (const movingValue of movingHorizontal) {
+      for (const otherValue of otherHorizontal) {
+        const delta = otherValue - movingValue;
+        if (Math.abs(delta) <= ALIGN_THRESHOLD && (!bestDy || Math.abs(delta) < Math.abs(bestDy.delta))) {
+          bestDy = { delta, value: otherValue };
+        }
+      }
+    }
+  }
+
+  const guides: RenderGuide[] = [];
+  if (bestDx) guides.push({ type: "vertical", value: bestDx.value });
+  if (bestDy) guides.push({ type: "horizontal", value: bestDy.value });
+
+  return {
+    dx: bestDx?.delta ?? 0,
+    dy: bestDy?.delta ?? 0,
+    guides,
+  };
 }
 
 interface CanvasAreaProps {
@@ -57,61 +131,103 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   onPositionChange,
   onDeleteElement,
 }) => {
-  const {
-    canvasZoom, setCanvasZoom,
-    setSelectedElementId,
-    selectedElementIds, setSelectedElementIds,
-    editingElementId,
-    clearSelection,
-    setCanvasScroll, setCanvasViewportSize,
-    activeCanvasId, setUiError,
-    activeTool, setActiveTool,
-    undo, redo,
-  } = useConductorStore();
+  const setCanvasZoom = useConductorStore((state) => state.setCanvasZoom);
+  const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
+  const setSelectedElementIds = useConductorStore((state) => state.setSelectedElementIds);
+  const toggleElementSelection = useConductorStore((state) => state.toggleElementSelection);
+  const clearSelection = useConductorStore((state) => state.clearSelection);
+  const setCanvasScroll = useConductorStore((state) => state.setCanvasScroll);
+  const setCanvasViewportSize = useConductorStore((state) => state.setCanvasViewportSize);
+  const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
+  const setUiError = useConductorStore((state) => state.setUiError);
+  const activeTool = useConductorStore((state) => state.activeTool);
+  const setActiveTool = useConductorStore((state) => state.setActiveTool);
+  const undo = useConductorStore((state) => state.undo);
+  const redo = useConductorStore((state) => state.redo);
 
-  // ── Interaction state ──────────────────────────────────────────────────
-  const [isPanning, setIsPanning]       = useState(false);
   const [isBoxSelecting, setIsBoxSelecting] = useState(false);
-  const [boxRect, setBoxRect]           = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [boxRect, setBoxRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [alignmentGuides, setAlignmentGuides] = useState<RenderGuide[]>([]);
 
-  // Connector draw state (needs React state for SVG overlay rendering)
   const [connectorDraft, setConnectorDraft] = useState<{
-    sourceId: string; sourcePx: { x: number; y: number };
-    mouseX: number;  mouseY: number;
+    sourceId: string;
+    sourcePx: { x: number; y: number };
+    mouseX: number;
+    mouseY: number;
   } | null>(null);
   const connectorDraftRef = useRef(connectorDraft);
   connectorDraftRef.current = connectorDraft;
 
-  // Drag state — kept in ref to avoid re-renders during mousemove
   const dragRef = useRef<{
     elementId: string;
     startMouseX: number;
     startMouseY: number;
-    origX: number;
-    origY: number;
+    targets: Array<{ id: string; origX: number; origY: number }>;
     moved: boolean;
+    rafId: number | null;
+    lastClientX: number;
+    lastClientY: number;
   } | null>(null);
 
-  const panStartRef  = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
-  const boxStartRef  = useRef<{ x: number; y: number } | null>(null);
-  const scrollHostRef = useRef<HTMLDivElement | null>(null);
+  const boxStartRef = useRef<{ x: number; y: number } | null>(null);
   const hasCenteredRef = useRef(false);
 
-  const freeformElements  = elements.filter(el => !isWidgetKind(el) && !isConnectorKind(el));
-  const widgetElements    = elements.filter(el => isWidgetKind(el));
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const canvasElRef = useRef<HTMLDivElement | null>(null);
+
+  const transformRef = useRef({ panX: 0, panY: 0, zoom: 1 });
+  const cursorRef = useRef("default");
+
+  const panRef = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    startPanX: number;
+    startPanY: number;
+  } | null>(null);
+
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyTransform = useCallback(() => {
+    const { panX, panY, zoom } = transformRef.current;
+    const el = canvasElRef.current;
+    if (el) {
+      el.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+    }
+    canvasTransformState.panX = panX;
+    canvasTransformState.panY = panY;
+    canvasTransformState.zoom = zoom;
+  }, []);
+
+  const syncCanvasStateToStore = useCallback(() => {
+    if (syncTimerRef.current !== null) {
+      clearTimeout(syncTimerRef.current);
+    }
+    syncTimerRef.current = setTimeout(() => {
+      const { panX, panY, zoom } = transformRef.current;
+      const store = useConductorStore.getState();
+      if (store.canvasZoom !== zoom) {
+        setCanvasZoom(zoom);
+      }
+      setCanvasScroll(panX, panY);
+      syncTimerRef.current = null;
+    }, 50);
+  }, [setCanvasZoom, setCanvasScroll]);
+
+  const freeformElements = elements.filter((el) => !isWidgetKind(el) && !isConnectorKind(el));
+  const widgetElements = elements.filter((el) => isWidgetKind(el));
   const hasFreeformElements = freeformElements.length > 0;
 
-  // ── Helpers ────────────────────────────────────────────────────────────
-
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
-    const host = scrollHostRef.current;
+    const host = viewportRef.current;
     if (!host) return { x: 0, y: 0 };
     const rect = host.getBoundingClientRect();
+    const { panX, panY, zoom } = transformRef.current;
     return {
-      x: (clientX - rect.left + host.scrollLeft) / canvasZoom,
-      y: (clientY - rect.top  + host.scrollTop)  / canvasZoom,
+      x: (clientX - rect.left - panX) / zoom,
+      y: (clientY - rect.top - panY) / zoom,
     };
-  }, [canvasZoom]);
+  }, []);
 
   const elementCenterPx = useCallback((el: CanvasElement) => ({
     x: el.position.x + (el.position.w * GRID_PX) / 2,
@@ -119,15 +235,88 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   }), []);
 
   const setHostCursor = useCallback((cursor: string) => {
-    if (scrollHostRef.current) {
-      scrollHostRef.current.style.cursor = cursor;
+    cursorRef.current = cursor;
+    if (viewportRef.current) {
+      viewportRef.current.style.cursor = cursor;
     }
   }, []);
 
-  // ── Global mousemove / mouseup — single attach/detach ─────────────────
+  const createElementAt = useCallback(async (
+    type: string,
+    extra: Record<string, unknown>,
+    canvasX: number,
+    canvasY: number,
+  ) => {
+    if (!activeCanvasId) return;
+    const def = NATIVE_DEFAULTS[type] || { w: 4, h: 3, zIndex: 0 };
+    const pxW = def.w * GRID_PX;
+    const pxH = def.h * GRID_PX;
+    const position: CanvasPosition = {
+      x: snapToGrid(canvasX - pxW / 2),
+      y: snapToGrid(canvasY - pxH / 2),
+      w: def.w,
+      h: def.h,
+      zIndex: def.zIndex,
+      rotation: 0,
+    };
+
+    try {
+      await createNativeElement(activeCanvasId, type, position, extra);
+      setUiError(null);
+      setActiveTool(null);
+    } catch (err) {
+      setUiError(`Create ${type} failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }, [activeCanvasId, setActiveTool, setUiError]);
+
   useEffect(() => {
+    const flushDragFrame = () => {
+      const d = dragRef.current;
+      if (!d) return;
+      d.rafId = null;
+
+      const startCanvas = clientToCanvas(d.startMouseX, d.startMouseY);
+      const currentCanvas = clientToCanvas(d.lastClientX, d.lastClientY);
+      const dx = currentCanvas.x - startCanvas.x;
+      const dy = currentCanvas.y - startCanvas.y;
+      const targets = new Map(d.targets.map((target) => [target.id, target]));
+      const skippedIds = new Set(d.targets.map((target) => target.id));
+      let guideOffset = { dx: 0, dy: 0, guides: [] as RenderGuide[] };
+
+      const { elements: latestElements } = useConductorStore.getState();
+      const primary = latestElements.find((el) => el.id === d.elementId);
+      const primaryStart = targets.get(d.elementId);
+      if (primary && primaryStart) {
+        const proposedPrimary: CanvasElement = {
+          ...primary,
+          position: {
+            ...primary.position,
+            x: snapToGrid(primaryStart.origX + dx),
+            y: snapToGrid(primaryStart.origY + dy),
+          },
+        };
+        guideOffset = computeAlignmentSnap(proposedPrimary, latestElements, skippedIds);
+      }
+
+      setAlignmentGuides(guideOffset.guides);
+
+      useConductorStore.setState((state) => ({
+        elements: state.elements.map((el) => {
+          const target = targets.get(el.id);
+          if (!target) return el;
+          return {
+            ...el,
+            position: {
+              ...el.position,
+              x: snapToGrid(target.origX + dx) + guideOffset.dx,
+              y: snapToGrid(target.origY + dy) + guideOffset.dy,
+            },
+          };
+        }),
+      }));
+    };
+
     const handleGlobalMove = (e: MouseEvent) => {
-      // Native element drag
       const d = dragRef.current;
       if (d) {
         if (!d.moved) {
@@ -136,67 +325,67 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           d.moved = true;
         }
 
-        const startCanvas = clientToCanvas(d.startMouseX, d.startMouseY);
-        const currentCanvas = clientToCanvas(e.clientX, e.clientY);
-        const ddx = currentCanvas.x - startCanvas.x;
-        const ddy = currentCanvas.y - startCanvas.y;
-
-        const { elements: els } = useConductorStore.getState();
-        const el = els.find(el => el.id === d.elementId);
-        if (!el) return;
-
-        const newX = snapToGrid(d.origX + ddx);
-        const newY = snapToGrid(d.origY + ddy);
-        useConductorStore.getState().updateElement(d.elementId, {
-          position: { ...el.position, x: newX, y: newY },
-        });
+        d.lastClientX = e.clientX;
+        d.lastClientY = e.clientY;
+        if (d.rafId === null) {
+          d.rafId = window.requestAnimationFrame(flushDragFrame);
+        }
       }
 
-      // Connector draft line
       const cd = connectorDraftRef.current;
       if (cd) {
         const canvas = clientToCanvas(e.clientX, e.clientY);
-        setConnectorDraft(prev => prev ? { ...prev, mouseX: canvas.x, mouseY: canvas.y } : null);
+        setConnectorDraft((prev) => prev ? { ...prev, mouseX: canvas.x, mouseY: canvas.y } : null);
       }
     };
 
     const handleGlobalUp = async (e: MouseEvent) => {
-      // Finish element drag
       const d = dragRef.current;
       if (d) {
-        if (d.moved) {
-          const { elements: els } = useConductorStore.getState();
-          const el = els.find(el => el.id === d.elementId);
-          if (el && onPositionChange) {
-            onPositionChange(el.id, el.position);
-          }
+        if (d.rafId !== null) {
+          window.cancelAnimationFrame(d.rafId);
+          flushDragFrame();
         }
+
+        if (d.moved && onPositionChange) {
+          const { elements: els } = useConductorStore.getState();
+          d.targets.forEach((target) => {
+            const el = els.find((candidate) => candidate.id === target.id);
+            if (el) onPositionChange(el.id, el.position);
+          });
+        }
+
         dragRef.current = null;
+        setAlignmentGuides([]);
         setHostCursor("default");
       }
 
-      // Finish connector draw
       const cd = connectorDraftRef.current;
       if (cd && activeCanvasId) {
         const canvasPoint = clientToCanvas(e.clientX, e.clientY);
         const { elements: els } = useConductorStore.getState();
-        const target = els.find(el => {
+        const target = els.find((el) => {
           if (el.id === cd.sourceId) return false;
           const left = el.position.x;
-          const top  = el.position.y;
-          const right  = left + el.position.w * GRID_PX;
-          const bottom = top  + el.position.h * GRID_PX;
+          const top = el.position.y;
+          const right = left + el.position.w * GRID_PX;
+          const bottom = top + el.position.h * GRID_PX;
           return canvasPoint.x >= left && canvasPoint.x <= right
-              && canvasPoint.y >= top  && canvasPoint.y <= bottom;
+            && canvasPoint.y >= top && canvasPoint.y <= bottom;
         });
 
         if (target) {
           try {
             await createNativeElement(activeCanvasId, "connector", {
-              x: 0, y: 0, w: 0, h: 0, zIndex: 10, rotation: 0,
+              x: 0,
+              y: 0,
+              w: 0,
+              h: 0,
+              zIndex: 10,
+              rotation: 0,
             }, {
               source: { nodeId: cd.sourceId, anchorId: "center" },
-              target: { nodeId: target.id,        anchorId: "center" },
+              target: { nodeId: target.id, anchorId: "center" },
               curvature: 0.4,
               routingMode: "bezier",
             });
@@ -204,30 +393,35 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             setUiError(`Create connector failed: ${err instanceof Error ? err.message : err}`);
           }
         }
+
         setConnectorDraft(null);
         setActiveTool(null);
+      }
+
+      if (panRef.current?.active) {
+        panRef.current = null;
+        syncCanvasStateToStore();
       }
     };
 
     window.addEventListener("mousemove", handleGlobalMove);
-    window.addEventListener("mouseup",   handleGlobalUp);
+    window.addEventListener("mouseup", handleGlobalUp);
     return () => {
       window.removeEventListener("mousemove", handleGlobalMove);
-      window.removeEventListener("mouseup",   handleGlobalUp);
+      window.removeEventListener("mouseup", handleGlobalUp);
     };
-  }, [clientToCanvas, activeCanvasId, onPositionChange, setUiError, setActiveTool, setHostCursor]);
+  }, [clientToCanvas, activeCanvasId, onPositionChange, setUiError, setActiveTool, setHostCursor, syncCanvasStateToStore]);
 
-  // ── Canvas-level mousedown ─────────────────────────────────────────────
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (readOnly) return;
     const target = e.target as HTMLElement;
 
-    // ── Ignore react-grid items (widget layer) ──
+    if (target.tagName === "IFRAME") return;
+
     if (target.closest(".react-grid-item")) return;
 
-    // ── Connector mode: start drawing from hovered native element ──
     if (activeTool === "connector") {
-      const nativeEl = elements.find(el => {
+      const nativeEl = elements.find((el) => {
         const domEl = document.getElementById(`native-el-${el.id}`);
         return domEl?.contains(target);
       });
@@ -236,38 +430,56 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         e.stopPropagation();
         const canvas = clientToCanvas(e.clientX, e.clientY);
         setConnectorDraft({
-          sourceId:  nativeEl.id,
-          sourcePx:  elementCenterPx(nativeEl),
-          mouseX:    canvas.x,
-          mouseY:    canvas.y,
+          sourceId: nativeEl.id,
+          sourcePx: elementCenterPx(nativeEl),
+          mouseX: canvas.x,
+          mouseY: canvas.y,
         });
         return;
       }
     }
 
-    // ── Native element drag (start) ──
     const nativeWrapper = target.closest("[data-native-element-id]") as HTMLElement | null;
     if (nativeWrapper && !target.closest("[data-resize-handle]")) {
-      const elementId = nativeWrapper.dataset.nativeElementId!;
-      const el = elements.find(el => el.id === elementId);
+      const elementId = nativeWrapper.dataset.nativeElementId;
+      if (!elementId) return;
+      const el = elements.find((candidate) => candidate.id === elementId);
       if (!el) return;
 
-      const { editingElementId: editingId } = useConductorStore.getState();
-      if (editingId === elementId) return;
+      const { editingElementId } = useConductorStore.getState();
+      if (editingElementId === elementId) return;
 
       e.preventDefault();
+
+      if (e.shiftKey) {
+        toggleElementSelection(elementId);
+        return;
+      }
+
+      const { selectedElementIds: currentSelection } = useConductorStore.getState();
+      const shouldDragSelection = currentSelection.includes(elementId) && currentSelection.length > 1;
+      const targetIds = shouldDragSelection ? currentSelection : [elementId];
+      const dragTargets = targetIds
+        .map((id) => {
+          const targetElement = elements.find((candidate) => candidate.id === id);
+          return targetElement
+            ? { id, origX: targetElement.position.x, origY: targetElement.position.y }
+            : null;
+        })
+        .filter((value): value is { id: string; origX: number; origY: number } => value !== null);
+
       dragRef.current = {
         elementId,
         startMouseX: e.clientX,
         startMouseY: e.clientY,
-        origX: el.position.x,
-        origY: el.position.y,
+        targets: dragTargets.length > 0 ? dragTargets : [{ id: elementId, origX: el.position.x, origY: el.position.y }],
         moved: false,
+        rafId: null,
+        lastClientX: e.clientX,
+        lastClientY: e.clientY,
       };
 
-      // Elements without NativeChrome get selection here
-      // Elements with NativeChrome get selection from NativeChrome.onClick
-      if (!hasNativeChrome(el)) {
+      if (!shouldDragSelection) {
         setSelectedElementId(elementId);
       }
 
@@ -275,90 +487,137 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       return;
     }
 
-    const host = scrollHostRef.current;
-    if (!host) return;
-
-    // ── Ctrl/Meta drag = pan ──
-    if (e.ctrlKey || e.metaKey) {
-      setIsPanning(true);
-      panStartRef.current = { x: e.clientX, y: e.clientY, left: host.scrollLeft, top: host.scrollTop };
+    if (e.ctrlKey || e.metaKey || e.button === 1) {
+      e.preventDefault();
+      panRef.current = {
+        active: true,
+        startX: e.clientX,
+        startY: e.clientY,
+        startPanX: transformRef.current.panX,
+        startPanY: transformRef.current.panY,
+      };
+      setHostCursor("grabbing");
       return;
     }
 
-    // ── Click on bare canvas = box-select or deselect ──
     const isOnBareCanvas =
       target === e.currentTarget ||
       target.classList.contains("canvas-inner") ||
-      target.classList.contains("canvas-bg");
+      target.classList.contains("canvas-bg") ||
+      target.classList.contains("freeform-layer");
 
     if (isOnBareCanvas) {
+      const createTool = parseCreateTool(activeTool);
+      if (createTool) {
+        e.preventDefault();
+        const canvas = clientToCanvas(e.clientX, e.clientY);
+        void createElementAt(createTool.type, createTool.extra, canvas.x, canvas.y);
+        return;
+      }
+
       clearSelection();
       setIsBoxSelecting(true);
-      const rect = host.getBoundingClientRect();
+      const rect = viewportRef.current!.getBoundingClientRect();
+      const { panX, panY, zoom } = transformRef.current;
       boxStartRef.current = {
-        x: e.clientX - rect.left + host.scrollLeft,
-        y: e.clientY - rect.top  + host.scrollTop,
+        x: (e.clientX - rect.left - panX) / zoom,
+        y: (e.clientY - rect.top - panY) / zoom,
       };
       setBoxRect({ x: boxStartRef.current.x, y: boxStartRef.current.y, w: 0, h: 0 });
+    }
+  }, [
+    readOnly,
+    activeTool,
+    elements,
+    clientToCanvas,
+    elementCenterPx,
+    createElementAt,
+    clearSelection,
+    setSelectedElementId,
+    setHostCursor,
+    toggleElementSelection,
+  ]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (panRef.current?.active) {
+      const dx = e.clientX - panRef.current.startX;
+      const dy = e.clientY - panRef.current.startY;
+      transformRef.current.panX = Math.round(panRef.current.startPanX + dx);
+      transformRef.current.panY = Math.round(panRef.current.startPanY + dy);
+      applyTransform();
       return;
     }
 
-    // ── Fallback: middle-mouse pan ──
-    if (e.button === 1) {
-      setIsPanning(true);
-      panStartRef.current = { x: e.clientX, y: e.clientY, left: host.scrollLeft, top: host.scrollTop };
-    }
-  }, [readOnly, activeTool, elements, clientToCanvas, elementCenterPx,
-      clearSelection, setSelectedElementId, setHostCursor]);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (isBoxSelecting && boxStartRef.current) {
-      const host = scrollHostRef.current;
+      const host = viewportRef.current;
       if (!host) return;
       const rect = host.getBoundingClientRect();
-      const cx = e.clientX - rect.left + host.scrollLeft;
-      const cy = e.clientY - rect.top  + host.scrollTop;
-      const sx = boxStartRef.current.x, sy = boxStartRef.current.y;
+      const { panX, panY, zoom } = transformRef.current;
+      const cx = (e.clientX - rect.left - panX) / zoom;
+      const cy = (e.clientY - rect.top - panY) / zoom;
+      const sx = boxStartRef.current.x;
+      const sy = boxStartRef.current.y;
       setBoxRect({ x: Math.min(sx, cx), y: Math.min(sy, cy), w: Math.abs(cx - sx), h: Math.abs(cy - sy) });
       return;
     }
-    if (isPanning && panStartRef.current) {
-      const host = scrollHostRef.current;
-      if (!host) return;
-      host.scrollLeft = panStartRef.current.left - (e.clientX - panStartRef.current.x);
-      host.scrollTop  = panStartRef.current.top  - (e.clientY - panStartRef.current.y);
-    }
-  }, [isBoxSelecting, isPanning]);
+  }, [isBoxSelecting, applyTransform]);
 
   const handleMouseUp = useCallback(() => {
     if (isBoxSelecting && boxRect && boxRect.w > 4 && boxRect.h > 4) {
-      const selected = freeformElements.filter(el => {
-        const l = el.position.x, t = el.position.y;
-        const r = l + el.position.w * GRID_PX, b = t + el.position.h * GRID_PX;
-        return l < boxRect.x + boxRect.w && r > boxRect.x
-            && t < boxRect.y + boxRect.h && b > boxRect.y;
+      const selected = freeformElements.filter((el) => {
+        const left = el.position.x;
+        const top = el.position.y;
+        const right = left + el.position.w * GRID_PX;
+        const bottom = top + el.position.h * GRID_PX;
+        return left < boxRect.x + boxRect.w && right > boxRect.x
+          && top < boxRect.y + boxRect.h && bottom > boxRect.y;
       });
-      setSelectedElementIds(selected.map(el => el.id));
+      setSelectedElementIds(selected.map((el) => el.id));
     }
+
     setIsBoxSelecting(false);
     setBoxRect(null);
     boxStartRef.current = null;
-    setIsPanning(false);
-    panStartRef.current = null;
-  }, [isBoxSelecting, boxRect, freeformElements, setSelectedElementIds]);
 
-  // ── Wheel zoom ─────────────────────────────────────────────────────────
+    if (panRef.current?.active) {
+      panRef.current = null;
+      syncCanvasStateToStore();
+      setHostCursor("default");
+    }
+  }, [isBoxSelecting, boxRect, freeformElements, setSelectedElementIds, syncCanvasStateToStore, setHostCursor]);
+
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    if (!e.ctrlKey) return;
+    if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-    setCanvasZoom(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +(canvasZoom + delta).toFixed(2))));
-  }, [canvasZoom, setCanvasZoom]);
+    e.stopPropagation();
 
-  // ── Keyboard ───────────────────────────────────────────────────────────
+    const host = viewportRef.current;
+    if (!host) return;
+    const rect = host.getBoundingClientRect();
+    const { zoom, panX, panY } = transformRef.current;
+
+    const nextZoom = Math.min(
+      MAX_ZOOM,
+      Math.max(MIN_ZOOM, +(zoom + (e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP)).toFixed(2)),
+    );
+    if (nextZoom === zoom) return;
+
+    const anchorX = e.clientX - rect.left;
+    const anchorY = e.clientY - rect.top;
+    const canvasAnchorX = (anchorX - panX) / zoom;
+    const canvasAnchorY = (anchorY - panY) / zoom;
+
+    transformRef.current.zoom = nextZoom;
+    transformRef.current.panX = Math.round(anchorX - canvasAnchorX * nextZoom);
+    transformRef.current.panY = Math.round(anchorY - canvasAnchorY * nextZoom);
+
+    applyTransform();
+    syncCanvasStateToStore();
+  }, [applyTransform, syncCanvasStateToStore]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    const { editingElementId: editingId } = useConductorStore.getState();
-    if (editingId) return;
+    const { editingElementId } = useConductorStore.getState();
+    if (editingElementId) return;
 
     if (e.key === "Escape") {
       clearSelection();
@@ -366,24 +625,34 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       setConnectorDraft(null);
       return;
     }
+
     if (e.key === "Delete" || e.key === "Backspace") {
       const { selectedElementIds: selIds, selectedElementId: selId } = useConductorStore.getState();
       const ids = selIds.length > 0 ? selIds : selId ? [selId] : [];
       if (ids.length > 0 && onDeleteElement) {
         e.preventDefault();
-        ids.forEach(id => onDeleteElement(id));
+        ids.forEach((id) => onDeleteElement(id));
         clearSelection();
       }
       return;
     }
+
     if (e.ctrlKey || e.metaKey) {
-      if (e.key === "a") { e.preventDefault(); setSelectedElementIds(freeformElements.map(el => el.id)); }
-      if (e.key === "z") { e.preventDefault(); undo(); }
-      if (e.key === "y") { e.preventDefault(); redo(); }
+      if (e.key === "a") {
+        e.preventDefault();
+        setSelectedElementIds(freeformElements.map((el) => el.id));
+      }
+      if (e.key === "z") {
+        e.preventDefault();
+        void undo();
+      }
+      if (e.key === "y") {
+        e.preventDefault();
+        void redo();
+      }
     }
   }, [clearSelection, setActiveTool, freeformElements, setSelectedElementIds, onDeleteElement, undo, redo]);
 
-  // ── Drag-and-drop from toolbar ─────────────────────────────────────────
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (e.dataTransfer.types.includes("application/x-conductor-tool")) {
       e.preventDefault();
@@ -391,59 +660,72 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     }
   }, []);
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
+  const handleDrop = useCallback((e: React.DragEvent) => {
     const toolType = e.dataTransfer.getData("application/x-conductor-tool");
-    if (!toolType || !activeCanvasId) return;
+    if (!toolType) return;
     e.preventDefault();
     const extra = (() => {
-      try { return JSON.parse(e.dataTransfer.getData("application/x-conductor-extra") || "{}"); }
-      catch { return {}; }
+      try {
+        return JSON.parse(e.dataTransfer.getData("application/x-conductor-extra") || "{}") as Record<string, unknown>;
+      } catch {
+        return {};
+      }
     })();
     const canvas = clientToCanvas(e.clientX, e.clientY);
-    const def = NATIVE_DEFAULTS[toolType] || { w: 4, h: 3, zIndex: 0 };
-    const pxW = def.w * GRID_PX, pxH = def.h * GRID_PX;
-    const position: CanvasPosition = {
-      x: snapToGrid(canvas.x - pxW / 2),
-      y: snapToGrid(canvas.y - pxH / 2),
-      w: def.w, h: def.h, zIndex: def.zIndex, rotation: 0,
-    };
-    try {
-      await createNativeElement(activeCanvasId, toolType, position, extra);
-      setUiError(null);
-    } catch (err) {
-      setUiError(`Create ${toolType} failed: ${err instanceof Error ? err.message : err}`);
-    }
-  }, [activeCanvasId, clientToCanvas, setUiError]);
+    void createElementAt(toolType, extra, canvas.x, canvas.y);
+  }, [clientToCanvas, createElementAt]);
 
-  // ── Center canvas on mount ─────────────────────────────────────────────
   useEffect(() => {
-    const host = scrollHostRef.current;
+    const host = viewportRef.current;
     if (!host || hasCenteredRef.current) return;
-    const cw = host.clientWidth, ch = host.clientHeight;
-    const iw = Math.max(MIN_CANVAS_WIDTH, cw), ih = Math.max(MIN_CANVAS_HEIGHT, ch);
-    host.scrollLeft = Math.max(0, (iw - cw) / 2);
-    host.scrollTop  = Math.max(0, (ih - ch) / 2);
+    const cw = host.clientWidth;
+    const ch = host.clientHeight;
+    transformRef.current.panX = Math.round((cw - MIN_CANVAS_WIDTH) / 2);
+    transformRef.current.panY = Math.round((ch - MIN_CANVAS_HEIGHT) / 2);
+    applyTransform();
+    syncCanvasStateToStore();
     hasCenteredRef.current = true;
-  }, []);
+  }, [applyTransform, syncCanvasStateToStore]);
 
   useEffect(() => {
-    const host = scrollHostRef.current;
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const { editingElementId } = useConductorStore.getState();
+      if (editingElementId) return;
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const { selectedElementIds: selIds, selectedElementId: selId } = useConductorStore.getState();
+        const ids = selIds.length > 0 ? selIds : selId ? [selId] : [];
+        if (ids.length > 0 && onDeleteElement) {
+          e.preventDefault();
+          ids.forEach((id) => onDeleteElement(id));
+          clearSelection();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
+  }, [onDeleteElement, clearSelection]);
+
+  useEffect(() => {
+    const host = viewportRef.current;
     if (!host) return;
-    const onScroll = () => setCanvasScroll(host.scrollLeft, host.scrollTop);
-    const ro = new ResizeObserver(([e]) => {
-      const cr = e.contentRect;
+    const ro = new ResizeObserver(([entry]) => {
+      const cr = entry.contentRect;
       setCanvasViewportSize(cr.width, cr.height);
     });
     ro.observe(host);
-    host.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => { ro.disconnect(); host.removeEventListener("scroll", onScroll); };
-  }, [setCanvasScroll, setCanvasViewportSize]);
+    return () => {
+      ro.disconnect();
+    };
+  }, [setCanvasViewportSize]);
 
-  // ── Cursor ─────────────────────────────────────────────────────────────
   const cursor = (() => {
     if (activeTool === "connector") return "crosshair";
-    if (isPanning) return "grabbing";
+    if (parseCreateTool(activeTool)) return "copy";
+    if (panRef.current?.active) return "grabbing";
     if (isBoxSelecting) return "crosshair";
     if (dragRef.current) return "grabbing";
     return "default";
@@ -451,8 +733,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
   return (
     <div
-      className="h-full overflow-auto canvas-area"
-      ref={scrollHostRef}
+      className="h-full overflow-hidden canvas-area"
+      ref={viewportRef}
       tabIndex={0}
       onWheel={handleWheel}
       onKeyDown={handleKeyDown}
@@ -462,19 +744,30 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
-      style={{ cursor, outline: "none" }}
+      style={{
+        cursor,
+        outline: "none",
+        overscrollBehavior: "none",
+        touchAction: "none",
+      }}
     >
       <div
         className="relative canvas-inner canvas-bg"
+        ref={canvasElRef}
         style={{
-          width: "100%",
-          minWidth: MIN_CANVAS_WIDTH,
-          height: "100%",
-          minHeight: MIN_CANVAS_HEIGHT,
-          zoom: canvasZoom,
+          width: MIN_CANVAS_WIDTH,
+          height: MIN_CANVAS_HEIGHT,
+          transformOrigin: "0 0",
+          transform: "translate(0px, 0px) scale(1)",
+          willChange: "transform",
+          contain: "layout style paint",
+          backfaceVisibility: "hidden",
+          WebkitBackfaceVisibility: "hidden",
           backgroundColor: "var(--bg-canvas)",
           backgroundImage: "radial-gradient(circle, var(--grid-dot) 1px, transparent 1px)",
           backgroundSize: "20px 20px",
+          shapeRendering: "geometricPrecision",
+          textRendering: "geometricPrecision",
         }}
       >
         {elements.length === 0 && (
@@ -503,13 +796,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           <WidgetLayer elements={widgetElements} readOnly={readOnly} />
         )}
 
-        {/* Box-select rect */}
         {boxRect && boxRect.w > 2 && boxRect.h > 2 && (
           <div
             style={{
               position: "absolute",
-              left: boxRect.x, top: boxRect.y,
-              width: boxRect.w, height: boxRect.h,
+              left: boxRect.x,
+              top: boxRect.y,
+              width: boxRect.w,
+              height: boxRect.h,
               border: "1px solid var(--accent)",
               backgroundColor: "rgba(99,102,241,0.07)",
               pointerEvents: "none",
@@ -518,19 +812,52 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           />
         )}
 
-        {/* Connector draft line */}
+        {alignmentGuides.map((guide, index) => (
+          <div
+            key={`${guide.type}-${guide.value}-${index}`}
+            style={{
+              position: "absolute",
+              pointerEvents: "none",
+              zIndex: 10001,
+              background: "#FF4FB8",
+              boxShadow: "0 0 0 1px rgba(255, 79, 184, 0.18)",
+              ...(guide.type === "vertical"
+                ? { left: guide.value, top: 0, width: 1, height: "100%" }
+                : { left: 0, top: guide.value, width: "100%", height: 1 }),
+            }}
+          />
+        ))}
+
         {connectorDraft && (
           <svg
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", overflow: "visible", pointerEvents: "none", zIndex: 9999 }}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              overflow: "visible",
+              pointerEvents: "none",
+              zIndex: 9999,
+            }}
           >
             <line
-              x1={connectorDraft.sourcePx.x} y1={connectorDraft.sourcePx.y}
-              x2={connectorDraft.mouseX}     y2={connectorDraft.mouseY}
-              stroke="var(--accent)" strokeWidth={2} strokeDasharray="6 3"
+              x1={connectorDraft.sourcePx.x}
+              y1={connectorDraft.sourcePx.y}
+              x2={connectorDraft.mouseX}
+              y2={connectorDraft.mouseY}
+              stroke="var(--accent)"
+              strokeWidth={2}
+              strokeDasharray="6 3"
               strokeLinecap="round"
             />
-            <circle cx={connectorDraft.sourcePx.x} cy={connectorDraft.sourcePx.y}
-              r={5} fill="var(--main-bg)" stroke="var(--accent)" strokeWidth={2} />
+            <circle
+              cx={connectorDraft.sourcePx.x}
+              cy={connectorDraft.sourcePx.y}
+              r={5}
+              fill="var(--main-bg)"
+              stroke="var(--accent)"
+              strokeWidth={2}
+            />
           </svg>
         )}
       </div>
