@@ -146,12 +146,12 @@ export async function resizeImageBuffer(
 
   // Try different quality levels to hit target size
   let quality = 85;
-  let resultBuffer = Buffer.from(await processedImage.quality(quality).getBuffer(`image/${originalMediaType.split('/')[1]}`));
+  let resultBuffer = Buffer.from(await processedImage.getBuffer(`image/${originalMediaType.split('/')[1]}`, { quality }));
 
   // If still too large, progressively reduce quality and/or scale
   while (resultBuffer.length > targetSize && quality > 20) {
     quality -= 10;
-    resultBuffer = Buffer.from(await processedImage.quality(quality).getBuffer(`image/${originalMediaType.split('/')[1]}`));
+    resultBuffer = Buffer.from(await processedImage.getBuffer(`image/${originalMediaType.split('/')[1]}`, { quality }));
 
     // If quality reduction isn't enough, also scale down
     if (resultBuffer.length > targetSize && quality <= 50) {
@@ -173,11 +173,11 @@ export async function resizeImageBuffer(
     imgWidth = processedImage.width;
     imgHeight = processedImage.height;
     quality = 80;
-    resultBuffer = Buffer.from(await processedImage.quality(quality).getBuffer(JPEG_MIME));
+    resultBuffer = Buffer.from(await processedImage.getBuffer(JPEG_MIME, { quality }));
 
     while (resultBuffer.length > targetSize && quality > 20) {
       quality -= 10;
-      resultBuffer = Buffer.from(await processedImage.quality(quality).getBuffer(JPEG_MIME));
+      resultBuffer = Buffer.from(await processedImage.getBuffer(JPEG_MIME, { quality }));
 
       if (resultBuffer.length > targetSize && quality <= 50) {
         const newScale = Math.sqrt(targetSize / resultBuffer.length) * 0.9;
