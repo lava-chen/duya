@@ -524,8 +524,9 @@ export class duyaAgent {
     try {
       console.log('[duyaAgent] Starting vision stream...');
       const stream = this.visionClient.streamChat([userMessage], {
-        maxTokens: 1024,
+        maxTokens: 2048,
         temperature: 0,
+        disableThinking: true,
       });
 
       let eventCount = 0;
@@ -770,11 +771,14 @@ export class duyaAgent {
           (lastMessageContent === compareContent ||
             lastMessageContent.trim() === compareContent.trim());
 
+        const displayContent = options?.displayContent;
+
         if (!isDuplicate) {
           messages.push({
             id: crypto.randomUUID(),
             role: 'user',
             content: prompt as string | MessageContent[],
+            displayContent: displayContent !== undefined ? displayContent : undefined,
             timestamp: Date.now(),
             seq_index: seqIndex,
             attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
@@ -784,6 +788,8 @@ export class duyaAgent {
           const newAttachments = (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments;
           if (newAttachments && newAttachments.length > 0) {
             lastMessage.attachments = newAttachments;
+            lastMessage.content = prompt as string | MessageContent[];
+            lastMessage.displayContent = displayContent !== undefined ? displayContent : undefined;
           }
         }
       }
