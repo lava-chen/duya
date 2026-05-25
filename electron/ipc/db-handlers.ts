@@ -751,6 +751,11 @@ export function registerDbHandlers(): void {
     return scheduler.listCronRuns(input);
   });
 
+  ipcMain.handle('automation:template:list', () => {
+    const { loadTemplates } = require('../automation/template-loader');
+    return loadTemplates();
+  });
+
   // ==================== Settings Handlers ====================
 
   ipcMain.handle('db:setting:get', (_event, key: string) => {

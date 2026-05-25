@@ -180,15 +180,31 @@ export function ModelSelectionSection() {
       const visionParsed = parseModelValue(visionModel);
 
       // Save vision settings to ConfigManager
+      // IMPORTANT: Only update provider and model fields, preserve existing baseUrl, apiKey, enabled
       if (visionModel && visionParsed.providerId && visionParsed.model) {
         const provider = providers.find(p => p.id === visionParsed.providerId);
         if (provider) {
+          // Get current vision settings first to preserve baseUrl and apiKey
+          const currentVision = await window.electronAPI.vision.get() as {
+            provider?: string;
+            model?: string;
+            baseUrl?: string;
+            apiKey?: string;
+            enabled?: boolean;
+          } | null;
+
           await window.electronAPI.vision.set({
             provider: provider.providerType || provider.name.toLowerCase(),
             model: visionParsed.model,
-            baseUrl: provider.baseUrl || '',
-            apiKey: provider.apiKey || '',
-            enabled: true,
+            // Preserve existing baseUrl and apiKey from current settings
+            baseUrl: currentVision?.baseUrl || '',
+            apiKey: currentVision?.apiKey || '',
+            enabled: currentVision?.enabled ?? true,
+          });
+          console.log('[ModelSelection] Vision model updated:', {
+            provider: provider.providerType || provider.name.toLowerCase(),
+            model: visionParsed.model,
+            preservedBaseUrl: currentVision?.baseUrl,
           });
         }
       }

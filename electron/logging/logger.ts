@@ -52,6 +52,9 @@ export const LogComponent = {
   NetHandlers: 'NetHandlers',
   BrowserDaemon: 'BrowserDaemon',
 
+  // Automation
+  Automation: 'Automation',
+
   // Boot & settings
   BootConfig: 'BootConfig',
   Settings: 'Settings',

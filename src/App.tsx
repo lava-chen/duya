@@ -169,10 +169,13 @@ export function App() {
     (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => {
     if (!activeThreadId) return;
 
+    // Strip markers before sending to API
+    const plainContent = stripPastedContentMarkers(content);
+
     if (!canSend(activeThreadId)) {
       enqueueMessage(activeThreadId, {
         sessionId: activeThreadId,
-        content,
+        content: plainContent,
         permissionMode: uiPermissionMode === 'bypass' ? 'bypassPermissions' : 'default',
         model,
         files,
@@ -204,9 +207,6 @@ export function App() {
     addMessage(activeThreadId, userMsg);
 
     setIsStreaming(true);
-
-    // Strip markers before sending to API
-    const plainContent = stripPastedContentMarkers(content);
 
     // Map UI permission mode to agent internal mode
     const agentPermissionMode = uiPermissionMode === 'bypass' ? 'bypassPermissions' : 'default';

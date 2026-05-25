@@ -62,11 +62,50 @@ const MemoryInputSchema = z.object({
 
 type MemoryInput = z.infer<typeof MemoryInputSchema>
 
+const MEMORY_TOOL_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['add', 'replace', 'remove', 'list'],
+      description: 'Action to perform: add, replace, remove, or list',
+    },
+    target: {
+      type: 'string',
+      enum: ['global', 'project'],
+      description: "Memory target: 'global' (cross-project) or 'project' (project-specific)",
+    },
+    subtarget: {
+      type: 'string',
+      enum: ['memory', 'user'],
+      description: "For global target: 'memory' (general facts) or 'user' (user preferences)",
+    },
+    summary: {
+      type: 'string',
+      description: 'Short summary of the memory entry (required for add)',
+    },
+    content: {
+      type: 'string',
+      description: 'Detailed content of the memory entry (optional)',
+    },
+    type: {
+      type: 'string',
+      enum: ['user', 'feedback', 'project', 'reference'],
+      description: 'Memory type categorization',
+    },
+    oldText: {
+      type: 'string',
+      description: 'Text to match for replace/remove actions',
+    },
+  },
+  required: ['action'],
+}
+
 export class MemoryTool extends BaseTool {
   readonly name = TOOL_NAME
   readonly description = MEMORY_TOOL_DESCRIPTION
 
-  readonly input_schema: z.ZodSchema = MemoryInputSchema
+  readonly input_schema: Record<string, unknown> = MEMORY_TOOL_INPUT_SCHEMA
 
   async execute(
     input: Record<string, unknown>,

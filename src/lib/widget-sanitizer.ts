@@ -9,8 +9,6 @@ const SCRIPT_SRC_ALLOWLIST = CDN_ALLOWLIST.map(domain => `https://${domain}`).jo
 
 const STRIP_TAGS_RE = /<\/(?:iframe|object|embed|form|meta|link|base|script)(?:\s[^>]*)?>/gi;
 const STRIP_OPEN_TAGS_RE = /<(?:iframe|object|embed|form|meta|link|base|script)(?:\s[^>]*)?\/?>/gi;
-const EVENT_HANDLER_RE = /\s+on\w+\s*=\s*"[^"]*"/gi;
-const EVENT_HANDLER_SINGLE_RE = /\s+on\w+\s*=\s*'[^']*'/gi;
 const JS_URL_RE = /\b(?:href|src|action)\s*=\s*["']\s*javascript\s*:/gi;
 const DATA_URL_RE = /\b(?:href|src|action)\s*=\s*["']\s*data\s*:/gi;
 const NESTED_SCRIPT_RE = /<script[\s\S]*?<\/script>/gi;
@@ -19,8 +17,6 @@ function stripTags(html: string): string {
   let result = html;
   result = result.replace(STRIP_OPEN_TAGS_RE, '');
   result = result.replace(STRIP_TAGS_RE, '');
-  result = result.replace(EVENT_HANDLER_RE, '');
-  result = result.replace(EVENT_HANDLER_SINGLE_RE, '');
   result = result.replace(JS_URL_RE, (match) => match.replace(/javascript\s*:/i, '#'));
   result = result.replace(DATA_URL_RE, (match) => match.replace(/data\s*:/i, '#'));
   return result;
@@ -139,6 +135,22 @@ const RECEIVER_SCRIPT = /* js */ `
     }, totalMs + 200);
   }
 
+  function reportHeight() {
+    var h = Math.max(document.documentElement.scrollHeight, document.documentElement.offsetHeight, document.body.scrollHeight, document.body.offsetHeight);
+    if (h > 0) {
+      window.parent.postMessage({ type: 'widget:resize', height: Math.ceil(h) }, '*');
+    }
+  }
+
+  var _reportTimer = null;
+  function scheduleHeightReport() {
+    if (_reportTimer) clearTimeout(_reportTimer);
+    _reportTimer = setTimeout(function() {
+      _reportTimer = null;
+      reportHeight();
+    }, 50);
+  }
+
   function setup() {
     var root = document.querySelector('.widget-root');
     if (!root) {
@@ -158,12 +170,11 @@ const RECEIVER_SCRIPT = /* js */ `
     ro.observe(document.documentElement);
     ro.observe(root);
 
-    function reportHeight() {
-      var h = Math.max(document.documentElement.scrollHeight, document.documentElement.offsetHeight, document.body.scrollHeight, document.body.offsetHeight);
-      if (h > 0) {
-        window.parent.postMessage({ type: 'widget:resize', height: Math.ceil(h) }, '*');
-      }
-    }
+    var mo = new MutationObserver(function() {
+      scheduleHeightReport();
+    });
+    mo.observe(root, { childList: true, subtree: true });
+
     window.reportDrawHeight = reportHeight;
 
     document.addEventListener('click', function(e) {
@@ -221,6 +232,9 @@ const RECEIVER_SCRIPT = /* js */ `
     }
 
     window.parent.postMessage({ type: 'widget:ready' }, '*');
+
+    setTimeout(reportHeight, 300);
+    setTimeout(reportHeight, 1000);
   }
 
   if (document.readyState === 'loading') {
@@ -248,22 +262,55 @@ const DRAW_CSS = /* css */ `
 }
 `;
 
+const SCRIPT_TAG_RE = /<script[\s\S]*?<\/script>/gi;
+
+function extractScripts(widgetCode: string): { cdnTags: string[]; inlineCode: string } {
+  const cdnTags: string[] = [];
+  const inlineParts: string[] = [];
+
+  const matches = widgetCode.match(SCRIPT_TAG_RE);
+  if (matches) {
+    for (const tag of matches) {
+      const srcMatch = tag.match(/<script[^>]*\ssrc\s*=\s*["']([^"']+)["'][^>]*>/i);
+      if (srcMatch) {
+        const src = srcMatch[1];
+        const isCdn = CDN_ALLOWLIST.some(d => src.includes(d));
+        if (isCdn) {
+          cdnTags.push(`<script src="${src}"></script>`);
+          continue;
+        }
+      }
+      const inner = tag.replace(/<\/?script[^>]*>/gi, '').trim();
+      if (inner) {
+        inlineParts.push(inner);
+      }
+    }
+  }
+
+  return { cdnTags, inlineCode: inlineParts.join('\n') };
+}
+
 export function buildReceiverSrcdoc(
   widgetCode: string,
   isStreaming: boolean,
   cssBridge: string,
   themeDarkCss: string,
 ): string {
-  const sanitizedCode = isStreaming
-    ? sanitizeForStreaming(widgetCode)
-    : sanitizeForIframe(widgetCode);
+  const { cdnTags, inlineCode } = extractScripts(widgetCode);
 
-  const visualHtml = sanitizedCode.replace(/<script[\s\S]*?<\/script>/gi, '');
-  const scripts = sanitizedCode.match(/<script[^>]*>([\s\S]*?)<\/script>/gi)
-    ?.map(s => s.replace(/<\/?script[^>]*>/gi, ''))
-    .join('\n') || '';
+  const codeWithoutScripts = widgetCode.replace(SCRIPT_TAG_RE, '');
+  const sanitizedCode = isStreaming
+    ? sanitizeForStreaming(codeWithoutScripts)
+    : sanitizeForIframe(codeWithoutScripts);
+
+  const visualHtml = sanitizedCode;
 
   const animCss = isStreaming ? '' : DRAW_CSS;
+
+  const cdnScriptsHtml = cdnTags.join('\n');
+  const widgetScriptsHtml = inlineCode
+    ? `<script>${inlineCode}</script>`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -271,6 +318,7 @@ export function buildReceiverSrcdoc(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline' ${SCRIPT_SRC_ALLOWLIST}; connect-src 'none';">
+${cdnScriptsHtml}
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   :root {
@@ -401,7 +449,7 @@ export function buildReceiverSrcdoc(
 <body>
 <div class="widget-root">${visualHtml}</div>
 <script>${RECEIVER_SCRIPT}</script>
-${scripts ? `<script>${scripts}</script>` : ''}
+${widgetScriptsHtml}
 </body>
 </html>`;
 }

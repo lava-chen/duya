@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import { randomUUID } from 'crypto';
 import { platform as getPlatform } from 'os';
 
-import { registerDbHandlers, registerConductorHandlers, registerAllIpcHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase } from './db/connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
 import { registerNetHandlers } from './ipc/net-handlers';
@@ -86,7 +86,8 @@ if (gotTheLock) {
       logger.error('Database initialization failed', undefined, { error: dbResult.error }, 'Main');
       registerDbHandlers();
       registerConductorHandlers();
-      registerAllIpcHandlers();
+      registerAgentHandlers();
+      registerNetHandlers();
       createSafeModeWindow(dbResult.error || 'Unknown error', dbResult.dbPath || dbPath, getIconPath);
       return;
     }

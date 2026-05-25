@@ -1,0 +1,100 @@
+{
+  "version": "1.0",
+  "templates": [
+    {
+      "id": "daily-brief",
+      "icon": "newspaper",
+      "label_en": "Daily Brief",
+      "label_zh": "每日简报",
+      "description_en": "Summarize yesterday's commits, PRs, and suggest today's todos",
+      "description_zh": "总结昨天的代码提交、PR 活动和待办事项",
+      "prompt": "Please summarize yesterday's work:\n1. Check git commit history and summarize main changes\n2. Check pending PRs and review requests\n3. Generate today's todo suggestions",
+      "defaultSchedule": {
+        "kind": "cron",
+        "cronExpr": "0 9 * * 1-5",
+        "cronTz": "Asia/Shanghai"
+      },
+      "defaultModel": "claude-sonnet-4-20250514",
+      "tags": ["daily", "summary", "git"]
+    },
+    {
+      "id": "weekly-review",
+      "icon": "calendar-check",
+      "label_en": "Weekly Review",
+      "label_zh": "每周回顾",
+      "description_en": "Weekly work summary and next week plan",
+      "description_zh": "每周工作总结和下周计划",
+      "prompt": "Please create a weekly review:\n1. Summarize this week's main accomplishments\n2. List any pending work or blockers\n3. Draft next week's priorities",
+      "defaultSchedule": {
+        "kind": "cron",
+        "cronExpr": "0 18 * * 5",
+        "cronTz": "Asia/Shanghai"
+      },
+      "defaultModel": "claude-sonnet-4-20250514",
+      "tags": ["weekly", "summary", "planning"]
+    },
+    {
+      "id": "project-monitor",
+      "icon": "chart-line",
+      "label_en": "Project Monitor",
+      "label_zh": "项目监控",
+      "description_en": "Monitor project health and alerts",
+      "description_zh": "监控项目健康状况和告警",
+      "prompt": "Monitor the project for any issues:\n1. Check for error logs and exceptions\n2. Review recent build status and test results\n3. Flag any anomalies or regressions",
+      "defaultSchedule": {
+        "kind": "every",
+        "everyMs": 3600000
+      },
+      "defaultModel": "claude-sonnet-4-20250514",
+      "tags": ["monitoring", "alerts", "health"]
+    },
+    {
+      "id": "bug-scan",
+      "icon": "bug",
+      "label_en": "Bug Scan",
+      "label_zh": "Bug 扫描",
+      "description_en": "Scan recent commits for potential bugs",
+      "description_zh": "扫描最近的代码提交，发现潜在 Bug",
+      "prompt": "Scan the codebase for potential bugs:\n1. Review recent git commits for risky changes\n2. Check for common anti-patterns and security issues\n3. Report any findings with file locations",
+      "defaultSchedule": {
+        "kind": "cron",
+        "cronExpr": "0 10 * * 1-5",
+        "cronTz": "Asia/Shanghai"
+      },
+      "defaultModel": "claude-sonnet-4-20250514",
+      "tags": ["bug", "scan", "quality"]
+    },
+    {
+      "id": "release-notes",
+      "icon": "scroll",
+      "label_en": "Release Notes",
+      "label_zh": "发布说明",
+      "description_en": "Draft release notes from merged PRs",
+      "description_zh": "从已合并的 PR 中生成发布说明",
+      "prompt": "Draft release notes:\n1. List all merged PRs since last release\n2. Categorize changes: features, fixes, improvements\n3. Write a concise summary for each category",
+      "defaultSchedule": {
+        "kind": "cron",
+        "cronExpr": "0 17 * * 5",
+        "cronTz": "Asia/Shanghai"
+      },
+      "defaultModel": "claude-sonnet-4-20250514",
+      "tags": ["release", "changelog", "weekly"]
+    },
+    {
+      "id": "ci-summary",
+      "icon": "git-fork",
+      "label_en": "CI Summary",
+      "label_zh": "CI 总结",
+      "description_en": "Summarize CI failures and flaky tests",
+      "description_zh": "总结 CI 失败和 flaky 测试情况",
+      "prompt": "Summarize CI status:\n1. Check recent CI pipeline results\n2. Identify flaky tests and recurring failures\n3. Suggest fixes for the most common failures",
+      "defaultSchedule": {
+        "kind": "cron",
+        "cronExpr": "0 9 30 * * 1-5",
+        "cronTz": "Asia/Shanghai"
+      },
+      "defaultModel": "claude-sonnet-4-20250514",
+      "tags": ["ci", "testing", "daily"]
+    }
+  ]
+}
