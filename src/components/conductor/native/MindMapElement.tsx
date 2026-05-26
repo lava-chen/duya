@@ -154,15 +154,27 @@ export const MindMapElement: React.FC<MindMapElementProps> = ({ element }) => {
     editInputRef.current.focus();
   }, [editingNodeId]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isElementSelected) return;
+      if (e.key === "Escape") {
+        if (editingNodeId) {
+          setEditingNodeId(null);
+          return;
+        }
+        setSelectedNodeId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isElementSelected, editingNodeId]);
+
   return (
     <svg
       width={svgWidth}
       height={svgHeight}
       viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-      style={{ display: "block", overflow: "visible" }}
-      onMouseDown={() => {
-        if (!isElementSelected) setSelectedElementId(element.id);
-      }}
+      style={{ display: "block", overflow: "visible", pointerEvents: "none" }}
     >
       <g transform={`translate(${padding}, ${padding})`}>
         {selectedNode && isElementSelected && !editingNodeId && (
@@ -220,9 +232,10 @@ export const MindMapElement: React.FC<MindMapElementProps> = ({ element }) => {
             <g
               key={node.id}
               transform={`translate(${node.x}, ${node.y})`}
-              style={{ cursor: isEditing ? "text" : "default" }}
+              style={{ cursor: isEditing ? "text" : "pointer", pointerEvents: "auto" }}
               onMouseDown={(e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 if (!isElementSelected) setSelectedElementId(element.id);
                 setSelectedNodeId(node.id);
               }}

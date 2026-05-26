@@ -43,6 +43,8 @@ const FreeformItem = memo(function FreeformItem({
   onPositionChange,
   onDeleteElement,
 }: FreeformItemProps) {
+  const isMindMap = element.elementKind === "native/mindmap";
+
   return (
     <div
       id={`native-el-${element.id}`}
@@ -57,8 +59,11 @@ const FreeformItem = memo(function FreeformItem({
         transform: `rotate(${element.position.rotation ?? 0}deg)`,
         cursor: readOnly ? "default" : "grab",
         userSelect: editing ? "text" : "none",
-        outline: "none",
-        willChange: "left, top, transform",
+        outline: selected ? "2px solid var(--accent)" : "none",
+        outlineOffset: selected ? "3px" : 0,
+        boxShadow: selected ? "0 0 0 6px var(--accent-soft)" : undefined,
+        borderRadius: selected ? 14 : undefined,
+        pointerEvents: isMindMap ? "none" : "auto",
       }}
     >
       <ElementRenderer

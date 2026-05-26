@@ -8,6 +8,7 @@ interface MiniSandboxProps {
   html: string;
   js?: string;
   css?: string;
+  fitMode?: "contain" | "actual" | "fill-width";
   streaming?: boolean;
   readOnly?: boolean;
   onMessage?: (msg: { type: string; [k: string]: unknown }) => void;
@@ -15,8 +16,24 @@ interface MiniSandboxProps {
 
 const LOADING_GRADIENT = "linear-gradient(135deg, var(--bg-hover) 25%, transparent 25%, transparent 50%, var(--bg-hover) 50%, var(--bg-hover) 75%, transparent 75%, transparent)";
 
-function buildSandboxSrcdoc(html: string, css?: string, js?: string): string {
-  const extraCss = css ? `<style>${css}</style>` : "";
+function getFitModeCss(fitMode: MiniSandboxProps["fitMode"]): string {
+  if (fitMode !== "fill-width") return "";
+  return `
+    body { padding: 0 !important; overflow: hidden !important; }
+    .widget-root { width: 100% !important; height: 100%; overflow: hidden !important; border-radius: 0 !important; }
+    .widget-root > svg,
+    .widget-root svg:first-of-type {
+      display: block;
+      width: 100% !important;
+      height: auto !important;
+      max-width: none !important;
+    }
+  `;
+}
+
+function buildSandboxSrcdoc(html: string, css?: string, js?: string, fitMode?: MiniSandboxProps["fitMode"]): string {
+  const combinedCss = [getFitModeCss(fitMode), css].filter(Boolean).join("\n");
+  const extraCss = combinedCss ? `<style>${combinedCss}</style>` : "";
   const extraJs = js ? `<script>${js}</script>` : "";
   const combined = `${extraCss}\n${html}\n${extraJs}`;
   return buildReceiverSrcdoc(combined, false, WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS);
@@ -26,6 +43,7 @@ export const MiniSandbox: React.FC<MiniSandboxProps> = ({
   html,
   js,
   css,
+  fitMode = "actual",
   streaming = false,
   readOnly = false,
   onMessage,
@@ -34,7 +52,7 @@ export const MiniSandbox: React.FC<MiniSandboxProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const srcdoc = buildSandboxSrcdoc(html, css, js);
+  const srcdoc = buildSandboxSrcdoc(html, css, js, fitMode);
 
   useEffect(() => {
     const iframe = iframeRef.current;

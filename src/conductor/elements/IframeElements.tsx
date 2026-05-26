@@ -119,8 +119,9 @@ export const MiniAppElement: React.FC<ElementComponentProps> = ({ element }) => 
   const appHtml = (payload.html as string) ?? "";
   const appJs = (payload.js as string) ?? "";
   const appCss = (payload.css as string) ?? "";
+  const fitMode = (element.config?.fitMode as "contain" | "actual" | "fill-width" | undefined) ?? "actual";
 
   if (!appHtml) return <EmptyElement element={element} />;
 
-  return <MiniSandbox html={appHtml} js={appJs} css={appCss} />;
+  return <MiniSandbox html={appHtml} js={appJs} css={appCss} fitMode={fitMode} />;
 };
