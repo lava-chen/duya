@@ -390,6 +390,12 @@ export interface AgentProgressEvent {
 }
 
 export interface ToolUseContextOptions {
+  recentImageAttachments?: Array<{
+    name: string;
+    path?: string;
+    url?: string;
+    type: string;
+  }>;
   tools: Tool[];
   commands: Command[];
   debug?: boolean;

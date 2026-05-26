@@ -6,6 +6,7 @@ import { ToolActionsGroup } from './ToolActionsGroup';
 import { Shimmer } from './Shimmer';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { useTranslation } from '@/hooks/useTranslation';
+import type { TranslationKey } from '@/i18n';
 import { useStreamingText } from '@/hooks/useStreamingText';
 import { useStreamingThinking } from '@/hooks/useStreamingThinking';
 import { useStreamingTools } from '@/hooks/useStreamingTools';
@@ -161,6 +162,29 @@ interface StreamingMessageProps {
   sessionId: string;
   onForceStop?: () => void;
 }
+
+function resolveI18nStatusText(
+  raw: string | undefined,
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string,
+): string | undefined {
+  if (!raw) return raw;
+  if (!raw.startsWith('@i18n:')) return raw;
+
+  const payload = raw.slice('@i18n:'.length);
+  const [key, ...paramParts] = payload.split('|');
+  if (!key) return raw;
+
+  const params: Record<string, string | number> = {};
+  for (const part of paramParts) {
+    const [k, ...rest] = part.split('=');
+    if (!k || rest.length === 0) continue;
+    const val = decodeURIComponent(rest.join('='));
+    const num = Number(val);
+    params[k] = Number.isFinite(num) && val.trim() !== '' ? num : val;
+  }
+
+  return t(key as TranslationKey, Object.keys(params).length > 0 ? params : undefined);
+}
  
 function ThinkingPhaseLabel() {
   const { t } = useTranslation();
@@ -267,15 +291,16 @@ const StreamingMarkdown = React.memo(function StreamingMarkdown({
     </MarkdownRenderer>
   );
 });
- 
 // ─── Text + widget rendering ──────────────────────────────────────────────────
  
 const StreamingTextContent = React.memo(function StreamingTextContent({
   text,
   isStreaming,
+  sourceMessageId,
 }: {
   text: string;
   isStreaming: boolean;
+  sourceMessageId?: string;
 }) {
   // Single source of pacing: adaptive typewriter.
   // When streaming ends it flushes instantly — no tail animation.
@@ -308,6 +333,8 @@ const StreamingTextContent = React.memo(function StreamingTextContent({
               widgetCode={partial.partialCode}
               isStreaming={true}
               showOverlay={true}
+              sourceMessageId={sourceMessageId}
+              sourceLabel="Streaming message"
             />
           </WidgetErrorBoundary>
         </div>
@@ -330,6 +357,8 @@ const StreamingTextContent = React.memo(function StreamingTextContent({
               <WidgetRenderer
                 widgetCode={seg.data.widget_code}
                 isStreaming={false}
+                sourceMessageId={sourceMessageId}
+                sourceLabel="Streaming message"
               />
             </WidgetErrorBoundary>
           );
@@ -366,8 +395,10 @@ const StreamingTools = React.memo(function StreamingTools({
  
 const StreamingVizWidgets = React.memo(function StreamingVizWidgets({
   actions,
+  sourceMessageId,
 }: {
   actions: import('./ToolActionsGroup').ActionItem[];
+  sourceMessageId?: string;
 }) {
   const widgetActions = actions.filter(a => a.kind === 'widget');
   if (widgetActions.length === 0) return null;
@@ -379,6 +410,8 @@ const StreamingVizWidgets = React.memo(function StreamingVizWidgets({
             widgetCode={action.content}
             isStreaming={true}
             showOverlay={true}
+            sourceMessageId={action.sourceMessageId ?? sourceMessageId}
+            sourceLabel={action.sourceLabel ?? 'Streaming visualization'}
           />
         </WidgetErrorBoundary>
       ))}
@@ -427,7 +460,7 @@ const StreamingStatus = React.memo(function StreamingStatus({
  
   const displayStatus = retryInfo
     ? `Retrying... (${retryInfo.attempt}/${retryInfo.maxAttempts})`
-    : statusText
+    : resolveI18nStatusText(statusText, t)
       || getRunningCommandSummary()
       || (content.length > 0 ? t('streaming.generating') : undefined);
  
@@ -473,9 +506,9 @@ export const StreamingMessage = React.memo(function StreamingMessage({
         />
  
         {/* Text content — paced by adaptive typewriter */}
-        <StreamingTextContent text={text} isStreaming={isStreaming} />
+        <StreamingTextContent text={text} isStreaming={isStreaming} sourceMessageId={sessionId} />
  
-        <StreamingVizWidgets actions={actions} />
+        <StreamingVizWidgets actions={actions} sourceMessageId={sessionId} />
  
         {/* Initial "thinking" shimmer — shown until first tool or text arrives */}
         {isStreaming && !text && uses.length === 0 && !thinking && (
@@ -499,4 +532,3 @@ export const StreamingMessage = React.memo(function StreamingMessage({
     </div>
   );
 });
- 

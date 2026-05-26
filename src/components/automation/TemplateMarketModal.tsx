@@ -86,7 +86,7 @@ export function TemplateMarketModal({
                 <button
                   key={template.id}
                   type="button"
-                  className="flex flex-col items-start gap-3 p-4 rounded-xl text-left transition-all duration-200"
+                  className="flex flex-col items-start gap-2 p-4 rounded-xl text-left transition-all duration-200"
                   style={{
                     background: 'var(--surface)',
                     border: '1px solid var(--border)',
@@ -106,22 +106,19 @@ export function TemplateMarketModal({
                     e.currentTarget.style.boxShadow = 'none';
                   }}
                 >
-                  <div
-                    className="flex items-center justify-center w-10 h-10 rounded-lg"
-                    style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
+                  <h4
+                    className="text-base mb-1"
+                    style={{
+                      color: 'var(--text)',
+                      fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif",
+                      fontWeight: 400,
+                    }}
                   >
-                    <span className="text-lg font-semibold">
-                      {template.label_en.charAt(0)}
-                    </span>
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-medium text-sm mb-1" style={{ color: 'var(--text)' }}>
-                      {template.label_en}
-                    </h4>
-                    <p className="text-xs leading-relaxed line-clamp-3" style={{ color: 'var(--muted)' }}>
-                      {template.description_en}
-                    </p>
-                  </div>
+                    {template.label_en}
+                  </h4>
+                  <p className="text-xs leading-relaxed line-clamp-3" style={{ color: 'var(--muted)' }}>
+                    {template.description_en}
+                  </p>
                 </button>
               ))}
             </div>

@@ -9,7 +9,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { PermissionRequestEvent } from '@/types/stream';
-import { resolvePermissionIPC } from '@/lib/ipc-client';
+import { resolvePermission } from '@/lib/agent-sse-client';
 import { subscribeToPhase, getSnapshot } from '@/lib/stream-session-manager';
 
 export interface UsePermissionsOptions {
@@ -92,21 +92,23 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
       waitingRef.current = true;
 
       try {
-        const resolvedPermission = await resolvePermissionIPC(
+        const mappedDecision =
+          decision === 'allow_session' ? 'allow_for_session' : decision;
+
+        if (!sessionId) {
+          console.warn('[usePermissions] Missing sessionId, cannot resolve permission.');
+          return;
+        }
+
+        await resolvePermission(
+          sessionId,
           pendingPermission.id,
-          decision === 'allow_session' ? 'allow' : decision,
+          mappedDecision as 'allow' | 'deny' | 'allow_once' | 'allow_for_session',
           {
             ...(updatedInput ? { updatedInput } : {}),
             ...(denyMessage ? { message: denyMessage } : {}),
-            ...(sessionId ? { sessionId } : {}),
           }
         );
-
-        // Even if IPC returns null (e.g., agent process unavailable),
-        // update local state as the decision was made by the user
-        if (!resolvedPermission) {
-          console.warn('[usePermissions] IPC returned null, but local state updated');
-        }
 
         // Update local state
         setPermissionResolved(decision === 'allow_session' ? 'allow' : decision);

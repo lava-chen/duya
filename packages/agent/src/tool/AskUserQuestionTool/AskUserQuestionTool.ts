@@ -35,19 +35,34 @@ const questionSchema = z.object({
   multiSelect: z.boolean().default(false).describe('Set to true to allow multiple answers'),
 });
 
+function unwrapDef(val: unknown): unknown {
+  if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+    const obj = val as Record<string, unknown>;
+    if (Object.keys(obj).length === 1 && 'def' in obj && typeof obj.def === 'string') {
+      try {
+        return JSON.parse(obj.def);
+      } catch {
+        return val;
+      }
+    }
+  }
+  return val;
+}
+
 export const askUserQuestionInputSchema = z.preprocess(
   (val) => {
-    if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
-      const obj = { ...(val as Record<string, unknown>) };
-      if (typeof obj.questions === 'string') {
+    let obj = unwrapDef(val);
+    if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) {
+      const record = { ...(obj as Record<string, unknown>) };
+      if (typeof record.questions === 'string') {
         try {
-          obj.questions = JSON.parse(obj.questions as string);
+          record.questions = JSON.parse(record.questions as string);
         } catch {
           /* leave as-is, let zod report the original error */
         }
       }
-      if (Array.isArray(obj.questions)) {
-        obj.questions = (obj.questions as unknown[]).map((q) => {
+      if (Array.isArray(record.questions)) {
+        record.questions = (record.questions as unknown[]).map((q) => {
           if (typeof q === 'object' && q !== null) {
             const qo = { ...(q as Record<string, unknown>) };
             if (typeof qo.options === 'string') {
@@ -62,9 +77,9 @@ export const askUserQuestionInputSchema = z.preprocess(
           return q;
         });
       }
-      return obj;
+      return record;
     }
-    return val;
+    return obj;
   },
   z.object({
     questions: z.array(questionSchema).min(1).max(4).describe('1-4 questions to ask the user'),
@@ -112,10 +127,61 @@ Usage notes:
 // Tool Implementation
 // ============================================================
 
+const JSON_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    questions: {
+      type: 'array',
+      description: '1-4 questions to ask the user',
+      minItems: 1,
+      maxItems: 4,
+      items: {
+        type: 'object',
+        properties: {
+          question: {
+            type: 'string',
+            description: 'The complete question to ask. Should be clear, specific, and end with a question mark.',
+          },
+          header: {
+            type: 'string',
+            description: 'Very short label (max 12 chars). Examples: "Auth method", "Library", "Approach".',
+          },
+          options: {
+            type: 'array',
+            description: '2-4 options',
+            minItems: 2,
+            maxItems: 4,
+            items: {
+              type: 'object',
+              properties: {
+                label: {
+                  type: 'string',
+                  description: 'Display text for the option (1-5 words)',
+                },
+                description: {
+                  type: 'string',
+                  description: 'Explanation of what this option means',
+                },
+              },
+              required: ['label', 'description'],
+            },
+          },
+          multiSelect: {
+            type: 'boolean',
+            description: 'Set to true to allow multiple answers',
+          },
+        },
+        required: ['question', 'header', 'options'],
+      },
+    },
+  },
+  required: ['questions'],
+};
+
 export class AskUserQuestionTool extends BaseTool {
   readonly name = ASK_USER_QUESTION_TOOL_NAME;
   readonly description = DESCRIPTION;
-  readonly input_schema = askUserQuestionInputSchema;
+  readonly input_schema = JSON_INPUT_SCHEMA;
 
   isConcurrencySafe(): boolean {
     return true;

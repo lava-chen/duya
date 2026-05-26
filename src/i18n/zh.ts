@@ -9,6 +9,7 @@ const zh: Record<TranslationKey, string> = {
   'nav.automation': '自动化',
   'nav.agents': 'Agents',
   'nav.conductor': '指挥台',
+  'nav.memory': '记忆',
 
   'chat.placeholder': '询问后续更改...',
   'chat.emptyTitle': '开始新对话',
@@ -62,6 +63,10 @@ const zh: Record<TranslationKey, string> = {
   'streaming.timedOut': '工具在 {seconds} 秒后超时',
   'streaming.forceStop': '强制停止',
   'streaming.streaming': '流式输出中...',
+  'streaming.visionAnalyzingStart': '正在调用视觉模型...',
+  'streaming.visionAnalyzingProgress': '正在分析图片 {current}/{total}...',
+  'streaming.visionFallback': '主视觉分析失败，正在尝试备用方案...',
+  'streaming.visionPreprocessDone': '图片预处理完成，正在生成回复...',
 
   'permission.allow': '允许',
   'permission.deny': '拒绝',

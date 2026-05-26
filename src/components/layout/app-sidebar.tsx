@@ -34,12 +34,13 @@ import { InputDialog } from "@/components/ui/InputDialog";
 type ThemeMode = "light" | "dark";
 
 // Type-safe label keys
-type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor';
+type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor' | 'nav.memory';
 
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
   { view: 'conductor', labelKey: 'nav.conductor', icon: SquaresFourIcon },
   { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
+  { view: 'memory', labelKey: 'nav.memory', icon: BrainIcon },
 ];
 
 const settingsNavItems: { id: SettingsTab; labelKey: string; icon: typeof HouseIcon }[] = [

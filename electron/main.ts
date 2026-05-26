@@ -29,6 +29,7 @@ import { registerFilesHandlers } from './ipc/files-handlers';
 import { registerLoggerHandlers } from './ipc/logger-handlers';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
+import { registerWikiAgentHandlers } from './ipc/wiki-agent-handlers';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import type { ExecutorRpcRequest } from './conductor/executor-types';
 
@@ -428,6 +429,7 @@ registerFilesHandlers();
 registerLoggerHandlers();
 registerUpdaterHandlers();
 registerAgentServerHandlers();
+registerWikiAgentHandlers();
 
 // =============================================================================
 // Graceful Shutdown

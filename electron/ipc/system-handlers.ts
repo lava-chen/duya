@@ -47,6 +47,18 @@ export function registerSystemHandlers(): void {
     return shell.openPath(folderPath);
   });
 
+  ipcMain.handle('shell:open-external', async (_event, url: string) => {
+    if (typeof url !== 'string' || url.length === 0 || url.length > 4096) {
+      return 'Invalid URL';
+    }
+    try {
+      await shell.openExternal(url);
+      return '';
+    } catch (err) {
+      return String(err);
+    }
+  });
+
   // Browser extension path
   ipcMain.handle('browser-extension:get-path', () => {
     if (isDev) {

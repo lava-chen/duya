@@ -1014,7 +1014,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'config:vision:set': {
       const cm = getConfigManager();
       const current = cm.getVisionSettings();
-      const merged = { ...current, ...p as Record<string, unknown>, enabled: true };
+      const pObj = p as Record<string, unknown>;
+      const merged = {
+        ...current,
+        ...pObj,
+        baseUrl: (pObj.baseUrl || pObj.baseURL) ?? current.baseUrl,
+      };
+      delete merged.baseURL;
       cm.setConfig('visionSettings', merged, 'agent');
       return { ok: true };
     }
@@ -1312,6 +1318,27 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       if (!p.platform || !p.platformUserId) throw new Error('Missing platform or platformUserId');
       const store = getPairingStore();
       return { approved: store.isApproved(p.platform as string, p.platformUserId as string) };
+    }
+
+    case 'modelCapability:get': {
+      const modelName = (p.modelName as string).trim().toLowerCase();
+      return db.prepare('SELECT * FROM model_capabilities WHERE id = ?').get(modelName);
+    }
+
+    case 'modelCapability:set': {
+      const modelName = (p.modelName as string).trim().toLowerCase();
+      const isMultimodal = p.isMultimodal ? 1 : 0;
+      const method = (p.method as string) || 'unknown';
+      db.prepare(
+        'INSERT OR REPLACE INTO model_capabilities (id, is_multimodal, detected_at, detection_method) VALUES (?, ?, ?, ?)'
+      ).run(modelName, isMultimodal, Date.now(), method);
+      return { success: true };
+    }
+
+    case 'modelCapability:delete': {
+      const modelName = (p.modelName as string).trim().toLowerCase();
+      const result = db.prepare('DELETE FROM model_capabilities WHERE id = ?').run(modelName);
+      return { success: result.changes > 0 };
     }
 
     default:

@@ -14,6 +14,8 @@ export type SkillSource = 'user' | 'project' | 'bundled' | 'mcp' | 'plugin';
  * Skill category (Hermes-inspired classification)
  */
 export type SkillCategory =
+  | 'cognition'         // cognitive methodologies, search philosophy, mental models
+  | 'agentic'           // plan execution, task decomposition, reflection loops
   | 'development'       // coding, debugging, testing, architecture
   | 'research'          // academic research, paper discovery, literature review
   | 'creative'          // art generation, visual design, creative ideation
@@ -22,6 +24,7 @@ export type SkillCategory =
   | 'automation'        // scripting, CI/CD, workflow automation
   | 'communication'     // email, messaging, social media
   | 'media'             // media search, content creation
+  | 'apple'             // Apple ecosystem integrations
   | 'mcp'              // MCP tool integrations
   | 'system'           // system utilities, file operations
   | 'other';            // uncategorized

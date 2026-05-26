@@ -114,14 +114,22 @@ export class AgentServerClient {
         signal: abortController.signal,
       });
 
-      // Add timeout to detect hanging requests
-      const timeoutMs = 30000;
-      const timeoutPromise = new Promise<null>((_, reject) => {
-        setTimeout(() => reject(new Error(`Request timeout after ${timeoutMs}ms`)), timeoutMs);
+      // The first SSE chunk can be delayed by image preprocessing + vision analysis.
+      // Use a much longer startup timeout for image turns to avoid false timeout errors.
+      const hasImageAttachments = !!options?.files?.some(
+        (file) => file.type.startsWith('image/') || file.type.startsWith('img/'),
+      );
+      const timeoutMs = hasImageAttachments ? 5 * 60 * 1000 : 60 * 1000;
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      const timeoutPromise = new Promise<Response>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error(`Request timeout after ${timeoutMs}ms`)), timeoutMs);
       });
 
       console.log('[agent-http-client] Waiting for response...');
       response = await Promise.race([fetchPromise, timeoutPromise]);
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
       if (!response) {
         throw new Error('Request timed out or returned null response');
       }

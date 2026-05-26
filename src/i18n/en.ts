@@ -7,6 +7,7 @@ const en = {
   'nav.automation': 'Automation',
   'nav.agents': 'Agents',
   'nav.conductor': 'Conductor',
+  'nav.memory': 'Memory',
 
   'chat.placeholder': 'Ask for follow-up changes...',
   'chat.emptyTitle': 'Start a new conversation',
@@ -60,6 +61,10 @@ const en = {
   'streaming.timedOut': 'Tool timed out after {seconds}s',
   'streaming.forceStop': 'Force stop',
   'streaming.streaming': 'streaming...',
+  'streaming.visionAnalyzingStart': 'Calling vision model...',
+  'streaming.visionAnalyzingProgress': 'Analyzing image {current}/{total}...',
+  'streaming.visionFallback': 'Primary vision failed, trying fallback...',
+  'streaming.visionPreprocessDone': 'Image preprocessing complete, generating response...',
 
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',

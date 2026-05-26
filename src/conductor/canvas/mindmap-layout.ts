@@ -14,7 +14,7 @@ const DEFAULT_BRANCH_COLORS = [
   "#7C3AED",
 ];
 
-export type LayoutDirection = "right" | "left" | "both" | "tree";
+export type LayoutDirection = "right" | "left" | "both" | "tree" | "vertical";
 
 export interface MindMapLayoutOptions {
   levelGap?: number;
@@ -49,6 +49,10 @@ export interface MindMapLayoutResult {
   totalHeight: number;
 }
 
+export function countMindMapDescendants(node: MindMapTreeNode): number {
+  return node.children.reduce((sum, child) => sum + 1 + countMindMapDescendants(child), 0);
+}
+
 interface Precomputed {
   subtreeHeight: number;
 }
@@ -69,6 +73,27 @@ function computeSubtreeHeight(
   for (const child of node.children) {
     total += computeSubtreeHeight(child, precomputed, siblingGap, nodeHeight);
   }
+  precomputed.set(node.id, { subtreeHeight: total });
+  return total;
+}
+
+function computeSubtreeWidth(
+  node: MindMapTreeNode,
+  precomputed: Map<string, Precomputed>,
+  siblingGap: number,
+  nodeWidth: number
+): number {
+  if (node.children.length === 0 || node.collapsed) {
+    const w = nodeWidth + siblingGap;
+    precomputed.set(node.id, { subtreeHeight: w });
+    return w;
+  }
+
+  let total = 0;
+  for (const child of node.children) {
+    total += computeSubtreeWidth(child, precomputed, siblingGap, nodeWidth);
+  }
+  total = Math.max(total, nodeWidth + siblingGap);
   precomputed.set(node.id, { subtreeHeight: total });
   return total;
 }
@@ -173,89 +198,172 @@ export function layoutMindMap(
 
   const result: LayoutNode[] = [];
   const totalH = precomputed.get(rootNode.id)?.subtreeHeight ?? nodeHeight + siblingGap;
+  const rootY = Math.max(0, (totalH - nodeHeight) / 2);
+  const rootX = 0;
+  const rootCenterY = rootY + nodeHeight / 2;
 
-  function buildHalfTree(
-    node: MindMapTreeNode,
-    dir: "right" | "left",
-    colorBias: number
-  ): LayoutNode {
-    const nodes: LayoutNode[] = [];
-    const myOptions: Required<MindMapLayoutOptions> = {
-      ...fullOptions,
-      direction: dir,
-    };
-
-    const localPrecomputed = new Map<string, Precomputed>();
-    computeSubtreeHeight(node, localPrecomputed, siblingGap, nodeHeight);
-
-    const root = buildLayoutNodes(
-      node,
-      0,
-      0,
-      0,
-      localPrecomputed,
-      myOptions,
-      nodes,
-      [],
-      colorBias
-    );
-
-    for (const n of nodes) {
-      result.push(n);
-    }
-
-    return root;
-  }
-
-  if (direction === "both") {
-    const rootChecked = rootNode.children && rootNode.children.length >= 2;
-
-    if (rootChecked) {
-      const mid = Math.ceil(rootNode.children.length / 2);
-      const leftChildren = rootNode.children.slice(0, mid);
-      const rightChildren = rootNode.children.slice(mid);
-
-      const leftSubtree: MindMapTreeNode = {
-        ...rootNode,
-        children: leftChildren,
-        text: "",
-      };
-      const rightSubtree: MindMapTreeNode = {
-        ...rootNode,
-        children: rightChildren,
-        text: "",
-      };
-
-      buildHalfTree(leftSubtree, "left", 0);
-      buildHalfTree(rightSubtree, "right", leftChildren.length);
-    } else {
-      buildHalfTree(rootNode, "right", 0);
-    }
-  } else if (direction === "tree") {
-    buildHalfTree(rootNode, "right", 0);
-    buildHalfTree(rootNode, "left", 0);
-  } else {
-    buildHalfTree(rootNode, direction, 0);
-  }
-
-  const justRoot: LayoutNode = {
+  const rootLayout: LayoutNode = {
     id: rootNode.id,
     text: rootNode.text,
-    x: 0,
-    y: Math.max(0, (totalH - nodeHeight) / 2),
+    x: rootX,
+    y: rootY,
     width: nodeWidth,
     height: nodeHeight,
     depth: 0,
     collapsed: !!rootNode.collapsed,
     children: [],
-    parentX: 0,
-    parentY: nodeHeight / 2,
+    parentX: rootX,
+    parentY: rootCenterY,
     branchColor: branchColors[0],
   };
+  result.push(rootLayout);
 
-  const existingRoot = result.find((n) => n.id === rootNode.id);
-  if (!existingRoot) {
-    result.unshift(justRoot);
+  function buildChildrenOnSide(
+    children: MindMapTreeNode[],
+    dir: "right" | "left",
+    colorBias: number
+  ): void {
+    if (children.length === 0) {
+      return;
+    }
+
+    const myOptions: Required<MindMapLayoutOptions> = {
+      ...fullOptions,
+      direction: dir,
+    };
+
+    const sideHeight = children.reduce((sum, child) => {
+      return sum + (precomputed.get(child.id)?.subtreeHeight ?? nodeHeight + siblingGap);
+    }, 0);
+    let childY = rootCenterY - sideHeight / 2;
+
+    const childXOffset = dir === "left"
+      ? rootX - nodeWidth - levelGap
+      : rootX + nodeWidth + levelGap;
+
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      const childLayout = buildLayoutNodes(
+        child,
+        1,
+        childXOffset,
+        childY,
+        precomputed,
+        myOptions,
+        result,
+        [],
+        colorBias + i
+      );
+      rootLayout.children.push(childLayout);
+      childY += precomputed.get(child.id)?.subtreeHeight ?? nodeHeight + siblingGap;
+    }
+  }
+
+  function buildChildrenVertical(): void {
+    if (rootNode.children.length === 0) return;
+
+    const verticalOptions: Required<MindMapLayoutOptions> = {
+      ...fullOptions,
+      direction: "right" as LayoutDirection,
+    };
+
+    const precomputedW = new Map<string, Precomputed>();
+    computeSubtreeWidth(rootNode, precomputedW, siblingGap, nodeWidth);
+
+    const totalW = precomputedW.get(rootNode.id)?.subtreeHeight ?? nodeWidth + siblingGap;
+    let childX = rootX + nodeWidth / 2 - totalW / 2;
+
+    const childY = rootY + nodeHeight + levelGap;
+
+    for (let i = 0; i < rootNode.children.length; i++) {
+      const child = rootNode.children[i];
+      const childW = precomputedW.get(child.id)?.subtreeHeight ?? nodeWidth + siblingGap;
+
+      const childLayout = buildLayoutNodesVertical(
+        child,
+        1,
+        childX + childW / 2 - nodeWidth / 2,
+        childY,
+        precomputedW,
+        verticalOptions,
+        result,
+        i
+      );
+      rootLayout.children.push(childLayout);
+      childX += childW;
+    }
+  }
+
+  function buildLayoutNodesVertical(
+    node: MindMapTreeNode,
+    depth: number,
+    xStart: number,
+    yStart: number,
+    widthPrecomputed: Map<string, Precomputed>,
+    options: Required<MindMapLayoutOptions>,
+    resultNodes: LayoutNode[],
+    colorIndex: number
+  ): LayoutNode {
+    const vertLayoutNode: LayoutNode = {
+      id: node.id,
+      text: node.text,
+      x: xStart,
+      y: yStart,
+      width: nodeWidth,
+      height: nodeHeight,
+      depth,
+      collapsed: !!node.collapsed,
+      children: [],
+      parentX: xStart,
+      parentY: yStart,
+      branchColor: branchColors[colorIndex % branchColors.length],
+    };
+    resultNodes.push(vertLayoutNode);
+
+    if (node.collapsed || node.children.length === 0) return vertLayoutNode;
+
+    const subtreeW = widthPrecomputed.get(node.id)?.subtreeHeight ?? nodeWidth + siblingGap;
+    let childX = xStart + nodeWidth / 2 - subtreeW / 2;
+    const childY = yStart + nodeHeight + levelGap;
+
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i];
+      const childW = widthPrecomputed.get(child.id)?.subtreeHeight ?? nodeWidth + siblingGap;
+      const childLayout = buildLayoutNodesVertical(
+        child,
+        depth + 1,
+        childX + childW / 2 - nodeWidth / 2,
+        childY,
+        widthPrecomputed,
+        options,
+        resultNodes,
+        colorIndex + 1 + i
+      );
+      vertLayoutNode.children.push(childLayout);
+      childX += childW;
+    }
+
+    return vertLayoutNode;
+  }
+
+  if (!rootNode.collapsed && rootNode.children.length > 0) {
+    if (direction === "vertical") {
+      buildChildrenVertical();
+    } else if (direction === "both") {
+      const mid = Math.ceil(rootNode.children.length / 2);
+      const leftChildren = rootNode.children.slice(0, mid);
+      const rightChildren = rootNode.children.slice(mid);
+      buildChildrenOnSide(leftChildren, "left", 0);
+      buildChildrenOnSide(rightChildren, "right", leftChildren.length);
+    } else if (direction === "tree") {
+      const mid = Math.ceil(rootNode.children.length / 2);
+      const leftChildren = rootNode.children.slice(0, mid);
+      const rightChildren = rootNode.children.slice(mid);
+      buildChildrenOnSide(leftChildren, "left", 0);
+      buildChildrenOnSide(rightChildren, "right", leftChildren.length);
+    } else {
+      buildChildrenOnSide(rootNode.children, direction, 0);
+    }
   }
 
   const allX = result.map((n) => n.x);
@@ -281,10 +389,7 @@ export function layoutMindMap(
     }
   }
 
-  const root = result.find((n) => n.id === rootNode.id && n.depth === 0);
-  if (root) {
-    collectEdges(root);
-  }
+  collectEdges(rootLayout);
 
   return {
     nodes: result,
@@ -299,8 +404,13 @@ export function computeBezierBranchPath(
   fromY: number,
   toX: number,
   toY: number,
-  direction: "right" | "left"
+  direction: "right" | "left" | "vertical"
 ): string {
+  if (direction === "vertical") {
+    const cp1y = fromY + Math.abs(toY - fromY) * 0.4;
+    const cp2y = toY - Math.abs(toY - fromY) * 0.4;
+    return `M ${fromX} ${fromY} C ${fromX} ${cp1y}, ${toX} ${cp2y}, ${toX} ${toY}`;
+  }
   const sign = direction === "right" ? 1 : -1;
   const cp1x = fromX + Math.abs(toX - fromX) * 0.4 * sign;
   const cp1y = fromY;
@@ -314,8 +424,13 @@ export function computeElbowBranchPath(
   fromY: number,
   toX: number,
   toY: number,
-  direction: "right" | "left"
+  direction: "right" | "left" | "vertical"
 ): string {
+  if (direction === "vertical") {
+    const offset = Math.min(34, Math.abs(toY - fromY) * 0.42);
+    const midY = fromY + offset;
+    return `M ${fromX} ${fromY} L ${fromX} ${midY} L ${toX} ${midY} L ${toX} ${toY}`;
+  }
   const offset = Math.min(34, Math.abs(toX - fromX) * 0.42);
   const midX = direction === "right" ? fromX + offset : fromX - offset;
   return `M ${fromX} ${fromY} L ${midX} ${fromY} L ${midX} ${toY} L ${toX} ${toY}`;

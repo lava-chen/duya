@@ -44,6 +44,8 @@ function isPlatformSupported(platforms?: string[]): boolean {
 }
 
 const CATEGORY_MAP: Record<string, SkillCategory> = {
+  'cognition': 'cognition',
+  'agentic': 'agentic',
   'development': 'development',
   'research': 'research',
   'creative': 'creative',
@@ -52,6 +54,7 @@ const CATEGORY_MAP: Record<string, SkillCategory> = {
   'automation': 'automation',
   'communication': 'communication',
   'media': 'media',
+  'apple': 'apple',
   'mcp': 'mcp',
   'system': 'system',
   'other': 'other',

@@ -441,6 +441,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
     const nativeWrapper = target.closest("[data-native-element-id]") as HTMLElement | null;
     if (nativeWrapper && !target.closest("[data-resize-handle]")) {
+      if (target.closest("input, textarea, select, button, [contenteditable='true']")) {
+        return;
+      }
       const elementId = nativeWrapper.dataset.nativeElementId;
       if (!elementId) return;
       const el = elements.find((candidate) => candidate.id === elementId);

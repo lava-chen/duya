@@ -21,8 +21,37 @@ import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector
 import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-client';
 import { Plus, Play, PencilSimple, Trash, Clock, Calendar, Timer, SlidersHorizontal, WarningCircle, CheckCircle, XCircle, SpinnerGap, Gear, ChatCircle, Robot } from '@phosphor-icons/react';
 import { AutomationEmptyState } from './AutomationEmptyState';
-import { NLCreateModal } from './NLCreateModal';
+import { QuickCronChatModal } from './QuickCronChatModal';
 import { TemplateMarketModal } from './TemplateMarketModal';
+import { useConversationStore } from '@/stores/conversation-store';
+
+function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): string {
+  const sections = [
+    'Create a cron job automation using the cron tool. Here is the user request:',
+    '',
+    userPrompt,
+  ];
+
+  if (templatePrompt) {
+    sections.push(
+      '',
+      'Template task details for the cron job to execute each run:',
+      templatePrompt,
+    );
+  }
+
+  sections.push(
+    '',
+    'Instructions:',
+    '1. Use the cron tool with action "create" to set up this cron job',
+    '2. Analyze the request to determine the appropriate schedule (cron expression, interval, or specific time)',
+    '3. Extract a concise but descriptive name for the cron job',
+    '4. The "prompt" field should contain the task description for each execution',
+    '5. Set enabled to true by default',
+  );
+
+  return sections.join('\n');
+}
 
 type EditorState = {
   id?: string;
@@ -114,10 +143,15 @@ export function AutomationView() {
   const [isCreating, setIsCreating] = useState(false);
 
   // NL & Template state
-  const [nlModalOpen, setNlModalOpen] = useState(false);
+  const [quickChatModalOpen, setQuickChatModalOpen] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templates, setTemplates] = useState<AutomationTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<AutomationTemplate | null>(null);
+
+  const createThread = useConversationStore((s) => s.createThread);
+  const setActiveThread = useConversationStore((s) => s.setActiveThread);
+  const setCurrentView = useConversationStore((s) => s.setCurrentView);
+  const storeThreads = useConversationStore((s) => s.threads);
 
   // Cron chat modal state
   const [chatModalOpen, setChatModalOpen] = useState(false);
@@ -281,12 +315,12 @@ export function AutomationView() {
 
   function handleChatCreate(): void {
     setSelectedTemplate(null);
-    setNlModalOpen(true);
+    setQuickChatModalOpen(true);
   }
 
   function handleQuickTemplate(template: AutomationTemplate): void {
     setSelectedTemplate(template);
-    setNlModalOpen(true);
+    setQuickChatModalOpen(true);
   }
 
   function handleManualCreate(): void {
@@ -301,31 +335,44 @@ export function AutomationView() {
   function handleTemplateSelect(template: AutomationTemplate): void {
     setSelectedTemplate(template);
     setTemplateModalOpen(false);
-    setNlModalOpen(true);
+    setQuickChatModalOpen(true);
   }
 
   function handleTemplateManualSetup(): void {
     setTemplateModalOpen(false);
     setSelectedTemplate(null);
-    setNlModalOpen(true);
+    setQuickChatModalOpen(true);
   }
 
-  function handleNLCreate(data: CreateAutomationCronInput): void {
-    if (!hasElectronApi) return;
-    void (async () => {
-      try {
-        setSaving(true);
-        setError(null);
-        const created = await createAutomationCronIPC(data);
-        setNlModalOpen(false);
-        setSelectedTemplate(null);
-        await reloadCrons(created.id);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setSaving(false);
+  async function handleStartCronChat(userPrompt: string, templatePrompt?: string): Promise<void> {
+    setQuickChatModalOpen(false);
+    setSelectedTemplate(null);
+
+    const workingDir = storeThreads[0]?.workingDirectory ?? undefined;
+    const projectName = storeThreads[0]?.projectName ?? undefined;
+
+    const thread = await createThread({
+      workingDirectory: workingDir,
+      projectName,
+    });
+
+    if (!thread) {
+      setError('Unable to create chat session. Please open a workspace first from the Chat page.');
+      return;
+    }
+
+    setActiveThread(thread.id);
+    setCurrentView('chat');
+
+    const prompt = buildCronCreationPrompt(userPrompt, templatePrompt);
+
+    setTimeout(() => {
+      const win = window as unknown as Record<string, unknown>;
+      const sendFn = win.__widgetSendMessage as ((text: string) => void) | undefined;
+      if (sendFn) {
+        sendFn(prompt);
       }
-    })();
+    }, 200);
   }
 
   function handleSelectCron(cron: AutomationCron): void {
@@ -560,21 +607,15 @@ export function AutomationView() {
       </div>
       )}
 
-      {/* NL Create Modal */}
-      <NLCreateModal
-        isOpen={nlModalOpen}
+      {/* NL Create Chat Modal */}
+      <QuickCronChatModal
+        isOpen={quickChatModalOpen}
         onClose={() => {
-          setNlModalOpen(false);
+          setQuickChatModalOpen(false);
           setSelectedTemplate(null);
         }}
-        onCreate={handleNLCreate}
-        onOpenTemplates={() => {
-          setNlModalOpen(false);
-          setTemplateModalOpen(true);
-        }}
+        onStartChat={handleStartCronChat}
         initialTemplate={selectedTemplate}
-        availableModels={availableModels}
-        modelsLoading={modelsLoading}
       />
 
       {/* Template Market Modal */}

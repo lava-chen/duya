@@ -201,8 +201,8 @@ function ContextMenu({
   );
 }
 
-export function FileTreePanel() {
-  const { fileTreeWidth, setFileTreeWidth } = usePanel();
+export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
+  const { panelWidth, setPanelWidth } = usePanel();
   const { t } = useTranslation();
   const { activeThreadId, threads } = useConversationStore();
 
@@ -269,9 +269,9 @@ export function FileTreePanel() {
 
   const handleResize = useCallback(
     (delta: number) => {
-      setFileTreeWidth(fileTreeWidth - delta);
+      setPanelWidth(panelWidth - delta);
     },
-    [fileTreeWidth, setFileTreeWidth]
+    [panelWidth, setPanelWidth]
   );
 
   const handleOpenFile = useCallback(async (path: string) => {
@@ -379,11 +379,11 @@ export function FileTreePanel() {
   // Show loading state
   if (loading) {
     return (
-      <div className="file-tree-panel">
-        <ResizeHandle side="left" onResize={handleResize} />
+      <div className={embedded ? "file-tree-panel-embedded" : "file-tree-panel"}>
+        {!embedded && <ResizeHandle side="left" onResize={handleResize} />}
         <div
           className="file-tree-panel-inner"
-          style={{ width: fileTreeWidth }}
+          style={embedded ? undefined : { width: panelWidth }}
         >
           <TaskListPanel />
           <div className="file-tree-panel-header">
@@ -426,11 +426,11 @@ export function FileTreePanel() {
   // Show error or empty state
   if (tree.length === 0) {
     return (
-      <div className="file-tree-panel">
-        <ResizeHandle side="left" onResize={handleResize} />
+      <div className={embedded ? "file-tree-panel-embedded" : "file-tree-panel"}>
+        {!embedded && <ResizeHandle side="left" onResize={handleResize} />}
         <div
           className="file-tree-panel-inner"
-          style={{ width: fileTreeWidth }}
+          style={embedded ? undefined : { width: panelWidth }}
         >
           <TaskListPanel />
           <div className="file-tree-panel-header">
@@ -472,11 +472,11 @@ export function FileTreePanel() {
 
   // Show tree
   return (
-    <div className="file-tree-panel">
-      <ResizeHandle side="left" onResize={handleResize} />
+    <div className={embedded ? "file-tree-panel-embedded" : "file-tree-panel"}>
+      {!embedded && <ResizeHandle side="left" onResize={handleResize} />}
       <div
         className="file-tree-panel-inner"
-        style={{ width: fileTreeWidth }}
+        style={embedded ? undefined : { width: panelWidth }}
       >
         <TaskListPanel />
         <div className="file-tree-panel-header">

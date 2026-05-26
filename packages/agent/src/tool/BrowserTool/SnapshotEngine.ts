@@ -44,6 +44,7 @@ export interface InteractiveElement {
   tag: string;
   type?: string;
   text: string;
+  ariaLabel?: string;
   selector: string;
   bounds?: { x: number; y: number; width: number; height: number };
 }
@@ -520,6 +521,27 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
     return parts.join(' ');
   }
 
+  function hasSemanticAttrs(el) {
+    return !!(
+      el.hasAttribute('role') ||
+      el.hasAttribute('aria-label') ||
+      el.hasAttribute('aria-labelledby') ||
+      el.hasAttribute('data-testid') ||
+      el.hasAttribute('data-test') ||
+      el.id
+    );
+  }
+
+  function isFlattenableContainer(tag, attrs, text, interactive, landmark, isScrollable, childLinesCount) {
+    if (interactive || landmark || isScrollable) return false;
+    if (text) return false;
+    if (childLinesCount <= 0) return false;
+    if (hasSemanticAttrs(attrs)) return false;
+    // Keep non-generic structure nodes to preserve page map.
+    if (!['div', 'span', 'section', 'article', 'main', 'header', 'footer', 'aside'].includes(tag)) return false;
+    return true;
+  }
+
   // ── Table → Markdown Serialization ─────────────────────────────────
 
   function serializeTable(table, depth) {
@@ -592,13 +614,16 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
     if (tag === 'svg') {
       const attrs = serializeAttrs(el);
       const interactive = isInteractive(el);
-      let prefix = '';
+      let line = '  '.repeat(depth) + '- ';
       if (interactive) {
         interactiveIndex++;
         el.setAttribute('data-opencli-ref', '' + interactiveIndex);
-        prefix = '[' + interactiveIndex + ']';
+        line += 'svg [ref=' + interactiveIndex + ']';
+      } else {
+        line += 'svg';
       }
-      lines.push('  '.repeat(depth) + prefix + '<svg' + (attrs ? ' ' + attrs : '') + ' />');
+      if (attrs) line += ' ' + attrs;
+      lines.push(line);
       return interactive;
     }
     if (SVG_CHILDREN.has(tag)) return false;
@@ -608,7 +633,7 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
       const tableLines = serializeTable(el, depth);
       if (tableLines) {
         const indent = '  '.repeat(depth);
-        lines.push(indent + '|table|');
+        lines.push(indent + '- |table|');
         for (const tl of tableLines) lines.push(tl);
         return false;
       }
@@ -701,10 +726,13 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
     }
     if (excludedByParent && !interactive && !isScrollable) return hasInteractiveDescendant;
     if (!interactive && !isScrollable && !text && childLinesCount === 0 && !landmark) return false;
+    if (isFlattenableContainer(tag, el, text, interactive, landmark, isScrollable, childLinesCount)) {
+      return hasInteractiveDescendant;
+    }
 
-    // ── Emit node ────────────────────────────────────────────────────
+    // ── Emit node (YAML outline) ─────────────────────────────────────
     const indent = '  '.repeat(depth);
-    let line = indent;
+    let line = indent + '- ';
 
     // Incremental diff: mark new elements with *
     if (PREV_HASHES) {
@@ -715,14 +743,13 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
       currentHashes.push(hashElement(el));
     }
 
-    // Scroll marker
-    if (isScrollable && !interactive) line += '|scroll|';
+    // Scroll marker (before tag)
+    if (isScrollable) line += '|scroll| ';
 
     // Interactive index + data-ref
     if (interactive) {
       interactiveIndex++;
       el.setAttribute('data-opencli-ref', '' + interactiveIndex);
-      line += isScrollable ? '|scroll[' + interactiveIndex + ']|' : '[' + interactiveIndex + ']';
       refIdentity['' + interactiveIndex] = {
         tag: tag,
         role: el.getAttribute('role') || '',
@@ -736,25 +763,33 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
       if (compound) compoundInfos['' + interactiveIndex] = compound;
     }
 
-    // Tag + attributes
+    // Tag name
+    line += tag;
+
+    // Ref marker (after tag name)
+    if (interactive) line += ' [ref=' + interactiveIndex + ']';
+
+    // Attributes
     const attrs = serializeAttrs(el);
-    line += '<' + tag;
     if (attrs) line += ' ' + attrs;
 
-    // Scroll info suffix, inline text, or self-close
+    // Suffix: text, scroll info, or container marker
     if (isScrollable && scrollInfo) {
       const parts = [];
-      if (scrollInfo.v) parts.push(scrollInfo.v.above + '↑ ' + scrollInfo.v.below + '↓');
+      if (scrollInfo.v) parts.push(scrollInfo.v.above + '\u2191 ' + scrollInfo.v.below + '\u2193');
       if (scrollInfo.h) parts.push('h:' + scrollInfo.h.pct + '%');
-      line += ' /> (' + parts.join(', ') + ')';
+      line += ' (' + parts.join(', ') + ')';
+      if (childLinesCount > 0) line += ':';
     } else if (text && childLinesCount === 0) {
-      line += '>' + text + '</' + tag + '>';
-    } else {
-      line += ' />';
+      line += ' "' + text.replace(/"/g, '').replace(/\n/g, ' ') + '"';
+    } else if (childLinesCount > 0) {
+      line += ':';
     }
 
     lines.splice(origLen, 0, line);
-    if (text && childLinesCount > 0) lines.splice(origLen + 1, 0, indent + '  ' + text);
+    if (text && childLinesCount > 0) {
+      lines.splice(origLen + 1, 0, indent + '  - text: "' + text.replace(/"/g, '').replace(/\n/g, ' ') + '"');
+    }
 
     return interactive || hasInteractiveDescendant;
   }
@@ -808,13 +843,13 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
       if (!doc || !doc.body) {
         const attrs = serializeAttrs(el);
         const frameLabel = '[F' + crossOriginIndex + ']';
-        lines.push(indent + '|iframe|' + frameLabel + '<iframe' + (attrs ? ' ' + attrs : '') + ' /> (cross-origin)');
+        lines.push(indent + '- |iframe| ' + frameLabel + ' iframe' + (attrs ? ' ' + attrs : '') + ' (cross-origin)');
         crossOriginIndex++;
         return false;
       }
       iframeCount++;
       const attrs = serializeAttrs(el);
-      lines.push(indent + '|iframe|<iframe' + (attrs ? ' ' + attrs : '') + ' />');
+      lines.push(indent + '- |iframe| iframe' + (attrs ? ' ' + attrs : '') + ':');
       let has = false;
       for (const child = doc.body.firstChild; child; child = child.nextSibling) {
         if (child.nodeType === 1) {
@@ -825,7 +860,7 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
     } catch {
       const attrs = serializeAttrs(el);
       const frameLabel = '[F' + crossOriginIndex + ']';
-      lines.push(indent + '|iframe|' + frameLabel + '<iframe' + (attrs ? ' ' + attrs : '') + ' /> (blocked)');
+      lines.push(indent + '- |iframe| ' + frameLabel + ' iframe' + (attrs ? ' ' + attrs : '') + ' (blocked)');
       crossOriginIndex++;
       return false;
     }
@@ -848,13 +883,13 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
   // Hidden interactive elements hint
   if (REPORT_HIDDEN && hiddenInteractives.length > 0) {
     lines.push('---');
-    lines.push('hidden_interactive (' + hiddenInteractives.length + '):');
+    lines.push('hidden (' + hiddenInteractives.length + '):');
     const shown = hiddenInteractives.slice(0, 10);
     for (const h of shown) {
       const label = h.text ? ' "' + h.text + '"' : '';
-      lines.push('  <' + h.tag + '>' + label + ' ~' + h.pagesAway + ' pages ' + h.direction);
+      lines.push('- ' + h.tag + label + ' ~' + h.pagesAway + ' pages ' + h.direction);
     }
-    if (hiddenInteractives.length > 10) lines.push('  …' + (hiddenInteractives.length - 10) + ' more');
+    if (hiddenInteractives.length > 10) lines.push('- ...' + (hiddenInteractives.length - 10) + ' more');
   }
 
   // Compound sidecar
@@ -1028,6 +1063,7 @@ export class SnapshotEngine {
           tag: info.tag,
           type: info.role || undefined,
           text: info.text || '',
+          ariaLabel: info.ariaLabel || '',
           selector: info.id ? '#' + info.id : (info.testId ? '[data-testid="' + info.testId + '"]' : info.tag),
         }));
       }
@@ -1091,8 +1127,7 @@ export class SnapshotEngine {
   }
 
   /**
-   * Build snapshot string from DOM node (fallback for CDP path)
-   * Uses OpenCLI-style pruning for compact output
+   * Build snapshot string from DOM node (CDP fallback, YAML outline format)
    */
   private buildSnapshot(
     node: DOMNode,
@@ -1105,12 +1140,10 @@ export class SnapshotEngine {
 
     if (depth > 50) return '';
 
-    // Skip script/style/comment/noscript/link nodes (completely ignore them)
     if (['SCRIPT', 'STYLE', 'COMMENT', '#comment', 'LINK', 'META', 'HEAD', 'NOSCRIPT'].includes(node.nodeName)) {
       return '';
     }
 
-    // Skip #document root but process its children
     if (node.nodeName === '#document' || node.nodeName === 'HTML') {
       const children = node.children || [];
       let result = '';
@@ -1121,35 +1154,31 @@ export class SnapshotEngine {
     }
 
     const indent = '  '.repeat(depth);
-    let result = '';
 
     // Text node
     if (node.nodeName === '#text') {
       const text = node.nodeValue?.trim() || '';
       if (text) {
-        return text.length > 200 ? text.slice(0, 200) + '...' : text;
+        const escaped = text.replace(/"/g, '').slice(0, 200);
+        return `${indent}- text: "${escaped}"\n`;
       }
       return '';
     }
 
     const tag = node.nodeName.toLowerCase();
 
-    // Skip SVG children (keep only foreignObject)
     if (SnapshotEngine.SVG_CHILDREN.has(tag) && tag !== 'foreignobject') {
       return '';
     }
 
-    // Get attributes for filtering
     const attrs = this.buildAttributes(node);
     const id = node.attributes?.find(a => a.name === 'id')?.value || '';
     const className = node.attributes?.find(a => a.name === 'class')?.value || '';
 
-    // Ad filtering
     if (SnapshotEngine.AD_SELECTOR_RE.test(id + ' ' + className)) {
       return '';
     }
 
-    // Check if interactive
     const isInteractive = this.isInteractiveElement(node);
     const ref = isInteractive ? ++this.refCounter : null;
 
@@ -1157,35 +1186,34 @@ export class SnapshotEngine {
       this.refMap.set(ref, this.buildSelector(node));
     }
 
-    // Skip non-interactive in interactiveOnly mode
     if (interactiveOnly && !isInteractive && !this.isContainerElement(node)) {
       return '';
     }
 
-    const refStr = ref !== null ? `[${ref}]` : '';
+    const refStr = ref !== null ? ` [ref=${ref}]` : '';
+    const attrsResult = this.buildWhitelistedAttrs(node);
 
     if (this.isVoidElement(node.nodeName)) {
-      // Include only whitelisted attrs for void elements
-      const voidAttrs = this.buildWhitelistedAttrs(node);
-      return `${indent}<${tag}${voidAttrs}${refStr} />\n`;
+      return `${indent}- ${tag}${refStr}${attrsResult}\n`;
     }
 
-    // Element with children
     const children = node.children || [];
     const textContent = this.getTextContent(node);
+    const hasChildren = children.length > 0;
+    const hasText = !!textContent.trim();
 
-    if (children.length === 0) {
-      if (textContent.trim()) {
-        // Truncate long text
+    if (!hasChildren) {
+      if (hasText) {
         const truncated = textContent.trim().length > 200
           ? textContent.trim().slice(0, 200) + '...'
           : textContent.trim();
-        return `${indent}<${tag}${attrs}${refStr}>${truncated}</${tag}>\n`;
+        const escaped = truncated.replace(/"/g, '');
+        return `${indent}- ${tag} "${escaped}"${refStr}${attrsResult}\n`;
       }
-      return `${indent}<${tag}${attrs}${refStr}></${tag}>\n`;
+      return `${indent}- ${tag}${refStr}${attrsResult}\n`;
     }
 
-    result += `${indent}<${tag}${attrs}${refStr}>\n`;
+    let result = `${indent}- ${tag}${refStr}${attrsResult}:\n`;
 
     for (const child of children) {
       const childSnapshot = this.buildSnapshot(child, { ...options, depth: depth + 1 });
@@ -1193,8 +1221,6 @@ export class SnapshotEngine {
         result += childSnapshot;
       }
     }
-
-    result += `${indent}</${tag}>\n`;
 
     return result;
   }

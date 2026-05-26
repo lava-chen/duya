@@ -39,7 +39,7 @@ export type ActionItem =
   | { kind: 'thinking'; content: string; isStreaming?: boolean }
   | { kind: 'tool'; tool: ToolAction; streamingToolOutput?: string }
   | { kind: 'text'; content: string }
-  | { kind: 'widget'; content: string };
+  | { kind: 'widget'; content: string; sourceMessageId?: string; sourceLabel?: string };
 
 interface ToolActionsGroupProps {
   tools?: ToolAction[];
@@ -379,6 +379,7 @@ function TextRow({ content }: { content: string }) {
               <WidgetRenderer
                 widgetCode={seg.data.widget_code}
                 isStreaming={false}
+                sourceLabel="Tool result"
               />
             </WidgetErrorBoundary>
           );
@@ -916,6 +917,8 @@ function renderActionItem(
           <WidgetRenderer
             widgetCode={action.content}
             isStreaming={false}
+            sourceMessageId={action.sourceMessageId}
+            sourceLabel={action.sourceLabel}
           />
         </WidgetErrorBoundary>
       );

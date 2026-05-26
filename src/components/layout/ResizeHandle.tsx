@@ -42,10 +42,8 @@ export function ResizeHandle({ side, onResize, onResizeEnd }: ResizeHandleProps)
       onResizeEnd?.();
     };
 
-    if (isDragging.current) {
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
-    }
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
 
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
