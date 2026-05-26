@@ -124,7 +124,15 @@ function parseMessageContent(content: string | unknown[], msgType?: string): {
   return { text, toolUses };
 }
 
-function AssistantContent({ text, pastedContents }: { text: string; pastedContents: PastedContentInfo[] }) {
+function AssistantContent({
+  text,
+  pastedContents,
+  sourceMessageId,
+}: {
+  text: string;
+  pastedContents: PastedContentInfo[];
+  sourceMessageId?: string;
+}) {
   const hasWidgetFence = text.includes('```show-widget');
 
   if (!hasWidgetFence) {
@@ -154,6 +162,8 @@ function AssistantContent({ text, pastedContents }: { text: string; pastedConten
               <WidgetRenderer
                 widgetCode={seg.data.widget_code}
                 isStreaming={false}
+                sourceMessageId={sourceMessageId}
+                sourceLabel="Chat message"
               />
             </WidgetErrorBoundary>
           );
@@ -164,7 +174,7 @@ function AssistantContent({ text, pastedContents }: { text: string; pastedConten
   );
 }
 
-function InterleavedContent({ actions }: { actions: ActionItem[] }) {
+function InterleavedContent({ actions, sourceMessageId }: { actions: ActionItem[]; sourceMessageId?: string }) {
   return (
     <>
       {actions.map((action, i) => {
@@ -181,6 +191,8 @@ function InterleavedContent({ actions }: { actions: ActionItem[] }) {
                 <WidgetRenderer
                   widgetCode={action.content}
                   isStreaming={false}
+                  sourceMessageId={action.sourceMessageId ?? sourceMessageId}
+                  sourceLabel={action.sourceLabel ?? 'Chat message'}
                 />
               </WidgetErrorBoundary>
             );
@@ -233,7 +245,7 @@ function messageToActionItems(
   const actions: ActionItem[] = [];
 
   if (msg.msgType === 'viz' && msg.vizSpec) {
-    actions.push({ kind: 'widget', content: msg.vizSpec });
+    actions.push({ kind: 'widget', content: msg.vizSpec, sourceMessageId: msg.id, sourceLabel: 'Chat visualization' });
     return actions;
   }
 
@@ -273,7 +285,7 @@ function messageToActionItems(
         if (b.name === 'show_widget') {
           const widgetCode = (b.input as Record<string, unknown>)?.widget_code;
           if (typeof widgetCode === 'string' && widgetCode.trim()) {
-            actions.push({ kind: 'widget', content: widgetCode });
+            actions.push({ kind: 'widget', content: widgetCode, sourceMessageId: msg.id, sourceLabel: 'Chat visualization' });
           }
           continue;
         }
@@ -624,9 +636,9 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
                 flat={isSubAgentSession}
               />
             )}
-            <InterleavedContent actions={actions} />
+            <InterleavedContent actions={actions} sourceMessageId={message.id} />
             {finalText && (
-              <AssistantContent text={finalText} pastedContents={allPastedContents} />
+              <AssistantContent text={finalText} pastedContents={allPastedContents} sourceMessageId={message.id} />
             )}
           </>
         ) : (
@@ -638,7 +650,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
               />
             )}
             {finalText && (
-              <AssistantContent text={finalText} pastedContents={allPastedContents} />
+              <AssistantContent text={finalText} pastedContents={allPastedContents} sourceMessageId={message.id} />
             )}
           </>
         )}

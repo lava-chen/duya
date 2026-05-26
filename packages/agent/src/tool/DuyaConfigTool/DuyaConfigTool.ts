@@ -200,12 +200,21 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
         }
 
         case 'vision_set': {
-          if (!data.provider && !data.model) {
-            return toolError('provider or model is required for vision_set');
+          if (
+            data.provider === undefined
+            && data.model === undefined
+            && data.baseUrl === undefined
+            && data.apiKey === undefined
+            && data.isActive === undefined
+          ) {
+            return toolError('At least one field is required for vision_set: provider, model, baseUrl, apiKey, isActive');
           }
           const patch: Record<string, unknown> = {};
-          if (data.provider) patch.provider = data.provider;
-          if (data.model) patch.model = data.model;
+          if (data.provider !== undefined) patch.provider = data.provider;
+          if (data.model !== undefined) patch.model = data.model;
+          if (data.baseUrl !== undefined) patch.baseUrl = data.baseUrl;
+          if (data.apiKey !== undefined) patch.apiKey = data.apiKey;
+          if (data.isActive !== undefined) patch.enabled = data.isActive;
           const result = await configDb.visionSet(patch);
           return toolSuccess({ ok: true, changes: patch, raw: result });
         }

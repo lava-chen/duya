@@ -575,6 +575,71 @@ function handleDeleteChat(
   sendJson(res, 200, { ok: true });
 }
 
+function handlePostPermission(
+  sessionId: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: RouterDeps,
+): void {
+  const { sessionManager, workerManager, httpLogger } = deps;
+
+  const session = sessionManager.getSession(sessionId);
+  if (!session) {
+    sendJson(res, 404, { error: 'Session not found' });
+    return;
+  }
+
+  let body = '';
+  req.on('data', (chunk: Buffer) => {
+    body += chunk.toString();
+  });
+
+  req.on('end', () => {
+    let parsed: { id?: string; decision?: string; updatedInput?: Record<string, unknown>; message?: string };
+    try {
+      parsed = body ? JSON.parse(body) : {};
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+
+    const { id, decision, updatedInput, message } = parsed;
+
+    if (!id || !decision) {
+      sendJson(res, 400, { error: 'Missing required fields: id, decision' });
+      return;
+    }
+
+    const validDecisions = ['allow', 'deny', 'allow_once', 'allow_for_session'];
+    if (!validDecisions.includes(decision)) {
+      sendJson(res, 400, { error: `Invalid decision. Must be one of: ${validDecisions.join(', ')}` });
+      return;
+    }
+
+    httpLogger.info('Permission resolution requested', { sessionId, id, decision });
+
+    const cmd: Record<string, unknown> = {
+      type: 'permission:resolve',
+      id,
+      decision,
+    };
+    if (updatedInput) {
+      cmd.updatedInput = updatedInput;
+    }
+    if (message) {
+      cmd.message = message;
+    }
+
+    const sent = workerManager.sendCommand(sessionId, cmd);
+    if (!sent) {
+      sendJson(res, 503, { error: 'Worker not available for permission resolution' });
+      return;
+    }
+
+    sendJson(res, 200, { ok: true });
+  });
+}
+
 function handlePostCompact(
   sessionId: string,
   req: http.IncomingMessage,
@@ -811,7 +876,7 @@ function handleSessionsRoute(
       return;
     }
     if (pathParts.length === 3 && pathParts[2] === 'permission') {
-      sendNotImplemented(res);
+      handlePostPermission(sessionId, req, res, deps);
       return;
     }
   }

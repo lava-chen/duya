@@ -13,14 +13,19 @@ export async function callLLMForRecap(
   const model =
     (provider.options?.model as string) ||
     (provider.options?.defaultModel as string) ||
-    'claude-sonnet-4-20250514';
+    '';
 
   try {
     switch (provider.providerType) {
       case 'anthropic':
+      case 'bedrock':
+      case 'vertex':
         return await callAnthropic(provider, systemPrompt, userContent, model);
       case 'openai':
       case 'openai-compatible':
+      case 'openrouter':
+      case 'google':
+      case 'gemini-image':
         return await callOpenAI(provider, systemPrompt, userContent, model);
       case 'ollama':
         return await callOllama(provider, systemPrompt, userContent, model);

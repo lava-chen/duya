@@ -228,3 +228,6 @@ export const SpinnerIcon = CircleNotchIcon;
 
 // DocumentTextIcon is an alias for FileTextIcon
 export const DocumentTextIcon = FileTextIcon;
+
+// ClockIcon is an alias for ClockCounterClockwiseIcon
+export const ClockIcon = ClockCounterClockwiseIcon;

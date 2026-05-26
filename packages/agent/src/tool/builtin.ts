@@ -42,6 +42,7 @@ import { duyaConfigTool } from './DuyaConfigTool/index.js';
 import { duyaHealthTool } from './DuyaHealthTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
+import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
 
 /**
  * BashTool instance
@@ -145,6 +146,10 @@ export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig)
   // Skill management tool - for creating/updating skills
   registry.register(skillManageTool, skillManageTool);
 
+  // Wiki tools - for searching and reading wiki knowledge base
+  registry.register(wikiSearchTool.toTool(), wikiSearchTool);
+  registry.register(wikiReadTool.toTool(), wikiReadTool);
+
   // show_widget tool - pass-through for generative UI widgets
   registry.register(
     {
@@ -244,3 +249,6 @@ export { cronTool } from './CronTool/index.js';
 export { duyaInfoTool } from './DuyaInfoTool/index.js';
 export { duyaConfigTool } from './DuyaConfigTool/index.js';
 export { duyaHealthTool } from './DuyaHealthTool/index.js';
+
+// Wiki tools exports
+export { wikiSearchTool, wikiReadTool, WikiSearchTool, WikiReadTool } from './wiki/index.js';

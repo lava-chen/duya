@@ -126,10 +126,30 @@ export function spawnAgentServer(): Promise<number> {
 
     child.stderr?.on('data', (data: Buffer) => {
       const line = data.toString().trim();
-      if (line) {
-        // Also output to console for debugging
-        console.error(`[agent-server] ${line}`);
+      if (!line) return;
+
+      // Also output to console for debugging
+      console.error(`[agent-server] ${line}`);
+
+      // Classify stderr lines properly — most stderr from the agent server
+      // is forwarded worker output (INFO-level), not actual errors.
+      const isError =
+        line.includes('Error:') ||
+        line.includes('[ERROR]') ||
+        line.includes('[FATAL]') ||
+        line.includes('TypeError') ||
+        line.includes('ReferenceError') ||
+        line.includes('uncaughtException');
+      const isWarn =
+        line.includes('[WARN]') ||
+        line.includes('[WARNING]');
+
+      if (isError) {
         logger.error(`Agent Server error: ${line}`, undefined, undefined, LogComponent.Main);
+      } else if (isWarn) {
+        logger.warn(`Agent Server: ${line}`, undefined, LogComponent.Main);
+      } else {
+        logger.info(`Agent Server: ${line}`, undefined, LogComponent.Main);
       }
     });
 

@@ -69,8 +69,25 @@ async function getProviderConfigById(providerId: string, model: string): Promise
 
     const electronApi = window.electronAPI as unknown as Record<string, unknown> | undefined;
     const providerApi = electronApi?.provider as {
+      getConfig?: (providerId: string, model: string) => Promise<{ apiKey: string; baseUrl?: string; model: string; provider: string; authStyle: string } | null>;
       list?: () => Promise<Array<{ id: string; name: string; providerType: string; baseUrl: string; apiKey: string; protocol: string }>>;
     } | undefined;
+
+    // Try unmasked getConfig first
+    if (providerApi?.getConfig) {
+      const config = await providerApi.getConfig(providerId, model);
+      if (config) {
+        console.log(`[stream-session-manager] Resolved title model via getConfig:`, { provider: config.provider, model: config.model });
+        return {
+          provider: config.provider,
+          apiKey: config.apiKey,
+          baseURL: config.baseUrl || '',
+          model: config.model,
+        };
+      }
+    }
+
+    // Fallback: resolve via provider list (masked key, works when same as active provider)
     if (!providerApi?.list) {
       console.warn('[stream-session-manager] listProviders API not available');
       return null;
@@ -93,7 +110,7 @@ async function getProviderConfigById(providerId: string, model: string): Promise
       return null;
     }
 
-    console.log(`[stream-session-manager] Found provider:`, { id: provider.id, protocol: provider.protocol, providerType: provider.providerType, hasApiKey: !!provider.apiKey, baseUrl: provider.baseUrl });
+    console.warn(`[stream-session-manager] Title model using fallback list API (masked key):`, { id: provider.id });
 
     return {
       provider: provider.protocol || provider.providerType,
@@ -992,6 +1009,14 @@ class StreamSessionManager {
           this.handleThinkingEvent(sessionId, streamId, event.content || '');
           break;
 
+        case 'status':
+          this.handleStatusEvent(
+            sessionId,
+            streamId,
+            event.data as { message?: string; status?: string } | undefined,
+          );
+          break;
+
         case 'tool_use':
           if (event.name) {
             this.handleToolUseEvent(sessionId, streamId, {
@@ -1150,7 +1175,15 @@ class StreamSessionManager {
         this.handleTitleGeneratedEvent(state.sessionId, streamId, data as { title?: string });
       } else if (normalizedType === 'token_usage') {
         this.handleTokenUsageEvent(state.sessionId, streamId, data as { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number });
+      } else if (normalizedType === 'status') {
+        this.handleStatusEvent(state.sessionId, streamId, data as { message?: string; status?: string });
       }
+      return;
+    }
+
+    // Some status events arrive as { type: 'status', data: { message } } without data.type.
+    if (event.type === 'status') {
+      this.handleStatusEvent(state.sessionId, streamId, data as { message?: string; status?: string });
     }
   }
 
@@ -1167,6 +1200,10 @@ class StreamSessionManager {
     }
     s.streamingText += text;
     s.finalMessageContent = s.streamingText;
+    if (s.statusText) {
+      s.statusText = undefined;
+      this.notifyStatusTextListeners(sessionId, s.statusText);
+    }
     const lastEvent = s.streamingEvents[s.streamingEvents.length - 1];
     if (lastEvent && lastEvent.type === 'text') {
       lastEvent.content += text;
@@ -1175,6 +1212,20 @@ class StreamSessionManager {
     }
     this.notifyTextListeners(sessionId, s.streamingText);
     this.notifyStreamingEventsListeners(sessionId);
+    this.notifyListeners(sessionId);
+    this.resetIdleTimeout(sessionId);
+  }
+
+  private handleStatusEvent(
+    sessionId: string,
+    streamId: string,
+    data: { message?: string; status?: string } | undefined,
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    const nextStatus = data?.message || data?.status;
+    s.statusText = nextStatus && nextStatus.trim() ? nextStatus : undefined;
+    this.notifyStatusTextListeners(sessionId, s.statusText);
     this.notifyListeners(sessionId);
     this.resetIdleTimeout(sessionId);
   }
@@ -1326,8 +1377,10 @@ class StreamSessionManager {
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     s.phase = 'completed';
     s.pendingPermissionRequest = null;
+    s.statusText = undefined;
     s.completedAt = Date.now();
     this.notifyPhaseListeners(sessionId, s.phase);
+    this.notifyStatusTextListeners(sessionId, s.statusText);
     this.notifyCompletedAtListeners(sessionId, s.completedAt);
     this.flushPendingText(sessionId, streamId);
     this.notifyListeners(sessionId);
@@ -1342,9 +1395,11 @@ class StreamSessionManager {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     s.phase = 'error';
+    s.statusText = undefined;
     s.error = data?.message || 'Unknown error';
     s.completedAt = Date.now();
     this.notifyPhaseListeners(sessionId, s.phase);
+    this.notifyStatusTextListeners(sessionId, s.statusText);
     this.notifyErrorListeners(sessionId, s.error);
     this.notifyCompletedAtListeners(sessionId, s.completedAt);
     this.notifyListeners(sessionId);

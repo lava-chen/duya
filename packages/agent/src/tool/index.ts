@@ -50,3 +50,7 @@ export * from './retry/types.js';
 export { ToolBatch, BATCH_STRATEGY, BATCH_EXECUTION_ORDER } from './orchestration/index.js';
 export { classifyTool } from './orchestration/index.js';
 export type { BatchConfig } from './orchestration/index.js';
+
+// Wiki tools exports
+export { wikiSearchTool, wikiReadTool, WikiSearchTool, WikiReadTool } from './wiki/index.js';
+export type { WikiSearchInput, WikiReadInput } from './wiki/index.js';

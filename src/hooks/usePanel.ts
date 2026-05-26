@@ -2,41 +2,48 @@
 
 import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
 
+export type PanelTab = 'canvas' | 'files';
+
 export interface PanelContextValue {
-  fileTreeOpen: boolean;
-  setFileTreeOpen: (open: boolean) => void;
-  toggleFileTree: () => void;
-  fileTreeWidth: number;
-  setFileTreeWidth: (width: number) => void;
+  panelOpen: boolean;
+  setPanelOpen: (open: boolean) => void;
+  togglePanel: () => void;
+  panelWidth: number;
+  setPanelWidth: (width: number) => void;
+  activeTab: PanelTab;
+  setActiveTab: (tab: PanelTab) => void;
 }
 
 export const PanelContext = createContext<PanelContextValue | null>(null);
 
-const MIN_FILE_TREE_WIDTH = 220;
-const MAX_FILE_TREE_WIDTH = 500;
-const DEFAULT_FILE_TREE_WIDTH = 280;
+const MIN_PANEL_WIDTH = 220;
+const MAX_PANEL_WIDTH = 720;
+const DEFAULT_PANEL_WIDTH = 380;
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
-  const [fileTreeOpen, setFileTreeOpen] = useState(false);
-  const [fileTreeWidth, setFileTreeWidth] = useState(DEFAULT_FILE_TREE_WIDTH);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [activeTab, setActiveTab] = useState<PanelTab>('files');
 
-  const toggleFileTree = useCallback(() => {
-    setFileTreeOpen((prev) => !prev);
+  const togglePanel = useCallback(() => {
+    setPanelOpen((prev) => !prev);
   }, []);
 
   const handleSetWidth = useCallback((width: number) => {
-    setFileTreeWidth(Math.min(MAX_FILE_TREE_WIDTH, Math.max(MIN_FILE_TREE_WIDTH, width)));
+    setPanelWidth(Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width)));
   }, []);
 
   const value = useMemo(
     () => ({
-      fileTreeOpen,
-      setFileTreeOpen,
-      toggleFileTree,
-      fileTreeWidth,
-      setFileTreeWidth: handleSetWidth,
+      panelOpen,
+      setPanelOpen,
+      togglePanel,
+      panelWidth,
+      setPanelWidth: handleSetWidth,
+      activeTab,
+      setActiveTab,
     }),
-    [fileTreeOpen, toggleFileTree, fileTreeWidth, handleSetWidth]
+    [panelOpen, togglePanel, panelWidth, handleSetWidth, activeTab]
   );
 
   return React.createElement(PanelContext.Provider, { value }, children);

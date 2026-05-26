@@ -13,17 +13,16 @@ interface TitleBarProps {
 
 export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
   const { threads, activeThreadId, currentView } = useConversationStore();
-  const { fileTreeOpen, toggleFileTree } = usePanel();
+  const { panelOpen, togglePanel } = usePanel();
   const brandIconSrc = `${import.meta.env.BASE_URL}icon.png`;
 
   // Only show title in chat view with active thread
   const showThreadInfo = currentView === 'chat' && activeThreadId;
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
-  const hasWorkingDirectory = !!activeThread?.workingDirectory;
 
-  // Only show file tree toggle when in a project
-  const showFileTreeToggle = hasWorkingDirectory;
+  // Only show panel toggle when in a project
+  const showPanelToggle = !!activeThread?.workingDirectory;
 
   const threadTitle = activeThread?.title || "New Thread";
   const projectName = activeThread?.projectName || "No Project";
@@ -72,15 +71,15 @@ export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
       </div>
       {/* Right side actions - next to window controls */}
       <div className="titlebar-actions">
-        {showFileTreeToggle && (
+        {showPanelToggle && (
           <button
             type="button"
-            className={`titlebar-action-btn${fileTreeOpen ? ' active' : ''}`}
-            onClick={toggleFileTree}
-            title="Toggle File Tree"
-            aria-label="Toggle File Tree"
+            className={`titlebar-action-btn${panelOpen ? ' active' : ''}`}
+            onClick={togglePanel}
+            title="Toggle Panel"
+            aria-label="Toggle Panel"
           >
-            {fileTreeOpen ? (
+            {panelOpen ? (
               <IconLayoutSidebarLeftCollapse size={16} />
             ) : (
               <IconLayoutSidebarLeftExpand size={16} />

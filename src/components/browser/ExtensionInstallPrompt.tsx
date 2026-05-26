@@ -16,7 +16,7 @@ import {
 } from '@/components/icons';
 
 // Chrome Web Store extension URL
-const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
+const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/hpkgmnimcghdnodpoehidjeinnhlnpkd?utm_source=item-share-cb';
 
 /**
  * Check if Chrome Web Store is accessible
@@ -148,11 +148,11 @@ export function ExtensionInstallPrompt({
   const installSteps = showManualInstall ? manualInstallSteps : storeInstallSteps;
 
   const handleOpenChromeStore = () => {
-    window.open(CHROME_STORE_URL, '_blank');
+    window.electronAPI?.shell?.openExternal(CHROME_STORE_URL);
   };
 
   const handleOpenExtensions = () => {
-    window.open('chrome://extensions/', '_blank');
+    window.electronAPI?.shell?.openExternal('chrome://extensions/');
   };
 
   const handleOpenFolder = () => {
