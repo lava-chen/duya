@@ -759,15 +759,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           height: MIN_CANVAS_HEIGHT,
           transformOrigin: "0 0",
           transform: "translate(0px, 0px) scale(1)",
-          willChange: "transform",
-          contain: "layout style paint",
-          backfaceVisibility: "hidden",
-          WebkitBackfaceVisibility: "hidden",
           backgroundColor: "var(--bg-canvas)",
           backgroundImage: "radial-gradient(circle, var(--grid-dot) 1px, transparent 1px)",
           backgroundSize: "20px 20px",
-          shapeRendering: "geometricPrecision",
-          textRendering: "geometricPrecision",
         }}
       >
         {elements.length === 0 && (
