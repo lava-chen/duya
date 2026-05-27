@@ -30,6 +30,7 @@ import { registerLoggerHandlers } from './ipc/logger-handlers';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerWikiAgentHandlers } from './ipc/wiki-agent-handlers';
+import { initWikiAgentRuntime } from './wiki-agent/WikiAgentRuntime';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import type { ExecutorRpcRequest } from './conductor/executor-types';
 
@@ -100,6 +101,7 @@ if (gotTheLock) {
     // Step 3: Initialize ConfigManager
     // ============================================================
     const configManager = initConfigManager();
+    initWikiAgentRuntime();
 
     // Migrate provider data from database to ConfigManager (one-time migration)
     try {

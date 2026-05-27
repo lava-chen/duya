@@ -1,4 +1,11 @@
 export type WikiNodeType =
+  | 'person'
+  | 'project'
+  | 'knowledge'
+  | 'event'
+  | 'file'
+  | 'self'
+  | 'todo'
   | 'concept'
   | 'module'
   | 'class'
@@ -36,6 +43,29 @@ export interface WikiLogEntry {
   timestamp: number;
   operation: string;
   details?: Record<string, unknown>;
+}
+
+export type WikiRuntimeState = 'idle' | 'queued' | 'processing' | 'error';
+
+export interface WikiRuntimeActivity {
+  sessionId?: string;
+  turnId?: string;
+  phase?: string;
+  state?: WikiRuntimeState;
+  summary: string | null;
+  timestamp: number | null;
+  errorMessage?: string | null;
+}
+
+export interface WikiRuntimeStatus {
+  state: WikiRuntimeState;
+  summary: string | null;
+  updatedAt: number | null;
+  isAvailable: boolean;
+  supportsRuntimeStatus: boolean;
+  supportsActivitySubscription: boolean;
+  supportsNodeAgentChat: boolean;
+  errorMessage: string | null;
 }
 
 export interface MemoryCandidate {

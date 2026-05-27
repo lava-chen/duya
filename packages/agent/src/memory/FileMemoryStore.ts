@@ -57,11 +57,19 @@ export class FileMemoryStore {
   /**
    * Load entries from file and capture snapshot.
    * Synchronous — safe to call from constructors.
+   * Creates an empty file if it doesn't exist yet.
    */
   load(): void {
     this._ensureDirSync()
     this._entries = this._readFileSync()
     this._snapshot = this._renderBlock()
+  }
+
+  /**
+   * Check if the backing file exists on disk.
+   */
+  exists(): boolean {
+    return fs.existsSync(this._filePath)
   }
 
   /**

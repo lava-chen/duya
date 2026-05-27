@@ -11,6 +11,8 @@ export interface PermissionRequestData {
   id: string;
   toolName: string;
   toolInput: Record<string, unknown>;
+  mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode';
+  expiresAt?: number;
   sessionId?: string;
 }
 

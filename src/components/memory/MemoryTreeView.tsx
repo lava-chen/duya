@@ -10,6 +10,13 @@ interface MemoryTreeViewProps {
 }
 
 const TYPE_LABELS: Record<string, string> = {
+  person: "People",
+  project: "Projects",
+  knowledge: "Knowledge",
+  event: "Events",
+  file: "Files",
+  self: "Self",
+  todo: "Todos",
   concept: "Concepts",
   module: "Modules",
   class: "Classes",
@@ -19,7 +26,22 @@ const TYPE_LABELS: Record<string, string> = {
   inbox: "Inbox",
 };
 
-const TYPE_ORDER = ["concept", "module", "class", "function", "workflow", "devops", "inbox"];
+const TYPE_ORDER = [
+  "person",
+  "project",
+  "knowledge",
+  "event",
+  "file",
+  "self",
+  "todo",
+  "concept",
+  "module",
+  "class",
+  "function",
+  "workflow",
+  "devops",
+  "inbox",
+];
 
 export function MemoryTreeView({ nodes, onSelectNode }: MemoryTreeViewProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set(TYPE_ORDER));

@@ -838,7 +838,7 @@ export function ProvidersSection() {
 }
 
 /**
- * Compact model selection card for different tasks (vision, gateway, title)
+ * Compact model selection card for different tasks (vision, gateway, wiki agent, title)
  */
 function ModelSelectionCard({ providers }: { providers: Provider[] }) {
   const { t } = useTranslation();
@@ -873,6 +873,7 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
   // Current selections from settings - use useEffect to sync with settings
   const [visionModel, setVisionModel] = useState("");
   const [gatewayModel, setGatewayModel] = useState("");
+  const [wikiAgentModel, setWikiAgentModel] = useState("");
   const [titleModel, setTitleModel] = useState("");
 
   // Sync vision model from settings when settings or providers change
@@ -890,6 +891,12 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
     console.log('[ModelSelection] gatewayModel from settings:', settings?.gatewayModel);
     setGatewayModel(settings?.gatewayModel || "");
   }, [settings?.gatewayModel]);
+
+  // Sync wiki agent model from settings
+  useEffect(() => {
+    console.log('[ModelSelection] wikiAgentModel from settings:', settings?.wikiAgentModel);
+    setWikiAgentModel(settings?.wikiAgentModel || "");
+  }, [settings?.wikiAgentModel]);
 
   // Sync title model from settings
   useEffect(() => {
@@ -957,6 +964,16 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
     }
   };
 
+  const handleWikiAgentChange = (value: string) => {
+    const trimmedValue = value.trim();
+    setWikiAgentModel(trimmedValue);
+    if (window.electronAPI?.settingsDb?.setJson) {
+      window.electronAPI.settingsDb.setJson('wikiAgentModel', trimmedValue);
+    } else {
+      save({ wikiAgentModel: trimmedValue });
+    }
+  };
+
   if (allModels.length === 0) {
     return null;
   }
@@ -979,6 +996,13 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
           description={t("settings.providers.gatewayModelDesc") || "For bridge/channel sessions"}
           value={gatewayModel}
           onValueChange={handleGatewayChange}
+          options={allModels}
+        />
+        <SettingsSelectRow
+          label={t("settings.providers.wikiAgentModel") || "WikiAgent Model"}
+          description={t("settings.providers.wikiAgentModelDesc") || "For background memory extraction and merge"}
+          value={wikiAgentModel}
+          onValueChange={handleWikiAgentChange}
           options={allModels}
         />
         <SettingsSelectRow

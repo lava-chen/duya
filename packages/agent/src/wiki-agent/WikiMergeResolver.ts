@@ -364,19 +364,49 @@ export class WikiMergeResolver {
    * Merge content intelligently
    */
   private mergeContent(existingContent: string, newContent: string, originalContext: string): string {
-    // Simple merge strategy: append new content with context
-    const timestamp = new Date().toISOString();
+    const existingDoc = this.parseSections(existingContent);
+    const incomingDoc = this.parseSections(newContent);
 
-    // Check if content is already present (avoid duplication)
-    const normalizedExisting = this.normalizeString(existingContent);
-    const normalizedNew = this.normalizeString(newContent);
+    const mergedPreamble = this.mergeTextBlocks(existingDoc.preamble, incomingDoc.preamble);
+    const mergedSections = existingDoc.sections.map(section => ({ ...section }));
 
-    if (normalizedExisting.includes(normalizedNew.slice(0, 100))) {
-      // New content largely overlaps with existing, just update context
-      return existingContent;
+    for (const incoming of incomingDoc.sections) {
+      if (this.isOriginalContextHeading(incoming.heading)) {
+        continue;
+      }
+
+      const existingIndex = mergedSections.findIndex(
+        section => this.normalizeSectionTitle(section.heading) === this.normalizeSectionTitle(incoming.heading),
+      );
+
+      if (existingIndex === -1) {
+        mergedSections.push({ ...incoming });
+        continue;
+      }
+
+      mergedSections[existingIndex] = {
+        ...mergedSections[existingIndex],
+        body: this.mergeTextBlocks(mergedSections[existingIndex].body, incoming.body),
+      };
     }
 
-    return `${existingContent}\n\n## Update (${timestamp})\n\n${newContent}\n\n### Original Context\n${originalContext}`;
+    const existingContext = this.getSectionBody(existingDoc.sections, 'Original Context');
+    const incomingContextSection = this.getSectionBody(incomingDoc.sections, 'Original Context');
+    const mergedContext = this.mergeTextBlocks(
+      this.mergeTextBlocks(existingContext, incomingContextSection),
+      originalContext,
+    );
+
+    if (mergedContext.length > 0) {
+      this.upsertSection(mergedSections, 'Original Context', mergedContext);
+    }
+
+    const rebuilt = this.renderDocument({
+      preamble: mergedPreamble,
+      sections: mergedSections,
+    });
+
+    return rebuilt.length > 0 ? rebuilt : existingContent;
   }
 
   /**
@@ -445,6 +475,118 @@ export class WikiMergeResolver {
       .replace(/[^a-z0-9\s-]/g, '')
       .replace(/\s+/g, '-')
       .slice(0, 100);
+  }
+
+  private parseSections(content: string): { preamble: string; sections: { heading: string; body: string }[] } {
+    const normalized = content.replace(/\r\n/g, '\n').trim();
+    if (!normalized) {
+      return { preamble: '', sections: [] };
+    }
+
+    const headingRegex = /^##+\s+.+$/gm;
+    const matches = [...normalized.matchAll(headingRegex)];
+    if (matches.length === 0) {
+      return { preamble: normalized, sections: [] };
+    }
+
+    const sections: { heading: string; body: string }[] = [];
+    const preamble = normalized.slice(0, matches[0].index).trim();
+
+    for (let i = 0; i < matches.length; i++) {
+      const start = matches[i].index ?? 0;
+      const end = i + 1 < matches.length ? (matches[i + 1].index ?? normalized.length) : normalized.length;
+      const sectionRaw = normalized.slice(start, end).trim();
+      const lines = sectionRaw.split('\n');
+      const heading = lines[0].trim();
+      const body = lines.slice(1).join('\n').trim();
+      sections.push({ heading, body });
+    }
+
+    return { preamble, sections };
+  }
+
+  private renderDocument(doc: { preamble: string; sections: { heading: string; body: string }[] }): string {
+    const parts: string[] = [];
+
+    if (doc.preamble.trim().length > 0) {
+      parts.push(doc.preamble.trim());
+    }
+
+    for (const section of doc.sections) {
+      const heading = section.heading.trim();
+      if (!heading) {
+        continue;
+      }
+      const body = section.body.trim();
+      parts.push(body.length > 0 ? `${heading}\n\n${body}` : heading);
+    }
+
+    return parts.join('\n\n').trim();
+  }
+
+  private mergeTextBlocks(existing: string, incoming: string): string {
+    const existingTrimmed = existing.trim();
+    const incomingTrimmed = incoming.trim();
+    if (!existingTrimmed) return incomingTrimmed;
+    if (!incomingTrimmed) return existingTrimmed;
+
+    const normalizeBlock = (text: string): string =>
+      this.normalizeString(text).replace(/\s+/g, ' ');
+    const existingBlocks = existingTrimmed.split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
+    const incomingBlocks = incomingTrimmed.split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
+    const existingSignatures = new Set(existingBlocks.map(normalizeBlock));
+
+    const merged = [...existingBlocks];
+    for (const block of incomingBlocks) {
+      const signature = normalizeBlock(block);
+      if (!existingSignatures.has(signature)) {
+        merged.push(block);
+        existingSignatures.add(signature);
+      }
+    }
+
+    return merged.join('\n\n');
+  }
+
+  private normalizeSectionTitle(heading: string): string {
+    return this.normalizeString(heading.replace(/^#+\s*/, ''));
+  }
+
+  private isOriginalContextHeading(heading: string): boolean {
+    return this.normalizeSectionTitle(heading) === this.normalizeSectionTitle('Original Context');
+  }
+
+  private getSectionBody(
+    sections: { heading: string; body: string }[],
+    headingName: string,
+  ): string {
+    const section = sections.find(
+      candidate => this.normalizeSectionTitle(candidate.heading) === this.normalizeSectionTitle(headingName),
+    );
+    return section?.body ?? '';
+  }
+
+  private upsertSection(
+    sections: { heading: string; body: string }[],
+    headingName: string,
+    body: string,
+  ): void {
+    const targetIndex = sections.findIndex(
+      section => this.normalizeSectionTitle(section.heading) === this.normalizeSectionTitle(headingName),
+    );
+
+    if (targetIndex === -1) {
+      sections.push({
+        heading: `## ${headingName}`,
+        body,
+      });
+      return;
+    }
+
+    sections[targetIndex] = {
+      ...sections[targetIndex],
+      body,
+    };
   }
 }
 

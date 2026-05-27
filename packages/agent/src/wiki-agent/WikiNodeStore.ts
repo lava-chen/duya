@@ -27,6 +27,13 @@ export class PathSecurityError extends Error {
  */
 const WIKI_STRUCTURE = {
   root: 'wiki-llm',
+  people: 'people',
+  projects: 'projects',
+  knowledge: 'knowledge',
+  events: 'events',
+  files: 'files',
+  users: 'users',
+  todos: 'todos',
   concepts: 'concepts',
   modules: 'modules',
   classes: 'classes',
@@ -35,10 +42,36 @@ const WIKI_STRUCTURE = {
   inbox: 'inbox',
 };
 
+const FRONTMATTER_ARRAY_KEYS = new Set([
+  'aliases',
+  'tags',
+  'backlinks',
+  'sourceSessions',
+]);
+
+const FRONTMATTER_NUMBER_KEYS = new Set([
+  'createdAt',
+  'updatedAt',
+  'lastObservedAt',
+]);
+
+const SUMMARY_SECTION_ORDER = [
+  'Current Understanding',
+  'Recall Hook',
+  'Original Context',
+];
+
 /**
  * Maps node type to directory
  */
 const TYPE_TO_DIR: Record<WikiNodeType, string> = {
+  person: WIKI_STRUCTURE.people,
+  project: WIKI_STRUCTURE.projects,
+  knowledge: WIKI_STRUCTURE.knowledge,
+  event: WIKI_STRUCTURE.events,
+  file: WIKI_STRUCTURE.files,
+  self: WIKI_STRUCTURE.users,
+  todo: WIKI_STRUCTURE.todos,
   concept: WIKI_STRUCTURE.concepts,
   module: WIKI_STRUCTURE.modules,
   class: WIKI_STRUCTURE.classes,
@@ -52,25 +85,63 @@ const TYPE_TO_DIR: Record<WikiNodeType, string> = {
  * WikiNodeStore - Manages wiki nodes in the file system
  */
 export class WikiNodeStore {
-  private basePath: string;
+  private rootPath: string;
 
-  constructor(basePath: string) {
-    this.basePath = path.resolve(basePath);
+  constructor(basePathOrRoot: string) {
+    this.rootPath = WikiNodeStore.resolveRootPath(basePathOrRoot);
   }
 
   /**
-   * Get the wiki root path
+   * Resolve the physical wiki root path from either a workspace path or the
+   * root itself.
+   */
+  static resolveRootPath(basePathOrRoot: string): string {
+    const resolvedPath = path.resolve(basePathOrRoot);
+    if (path.basename(resolvedPath) === WIKI_STRUCTURE.root) {
+      return resolvedPath;
+    }
+    return path.join(resolvedPath, WIKI_STRUCTURE.root);
+  }
+
+  /**
+   * Normalize a root-relative node path. Legacy wiki-llm/ prefixes are
+   * accepted so existing callers keep working.
+   */
+  static normalizeRelativeNodePath(nodePath: string): string {
+    const normalizedPath = nodePath.replace(/\\/g, '/').trim();
+    const withoutRootPrefix = normalizedPath === WIKI_STRUCTURE.root
+      ? ''
+      : normalizedPath.startsWith(`${WIKI_STRUCTURE.root}/`)
+        ? normalizedPath.slice(WIKI_STRUCTURE.root.length + 1)
+        : normalizedPath;
+    return withoutRootPrefix.replace(/^\/+/, '');
+  }
+
+  /**
+   * Get the wiki root path.
    */
   getRootPath(): string {
-    return path.join(this.basePath, WIKI_STRUCTURE.root);
+    return this.rootPath;
+  }
+
+  /**
+   * Resolve an arbitrary wiki path to an absolute path under the root.
+   */
+  private resolveWikiPath(targetPath: string): string {
+    if (path.isAbsolute(targetPath)) {
+      return path.resolve(targetPath);
+    }
+
+    const relativePath = WikiNodeStore.normalizeRelativeNodePath(targetPath);
+    return path.resolve(this.rootPath, relativePath);
   }
 
   /**
    * Validate that a path is within the wiki directory (security check)
    */
   private validatePath(targetPath: string): string {
-    const resolvedPath = path.resolve(targetPath);
-    const rootPath = this.getRootPath();
+    const resolvedPath = this.resolveWikiPath(targetPath);
+    const rootPath = this.rootPath;
 
     // Ensure the resolved path starts with the root path
     const relative = path.relative(rootPath, resolvedPath);
@@ -98,6 +169,13 @@ export class WikiNodeStore {
 
     // Create subdirectories
     const dirs = [
+      WIKI_STRUCTURE.people,
+      WIKI_STRUCTURE.projects,
+      WIKI_STRUCTURE.knowledge,
+      WIKI_STRUCTURE.events,
+      WIKI_STRUCTURE.files,
+      WIKI_STRUCTURE.users,
+      WIKI_STRUCTURE.todos,
       WIKI_STRUCTURE.concepts,
       WIKI_STRUCTURE.modules,
       WIKI_STRUCTURE.classes,
@@ -145,20 +223,65 @@ export class WikiNodeStore {
       .slice(0, 100);
   }
 
+  private extractSummary(content: string): string | undefined {
+    const normalized = content.replace(/\r\n/g, '\n').trim();
+    if (!normalized) {
+      return undefined;
+    }
+
+    for (const sectionName of SUMMARY_SECTION_ORDER) {
+      const sectionBody = this.extractSectionBody(normalized, sectionName);
+      if (sectionBody) {
+        return sectionBody.slice(0, 220);
+      }
+    }
+
+    const firstParagraph = normalized
+      .split(/\n{2,}/)
+      .map(block => block.trim())
+      .find(Boolean);
+    return firstParagraph?.slice(0, 220);
+  }
+
+  private extractSectionBody(content: string, sectionName: string): string {
+    const lines = content.split('\n');
+    const targetHeading = sectionName.toLowerCase();
+    let capture = false;
+    const body: string[] = [];
+
+    for (const line of lines) {
+      const headingMatch = line.match(/^##+\s+(.+)$/);
+      if (headingMatch) {
+        const heading = headingMatch[1].trim().toLowerCase();
+        if (capture) {
+          break;
+        }
+        capture = heading === targetHeading;
+        continue;
+      }
+
+      if (capture) {
+        body.push(line);
+      }
+    }
+
+    return body.join('\n').trim();
+  }
+
   /**
    * Generate node path from type and title
    */
   private getNodePath(type: WikiNodeType, title: string): string {
     const dir = TYPE_TO_DIR[type];
     const filename = `${this.sanitizeFilename(title)}.md`;
-    return path.join(this.getRootPath(), dir, filename);
+    return path.join(this.rootPath, dir, filename);
   }
 
   /**
    * Get full path from relative path
    */
   getNodeFullPath(relativePath: string): string {
-    return path.join(this.getRootPath(), relativePath);
+    return this.validatePath(relativePath);
   }
 
   /**
@@ -186,6 +309,10 @@ export class WikiNodeStore {
           } catch {
             frontmatter[key] = value;
           }
+        } else if (FRONTMATTER_NUMBER_KEYS.has(key) && /^-?\d+$/.test(value)) {
+          frontmatter[key] = Number(value);
+        } else if (FRONTMATTER_ARRAY_KEYS.has(key)) {
+          frontmatter[key] = value.length > 0 ? value.split(',').map(item => item.trim()) : [];
         } else {
           frontmatter[key] = value;
         }
@@ -224,7 +351,7 @@ export class WikiNodeStore {
     const { frontmatter, body } = this.parseFrontmatter(content);
 
     // Determine type from path
-    const relativePath = path.relative(this.getRootPath(), validatedPath);
+    const relativePath = path.relative(this.rootPath, validatedPath);
     const typeDir = relativePath.split(path.sep)[0];
     const type = (Object.entries(TYPE_TO_DIR).find(([, dir]) => dir === typeDir)?.[0] || 'concept') as WikiNodeType;
 
@@ -239,6 +366,8 @@ export class WikiNodeStore {
       createdAt: (frontmatter.createdAt as number) || Date.now(),
       updatedAt: (frontmatter.updatedAt as number) || Date.now(),
       backlinks: (frontmatter.backlinks as string[]) || [],
+      sourceSessions: (frontmatter.sourceSessions as string[]) || [],
+      lastObservedAt: frontmatter.lastObservedAt as number | undefined,
     };
   }
 
@@ -264,6 +393,8 @@ export class WikiNodeStore {
       createdAt: node.createdAt,
       updatedAt: node.updatedAt,
       backlinks: node.backlinks,
+      sourceSessions: node.sourceSessions,
+      lastObservedAt: node.lastObservedAt,
     };
 
     const content = this.serializeFrontmatter(frontmatter) + node.content;
@@ -285,7 +416,7 @@ export class WikiNodeStore {
    * Read the index
    */
   readIndex(): WikiIndexEntry[] {
-    const indexPath = path.join(this.getRootPath(), 'index.md');
+    const indexPath = path.join(this.rootPath, 'index.md');
     this.validatePath(indexPath);
 
     if (!fs.existsSync(indexPath)) {
@@ -318,7 +449,7 @@ export class WikiNodeStore {
    * Write the index
    */
   writeIndex(entries: WikiIndexEntry[]): void {
-    const indexPath = path.join(this.getRootPath(), 'index.md');
+    const indexPath = path.join(this.rootPath, 'index.md');
     this.validatePath(indexPath);
 
     const lines = [
@@ -357,6 +488,13 @@ export class WikiNodeStore {
     const dir = parts[0];
 
     const typeMap: Record<string, WikiNodeType> = {
+      [WIKI_STRUCTURE.people]: 'person',
+      [WIKI_STRUCTURE.projects]: 'project',
+      [WIKI_STRUCTURE.knowledge]: 'knowledge',
+      [WIKI_STRUCTURE.events]: 'event',
+      [WIKI_STRUCTURE.files]: 'file',
+      [WIKI_STRUCTURE.users]: 'self',
+      [WIKI_STRUCTURE.todos]: 'todo',
       [WIKI_STRUCTURE.concepts]: 'concept',
       [WIKI_STRUCTURE.modules]: 'module',
       [WIKI_STRUCTURE.classes]: 'class',
@@ -372,7 +510,7 @@ export class WikiNodeStore {
    * Read the log
    */
   readLog(): WikiLogEntry[] {
-    const logPath = path.join(this.getRootPath(), 'log.md');
+    const logPath = path.join(this.rootPath, 'log.md');
     this.validatePath(logPath);
 
     if (!fs.existsSync(logPath)) {
@@ -402,7 +540,7 @@ export class WikiNodeStore {
    * Write the log
    */
   writeLog(entries: WikiLogEntry[]): void {
-    const logPath = path.join(this.getRootPath(), 'log.md');
+    const logPath = path.join(this.rootPath, 'log.md');
     this.validatePath(logPath);
 
     const lines = [
@@ -437,7 +575,7 @@ export class WikiNodeStore {
    */
   listAllNodes(): WikiIndexEntry[] {
     const entries: WikiIndexEntry[] = [];
-    const root = this.getRootPath();
+    const root = this.rootPath;
 
     const scanDir = (dir: string, type: WikiNodeType) => {
       const fullPath = path.join(root, dir);
@@ -455,6 +593,8 @@ export class WikiNodeStore {
               path: path.relative(root, filePath),
               type: node.type,
               aliases: node.aliases,
+              tags: node.tags,
+              summary: this.extractSummary(node.content),
             });
           } catch {
             // Skip invalid files
@@ -482,6 +622,17 @@ export class WikiNodeStore {
       if (node.title.toLowerCase().includes(lowerQuery)) return true;
       // Search in aliases
       if (node.aliases.some(alias => alias.toLowerCase().includes(lowerQuery))) return true;
+      // Search in tags
+      if (node.tags?.some(tag => tag.toLowerCase().includes(lowerQuery))) return true;
+      // Search in summary / preview text
+      if (node.summary?.toLowerCase().includes(lowerQuery)) return true;
+      // Search in full content as a fallback
+      try {
+        const fullNode = this.readNode(node.path);
+        if (fullNode.content.toLowerCase().includes(lowerQuery)) return true;
+      } catch {
+        // Ignore unreadable nodes during search
+      }
       return false;
     });
   }

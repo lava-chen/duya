@@ -487,6 +487,44 @@ function validateMessageHistory(messages: Message[]): Message[] {
   return cleanedMessages;
 }
 
+function extractFinalAssistantText(messages: Message[]): string {
+  const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+  if (!lastAssistant) {
+    return '';
+  }
+
+  if (typeof lastAssistant.content === 'string') {
+    return lastAssistant.content.trim();
+  }
+
+  return lastAssistant.content
+    .filter((block) => block.type === 'text')
+    .map((block) => (block as { type: 'text'; text: string }).text)
+    .join('\n')
+    .trim();
+}
+
+function summarizeConversationForWiki(messages: Message[], maxMessages = 12): string {
+  return messages
+    .slice(-maxMessages)
+    .map((message) => {
+      const role = message.role.toUpperCase();
+      if (typeof message.content === 'string') {
+        return `[${role}] ${message.content.slice(0, 1000)}`;
+      }
+
+      const text = message.content
+        .filter((block) => block.type === 'text')
+        .map((block) => (block as { type: 'text'; text: string }).text)
+        .join('\n')
+        .trim();
+
+      return text ? `[${role}] ${text.slice(0, 1000)}` : '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 // ============================================================================
 // Agent Initialization
 // ============================================================================
@@ -698,13 +736,11 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
 }
 
 // Create permission handler for streaming
-function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; expiresAt: number }) => Promise<'allow' | 'deny'> {
+function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number }) => Promise<'allow' | 'deny'> {
   return (request) => {
     return new Promise<'allow' | 'deny'>((resolve, reject) => {
-      // Store the pending permission with its resolve/reject
       pendingPermissions.set(request.id, { resolve, reject });
 
-      // Send permission request to main, wait for response
       sendToMain({
         type: 'chat:permission',
         sessionId: sessId,
@@ -712,10 +748,11 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
           id: request.id,
           toolName: request.toolName,
           toolInput: request.toolInput,
+          mode: request.mode,
+          expiresAt: request.expiresAt,
         },
       });
 
-      // Timeout - default to deny after 5 minutes
       setTimeout(() => {
         if (pendingPermissions.has(request.id)) {
           pendingPermissions.delete(request.id);
@@ -1387,15 +1424,34 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: result.success, messageCount: agentMessages.length });
         // Send chat:done AFTER persistence completes to ensure messages are saved
         // before the SSE stream closes (router.ts starts 2s timeout on done event)
-        sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
+        sendToMain({
+          type: 'chat:done',
+          sessionId: msg.sessionId,
+          turnId: msg.id,
+          finalContent: extractFinalAssistantText(agentMessages),
+          conversationText: summarizeConversationForWiki(agentMessages),
+        });
       } catch (err) {
         log('[Agent-Process] appendMessages error:', err);
-        sendToMain({ type: 'chat:done', sessionId: msg.sessionId, error: err instanceof Error ? err.message : String(err) });
+        sendToMain({
+          type: 'chat:done',
+          sessionId: msg.sessionId,
+          turnId: msg.id,
+          finalContent: extractFinalAssistantText(agentMessages),
+          conversationText: summarizeConversationForWiki(agentMessages),
+          error: err instanceof Error ? err.message : String(err),
+        });
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: false, reason: err instanceof Error ? err.message : String(err) });
       }
     } else {
       warn(`[Agent-Process] No messages to save for session ${msg.sessionId}`);
-      sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
+      sendToMain({
+        type: 'chat:done',
+        sessionId: msg.sessionId,
+        turnId: msg.id,
+        finalContent: '',
+        conversationText: '',
+      });
     }
 
     // Background title generation: generate if never generated before (no message limit)

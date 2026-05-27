@@ -222,6 +222,8 @@ const zh: Record<TranslationKey, string> = {
   'settings.providers.visionModelDesc': '用于图像分析和理解',
   'settings.providers.gatewayModel': '网关模型',
   'settings.providers.gatewayModelDesc': '用于桥接/频道聊天会话',
+  'settings.providers.wikiAgentModel': 'WikiAgent 模型',
+  'settings.providers.wikiAgentModelDesc': '用于后台记忆提取与合并',
   'settings.providers.titleModel': '标题模型',
   'settings.providers.titleModelDesc': '用于自动生成会话标题',
 

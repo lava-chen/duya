@@ -37,11 +37,17 @@ export function MemoryActivityList() {
           <ClockCounterClockwiseIcon size={12} />
           <span className="memory-activity-time">{fmtTime(entry.timestamp)}</span>
           <span className="memory-activity-op">{entry.operation}</span>
-          {entry.details?.message && (
-            <span className="memory-activity-detail">
-              {String(entry.details.message)}
-            </span>
-          )}
+          {(() => {
+            const msg = entry.details?.message;
+            if (msg && typeof msg === 'string') {
+              return (
+                <span className="memory-activity-detail">
+                  {msg}
+                </span>
+              );
+            }
+            return null;
+          })()}
         </div>
       ))}
 
