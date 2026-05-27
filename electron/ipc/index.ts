@@ -15,6 +15,7 @@ import { registerAgentHandlers } from '../agents/agent-communicator';
 import { registerNetHandlers } from './net-handlers';
 import { registerAgentServerHandlers } from './agent-server-handlers';
 import { registerRecapHandlers } from './recap-handlers';
+import { registerWikiAgentHandlers } from './wiki-agent-handlers';
 
 export {
   registerSystemHandlers,
@@ -29,6 +30,7 @@ export {
   registerNetHandlers,
   registerAgentServerHandlers,
   registerRecapHandlers,
+  registerWikiAgentHandlers,
 };
 
 /**

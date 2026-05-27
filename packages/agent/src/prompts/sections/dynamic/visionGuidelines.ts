@@ -18,6 +18,7 @@ Use ${TOOL_NAMES.VISION} when you need to:
 
 ## Usage
 Provide the image path and optionally a specific question about what you want to know. If no question is provided, a general description is returned.
+If the user refers to a recently uploaded image without providing a new path, you can call the tool without \`image_path\` and it will reuse the most recent uploaded image attachment in the conversation.
 
 ## Tips
 - Screenshots from browser automation are often valuable to analyze

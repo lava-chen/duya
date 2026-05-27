@@ -27,11 +27,12 @@ import {
   rewriteMarkdownLinks,
 } from './markdown-utils.js';
 import type { WeChatMessage, WeChatConfigOptions } from './types.js';
-import { WX_MSG_TYPES } from './types.js';
 import { parseMessageContent, isFromGroup } from './message-utils.js';
-import { wxApi, getMimeFromFilename } from './api.js';
+import { wxApi, getMimeFromFilename, MessageItemType } from './api.js';
 import type { IpcClient } from '../../ipc-client.js';
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -479,10 +480,11 @@ export class WeixinAdapter extends BaseAdapter {
     const isGroup = isFromGroup(msg.to_user_id ?? msg.ToUserName ?? '');
     const chatId = isGroup ? (msg.to_user_id ?? msg.ToUserName ?? senderId) : senderId;
 
-    // Skip non-text messages for now
-    if (!text && msg.message_type !== WX_MSG_TYPES.TEXT) return;
+    // Download images from item_list
+    const imagePaths = await this.downloadImagesFromMessage(msg, senderId);
 
-    if (!text) return;
+    // Skip if no text and no images
+    if (!text && imagePaths.length === 0) return;
 
     // DM policy check (async for pairing)
     const dmAllowed = await this.isDmAllowedAsync(senderId);
@@ -496,7 +498,8 @@ export class WeixinAdapter extends BaseAdapter {
       platformUserId: senderId,
       platformChatId: chatId,
       platformMsgId: msgId,
-      text,
+      text: text || undefined,
+      imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
       ts: msg.create_time_ms ?? msg.CreateTime ? (msg.create_time_ms ?? msg.CreateTime!) * 1000 : Date.now(),
     };
 
@@ -511,6 +514,51 @@ export class WeixinAdapter extends BaseAdapter {
     } else {
       this.messageHandler?.(normalizedMsg);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Image download from Weixin CDN
+  // ---------------------------------------------------------------------------
+
+  private async downloadImagesFromMessage(msg: WeChatMessage, senderId: string): Promise<string[]> {
+    const imagePaths: string[] = [];
+    const itemList = msg.item_list ?? [];
+
+    for (const item of itemList) {
+      if (item.type === MessageItemType.IMAGE && item.image_item) {
+        const imageItem = item.image_item;
+        const media = imageItem.media;
+        const encryptQueryParam = media?.encrypt_query_param;
+        const aesKeyHex = imageItem.aeskey;
+
+        if (!encryptQueryParam) {
+          console.warn('[Weixin] Image item missing encrypt_query_param, skipping');
+          continue;
+        }
+
+        try {
+          const imageBuffer = await wxApi.downloadImage({
+            cdnBaseUrl: this.cdnBaseUrl,
+            encryptQueryParam,
+            aesKeyHex,
+            aesKeyB64: media?.aes_key,
+          });
+
+          const ext = '.jpg';
+          const tmpDir = path.join(os.tmpdir(), 'duya-weixin-media');
+          fs.mkdirSync(tmpDir, { recursive: true });
+          const filePath = path.join(tmpDir, `wx-img-${senderId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+          fs.writeFileSync(filePath, imageBuffer);
+          imagePaths.push(filePath);
+
+          console.log(`[Weixin] Downloaded image: ${filePath} (${imageBuffer.length} bytes)`);
+        } catch (err) {
+          console.error('[Weixin] Failed to download image:', err);
+        }
+      }
+    }
+
+    return imagePaths;
   }
 
   // ---------------------------------------------------------------------------

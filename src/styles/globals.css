@@ -1357,6 +1357,12 @@ a {
   background: var(--main-bg);
 }
 
+/* When conductor panel is open, shrink chat max-width containers */
+.app-shell-root[data-conductor-open="true"] .chat-view .max-w-\[800px\],
+.app-shell-root[data-conductor-open="true"] .chat-view .max-w-\[750px\] {
+  max-width: min(800px, 55vw) !important;
+}
+
 .app-header {
   height: 3.2rem;
   border-bottom: 1px solid var(--border);
@@ -4205,13 +4211,13 @@ a {
 /* Session Row */
 .session-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.625rem;
-  padding: 0.5rem 0.5rem;
+  padding: 0.625rem 0.75rem;
   text-align: left;
   background: none;
   border: none;
-  border-radius: 0.5rem;
+  border-radius: 0.625rem;
   cursor: pointer;
   width: 100%;
   transition: background-color 0.15s ease;
@@ -4237,6 +4243,7 @@ a {
   width: 1.5rem;
   flex-shrink: 0;
   letter-spacing: 0.02em;
+  margin-top: 0.125rem;
 }
 
 .session-row-info {
@@ -4244,21 +4251,25 @@ a {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 0.125rem;
 }
 
 .session-row-title {
-  font-size: 0.8125rem;
-  font-weight: 400;
+  font-size: 0.875rem;
+  font-weight: 500;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.4;
 }
 
 .session-row-meta {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
 }
 
 .session-row-badge {
@@ -4266,6 +4277,7 @@ a {
   align-items: center;
   color: var(--success);
   flex-shrink: 0;
+  margin-top: 0.125rem;
 }
 
 /* Gateway Chat Modal */
@@ -4581,6 +4593,88 @@ a {
   height: 100%;
   flex-shrink: 0;
   overflow: hidden;
+}
+
+/* ============================================
+   Sidebar Panel (Multi-Tab) Styles
+   ============================================ */
+
+.sidebar-panel {
+  display: flex;
+  height: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sidebar-panel-inner {
+  display: flex;
+  height: 100%;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--sidebar-bg);
+}
+
+.sidebar-panel-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  padding: 2px 4px 0;
+}
+
+.sidebar-panel-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.sidebar-panel-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-panel-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 2px solid var(--accent);
+}
+
+.sidebar-panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Embedded file tree panel (inside sidebar panel) */
+.file-tree-panel-embedded {
+  display: flex;
+  height: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.file-tree-panel-embedded .file-tree-panel-inner {
+  display: flex;
+  height: 100%;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--sidebar-bg);
 }
 
 .file-tree-panel {
@@ -5822,4 +5916,40 @@ html.compact .panel-zone {
   .attachment-preview-doc-thumbnail {
     max-height: calc(100vh - 10rem);
   }
+}
+
+/* ============================================
+   Sidebar Conductor View Styles
+   ============================================ */
+
+.sidebar-conductor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--main-bg);
+}
+
+.sidebar-conductor-header {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-conductor-canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar-conductor-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 13px;
 }

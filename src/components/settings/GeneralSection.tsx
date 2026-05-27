@@ -400,6 +400,12 @@ export function GeneralSection() {
               </div>
             }
           />
+          <SettingsToggle
+            label="Wiki Agent (Experimental)"
+            description="Enable background wiki memory extraction and status display. Experimental feature, disabled by default."
+            checked={settings?.wikiAgentEnabled ?? false}
+            onCheckedChange={(checked) => save({ wikiAgentEnabled: checked })}
+          />
           </SettingsCard>
       </SettingsSection>
 

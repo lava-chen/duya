@@ -29,17 +29,19 @@ import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
 import { useTranslation } from "@/hooks/useTranslation";
+import { useSettings } from "@/hooks/useSettings";
 import { InputDialog } from "@/components/ui/InputDialog";
 
 type ThemeMode = "light" | "dark";
 
 // Type-safe label keys
-type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor';
+type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor' | 'nav.memory';
 
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
   { view: 'conductor', labelKey: 'nav.conductor', icon: SquaresFourIcon },
   { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
+  { view: 'memory', labelKey: 'nav.memory', icon: BrainIcon },
 ];
 
 const settingsNavItems: { id: SettingsTab; labelKey: string; icon: typeof HouseIcon }[] = [
@@ -64,6 +66,7 @@ interface AppSidebarProps {
 export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
   function AppSidebar({ isSettingsPage = false, style }, ref) {
     const { t } = useTranslation();
+    const { settings } = useSettings();
     const [theme, setTheme] = useState<ThemeMode>("dark");
     const [isLoading, setIsLoading] = useState(true);
     const [isInputDialogOpen, setIsInputDialogOpen] = useState(false);
@@ -78,6 +81,13 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       setCurrentView,
       setSettingsTab,
     } = useConversationStore();
+    const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
+
+    useEffect(() => {
+      if (!wikiAgentEnabled && currentView === 'memory') {
+        setCurrentView('home');
+      }
+    }, [wikiAgentEnabled, currentView, setCurrentView]);
 
     // Load from SQLite database on mount
     useEffect(() => {
@@ -249,7 +259,9 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         <nav className="sidebar-primary-nav" aria-label="Primary Navigation">
           <NewThreadDropdown />
 
-          {mainNavItems.map((item) => {
+          {mainNavItems
+            .filter((item) => wikiAgentEnabled || item.view !== 'memory')
+            .map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.view;
 

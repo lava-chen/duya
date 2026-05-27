@@ -487,6 +487,44 @@ function validateMessageHistory(messages: Message[]): Message[] {
   return cleanedMessages;
 }
 
+function extractFinalAssistantText(messages: Message[]): string {
+  const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+  if (!lastAssistant) {
+    return '';
+  }
+
+  if (typeof lastAssistant.content === 'string') {
+    return lastAssistant.content.trim();
+  }
+
+  return lastAssistant.content
+    .filter((block) => block.type === 'text')
+    .map((block) => (block as { type: 'text'; text: string }).text)
+    .join('\n')
+    .trim();
+}
+
+function summarizeConversationForWiki(messages: Message[], maxMessages = 12): string {
+  return messages
+    .slice(-maxMessages)
+    .map((message) => {
+      const role = message.role.toUpperCase();
+      if (typeof message.content === 'string') {
+        return `[${role}] ${message.content.slice(0, 1000)}`;
+      }
+
+      const text = message.content
+        .filter((block) => block.type === 'text')
+        .map((block) => (block as { type: 'text'; text: string }).text)
+        .join('\n')
+        .trim();
+
+      return text ? `[${role}] ${text.slice(0, 1000)}` : '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 // ============================================================================
 // Agent Initialization
 // ============================================================================
@@ -698,13 +736,11 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
 }
 
 // Create permission handler for streaming
-function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; expiresAt: number }) => Promise<'allow' | 'deny'> {
+function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number }) => Promise<'allow' | 'deny'> {
   return (request) => {
     return new Promise<'allow' | 'deny'>((resolve, reject) => {
-      // Store the pending permission with its resolve/reject
       pendingPermissions.set(request.id, { resolve, reject });
 
-      // Send permission request to main, wait for response
       sendToMain({
         type: 'chat:permission',
         sessionId: sessId,
@@ -712,10 +748,11 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
           id: request.id,
           toolName: request.toolName,
           toolInput: request.toolInput,
+          mode: request.mode,
+          expiresAt: request.expiresAt,
         },
       });
 
-      // Timeout - default to deny after 5 minutes
       setTimeout(() => {
         if (pendingPermissions.has(request.id)) {
           pendingPermissions.delete(request.id);
@@ -786,6 +823,17 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   try {
     startChatHeartbeat();
     const requestPermission = createPermissionHandler(msg.sessionId);
+    const sendStatus = (message: string): void => {
+      sendToMain({ type: 'chat:status', sessionId: msg.sessionId, message });
+    };
+    const sendI18nStatus = (key: string, params?: Record<string, string | number>): void => {
+      const encodedParams = params
+        ? Object.entries(params)
+          .map(([k, v]) => `|${k}=${encodeURIComponent(String(v))}`)
+          .join('')
+        : '';
+      sendStatus(`@i18n:${key}${encodedParams}`);
+    };
     // Use session system prompt if available, fallback to options.systemPrompt
     const effectiveSystemPrompt = sessionSystemPrompt || msg.options?.systemPrompt;
     // Apply permission mode from chat start options if provided
@@ -841,7 +889,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       mediaType: string;
     }
     const imageDataCache = new Map<string, CachedImageData>();
-    const readFailedFiles: string[] = [];
+    const readFailedFiles = new Set<string>();
+    const markReadFailed = (name: string) => {
+      if (name) readFailedFiles.add(name);
+    };
 
     for (const file of imageFiles) {
       let base64Data = '';
@@ -875,7 +926,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           }
         } catch (readErr) {
           console.error('[IMAGE-DETAIL] FAILED to read file:', readErr);
-          readFailedFiles.push(file.name);
+          markReadFailed(file.name);
         }
       } else {
         console.error('[IMAGE-DETAIL] Skipped - CDN URL or no valid source:', {
@@ -891,31 +942,51 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       } else {
         console.error('[IMAGE-DETAIL] FAILED to get base64 for:', file.name);
         if (!isCDNImageUrl(file.url)) {
-          readFailedFiles.push(file.name);
+          markReadFailed(file.name);
         }
       }
     }
     console.error('[IMAGE-DETAIL] imageDataCache entries:', imageDataCache.size);
     console.error('[IMAGE-DETAIL] Cache keys:', [...imageDataCache.keys()]);
-    console.error('[IMAGE-DETAIL] readFailedFiles:', readFailedFiles);
+    console.error('[IMAGE-DETAIL] readFailedFiles:', [...readFailedFiles]);
 
     // Phase 2: Vision pre-analysis using the configured vision model.
     // Uses the cached base64 data from Phase 1.
     let preAnalysisText = '';
     let visionAnalysisFailed = false;
     let visionAnalysisError: string | null = null;
-    if (imageFiles.length > 0 && agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function') {
+    const failedVisionFiles = new Set<string>();
+    const hasVisionAnalyzer = agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function';
+    if (imageFiles.length > 0 && hasVisionAnalyzer) {
+      sendI18nStatus('streaming.visionAnalyzingStart');
+    }
+    if (imageFiles.length > 0 && hasVisionAnalyzer) {
+      let analyzedCount = 0;
       for (const file of imageFiles) {
         const cached = imageDataCache.get(file.name);
         if (!cached) continue;
 
         try {
-          const result = await (agent as unknown as { analyzeImage: (b64: string, mt: string) => Promise<string> }).analyzeImage(cached.base64, cached.mediaType);
+          analyzedCount += 1;
+          sendI18nStatus('streaming.visionAnalyzingProgress', {
+            current: analyzedCount,
+            total: imageFiles.length,
+          });
+          const quickVisionPrompt = msg.prompt?.trim()
+            ? `Briefly analyze this image for the user's request: ${msg.prompt.trim()}. `
+              + 'Return concise key points only, include critical text/OCR if relevant.'
+            : 'Provide a concise image summary with key objects and critical text only.';
+          const result = await (agent as unknown as { analyzeImage: (b64: string, mt: string, prompt?: string) => Promise<string> }).analyzeImage(
+            cached.base64,
+            cached.mediaType,
+            quickVisionPrompt,
+          );
           preAnalysisText += `\n\n[Image: "${file.name}"]\n${result}`;
           log(`[Agent-Process] Vision analysis: "${file.name}" — ${result.length} chars`);
         } catch (err) {
           visionAnalysisFailed = true;
           visionAnalysisError = err instanceof Error ? err.message : String(err);
+          failedVisionFiles.add(file.name);
           warn(`[Agent-Process] Vision analysis failed for "${file.name}": ${visionAnalysisError}`);
         }
       }
@@ -939,6 +1010,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       !modelIsMultimodal &&
       (!preAnalysisText || visionAnalysisFailed)
     ) {
+      sendI18nStatus('streaming.visionFallback');
       const toolPassResults: string[] = [];
       for (const file of imageFiles) {
         const cached = imageDataCache.get(file.name);
@@ -953,9 +1025,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           let toolResult: { error?: boolean; result?: unknown };
 
           if (cached) {
+            // Skip immediate re-try if this file already failed in phase 2.
+            if (failedVisionFiles.has(file.name)) {
+              continue;
+            }
             // For data: URLs and already-read files, use analyzeImage directly
             // with the cached base64 to avoid double-read
-            const analyzeImage = (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string) => Promise<string> })?.analyzeImage;
+            const analyzeImage = (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string) => Promise<string> })?.analyzeImage?.bind(agent);
             if (!analyzeImage) {
               continue;
             }
@@ -976,7 +1052,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
               undefined,
               {
                 options: {
-                  analyzeImage: (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string) => Promise<string> })?.analyzeImage,
+                  analyzeImage: (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string) => Promise<string> })?.analyzeImage?.bind(agent),
                 },
               } as unknown as import('../types.js').ToolUseContext,
             );
@@ -1025,14 +1101,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // When images exist but the agent cannot see them at all (model not
     // multimodal and no vision analyzer configured), at minimum include
     // the image file names in the prompt so the agent knows they exist.
-    const hasVisionAnalyzer = agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function';
     if (imageFiles.length > 0 && !modelIsMultimodal && !hasVisionAnalyzer && !visionAnalysisFailed) {
       const imageNames = imageFiles.map(f => f.name).join(', ');
       const parts: string[] = [];
       parts.push(`\n\n[System: The user sent ${imageFiles.length} image file(s): ${imageNames}.`);
       parts.push('This model cannot view images directly and no vision model is configured.');
-      if (readFailedFiles.length > 0) {
-        parts.push(`Unable to read from disk: ${readFailedFiles.join(', ')}.`);
+      if (readFailedFiles.size > 0) {
+        parts.push(`Unable to read from disk: ${Array.from(readFailedFiles).join(', ')}.`);
       }
       parts.push('Please configure a vision model in Settings or use a multimodal model (e.g. Claude, GPT-4V, Gemini) to process images.]');
       const imageInfo = parts.join(' ');
@@ -1043,8 +1118,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     // Image read failures that still have some cached data (multimodal model
     // will see the image blocks, but add a note about failed files)
-    if (readFailedFiles.length > 0 && modelIsMultimodal) {
-      const failedInfo = `\n\n[System: Note: ${readFailedFiles.length} image file(s) could not be read from disk (${readFailedFiles.join(', ')}). Only successfully read images are shown.]`;
+    if (readFailedFiles.size > 0 && modelIsMultimodal) {
+      const failedFileNames = Array.from(readFailedFiles);
+      const failedInfo = `\n\n[System: Note: ${failedFileNames.length} image file(s) could not be read from disk (${failedFileNames.join(', ')}). Only successfully read images are shown.]`;
       effectivePrompt = effectivePrompt
         ? `${effectivePrompt}${failedInfo}`
         : failedInfo;
@@ -1054,6 +1130,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // so the agent knows to analyze the attachments instead of guessing the user's intent.
     if (!effectivePrompt.trim() && files && files.length > 0) {
       effectivePrompt = 'The user has attached file(s). Please analyze the attached files and provide a helpful response based on their contents.';
+    }
+
+    if (imageFiles.length > 0 && hasVisionAnalyzer) {
+      sendI18nStatus('streaming.visionPreprocessDone');
     }
 
     let messageContent: string | MessageContent[] = effectivePrompt;
@@ -1344,15 +1424,34 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: result.success, messageCount: agentMessages.length });
         // Send chat:done AFTER persistence completes to ensure messages are saved
         // before the SSE stream closes (router.ts starts 2s timeout on done event)
-        sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
+        sendToMain({
+          type: 'chat:done',
+          sessionId: msg.sessionId,
+          turnId: msg.id,
+          finalContent: extractFinalAssistantText(agentMessages),
+          conversationText: summarizeConversationForWiki(agentMessages),
+        });
       } catch (err) {
         log('[Agent-Process] appendMessages error:', err);
-        sendToMain({ type: 'chat:done', sessionId: msg.sessionId, error: err instanceof Error ? err.message : String(err) });
+        sendToMain({
+          type: 'chat:done',
+          sessionId: msg.sessionId,
+          turnId: msg.id,
+          finalContent: extractFinalAssistantText(agentMessages),
+          conversationText: summarizeConversationForWiki(agentMessages),
+          error: err instanceof Error ? err.message : String(err),
+        });
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: false, reason: err instanceof Error ? err.message : String(err) });
       }
     } else {
       warn(`[Agent-Process] No messages to save for session ${msg.sessionId}`);
-      sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
+      sendToMain({
+        type: 'chat:done',
+        sessionId: msg.sessionId,
+        turnId: msg.id,
+        finalContent: '',
+        conversationText: '',
+      });
     }
 
     // Background title generation: generate if never generated before (no message limit)

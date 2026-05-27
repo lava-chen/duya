@@ -15,6 +15,27 @@ function tKey(key: string): import('@/i18n').TranslationKey {
   return key as import('@/i18n').TranslationKey;
 }
 
+function getVisionBaseUrlFallback(providerType: string): string {
+  switch (providerType) {
+    case 'openrouter':
+      return 'https://openrouter.ai/api/v1';
+    case 'openai':
+    case 'openai-compatible':
+      return 'https://api.openai.com/v1';
+    case 'anthropic':
+      return 'https://api.anthropic.com';
+    case 'ollama':
+      return 'http://localhost:11434';
+    default:
+      return '';
+  }
+}
+
+function isMaskedApiKey(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.includes('***') || value.includes('****');
+}
+
 interface ModelSelectorRowProps {
   label: string;
   description: string;
@@ -69,11 +90,13 @@ export function ModelSelectionSection() {
 
   const [visionModel, setVisionModel] = useState("");
   const [gatewayModel, setGatewayModel] = useState("");
+  const [wikiAgentModel, setWikiAgentModel] = useState("");
   const [titleModel, setTitleModel] = useState("");
   const [embeddingModel, setEmbeddingModel] = useState("");
 
   const [originalVisionModel, setOriginalVisionModel] = useState("");
   const [originalGatewayModel, setOriginalGatewayModel] = useState("");
+  const [originalWikiAgentModel, setOriginalWikiAgentModel] = useState("");
   const [originalTitleModel, setOriginalTitleModel] = useState("");
   const [originalEmbeddingModel, setOriginalEmbeddingModel] = useState("");
 
@@ -137,6 +160,7 @@ export function ModelSelectionSection() {
         // Load other model settings from Settings DB
         const settings = await window.electronAPI.settingsDb.getJson<{
           gatewayModel?: string;
+          wikiAgentModel?: string;
           titleGenerationModel?: string;
           embeddingModel?: string;
         }>('modelSelection', {});
@@ -145,6 +169,10 @@ export function ModelSelectionSection() {
         if (settings.gatewayModel) {
           setGatewayModel(settings.gatewayModel);
           setOriginalGatewayModel(settings.gatewayModel);
+        }
+        if (settings.wikiAgentModel) {
+          setWikiAgentModel(settings.wikiAgentModel);
+          setOriginalWikiAgentModel(settings.wikiAgentModel);
         }
         if (settings.titleGenerationModel) {
           setTitleModel(settings.titleGenerationModel);
@@ -180,11 +208,12 @@ export function ModelSelectionSection() {
       const visionParsed = parseModelValue(visionModel);
 
       // Save vision settings to ConfigManager
-      // IMPORTANT: Only update provider and model fields, preserve existing baseUrl, apiKey, enabled
       if (visionModel && visionParsed.providerId && visionParsed.model) {
         const provider = providers.find(p => p.id === visionParsed.providerId);
         if (provider) {
-          // Get current vision settings first to preserve baseUrl and apiKey
+          const nextProvider = (provider.providerType || provider.name || '').toLowerCase();
+
+          // Get current vision settings first to keep enabled flag and fallback fields
           const currentVision = await window.electronAPI.vision.get() as {
             provider?: string;
             model?: string;
@@ -193,18 +222,53 @@ export function ModelSelectionSection() {
             enabled?: boolean;
           } | null;
 
+          // Get unmasked provider config from main process (source of truth).
+          const providerConfig = await window.electronAPI.provider.getConfig(
+            provider.id,
+            visionParsed.model,
+          ) as {
+            apiKey?: string;
+            baseUrl?: string;
+            model?: string;
+            provider?: string;
+          } | null;
+
+          // Prefer selected provider baseUrl; never blindly keep stale baseUrl from another provider.
+          const nextBaseUrl =
+            provider.baseUrl?.trim()
+            || providerConfig?.baseUrl?.trim()
+            || getVisionBaseUrlFallback(nextProvider)
+            || currentVision?.baseUrl
+            || '';
+
+          const currentVisionApiKey = (currentVision?.apiKey || '').trim();
+          const providerConfigApiKey = (providerConfig?.apiKey || '').trim();
+          const providerListApiKey = (provider.apiKey || '').trim();
+
+          const normalizedCurrentVisionApiKey = isMaskedApiKey(currentVisionApiKey) ? '' : currentVisionApiKey;
+          const normalizedProviderListApiKey = isMaskedApiKey(providerListApiKey) ? '' : providerListApiKey;
+
+          // For local Ollama vision, apiKey is unnecessary and often stale.
+          const nextApiKey =
+            nextProvider === 'ollama'
+              ? ''
+              : (
+                normalizedCurrentVisionApiKey
+                || providerConfigApiKey
+                || normalizedProviderListApiKey
+              );
+
           await window.electronAPI.vision.set({
-            provider: provider.providerType || provider.name.toLowerCase(),
+            provider: nextProvider,
             model: visionParsed.model,
-            // Preserve existing baseUrl and apiKey from current settings
-            baseUrl: currentVision?.baseUrl || '',
-            apiKey: currentVision?.apiKey || '',
+            baseUrl: nextBaseUrl,
+            apiKey: nextApiKey,
             enabled: currentVision?.enabled ?? true,
           });
           console.log('[ModelSelection] Vision model updated:', {
-            provider: provider.providerType || provider.name.toLowerCase(),
+            provider: nextProvider,
             model: visionParsed.model,
-            preservedBaseUrl: currentVision?.baseUrl,
+            baseUrl: nextBaseUrl,
           });
         }
       }
@@ -212,6 +276,7 @@ export function ModelSelectionSection() {
       // Save other model settings to Settings DB
       await window.electronAPI.settingsDb.setJson('modelSelection', {
         gatewayModel: gatewayModel || undefined,
+        wikiAgentModel: wikiAgentModel || undefined,
         titleGenerationModel: titleModel || undefined,
         embeddingModel: embeddingModel || undefined,
       });
@@ -219,6 +284,7 @@ export function ModelSelectionSection() {
       // Update original values
       setOriginalVisionModel(visionModel);
       setOriginalGatewayModel(gatewayModel);
+      setOriginalWikiAgentModel(wikiAgentModel);
       setOriginalTitleModel(titleModel);
       setOriginalEmbeddingModel(embeddingModel);
 
@@ -230,11 +296,12 @@ export function ModelSelectionSection() {
     } finally {
       setSaving(false);
     }
-  }, [visionModel, gatewayModel, titleModel, embeddingModel, providers]);
+  }, [visionModel, gatewayModel, wikiAgentModel, titleModel, embeddingModel, providers]);
 
   const hasChanges =
     visionModel !== originalVisionModel ||
     gatewayModel !== originalGatewayModel ||
+    wikiAgentModel !== originalWikiAgentModel ||
     titleModel !== originalTitleModel ||
     embeddingModel !== originalEmbeddingModel;
 
@@ -295,6 +362,16 @@ export function ModelSelectionSection() {
               description={t(tKey('settings.gatewayModelDesc')) || 'Model for gateway/channel interactions'}
               selectedModel={gatewayModel}
               onModelChange={setGatewayModel}
+              providers={providers}
+              loading={providersLoading}
+            />
+
+            {/* Wiki Agent Model */}
+            <ModelSelectorRow
+              label={t(tKey('settings.wikiAgentModel')) || 'WikiAgent Model'}
+              description={t(tKey('settings.wikiAgentModelDesc')) || 'Model for background memory extraction and merge'}
+              selectedModel={wikiAgentModel}
+              onModelChange={setWikiAgentModel}
               providers={providers}
               loading={providersLoading}
             />

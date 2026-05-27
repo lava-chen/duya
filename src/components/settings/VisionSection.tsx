@@ -13,6 +13,7 @@ import {
 } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
+import { testProviderIPC } from "@/lib/ipc-client";
 import type { VisionLLMConfig } from "@/types";
 
 // Helper for translation keys that may not be in the type yet
@@ -74,18 +75,21 @@ export function VisionSection() {
   const handleTestConnection = useCallback(async () => {
     setTestStatus("testing");
     try {
-      // Simple validation - in production this would test the actual connection
       if (!provider || !model) {
         setTestStatus("error");
         return;
       }
-      // Simulate test delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setTestStatus("success");
+      const result = await testProviderIPC({
+        provider_type: provider,
+        base_url: baseURL || undefined,
+        api_key: apiKey || undefined,
+        model,
+      });
+      setTestStatus(result.success ? "success" : "error");
     } catch {
       setTestStatus("error");
     }
-  }, [provider, model]);
+  }, [provider, model, baseURL, apiKey]);
 
   const hasChanges =
     enabled !== settings.visionLLMEnabled ||

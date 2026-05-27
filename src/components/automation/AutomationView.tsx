@@ -19,10 +19,65 @@ import {
 import { CronChatModal } from './CronChatModal';
 import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector';
 import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-client';
-import { Plus, Play, PencilSimple, Trash, Clock, Calendar, Timer, SlidersHorizontal, WarningCircle, CheckCircle, XCircle, SpinnerGap, Gear, ChatCircle, Robot } from '@phosphor-icons/react';
+import {
+  Plus,
+  Play,
+  PencilSimple,
+  Trash,
+  Clock,
+  Calendar,
+  Timer,
+  SlidersHorizontal,
+  WarningCircle,
+  CheckCircle,
+  XCircle,
+  SpinnerGap,
+  Gear,
+  ChatCircle,
+  Robot,
+  Lightning,
+  DownloadSimple,
+  SquaresFour,
+  CaretRight,
+  DotsThreeVertical,
+  ArrowRight,
+  GitBranch,
+  Globe,
+  MagnifyingGlass,
+  FileText,
+} from '@phosphor-icons/react';
 import { AutomationEmptyState } from './AutomationEmptyState';
-import { NLCreateModal } from './NLCreateModal';
+import { QuickCronChatModal } from './QuickCronChatModal';
 import { TemplateMarketModal } from './TemplateMarketModal';
+import { useConversationStore } from '@/stores/conversation-store';
+
+function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): string {
+  const sections = [
+    'Create a cron job automation using the cron tool. Here is the user request:',
+    '',
+    userPrompt,
+  ];
+
+  if (templatePrompt) {
+    sections.push(
+      '',
+      'Template task details for the cron job to execute each run:',
+      templatePrompt,
+    );
+  }
+
+  sections.push(
+    '',
+    'Instructions:',
+    '1. Use the cron tool with action "create" to set up this cron job',
+    '2. Analyze the request to determine the appropriate schedule (cron expression, interval, or specific time)',
+    '3. Extract a concise but descriptive name for the cron job',
+    '4. The "prompt" field should contain the task description for each execution',
+    '5. Set enabled to true by default',
+  );
+
+  return sections.join('\n');
+}
 
 type EditorState = {
   id?: string;
@@ -46,12 +101,53 @@ function formatTime(value: number | null): string {
   return new Date(value).toLocaleString();
 }
 
+function formatRelativeTime(value: number | null): string {
+  if (!value) return '-';
+  const now = Date.now();
+  const diff = value - now;
+  const absDiff = Math.abs(diff);
+  const hours = Math.floor(absDiff / (1000 * 60 * 60));
+  const minutes = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
+
+  if (diff > 0) {
+    if (hours > 0) return `${hours}h ${minutes}m later`;
+    return `${minutes}m later`;
+  } else {
+    if (hours > 0) return `${hours}h ${minutes}m ago`;
+    return `${minutes}m ago`;
+  }
+}
+
+function formatDateShort(value: number | null): string {
+  if (!value) return '-';
+  const d = new Date(value);
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+}
+
 function getScheduleDisplay(cron: AutomationCron): string {
   switch (cron.schedule_kind) {
     case 'every':
       return `Every ${cron.schedule_every_ms ? cron.schedule_every_ms / 1000 : '?'}s`;
     case 'at':
       return `At ${cron.schedule_at || '?'}`;
+    case 'cron':
+      return cron.schedule_cron_expr || '?';
+    default:
+      return 'Unknown';
+  }
+}
+
+function getScheduleLabel(cron: AutomationCron): string {
+  switch (cron.schedule_kind) {
+    case 'every': {
+      const ms = cron.schedule_every_ms ?? 0;
+      if (ms >= 86400000) return `Every ${ms / 86400000}d`;
+      if (ms >= 3600000) return `Every ${ms / 3600000}h`;
+      if (ms >= 60000) return `Every ${ms / 60000}m`;
+      return `Every ${ms / 1000}s`;
+    }
+    case 'at':
+      return `Once at ${cron.schedule_at || '?'}`;
     case 'cron':
       return cron.schedule_cron_expr || '?';
     default:
@@ -87,6 +183,22 @@ function getRunStatusIcon(status: string) {
   }
 }
 
+function getRunStatusDot(status: string) {
+  switch (status) {
+    case 'success':
+      return <div className="w-2 h-2 rounded-full bg-[var(--success)]" />;
+    case 'failed':
+      return <div className="w-2 h-2 rounded-full bg-[var(--error)]" />;
+    case 'running':
+      return <div className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />;
+    case 'pending':
+      return <div className="w-2 h-2 rounded-full bg-[var(--warning)]" />;
+    case 'cancelled':
+    default:
+      return <div className="w-2 h-2 rounded-full bg-[var(--muted)]" />;
+  }
+}
+
 const DEFAULT_EDITOR: EditorState = {
   name: '',
   description: '',
@@ -103,6 +215,51 @@ const DEFAULT_EDITOR: EditorState = {
   model: '',
 };
 
+// Parse prompt into task steps
+function parsePromptSteps(prompt: string): string[] {
+  const lines = prompt.split(/\n|(?:\d+\.\s+)/).filter(l => l.trim().length > 0);
+  if (lines.length <= 1) {
+    // Try to split by sentences or commas
+    return prompt.split(/[.!?;]/).filter(l => l.trim().length > 10).map(l => l.trim());
+  }
+  return lines.map(l => l.trim()).filter(l => l.length > 0 && !l.match(/^\d+\.$/));
+}
+
+// Mock capabilities based on prompt content
+function inferCapabilities(prompt: string): { name: string; available: boolean; icon: React.ReactNode }[] {
+  const p = prompt.toLowerCase();
+  return [
+    { name: 'Git', available: p.includes('git') || p.includes('commit') || p.includes('pr') || p.includes('branch'), icon: <GitBranch size={12} /> },
+    { name: 'PR Review', available: p.includes('pr') || p.includes('pull request') || p.includes('review'), icon: <FileText size={12} /> },
+    { name: 'Browser', available: p.includes('browser') || p.includes('web') || p.includes('url') || p.includes('site'), icon: <Globe size={12} /> },
+    { name: 'Search', available: p.includes('search') || p.includes('find') || p.includes('lookup'), icon: <MagnifyingGlass size={12} /> },
+  ];
+}
+
+// Mock execution graph based on prompt
+function buildExecutionGraph(prompt: string): { name: string; status: 'success' | 'failed' | 'pending' | 'running' }[] {
+  const p = prompt.toLowerCase();
+  const graph: { name: string; status: 'success' | 'failed' | 'pending' | 'running' }[] = [
+    { name: 'Trigger', status: 'success' },
+  ];
+
+  if (p.includes('git') || p.includes('commit')) {
+    graph.push({ name: 'Git Commit Scan', status: 'success' });
+  }
+  if (p.includes('pr') || p.includes('pull request')) {
+    graph.push({ name: 'PR Review', status: Math.random() > 0.5 ? 'success' : 'failed' });
+  }
+  if (p.includes('summarize') || p.includes('summary')) {
+    graph.push({ name: 'Summarize', status: 'success' });
+  }
+  if (p.includes('todo') || p.includes('task')) {
+    graph.push({ name: 'Todo Generation', status: 'pending' });
+  }
+  graph.push({ name: 'Output', status: 'pending' });
+
+  return graph;
+}
+
 export function AutomationView() {
   const hasElectronApi = typeof window !== 'undefined' && !!window.electronAPI?.automation;
   const [loading, setLoading] = useState(true);
@@ -114,10 +271,15 @@ export function AutomationView() {
   const [isCreating, setIsCreating] = useState(false);
 
   // NL & Template state
-  const [nlModalOpen, setNlModalOpen] = useState(false);
+  const [quickChatModalOpen, setQuickChatModalOpen] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templates, setTemplates] = useState<AutomationTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<AutomationTemplate | null>(null);
+
+  const createThread = useConversationStore((s) => s.createThread);
+  const setActiveThread = useConversationStore((s) => s.setActiveThread);
+  const setCurrentView = useConversationStore((s) => s.setCurrentView);
+  const storeThreads = useConversationStore((s) => s.threads);
 
   // Cron chat modal state
   const [chatModalOpen, setChatModalOpen] = useState(false);
@@ -138,7 +300,6 @@ export function AutomationView() {
     try {
       const providers = await listProvidersIPC();
       if (providers && providers.length > 0) {
-        // Fix the hasApiKey field if it's missing
         providers.forEach((p) => {
           const pAny = p as Provider & Record<string, unknown>;
           const hasKey = pAny.hasApiKey ?? pAny.has_api_key ?? !!(p.apiKey && p.apiKey.length > 0);
@@ -150,12 +311,10 @@ export function AutomationView() {
           || providers.find((p) => p.hasApiKey);
 
         if (activeProvider) {
-          // Check if this is an Ollama provider
           const isOllama = activeProvider.providerType === 'ollama' ||
             activeProvider.baseUrl?.includes('11434') ||
             activeProvider.baseUrl?.includes('ollama');
 
-          // For Ollama, fetch local models
           if (isOllama) {
             try {
               const baseUrl = activeProvider.baseUrl || 'http://localhost:11434';
@@ -173,7 +332,6 @@ export function AutomationView() {
             }
           }
 
-          // Check if provider has enabled_models in options
           let enabledModels: string[] = [];
           try {
             const opts = JSON.parse(activeProvider.options || '{}');
@@ -191,7 +349,6 @@ export function AutomationView() {
             return;
           }
 
-          // No models available - show empty list
           setAvailableModels([]);
         }
       }
@@ -246,7 +403,7 @@ export function AutomationView() {
       setRuns([]);
       return;
     }
-    const list = await listAutomationCronRunsIPC(cronId, 20, 0);
+    const list = await listAutomationCronRunsIPC(cronId, 50, 0);
     setRuns(list);
   }
 
@@ -275,18 +432,18 @@ export function AutomationView() {
   }, [hasElectronApi, selectedCronId]);
 
   function handleCreateNew(): void {
-    setIsCreating(true);
-    setSelectedCronId(null);
+    setSelectedTemplate(null);
+    setQuickChatModalOpen(true);
   }
 
   function handleChatCreate(): void {
     setSelectedTemplate(null);
-    setNlModalOpen(true);
+    setQuickChatModalOpen(true);
   }
 
   function handleQuickTemplate(template: AutomationTemplate): void {
     setSelectedTemplate(template);
-    setNlModalOpen(true);
+    setQuickChatModalOpen(true);
   }
 
   function handleManualCreate(): void {
@@ -301,31 +458,44 @@ export function AutomationView() {
   function handleTemplateSelect(template: AutomationTemplate): void {
     setSelectedTemplate(template);
     setTemplateModalOpen(false);
-    setNlModalOpen(true);
+    setQuickChatModalOpen(true);
   }
 
   function handleTemplateManualSetup(): void {
     setTemplateModalOpen(false);
     setSelectedTemplate(null);
-    setNlModalOpen(true);
+    setQuickChatModalOpen(true);
   }
 
-  function handleNLCreate(data: CreateAutomationCronInput): void {
-    if (!hasElectronApi) return;
-    void (async () => {
-      try {
-        setSaving(true);
-        setError(null);
-        const created = await createAutomationCronIPC(data);
-        setNlModalOpen(false);
-        setSelectedTemplate(null);
-        await reloadCrons(created.id);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setSaving(false);
+  async function handleStartCronChat(userPrompt: string, templatePrompt?: string): Promise<void> {
+    setQuickChatModalOpen(false);
+    setSelectedTemplate(null);
+
+    const workingDir = storeThreads[0]?.workingDirectory ?? undefined;
+    const projectName = storeThreads[0]?.projectName ?? undefined;
+
+    const thread = await createThread({
+      workingDirectory: workingDir,
+      projectName,
+    });
+
+    if (!thread) {
+      setError('Unable to create chat session. Please open a workspace first from the Chat page.');
+      return;
+    }
+
+    setActiveThread(thread.id);
+    setCurrentView('chat');
+
+    const prompt = buildCronCreationPrompt(userPrompt, templatePrompt);
+
+    setTimeout(() => {
+      const win = window as unknown as Record<string, unknown>;
+      const sendFn = win.__widgetSendMessage as ((text: string) => void) | undefined;
+      if (sendFn) {
+        sendFn(prompt);
       }
-    })();
+    }, 200);
   }
 
   function handleSelectCron(cron: AutomationCron): void {
@@ -360,69 +530,99 @@ export function AutomationView() {
     }
   }
 
+  // Calculate success rate
+  const successRate = useMemo(() => {
+    if (runs.length === 0) return null;
+    const success = runs.filter(r => r.run_status === 'success').length;
+    return Math.round((success / runs.length) * 100);
+  }, [runs]);
+
+  // Last 7 days status
+  const last7Days = useMemo(() => {
+    const days: { date: string; status: 'success' | 'failed' | 'none' }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+      const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const dayEnd = dayStart + 86400000;
+      const dayRuns = runs.filter(r => r.started_at && r.started_at >= dayStart && r.started_at < dayEnd);
+      if (dayRuns.length === 0) {
+        days.push({ date: dateStr, status: 'none' });
+      } else {
+        const hasFailed = dayRuns.some(r => r.run_status === 'failed');
+        days.push({ date: dateStr, status: hasFailed ? 'failed' : 'success' });
+      }
+    }
+    return days;
+  }, [runs]);
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4">
         <h2 className="automation-title-copernicus" style={{ color: 'var(--text)' }}>Automation</h2>
         <div className="flex items-center gap-2">
-          {crons.length > 0 && (
-            <>
-              <button
-                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
-                style={{
-                  background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
-                  color: '#ffffff',
-                }}
-                onClick={handleChatCreate}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.opacity = '0.9';
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.boxShadow = '0 4px 12px var(--accent-shadow)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.opacity = '1';
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-                type="button"
-              >
-                <ChatCircle size={16} weight="bold" />
-                Create via Chat
-              </button>
-              <button
-                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
-                style={{
-                  background: 'var(--surface)',
-                  color: 'var(--text)',
-                  border: '1px solid var(--border)',
-                }}
-                onClick={handleManualCreate}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-                type="button"
-              >
-                <Plus size={16} weight="bold" />
-                Manual
-              </button>
-            </>
-          )}
-          {(hasElectronApi && crons.length > 0) && (
-            <button
-              className="px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
-              style={{
-                background: 'var(--surface)',
-                color: 'var(--text)',
-                border: '1px solid var(--border)',
-              }}
-              onClick={handleViewTemplates}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-              type="button"
-            >
-              View Templates
-            </button>
-          )}
+          {/* Chat input hint */}
+          <div className="hidden lg:flex items-center gap-2 mr-3 px-3 py-1.5 rounded-lg text-xs" style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
+            <ChatCircle size={12} />
+            <span>Ask Duya to create automations...</span>
+          </div>
+
+          <button
+            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
+            style={{
+              background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
+              color: '#ffffff',
+            }}
+            onClick={handleCreateNew}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.opacity = '0.9';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+              e.currentTarget.style.boxShadow = '0 4px 12px var(--accent-shadow)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.opacity = '1';
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = 'none';
+            }}
+            type="button"
+          >
+            <Plus size={16} weight="bold" />
+            New Automation
+          </button>
+
+          <button
+            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
+            style={{
+              background: 'var(--surface)',
+              color: 'var(--text)',
+              border: '1px solid var(--border)',
+            }}
+            onClick={handleViewTemplates}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+            type="button"
+          >
+            <SquaresFour size={16} />
+            Templates
+          </button>
+
+          <button
+            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
+            style={{
+              background: 'var(--surface)',
+              color: 'var(--text)',
+              border: '1px solid var(--border)',
+            }}
+            onClick={handleChatCreate}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+            type="button"
+          >
+            <DownloadSimple size={16} />
+            Import
+          </button>
         </div>
       </div>
 
@@ -459,7 +659,7 @@ export function AutomationView() {
               ) : crons.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-center p-4">
                   <Clock size={32} className="mb-2 opacity-30" style={{ color: 'var(--muted)' }} />
-                  <p className="text-sm" style={{ color: 'var(--muted)' }}>No cron jobs yet</p>
+                  <p className="text-sm" style={{ color: 'var(--muted)' }}>No automations yet</p>
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -488,11 +688,11 @@ export function AutomationView() {
                       <div className="flex items-center gap-3 text-xs ml-5" style={{ color: 'var(--muted)' }}>
                         <span className="flex items-center gap-1">
                           <Timer size={11} />
-                          {getScheduleDisplay(cron)}
+                          {getScheduleLabel(cron)}
                         </span>
                         <span className="flex items-center gap-1">
                           <Calendar size={11} />
-                          {formatTime(cron.next_run_at).split(' ')[0]}
+                          {formatDateShort(cron.next_run_at)}
                         </span>
                       </div>
                     </div>
@@ -548,11 +748,13 @@ export function AutomationView() {
                 }}
                 saving={saving}
                 onViewSession={handleOpenChat}
+                successRate={successRate}
+                last7Days={last7Days}
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <p className="text-base font-medium mb-1" style={{ color: 'var(--text)' }}>Select a cron job</p>
-                <p className="text-sm" style={{ color: 'var(--muted)' }}>Choose a cron job from the list to view details and runs</p>
+                <p className="text-base font-medium mb-1" style={{ color: 'var(--text)' }}>Select an automation</p>
+                <p className="text-sm" style={{ color: 'var(--muted)' }}>Choose an automation from the list to view details and runs</p>
               </div>
             )}
           </section>
@@ -560,21 +762,15 @@ export function AutomationView() {
       </div>
       )}
 
-      {/* NL Create Modal */}
-      <NLCreateModal
-        isOpen={nlModalOpen}
+      {/* NL Create Chat Modal */}
+      <QuickCronChatModal
+        isOpen={quickChatModalOpen}
         onClose={() => {
-          setNlModalOpen(false);
+          setQuickChatModalOpen(false);
           setSelectedTemplate(null);
         }}
-        onCreate={handleNLCreate}
-        onOpenTemplates={() => {
-          setNlModalOpen(false);
-          setTemplateModalOpen(true);
-        }}
+        onStartChat={handleStartCronChat}
         initialTemplate={selectedTemplate}
-        availableModels={availableModels}
-        modelsLoading={modelsLoading}
       />
 
       {/* Template Market Modal */}
@@ -648,7 +844,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
     <>
       <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between" style={{ background: 'var(--surface)' }}>
         <h3 className="font-medium text-sm" style={{ color: 'var(--text)' }}>
-          {initialData?.id ? 'Edit Cron Job' : 'Create New Cron Job'}
+          {initialData?.id ? 'Edit Automation' : 'New Automation'}
         </h3>
         <button
           className="p-1.5 rounded-md transition-all duration-150"
@@ -673,7 +869,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                   border: '1px solid var(--border)',
                   color: 'var(--text)',
                 }}
-                placeholder="Enter cron job name"
+                placeholder="Enter automation name"
                 value={editor.name}
                 onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
                 onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
@@ -983,7 +1179,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                   Saving...
                 </>
               ) : (
-                <>{initialData?.id ? 'Save Changes' : 'Create Cron Job'}</>
+                <>{initialData?.id ? 'Save Changes' : 'Create Automation'}</>
               )}
             </button>
             <button
@@ -1018,10 +1214,28 @@ interface CronDetailProps {
   onUpdate: (id: string, data: Parameters<typeof updateAutomationCronIPC>[1]) => void;
   saving: boolean;
   onViewSession?: (run: AutomationCronRun) => void;
+  successRate: number | null;
+  last7Days: { date: string; status: 'success' | 'failed' | 'none' }[];
 }
 
-function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelete, onUpdate, saving, onViewSession }: CronDetailProps) {
+function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelete, onUpdate, saving, onViewSession, successRate, last7Days }: CronDetailProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const [showAllRuns, setShowAllRuns] = useState(false);
+
+  const displayedRuns = showAllRuns ? runs : runs.slice(0, 5);
+  const capabilities = inferCapabilities(cron.prompt);
+  const executionGraph = buildExecutionGraph(cron.prompt);
+  const promptSteps = parsePromptSteps(cron.prompt);
+
+  // Last result
+  const lastRun = runs[0];
+  const lastResult = lastRun ? {
+    status: lastRun.run_status,
+    error: lastRun.error_message,
+    duration: lastRun.started_at && lastRun.ended_at
+      ? `${Math.round((lastRun.ended_at - lastRun.started_at) / 1000)}s`
+      : null,
+  } : null;
 
   if (isEditing) {
     return (
@@ -1107,72 +1321,188 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {/* Info Section */}
+        {/* Daily Brief Section */}
         <div className="p-4 border-b border-[var(--border)]">
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-xs mb-1" style={{ color: 'var(--muted)' }}>Schedule</label>
-              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
-                <Timer size={14} />
-                {getScheduleDisplay(cron)}
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: 'var(--muted)' }}>Status</label>
-              <span
-                className="text-xs px-2 py-1 rounded-full"
-                style={{
-                  background: cron.status === 'enabled' ? 'var(--success-soft)' : 'var(--chip)',
-                  color: cron.status === 'enabled' ? 'var(--success)' : 'var(--muted)',
-                }}
-              >
-                {cron.status}
-              </span>
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: 'var(--muted)' }}>Model</label>
-              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
-                <Robot size={14} />
-                <span className="truncate">{cron.model || 'Not configured'}</span>
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: 'var(--muted)' }}>Next Run</label>
-              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
-                <Calendar size={14} />
-                {formatTime(cron.next_run_at)}
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: 'var(--muted)' }}>Last Run</label>
-              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text)' }}>
-                <Clock size={14} />
-                {formatTime(cron.last_run_at)}
-              </div>
-            </div>
+          <div className="flex items-center gap-2 mb-3">
+            <Lightning size={14} weight="fill" style={{ color: 'var(--accent)' }} />
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Daily Brief</span>
           </div>
-          {cron.description && (
-            <div className="mb-4">
-              <label className="block text-xs mb-1" style={{ color: 'var(--muted)' }}>Description</label>
-              <p className="text-sm" style={{ color: 'var(--text)' }}>{cron.description}</p>
+
+          <div className="grid grid-cols-2 gap-3">
+            {/* Status Card */}
+            <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-2 mb-1">
+                {getRunStatusIcon(cron.status === 'error' ? 'failed' : lastResult?.status || 'pending')}
+                <span className="text-sm font-medium capitalize" style={{ color: 'var(--text)' }}>
+                  {cron.status === 'error' ? 'Error' : lastResult?.status || 'No runs yet'}
+                </span>
+              </div>
+              <p className="text-xs" style={{ color: 'var(--muted)' }}>{cron.name}</p>
             </div>
-          )}
-          <div>
-            <label className="block text-xs mb-1" style={{ color: 'var(--muted)' }}>Prompt</label>
-            <div className="p-3 rounded-lg text-sm" style={{ background: 'var(--main-bg)', color: 'var(--text)' }}>
-              {cron.prompt}
+
+            {/* Next Run Card */}
+            <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-2 mb-1">
+                <Clock size={14} style={{ color: 'var(--accent)' }} />
+                <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Next Run</span>
+              </div>
+              <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>
+                {formatDateShort(cron.next_run_at)}
+              </p>
+              <p className="text-xs" style={{ color: 'var(--muted)' }}>
+                {formatRelativeTime(cron.next_run_at)}
+              </p>
+            </div>
+
+            {/* Last Result Card */}
+            <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-2 mb-1">
+                <CaretRight size={14} style={{ color: 'var(--accent)' }} />
+                <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Last Result</span>
+              </div>
+              {lastResult ? (
+                <>
+                  <p className="text-sm font-medium capitalize" style={{
+                    color: lastResult.status === 'success' ? 'var(--success)' : lastResult.status === 'failed' ? 'var(--error)' : 'var(--text)'
+                  }}>
+                    {lastResult.status === 'success' ? 'Success' : lastResult.status === 'failed' ? `Failed: ${lastResult.error || 'Unknown'}` : lastResult.status}
+                  </p>
+                  {lastResult.duration && (
+                    <p className="text-xs" style={{ color: 'var(--muted)' }}>Duration: {lastResult.duration}</p>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm" style={{ color: 'var(--muted)' }}>No runs yet</p>
+              )}
+            </div>
+
+            {/* Capabilities Card */}
+            <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-2 mb-2">
+                <Gear size={14} style={{ color: 'var(--accent)' }} />
+                <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Capabilities</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {capabilities.map((cap) => (
+                  <span
+                    key={cap.name}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium"
+                    style={{
+                      background: cap.available ? 'var(--success-soft)' : 'var(--chip)',
+                      color: cap.available ? 'var(--success)' : 'var(--muted)',
+                    }}
+                  >
+                    {cap.available ? <CheckCircle size={10} weight="fill" /> : <XCircle size={10} />}
+                    {cap.name}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Runs Section */}
+        {/* Task Spec Section */}
+        <div className="p-4 border-b border-[var(--border)]">
+          <div className="flex items-center gap-2 mb-3">
+            <FileText size={14} style={{ color: 'var(--accent)' }} />
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Task</span>
+          </div>
+          <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+            <p className="text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
+              {promptSteps[0] || cron.prompt}
+            </p>
+            {promptSteps.length > 1 && (
+              <ul className="space-y-1">
+                {promptSteps.slice(1).map((step, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs" style={{ color: 'var(--muted)' }}>
+                    <span className="mt-0.5 w-1 h-1 rounded-full bg-[var(--accent)] flex-shrink-0" />
+                    {step}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        {/* Execution Graph Section */}
+        <div className="p-4 border-b border-[var(--border)]">
+          <div className="flex items-center gap-2 mb-3">
+            <GitBranch size={14} style={{ color: 'var(--accent)' }} />
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Execution Graph</span>
+          </div>
+          <div className="flex items-center gap-1 overflow-x-auto pb-2">
+            {executionGraph.map((node, i) => (
+              <div key={i} className="flex items-center gap-1 flex-shrink-0">
+                <div
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium"
+                  style={{
+                    background: node.status === 'failed' ? 'var(--error-soft)' : node.status === 'success' ? 'var(--success-soft)' : 'var(--surface)',
+                    color: node.status === 'failed' ? 'var(--error)' : node.status === 'success' ? 'var(--success)' : 'var(--muted)',
+                    border: `1px solid ${node.status === 'failed' ? 'rgba(239, 68, 68, 0.3)' : node.status === 'success' ? 'rgba(34, 197, 94, 0.3)' : 'var(--border)'}`,
+                  }}
+                >
+                  {node.status === 'failed' && <XCircle size={10} weight="fill" />}
+                  {node.status === 'success' && <CheckCircle size={10} weight="fill" />}
+                  {node.status === 'running' && <SpinnerGap size={10} className="animate-spin" />}
+                  {node.name}
+                </div>
+                {i < executionGraph.length - 1 && (
+                  <ArrowRight size={12} style={{ color: 'var(--muted)' }} />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Runs Timeline Section */}
         <div className="p-4">
           <div className="flex items-center justify-between mb-3">
-            <h4 className="font-medium text-sm" style={{ color: 'var(--text)' }}>Recent Runs</h4>
-            <span className="text-xs px-2 py-1 rounded-full" style={{ background: 'var(--chip)', color: 'var(--muted)' }}>
-              {runs.length}
-            </span>
+            <div className="flex items-center gap-2">
+              <Clock size={14} style={{ color: 'var(--accent)' }} />
+              <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Recent Runs</span>
+            </div>
+            {successRate !== null && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs" style={{ color: 'var(--muted)' }}>Success rate</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-16 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${successRate}%`,
+                        background: successRate >= 80 ? 'var(--success)' : successRate >= 50 ? 'var(--warning)' : 'var(--error)',
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{successRate}%</span>
+                </div>
+              </div>
+            )}
           </div>
+
+          {/* Last 7 days */}
+          {last7Days.length > 0 && (
+            <div className="flex items-center gap-2 mb-3 px-1">
+              <span className="text-[10px]" style={{ color: 'var(--muted)' }}>Last 7 days</span>
+              <div className="flex items-center gap-1">
+                {last7Days.map((day, i) => (
+                  <div key={i} className="flex flex-col items-center gap-0.5">
+                    <div
+                      className="w-4 h-4 rounded flex items-center justify-center text-[8px] font-bold"
+                      style={{
+                        background: day.status === 'success' ? 'var(--success-soft)' : day.status === 'failed' ? 'var(--error-soft)' : 'var(--chip)',
+                        color: day.status === 'success' ? 'var(--success)' : day.status === 'failed' ? 'var(--error)' : 'var(--muted)',
+                      }}
+                    >
+                      {day.status === 'success' ? '✓' : day.status === 'failed' ? '✗' : '·'}
+                    </div>
+                    <span className="text-[8px]" style={{ color: 'var(--muted)' }}>{day.date}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {runs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <Play size={28} className="mb-2 opacity-30" style={{ color: 'var(--muted)' }} />
@@ -1180,47 +1510,82 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
               <p className="text-xs mt-1" style={{ color: 'var(--muted)', opacity: 0.7 }}>Click "Run Now" to execute manually</p>
             </div>
           ) : (
-            <div className="space-y-2">
-              {runs.map((run) => (
+            <div className="space-y-0">
+              {displayedRuns.map((run, index) => (
                 <div
                   key={run.id}
-                  className="rounded-lg p-3 transition-all duration-150"
-                  style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}
+                  className="flex items-start gap-3 py-3"
+                  style={{
+                    borderLeft: '2px solid var(--border)',
+                    paddingLeft: '12px',
+                    marginLeft: '6px',
+                  }}
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      {getRunStatusIcon(run.run_status)}
-                      <span className="text-sm font-medium capitalize" style={{ color: 'var(--text)' }}>
-                        {run.run_status}
+                  {/* Timeline dot */}
+                  <div
+                    className="absolute w-3 h-3 rounded-full border-2 flex-shrink-0"
+                    style={{
+                      marginLeft: '-21px',
+                      marginTop: '2px',
+                      background: run.run_status === 'success' ? 'var(--success)' : run.run_status === 'failed' ? 'var(--error)' : 'var(--surface)',
+                      borderColor: run.run_status === 'success' ? 'var(--success)' : run.run_status === 'failed' ? 'var(--error)' : 'var(--border)',
+                    }}
+                  />
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        {getRunStatusDot(run.run_status)}
+                        <span className="text-sm font-medium capitalize" style={{ color: 'var(--text)' }}>
+                          {run.run_status}
+                        </span>
+                        {run.error_message && (
+                          <span className="text-xs truncate max-w-[200px]" style={{ color: 'var(--error)' }}>
+                            {run.error_message}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs flex-shrink-0" style={{ color: 'var(--muted)' }}>
+                        {formatDateShort(run.started_at)}
                       </span>
                     </div>
-                    <div className="flex items-center gap-3 text-xs" style={{ color: 'var(--muted)' }}>
-                      <span>{formatTime(run.started_at)}</span>
+
+                    {run.output && (
+                      <p className="text-xs truncate" style={{ color: 'var(--muted)' }}>
+                        {run.output}
+                      </p>
+                    )}
+
+                    <div className="flex items-center gap-2 mt-1.5">
                       {run.session_id && onViewSession && (
                         <button
                           onClick={() => onViewSession(run)}
-                          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150"
+                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all duration-150"
                           style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
-                          title="View session messages"
                         >
-                          <ChatCircle size={12} />
-                          View
+                          <ChatCircle size={10} />
+                          View logs
                         </button>
+                      )}
+                      {run.error_message && (
+                        <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--error-soft)', color: 'var(--error)' }}>
+                          {run.error_message}
+                        </span>
                       )}
                     </div>
                   </div>
-                  {run.error_message && (
-                    <div className="text-xs px-2 py-1.5 rounded mb-2" style={{ background: 'var(--error-soft)', color: 'var(--error)' }}>
-                      {run.error_message}
-                    </div>
-                  )}
-                  {run.output && (
-                    <pre className="text-xs p-2 rounded overflow-x-auto" style={{ background: 'var(--surface)', color: 'var(--text)' }}>
-                      {run.output}
-                    </pre>
-                  )}
                 </div>
               ))}
+
+              {runs.length > 5 && (
+                <button
+                  onClick={() => setShowAllRuns(!showAllRuns)}
+                  className="w-full text-center py-2 text-xs font-medium transition-colors"
+                  style={{ color: 'var(--accent)' }}
+                >
+                  {showAllRuns ? 'Show less' : `Show ${runs.length - 5} more`}
+                </button>
+              )}
             </div>
           )}
         </div>

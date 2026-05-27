@@ -525,11 +525,13 @@ export function handleGatewayMessage(
 
       // Use platform + platformChatId as sessionId to ensure conversation history is preserved
       const sessionId = `gw-${data.platform}-${data.platformChatId}`;
-      
+
       // Find and reset existing session if any
+      let oldSessionId: string | undefined;
       const states = getSessionStates();
       for (const [id, state] of states) {
         if (id === sessionId) {
+          oldSessionId = id;
           resetGatewaySession(id);
           break;
         }

@@ -18,6 +18,7 @@ import { getPrompt } from './prompt.js';
 import { PlatformHookManager } from './platform-hooks/PlatformHookManager.js';
 import { isUrlBlocked, getEffectiveBlockedDomains, type DomainBlockerConfig } from './DomainBlocker.js';
 import { ActionRegistry, SchemaGenerator, getAllActions, type ActionContext } from './actions/index.js';
+import { formatResult } from './ResultFormatter.js';
 import type { BrowserMode, NetworkEnvironment } from './types.js';
 
 export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
@@ -126,7 +127,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
       return {
         id: crypto.randomUUID(),
         name: this.name,
-        result: JSON.stringify({ operation, mode: this.mode, ...result }),
+        result: formatResult(operation, { operation, mode: this.mode, ...result }),
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

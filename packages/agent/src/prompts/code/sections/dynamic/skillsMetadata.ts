@@ -10,6 +10,8 @@ export const SKILLS_GUIDANCE = `After completing a complex task (5+ tool calls),
 When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with skill_manage(action='patch') — don't wait to be asked. Skills that aren't maintained become liabilities.`
 
 const CATEGORY_LABELS: Record<SkillCategory, string> = {
+  'cognition': 'Cognition',
+  'agentic': 'Agentic',
   'development': 'Development',
   'research': 'Research',
   'creative': 'Creative',
@@ -18,6 +20,7 @@ const CATEGORY_LABELS: Record<SkillCategory, string> = {
   'automation': 'Automation',
   'communication': 'Communication',
   'media': 'Media',
+  'apple': 'Apple',
   'mcp': 'MCP',
   'system': 'System',
   'other': 'Other',

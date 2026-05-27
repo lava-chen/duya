@@ -149,6 +149,14 @@ export interface ProviderAPI {
     provider: string
     authStyle: string
   } | null>
+  // Get unmasked provider config by ID for title generation model resolution
+  getConfig: (providerId: string, model: string) => Promise<{
+    apiKey: string
+    baseUrl?: string
+    model: string
+    provider: string
+    authStyle: string
+  } | null>
 }
 
 export interface OutputStyleAPI {
@@ -372,6 +380,22 @@ export interface DocumentParserAPI {
   isReady: () => Promise<boolean>
 }
 
+export interface WikiAPI {
+  listAllNodes: () => Promise<unknown[]>
+  getNode: (nodePath: string) => Promise<unknown | null>
+  updateNode: (node: unknown) => Promise<boolean>
+  deleteNode: (nodePath: string) => Promise<boolean>
+  searchNodes: (query: string) => Promise<unknown[]>
+  readIndex: () => Promise<unknown[]>
+  readLog: () => Promise<unknown[]>
+  listInboxFiles: () => Promise<string[]>
+  readInboxFile: (filename: string) => Promise<string | null>
+  deleteInboxFile: (filename: string) => Promise<boolean>
+  getRootPath: () => Promise<string>
+  getRuntimeStatus: () => Promise<unknown>
+  onActivity: (callback: (data: unknown) => void) => () => void
+}
+
 export interface RecapAPI {
   request: (sessionId: string) => Promise<{ success: boolean; recap: string | null; error?: string }>
   setActiveSession: (sessionId: string) => Promise<void>
@@ -393,6 +417,7 @@ export interface ElectronAPI {
   }
   shell: {
     openPath: (folderPath: string) => Promise<string>
+    openExternal: (url: string) => Promise<string>
   }
   notification: {
     show: (options: { title: string; body: string; sessionId?: string }) => Promise<boolean>
@@ -459,6 +484,7 @@ export interface ElectronAPI {
   parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
   recap: RecapAPI
+  wiki: WikiAPI
   // Agent Server API
   agentServer: {
     getPort: () => Promise<number | null>
@@ -864,8 +890,8 @@ function getAgentPortAPI(): AgentControlPortAPI | null {
         agentSessionId?: string;
       }, (data as { sessionId?: string }).sessionId))
     },
-    onPermission: (callback: (request: { id: string; toolName: string; toolInput: Record<string, unknown> }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:permission', (data) => callback((data as { request: { id: string; toolName: string; toolInput: Record<string, unknown> } }).request, (data as { sessionId?: string }).sessionId))
+    onPermission: (callback: (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number }, sessionId?: string) => void) => {
+      return registerAgentPortHandler('chat:permission', (data) => callback((data as { request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } }).request, (data as { sessionId?: string }).sessionId))
     },
     onContextUsage: (callback: (data: { usedTokens: number; contextWindow: number; percentFull: number }, sessionId?: string) => void) => {
       return registerAgentPortHandler('chat:context_usage', (data) => callback(data as { usedTokens: number; contextWindow: number; percentFull: number }, (data as { sessionId?: string }).sessionId))
@@ -918,6 +944,7 @@ const electronAPI: ElectronAPI = {
   },
   shell: {
     openPath: (folderPath) => ipcRenderer.invoke('shell:open-path', folderPath),
+    openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   },
   notification: {
     show: (options) => ipcRenderer.invoke('notification:show', options),
@@ -1053,6 +1080,8 @@ const electronAPI: ElectronAPI = {
     activate: (id: string) => ipcRenderer.invoke('config:provider:activate', id),
     // Get full provider config with unmasked API key for agent initialization
     getActiveProviderConfig: () => ipcRenderer.invoke('config:provider:getActiveProviderConfig'),
+    // Get unmasked provider config by ID for title generation model resolution
+    getConfig: (providerId: string, model: string) => ipcRenderer.invoke('config:provider:getConfig', providerId, model),
   },
   outputStyle: {
     list: () => ipcRenderer.invoke('config:style:getAll'),
@@ -1166,6 +1195,30 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('recap:result', handler);
       return () => {
         ipcRenderer.removeListener('recap:result', handler);
+      };
+    },
+  },
+  // Wiki API
+  wiki: {
+    listAllNodes: () => ipcRenderer.invoke('wiki:listAllNodes'),
+    getNode: (nodePath: string) => ipcRenderer.invoke('wiki:getNode', nodePath),
+    updateNode: (node: unknown) => ipcRenderer.invoke('wiki:updateNode', node),
+    deleteNode: (nodePath: string) => ipcRenderer.invoke('wiki:deleteNode', nodePath),
+    searchNodes: (query: string) => ipcRenderer.invoke('wiki:searchNodes', query),
+    readIndex: () => ipcRenderer.invoke('wiki:readIndex'),
+    readLog: () => ipcRenderer.invoke('wiki:readLog'),
+    listInboxFiles: () => ipcRenderer.invoke('wiki:listInboxFiles'),
+    readInboxFile: (filename: string) => ipcRenderer.invoke('wiki:readInboxFile', filename),
+    deleteInboxFile: (filename: string) => ipcRenderer.invoke('wiki:deleteInboxFile', filename),
+    getRootPath: () => ipcRenderer.invoke('wiki:getRootPath'),
+    getRuntimeStatus: () => ipcRenderer.invoke('wiki:getRuntimeStatus'),
+    onActivity: (callback: (data: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        callback(payload);
+      };
+      ipcRenderer.on('wiki:activity', handler);
+      return () => {
+        ipcRenderer.removeListener('wiki:activity', handler);
       };
     },
   },

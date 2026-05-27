@@ -801,7 +801,11 @@ export async function getInterruptedSessions(): Promise<unknown[]> {
 export async function resolvePermission(
   sessionId: string,
   permissionId: string,
-  decision: 'allow' | 'deny' | 'allow_once' | 'allow_for_session'
+  decision: 'allow' | 'deny' | 'allow_once' | 'allow_for_session',
+  extra?: {
+    updatedInput?: Record<string, unknown>;
+    message?: string;
+  }
 ): Promise<void> {
   const port = await getPort();
   const url = `http://127.0.0.1:${port}/sessions/${sessionId}/permission`;
@@ -809,7 +813,7 @@ export async function resolvePermission(
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: permissionId, decision }),
+    body: JSON.stringify({ id: permissionId, decision, ...extra }),
   });
 
   if (!response.ok) {

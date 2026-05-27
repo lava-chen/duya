@@ -173,19 +173,16 @@ function SessionItem({
       onClick={onClick}
       className={`session-row ${isActive ? "active" : ""}`}
     >
-      <span
-        className="session-row-platform"
-        style={{ color: platformColor }}
-      >
-        {platformLabel}
-      </span>
-
       <div className="session-row-info">
         <span className="session-row-title">
           {session.title || t("project.untitled")}
         </span>
         <span className="session-row-meta">
-          {formatRelativeTime(session.updatedAt)}
+          <span style={{ color: platformColor, fontWeight: 600 }}>
+            {platformLabel}
+          </span>
+          <span>·</span>
+          <span>{formatRelativeTime(session.updatedAt)}</span>
         </span>
       </div>
 

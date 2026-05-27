@@ -89,6 +89,45 @@ export type {
   CanUseToolDecision,
 } from './tool/StreamingToolExecutor.js';
 
+function collectRecentImageAttachments(messages: Message[]): Array<{
+  name: string;
+  path?: string;
+  url?: string;
+  type: string;
+}> {
+  const recent: Array<{
+    name: string;
+    path?: string;
+    url?: string;
+    type: string;
+  }> = [];
+  const seen = new Set<string>();
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const attachments = messages[i]?.attachments;
+    if (!attachments || attachments.length === 0) continue;
+
+    for (const attachment of [...attachments].reverse()) {
+      if (!attachment?.type?.startsWith('image/')) continue;
+      const source = attachment.path || attachment.url;
+      if (!source) continue;
+
+      const dedupeKey = `${attachment.name}::${source}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      recent.push({
+        name: attachment.name,
+        path: attachment.path,
+        url: attachment.url,
+        type: attachment.type,
+      });
+    }
+  }
+
+  return recent;
+}
+
 // Export MCP related
 export { MCPManager, MCPClient } from './mcp/index.js';
 export { loadMCPConfigs, loadMCPConfigsFromSettings, getSettingsPath, validateMCPConfig } from './mcp/config.js';
@@ -528,7 +567,6 @@ export class duyaAgent {
       const stream = this.visionClient.streamChat([userMessage], {
         maxTokens: 2048,
         temperature: 0,
-        disableThinking: true,
       });
 
       let eventCount = 0;
@@ -818,6 +856,7 @@ export class duyaAgent {
         getAppState: () => ({}),
         setAppState: () => {},
         options: {
+          recentImageAttachments: collectRecentImageAttachments(messages),
           tools,
           commands: [],
           mainLoopModel: this._model,

@@ -72,6 +72,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [73-canvas-v2-mindmap-frame](./active/73-conductor-canvas-v2-mindmap-frame-toolbar.md) | Phase 4-6: MindMap + Frame + 工具栏 + 交互 | P0 | 71, 72 |
 | [74-canvas-v2-agent-integration](./active/74-conductor-canvas-v2-agent-integration.md) | Phase 7-8: Agent 工具 + Image + 主题 + 轻量外壳 | P0 | 70, 71, 72, 73 |
 
+| [81-mindmap-interaction-correction](./active/81-mindmap-interaction-correction.md) | Follow-up: root move + subtree reorder + draft node flow | P0 | 73 |
 ### Compact System Fix Plans
 
 | Plan | Description | Priority | Status |
@@ -97,6 +98,10 @@ Source: [problems-analysis.md](./problems-analysis.md) — 10 个首次测试问
 | [58-wiki-agent-listener](./active/58-wiki-agent-listener.md) | Phase 2: Listener 被动提取（会话结束→提取→建链） | P1 | 待开始 |
 | [59-wiki-agent-gardener](./active/59-wiki-agent-gardener.md) | Phase 3: Gardener 主动巡检（六项检查，Scheduler 注册） | P2 | 待开始 |
 | [61-wiki-agent-deep-research](./active/61-wiki-agent-deep-research.md) | Phase 4: Deep Research 双向集成（增量规划） | P2 | 待开始 |
+| [77-wiki-agent-v0.5-overview](./active/77-wiki-agent-v0.5-overview.md) | WikiAgent v0.5 总览（全局监听 + 独立 prompts + 保守 merge + app UI） | P1 | 待开始 |
+| [78-wiki-agent-global-observer-core](./active/78-wiki-agent-global-observer-core.md) | Phase 1: 全局监听、统一 queue、node store、读工具 | P1 | 待开始 |
+| [79-wiki-agent-prompt-merge](./active/79-wiki-agent-prompt-merge.md) | Phase 2: 独立 prompt system、候选提取、保守自动合并 | P1 | 待开始 |
+| [80-wiki-agent-app-ui](./active/80-wiki-agent-app-ui.md) | Phase 3: Memory 页面、Inbox、Activity、Merge 预览 | P1 | 待开始 |
 
 ## Completed Plans
 

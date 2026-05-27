@@ -406,6 +406,15 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_gateway_user_map_platform ON gateway_user_map(platform, platform_chat_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_gateway_message_map_session ON gateway_message_map(session_id)`);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS model_capabilities (
+      id                TEXT PRIMARY KEY,
+      is_multimodal     INTEGER NOT NULL,
+      detected_at       INTEGER NOT NULL,
+      detection_method  TEXT NOT NULL DEFAULT 'unknown'
+    )
+  `);
+
   initializeFts5(db);
 
   const insertSetting = db.prepare(`
