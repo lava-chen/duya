@@ -5,6 +5,8 @@ import { app } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
 import { handleDbRequest } from './db-bridge';
 import { killProcessTree } from '../lib/process-cleanup';
+import { getWikiAgentRuntime, initWikiAgentRuntime } from '../wiki-agent/WikiAgentRuntime';
+import type { ChatDonePayload } from '../wiki-agent/types';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -74,6 +76,26 @@ export function spawnAgentServer(): Promise<number> {
         }).catch((error) => {
           getLogger().error('handleDbRequest failed for Agent Server', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Main);
         });
+        return;
+      }
+
+      if (msg.type === 'wiki:chat_done' && msg.payload) {
+        const payload = msg.payload as Partial<ChatDonePayload>;
+        if (
+          typeof payload.sessionId === 'string'
+          && typeof payload.turnId === 'string'
+          && typeof payload.finalContent === 'string'
+        ) {
+          const runtime = getWikiAgentRuntime() ?? initWikiAgentRuntime();
+          runtime.handleChatDone({
+            sessionId: payload.sessionId,
+            turnId: payload.turnId,
+            finalContent: payload.finalContent,
+            conversationText: typeof payload.conversationText === 'string' ? payload.conversationText : undefined,
+            timestamp: typeof payload.timestamp === 'number' ? payload.timestamp : Date.now(),
+            metadata: payload.metadata,
+          });
+        }
       }
     });
 
@@ -126,10 +148,30 @@ export function spawnAgentServer(): Promise<number> {
 
     child.stderr?.on('data', (data: Buffer) => {
       const line = data.toString().trim();
-      if (line) {
-        // Also output to console for debugging
-        console.error(`[agent-server] ${line}`);
+      if (!line) return;
+
+      // Also output to console for debugging
+      console.error(`[agent-server] ${line}`);
+
+      // Classify stderr lines properly — most stderr from the agent server
+      // is forwarded worker output (INFO-level), not actual errors.
+      const isError =
+        line.includes('Error:') ||
+        line.includes('[ERROR]') ||
+        line.includes('[FATAL]') ||
+        line.includes('TypeError') ||
+        line.includes('ReferenceError') ||
+        line.includes('uncaughtException');
+      const isWarn =
+        line.includes('[WARN]') ||
+        line.includes('[WARNING]');
+
+      if (isError) {
         logger.error(`Agent Server error: ${line}`, undefined, undefined, LogComponent.Main);
+      } else if (isWarn) {
+        logger.warn(`Agent Server: ${line}`, undefined, LogComponent.Main);
+      } else {
+        logger.info(`Agent Server: ${line}`, undefined, LogComponent.Main);
       }
     });
 

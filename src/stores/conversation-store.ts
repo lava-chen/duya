@@ -49,7 +49,7 @@ export interface ProjectGroup {
 }
 
 // View types for state-driven UI
-export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor';
+export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor' | 'memory';
 export type SettingsTab = 'general' | 'appearance' | 'providers' | 'skills' | 'mcp' | 'channels' | 'browser' | 'security' | 'usage' | 'agents' | 'support';
 
 interface ConversationState {

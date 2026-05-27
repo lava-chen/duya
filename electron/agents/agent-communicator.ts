@@ -30,10 +30,14 @@ function getDefaultModelForProvider(providerType: ApiProvider['providerType'], o
     case 'ollama':
       return 'llama3.2';
     case 'openai':
-      return 'gpt-4o';
     case 'openai-compatible':
-      return '';
+    case 'openrouter':
+    case 'google':
+    case 'gemini-image':
+      return 'gpt-4o';
     case 'anthropic':
+    case 'bedrock':
+    case 'vertex':
       return 'claude-sonnet-4-20250514';
     default:
       return '';
@@ -187,6 +191,21 @@ export function registerAgentHandlers(): void {
     };
   });
 
+  // Get provider config by ID with unmasked API key (for title generation model resolution)
+  ipcMain.handle('config:provider:getConfig', (_event, providerId: string, model: string) => {
+    const configManager = getConfigManager();
+    const provider = configManager.getAllProviders()[providerId];
+    if (!provider) return null;
+
+    return {
+      apiKey: provider.apiKey,
+      baseUrl: provider.baseUrl || undefined,
+      model: model || '',
+      provider: toLLMProvider(provider.providerType),
+      authStyle: 'api_key' as const,
+    };
+  });
+
   // Upsert provider
   ipcMain.handle('config:provider:upsert', (_event, data: ApiProvider) => {
     const configManager = getConfigManager();
@@ -254,14 +273,14 @@ export function registerAgentHandlers(): void {
     return configManager.getVisionSettings();
   });
 
-  ipcMain.handle('config:vision:set', (_event, data: { provider?: string; model?: string; baseURL?: string; apiKey?: string; enabled?: boolean }) => {
+  ipcMain.handle('config:vision:set', (_event, data: { provider?: string; model?: string; baseUrl?: string; baseURL?: string; apiKey?: string; enabled?: boolean }) => {
     const configManager = getConfigManager();
     const current = configManager.getVisionSettings();
     const merged = {
       ...current,
       ...data,
-      // Normalize baseURL -> baseUrl for ConfigManager
-      baseUrl: data.baseURL || current.baseUrl,
+      // Normalize baseURL/baseUrl -> baseUrl for ConfigManager
+      baseUrl: data.baseUrl || data.baseURL || current.baseUrl,
     };
     // Remove baseURL from merged since ConfigManager uses baseUrl
     delete (merged as Record<string, unknown>).baseURL;

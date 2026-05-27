@@ -21,6 +21,29 @@ function UnknownElementFallback({ element }: { element: CanvasElement }) {
   );
 }
 
+function getDisplayLabel(element: CanvasElement): string {
+  const metadataLabel = element.metadata?.label;
+  if (metadataLabel && metadataLabel !== element.elementKind) {
+    return metadataLabel;
+  }
+
+  const sourceTitle = element.config?.sourceTitle;
+  if (typeof sourceTitle === "string" && sourceTitle.trim()) {
+    return sourceTitle;
+  }
+
+  const sourceLabel = element.config?.sourceLabel;
+  if (typeof sourceLabel === "string" && sourceLabel.trim()) {
+    return sourceLabel;
+  }
+
+  if (element.vizSpec?.title) {
+    return element.vizSpec.title;
+  }
+
+  return getElementLabel(element.elementKind);
+}
+
 export const ElementRenderer: React.FC<ElementRendererProps> = ({
   element,
   readOnly,
@@ -48,7 +71,7 @@ export const ElementRenderer: React.FC<ElementRendererProps> = ({
     );
   }
 
-  const label = element.metadata?.label || getElementLabel(element.elementKind);
+  const label = getDisplayLabel(element);
   const ElementComponent = def.component;
 
   const content = (

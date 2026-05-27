@@ -25,7 +25,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 export interface ApiProvider {
   id: string;
   name: string;
-  providerType: 'anthropic' | 'openai' | 'ollama' | 'openai-compatible';
+  providerType: 'anthropic' | 'openai' | 'ollama' | 'openai-compatible' | 'openrouter' | 'bedrock' | 'vertex' | 'gemini-image' | 'google';
   baseUrl: string;
   apiKey: string;
   isActive: boolean;
@@ -42,6 +42,84 @@ export interface VisionSettings {
   baseUrl: string;
   apiKey: string;
   enabled: boolean;
+}
+
+function normalizeVisionSettings(input: Partial<VisionSettings>): VisionSettings {
+  const provider = (input.provider || '').trim().toLowerCase();
+  const model = (input.model || '').trim();
+  const baseUrl = (input.baseUrl || '').trim();
+  const apiKey = (input.apiKey || '').trim();
+  const enabled = Boolean(input.enabled);
+
+  const base = baseUrl.toLowerCase();
+  const isOllamaLocal =
+    base.includes('localhost:11434')
+    || base.includes('127.0.0.1:11434')
+    || base.includes('ollama');
+  const isOpenAIStyleEndpoint = base.includes('/v1');
+
+  let normalizedProvider = provider;
+  let normalizedBaseUrl = baseUrl;
+
+  if (!normalizedProvider && isOllamaLocal && !isOpenAIStyleEndpoint) {
+    normalizedProvider = 'ollama';
+  }
+  if (!normalizedProvider && base.includes('openrouter')) {
+    normalizedProvider = 'openrouter';
+  }
+  if (!normalizedProvider && base.includes('api.openai.com')) {
+    normalizedProvider = 'openai';
+  }
+  if (!normalizedProvider && base.includes('anthropic')) {
+    normalizedProvider = 'anthropic';
+  }
+
+  // Auto-heal common mismatch: provider says openrouter/openai but URL is Ollama native.
+  if (
+    isOllamaLocal
+    && !isOpenAIStyleEndpoint
+    && ['openrouter', 'openai', 'openai-compatible'].includes(normalizedProvider)
+  ) {
+    normalizedProvider = 'ollama';
+  }
+
+  // Fill base URL defaults when provider is known but URL is empty.
+  if (!normalizedBaseUrl) {
+    switch (normalizedProvider) {
+      case 'ollama':
+        normalizedBaseUrl = 'http://localhost:11434';
+        break;
+      case 'openrouter':
+        normalizedBaseUrl = 'https://openrouter.ai/api/v1';
+        break;
+      case 'openai':
+      case 'openai-compatible':
+        normalizedBaseUrl = 'https://api.openai.com/v1';
+        break;
+      case 'anthropic':
+        normalizedBaseUrl = 'https://api.anthropic.com';
+        break;
+      default:
+        normalizedBaseUrl = '';
+        break;
+    }
+  }
+
+  // Ollama native API does not require API keys.
+  const normalizedApiKey = normalizedProvider === 'ollama' ? '' : apiKey;
+
+  return {
+    provider: normalizedProvider,
+    model,
+    baseUrl: normalizedBaseUrl,
+    apiKey: normalizedApiKey,
+    enabled,
+  };
+}
+
+function isMaskedKey(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.includes('***') || value.includes('****');
 }
 
 export interface AgentSettings {
@@ -127,11 +205,14 @@ export type LLMProvider = 'anthropic' | 'openai' | 'ollama';
 export function toLLMProvider(providerType: ApiProvider['providerType'], baseUrl?: string): LLMProvider {
   switch (providerType) {
     case 'anthropic':
+    case 'bedrock':
+    case 'vertex':
       return 'anthropic';
     case 'openai':
-      return 'openai';
     case 'openai-compatible':
-      // If baseURL points to Ollama, use Ollama client for better compatibility
+    case 'openrouter':
+    case 'google':
+    case 'gemini-image':
       if (baseUrl?.includes('localhost:11434') || baseUrl?.includes('127.0.0.1:11434')) {
         return 'ollama';
       }
@@ -465,12 +546,16 @@ export class ConfigManager {
   }
 
   private mergeWithDefault(config: Partial<AppConfig>): AppConfig {
+    const mergedVisionSettings = normalizeVisionSettings({
+      ...DEFAULT_CONFIG.visionSettings,
+      ...config.visionSettings,
+    });
     return {
       version: config.version ?? DEFAULT_CONFIG.version,
       apiProviders: { ...DEFAULT_CONFIG.apiProviders, ...config.apiProviders },
       agentSettings: { ...DEFAULT_CONFIG.agentSettings, ...config.agentSettings },
       uiPreferences: { ...DEFAULT_CONFIG.uiPreferences, ...config.uiPreferences },
-      visionSettings: { ...DEFAULT_CONFIG.visionSettings, ...config.visionSettings },
+      visionSettings: mergedVisionSettings,
       outputStyles: { ...DEFAULT_CONFIG.outputStyles, ...config.outputStyles },
       securityBypassSkills: config.securityBypassSkills ?? DEFAULT_CONFIG.securityBypassSkills,
       conductorFeatureFlags: config.conductorFeatureFlags && DEFAULT_CONFIG.conductorFeatureFlags
@@ -484,6 +569,36 @@ export class ConfigManager {
 
   private createDefaultConfig(): AppConfig {
     return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  }
+
+  private resolveVisionApiKeyFromProviders(vision: VisionSettings): string {
+    if (!vision.provider || vision.provider === 'ollama') return '';
+
+    const providerType = vision.provider.toLowerCase();
+    const baseUrl = (vision.baseUrl || '').toLowerCase();
+    const providers = Object.values(this.config.apiProviders || {});
+
+    const exactMatch = providers.find((p) =>
+      p.providerType.toLowerCase() === providerType
+      && (p.baseUrl || '').toLowerCase() === baseUrl
+      && !!p.apiKey,
+    );
+    if (exactMatch?.apiKey) return exactMatch.apiKey;
+
+    const typeMatch = providers.find((p) =>
+      p.providerType.toLowerCase() === providerType
+      && !!p.apiKey,
+    );
+    if (typeMatch?.apiKey) return typeMatch.apiKey;
+
+    const urlMatch = providers.find((p) =>
+      baseUrl.length > 0
+      && (p.baseUrl || '').toLowerCase() === baseUrl
+      && !!p.apiKey,
+    );
+    if (urlMatch?.apiKey) return urlMatch.apiKey;
+
+    return '';
   }
 
   // =============================================================================
@@ -608,7 +723,20 @@ export class ConfigManager {
   }
 
   getVisionSettings(): VisionSettings {
-    return this.config.visionSettings;
+    // Only return defined fields to prevent stale data (e.g., providerId) from leaking.
+    // Also normalize to self-heal persisted mismatches from older versions.
+    const normalized = normalizeVisionSettings(this.config.visionSettings);
+    if (normalized.provider !== 'ollama' && (!normalized.apiKey || isMaskedKey(normalized.apiKey))) {
+      const recoveredKey = this.resolveVisionApiKeyFromProviders(normalized);
+      if (recoveredKey) {
+        normalized.apiKey = recoveredKey;
+      }
+    }
+    if (JSON.stringify(normalized) !== JSON.stringify(this.config.visionSettings)) {
+      this.config.visionSettings = normalized;
+      this.dirty = true;
+    }
+    return normalized;
   }
 
   getApiKey(providerId: string): string | undefined {
@@ -703,7 +831,18 @@ export class ConfigManager {
       return false;
     }
 
-    (this.config as unknown as Record<string, unknown>)[key] = value;
+    if (key === 'visionSettings' && typeof value === 'object' && value !== null) {
+      const normalizedVision = normalizeVisionSettings(value as Partial<VisionSettings>);
+      if (normalizedVision.provider !== 'ollama' && (!normalizedVision.apiKey || isMaskedKey(normalizedVision.apiKey))) {
+        const recoveredKey = this.resolveVisionApiKeyFromProviders(normalizedVision);
+        if (recoveredKey) {
+          normalizedVision.apiKey = recoveredKey;
+        }
+      }
+      (this.config as unknown as Record<string, unknown>)[key] = normalizedVision;
+    } else {
+      (this.config as unknown as Record<string, unknown>)[key] = value;
+    }
     this.dirty = true;
     this.broadcast();
     this.notifyChange(key);

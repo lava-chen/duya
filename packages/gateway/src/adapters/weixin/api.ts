@@ -10,7 +10,7 @@
  * 3. Session expired detection and handling (errcode -14)
  */
 
-import { randomBytes, createHash, createCipheriv } from 'node:crypto';
+import { randomBytes, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import https from 'https';
 import { Socket } from 'net';
 import fs from 'node:fs';
@@ -282,6 +282,43 @@ function aesEcbPaddedSize(plaintextSize: number): number {
 function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
   const cipher = createCipheriv('aes-128-ecb', key, null);
   return Buffer.concat([cipher.update(plaintext), cipher.final()]);
+}
+
+/** Decrypt buffer with AES-128-ECB and strip PKCS7 padding. */
+function decryptAesEcb(ciphertext: Buffer, key: Buffer): Buffer {
+  const decipher = createDecipheriv('aes-128-ecb', key, null);
+  const padded = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  if (padded.length === 0) return padded;
+  const padLen = padded[padded.length - 1];
+  if (padLen >= 1 && padLen <= 16) {
+    let validPad = true;
+    for (let i = padded.length - padLen; i < padded.length; i++) {
+      if (padded[i] !== padLen) {
+        validPad = false;
+        break;
+      }
+    }
+    if (validPad) return padded.subarray(0, padded.length - padLen);
+  }
+  return padded;
+}
+
+/**
+ * Parse Weixin iLink AES key from base64-encoded string.
+ * 
+ * When the decoded bytes are 16 bytes → raw AES-128 key.
+ * When the decoded bytes are 32 bytes → hex-encoded key, parse as hex.
+ */
+function parseAesKey(aesKeyB64: string): Buffer {
+  const decoded = Buffer.from(aesKeyB64, 'base64');
+  if (decoded.length === 16) return decoded;
+  if (decoded.length === 32) {
+    const text = decoded.toString('ascii');
+    if (/^[0-9a-fA-F]+$/.test(text)) {
+      return Buffer.from(text, 'hex');
+    }
+  }
+  throw new Error(`unexpected aes_key format (${decoded.length} decoded bytes)`);
 }
 
 /** Build a CDN upload URL from upload_param and filekey. */
@@ -1095,5 +1132,88 @@ export const wxApi = {
 
     console.debug('sendFileMessage: success');
     return { messageId: lastClientId };
+  },
+
+  /**
+   * Download and AES-128-ECB decrypt media from the Weixin CDN.
+   * Returns the raw decrypted bytes.
+   */
+  async downloadAndDecryptMedia(params: {
+    encryptedQueryParam: string;
+    aesKeyB64: string;
+    timeoutSeconds?: number;
+  }): Promise<Buffer> {
+    const { encryptedQueryParam, aesKeyB64, timeoutSeconds = 30 } = params;
+    const downloadUrl = `${_config.cdnBaseUrl || DEFAULT_CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(encryptedQueryParam)}`;
+    console.debug(`downloadAndDecryptMedia: downloading from ${downloadUrl}`);
+
+    const aesKey = parseAesKey(aesKeyB64);
+
+    const raw = await new Promise<Buffer>((resolve, reject) => {
+      const urlObj = new URL(downloadUrl);
+      const req = https.request(
+        {
+          hostname: urlObj.hostname,
+          port: urlObj.port || 443,
+          path: urlObj.pathname + urlObj.search,
+          method: 'GET',
+          ...(sslOptions ? { ca: sslOptions.ca } : {}),
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => {
+            const buf = Buffer.concat(chunks);
+            if (res.statusCode !== 200) {
+              reject(new Error(`CDN download HTTP ${res.statusCode}: ${buf.toString('utf-8').slice(0, 200)}`));
+              return;
+            }
+            resolve(buf);
+          });
+        },
+      );
+
+      req.on('error', reject);
+      req.setTimeout((timeoutSeconds + 10) * 1000, () => {
+        req.destroy();
+        reject(new Error('CDN download timeout'));
+      });
+      req.end();
+    });
+
+    return decryptAesEcb(raw, aesKey);
+  },
+
+  /**
+   * Download and decrypt an image from Weixin CDN to a Buffer.
+   * Handles the image_item.aeskey (hex) → base64 conversion required by the API.
+   */
+  async downloadImage(params: {
+    cdnBaseUrl: string;
+    encryptQueryParam: string;
+    aesKeyB64?: string;
+    aesKeyHex?: string;
+  }): Promise<Buffer> {
+    const { cdnBaseUrl, encryptQueryParam, aesKeyB64, aesKeyHex } = params;
+
+    let resolvedKey: string;
+    if (aesKeyB64) {
+      resolvedKey = aesKeyB64;
+    } else if (aesKeyHex) {
+      resolvedKey = Buffer.from(aesKeyHex, 'hex').toString('base64');
+    } else {
+      throw new Error('downloadImage: neither aesKeyB64 nor aesKeyHex provided');
+    }
+
+    const prevCdn = _config.cdnBaseUrl;
+    _config.cdnBaseUrl = cdnBaseUrl;
+    try {
+      return await this.downloadAndDecryptMedia({
+        encryptedQueryParam: encryptQueryParam,
+        aesKeyB64: resolvedKey,
+      });
+    } finally {
+      _config.cdnBaseUrl = prevCdn;
+    }
   },
 };

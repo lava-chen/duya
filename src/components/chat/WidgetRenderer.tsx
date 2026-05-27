@@ -3,12 +3,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { buildReceiverSrcdoc, sanitizeForStreaming } from '@/lib/widget-sanitizer';
 import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from '@/lib/widget-css-bridge';
-import { CopyIcon, CheckIcon, DownloadSimpleIcon } from '@/components/icons';
+import { CopyIcon, CheckIcon, DownloadSimpleIcon, SquaresFourIcon } from '@/components/icons';
+import { addChatWidgetToCanvas } from '@/lib/chat-widget-to-canvas';
 
 interface WidgetRendererProps {
   widgetCode: string;
   isStreaming: boolean;
   showOverlay?: boolean;
+  sourceMessageId?: string;
+  sourceLabel?: string;
 }
 
 const DEBOUNCE_MS = 120;
@@ -56,8 +59,19 @@ function getFileExtension(code: string): string {
   return 'html';
 }
 
-function WidgetActions({ code }: { code: string }) {
+function WidgetActions({
+  code,
+  sourceMessageId,
+  sourceLabel,
+}: {
+  code: string;
+  sourceMessageId?: string;
+  sourceLabel?: string;
+}) {
   const [copied, setCopied] = useState(false);
+  const [added, setAdded] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -93,10 +107,42 @@ function WidgetActions({ code }: { code: string }) {
     setMenuOpen(false);
   };
 
+  const handleAddToCanvas = async () => {
+    if (adding) return;
+    try {
+      setAdding(true);
+      setAddError(null);
+      await addChatWidgetToCanvas({
+        widgetCode: code,
+        sourceMessageId,
+        sourceLabel,
+      });
+      setAdded(true);
+      setTimeout(() => setAdded(false), 2000);
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : 'Add to canvas failed');
+    } finally {
+      setAdding(false);
+    }
+  };
+
   const ext = getFileExtension(code);
 
   return (
     <div className="absolute top-2 right-2 z-20 flex items-center gap-1">
+      {addError && (
+        <div className="absolute right-0 top-9 max-w-56 rounded-md border border-red-500/30 bg-[var(--bg-canvas)] px-2 py-1 text-[11px] text-red-500 shadow-lg">
+          {addError}
+        </div>
+      )}
+      <button
+        onClick={handleAddToCanvas}
+        disabled={adding}
+        className="p-1.5 rounded-md bg-[var(--bg-canvas)]/80 hover:bg-[var(--bg-canvas)] text-[var(--text-secondary)] hover:text-[var(--text)] border border-[var(--border)]/50 backdrop-blur-sm transition-colors disabled:opacity-60 disabled:cursor-wait"
+        title={addError ?? (added ? 'Added to canvas' : 'Add to canvas')}
+      >
+        {added ? <CheckIcon size={14} /> : <SquaresFourIcon size={14} />}
+      </button>
       <button
         onClick={handleCopy}
         className="p-1.5 rounded-md bg-[var(--bg-canvas)]/80 hover:bg-[var(--bg-canvas)] text-[var(--text-secondary)] hover:text-[var(--text)] border border-[var(--border)]/50 backdrop-blur-sm transition-colors"
@@ -143,6 +189,8 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
   widgetCode,
   isStreaming,
   showOverlay,
+  sourceMessageId,
+  sourceLabel,
 }: WidgetRendererProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number | null>(null);
@@ -290,7 +338,13 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
         minHeight: '60px',
       }}
     >
-      {!isStreaming && !error && <WidgetActions code={widgetCode} />}
+      {!isStreaming && !error && (
+        <WidgetActions
+          code={widgetCode}
+          sourceMessageId={sourceMessageId}
+          sourceLabel={sourceLabel}
+        />
+      )}
       {error ? (
         <div className="flex items-center justify-center p-4 text-sm text-red-500">
           {error}

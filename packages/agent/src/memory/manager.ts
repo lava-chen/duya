@@ -92,20 +92,21 @@ export class MemoryManager {
       projectMemory: '',
     }
 
-    // Load project store if .duya directory exists
+    // Load project store if .duya directory exists or can be created
     const projectDuyaDir = path.join(projectPath, '.duya')
     this._projectStore = new FileMemoryStore(
       path.join(projectDuyaDir, 'MEMORY.md'),
       { charLimit: MEMORY_CHAR_LIMITS.project },
     )
 
-    try {
+    if (this._projectStore.exists()) {
       this._projectStore.load()
       this._snapshot.projectMemory = this._projectStore.snapshot
       this._cachedEntries.project = this._projectStore.list()
-    } catch {
-      // Project memory doesn't exist yet, that's ok
-      this._projectStore = null
+    } else {
+      // Create empty file so subsequent add operations work
+      this._projectStore.load()
+      this._snapshot.projectMemory = this._projectStore.snapshot
       this._cachedEntries.project = []
     }
 

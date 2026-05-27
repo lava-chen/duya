@@ -8,15 +8,15 @@ import { getAllSettingsIPC } from "@/lib/ipc-client";
 function parseAppSettings(raw: Record<string, string>): AppSettings {
   const defaults: AppSettings = {
     apiKey: "",
-    baseURL: "https://api.anthropic.com",
-    defaultModel: "claude-3-5-sonnet-latest",
-    lastSelectedModel: "", // Default to empty, meaning use defaultModel
+    baseURL: "",
+    defaultModel: "",
+    lastSelectedModel: "",
     mcpServers: [],
     permissionMode: "default",
     sandboxEnabled: true,
     theme: "dark",
     locale: "en",
-    provider: "anthropic",
+    provider: "",
     messageFont: "serif",
     skillAdditionalPaths: [],
     skillNudgeInterval: 10,
@@ -33,7 +33,11 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     visionLLMConfig: null,
     visionLLMEnabled: false,
     // Gateway model settings
-    gatewayModel: "claude-sonnet-4-20250514",
+    gatewayModel: "",
+    // Wiki Agent model settings
+    wikiAgentModel: undefined,
+    // Wiki Agent feature toggle (experimental)
+    wikiAgentEnabled: false,
     // Title generation model
     titleGenerationModel: undefined,
     // Appearance settings
@@ -44,14 +48,14 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     // Browser security settings
     blockedDomains: [],
     // Favorite agent profiles for quick access (max 3)
-    favoriteAgentIds: ['general-purpose', 'code-expert', 'research'],
+    favoriteAgentIds: ['general-purpose', 'code-expert', 'plan'],
     // Agent prompt language preference
     agentLanguage: undefined,
   };
 
   try {
     // Parse modelSelection as fallback for gateway/title models
-    let modelSelection: { gatewayModel?: string; titleGenerationModel?: string; embeddingModel?: string } | null = null;
+    let modelSelection: { gatewayModel?: string; wikiAgentModel?: string; titleGenerationModel?: string; embeddingModel?: string } | null = null;
     if (raw.modelSelection) {
       try {
         modelSelection = JSON.parse(raw.modelSelection);
@@ -87,35 +91,9 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       // Notification settings
       notificationsEnabled: raw.notificationsEnabled !== "false",
       soundEffectsEnabled: raw.soundEffectsEnabled !== "false",
-      // Vision model settings - read from visionSettings for backend compatibility
-      visionLLMConfig: (() => {
-        // Try visionSettings first (backend format), then fall back to visionLLMConfig
-        const rawConfig = raw.visionSettings || raw.visionLLMConfig;
-        if (rawConfig && rawConfig !== "null") {
-          try {
-            const parsed = JSON.parse(rawConfig);
-            return {
-              provider: parsed.provider || '',
-              model: parsed.model || '',
-              baseURL: parsed.baseUrl || parsed.baseURL || '', // Handle both formats
-              apiKey: parsed.apiKey || '',
-              enabled: parsed.enabled ?? false,
-            };
-          } catch {
-            return defaults.visionLLMConfig;
-          }
-        }
-        return defaults.visionLLMConfig;
-      })(),
-      visionLLMEnabled: raw.visionSettings
-        ? (() => {
-          try {
-            return JSON.parse(raw.visionSettings).enabled ?? false;
-          } catch {
-            return false;
-          }
-        })()
-        : raw.visionLLMEnabled === "true",
+      // Vision model settings - always loaded from ConfigManager via refresh()
+      visionLLMConfig: defaults.visionLLMConfig,
+      visionLLMEnabled: defaults.visionLLMEnabled,
       // Gateway model settings - handle both plain string and JSON-stringified string, with modelSelection fallback
       gatewayModel: (() => {
         const val = raw.gatewayModel ?? modelSelection?.gatewayModel;
@@ -130,6 +108,20 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
         }
         return val;
       })(),
+      // Wiki Agent model - handle both plain string and JSON-stringified string, with modelSelection fallback
+      wikiAgentModel: (() => {
+        const val = raw.wikiAgentModel ?? modelSelection?.wikiAgentModel;
+        if (!val) return undefined;
+        if (typeof val === 'string' && val.startsWith('"') && val.endsWith('"')) {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return val;
+          }
+        }
+        return val;
+      })(),
+      wikiAgentEnabled: raw.wikiAgentEnabled === "true",
       // Title generation model - handle both plain string and JSON-stringified string, with modelSelection fallback
       titleGenerationModel: (() => {
         const val = raw.titleGenerationModel ?? modelSelection?.titleGenerationModel;
@@ -177,15 +169,15 @@ export function useSettings(): {
 } {
   const [settings, setSettings] = useState<AppSettings>({
     apiKey: "",
-    baseURL: "https://api.anthropic.com",
-    defaultModel: "claude-3-5-sonnet-latest",
+    baseURL: "",
+    defaultModel: "",
     lastSelectedModel: "",
     mcpServers: [],
     permissionMode: "default",
     sandboxEnabled: true,
     theme: "dark",
     locale: "en",
-    provider: "anthropic",
+    provider: "",
     messageFont: "serif",
     skillAdditionalPaths: [],
     skillNudgeInterval: 10,
@@ -202,7 +194,11 @@ export function useSettings(): {
     visionLLMConfig: null,
     visionLLMEnabled: false,
     // Gateway model settings
-    gatewayModel: "claude-sonnet-4-20250514",
+    gatewayModel: "",
+    // Wiki Agent model settings
+    wikiAgentModel: undefined,
+    // Wiki Agent feature toggle (experimental)
+    wikiAgentEnabled: false,
     // Title generation model
     titleGenerationModel: undefined,
     // Appearance settings
@@ -270,41 +266,17 @@ export function useSettings(): {
     try {
       if (typeof window !== 'undefined' && window.electronAPI?.settingsDb?.setJson) {
         for (const [key, value] of Object.entries(updates)) {
-          // Use ConfigManager-backed API for vision settings (统一存储)
           if (key === 'visionLLMConfig' && value) {
             const config = value as VisionLLMConfig;
-            if (window.electronAPI.vision?.set) {
-              await window.electronAPI.vision.set({
-                provider: config.provider,
-                model: config.model,
-                baseUrl: config.baseURL,
-                apiKey: config.apiKey,
-                enabled: config.enabled,
-              });
-            } else {
-              // Fallback: 直接写入 SQLite
-              await window.electronAPI.settingsDb.setJson('visionSettings', {
-                provider: config.provider,
-                model: config.model,
-                baseUrl: config.baseURL,
-                apiKey: config.apiKey,
-                enabled: config.enabled,
-              });
-            }
+            await window.electronAPI.vision?.set({
+              provider: config.provider,
+              model: config.model,
+              baseUrl: config.baseURL,
+              apiKey: config.apiKey,
+              enabled: config.enabled,
+            });
           } else if (key === 'visionLLMEnabled') {
-            if (window.electronAPI.vision?.set) {
-              await window.electronAPI.vision.set({ enabled: value as boolean });
-            } else {
-              // Fallback
-              const currentSettings = await window.electronAPI.settingsDb.get('visionSettings');
-              if (currentSettings) {
-                const parsed = typeof currentSettings === 'string' ? JSON.parse(currentSettings) : currentSettings;
-                await window.electronAPI.settingsDb.setJson('visionSettings', {
-                  ...parsed,
-                  enabled: value,
-                });
-              }
-            }
+            await window.electronAPI.vision?.set({ enabled: value as boolean });
           } else {
             await window.electronAPI.settingsDb.setJson(key, value);
           }

@@ -1,5 +1,6 @@
 import * as http from 'http';
 import * as os from 'os';
+import { randomUUID } from 'crypto';
 import { ChildProcess } from 'child_process';
 import { SessionManager } from './session-store';
 import { SessionState, ConductorAction } from './types';
@@ -54,6 +55,17 @@ function mapEventType(eventType: string): string {
   if (eventType === 'ready') return 'ready';
   if (eventType === 'memory_warning') return 'memory_warning';
   return 'message';
+}
+
+function emitWikiChatDone(event: Record<string, unknown>): void {
+  if (event.type !== 'chat:done' || typeof process.send !== 'function') {
+    return;
+  }
+
+  process.send({
+    type: 'wiki:chat_done',
+    payload: event,
+  });
 }
 
 async function handlePostChat(
@@ -259,7 +271,7 @@ async function handlePostChat(
         workerManager.sendCommand(sessionId, {
           type: 'chat:start',
           sessionId,
-          id: sessionId,
+          id: randomUUID(),
           prompt,
           options: parsed.options || {},
         });
@@ -391,6 +403,7 @@ function handlePostChatSSE(
         const eventType = sseEvent.type || 'unknown';
 
         if (eventType === 'done') {
+          emitWikiChatDone(event);
           // Flush pending messages to DB before sending done event
           if (pendingMessages.length > 0 && process.send) {
             const flushMsg = {
@@ -547,6 +560,7 @@ function handlePostChatNonSSE(
         allEvents.push(event);
 
         if (event.type === 'chat:done' || event.type === 'chat:error') {
+          emitWikiChatDone(event);
           doneReceived = true;
           sendJson(res, 200, { events: allEvents });
           return;
@@ -573,6 +587,71 @@ function handleDeleteChat(
   httpLogger.info('Chat interruption requested', { sessionId });
   workerManager.killWorker(sessionId);
   sendJson(res, 200, { ok: true });
+}
+
+function handlePostPermission(
+  sessionId: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: RouterDeps,
+): void {
+  const { sessionManager, workerManager, httpLogger } = deps;
+
+  const session = sessionManager.getSession(sessionId);
+  if (!session) {
+    sendJson(res, 404, { error: 'Session not found' });
+    return;
+  }
+
+  let body = '';
+  req.on('data', (chunk: Buffer) => {
+    body += chunk.toString();
+  });
+
+  req.on('end', () => {
+    let parsed: { id?: string; decision?: string; updatedInput?: Record<string, unknown>; message?: string };
+    try {
+      parsed = body ? JSON.parse(body) : {};
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+
+    const { id, decision, updatedInput, message } = parsed;
+
+    if (!id || !decision) {
+      sendJson(res, 400, { error: 'Missing required fields: id, decision' });
+      return;
+    }
+
+    const validDecisions = ['allow', 'deny', 'allow_once', 'allow_for_session'];
+    if (!validDecisions.includes(decision)) {
+      sendJson(res, 400, { error: `Invalid decision. Must be one of: ${validDecisions.join(', ')}` });
+      return;
+    }
+
+    httpLogger.info('Permission resolution requested', { sessionId, id, decision });
+
+    const cmd: Record<string, unknown> = {
+      type: 'permission:resolve',
+      id,
+      decision,
+    };
+    if (updatedInput) {
+      cmd.updatedInput = updatedInput;
+    }
+    if (message) {
+      cmd.message = message;
+    }
+
+    const sent = workerManager.sendCommand(sessionId, cmd);
+    if (!sent) {
+      sendJson(res, 503, { error: 'Worker not available for permission resolution' });
+      return;
+    }
+
+    sendJson(res, 200, { ok: true });
+  });
 }
 
 function handlePostCompact(
@@ -811,7 +890,7 @@ function handleSessionsRoute(
       return;
     }
     if (pathParts.length === 3 && pathParts[2] === 'permission') {
-      sendNotImplemented(res);
+      handlePostPermission(sessionId, req, res, deps);
       return;
     }
   }

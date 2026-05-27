@@ -17,6 +17,13 @@ export interface WeChatMessage {
     text_item?: {
       text: string;
     };
+    image_item?: {
+      media?: {
+        encrypt_query_param?: string;
+        aes_key?: string;
+      };
+      aeskey?: string;
+    };
   }>;
   context_token?: string;
   MsgType?: number;

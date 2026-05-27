@@ -284,7 +284,7 @@ export function CanvasToolbar() {
   return (
     <div
       ref={barRef}
-      className="absolute left-0 top-1/2 -translate-y-1/2 z-20 select-none flex flex-col items-center gap-1.5 py-4 px-2.5 bg-[var(--sidebar-bg)]/92 backdrop-blur-lg border border-[var(--border)] rounded-r-[22px] shadow-[0_20px_50px_rgba(0,0,0,0.2)]"
+      className="absolute left-0 top-1/2 -translate-y-1/2 z-20 select-none flex flex-col items-center gap-1.5 py-4 px-2.5 bg-[var(--sidebar-bg)]/92 backdrop-blur-lg border border-[var(--muted)]/20 border-l-0 rounded-r-[22px] shadow-[0_20px_50px_rgba(0,0,0,0.2)]"
       onMouseDown={(e) => e.stopPropagation()}
     >
       {Array.from(groups.entries()).map(([group, tools]) => (

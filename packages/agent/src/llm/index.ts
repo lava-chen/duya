@@ -134,14 +134,30 @@ export function createRetryableLLMClient(
  * Both implementations must be kept consistent.
  */
 export function inferProvider(baseURL: string, providerType?: string): LLMProvider {
+  const normalizedBaseURL = (baseURL || '').toLowerCase();
+  const isOllamaLocal = normalizedBaseURL.includes('localhost:11434')
+    || normalizedBaseURL.includes('127.0.0.1:11434')
+    || normalizedBaseURL.includes('ollama');
+  const isOpenAIStyleEndpoint = normalizedBaseURL.includes('/v1');
+
   // If providerType is explicitly specified, use it (unless it's ambiguous)
   // This allows users to override baseURL detection in Vision Settings
   if (providerType) {
     const pt = providerType.toLowerCase();
     if (pt === 'openrouter' || pt === 'openai-compatible' || pt === 'openai') {
+      // Guard against stale/mismatched UI config:
+      // `openrouter` or `openai` provider with Ollama native URL should use Ollama.
+      if (isOllamaLocal && !isOpenAIStyleEndpoint) {
+        return 'ollama';
+      }
       return 'openai';
     }
     if (pt === 'ollama') {
+      // Ollama exposes both native API and OpenAI-compatible `/v1`.
+      // Respect `/v1` as OpenAI-compatible mode.
+      if (isOpenAIStyleEndpoint) {
+        return 'openai';
+      }
       return 'ollama';
     }
     if (pt === 'anthropic') {
@@ -150,7 +166,7 @@ export function inferProvider(baseURL: string, providerType?: string): LLMProvid
   }
 
   if (baseURL) {
-    const url = baseURL.toLowerCase();
+    const url = normalizedBaseURL;
 
     // If baseUrl clearly indicates a specific provider, use it
     if (url.includes('openrouter')) {

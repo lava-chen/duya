@@ -21,6 +21,8 @@ When using a skill and finding it outdated, incomplete, or wrong, patch it immed
  * Default category labels (fallback when no DESCRIPTION.md)
  */
 const CATEGORY_LABELS: Record<SkillCategory, string> = {
+  'cognition': 'Cognition',
+  'agentic': 'Agentic',
   'development': 'Development',
   'research': 'Research',
   'creative': 'Creative',
@@ -29,6 +31,7 @@ const CATEGORY_LABELS: Record<SkillCategory, string> = {
   'automation': 'Automation',
   'communication': 'Communication',
   'media': 'Media',
+  'apple': 'Apple',
   'mcp': 'MCP',
   'system': 'System',
   'other': 'Other',
@@ -38,6 +41,8 @@ const CATEGORY_LABELS: Record<SkillCategory, string> = {
  * Default category descriptions (fallback when no DESCRIPTION.md)
  */
 const CATEGORY_DESCRIPTIONS: Record<SkillCategory, string> = {
+  'cognition': 'Cognitive methodologies, search philosophy, and mental models',
+  'agentic': 'Plan execution, task decomposition, and reflection loops',
   'development': 'Coding, debugging, testing, and architecture',
   'research': 'Academic research, paper discovery, and literature review',
   'creative': 'Art generation, visual design, and creative ideation',
@@ -46,6 +51,7 @@ const CATEGORY_DESCRIPTIONS: Record<SkillCategory, string> = {
   'automation': 'Scripting, CI/CD, and workflow automation',
   'communication': 'Email, messaging, and social media',
   'media': 'Media search and content creation',
+  'apple': 'Apple ecosystem integrations',
   'mcp': 'MCP tool integrations',
   'system': 'System utilities and file operations',
   'other': 'Uncategorized skills',

@@ -5,6 +5,7 @@
 import { CodePromptSystem } from './code/CodePromptSystem.js'
 import { GeneralPromptSystem } from './general/GeneralPromptSystem.js'
 import { ConductorPromptSystem } from './conductor/ConductorPromptSystem.js'
+import { WikiAgentPromptSystem } from '../wiki-agent/prompts/WikiAgentPromptSystem.js'
 import { PromptsRegistry } from './PromptsRegistry.js'
 import type { PromptProfile } from './modes/types.js'
 
@@ -21,10 +22,15 @@ const conductorFactory = {
   create: (profile?: PromptProfile) => new ConductorPromptSystem(profile),
 }
 
+const wikiAgentFactory = {
+  create: (profile?: PromptProfile) => new WikiAgentPromptSystem(profile),
+}
+
 // Register all systems
 PromptsRegistry.register('code', codeFactory)
 PromptsRegistry.register('general', generalFactory)
 PromptsRegistry.register('conductor', conductorFactory)
+PromptsRegistry.register('wiki-agent', wikiAgentFactory)
 
 /**
  * Resolve the prompt system name from an agent profile.

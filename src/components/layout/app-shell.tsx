@@ -5,7 +5,7 @@ import { TitleBar } from "@/components/layout/TitleBar";
 import { UpdateBadge } from "@/components/update/UpdateBadge";
 import { lazy, Suspense, useState, useCallback, useRef, useEffect } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
-import { PanelProvider } from "@/hooks/usePanel";
+import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
 
 // Custom event for triggering onboarding reset
@@ -22,9 +22,10 @@ const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 400;
 const DEFAULT_SIDEBAR_WIDTH = 260;
 
-export function AppShell({ children }: AppShellProps) {
+function AppShellInner({ children }: AppShellProps) {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const { currentView, isHydrated } = useConversationStore();
+  const { panelOpen, activeTab } = usePanel();
 
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
@@ -97,35 +98,43 @@ export function AppShell({ children }: AppShellProps) {
     return () => window.removeEventListener(RESET_ONBOARDING_EVENT, handleResetOnboarding);
   }, []);
 
+  const isConductorOpen = panelOpen && activeTab === 'canvas';
+
   return (
-    <PanelProvider>
-      <div className="app-shell-root">
-        {showOnboarding && (
-          <Suspense fallback={null}>
-            <OnboardingFlow onComplete={() => setShowOnboarding(false)} />
-          </Suspense>
-        )}
-        <div className="app-shell">
-          <TitleBar sidebarWidth={sidebarWidth} />
-          <div className="app-body">
-            <AppSidebar ref={sidebarRef} style={{ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth }} />
-            <div className="sidebar-resizer" onMouseDown={handleMouseDown}>
-              <div className="sidebar-resizer-handle" />
-            </div>
-            <div className="app-main-wrapper">
-              <div className="app-main">
-                <div className="app-main-inner">
-                  <main className="app-content">{children}</main>
-                </div>
-              </div>
-              <div className="app-status-bar">
-                <UpdateBadge />
-              </div>
-            </div>
-            <PanelZone />
+    <div className="app-shell-root" data-conductor-open={isConductorOpen ? "true" : undefined}>
+      {showOnboarding && (
+        <Suspense fallback={null}>
+          <OnboardingFlow onComplete={() => setShowOnboarding(false)} />
+        </Suspense>
+      )}
+      <div className="app-shell">
+        <TitleBar sidebarWidth={sidebarWidth} />
+        <div className="app-body">
+          <AppSidebar ref={sidebarRef} style={{ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth }} />
+          <div className="sidebar-resizer" onMouseDown={handleMouseDown}>
+            <div className="sidebar-resizer-handle" />
           </div>
+          <div className="app-main-wrapper">
+            <div className="app-main">
+              <div className="app-main-inner">
+                <main className="app-content">{children}</main>
+              </div>
+            </div>
+            <div className="app-status-bar">
+              <UpdateBadge />
+            </div>
+          </div>
+          <PanelZone />
         </div>
       </div>
+    </div>
+  );
+}
+
+export function AppShell({ children }: AppShellProps) {
+  return (
+    <PanelProvider>
+      <AppShellInner>{children}</AppShellInner>
     </PanelProvider>
   );
 }
