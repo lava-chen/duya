@@ -32,6 +32,7 @@ export interface ChatDonePayload {
   turnId: string;
   finalContent: string;
   timestamp: number;
+  conversationText?: string;
   metadata?: {
     model?: string;
     tokenUsage?: {
@@ -44,7 +45,21 @@ export interface ChatDonePayload {
 /**
  * Wiki node types
  */
-export type WikiNodeType = 'concept' | 'module' | 'class' | 'function' | 'workflow' | 'devops' | 'inbox';
+export type WikiNodeType =
+  | 'person'
+  | 'project'
+  | 'knowledge'
+  | 'event'
+  | 'file'
+  | 'self'
+  | 'todo'
+  | 'concept'
+  | 'module'
+  | 'class'
+  | 'function'
+  | 'workflow'
+  | 'devops'
+  | 'inbox';
 
 /**
  * A wiki node (markdown file)
@@ -114,4 +129,35 @@ export interface WikiDirectoryStructure {
   workflows: string;
   devops: string;
   inbox: string;
+}
+
+export type WikiAgentRuntimePhase =
+  | 'idle'
+  | 'queued'
+  | 'classifying'
+  | 'extracting'
+  | 'merging'
+  | 'writing'
+  | 'completed'
+  | 'error';
+
+export interface WikiAgentActivityEvent {
+  sessionId: string;
+  turnId: string;
+  phase: WikiAgentRuntimePhase;
+  timestamp: number;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface WikiAgentRuntimeStatus {
+  observerActive: boolean;
+  queueLength: number;
+  processing: boolean;
+  processedCount: number;
+  phase: WikiAgentRuntimePhase;
+  lastActivityAt?: number;
+  lastActivityMessage?: string;
+  lastCompletedAt?: number;
+  lastError?: string;
 }

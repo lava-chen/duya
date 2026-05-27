@@ -220,6 +220,8 @@ const en = {
   'settings.providers.visionModelDesc': 'For image analysis and understanding',
   'settings.providers.gatewayModel': 'Gateway Model',
   'settings.providers.gatewayModelDesc': 'For bridge/channel chat sessions',
+  'settings.providers.wikiAgentModel': 'WikiAgent Model',
+  'settings.providers.wikiAgentModelDesc': 'For background memory extraction and merge',
   'settings.providers.titleModel': 'Title Model',
   'settings.providers.titleModelDesc': 'For auto-generating conversation titles',
 

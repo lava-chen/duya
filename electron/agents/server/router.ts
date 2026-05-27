@@ -1,5 +1,6 @@
 import * as http from 'http';
 import * as os from 'os';
+import { randomUUID } from 'crypto';
 import { ChildProcess } from 'child_process';
 import { SessionManager } from './session-store';
 import { SessionState, ConductorAction } from './types';
@@ -54,6 +55,17 @@ function mapEventType(eventType: string): string {
   if (eventType === 'ready') return 'ready';
   if (eventType === 'memory_warning') return 'memory_warning';
   return 'message';
+}
+
+function emitWikiChatDone(event: Record<string, unknown>): void {
+  if (event.type !== 'chat:done' || typeof process.send !== 'function') {
+    return;
+  }
+
+  process.send({
+    type: 'wiki:chat_done',
+    payload: event,
+  });
 }
 
 async function handlePostChat(
@@ -259,7 +271,7 @@ async function handlePostChat(
         workerManager.sendCommand(sessionId, {
           type: 'chat:start',
           sessionId,
-          id: sessionId,
+          id: randomUUID(),
           prompt,
           options: parsed.options || {},
         });
@@ -391,6 +403,7 @@ function handlePostChatSSE(
         const eventType = sseEvent.type || 'unknown';
 
         if (eventType === 'done') {
+          emitWikiChatDone(event);
           // Flush pending messages to DB before sending done event
           if (pendingMessages.length > 0 && process.send) {
             const flushMsg = {
@@ -547,6 +560,7 @@ function handlePostChatNonSSE(
         allEvents.push(event);
 
         if (event.type === 'chat:done' || event.type === 'chat:error') {
+          emitWikiChatDone(event);
           doneReceived = true;
           sendJson(res, 200, { events: allEvents });
           return;

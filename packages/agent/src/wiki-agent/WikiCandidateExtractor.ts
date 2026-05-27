@@ -114,8 +114,9 @@ export class WikiCandidateExtractor {
 
     // Handle string response (try to parse JSON)
     if (typeof rawResponse === 'string') {
+      const jsonText = this.extractJsonPayload(rawResponse);
       try {
-        const parsed = JSON.parse(rawResponse);
+        const parsed = JSON.parse(jsonText);
         return this.parseLLMResponse(parsed);
       } catch {
         return [];
@@ -131,6 +132,22 @@ export class WikiCandidateExtractor {
     }
 
     return [];
+  }
+
+  private extractJsonPayload(rawResponse: string): string {
+    const trimmed = rawResponse.trim();
+    const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fencedMatch?.[1]) {
+      return fencedMatch[1].trim();
+    }
+
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return trimmed.slice(firstBrace, lastBrace + 1);
+    }
+
+    return trimmed;
   }
 
   /**
@@ -200,7 +217,22 @@ export class WikiCandidateExtractor {
    * Validate and normalize node type
    */
   private validateType(type: unknown): WikiNodeType {
-    const validTypes: WikiNodeType[] = ['concept', 'module', 'class', 'function', 'workflow', 'devops', 'inbox'];
+    const validTypes: WikiNodeType[] = [
+      'person',
+      'project',
+      'knowledge',
+      'event',
+      'file',
+      'self',
+      'todo',
+      'concept',
+      'module',
+      'class',
+      'function',
+      'workflow',
+      'devops',
+      'inbox',
+    ];
 
     if (typeof type === 'string' && validTypes.includes(type as WikiNodeType)) {
       return type as WikiNodeType;

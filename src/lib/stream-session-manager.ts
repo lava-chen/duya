@@ -1070,7 +1070,7 @@ class StreamSessionManager {
           break;
 
         case 'permission':
-          this.handlePermissionEvent(sessionId, streamId, event.data as { id: string; toolName: string; toolInput: Record<string, unknown> } | undefined);
+          this.handlePermissionEvent(sessionId, streamId, event.data as { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } | undefined);
           break;
 
         case 'db:request':
@@ -1300,7 +1300,7 @@ class StreamSessionManager {
     this.resetIdleTimeout(sessionId);
   }
 
-  private handlePermissionEvent(sessionId: string, streamId: string, data: { id: string; toolName: string; toolInput: Record<string, unknown> } | undefined): void {
+  private handlePermissionEvent(sessionId: string, streamId: string, data: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } | undefined): void {
     if (!data) return;
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
@@ -1310,8 +1310,8 @@ class StreamSessionManager {
       id: data.id,
       toolName: data.toolName,
       toolInput: data.toolInput,
-      mode: 'generic',
-      expiresAt: Date.now() + 60000,
+      mode: (data.mode as PermissionRequestEvent['mode']) || 'generic',
+      expiresAt: data.expiresAt || Date.now() + 60000,
     };
     s.pendingPermissionRequest = event;
     s.permissionListeners.forEach((listener) => {

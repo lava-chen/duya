@@ -1,9 +1,8 @@
 /**
  * WikiReadTool - Read wiki node content
- * Restricted to wiki-llm/ root directory with path security
+ * Restricted to the wiki root directory with path security
  */
 
-import * as path from 'path';
 import { BaseTool } from '../BaseTool.js';
 import type { ToolResult, ToolUseContext } from '../../types.js';
 import type { RenderedToolMessage, ToolInterruptBehavior } from '../types.js';
@@ -38,20 +37,23 @@ export function validateWikiReadInput(input: unknown): { valid: true; data: Wiki
   }
 
   // Validate path format (no directory traversal attempts)
-  const normalizedPath = obj.path.replace(/\\/g, '/');
+  const normalizedPath = WikiNodeStore.normalizeRelativeNodePath(obj.path);
   if (normalizedPath.includes('..')) {
     return { valid: false, error: 'path cannot contain ".." (directory traversal)' };
   }
 
-  // Must be within wiki-llm directory
-  if (!normalizedPath.startsWith('wiki-llm/') && !normalizedPath.startsWith('wiki-llm\\')) {
-    return { valid: false, error: 'path must be within wiki-llm/ directory' };
+  if (normalizedPath.length === 0 || normalizedPath.endsWith('/')) {
+    return { valid: false, error: 'path must point to a wiki markdown file' };
+  }
+
+  if (!normalizedPath.endsWith('.md')) {
+    return { valid: false, error: 'path must point to a .md file' };
   }
 
   return {
     valid: true,
     data: {
-      path: obj.path as string,
+      path: normalizedPath,
     },
   };
 }
@@ -62,13 +64,13 @@ export function validateWikiReadInput(input: unknown): { valid: true; data: Wiki
 
 export class WikiReadTool extends BaseTool {
   readonly name = 'wiki_read';
-  readonly description = 'Read the content of a wiki node. The path must be within the wiki-llm/ directory. Use wiki_search first to find the correct path.';
+  readonly description = 'Read the content of a wiki node. Paths are relative to the wiki root, for example "concepts/architecture.md". The legacy "wiki-llm/..." prefix is also accepted. Use wiki_search first to find the correct path.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
       path: {
         type: 'string',
-        description: 'The path to the wiki node file (e.g., "wiki-llm/concepts/architecture.md"). Must be within wiki-llm/ directory.',
+        description: 'The root-relative path to the wiki node file, such as "concepts/architecture.md". The legacy "wiki-llm/concepts/architecture.md" form is also accepted.',
       },
     },
     required: ['path'],
@@ -127,11 +129,8 @@ export class WikiReadTool extends BaseTool {
         this.store.initialize();
       }
 
-      // Resolve full path
-      const fullPath = path.join(workingDirectory || '', nodePath);
-
       // Read the node
-      const node = this.store.readNode(fullPath);
+      const node = this.store.readNode(nodePath);
 
       // Format result
       const result: WikiReadResult = {

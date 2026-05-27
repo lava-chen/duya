@@ -30,6 +30,12 @@ export interface JobProcessor {
   process(job: WikiAgentJob): Promise<void>;
 }
 
+export interface EnqueueResult {
+  accepted: boolean;
+  job?: WikiAgentJob;
+  reason: 'enqueued' | 'already_processed' | 'already_queued';
+}
+
 /**
  * Serialized job queue with idempotency and retry support
  */
@@ -62,7 +68,7 @@ export class WikiAgentScheduler {
    * Enqueue a new job from chat:done payload
    * Implements idempotency: sessionId + turnId must be unique
    */
-  enqueue(payload: ChatDonePayload): WikiAgentJob {
+  enqueue(payload: ChatDonePayload): EnqueueResult {
     const jobKey = this.getJobKey(payload.sessionId, payload.turnId);
 
     // Check if already processed
@@ -71,7 +77,10 @@ export class WikiAgentScheduler {
         sessionId: payload.sessionId,
         turnId: payload.turnId,
       }, LogComponent.AgentProcess);
-      throw new Error(`Job already processed: ${jobKey}`);
+      return {
+        accepted: false,
+        reason: 'already_processed',
+      };
     }
 
     // Check if already in queue
@@ -83,7 +92,11 @@ export class WikiAgentScheduler {
         sessionId: payload.sessionId,
         turnId: payload.turnId,
       }, LogComponent.AgentProcess);
-      return existingJob;
+      return {
+        accepted: false,
+        job: existingJob,
+        reason: 'already_queued',
+      };
     }
 
     const job: WikiAgentJob = {
@@ -108,7 +121,11 @@ export class WikiAgentScheduler {
     // Trigger processing
     void this.processQueue();
 
-    return job;
+    return {
+      accepted: true,
+      job,
+      reason: 'enqueued',
+    };
   }
 
   /**

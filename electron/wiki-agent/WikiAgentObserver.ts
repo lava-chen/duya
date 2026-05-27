@@ -45,10 +45,10 @@ export class WikiAgentObserver {
    * Handle chat:done event from any session
    * Called by message bus when chat:done is received
    */
-  onChatDone(payload: ChatDonePayload): void {
+  onChatDone(payload: ChatDonePayload): boolean {
     if (!this.isStarted) {
       logger.debug('WikiAgentObserver not started, ignoring chat:done', { sessionId: payload.sessionId }, LogComponent.AgentProcess);
-      return;
+      return false;
     }
 
     logger.debug('WikiAgentObserver received chat:done', {
@@ -58,7 +58,7 @@ export class WikiAgentObserver {
     }, LogComponent.AgentProcess);
 
     // Enqueue the job for processing
-    this.scheduler.enqueue(payload);
+    return this.scheduler.enqueue(payload).accepted;
   }
 
   /**

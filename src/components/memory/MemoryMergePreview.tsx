@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useMemoryStore } from "@/stores/memory-store";
-import { CheckIcon, XIcon, ArrowLeftRightIcon } from "@/components/icons";
+import { CheckIcon, XIcon } from "@/components/icons";
+import { ArrowsLeftRight as ArrowLeftRightIcon } from "@phosphor-icons/react";
 
 interface MergePreviewProps {
   sourceNode: {

@@ -48,7 +48,22 @@ export function validateWikiSearchInput(input: unknown): { valid: true; data: Wi
     if (!Array.isArray(obj.types)) {
       return { valid: false, error: 'types must be an array' };
     }
-    const validTypes = ['concept', 'module', 'class', 'function', 'workflow', 'devops', 'inbox'];
+    const validTypes = [
+      'person',
+      'project',
+      'knowledge',
+      'event',
+      'file',
+      'self',
+      'todo',
+      'concept',
+      'module',
+      'class',
+      'function',
+      'workflow',
+      'devops',
+      'inbox',
+    ];
     for (const type of obj.types) {
       if (typeof type !== 'string' || !validTypes.includes(type)) {
         return { valid: false, error: `Invalid type: ${type}. Valid types: ${validTypes.join(', ')}` };
@@ -88,10 +103,10 @@ export class WikiSearchTool extends BaseTool {
       },
       types: {
         type: 'array',
-        description: 'Filter by node types. Valid types: concept, module, class, function, workflow, devops, inbox.',
+        description: 'Filter by node types. Valid types: person, project, knowledge, event, file, self, todo, concept, module, class, function, workflow, devops, inbox.',
         items: {
           type: 'string',
-          enum: ['concept', 'module', 'class', 'function', 'workflow', 'devops', 'inbox'],
+          enum: ['person', 'project', 'knowledge', 'event', 'file', 'self', 'todo', 'concept', 'module', 'class', 'function', 'workflow', 'devops', 'inbox'],
         },
       },
     },
@@ -272,6 +287,24 @@ export class WikiSearchTool extends BaseTool {
           if (tag.toLowerCase().includes(lowerQuery)) {
             score = Math.max(score, 40);
             matchType = 'tag';
+          }
+        }
+      }
+
+      // Summary and content match
+      if (score < 40) {
+        if (node.summary?.toLowerCase().includes(lowerQuery)) {
+          score = Math.max(score, 35);
+          matchType = 'content';
+        } else {
+          try {
+            const fullNode = this.store!.readNode(node.path);
+            if (fullNode.content.toLowerCase().includes(lowerQuery)) {
+              score = Math.max(score, 30);
+              matchType = 'content';
+            }
+          } catch {
+            // Ignore unreadable nodes during ranking.
           }
         }
       }

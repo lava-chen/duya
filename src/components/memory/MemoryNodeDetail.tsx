@@ -5,14 +5,16 @@ import { XIcon, ClockIcon } from "@/components/icons";
 import { MemoryNodeAgentPanel } from "./MemoryNodeAgentPanel";
 
 export function MemoryNodeDetail() {
-  const { selectedNode, selectedNodePath, isLoadingDetail, selectNode } = useMemoryStore();
+  const { selectedNode, selectedNodePath, isLoadingDetail, detailError, selectNode } = useMemoryStore();
 
   if (!selectedNodePath) return null;
 
   if (isLoadingDetail || !selectedNode) {
     return (
       <div className="memory-detail">
-        <div className="memory-detail-loading">Loading...</div>
+        <div className="memory-detail-loading">
+          {isLoadingDetail ? 'Loading...' : detailError || 'Unable to load this node.'}
+        </div>
       </div>
     );
   }

@@ -31,6 +31,7 @@ import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { RecapBanner } from './RecapBanner';
+import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 
 interface ChatViewProps {
   sessionId: string;
@@ -66,6 +67,37 @@ function ContextCompressionToast({ message }: { message: string }) {
   );
 }
 
+function WikiAgentToast({
+  message,
+  error = false,
+}: {
+  message: string;
+  error?: boolean;
+}) {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setVisible(false);
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [message]);
+
+  if (!visible) return null;
+
+  return (
+    <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
+      <div
+        className="flex items-center gap-2 px-4 py-2 text-white text-sm rounded-lg shadow-lg backdrop-blur-sm"
+        style={{ background: error ? 'rgba(220, 38, 38, 0.9)' : 'rgba(31, 41, 55, 0.92)' }}
+      >
+        <span className="font-medium">WikiAgent</span>
+        <span>{message}</span>
+      </div>
+    </div>
+  );
+}
+
 export function ChatView({
   sessionId,
   messages,
@@ -79,11 +111,12 @@ export function ChatView({
   const [compressionNotification, setCompressionNotification] = useState<string | null>(null);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask');
-  const [agentProfileId, setAgentProfileId] = useState<string | null>(null);
   const [agentMode, setAgentMode] = useState<AgentMode>('main');
+  const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
   const [recapBanner, setRecapBanner] = useState<string | null>(null);
+  const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
 
   // Project state derived from store threads
@@ -197,8 +230,8 @@ export function ChatView({
               }
             } else {
               // Reset to main when session has no profile set
-              setAgentProfileId(null);
               setAgentMode('main');
+              setAgentProfileId(getProfileIdForMode('main'));
             }
           }
         })
@@ -381,6 +414,22 @@ export function ChatView({
     };
   }, [handleSend]);
 
+  useEffect(() => {
+    const unsubscribe = subscribeWikiActivityIPC((activity) => {
+      if (activity.sessionId !== sessionId || !activity.summary) {
+        return;
+      }
+
+      setWikiActivityMessage({
+        text: activity.summary,
+        error: activity.state === 'error' || activity.phase === 'error',
+        nonce: Date.now(),
+      });
+    });
+
+    return unsubscribe;
+  }, [sessionId]);
+
   const handleScrollToBottom = useCallback(() => {
     if (messageListRef.current) {
       messageListRef.current.scrollToBottom();
@@ -416,6 +465,14 @@ export function ChatView({
       {/* Context compression notification */}
       {compressionNotification && (
         <ContextCompressionToast message={compressionNotification} />
+      )}
+
+      {wikiActivityMessage && (
+        <WikiAgentToast
+          key={wikiActivityMessage.nonce}
+          message={wikiActivityMessage.text}
+          error={wikiActivityMessage.error}
+        />
       )}
 
       {/* Recap banner */}

@@ -110,18 +110,23 @@ export function clearPendingAnswer(permissionId: string): void {
 // Tool Description
 // ============================================================
 
-const DESCRIPTION = `Use this tool when you need to ask the user questions during execution. This allows you to:
-1. Gather user preferences or requirements
-2. Clarify ambiguous instructions
-3. Get decisions on implementation choices as you work
-4. Offer choices to the user about what direction to take
+const DESCRIPTION = `Use this tool when you need to ask the user questions during execution. Useful for:
+- Gathering user preferences or requirements
+- Clarifying ambiguous instructions
+- Getting decisions on implementation choices
+- Offering directional choices to the user
 
-Usage notes:
-- Users will always be able to select "Other" to provide custom text input
-- Use multiSelect: true to allow multiple answers to be selected for a question
-- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
-- Keep questions concise and clear
-- Limit to 1-4 questions per call`;
+CRITICAL RULES (violating any causes a hard error):
+- 1-4 questions per call (min 1, max 4)
+- Each question MUST include: question, header, options, multiSelect
+- header: max 12 characters, label-like (e.g. "Auth method", "Library")
+- options: EXACTLY 2-4 predefined choices per question, each with label + description
+- label: 1-5 words, concise
+- description: explains what choosing this option means
+- multiSelect: boolean (true if multiple selections allowed)
+- Users can always type "Other" for custom input, so you do NOT need an "Other" option
+- If recommending a specific option, place it first and append " (Recommended)" to its label
+- Keep questions clear, specific, and end with a question mark`;
 
 // ============================================================
 // Tool Implementation

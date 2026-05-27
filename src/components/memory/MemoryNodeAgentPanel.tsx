@@ -1,79 +1,76 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMemoryStore } from "@/stores/memory-store";
 import { PaperPlaneRightIcon, LightningIcon } from "@/components/icons";
 
 export function MemoryNodeAgentPanel() {
-  const { selectedNode } = useMemoryStore();
+  const { selectedNode, runtimeStatus, isLoadingRuntimeStatus, runtimeStatusError } = useMemoryStore();
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<{ role: "user" | "agent"; content: string }[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
 
   if (!selectedNode) return null;
 
-  const handleSend = () => {
-    const trimmed = input.trim();
-    if (!trimmed || isProcessing) return;
+  const runtimeLabel =
+    runtimeStatus.state === "processing"
+      ? "Processing"
+      : runtimeStatus.state === "queued"
+        ? "Queued"
+        : runtimeStatus.state === "error"
+          ? "Error"
+          : "Idle";
 
-    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
-    setInput("");
-    setIsProcessing(true);
+  const panelState = useMemo(() => {
+    if (isLoadingRuntimeStatus) return "loading";
+    if (runtimeStatusError || runtimeStatus.state === "error") return "error";
+    if (!runtimeStatus.supportsNodeAgentChat) return "unsupported";
+    return "ready";
+  }, [isLoadingRuntimeStatus, runtimeStatus.supportsNodeAgentChat, runtimeStatus.state, runtimeStatusError]);
 
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        { role: "agent", content: "Agent interaction will be available once the wiki-agent backend is connected." },
-      ]);
-      setIsProcessing(false);
-    }, 800);
-  };
+  const disabled = panelState !== "ready";
+
+  const statusMessage =
+    panelState === "loading"
+      ? "Checking wiki-agent backend..."
+      : panelState === "error"
+        ? runtimeStatusError || runtimeStatus.errorMessage || "Wiki-agent runtime reported an error."
+        : panelState === "unsupported"
+          ? "Node chat-to-edit is not exposed by the current backend APIs."
+          : "Agent is ready for node edit chat.";
 
   const handleSuggest = () => {
-    setInput("Suggest improvements for this node");
+    if (disabled) return;
+    setInput("Suggest improvements for this node.");
   };
 
-  const handleUpdate = () => {
-    setInput("Update this node with the following changes:");
+  const handleApply = () => {
+    if (disabled) return;
+    setInput("Apply these edits to the current node:");
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+  const handleSend = () => {
+    // Intentionally no-op until a concrete node chat/edit API is available.
   };
 
   return (
     <div className="memory-agent-panel">
       <div className="memory-agent-panel-header">
-        <LightningIcon size={14} />
-        <span>Agent Chat</span>
+        <div className="memory-agent-panel-title">
+          <LightningIcon size={14} />
+          <span>Agent Chat</span>
+        </div>
+        <span className={`memory-agent-runtime ${runtimeStatus.state}`}>{runtimeLabel}</span>
       </div>
 
-      {messages.length > 0 && (
-        <div className="memory-agent-messages">
-          {messages.map((msg, i) => (
-            <div key={i} className={`memory-agent-message ${msg.role}`}>
-              <div className="memory-agent-message-role">
-                {msg.role === "user" ? "You" : "Agent"}
-              </div>
-              <div className="memory-agent-message-content">{msg.content}</div>
-            </div>
-          ))}
-          {isProcessing && (
-            <div className="memory-agent-message agent">
-              <div className="memory-agent-message-content typing">Thinking...</div>
-            </div>
-          )}
-        </div>
-      )}
+      <div className={`memory-agent-status ${panelState === "error" ? "error" : ""}`}>
+        {statusMessage}
+      </div>
 
       <div className="memory-agent-actions">
         <button
           type="button"
           className="memory-agent-action-btn"
           onClick={handleSuggest}
+          disabled={disabled}
         >
           <LightningIcon size={14} />
           Suggest
@@ -81,7 +78,8 @@ export function MemoryNodeAgentPanel() {
         <button
           type="button"
           className="memory-agent-action-btn"
-          onClick={handleUpdate}
+          onClick={handleApply}
+          disabled={disabled}
         >
           <LightningIcon size={14} />
           Apply
@@ -91,17 +89,17 @@ export function MemoryNodeAgentPanel() {
       <div className="memory-agent-input-row">
         <textarea
           className="memory-agent-textarea"
-          placeholder="Ask agent about this node..."
+          placeholder={disabled ? "Node edit chat unavailable in this build." : "Ask agent about this node..."}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
           rows={2}
+          disabled={disabled}
         />
         <button
           type="button"
           className="memory-agent-send"
           onClick={handleSend}
-          disabled={!input.trim() || isProcessing}
+          disabled={disabled || !input.trim()}
         >
           <PaperPlaneRightIcon size={16} />
         </button>
@@ -119,48 +117,48 @@ export function MemoryNodeAgentPanel() {
         .memory-agent-panel-header {
           display: flex;
           align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+
+        .memory-agent-panel-title {
+          display: flex;
+          align-items: center;
           gap: 6px;
           font-size: 12px;
           font-weight: 600;
           color: var(--text-secondary);
         }
 
-        .memory-agent-messages {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-          max-height: 200px;
-          overflow-y: auto;
-        }
-
-        .memory-agent-message {
-          font-size: 12px;
-          line-height: 1.5;
-        }
-
-        .memory-agent-message-role {
-          font-size: 10px;
-          font-weight: 600;
+        .memory-agent-runtime {
+          font-size: 11px;
+          padding: 2px 8px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
           color: var(--text-tertiary);
-          margin-bottom: 2px;
-        }
-
-        .memory-agent-message.user .memory-agent-message-content {
-          background: var(--accent-bg);
-          color: var(--text);
-          padding: 6px 10px;
-          border-radius: 8px;
-        }
-
-        .memory-agent-message.agent .memory-agent-message-content {
           background: var(--bg-surface);
-          color: var(--text);
-          padding: 6px 10px;
-          border-radius: 8px;
         }
 
-        .typing {
-          opacity: 0.6;
+        .memory-agent-runtime.processing {
+          color: var(--accent);
+          background: var(--accent-bg);
+          border-color: transparent;
+        }
+
+        .memory-agent-runtime.error {
+          color: var(--error);
+          background: var(--error-soft);
+          border-color: var(--error);
+        }
+
+        .memory-agent-status {
+          font-size: 12px;
+          color: var(--text-tertiary);
+          line-height: 1.4;
+        }
+
+        .memory-agent-status.error {
+          color: var(--error);
         }
 
         .memory-agent-actions {
@@ -182,9 +180,14 @@ export function MemoryNodeAgentPanel() {
           transition: all 0.1s;
         }
 
-        .memory-agent-action-btn:hover {
+        .memory-agent-action-btn:hover:not(:disabled) {
           background: var(--bg-hover);
           color: var(--text);
+        }
+
+        .memory-agent-action-btn:disabled {
+          opacity: 0.5;
+          cursor: default;
         }
 
         .memory-agent-input-row {
@@ -208,6 +211,11 @@ export function MemoryNodeAgentPanel() {
 
         .memory-agent-textarea:focus {
           border-color: var(--accent);
+        }
+
+        .memory-agent-textarea:disabled {
+          opacity: 0.6;
+          cursor: default;
         }
 
         .memory-agent-textarea::placeholder {

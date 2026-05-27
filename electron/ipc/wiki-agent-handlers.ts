@@ -1,27 +1,17 @@
-import { ipcMain, app } from 'electron';
+import { ipcMain } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
-import { WikiNodeStore, createWikiNodeStore } from '../../packages/agent/src/wiki-agent/WikiNodeStore.js';
 import type { WikiNode, WikiIndexEntry, WikiLogEntry } from '../../packages/agent/src/wiki-agent/types.js';
 import * as path from 'path';
 import * as fs from 'fs';
+import { getMainWikiNodeStore } from '../wiki-agent/node-store.js';
+import { getWikiAgentRuntime } from '../wiki-agent/WikiAgentRuntime.js';
 
 const logger = getLogger();
-
-let nodeStore: WikiNodeStore | null = null;
-
-function getNodeStore(): WikiNodeStore {
-  if (!nodeStore) {
-    const basePath = path.join(app.getPath('userData'), 'wiki');
-    nodeStore = createWikiNodeStore(basePath);
-    nodeStore.initialize();
-  }
-  return nodeStore;
-}
 
 export function registerWikiAgentHandlers(): void {
   ipcMain.handle('wiki:listAllNodes', (): WikiIndexEntry[] => {
     try {
-      return getNodeStore().listAllNodes();
+      return getMainWikiNodeStore().listAllNodes();
     } catch (error) {
       logger.warn('Failed to list wiki nodes', { error: String(error) }, LogComponent.Main);
       return [];
@@ -30,7 +20,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:getNode', (_event, nodePath: string): WikiNode | null => {
     try {
-      return getNodeStore().readNode(nodePath);
+      return getMainWikiNodeStore().readNode(nodePath);
     } catch (error) {
       logger.warn('Failed to read wiki node', { path: nodePath, error: String(error) }, LogComponent.Main);
       return null;
@@ -39,7 +29,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:updateNode', (_event, node: WikiNode): boolean => {
     try {
-      getNodeStore().writeNode({ ...node, updatedAt: Date.now() });
+      getMainWikiNodeStore().writeNode({ ...node, updatedAt: Date.now() });
       return true;
     } catch (error) {
       logger.warn('Failed to update wiki node', { nodeId: node.id, error: String(error) }, LogComponent.Main);
@@ -49,7 +39,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:deleteNode', (_event, nodePath: string): boolean => {
     try {
-      getNodeStore().deleteNode(nodePath);
+      getMainWikiNodeStore().deleteNode(nodePath);
       return true;
     } catch (error) {
       logger.warn('Failed to delete wiki node', { path: nodePath, error: String(error) }, LogComponent.Main);
@@ -59,7 +49,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:searchNodes', (_event, query: string): WikiIndexEntry[] => {
     try {
-      return getNodeStore().searchNodes(query);
+      return getMainWikiNodeStore().searchNodes(query);
     } catch (error) {
       logger.warn('Failed to search wiki nodes', { query, error: String(error) }, LogComponent.Main);
       return [];
@@ -68,7 +58,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:readIndex', (): WikiIndexEntry[] => {
     try {
-      return getNodeStore().readIndex();
+      return getMainWikiNodeStore().readIndex();
     } catch (error) {
       logger.warn('Failed to read wiki index', { error: String(error) }, LogComponent.Main);
       return [];
@@ -77,7 +67,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:readLog', (): WikiLogEntry[] => {
     try {
-      return getNodeStore().readLog();
+      return getMainWikiNodeStore().readLog();
     } catch (error) {
       logger.warn('Failed to read wiki log', { error: String(error) }, LogComponent.Main);
       return [];
@@ -86,7 +76,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:listInboxFiles', (): string[] => {
     try {
-      const inboxPath = path.join(getNodeStore().getRootPath(), 'inbox');
+      const inboxPath = path.join(getMainWikiNodeStore().getRootPath(), 'inbox');
       if (!fs.existsSync(inboxPath)) return [];
       return fs.readdirSync(inboxPath).filter(f => f.endsWith('.md'));
     } catch (error) {
@@ -97,7 +87,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:readInboxFile', (_event, filename: string): string | null => {
     try {
-      const filePath = path.join(getNodeStore().getRootPath(), 'inbox', filename);
+      const filePath = path.join(getMainWikiNodeStore().getRootPath(), 'inbox', filename);
       if (!fs.existsSync(filePath)) return null;
       return fs.readFileSync(filePath, 'utf-8');
     } catch (error) {
@@ -108,7 +98,7 @@ export function registerWikiAgentHandlers(): void {
 
   ipcMain.handle('wiki:deleteInboxFile', (_event, filename: string): boolean => {
     try {
-      const filePath = path.join(getNodeStore().getRootPath(), 'inbox', filename);
+      const filePath = path.join(getMainWikiNodeStore().getRootPath(), 'inbox', filename);
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
@@ -120,7 +110,17 @@ export function registerWikiAgentHandlers(): void {
   });
 
   ipcMain.handle('wiki:getRootPath', (): string => {
-    return getNodeStore().getRootPath();
+    return getMainWikiNodeStore().getRootPath();
+  });
+
+  ipcMain.handle('wiki:getRuntimeStatus', () => {
+    return getWikiAgentRuntime()?.getStatus() ?? {
+      observerActive: false,
+      queueLength: 0,
+      processing: false,
+      processedCount: 0,
+      phase: 'idle',
+    };
   });
 
   logger.info('Wiki Agent IPC handlers registered', undefined, LogComponent.Main);

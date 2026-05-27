@@ -34,6 +34,10 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     visionLLMEnabled: false,
     // Gateway model settings
     gatewayModel: "",
+    // Wiki Agent model settings
+    wikiAgentModel: undefined,
+    // Wiki Agent feature toggle (experimental)
+    wikiAgentEnabled: false,
     // Title generation model
     titleGenerationModel: undefined,
     // Appearance settings
@@ -51,7 +55,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
 
   try {
     // Parse modelSelection as fallback for gateway/title models
-    let modelSelection: { gatewayModel?: string; titleGenerationModel?: string; embeddingModel?: string } | null = null;
+    let modelSelection: { gatewayModel?: string; wikiAgentModel?: string; titleGenerationModel?: string; embeddingModel?: string } | null = null;
     if (raw.modelSelection) {
       try {
         modelSelection = JSON.parse(raw.modelSelection);
@@ -104,6 +108,20 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
         }
         return val;
       })(),
+      // Wiki Agent model - handle both plain string and JSON-stringified string, with modelSelection fallback
+      wikiAgentModel: (() => {
+        const val = raw.wikiAgentModel ?? modelSelection?.wikiAgentModel;
+        if (!val) return undefined;
+        if (typeof val === 'string' && val.startsWith('"') && val.endsWith('"')) {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return val;
+          }
+        }
+        return val;
+      })(),
+      wikiAgentEnabled: raw.wikiAgentEnabled === "true",
       // Title generation model - handle both plain string and JSON-stringified string, with modelSelection fallback
       titleGenerationModel: (() => {
         const val = raw.titleGenerationModel ?? modelSelection?.titleGenerationModel;
@@ -177,6 +195,10 @@ export function useSettings(): {
     visionLLMEnabled: false,
     // Gateway model settings
     gatewayModel: "",
+    // Wiki Agent model settings
+    wikiAgentModel: undefined,
+    // Wiki Agent feature toggle (experimental)
+    wikiAgentEnabled: false,
     // Title generation model
     titleGenerationModel: undefined,
     // Appearance settings

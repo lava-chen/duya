@@ -392,6 +392,8 @@ export interface WikiAPI {
   readInboxFile: (filename: string) => Promise<string | null>
   deleteInboxFile: (filename: string) => Promise<boolean>
   getRootPath: () => Promise<string>
+  getRuntimeStatus: () => Promise<unknown>
+  onActivity: (callback: (data: unknown) => void) => () => void
 }
 
 export interface RecapAPI {
@@ -888,8 +890,8 @@ function getAgentPortAPI(): AgentControlPortAPI | null {
         agentSessionId?: string;
       }, (data as { sessionId?: string }).sessionId))
     },
-    onPermission: (callback: (request: { id: string; toolName: string; toolInput: Record<string, unknown> }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:permission', (data) => callback((data as { request: { id: string; toolName: string; toolInput: Record<string, unknown> } }).request, (data as { sessionId?: string }).sessionId))
+    onPermission: (callback: (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number }, sessionId?: string) => void) => {
+      return registerAgentPortHandler('chat:permission', (data) => callback((data as { request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } }).request, (data as { sessionId?: string }).sessionId))
     },
     onContextUsage: (callback: (data: { usedTokens: number; contextWindow: number; percentFull: number }, sessionId?: string) => void) => {
       return registerAgentPortHandler('chat:context_usage', (data) => callback(data as { usedTokens: number; contextWindow: number; percentFull: number }, (data as { sessionId?: string }).sessionId))
@@ -1209,6 +1211,16 @@ const electronAPI: ElectronAPI = {
     readInboxFile: (filename: string) => ipcRenderer.invoke('wiki:readInboxFile', filename),
     deleteInboxFile: (filename: string) => ipcRenderer.invoke('wiki:deleteInboxFile', filename),
     getRootPath: () => ipcRenderer.invoke('wiki:getRootPath'),
+    getRuntimeStatus: () => ipcRenderer.invoke('wiki:getRuntimeStatus'),
+    onActivity: (callback: (data: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        callback(payload);
+      };
+      ipcRenderer.on('wiki:activity', handler);
+      return () => {
+        ipcRenderer.removeListener('wiki:activity', handler);
+      };
+    },
   },
   // Agent Server API
   agentServer: {

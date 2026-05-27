@@ -84,15 +84,23 @@ export function App() {
     activeThreadId,
     messages,
     setActiveThread,
+    setCurrentView,
     addMessage,
     loadThreadMessages,
   } = useConversationStore();
   const { settings } = useSettings();
+  const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingSnapshot, setStreamingSnapshot] = useState<SessionStreamSnapshot | null>(null);
   const lastCancelTimeRef = useRef(0);
   const prevPhaseRef = useRef<StreamPhase>('idle');
+
+  useEffect(() => {
+    if (!wikiAgentEnabled && currentView === 'memory') {
+      setCurrentView('home');
+    }
+  }, [wikiAgentEnabled, currentView, setCurrentView]);
 
   // Subscribe to stream snapshot updates with optimistic message injection
   useEffect(() => {
@@ -292,7 +300,7 @@ export function App() {
           {currentView === 'automation' && <AutomationView />}
           {currentView === 'conductor' && <ConductorView />}
           {currentView === 'settings' && <SettingsView />}
-          {currentView === 'memory' && <MemoryView />}
+          {currentView === 'memory' && wikiAgentEnabled && <MemoryView />}
         </>
       );
     }
@@ -312,7 +320,9 @@ export function App() {
       case 'settings':
         return <SettingsView />;
       case 'memory':
-        return <MemoryView />;
+        return wikiAgentEnabled
+          ? <MemoryView />
+          : <WelcomeView onSelectThread={setActiveThread} onSendMessage={handleSendMessage} />;
       default:
         return <WelcomeView onSelectThread={setActiveThread} onSendMessage={handleSendMessage} />;
     }

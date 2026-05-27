@@ -7,6 +7,13 @@
  * Wiki node types
  */
 export type WikiNodeType =
+  | 'person'
+  | 'project'
+  | 'knowledge'
+  | 'event'
+  | 'file'
+  | 'self'
+  | 'todo'
   | 'concept'
   | 'module'
   | 'class'

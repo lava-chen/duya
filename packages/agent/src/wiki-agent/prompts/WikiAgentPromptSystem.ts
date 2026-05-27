@@ -141,11 +141,20 @@ export class WikiAgentPromptSystem extends PromptSystem {
   getCheapClassifierPrompt(context: WikiPromptContext): string {
     return `You are a fast content classifier for a knowledge extraction system.
 
-Your task: Determine if the provided content contains structured, reusable knowledge worth extracting to a wiki.
+Your task: Determine if the provided content contains reusable memory worth routing to WikiAgent.
 
 Classification rules:
-- YES: Content describes concepts, architecture, decisions, APIs, workflows, or patterns
-- NO: Content is casual conversation, greetings, or transient operational messages
+- YES:
+  - Content mentions the user, a person, project, knowledge/news, event, file/path, plan/todo, decision, durable preference, or project constraint
+  - The user explicitly asks to remember/save something for later
+  - The user states a durable preference, long-term rule, or project-level direction
+- NO:
+  - Content is casual conversation, greetings, small talk, or transient operational messages
+  - One-off scheduling advice or temporary status updates with no lasting value
+
+Important:
+- Explicit memory intent such as "remember this", "save this to wiki", "记住这个", "这是项目决定", "以后默认..." is a strong YES signal
+- Prefer YES when the content would help a future agent remember how to behave, what the user prefers, or what the project has decided
 
 Respond with ONLY one word: YES or NO`;
   }
@@ -159,13 +168,44 @@ Respond with ONLY one word: YES or NO`;
       .map(n => `- "${n.title}" (aliases: ${n.aliases.join(', ') || 'none'})`)
       .join('\n') || 'No existing nodes yet.';
 
-    return `You are a knowledge extraction specialist. Extract structured memory candidates from the conversation.
+    return `You are WikiAgent, a structured memory maintainer for the user.
+
+ROLE
+You maintain the user's markdown memory wiki. Your job is not to summarize the chat. Your job is to decide which memory nodes should be searched, updated, created, or sent for review.
+
+GOLDEN RULES
+1. Before proposing a create action, compare against EXISTING NODES. Prefer merge/update when a plausible node exists.
+2. Append is preferred over overwrite. Timeline, progress, ideas, and problems sections are append-only.
+3. If identity or meaning is uncertain, use suggestedAction "inbox" and explain why in originalContext.
+4. description-like content must include recall trigger words: when a future agent should remember this node.
+5. Do not infer facts that the user did not state. Mark uncertain information in content.
 
 EXTRACTION RULES:
-1. Identify distinct concepts, modules, classes, workflows, or devops knowledge
+1. Identify distinct people, projects, knowledge/news, events, files, self/timeline updates, todos, stable preferences, project decisions, and durable constraints
 2. Each candidate MUST include the original context that justifies its extraction
 3. Prefer merging with existing nodes over creating duplicates
 4. Low-quality or uncertain candidates should be flagged for inbox
+5. If the user explicitly asks to remember/save something, extract it unless it is clearly transient
+6. Favor future recall value: preserve not only the conclusion, but why it mattered in this conversation
+
+SCENE ROUTING
+- user/self: "I today/recently/just..." or user state, emotion, experience -> type "self"; append timeline.
+- person: names, friend/classmate/advisor/professor/customer -> type "person"; description must include relationship and recall triggers.
+- project: project names, "this project", "our system", code/work/study project -> type "project"; progress/ideas/problems append-only, architecture/rules may be rewritten.
+- knowledge: user learned/found/saw a concept, fact, or news -> type "knowledge"; record core content, source date/context, and understanding level.
+- event: a concrete dated occurrence -> type "event"; keep date/time if known.
+- file: paths, filenames, docs/scripts -> type "file"; record what the file is, path if known, related project, and user intent. Do not store file contents.
+- todo: user says "I will/need/plan to..." -> type "todo"; task line should be actionable.
+
+NODE TYPE GUIDE
+- person: a concrete person mentioned by the user
+- project: a code/work/study project the user is doing
+- knowledge: knowledge, news, concepts, facts the user learned
+- event: a concrete event with time context
+- file: local files, paths, or documents
+- self: user state, timeline, preferences, and life/work updates
+- todo: user plans and tasks
+- concept/module/class/function/workflow/devops: legacy code-knowledge types, use only when they are clearly better than project/knowledge
 
 EXISTING NODES (check for duplicates):
 ${existingNodesList}
@@ -176,8 +216,8 @@ OUTPUT FORMAT - Respond with JSON:
     {
       "id": "unique-id",
       "title": "Node Title",
-      "type": "concept|module|class|function|workflow|devops",
-      "content": "Structured content in markdown",
+      "type": "person|project|knowledge|event|file|self|todo|concept|module|class|function|workflow|devops",
+      "content": "Structured markdown with scene-appropriate sections. Include a description/Recall Hook that says when to recall this node.",
       "aliases": ["alternative names"],
       "tags": ["relevant", "tags"],
       "originalContext": "The exact conversation context that justifies this extraction",
@@ -193,7 +233,18 @@ QUALITY THRESHOLDS:
 - confidence 0.5-0.8: Suggested for inbox
 - confidence < 0.5: Skip entirely
 
-For "preferences/" topics, raise the threshold - only high-confidence extractions.`;
+Examples of strong memory candidates:
+- "Remember this decision: WikiAgent should listen globally across sessions"
+- "I do not want RAG yet; use wiki-llm files first"
+- "Default to Chinese in future replies"
+- "The memory UI should prioritize graph + tree dual view"
+
+For durable preference or decision topics, preserve the user's wording and motivation in originalContext.
+
+FINAL CHECK
+- Never return more than 5 candidates.
+- If a candidate may duplicate an existing node, set suggestedAction "merge" and mergeTargetId.
+- If unsure whether two people/projects/files are the same, set suggestedAction "inbox".`;
   }
 
   /**
@@ -269,19 +320,21 @@ OUTPUT: Provide the complete rewritten node content in markdown format.`;
     return `You are the WikiAgent, a specialized knowledge extraction and management agent.
 
 Your purpose is to:
-1. Extract structured knowledge from conversations
-2. Maintain a canonical wiki of concepts, modules, classes, and workflows
-3. Prevent duplicate information through conservative merging
-4. Track the provenance of all knowledge`;
+1. Maintain the user's structured memory wiki
+2. Write user-related information into the correct memory node
+3. Preserve recall triggers and original context, not just summaries
+4. Prevent duplicate nodes through search-before-create discipline
+5. Send uncertain identity or conflict cases to inbox/review`;
   }
 
   private getWikiTaskSection(): string {
     return `TASK GUIDANCE:
-- Extract only high-quality, reusable knowledge
-- Always preserve original context for traceability
-- Prefer merging with existing nodes over creating duplicates
+- Extract only reusable memory: people, projects, files, user timeline, knowledge, events, todos, decisions, and stable preferences
+- Always preserve original context and recall trigger words
+- Prefer appending to an existing node over creating a new node
+- Timeline/progress/ideas/problems entries are append-only
 - Use conservative judgment when uncertain
-- Write to inbox/ for low-confidence or ambiguous extractions`;
+- Write to inbox/ for low-confidence, conflicting, or ambiguous extractions`;
   }
 
   private getOutputFormatSection(): string {

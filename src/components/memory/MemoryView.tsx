@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { useMemoryStore } from "@/stores/memory-store";
 import type { MemoryViewTab, WikiNodeType } from "@/types/memory";
+import { subscribeWikiActivityIPC } from "@/lib/memory-ipc";
 import { MemoryGraphView } from "./MemoryGraphView";
 import { MemoryTreeView } from "./MemoryTreeView";
 import { MemoryInboxList } from "./MemoryInboxList";
@@ -12,6 +13,13 @@ import { ChartBarIcon, GitBranchIcon, ArchiveIcon, ClockCounterClockwiseIcon, Ma
 import { useTranslation } from "@/hooks/useTranslation";
 
 const NODE_TYPES: { value: WikiNodeType; label: string }[] = [
+  { value: "person", label: "People" },
+  { value: "project", label: "Projects" },
+  { value: "knowledge", label: "Knowledge" },
+  { value: "event", label: "Events" },
+  { value: "file", label: "Files" },
+  { value: "self", label: "Self" },
+  { value: "todo", label: "Todos" },
   { value: "concept", label: "Concepts" },
   { value: "module", label: "Modules" },
   { value: "class", label: "Classes" },
@@ -44,6 +52,11 @@ export function MemoryView() {
     searchNodes,
     nodes,
     isLoadingNodes,
+    runtimeStatus,
+    isLoadingRuntimeStatus,
+    runtimeStatusError,
+    loadRuntimeStatus,
+    applyRuntimeActivity,
   } = useMemoryStore();
 
   useEffect(() => {
@@ -61,6 +74,14 @@ export function MemoryView() {
     return () => clearTimeout(debounce);
   }, [searchQuery, searchNodes, loadNodes]);
 
+  useEffect(() => {
+    void loadRuntimeStatus();
+    const unsubscribe = subscribeWikiActivityIPC((activity) => {
+      applyRuntimeActivity(activity);
+    });
+    return unsubscribe;
+  }, [applyRuntimeActivity, loadRuntimeStatus]);
+
   const filteredNodes = useMemo(() => {
     if (!typeFilter) return nodes;
     return nodes.filter((n) => n.type === typeFilter);
@@ -72,6 +93,27 @@ export function MemoryView() {
     { id: "inbox", label: "Inbox" },
     { id: "activity", label: "Activity" },
   ];
+
+  const runtimeLabel =
+    runtimeStatus.state === "processing"
+      ? "Processing"
+      : runtimeStatus.state === "queued"
+        ? "Queued"
+        : runtimeStatus.state === "error"
+          ? "Error"
+          : "Idle";
+
+  const runtimeMeta = isLoadingRuntimeStatus
+    ? "Checking runtime status..."
+    : runtimeStatusError
+      ? runtimeStatusError
+      : runtimeStatus.summary
+        ? runtimeStatus.updatedAt
+          ? `${runtimeStatus.summary} · ${new Date(runtimeStatus.updatedAt).toLocaleTimeString()}`
+          : runtimeStatus.summary
+        : runtimeStatus.supportsRuntimeStatus || runtimeStatus.supportsActivitySubscription
+          ? "No recent activity."
+          : "Runtime status API is not available in this build.";
 
   const renderTabContent = () => {
     switch (viewTab) {
@@ -123,6 +165,14 @@ export function MemoryView() {
               <XIcon size={12} />
             </button>
           )}
+        </div>
+        <div className="memory-runtime" aria-live="polite">
+          <span className={`memory-runtime-badge ${runtimeStatus.state}`}>
+            {runtimeLabel}
+          </span>
+          <span className={`memory-runtime-meta${runtimeStatusError ? " error" : ""}`}>
+            {runtimeMeta}
+          </span>
         </div>
       </div>
 
@@ -221,6 +271,58 @@ export function MemoryView() {
           border: 1px solid var(--border);
           border-radius: 6px;
           flex: 0 0 240px;
+        }
+
+        .memory-runtime {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 260px;
+          justify-content: flex-end;
+        }
+
+        .memory-runtime-badge {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 3px 8px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--text-secondary);
+          background: var(--bg-surface);
+          flex-shrink: 0;
+        }
+
+        .memory-runtime-badge.processing {
+          color: var(--accent);
+          background: var(--accent-bg);
+          border-color: transparent;
+        }
+
+        .memory-runtime-badge.queued {
+          color: var(--text);
+          background: var(--bg-hover);
+        }
+
+        .memory-runtime-badge.error {
+          color: var(--error);
+          background: var(--error-soft);
+          border-color: var(--error);
+        }
+
+        .memory-runtime-meta {
+          font-size: 12px;
+          color: var(--text-tertiary);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 420px;
+        }
+
+        .memory-runtime-meta.error {
+          color: var(--error);
         }
 
         .memory-search svg {
