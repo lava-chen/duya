@@ -10,7 +10,7 @@
  * Reference: https://github.com/ollama/ollama/blob/main/docs/api.md
  */
 
-import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseContent, ToolResultContent, ImageContent } from '../types.js';
+import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseContent, ToolResultContent, ImageContent, TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
 
@@ -539,5 +539,17 @@ export class OllamaClient implements LLMClient {
     }
 
     yield { type: 'done' };
+  }
+
+  async chat(
+    _messages: Message[],
+    _options?: {
+      systemPrompt?: string;
+      maxTokens?: number;
+      temperature?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<{ content: string; usage?: TokenUsage }> {
+    throw new Error('chat() is not supported for Ollama client. Use streamChat() instead.');
   }
 }

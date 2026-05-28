@@ -387,6 +387,211 @@ export const researchSessionDb = {
     sendDbRequest('researchSession:listByStatus', { status }),
 };
 
+// ==================== Literature Plugin Operations ====================
+
+export const literatureDb = {
+  sourceCreate: (data: {
+    id: string
+    kind: string
+    title: string
+    authors: string[]
+    year?: number
+    venue?: string
+    doi?: string
+    arxivId?: string
+    url?: string
+    filePath?: string
+    citationKey?: string
+    bibtex?: string
+    projectIds?: string[]
+    tags?: string[]
+  }) => sendDbRequest('literature:source:create', data),
+
+  sourceGet: (id: string) => sendDbRequest('literature:source:get', { id }),
+
+  sourceList: (options?: {
+    kind?: string
+    projectId?: string
+    tags?: string[]
+    yearFrom?: number
+    yearTo?: number
+    search?: string
+    limit?: number
+  }) => sendDbRequest('literature:source:list', options || {}),
+
+  sourceUpdate: (id: string, data: Record<string, unknown>) =>
+    sendDbRequest('literature:source:update', { id, ...data }),
+
+  sourceDelete: (id: string) => sendDbRequest('literature:source:delete', { id }),
+
+  evidenceCreateMany: (spans: Array<{
+    id: string
+    sourceId: string
+    page?: number
+    section?: string
+    text: string
+    quote?: string
+    bbox?: { page: number; x: number; y: number; width: number; height: number }
+  }>) => sendDbRequest('literature:evidence:createMany', { spans }),
+
+  evidenceSearch: (query: string, options?: {
+    sourceId?: string
+    page?: number
+    section?: string
+  }) => sendDbRequest('literature:evidence:search', { query, ...options }),
+
+  evidenceDeleteBySource: (sourceId: string) =>
+    sendDbRequest('literature:evidence:deleteBySource', { sourceId }),
+
+  paperCardUpsert: (data: {
+    id: string
+    sourceId: string
+    card: Record<string, unknown>
+    evidenceSpanIds: string[]
+  }) => sendDbRequest('literature:paperCard:upsert', data),
+
+  paperCardGet: (sourceId: string) =>
+    sendDbRequest('literature:paperCard:get', { sourceId }),
+
+  paperCardDelete: (sourceId: string) =>
+    sendDbRequest('literature:paperCard:delete', { sourceId }),
+}
+
+// ==================== Research Memory Operations ====================
+
+export const researchMemoryDb = {
+  projectCreate: (data: {
+    id: string
+    name: string
+    description?: string
+  }) => sendDbRequest('researchMemory:project:create', data),
+
+  projectGet: (id: string) => sendDbRequest('researchMemory:project:get', { id }),
+
+  projectList: () => sendDbRequest('researchMemory:project:list', {}),
+
+  projectUpdate: (id: string, data: Record<string, unknown>) =>
+    sendDbRequest('researchMemory:project:update', { id, ...data }),
+
+  projectDelete: (id: string) => sendDbRequest('researchMemory:project:delete', { id }),
+
+  projectStateGet: (projectId: string) =>
+    sendDbRequest('researchMemory:projectState:get', { projectId }),
+
+  projectStateUpsert: (projectId: string, state: Record<string, unknown>) =>
+    sendDbRequest('researchMemory:projectState:upsert', { projectId, state }),
+
+  memoryObjectCreate: (data: {
+    id: string
+    projectId: string
+    type: string
+    content: string
+    summary?: string
+    sourceRefs?: unknown[]
+    relationRefs?: unknown[]
+    validFrom?: number
+    validTo?: number
+    status?: string
+    confidence?: number
+    importance?: number
+    tags?: string[]
+  }) => sendDbRequest('researchMemory:object:create', data),
+
+  memoryObjectGet: (id: string) => sendDbRequest('researchMemory:object:get', { id }),
+
+  memoryObjectListByProject: (projectId: string, options?: {
+    type?: string
+    status?: string
+    limit?: number
+  }) => sendDbRequest('researchMemory:object:listByProject', { projectId, ...options }),
+
+  memoryObjectSearch: (query: string, projectId?: string, options?: {
+    type?: string
+    status?: string
+    limit?: number
+  }) => sendDbRequest('researchMemory:object:search', { query, projectId, ...options }),
+
+  memoryObjectUpdate: (id: string, data: Record<string, unknown>) =>
+    sendDbRequest('researchMemory:object:update', { id, ...data }),
+
+  memoryObjectDelete: (id: string) =>
+    sendDbRequest('researchMemory:object:delete', { id }),
+
+  hypothesisCreate: (data: {
+    id: string
+    projectId: string
+    statement: string
+    status?: string
+    supportingEvidenceIds?: string[]
+    contradictingEvidenceIds?: string[]
+    relatedSourceIds?: string[]
+  }) => sendDbRequest('researchMemory:hypothesis:create', data),
+
+  hypothesisGet: (id: string) => sendDbRequest('researchMemory:hypothesis:get', { id }),
+
+  hypothesisListByProject: (projectId: string) =>
+    sendDbRequest('researchMemory:hypothesis:listByProject', { projectId }),
+
+  hypothesisUpdate: (id: string, data: {
+    status?: string
+    supersededBy?: string
+    supportingEvidenceIds?: string[]
+    contradictingEvidenceIds?: string[]
+    relatedSourceIds?: string[]
+  }) => sendDbRequest('researchMemory:hypothesis:update', { id, ...data }),
+
+  hypothesisDelete: (id: string) =>
+    sendDbRequest('researchMemory:hypothesis:delete', { id }),
+
+  candidateCreate: (data: {
+    id: string
+    projectId: string
+    proposedType: string
+    content: string
+    rationale: string
+    sourceRefs?: unknown[]
+    confidence?: number
+    createdBySessionId?: string
+  }) => sendDbRequest('researchMemory:candidate:create', data),
+
+  candidateListByProject: (projectId: string, status?: string) =>
+    sendDbRequest('researchMemory:candidate:listByProject', { projectId, status }),
+
+  candidateGet: (id: string) => sendDbRequest('researchMemory:candidate:get', { id }),
+
+  candidateAccept: (id: string, options?: { embeddingJson?: string }) =>
+    sendDbRequest('researchMemory:candidate:accept', { id, ...options }),
+
+  candidateReject: (id: string) => sendDbRequest('researchMemory:candidate:reject', { id }),
+
+  candidateDelete: (id: string) => sendDbRequest('researchMemory:candidate:delete', { id }),
+
+  objectUpdateEmbedding: (id: string, embeddingJson: string | null) =>
+    sendDbRequest('researchMemory:object:updateEmbedding', { id, embedding_json: embeddingJson }),
+
+  objectListWithEmbeddings: (projectId?: string, limit?: number) =>
+    sendDbRequest('researchMemory:object:listWithEmbeddings', { projectId, limit }),
+
+  relationCreate: (data: {
+    projectId: string
+    fromMemoryId: string
+    toMemoryId: string
+    relationType: string
+  }) => sendDbRequest('researchMemory:relation:create', data),
+
+  relationListByMemory: (memoryId: string) =>
+    sendDbRequest('researchMemory:relation:listByMemory', { memoryId }),
+
+  relationListByProject: (projectId: string) =>
+    sendDbRequest('researchMemory:relation:listByProject', { projectId }),
+
+  relationDelete: (id: string) => sendDbRequest('researchMemory:relation:delete', { id }),
+}
+
+export const pluginDb = {
+  registryList: () => sendDbRequest('plugin:registry:list', {}),
+}
+
 // ==================== Model Capability Operations ====================
 
 export const modelCapabilityDb = {
@@ -406,6 +611,7 @@ export const automationDb = {
     description?: string | null;
     schedule: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null };
     prompt: string;
+    model: string;
     inputParams?: Record<string, unknown>;
     concurrencyPolicy?: 'skip' | 'parallel' | 'queue' | 'replace';
     maxRetries?: number;

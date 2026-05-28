@@ -20,8 +20,10 @@ export const HOOK_EVENTS = [
   'Notification',
   'UserPromptSubmit',
   'SessionStart',
+  'SessionEnd',
   'Setup',
   'SubagentStart',
+  'SubagentStop',
   'PermissionDenied',
   'PermissionRequest',
   'Elicitation',
@@ -29,8 +31,18 @@ export const HOOK_EVENTS = [
   'CwdChanged',
   'FileChanged',
   'WorktreeCreate',
-  'PreTurn',    // Before each LLM call
-  'PostTurn',   // After each LLM call completes
+  'WorktreeRemove',
+  'PreCompact',
+  'PostCompact',
+  'PreTurn',
+  'PostTurn',
+  'Stop',
+  'StopFailure',
+  'TeammateIdle',
+  'TaskCreated',
+  'TaskCompleted',
+  'ConfigChange',
+  'InstructionsLoaded',
 ] as const;
 
 export type HookEvent = (typeof HOOK_EVENTS)[number];
@@ -257,6 +269,145 @@ export const PostTurnHookInputSchema = BaseHookInputSchema.extend({
 export type PostTurnHookInput = z.infer<typeof PostTurnHookInputSchema>;
 
 /**
+ * SessionEnd hook input
+ */
+export const SessionEndHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('SessionEnd'),
+  reason: z.enum(['user_exit', 'timeout', 'error', 'clear']).optional(),
+});
+
+export type SessionEndHookInput = z.infer<typeof SessionEndHookInputSchema>;
+
+/**
+ * PreCompact hook input
+ */
+export const PreCompactHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('PreCompact'),
+  trigger: z.enum(['auto', 'manual', 'idle']),
+  compactConfig: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type PreCompactHookInput = z.infer<typeof PreCompactHookInputSchema>;
+
+/**
+ * PostCompact hook input
+ */
+export const PostCompactHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('PostCompact'),
+  trigger: z.enum(['auto', 'manual', 'idle']),
+  messageCountBefore: z.number().optional(),
+  messageCountAfter: z.number().optional(),
+  error: z.string().optional(),
+});
+
+export type PostCompactHookInput = z.infer<typeof PostCompactHookInputSchema>;
+
+/**
+ * Stop hook input
+ */
+export const StopHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('Stop'),
+  reason: z.enum(['user_request', 'system', 'error', 'timeout']),
+});
+
+export type StopHookInput = z.infer<typeof StopHookInputSchema>;
+
+/**
+ * StopFailure hook input
+ */
+export const StopFailureHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('StopFailure'),
+  reason: z.enum(['user_request', 'system', 'error', 'timeout']),
+  error: z.string(),
+});
+
+export type StopFailureHookInput = z.infer<typeof StopFailureHookInputSchema>;
+
+/**
+ * SubagentStop hook input
+ */
+export const SubagentStopHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('SubagentStop'),
+  agent_id: z.string(),
+  agent_type: z.string(),
+  status: z.enum(['completed', 'error', 'cancelled', 'timeout']),
+  summary: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export type SubagentStopHookInput = z.infer<typeof SubagentStopHookInputSchema>;
+
+/**
+ * TeammateIdle hook input
+ */
+export const TeammateIdleHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('TeammateIdle'),
+  agent_id: z.string(),
+  agent_type: z.string(),
+});
+
+export type TeammateIdleHookInput = z.infer<typeof TeammateIdleHookInputSchema>;
+
+/**
+ * TaskCreated hook input
+ */
+export const TaskCreatedHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('TaskCreated'),
+  task_id: z.string(),
+  task_name: z.string(),
+  task_context: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type TaskCreatedHookInput = z.infer<typeof TaskCreatedHookInputSchema>;
+
+/**
+ * TaskCompleted hook input
+ */
+export const TaskCompletedHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('TaskCompleted'),
+  task_id: z.string(),
+  task_name: z.string(),
+  status: z.enum(['completed', 'failed', 'cancelled']),
+  result: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export type TaskCompletedHookInput = z.infer<typeof TaskCompletedHookInputSchema>;
+
+/**
+ * ConfigChange hook input
+ */
+export const ConfigChangeHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('ConfigChange'),
+  changed_keys: z.array(z.string()),
+  old_values: z.record(z.string(), z.unknown()).optional(),
+  new_values: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type ConfigChangeHookInput = z.infer<typeof ConfigChangeHookInputSchema>;
+
+/**
+ * InstructionsLoaded hook input
+ */
+export const InstructionsLoadedHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('InstructionsLoaded'),
+  instruction_source: z.string(),
+  instruction_count: z.number().optional(),
+});
+
+export type InstructionsLoadedHookInput = z.infer<typeof InstructionsLoadedHookInputSchema>;
+
+/**
+ * WorktreeRemove hook input
+ */
+export const WorktreeRemoveHookInputSchema = BaseHookInputSchema.extend({
+  hook_event_name: z.literal('WorktreeRemove'),
+  name: z.string(),
+});
+
+export type WorktreeRemoveHookInput = z.infer<typeof WorktreeRemoveHookInputSchema>;
+
+/**
  * Union of all hook input types
  */
 export const HookInputSchema = z.discriminatedUnion('hook_event_name', [
@@ -267,16 +418,28 @@ export const HookInputSchema = z.discriminatedUnion('hook_event_name', [
   NotificationHookInputSchema,
   UserPromptSubmitHookInputSchema,
   SessionStartHookInputSchema,
+  SessionEndHookInputSchema,
   SetupHookInputSchema,
   SubagentStartHookInputSchema,
+  SubagentStopHookInputSchema,
   PermissionRequestHookInputSchema,
   ElicitationHookInputSchema,
   ElicitationResultHookInputSchema,
   CwdChangedHookInputSchema,
   FileChangedHookInputSchema,
   WorktreeCreateHookInputSchema,
+  WorktreeRemoveHookInputSchema,
+  PreCompactHookInputSchema,
+  PostCompactHookInputSchema,
   PreTurnHookInputSchema,
   PostTurnHookInputSchema,
+  StopHookInputSchema,
+  StopFailureHookInputSchema,
+  TeammateIdleHookInputSchema,
+  TaskCreatedHookInputSchema,
+  TaskCompletedHookInputSchema,
+  ConfigChangeHookInputSchema,
+  InstructionsLoadedHookInputSchema,
 ]);
 
 export type HookInput = z.infer<typeof HookInputSchema>;
@@ -291,6 +454,7 @@ export type HookInput = z.infer<typeof HookInputSchema>;
 export const AsyncHookResponseSchema = z.object({
   async: z.literal(true),
   asyncTimeout: z.number().optional(),
+  asyncRewake: z.boolean().optional().describe('If true, wakes model when async hook completes'),
 });
 
 /**
@@ -328,6 +492,19 @@ export function isSyncHookOutput(json: HookJSONOutput): json is z.infer<typeof S
 // ============================================================================
 // Hook Command Schemas
 // ============================================================================
+
+/**
+ * Prompt command hook schema
+ */
+export const PromptCommandHookSchema = z.object({
+  type: z.literal('prompt'),
+  prompt: z.string().describe('Prompt to send to LLM for evaluation'),
+  if: z.string().optional().describe('Permission rule syntax to filter when hook runs'),
+  model: z.string().optional().describe('Model override for this hook'),
+  timeout: z.number().positive().optional().describe('Timeout in seconds'),
+  statusMessage: z.string().optional().describe('Custom status message while hook runs'),
+  once: z.boolean().optional().describe('If true, runs once and is removed'),
+});
 
 /**
  * Bash command hook schema
@@ -375,12 +552,14 @@ export const AgentHookSchema = z.object({
  * Hook command schema (discriminated union)
  */
 export const HookCommandSchema = z.discriminatedUnion('type', [
+  PromptCommandHookSchema,
   BashCommandHookSchema,
   HttpHookSchema,
   AgentHookSchema,
 ]);
 
 export type HookCommand = z.infer<typeof HookCommandSchema>;
+export type PromptCommandHook = Extract<HookCommand, { type: 'prompt' }>;
 export type BashCommandHook = Extract<HookCommand, { type: 'command' }>;
 export type HttpHook = Extract<HookCommand, { type: 'http' }>;
 export type AgentHook = Extract<HookCommand, { type: 'agent' }>;
@@ -405,8 +584,10 @@ export const HooksSettingsSchema = z.object({
   Notification: z.array(HookMatcherSchema).optional(),
   UserPromptSubmit: z.array(HookMatcherSchema).optional(),
   SessionStart: z.array(HookMatcherSchema).optional(),
+  SessionEnd: z.array(HookMatcherSchema).optional(),
   Setup: z.array(HookMatcherSchema).optional(),
   SubagentStart: z.array(HookMatcherSchema).optional(),
+  SubagentStop: z.array(HookMatcherSchema).optional(),
   PermissionDenied: z.array(HookMatcherSchema).optional(),
   PermissionRequest: z.array(HookMatcherSchema).optional(),
   Elicitation: z.array(HookMatcherSchema).optional(),
@@ -414,8 +595,18 @@ export const HooksSettingsSchema = z.object({
   CwdChanged: z.array(HookMatcherSchema).optional(),
   FileChanged: z.array(HookMatcherSchema).optional(),
   WorktreeCreate: z.array(HookMatcherSchema).optional(),
+  WorktreeRemove: z.array(HookMatcherSchema).optional(),
+  PreCompact: z.array(HookMatcherSchema).optional(),
+  PostCompact: z.array(HookMatcherSchema).optional(),
   PreTurn: z.array(HookMatcherSchema).optional(),
   PostTurn: z.array(HookMatcherSchema).optional(),
+  Stop: z.array(HookMatcherSchema).optional(),
+  StopFailure: z.array(HookMatcherSchema).optional(),
+  TeammateIdle: z.array(HookMatcherSchema).optional(),
+  TaskCreated: z.array(HookMatcherSchema).optional(),
+  TaskCompleted: z.array(HookMatcherSchema).optional(),
+  ConfigChange: z.array(HookMatcherSchema).optional(),
+  InstructionsLoaded: z.array(HookMatcherSchema).optional(),
 });
 
 export type HooksSettings = z.infer<typeof HooksSettingsSchema>;

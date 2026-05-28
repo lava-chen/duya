@@ -18,6 +18,7 @@ import type {
 } from '../types.js';
 import { HookJSONOutputSchema } from '../types.js';
 import { getSessionHooks, getSessionFunctionHooks } from './sessionHooks.js';
+import { getPrioritizedMatches, matchesMatcher } from '../matcher.js';
 
 // ============================================================================
 // Constants
@@ -267,6 +268,193 @@ export function createWorktreeCreateHookInput(
   };
 }
 
+/**
+ * Create WorktreeRemove hook input
+ */
+export function createWorktreeRemoveHookInput(
+  context: HookExecutionContext,
+  params: { name: string },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'WorktreeRemove',
+    name: params.name,
+  };
+}
+
+/**
+ * Create SessionEnd hook input
+ */
+export function createSessionEndHookInput(
+  context: HookExecutionContext,
+  params: { reason?: 'user_exit' | 'timeout' | 'error' | 'clear' },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'SessionEnd',
+    reason: params.reason,
+  };
+}
+
+/**
+ * Create PreCompact hook input
+ */
+export function createPreCompactHookInput(
+  context: HookExecutionContext,
+  params: { trigger: 'auto' | 'manual' | 'idle'; compactConfig?: Record<string, unknown> },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'PreCompact',
+    trigger: params.trigger,
+    compactConfig: params.compactConfig,
+  };
+}
+
+/**
+ * Create PostCompact hook input
+ */
+export function createPostCompactHookInput(
+  context: HookExecutionContext,
+  params: { trigger: 'auto' | 'manual' | 'idle'; messageCountBefore?: number; messageCountAfter?: number; error?: string },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'PostCompact',
+    trigger: params.trigger,
+    messageCountBefore: params.messageCountBefore,
+    messageCountAfter: params.messageCountAfter,
+    error: params.error,
+  };
+}
+
+/**
+ * Create Stop hook input
+ */
+export function createStopHookInput(
+  context: HookExecutionContext,
+  params: { reason: 'user_request' | 'system' | 'error' | 'timeout' },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'Stop',
+    reason: params.reason,
+  };
+}
+
+/**
+ * Create StopFailure hook input
+ */
+export function createStopFailureHookInput(
+  context: HookExecutionContext,
+  params: { reason: 'user_request' | 'system' | 'error' | 'timeout'; error: string },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'StopFailure',
+    reason: params.reason,
+    error: params.error,
+  };
+}
+
+/**
+ * Create SubagentStop hook input
+ */
+export function createSubagentStopHookInput(
+  context: HookExecutionContext,
+  params: { agent_id: string; agent_type: string; status: 'completed' | 'error' | 'cancelled' | 'timeout'; summary?: string; error?: string },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'SubagentStop',
+    agent_id: params.agent_id,
+    agent_type: params.agent_type,
+    status: params.status,
+    summary: params.summary,
+    error: params.error,
+  };
+}
+
+/**
+ * Create TeammateIdle hook input
+ */
+export function createTeammateIdleHookInput(
+  context: HookExecutionContext,
+  params: { agent_id: string; agent_type: string },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'TeammateIdle',
+    agent_id: params.agent_id,
+    agent_type: params.agent_type,
+  };
+}
+
+/**
+ * Create TaskCreated hook input
+ */
+export function createTaskCreatedHookInput(
+  context: HookExecutionContext,
+  params: { task_id: string; task_name: string; task_context?: Record<string, unknown> },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'TaskCreated',
+    task_id: params.task_id,
+    task_name: params.task_name,
+    task_context: params.task_context,
+  };
+}
+
+/**
+ * Create TaskCompleted hook input
+ */
+export function createTaskCompletedHookInput(
+  context: HookExecutionContext,
+  params: { task_id: string; task_name: string; status: 'completed' | 'failed' | 'cancelled'; result?: string; error?: string },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'TaskCompleted',
+    task_id: params.task_id,
+    task_name: params.task_name,
+    status: params.status,
+    result: params.result,
+    error: params.error,
+  };
+}
+
+/**
+ * Create ConfigChange hook input
+ */
+export function createConfigChangeHookInput(
+  context: HookExecutionContext,
+  params: { changed_keys: string[]; old_values?: Record<string, unknown>; new_values?: Record<string, unknown> },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'ConfigChange',
+    changed_keys: params.changed_keys,
+    old_values: params.old_values,
+    new_values: params.new_values,
+  };
+}
+
+/**
+ * Create InstructionsLoaded hook input
+ */
+export function createInstructionsLoadedHookInput(
+  context: HookExecutionContext,
+  params: { instruction_source: string; instruction_count?: number },
+): HookInput {
+  return {
+    ...createBaseHookInput(context),
+    hook_event_name: 'InstructionsLoaded',
+    instruction_source: params.instruction_source,
+    instruction_count: params.instruction_count,
+  };
+}
+
 // ============================================================================
 // Hook Execution
 // ============================================================================
@@ -419,6 +607,80 @@ function processHookJSONOutput(
           result.watchPaths = hookSpecificOutput.watchPaths as string[];
         }
         break;
+
+      case 'SessionEnd':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'PreCompact':
+        if (hookSpecificOutput.permissionDecision === 'deny') {
+          result.preventContinuation = true;
+          result.stopReason = String(hookSpecificOutput.permissionDecisionReason || 'Blocked by PreCompact hook');
+          result.blockingError = {
+            blockingError: result.stopReason,
+            command,
+          };
+        }
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'PostCompact':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'Stop':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'StopFailure':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'SubagentStop':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'TeammateIdle':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'TaskCreated':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'TaskCompleted':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'ConfigChange':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'InstructionsLoaded':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'WorktreeRemove':
+        result.additionalContext = hookSpecificOutput.additionalContext as string | undefined;
+        break;
+
+      case 'Elicitation':
+        if (hookSpecificOutput.elicitationResponse) {
+          result.elicitationResponse = hookSpecificOutput.elicitationResponse as {
+            action: 'accept' | 'decline' | 'cancel';
+            content?: Record<string, unknown>;
+          };
+        }
+        break;
+
+      case 'ElicitationResult':
+        if (hookSpecificOutput.elicitationResultResponse) {
+          result.elicitationResultResponse = hookSpecificOutput.elicitationResultResponse as {
+            action: 'accept' | 'decline' | 'cancel';
+            content?: Record<string, unknown>;
+          };
+        }
+        break;
     }
   }
 
@@ -535,7 +797,6 @@ export async function executeHook(
         return { outcome: 'cancelled', hook };
       }
 
-      // Parse hook output
       const trimmed = result.stdout.trim();
       if (trimmed.startsWith('{')) {
         const parsed = JSON.parse(trimmed);
@@ -553,8 +814,33 @@ export async function executeHook(
       };
     }
 
-    // For HTTP and agent hooks, we'd need additional implementation
-    // For now, return a non-blocking error
+    if (hook.type === 'prompt') {
+      const { executePromptHook } = await import('../executors/prompt-executor.js');
+      const result = await executePromptHook(hook, jsonInput, options);
+      return {
+        ...result,
+        hook,
+      };
+    }
+
+    if (hook.type === 'http') {
+      const { executeHttpHook } = await import('../executors/http-executor.js');
+      const result = await executeHttpHook(hook, jsonInput, options);
+      return {
+        ...result,
+        hook,
+      };
+    }
+
+    if (hook.type === 'agent') {
+      const { executeAgentHook } = await import('../executors/agent-executor.js');
+      const result = await executeAgentHook(hook, jsonInput, options);
+      return {
+        ...result,
+        hook,
+      };
+    }
+
     return {
       outcome: 'non_blocking_error',
       hook,
@@ -632,48 +918,35 @@ export function aggregateHookResults(results: HookResult[]): AggregatedHookResul
 }
 
 // ============================================================================
-// Hook Matching
+// Hook Matching (Enhanced)
 // ============================================================================
 
 /**
- * Check if a hook's matcher matches the given input
- */
-function matchesMatcher(matcher: string, input: Record<string, unknown>): boolean {
-  if (!matcher) return true;
-
-  // Simple matcher - could be tool name or pattern
-  // For now, just check if the tool_name matches
-  const toolName = input.tool_name;
-  if (typeof toolName === 'string') {
-    // Support glob-like matching
-    const pattern = matcher.replace(/\*/g, '.*');
-    return new RegExp(`^${pattern}$`, 'i').test(toolName);
-  }
-
-  return true;
-}
-
-/**
- * Get matching hooks for a given hook input
+ * Get matching hooks for a given hook event and input.
+ * Uses the enhanced matcher with glob pattern and priority sorting.
  */
 export function getMatchingHooks(
   sessionId: string,
   hookEvent: HookEvent,
   input: Record<string, unknown>,
+  permissionContext: Record<string, unknown> = {},
 ): HookCommand[] {
   const hooks: HookCommand[] = [];
   const sessionHooks = getSessionHooks(sessionId, hookEvent);
 
   const matchers = sessionHooks.get(hookEvent);
-  if (!matchers) return hooks;
+  if (!matchers || matchers.length === 0) return hooks;
 
-  for (const matcherConfig of matchers) {
-    if (matchesMatcher(matcherConfig.matcher, input)) {
-      for (const hookEntry of matcherConfig.hooks) {
-        if (hookEntry.hook.type !== 'function') {
-          hooks.push(hookEntry.hook);
-        }
-      }
+  const hookMatchers: HookMatcher[] = matchers.map(m => ({
+    matcher: m.matcher,
+    hooks: m.hooks.map(h => h.hook as HookCommand & { type: 'command' | 'prompt' | 'http' | 'agent' }),
+  }));
+
+  const prioritized = getPrioritizedMatches(hookMatchers, input, permissionContext);
+
+  for (const matcherConfig of prioritized) {
+    for (const hookEntry of matcherConfig.hooks) {
+      hooks.push(hookEntry as HookCommand);
     }
   }
 
@@ -681,7 +954,8 @@ export function getMatchingHooks(
 }
 
 /**
- * Execute all matching hooks for a given hook event and input
+ * Execute all matching hooks for a given hook event and input.
+ * Supports async hooks: hooks with async: true are spawned in background.
  */
 export async function executeHooksForEvent(
   sessionId: string,
@@ -695,10 +969,27 @@ export async function executeHooksForEvent(
   const results: HookResult[] = [];
 
   for (const hook of hooks) {
+    // Check if this is an async hook
+    if ('async' in hook && hook.async === true) {
+      const asyncTimeout = ('asyncTimeout' in hook && typeof hook.asyncTimeout === 'number')
+        ? hook.asyncTimeout * 1000
+        : (hook.timeout ? hook.timeout * 1000 : undefined);
+
+      const { spawnAsyncHook } = await import('../executors/async-runner.js');
+      spawnAsyncHook(
+        `async-${hookEvent}-${Date.now()}-${Math.random()}`,
+        hook,
+        hookEvent,
+        hookInput,
+        asyncTimeout || 10 * 60 * 1000,
+        options,
+      );
+      continue;
+    }
+
     const result = await executeHook(hook, hookEvent, hookInput, options);
     results.push(result);
 
-    // Stop on first blocking error
     if (result.outcome === 'blocking') {
       break;
     }
@@ -709,7 +1000,8 @@ export async function executeHooksForEvent(
   const functionMatchers = functionHooks.get(hookEvent);
   if (functionMatchers) {
     for (const matcherConfig of functionMatchers) {
-      if (matchesMatcher(matcherConfig.matcher, input)) {
+      const matchResult = matchesMatcher(matcherConfig.matcher, input);
+      if (matchResult.matches) {
         for (const funcHook of matcherConfig.hooks) {
           try {
             const passed = await funcHook.callback(hookInput, (hookInput as { tool_use_id?: string }).tool_use_id ?? null, options.signal);
