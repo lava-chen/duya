@@ -465,6 +465,18 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
 
   const isUser = message.role === 'user';
   const hasPastedContents = allPastedContents.length > 0;
+
+  const displayText = useMemo(() => {
+    if (!hasPastedContents) return mainText;
+    let cleaned = mainText;
+    for (const pasted of allPastedContents) {
+      if (cleaned.includes(pasted.fullContent)) {
+        cleaned = cleaned.replace(pasted.fullContent, '').trim();
+      }
+    }
+    return cleaned;
+  }, [mainText, allPastedContents, hasPastedContents]);
+
   const hasAttachments = message.attachments && message.attachments.length > 0;
   const imageAttachments = message.attachments?.filter(a => a.type.startsWith('image/')) || [];
   const fileAttachments = message.attachments?.filter(a => !a.type.startsWith('image/')) || [];
@@ -558,12 +570,14 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
               ))}
             </div>
           )}
+          {displayText && (
           <div
             className="rounded-2xl rounded-tr-sm px-4 py-2.5"
             style={{ backgroundColor: 'rgba(0, 0, 0, 0.06)' }}
           >
-            <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text)' }}>{mainText}</p>
+            <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text)' }}>{displayText}</p>
           </div>
+          )}
           <div className="flex justify-end items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <span className="text-[11px] text-muted-foreground/60 tabular-nums">
               {formatMessageTime(message.timestamp)}

@@ -1,0 +1,1 @@
+export { ResearchModePanel } from './ResearchModePanel';

@@ -9,6 +9,7 @@ import {
   SpinnerGapIcon,
   GearSixIcon,
 } from '@/components/icons';
+import { useTranslation } from '@/hooks/useTranslation';
 import { useConversationStore } from '@/stores/conversation-store';
 
 export interface ModelOption {
@@ -40,9 +41,10 @@ export function ModelSelector({
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const { setCurrentView, setSettingsTab } = useConversationStore();
+  const { t } = useTranslation();
 
   const selectedModel = models.find(m => m.id === selectedModelId);
-  const displayLabel = selectedModel?.display_name || selectedModelId || 'Select model';
+  const displayLabel = selectedModel?.display_name || selectedModelId || t('messageInput.selectModel');
 
   // Close on click outside
   useEffect(() => {
@@ -96,7 +98,7 @@ export function ModelSelector({
           className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground hover:border-accent/50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <span className="truncate">
-            {loading ? 'Loading models...' : displayLabel}
+            {loading ? t('messageInput.loadingModels') : displayLabel}
           </span>
           <CaretDownIcon size={14} className="shrink-0 ml-2 text-muted-foreground" />
         </button>
@@ -115,7 +117,7 @@ export function ModelSelector({
             <div ref={listRef} className="max-h-[300px] overflow-y-auto scrollbar-thin">
               {models.length === 0 ? (
                 <div className="px-3 py-4 text-sm text-center" style={{ color: 'var(--muted)' }}>
-                  No models available
+                  {t('messageInput.noModelsAvailable')}
                 </div>
               ) : (
                 models.map(model => (
@@ -173,7 +175,7 @@ export function ModelSelector({
               }}
             >
               <GearSixIcon size={14} className="shrink-0" />
-              <span>Manage providers</span>
+              <span>{t('messageInput.manageProviders')}</span>
             </button>
           </div>
         )}
@@ -226,7 +228,7 @@ export function ModelSelector({
           <div ref={listRef} className="max-h-[250px] overflow-y-auto scrollbar-thin">
             {models.length === 0 ? (
               <div className="px-3 py-3 text-xs text-center" style={{ color: 'var(--muted)' }}>
-                No models available
+                {t('messageInput.noModelsAvailable')}
               </div>
             ) : (
               models.map(model => (
@@ -284,7 +286,7 @@ export function ModelSelector({
             }}
           >
             <GearSixIcon size={12} className="shrink-0" />
-            <span>Manage providers</span>
+            <span>{t('messageInput.manageProviders')}</span>
           </button>
         </div>
       )}

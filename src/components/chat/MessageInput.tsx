@@ -5,6 +5,7 @@
 import React, { useState, useRef, useCallback, KeyboardEvent, FormEvent, useEffect } from 'react';
 import {
   ArrowUpIcon,
+  BrainIcon,
   XIcon,
   StopIcon,
   FileIcon,
@@ -45,6 +46,7 @@ interface MessageInputProps {
     content: string,
     files?: FileAttachment[],
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
+    mode?: string,
   ) => void;
   onCommand?: (command: string) => void;
   onStop?: () => void;
@@ -148,6 +150,11 @@ export function MessageInput({
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevSessionIdRef = useRef<string | undefined>(sessionId);
   const draftLoadedRef = useRef(false);
+  const prePasteValueRef = useRef<string>('');
+
+  useEffect(() => {
+    prePasteValueRef.current = inputValue;
+  }, [inputValue]);
 
   // File chips from file tree
   const [fileChips, setFileChips] = useState<FileChip[]>([]);
@@ -172,6 +179,7 @@ export function MessageInput({
   const [responseStyles, setResponseStyles] = useState<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>>([]);
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
   const [thinkingEffort, setThinkingEffort] = useState<string | null>(null);
+  const [sendMode, setSendMode] = useState<string | undefined>(undefined);
 
   const closePopover = useCallback(() => {
     setPopoverMode(null);
@@ -532,6 +540,7 @@ export function MessageInput({
     async (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const val = e.target.value;
       setInputValue(val);
+      prePasteValueRef.current = val;
       adjustTextareaHeight();
       await handleSlashInputChange(val);
     },
@@ -571,10 +580,14 @@ export function MessageInput({
       }
 
       // Fall back to text paste handling
+      const prePasteValue = prePasteValueRef.current;
       const pastedContent = handlePaste(e);
       if (pastedContent) {
-        // Pasted content was treated as attachment, textarea value not changed
-        // Optionally adjust height if needed
+        setTimeout(() => {
+          if (textareaRef.current && textareaRef.current.value !== prePasteValue) {
+            setInputValue(prePasteValue);
+          }
+        }, 0);
         adjustTextareaHeight();
       }
     },
@@ -628,7 +641,8 @@ export function MessageInput({
         setFileChips([]);
         clearPastedContents();
         clearFiles();
-        onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
+        onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode);
+        setSendMode(undefined);
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto';
         }
@@ -650,7 +664,8 @@ export function MessageInput({
         const result = onExecuteCommand?.(cmd);
         if (result) {
           // Show command result as a message
-          onSend(result.content, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
+          onSend(result.content, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode);
+          setSendMode(undefined);
         }
         clearDraft();
         setInputValue('');
@@ -670,7 +685,8 @@ export function MessageInput({
       if (cliBadge) setCliBadge(null);
 
       clearDraft();
-      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts);
+      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode);
+      setSendMode(undefined);
       setInputValue('');
       setFileChips([]);
       clearPastedContents();
@@ -679,7 +695,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId],
+    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode],
   );
 
   const handleKeyDown = useCallback(
@@ -869,6 +885,22 @@ export function MessageInput({
             </div>
           )}
 
+          {sendMode === 'research' && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium" style={{ background: 'rgba(37, 99, 235, 0.14)', color: '#7db4ff' }}>
+                <BrainIcon size={12} />
+                深度研究已开启
+              </span>
+              <button
+                type="button"
+                onClick={() => setSendMode(undefined)}
+                className="w-4 h-4 rounded-full bg-gray-700 flex items-center justify-center hover:bg-gray-600 transition-colors"
+              >
+                <XIcon size={10} />
+              </button>
+            </div>
+          )}
+
           {/* Bottom Toolbar */}
           <div className="mt-1 px-2 flex items-center justify-between">
             {/* Left: Plus Button (with file attach, model selector, effort) & Permission */}
@@ -934,6 +966,10 @@ export function MessageInput({
                   console.log('Selected thinking effort:', effort);
                 }}
                 modelSupportsEffort={true}
+                onRunResearchMode={() => {
+                  setSendMode('research');
+                  textareaRef.current?.focus();
+                }}
               />
               <input
                 ref={fileInputRef}

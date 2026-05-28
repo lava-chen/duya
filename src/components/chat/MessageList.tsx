@@ -5,7 +5,9 @@
 import React, { useEffect, useRef, useMemo, useCallback, forwardRef, useImperativeHandle, useLayoutEffect, useState } from 'react';
 import type { Message } from '@/types';
 import { MessageItem } from './MessageItem';
+import { ResearchModePanel } from './research-mode';
 import { StreamingMessage } from './StreamingMessage';
+import { useResearchSession } from '@/hooks/useResearchSession';
 
 export interface MessageListRef {
   scrollToBottom: () => void;
@@ -230,6 +232,13 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   }, [messages]);
 
   const shouldRenderStreamingMessage = isStreaming;
+  const researchSnapshot = useResearchSession(sessionId);
+  const shouldRenderResearchPanel = researchSnapshot.mode === 'research'
+    && (researchSnapshot.active
+      || researchSnapshot.stage === 'complete'
+      || researchSnapshot.stage === 'error'
+      || researchSnapshot.planQuestions.length > 0
+      || !!researchSnapshot.reportText);
 
   // Track session changes and reset scroll state
   useEffect(() => {
@@ -376,7 +385,15 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           </div>
         )}
 
-        {shouldRenderStreamingMessage && (
+        {shouldRenderResearchPanel && (
+          <ResearchModePanel
+            sessionId={sessionId}
+            snapshot={researchSnapshot}
+            onForceStop={onForceStop}
+          />
+        )}
+
+        {shouldRenderStreamingMessage && !shouldRenderResearchPanel && (
           <StreamingMessage
             sessionId={sessionId}
             onForceStop={onForceStop}
