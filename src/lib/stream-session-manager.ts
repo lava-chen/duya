@@ -3,6 +3,14 @@
 // Connects to Agent Server via HTTP+SSE for chat streaming.
 
 import type { SessionStreamSnapshot, ToolUseInfo, ToolResultInfo, TokenUsage, ContextUsage, StreamPhase } from '@/types/message';
+import type {
+  ResearchActivityItem,
+  ResearchPanelFinding,
+  ResearchPanelQuestion,
+  ResearchPendingRequest,
+  ResearchSessionSnapshot,
+  ResearchPlanDetail,
+} from '@/types/research';
 import type { PermissionRequestEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
@@ -221,6 +229,8 @@ interface StartStreamParams {
   outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
   titleGenerationModel?: string;
   titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
+  mode?: string;
+  wikiAgentEnabled?: boolean;
 }
 
 interface StartStreamResult {
@@ -281,6 +291,70 @@ export type ConductorEvent =
   | { type: 'error'; message: string; timestamp: number }
   | { type: 'done'; timestamp: number };
 
+interface ResearchQuestionEventData {
+  kind: 'clarification' | 'plan_approval' | 'update';
+  questions: Array<{
+    id: string;
+    text: string;
+    type: 'text' | 'choice';
+    required: boolean;
+    options?: string[];
+  }>;
+  allowSkip: boolean;
+  timestamp: number;
+  requestId?: string;
+  changeType?: 'added' | 'obsoleted';
+  complexity?: string;
+  maxIterations?: number;
+  approvalRequired?: boolean;
+  plan?: ResearchPlanDetail;
+}
+
+interface ResearchProgressEventData {
+  phase: string;
+  iteration: number;
+  maxIterations: number;
+  coverage: number;
+  findingsCount: number;
+  questionCount: number;
+  timestamp: number;
+}
+
+interface ResearchIterationEventData {
+  iteration: number;
+  maxIterations: number;
+  phase: 'start' | 'complete' | 'early_stop';
+  questions: string[];
+  findingsCount: number;
+  coverage: number;
+  timestamp: number;
+}
+
+interface ResearchFindingEventData {
+  finding: ResearchPanelFinding;
+  timestamp: number;
+}
+
+interface ResearchComplexityEventData {
+  complexity: string;
+  maxIterations: number;
+  description: string;
+  timestamp: number;
+}
+
+interface ResearchCompleteEventData {
+  summary: string;
+  iterations: number;
+  coverage: number;
+  findingsCount: number;
+  timestamp: number;
+}
+
+interface ResearchErrorEventData {
+  message: string;
+  timestamp: number;
+}
+
 /** Conductor stream phase */
 export type ConductorPhase = 'idle' | 'thinking' | 'streaming' | 'tool_use' | 'completed' | 'error';
 
@@ -338,6 +412,38 @@ interface ConductorSessionState {
   conductorEventsListeners: Set<(events: ConductorEvent[]) => void>;
   conductorPhaseListeners: Set<(phase: ConductorPhase) => void>;
   conductorErrorListeners: Set<(error: string | null) => void>;
+}
+
+interface ResearchSessionState extends ResearchSessionSnapshot {
+  listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
+}
+
+function createInitialResearchState(sessionId: string): Omit<ResearchSessionState, 'listeners'> {
+  return {
+    sessionId,
+    mode: null,
+    active: false,
+    stage: 'idle',
+    originalQuery: '',
+    complexity: undefined,
+    complexityDescription: undefined,
+    phase: undefined,
+    maxIterations: 0,
+    currentIteration: 0,
+    coverage: 0,
+    findingsCount: 0,
+    questionCount: 0,
+    planQuestions: [],
+    plan: null,
+    findings: [],
+    reportText: '',
+    summary: undefined,
+    error: null,
+    pendingRequest: null,
+    activities: [],
+    startedAt: null,
+    completedAt: null,
+  };
 }
 
 function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
@@ -399,9 +505,33 @@ function isActivePhase(phase: StreamPhase): boolean {
   return ACTIVE_PHASES.includes(phase);
 }
 
+function mapPhaseToStage(phase: string | undefined): ResearchSessionSnapshot['stage'] {
+  switch (phase) {
+    case 'planning':
+      return 'planning';
+    case 'awaiting_plan_approval':
+      return 'awaiting_plan_approval';
+    case 'clarifying':
+      return 'clarifying';
+    case 'researching':
+      return 'researching';
+    case 'synthesizing':
+      return 'synthesizing';
+    case 'complete':
+      return 'complete';
+    case 'error':
+      return 'error';
+    case 'aborted':
+      return 'aborted';
+    default:
+      return 'idle';
+  }
+}
+
 class StreamSessionManager {
   private sessions: Map<string, SessionState> = new Map();
   private conductorSessions: Map<string, ConductorSessionState> = new Map();
+  private researchSessions: Map<string, ResearchSessionState> = new Map();
   private pendingMessages: Map<string, StartStreamParams[]> = new Map();
   private textEmitInterval = 300; // Increased from 100ms to reduce UI flickering
   private idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
@@ -810,7 +940,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, model, maxTokens, systemPrompt, initialGeneration, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam } = params;
+    const { sessionId, content, model, maxTokens, systemPrompt, initialGeneration, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled } = params;
 
     // Resolve workingDirectory from the thread store — sessionId IS the threadId
     let workingDirectory: string | undefined;
@@ -833,6 +963,16 @@ class StreamSessionManager {
       filesWithImageChunks: files?.filter(f => f.imageChunks)?.map(f => ({ name: f.name, chunks: f.imageChunks?.length })),
     });
     const state = this.getOrCreateState(sessionId);
+
+    if (mode === 'research') {
+      this.resetResearchState(sessionId, content);
+    } else {
+      const researchState = this.getOrCreateResearchState(sessionId);
+      if (researchState.mode !== 'research') {
+        Object.assign(researchState, createInitialResearchState(sessionId));
+        this.notifyResearchListeners(sessionId);
+      }
+    }
 
     if (state.abortController && isActivePhase(state.phase)) {
       try {
@@ -953,7 +1093,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, model, maxTokens, systemPrompt, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory },
+      { content, model, maxTokens, systemPrompt, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled },
       nextGeneration
     );
 
@@ -976,6 +1116,8 @@ class StreamSessionManager {
       titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
       providerConfig?: ProviderConfig | null;
       workingDirectory?: string;
+      mode?: string;
+      wikiAgentEnabled?: boolean;
     },
     generation: number
   ): Promise<void> {
@@ -1090,6 +1232,42 @@ class StreamSessionManager {
           this.handleTokenUsageEvent(sessionId, streamId, event.data as { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number } | undefined);
           break;
 
+        case 'research_phase':
+          this.handleResearchPhaseEvent(sessionId, event.data as { from: string; to: string; timestamp: number } | undefined);
+          break;
+
+        case 'research_questions':
+          this.handleResearchQuestionsEvent(sessionId, event.data as ResearchQuestionEventData | undefined);
+          break;
+
+        case 'research_iteration':
+          this.handleResearchIterationEvent(sessionId, event.data as ResearchIterationEventData | undefined);
+          break;
+
+        case 'research_finding':
+          this.handleResearchFindingEvent(sessionId, event.data as ResearchFindingEventData | undefined);
+          break;
+
+        case 'research_progress':
+          this.handleResearchProgressEvent(sessionId, event.data as ResearchProgressEventData | undefined);
+          break;
+
+        case 'research_synthesis_chunk':
+          this.handleResearchSynthesisChunkEvent(sessionId, event.data as { delta: string; total: number; timestamp: number } | undefined);
+          break;
+
+        case 'research_complete':
+          this.handleResearchCompleteEvent(sessionId, event.data as ResearchCompleteEventData | undefined);
+          break;
+
+        case 'research_complexity':
+          this.handleResearchComplexityEvent(sessionId, event.data as ResearchComplexityEventData | undefined);
+          break;
+
+        case 'research_error':
+          this.handleResearchErrorEvent(sessionId, event.data as ResearchErrorEventData | undefined);
+          break;
+
         default:
           // Try to handle as generic message with data
           if (event.data) {
@@ -1119,10 +1297,12 @@ class StreamSessionManager {
         files: params.files,
         agentProfileId: params.agentProfileId,
         outputStyleConfig: params.outputStyleConfig,
+        mode: params.mode,
         titleGenerationModel: params.titleGenerationModel,
         titleGenerationModelConfig: params.titleGenerationModelConfig,
         providerConfig: params.providerConfig as unknown as Record<string, unknown> | undefined,
         workingDirectory: params.workingDirectory,
+        wikiAgentEnabled: params.wikiAgentEnabled,
       });
     } catch (error) {
       console.error('[stream-session-manager] Agent Server error:', error);
@@ -1298,6 +1478,307 @@ class StreamSessionManager {
     this.notifyToolListeners(sessionId);
     this.notifyStreamingEventsListeners(sessionId);
     this.resetIdleTimeout(sessionId);
+  }
+
+  private handleResearchPhaseEvent(
+    sessionId: string,
+    data: { from: string; to: string; timestamp: number } | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = true;
+    state.phase = data.to;
+
+    switch (data.to) {
+      case 'clarification':
+        state.stage = 'clarifying';
+        break;
+      case 'planning':
+        state.stage = 'planning';
+        break;
+      case 'research_loop':
+        state.stage = 'researching';
+        state.pendingRequest = null;
+        break;
+      case 'synthesis':
+      case 'interactive_report':
+        state.stage = 'synthesizing';
+        state.pendingRequest = null;
+        break;
+      case 'complete':
+        state.stage = 'complete';
+        state.active = false;
+        state.pendingRequest = null;
+        state.completedAt = state.completedAt || data.timestamp;
+        break;
+      case 'aborted':
+        state.stage = 'aborted';
+        state.active = false;
+        state.completedAt = state.completedAt || data.timestamp;
+        break;
+      default:
+        break;
+    }
+
+    this.pushResearchActivity(sessionId, {
+      title: `Phase: ${data.to.replace(/_/g, ' ')}`,
+      timestamp: data.timestamp,
+    });
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchQuestionsEvent(
+    sessionId: string,
+    data: ResearchQuestionEventData | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = true;
+
+    if (data.kind === 'clarification' && data.requestId) {
+      state.stage = 'clarifying';
+      state.pendingRequest = {
+        kind: 'clarification',
+        requestId: data.requestId,
+        questions: data.questions,
+        allowSkip: data.allowSkip,
+      };
+      this.pushResearchActivity(sessionId, {
+        title: 'Waiting for clarification',
+        detail: `${data.questions.length} question${data.questions.length === 1 ? '' : 's'} need input.`,
+        timestamp: data.timestamp,
+        tone: 'warning',
+      });
+    }
+
+    if (data.kind === 'plan_approval') {
+      state.plan = data.plan || null;
+      const planQuestionMap = new Map(
+        (state.plan?.researchQuestions || []).map((question) => [question.id, question])
+      );
+      state.planQuestions = data.questions.map((question) => {
+        const matchedPlanQuestion = planQuestionMap.get(question.id);
+        return {
+          id: question.id,
+          text: question.text,
+          status: 'pending',
+          purpose: matchedPlanQuestion?.purpose,
+          priority: matchedPlanQuestion?.priority,
+          dependsOn: matchedPlanQuestion?.dependsOn,
+          requiredEvidence: matchedPlanQuestion?.requiredEvidence,
+        };
+      });
+      state.questionCount = state.planQuestions.length;
+      if (typeof data.maxIterations === 'number') {
+        state.maxIterations = data.maxIterations;
+      }
+      if (data.complexity) {
+        state.complexity = data.complexity;
+      }
+      if (data.requestId) {
+        state.pendingRequest = {
+          kind: 'plan_approval',
+          requestId: data.requestId,
+          questions: data.questions,
+          allowSkip: false,
+        };
+      }
+      state.stage = 'awaiting_plan_approval';
+      this.pushResearchActivity(sessionId, {
+        title: 'Research plan ready',
+        detail: `${data.questions.length} planned steps prepared for approval.`,
+        timestamp: data.timestamp,
+      });
+    }
+
+    if (data.kind === 'update') {
+      const updateQuestions = data.questions.map((question) => ({
+        id: question.id,
+        text: question.text,
+        status: data.changeType === 'obsoleted' ? ('obsolete' as const) : ('pending' as const),
+      }));
+
+      if (data.changeType === 'added') {
+        const existingIds = new Set(state.planQuestions.map((question) => question.id));
+        state.planQuestions = [
+          ...state.planQuestions,
+          ...updateQuestions.filter((question) => !existingIds.has(question.id)),
+        ];
+      } else if (data.changeType === 'obsoleted') {
+        const obsoleteIds = new Set(updateQuestions.map((question) => question.id));
+        state.planQuestions = state.planQuestions.map((question) =>
+          obsoleteIds.has(question.id)
+            ? { ...question, status: 'obsolete' }
+            : question,
+        );
+      }
+
+      this.pushResearchActivity(sessionId, {
+        title: data.changeType === 'obsoleted' ? 'Plan updated' : 'New research questions added',
+        detail: `${data.questions.length} question${data.questions.length === 1 ? '' : 's'} ${data.changeType === 'obsoleted' ? 'closed' : 'added'}.`,
+        timestamp: data.timestamp,
+      });
+    }
+
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchComplexityEvent(
+    sessionId: string,
+    data: ResearchComplexityEventData | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = true;
+    state.complexity = data.complexity;
+    state.complexityDescription = data.description;
+    state.maxIterations = data.maxIterations;
+    this.pushResearchActivity(sessionId, {
+      title: 'Complexity classified',
+      detail: data.description,
+      timestamp: data.timestamp,
+    });
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchIterationEvent(
+    sessionId: string,
+    data: ResearchIterationEventData | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = true;
+    state.currentIteration = data.iteration;
+    state.maxIterations = data.maxIterations || state.maxIterations;
+    state.coverage = data.coverage;
+    state.findingsCount = Math.max(state.findingsCount, data.findingsCount);
+
+    if (data.phase === 'start') {
+      const activeTexts = new Set(data.questions);
+      state.planQuestions = state.planQuestions.map((question) => ({
+        ...question,
+        status: activeTexts.has(question.text)
+          ? 'active'
+          : question.status === 'active'
+            ? 'done'
+            : question.status,
+      }));
+      this.pushResearchActivity(sessionId, {
+        title: `Iteration ${data.iteration} started`,
+        detail: data.questions[0] || 'Collecting sources.',
+        timestamp: data.timestamp,
+      });
+    } else {
+      state.planQuestions = state.planQuestions.map((question) =>
+        question.status === 'active'
+          ? { ...question, status: 'done' }
+          : question,
+      );
+      this.pushResearchActivity(sessionId, {
+        title: data.phase === 'early_stop' ? 'Research stopped early' : `Iteration ${data.iteration} complete`,
+        detail: `${Math.round(data.coverage * 100)}% coverage, ${data.findingsCount} findings.`,
+        timestamp: data.timestamp,
+        tone: data.phase === 'early_stop' ? 'success' : 'neutral',
+      });
+    }
+
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchProgressEvent(
+    sessionId: string,
+    data: ResearchProgressEventData | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = true;
+    state.phase = data.phase;
+    state.currentIteration = data.iteration || state.currentIteration;
+    state.maxIterations = data.maxIterations || state.maxIterations;
+    state.coverage = data.coverage;
+    state.findingsCount = Math.max(state.findingsCount, data.findingsCount);
+    state.questionCount = Math.max(state.questionCount, data.questionCount, state.planQuestions.length);
+
+    if (data.phase === 'planning' && state.stage === 'idle') {
+      state.stage = 'planning';
+    } else if (data.phase === 'synthesis') {
+      state.stage = 'synthesizing';
+    }
+
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchFindingEvent(
+    sessionId: string,
+    data: ResearchFindingEventData | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = true;
+    state.findings = [data.finding, ...state.findings].slice(0, 80);
+    state.findingsCount = Math.max(state.findingsCount, state.findings.length);
+    this.pushResearchActivity(sessionId, {
+      title: data.finding.title || data.finding.source || 'New source found',
+      detail: data.finding.content,
+      timestamp: data.timestamp,
+      tone: data.finding.stance === 'contradicts' ? 'warning' : 'neutral',
+    });
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchSynthesisChunkEvent(
+    sessionId: string,
+    data: { delta: string; total: number; timestamp: number } | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = true;
+    state.stage = 'synthesizing';
+    state.pendingRequest = null;
+    state.reportText += data.delta;
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchCompleteEvent(
+    sessionId: string,
+    data: ResearchCompleteEventData | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = false;
+    state.stage = 'complete';
+    state.summary = data.summary;
+    state.currentIteration = data.iterations;
+    state.coverage = data.coverage;
+    state.findingsCount = data.findingsCount;
+    state.pendingRequest = null;
+    state.completedAt = data.timestamp;
+    this.pushResearchActivity(sessionId, {
+      title: 'Research complete',
+      detail: data.summary,
+      timestamp: data.timestamp,
+      tone: 'success',
+    });
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchErrorEvent(
+    sessionId: string,
+    data: ResearchErrorEventData | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.active = false;
+    state.stage = 'error';
+    state.error = data.message;
+    state.completedAt = data.timestamp;
+    this.pushResearchActivity(sessionId, {
+      title: 'Research error',
+      detail: data.message,
+      timestamp: data.timestamp,
+      tone: 'warning',
+    });
+    this.notifyResearchListeners(sessionId);
   }
 
   private handlePermissionEvent(sessionId: string, streamId: string, data: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } | undefined): void {
@@ -1716,9 +2197,28 @@ class StreamSessionManager {
     return () => { state.streamingEventsListeners.delete(listener); };
   }
 
+  subscribeToResearch(sessionId: string, listener: (snapshot: ResearchSessionSnapshot) => void): () => void {
+    const state = this.getOrCreateResearchState(sessionId);
+    state.listeners.add(listener);
+    const snapshot = this.getResearchSnapshot(sessionId);
+    if (snapshot) {
+      listener(snapshot);
+    }
+    return () => {
+      state.listeners.delete(listener);
+    };
+  }
+
   getSnapshot(sessionId: string): SessionStreamSnapshot | null {
     const state = this.sessions.get(sessionId);
     return state ? buildSnapshot(state) : null;
+  }
+
+  getResearchSnapshot(sessionId: string): ResearchSessionSnapshot | null {
+    const state = this.researchSessions.get(sessionId);
+    if (!state) return null;
+    const { listeners: _listeners, ...snapshot } = state;
+    return { ...snapshot };
   }
 
   setToolTimeoutCallback(sessionId: string, callback: (content: string) => void): void {
@@ -1748,6 +2248,126 @@ class StreamSessionManager {
 
     this.sessions.set(sessionId, state);
     return state;
+  }
+
+  private getOrCreateResearchState(sessionId: string): ResearchSessionState {
+    const existing = this.researchSessions.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+
+    const state: ResearchSessionState = {
+      ...createInitialResearchState(sessionId),
+      listeners: new Set(),
+    };
+    this.researchSessions.set(sessionId, state);
+    return state;
+  }
+
+  private resetResearchState(sessionId: string, originalQuery = ''): ResearchSessionState {
+    const state = this.getOrCreateResearchState(sessionId);
+    const fresh = createInitialResearchState(sessionId);
+    Object.assign(state, fresh, {
+      mode: 'research',
+      active: true,
+      stage: 'planning' as const,
+      originalQuery,
+      startedAt: Date.now(),
+    });
+    this.notifyResearchListeners(sessionId);
+    return state;
+  }
+
+  /**
+   * Restore research state from backend database after app restart.
+   */
+  async restoreResearchStateFromDB(sessionId: string): Promise<boolean> {
+    const client = getAgentServerClient();
+    const dbRow = await client.getResearchSnapshot(sessionId);
+    if (!dbRow || dbRow.status === 'completed' || dbRow.status === 'aborted') {
+      return false;
+    }
+
+    const state = this.getOrCreateResearchState(sessionId);
+    state.mode = 'research';
+    state.active = dbRow.status === 'active';
+    state.originalQuery = (dbRow.original_query as string) || '';
+    state.stage = mapPhaseToStage(dbRow.current_phase as string);
+    state.currentIteration = (dbRow.iterations as number) || 0;
+    state.coverage = (dbRow.coverage as number) || 0;
+    state.startedAt = dbRow.created_at as number || null;
+    state.completedAt = null;
+
+    // Restore from context_json
+    if (dbRow.context_json && typeof dbRow.context_json === 'string') {
+      try {
+        const context = JSON.parse(dbRow.context_json);
+        // Restore plan questions
+        if (context.planQuestions && Array.isArray(context.planQuestions)) {
+          state.planQuestions = context.planQuestions.map((q: Record<string, unknown>) => ({
+            id: String(q.id),
+            text: String(q.text),
+            status: (q.status as 'pending' | 'active' | 'done' | 'obsolete') || 'pending',
+            purpose: q.purpose as string | undefined,
+            priority: q.priority as number | undefined,
+            dependsOn: q.dependsOn as string[] | undefined,
+            requiredEvidence: q.requiredEvidence as Record<string, unknown> | undefined,
+          }));
+          state.questionCount = state.planQuestions.length;
+        }
+        // Restore pending request
+        if (context.pendingRequest) {
+          state.pendingRequest = context.pendingRequest as ResearchPendingRequest;
+        }
+        // Restore plan
+        if (context.plan) {
+          state.plan = context.plan as ResearchPlanDetail;
+        }
+        // Restore findings
+        if (context.findings && Array.isArray(context.findings)) {
+          state.findings = context.findings as ResearchPanelFinding[];
+          state.findingsCount = state.findings.length;
+        }
+      } catch {
+        // context_json parsing failed, continue with basic restoration
+      }
+    }
+
+    // Restore activities from db row if available
+    if (dbRow.activities && Array.isArray(dbRow.activities)) {
+      state.activities = dbRow.activities as ResearchActivityItem[];
+    }
+
+    this.notifyResearchListeners(sessionId);
+    return true;
+  }
+
+  private notifyResearchListeners(sessionId: string): void {
+    const state = this.researchSessions.get(sessionId);
+    if (!state) return;
+    const snapshot = this.getResearchSnapshot(sessionId);
+    if (!snapshot) return;
+    state.listeners.forEach((listener) => {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        console.error(`[stream-session-manager] Research listener error for ${sessionId}:`, error);
+      }
+    });
+  }
+
+  private pushResearchActivity(
+    sessionId: string,
+    activity: Omit<ResearchActivityItem, 'id'>,
+  ): void {
+    const state = this.getOrCreateResearchState(sessionId);
+    state.activities = [
+      {
+        id: `${activity.timestamp}-${state.activities.length}`,
+        ...activity,
+      },
+      ...state.activities,
+    ].slice(0, 40);
   }
 
   // Legacy full snapshot notification
@@ -1972,6 +2592,9 @@ function getStreamManager(): StreamSessionManager {
 
 export const streamSessionManager = getStreamManager();
 
+export const restoreResearchStateFromDB = (sessionId: string) =>
+  streamSessionManager.restoreResearchStateFromDB(sessionId);
+
 export const ensureSession = (sessionId: string) => streamSessionManager.ensureSession(sessionId);
 export const startStream = (params: StartStreamParams) => streamSessionManager.startStream(params);
 export const stopStream = (sessionId: string, reason?: string) => streamSessionManager.stopStream(sessionId, reason);
@@ -2023,6 +2646,10 @@ export const subscribeToRetry = (sessionId: string, listener: (info: { attempt: 
   streamSessionManager.subscribeToRetry(sessionId, listener);
 export const subscribeToStreamingEvents = (sessionId: string, listener: (events: StreamingEvent[]) => void) =>
   streamSessionManager.subscribeToStreamingEvents(sessionId, listener);
+export const subscribeToResearch = (sessionId: string, listener: (snapshot: ResearchSessionSnapshot) => void) =>
+  streamSessionManager.subscribeToResearch(sessionId, listener);
+export const getResearchSnapshot = (sessionId: string) =>
+  streamSessionManager.getResearchSnapshot(sessionId);
 
 // Re-export conductor types and session manager methods
 export const startConductorStream = (params: { canvasId: string; content: string; snapshot?: unknown; model?: string }) =>
