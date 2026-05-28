@@ -69,3 +69,6 @@ packages/agent/bundle/
 packages/gateway/bundle/
 
 # Bundled output
+
+
+.cache/

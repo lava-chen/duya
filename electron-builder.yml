@@ -60,6 +60,9 @@ extraResources:
   - from: extension/
     to: extension/
     filter: ["**/*"]
+  - from: build/document-parser/
+    to: document-parser/
+    filter: ["**/*"]
 
 afterPack: scripts/after-pack.js
 
@@ -91,7 +94,7 @@ win:
 nsis:
   oneClick: false
   perMachine: false
-  allowToChangeInstallationDirectory: false
+  allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   deleteAppDataOnUninstall: false
