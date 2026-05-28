@@ -24,6 +24,10 @@ import {
   shouldFallbackToPrompting,
   type DenialTrackingState,
 } from './denialTracking.js'
+import { classifyAction } from './yoloClassifier.js'
+import { recordAutoModeDenial } from './autoModeDenials.js'
+import type { LLMClient } from '../llm/base.js'
+import type { Message } from '../types.js'
 import * as path from 'path'
 
 const PERMISSION_RULE_SOURCES = [
@@ -177,6 +181,12 @@ export interface ToolPermissionCheckContext {
   setAppState?: (fn: (prev: unknown) => { denialTracking?: DenialTrackingState }) => void
   localDenialTracking?: DenialTrackingState
   abortController: AbortController
+  /** LLM client for auto mode classifier */
+  llmClient?: LLMClient
+  /** Model name for auto mode classifier */
+  classifierModel?: string
+  /** Messages for auto mode classifier transcript */
+  messages?: Message[]
 }
 
 export type HasPermissionsFn = (
@@ -268,12 +278,106 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
+    // 6. Auto mode: use AI classifier instead of prompting user
+    const isAutoMode = appState.toolPermissionContext.mode === 'auto';
+
+    if (isAutoMode && context.llmClient && context.classifierModel) {
+      const denialState =
+        appState.denialTracking ??
+        context.localDenialTracking ??
+        createDenialTrackingState();
+
+      // Check circuit breaker: fall back to prompting on too many denials
+      if (shouldFallbackToPrompting(denialState)) {
+        return {
+          behavior: 'ask',
+          message: createPermissionRequestMessage(toolName),
+          decisionReason: {
+            type: 'other',
+            reason: 'Auto mode classifier disabled due to too many denials - manual approval required',
+          },
+        };
+      }
+
+      // Run the classifier
+      const result = await classifyAction({
+        llmClient: context.llmClient,
+        model: context.classifierModel,
+        messages: context.messages ?? [],
+        toolName,
+        toolInput: input,
+        context: appState.toolPermissionContext,
+        signal: context.abortController.signal,
+      });
+
+      if (result.unavailable || result.shouldBlock) {
+        const newDenialState = recordDenial(denialState);
+        persistDenialState(context, newDenialState);
+
+        recordAutoModeDenial({
+          toolName,
+          display: summarizeToolInput(toolName, input),
+          reason: result.reason,
+          timestamp: Date.now(),
+        });
+
+        // Check if denial limit exceeded - if so, show a specific message
+        const limitExceeded = handleDenialLimitExceeded(
+          newDenialState,
+          toolName,
+          result.reason,
+        );
+        if (limitExceeded) {
+          return limitExceeded;
+        }
+
+        // Classifier blocked but under limits - return deny
+        return {
+          behavior: 'deny',
+          decisionReason: {
+            type: 'classifier',
+            classifier: 'auto-mode',
+            reason: result.reason,
+          },
+          message: `Auto mode blocked ${toolName}: ${result.reason}`,
+        };
+      }
+
+      // Classifier allowed - record success and allow
+      const successState = recordSuccess(denialState);
+      persistDenialState(context, successState);
+
+      return {
+        behavior: 'allow',
+        decisionReason: {
+          type: 'classifier',
+          classifier: 'auto-mode',
+          reason: result.reason,
+        },
+      };
+    }
+
     // Default: ask for permission
     return {
       behavior: 'ask',
       message: createPermissionRequestMessage(toolName),
     }
   }
+}
+
+function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
+  if (toolName === 'Bash' && typeof input.command === 'string') {
+    return input.command.length > 100
+      ? input.command.slice(0, 100) + '...'
+      : input.command;
+  }
+  if (typeof input.file_path === 'string') {
+    return `${toolName}: ${input.file_path}`;
+  }
+  if (typeof input.path === 'string') {
+    return `${toolName}: ${input.path}`;
+  }
+  return toolName;
 }
 
 /**

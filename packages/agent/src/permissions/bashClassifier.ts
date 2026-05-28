@@ -2,44 +2,83 @@
  * Bash Classifier for duya Agent
  * Adapted from claude-code-haha/src/utils/permissions/bashClassifier.ts
  *
- * This is a stub implementation - classifier permissions are typically ant-only.
+ * Provides prompt-based classification for bash commands.
+ * Rules with "prompt:" prefix in the content are extracted as natural-language
+ * descriptions that the YOLO classifier can use to make decisions.
  */
 
-export const PROMPT_PREFIX = 'prompt:'
+import type { ToolPermissionContext } from './types.js';
+import { getAllowRules, getDenyRules, getAskRules } from './permissions.js';
+
+export const PROMPT_PREFIX = 'prompt:';
 
 export type ClassifierResult = {
-  matches: boolean
-  matchedDescription?: string
-  confidence: 'high' | 'medium' | 'low'
-  reason: string
-}
+  matches: boolean;
+  matchedDescription?: string;
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+};
 
-export type ClassifierBehavior = 'deny' | 'ask' | 'allow'
+export type ClassifierBehavior = 'deny' | 'ask' | 'allow';
 
 export function extractPromptDescription(
-  _ruleContent: string | undefined,
+  ruleContent: string | undefined,
 ): string | null {
-  return null
+  if (!ruleContent) return null;
+  if (ruleContent.startsWith(PROMPT_PREFIX)) {
+    return ruleContent.slice(PROMPT_PREFIX.length).trim();
+  }
+  return null;
 }
 
 export function createPromptRuleContent(description: string): string {
-  return `${PROMPT_PREFIX} ${description.trim()}`
+  return `${PROMPT_PREFIX} ${description.trim()}`;
 }
 
 export function isClassifierPermissionsEnabled(): boolean {
-  return false
+  return true;
 }
 
-export function getBashPromptDenyDescriptions(_context: unknown): string[] {
-  return []
+function extractBashPromptDescriptions(
+  context: ToolPermissionContext,
+  behavior: 'deny' | 'ask' | 'allow',
+): string[] {
+  let rules;
+  switch (behavior) {
+    case 'deny':
+      rules = getDenyRules(context);
+      break;
+    case 'ask':
+      rules = getAskRules(context);
+      break;
+    case 'allow':
+      rules = getAllowRules(context);
+      break;
+    default:
+      return [];
+  }
+
+  const descriptions: string[] = [];
+  for (const rule of rules) {
+    if (rule.ruleValue.toolName !== 'Bash') continue;
+    const desc = extractPromptDescription(rule.ruleValue.ruleContent);
+    if (desc) {
+      descriptions.push(desc);
+    }
+  }
+  return descriptions;
 }
 
-export function getBashPromptAskDescriptions(_context: unknown): string[] {
-  return []
+export function getBashPromptDenyDescriptions(context: ToolPermissionContext): string[] {
+  return extractBashPromptDescriptions(context, 'deny');
 }
 
-export function getBashPromptAllowDescriptions(_context: unknown): string[] {
-  return []
+export function getBashPromptAskDescriptions(context: ToolPermissionContext): string[] {
+  return extractBashPromptDescriptions(context, 'ask');
+}
+
+export function getBashPromptAllowDescriptions(context: ToolPermissionContext): string[] {
+  return extractBashPromptDescriptions(context, 'allow');
 }
 
 export async function classifyBashCommand(
@@ -53,8 +92,8 @@ export async function classifyBashCommand(
   return {
     matches: false,
     confidence: 'high',
-    reason: 'This feature is disabled',
-  }
+    reason: 'LLM-based bash classification requires YOLO classifier integration',
+  };
 }
 
 export async function generateGenericDescription(
@@ -62,5 +101,5 @@ export async function generateGenericDescription(
   specificDescription: string | undefined,
   _signal: AbortSignal,
 ): Promise<string | null> {
-  return specificDescription || null
+  return specificDescription || null;
 }
