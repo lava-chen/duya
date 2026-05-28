@@ -12,6 +12,7 @@ import { getAutomationScheduler } from '../automation/Scheduler.js';
 import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
 import { getPairingStore } from '../gateway/pairing';
+import { getPluginManager } from '../plugins/PluginManager';
 
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 
@@ -36,11 +37,15 @@ function getDefaultModelForProvider(providerType: ApiProvider['providerType'], o
     case 'ollama':
       return 'llama3.2';
     case 'openai':
-      return 'gpt-4o';
     case 'openai-compatible':
-      return '';
+    case 'openrouter':
+    case 'google':
+    case 'gemini-image':
+      return 'gpt-4o';
     case 'anthropic':
-      return '';
+    case 'bedrock':
+    case 'vertex':
+      return 'claude-sonnet-4-20250514';
     default:
       return '';
   }
@@ -995,7 +1000,24 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     case 'config:agent:getSettings': {
       const cm = getConfigManager();
-      return cm.getAgentSettings();
+      const settings = cm.getAgentSettings();
+
+      // If defaultModel is not set, resolve from active provider so duya_info
+      // always reports the model that will actually be used.
+      if (!settings.defaultModel || settings.defaultModel === '') {
+        const activeProvider = cm.getActiveProvider();
+        if (activeProvider) {
+          const resolvedModel = getDefaultModelForProvider(
+            activeProvider.providerType,
+            activeProvider.options,
+          );
+          if (resolvedModel && resolvedModel.length > 0) {
+            return { ...settings, defaultModel: resolvedModel };
+          }
+        }
+      }
+
+      return settings;
     }
 
     case 'config:agent:setSettings': {
@@ -1292,6 +1314,555 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       ).all(p.status);
     }
 
+    // ==================== Literature Plugin actions ====================
+
+    case 'literature:source:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO literature_sources (
+          id, kind, title, authors_json, year, venue, doi, arxiv_id,
+          url, file_path, citation_key, bibtex, project_ids_json, tags_json,
+          created_at, updated_at
+        ) VALUES (
+          @id, @kind, @title, @authors_json, @year, @venue, @doi, @arxiv_id,
+          @url, @file_path, @citation_key, @bibtex, @project_ids_json, @tags_json,
+          @created_at, @updated_at
+        )
+      `).run({
+        id: p.id,
+        kind: p.kind,
+        title: p.title,
+        authors_json: JSON.stringify(p.authors ?? []),
+        year: p.year ?? null,
+        venue: p.venue ?? null,
+        doi: p.doi ?? null,
+        arxiv_id: p.arxivId ?? null,
+        url: p.url ?? null,
+        file_path: p.filePath ?? null,
+        citation_key: p.citationKey ?? null,
+        bibtex: p.bibtex ?? null,
+        project_ids_json: JSON.stringify(p.projectIds ?? []),
+        tags_json: JSON.stringify(p.tags ?? []),
+        created_at: now,
+        updated_at: now,
+      });
+      return db.prepare('SELECT * FROM literature_sources WHERE id = ?').get(p.id);
+    }
+
+    case 'literature:source:get':
+      return db.prepare('SELECT * FROM literature_sources WHERE id = ?').get(p.id);
+
+    case 'literature:source:list': {
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+
+      if (p.kind) { conditions.push('kind = ?'); params.push(p.kind); }
+      if (p.yearFrom) { conditions.push('year >= ?'); params.push(p.yearFrom); }
+      if (p.yearTo) { conditions.push('year <= ?'); params.push(p.yearTo); }
+      if (p.search) {
+        conditions.push('(title LIKE ? OR doi LIKE ?)');
+        const searchTerm = `%${p.search}%`;
+        params.push(searchTerm, searchTerm);
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const limit = (p.limit as number) || 100;
+      return db.prepare(`SELECT * FROM literature_sources ${where} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit);
+    }
+
+    case 'literature:source:update': {
+      const id = p.id as string;
+      const now = Date.now();
+      const fields: string[] = ['updated_at = ?'];
+      const params: unknown[] = [now];
+
+      const stringFields = ['kind', 'title', 'venue', 'doi', 'url', 'citation_key', 'bibtex'];
+      for (const field of stringFields) {
+        if (p[field] !== undefined) {
+          const dbField = field === 'citation_key' ? 'citation_key' : field === 'doi' ? 'doi' : field;
+          fields.push(`${dbField} = ?`);
+          params.push(p[field]);
+        }
+      }
+
+      if (p.authors !== undefined) {
+        fields.push('authors_json = ?');
+        params.push(JSON.stringify(p.authors));
+      }
+      if (p.year !== undefined) {
+        fields.push('year = ?');
+        params.push(p.year);
+      }
+      if (p.filePath !== undefined) {
+        fields.push('file_path = ?');
+        params.push(p.filePath);
+      }
+      if (p.arxivId !== undefined) {
+        fields.push('arxiv_id = ?');
+        params.push(p.arxivId);
+      }
+      if (p.projectIds !== undefined) {
+        fields.push('project_ids_json = ?');
+        params.push(JSON.stringify(p.projectIds));
+      }
+      if (p.tags !== undefined) {
+        fields.push('tags_json = ?');
+        params.push(JSON.stringify(p.tags));
+      }
+
+      params.push(id);
+      db.prepare(`UPDATE literature_sources SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+      return db.prepare('SELECT * FROM literature_sources WHERE id = ?').get(id);
+    }
+
+    case 'literature:source:delete': {
+      const result = db.prepare('DELETE FROM literature_sources WHERE id = ?').run(p.id);
+      return { success: result.changes > 0 };
+    }
+
+    case 'literature:evidence:createMany': {
+      const spans = p.spans as Array<Record<string, unknown>>;
+      const now = Date.now();
+      const insert = db.prepare(`
+        INSERT INTO literature_evidence_spans (id, source_id, page, section, text, quote, bbox_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const txn = db.transaction(() => {
+        for (const span of spans) {
+          insert.run(
+            span.id,
+            span.sourceId,
+            span.page ?? null,
+            span.section ?? null,
+            span.text,
+            span.quote ?? null,
+            span.bbox ? JSON.stringify(span.bbox) : null,
+            now,
+          );
+        }
+      });
+      txn();
+      return { success: true, count: spans.length };
+    }
+
+    case 'literature:evidence:search': {
+      const conditions: string[] = ['text LIKE ?'];
+      const params: unknown[] = [`%${p.query}%`];
+
+      if (p.sourceId) {
+        conditions.push('source_id = ?');
+        params.push(p.sourceId);
+      }
+      if (p.page !== undefined) {
+        conditions.push('page = ?');
+        params.push(p.page);
+      }
+      if (p.section) {
+        conditions.push('section = ?');
+        params.push(p.section);
+      }
+
+      return db.prepare(`SELECT * FROM literature_evidence_spans WHERE ${conditions.join(' AND ')} ORDER BY page ASC`).all(...params);
+    }
+
+    case 'literature:evidence:deleteBySource':
+      db.prepare('DELETE FROM literature_evidence_spans WHERE source_id = ?').run(p.sourceId);
+      return { success: true };
+
+    case 'literature:paperCard:upsert': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO literature_paper_cards (id, source_id, card_json, evidence_span_ids_json, created_at, updated_at)
+        VALUES (@id, @source_id, @card_json, @evidence_span_ids_json, @created_at, @updated_at)
+        ON CONFLICT(source_id) DO UPDATE SET
+          card_json = @card_json,
+          evidence_span_ids_json = @evidence_span_ids_json,
+          updated_at = @updated_at
+      `).run({
+        id: p.id,
+        source_id: p.sourceId,
+        card_json: JSON.stringify(p.card),
+        evidence_span_ids_json: JSON.stringify(p.evidenceSpanIds ?? []),
+        created_at: now,
+        updated_at: now,
+      });
+      return db.prepare('SELECT * FROM literature_paper_cards WHERE source_id = ?').get(p.sourceId);
+    }
+
+    case 'literature:paperCard:get':
+      return db.prepare('SELECT * FROM literature_paper_cards WHERE source_id = ?').get(p.sourceId);
+
+    case 'literature:paperCard:delete': {
+      const result = db.prepare('DELETE FROM literature_paper_cards WHERE source_id = ?').run(p.sourceId);
+      return { success: result.changes > 0 };
+    }
+
+    // ==================== Research Memory actions ====================
+
+    case 'researchMemory:project:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_projects (id, name, description, created_at, updated_at)
+        VALUES (@id, @name, @description, @created_at, @updated_at)
+      `).run({
+        id: p.id,
+        name: p.name,
+        description: p.description ?? null,
+        created_at: now,
+        updated_at: now,
+      });
+      return db.prepare('SELECT * FROM research_projects WHERE id = ?').get(p.id);
+    }
+
+    case 'researchMemory:project:get':
+      return db.prepare('SELECT * FROM research_projects WHERE id = ?').get(p.id);
+
+    case 'researchMemory:project:list':
+      return db.prepare('SELECT * FROM research_projects ORDER BY updated_at DESC').all();
+
+    case 'researchMemory:project:update': {
+      const id = p.id as string;
+      const now = Date.now();
+      const fields: string[] = ['updated_at = ?'];
+      const params: unknown[] = [now];
+
+      if (p.name !== undefined) { fields.push('name = ?'); params.push(p.name); }
+      if (p.description !== undefined) { fields.push('description = ?'); params.push(p.description); }
+      if (p.status !== undefined) { fields.push('status = ?'); params.push(p.status); }
+      params.push(id);
+
+      db.prepare(`UPDATE research_projects SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+      return db.prepare('SELECT * FROM research_projects WHERE id = ?').get(id);
+    }
+
+    case 'researchMemory:project:delete': {
+      const result = db.prepare('DELETE FROM research_projects WHERE id = ?').run(p.id);
+      return { success: result.changes > 0 };
+    }
+
+    case 'researchMemory:projectState:get':
+      return db.prepare('SELECT * FROM research_project_states WHERE project_id = ?').get(p.projectId);
+
+    case 'researchMemory:projectState:upsert': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_project_states (project_id, state_json, updated_at)
+        VALUES (@project_id, @state_json, @updated_at)
+        ON CONFLICT(project_id) DO UPDATE SET state_json = @state_json, updated_at = @updated_at
+      `).run({
+        project_id: p.projectId,
+        state_json: JSON.stringify(p.state),
+        updated_at: now,
+      });
+      return db.prepare('SELECT * FROM research_project_states WHERE project_id = ?').get(p.projectId);
+    }
+
+    case 'researchMemory:object:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_memory_objects (
+          id, project_id, type, content, summary, source_refs_json, relation_refs_json,
+          valid_from, valid_to, status, confidence, importance, tags_json,
+          embedding_json, created_at, updated_at
+        ) VALUES (
+          @id, @project_id, @type, @content, @summary, @source_refs_json, @relation_refs_json,
+          @valid_from, @valid_to, @status, @confidence, @importance, @tags_json,
+          @embedding_json, @created_at, @updated_at
+        )
+      `).run({
+        id: p.id,
+        project_id: p.projectId,
+        type: p.type,
+        content: p.content,
+        summary: p.summary ?? null,
+        source_refs_json: JSON.stringify(p.sourceRefs ?? []),
+        relation_refs_json: JSON.stringify(p.relationRefs ?? []),
+        valid_from: p.validFrom ?? null,
+        valid_to: p.validTo ?? null,
+        status: p.status ?? 'active',
+        confidence: p.confidence ?? 0.5,
+        importance: p.importance ?? 0.5,
+        tags_json: JSON.stringify(p.tags ?? []),
+        embedding_json: (p as Record<string, unknown>).embedding_json ?? null,
+        created_at: now,
+        updated_at: now,
+      });
+      return db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(p.id);
+    }
+
+    case 'researchMemory:object:get':
+      return db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(p.id);
+
+    case 'researchMemory:object:listByProject': {
+      const conditions: string[] = ['project_id = ?'];
+      const params: unknown[] = [p.projectId];
+
+      if (p.type) { conditions.push('type = ?'); params.push(p.type); }
+      if (p.status) { conditions.push('status = ?'); params.push(p.status); }
+
+      const limit = (p.limit as number) || 100;
+      return db.prepare(
+        `SELECT * FROM research_memory_objects WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`
+      ).all(...params, limit);
+    }
+
+    case 'researchMemory:object:search': {
+      const conditions: string[] = ['(content LIKE ? OR summary LIKE ?)'];
+      const searchTerm = `%${p.query}%`;
+      const params: unknown[] = [searchTerm, searchTerm];
+
+      if (p.projectId) { conditions.push('project_id = ?'); params.push(p.projectId); }
+      if (p.type) { conditions.push('type = ?'); params.push(p.type); }
+      if (p.status) { conditions.push('status = ?'); params.push(p.status); }
+
+      const limit = (p.limit as number) || 100;
+      return db.prepare(
+        `SELECT * FROM research_memory_objects WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`
+      ).all(...params, limit);
+    }
+
+    case 'researchMemory:object:update': {
+      const id = p.id as string;
+      const now = Date.now();
+      const fields: string[] = ['updated_at = ?'];
+      const params: unknown[] = [now];
+
+      const stringFields: Array<{ key: string; db: string }> = [
+        { key: 'content', db: 'content' },
+        { key: 'summary', db: 'summary' },
+        { key: 'status', db: 'status' },
+        { key: 'type', db: 'type' },
+      ];
+      for (const { key, db: dbField } of stringFields) {
+        if (p[key] !== undefined) { fields.push(`${dbField} = ?`); params.push(p[key]); }
+      }
+
+      if (p.sourceRefs !== undefined) { fields.push('source_refs_json = ?'); params.push(JSON.stringify(p.sourceRefs)); }
+      if (p.relationRefs !== undefined) { fields.push('relation_refs_json = ?'); params.push(JSON.stringify(p.relationRefs)); }
+      if (p.validFrom !== undefined) { fields.push('valid_from = ?'); params.push(p.validFrom); }
+      if (p.validTo !== undefined) { fields.push('valid_to = ?'); params.push(p.validTo); }
+      if (p.confidence !== undefined) { fields.push('confidence = ?'); params.push(p.confidence); }
+      if (p.importance !== undefined) { fields.push('importance = ?'); params.push(p.importance); }
+      if (p.tags !== undefined) { fields.push('tags_json = ?'); params.push(JSON.stringify(p.tags)); }
+
+      params.push(id);
+      db.prepare(`UPDATE research_memory_objects SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+      return db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(id);
+    }
+
+    case 'researchMemory:object:delete': {
+      const result = db.prepare('DELETE FROM research_memory_objects WHERE id = ?').run(p.id);
+      return { success: result.changes > 0 };
+    }
+
+    case 'researchMemory:hypothesis:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_hypotheses (
+          id, project_id, statement, status, supporting_evidence_ids_json,
+          contradicting_evidence_ids_json, related_source_ids_json, superseded_by,
+          created_at, updated_at
+        ) VALUES (
+          @id, @project_id, @statement, @status, @supporting_evidence_ids_json,
+          @contradicting_evidence_ids_json, @related_source_ids_json, @superseded_by,
+          @created_at, @updated_at
+        )
+      `).run({
+        id: p.id,
+        project_id: p.projectId,
+        statement: p.statement,
+        status: p.status ?? 'proposed',
+        supporting_evidence_ids_json: JSON.stringify(p.supportingEvidenceIds ?? []),
+        contradicting_evidence_ids_json: JSON.stringify(p.contradictingEvidenceIds ?? []),
+        related_source_ids_json: JSON.stringify(p.relatedSourceIds ?? []),
+        superseded_by: null,
+        created_at: now,
+        updated_at: now,
+      });
+      return db.prepare('SELECT * FROM research_hypotheses WHERE id = ?').get(p.id);
+    }
+
+    case 'researchMemory:hypothesis:get':
+      return db.prepare('SELECT * FROM research_hypotheses WHERE id = ?').get(p.id);
+
+    case 'researchMemory:hypothesis:listByProject':
+      return db.prepare('SELECT * FROM research_hypotheses WHERE project_id = ? ORDER BY updated_at DESC').all(p.projectId);
+
+    case 'researchMemory:hypothesis:update': {
+      const id = p.id as string;
+      const now = Date.now();
+      const fields: string[] = ['updated_at = ?'];
+      const params: unknown[] = [now];
+
+      if (p.status !== undefined) { fields.push('status = ?'); params.push(p.status); }
+      if (p.supersededBy !== undefined) { fields.push('superseded_by = ?'); params.push(p.supersededBy); }
+      if (p.supportingEvidenceIds !== undefined) { fields.push('supporting_evidence_ids_json = ?'); params.push(JSON.stringify(p.supportingEvidenceIds)); }
+      if (p.contradictingEvidenceIds !== undefined) { fields.push('contradicting_evidence_ids_json = ?'); params.push(JSON.stringify(p.contradictingEvidenceIds)); }
+      if (p.relatedSourceIds !== undefined) { fields.push('related_source_ids_json = ?'); params.push(JSON.stringify(p.relatedSourceIds)); }
+
+      params.push(id);
+      db.prepare(`UPDATE research_hypotheses SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+      return db.prepare('SELECT * FROM research_hypotheses WHERE id = ?').get(id);
+    }
+
+    case 'researchMemory:hypothesis:delete': {
+      const result = db.prepare('DELETE FROM research_hypotheses WHERE id = ?').run(p.id);
+      return { success: result.changes > 0 };
+    }
+
+    case 'researchMemory:candidate:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_memory_candidates (
+          id, project_id, proposed_type, content, rationale, source_refs_json,
+          confidence, status, created_by_session_id, created_at
+        ) VALUES (
+          @id, @project_id, @proposed_type, @content, @rationale, @source_refs_json,
+          @confidence, 'pending', @created_by_session_id, @created_at
+        )
+      `).run({
+        id: p.id,
+        project_id: p.projectId,
+        proposed_type: p.proposedType,
+        content: p.content,
+        rationale: p.rationale,
+        source_refs_json: JSON.stringify(p.sourceRefs ?? []),
+        confidence: p.confidence ?? 0.5,
+        created_by_session_id: p.createdBySessionId ?? null,
+        created_at: now,
+      });
+      return db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id);
+    }
+
+    case 'researchMemory:candidate:get': {
+      return db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id);
+    }
+
+    case 'researchMemory:candidate:listByProject': {
+      if (p.status) {
+        return db.prepare(
+          'SELECT * FROM research_memory_candidates WHERE project_id = ? AND status = ? ORDER BY created_at DESC'
+        ).all(p.projectId, p.status);
+      }
+      return db.prepare(
+        'SELECT * FROM research_memory_candidates WHERE project_id = ? ORDER BY created_at DESC'
+      ).all(p.projectId);
+    }
+
+    case 'researchMemory:candidate:accept': {
+      const now = Date.now();
+      const txn = db.transaction(() => {
+        const candidate = db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id) as Record<string, unknown> | undefined;
+        if (!candidate) throw new Error('Candidate not found');
+
+        const memoryId = randomUUID();
+        db.prepare(`
+          INSERT INTO research_memory_objects (
+            id, project_id, type, content, summary, source_refs_json, relation_refs_json,
+            valid_from, valid_to, status, confidence, importance, tags_json,
+            embedding_json, created_at, updated_at
+          ) VALUES (
+            @id, @project_id, @type, @content, @summary, @source_refs_json, @relation_refs_json,
+            @valid_from, @valid_to, @status, @confidence, @importance, @tags_json,
+            @embedding_json, @created_at, @updated_at
+          )
+        `).run({
+          id: memoryId,
+          project_id: candidate.project_id as string,
+          type: candidate.proposed_type as string,
+          content: candidate.content as string,
+          summary: null,
+          source_refs_json: candidate.source_refs_json as string,
+          relation_refs_json: JSON.stringify([]),
+          valid_from: null,
+          valid_to: null,
+          status: 'active',
+          confidence: candidate.confidence ?? 0.5,
+          importance: 0.7,
+          tags_json: JSON.stringify(['accepted_candidate']),
+          embedding_json: (p as Record<string, unknown>).embedding_json ?? null,
+          created_at: now,
+          updated_at: now,
+        });
+
+        db.prepare(
+          'UPDATE research_memory_candidates SET status = ?, reviewed_at = ? WHERE id = ?'
+        ).run('accepted', now, p.id);
+
+        const acceptedCandidate = db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id);
+        const createdMemory = db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(memoryId);
+        return { success: true, candidate: acceptedCandidate, memory: createdMemory };
+      });
+      return txn();
+    }
+
+    case 'researchMemory:candidate:reject': {
+      const now = Date.now();
+      db.prepare(
+        'UPDATE research_memory_candidates SET status = ?, reviewed_at = ? WHERE id = ?'
+      ).run('rejected', now, p.id);
+      return db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id);
+    }
+
+    case 'researchMemory:candidate:delete': {
+      const result = db.prepare('DELETE FROM research_memory_candidates WHERE id = ?').run(p.id);
+      return { success: result.changes > 0 };
+    }
+
+    case 'researchMemory:object:updateEmbedding': {
+      const id = p.id as string;
+      const embeddingJson = (p as Record<string, unknown>).embedding_json;
+      db.prepare(
+        'UPDATE research_memory_objects SET embedding_json = ?, updated_at = ? WHERE id = ?'
+      ).run(embeddingJson ?? null, Date.now(), id);
+      return db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(id);
+    }
+
+    case 'researchMemory:object:listWithEmbeddings': {
+      const conditions: string[] = ['embedding_json IS NOT NULL'];
+      const params: unknown[] = [];
+      if (p.projectId) { conditions.push('project_id = ?'); params.push(p.projectId); }
+      const limit = (p.limit as number) || 500;
+      return db.prepare(
+        `SELECT id, project_id, content, summary, embedding_json FROM research_memory_objects WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`
+      ).all(...params, limit);
+    }
+
+    case 'researchMemory:relation:create': {
+      const now = Date.now();
+      const id = randomUUID();
+      db.prepare(`
+        INSERT INTO research_memory_relations (id, project_id, from_memory_id, to_memory_id, relation_type, created_at)
+        VALUES (@id, @project_id, @from_memory_id, @to_memory_id, @relation_type, @created_at)
+      `).run({
+        id,
+        project_id: p.projectId,
+        from_memory_id: p.fromMemoryId,
+        to_memory_id: p.toMemoryId,
+        relation_type: p.relationType,
+        created_at: now,
+      });
+      return db.prepare('SELECT * FROM research_memory_relations WHERE id = ?').get(id);
+    }
+
+    case 'researchMemory:relation:listByMemory': {
+      const memoryId = p.memoryId as string;
+      return db.prepare(
+        'SELECT * FROM research_memory_relations WHERE from_memory_id = ? OR to_memory_id = ? ORDER BY created_at DESC'
+      ).all(memoryId, memoryId);
+    }
+
+    case 'researchMemory:relation:listByProject': {
+      return db.prepare(
+        'SELECT * FROM research_memory_relations WHERE project_id = ? ORDER BY created_at DESC'
+      ).all(p.projectId);
+    }
+
+    case 'researchMemory:relation:delete': {
+      const result = db.prepare('DELETE FROM research_memory_relations WHERE id = ?').run(p.id);
+      return { success: result.changes > 0 };
+    }
+
     case 'pairing:listPending': {
       const store = getPairingStore();
       return store.listAllPending();
@@ -1318,6 +1889,11 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       if (!p.platform || !p.platformUserId) throw new Error('Missing platform or platformUserId');
       const store = getPairingStore();
       return { approved: store.isApproved(p.platform as string, p.platformUserId as string) };
+    }
+
+    case 'plugin:registry:list': {
+      const pluginManager = getPluginManager();
+      return pluginManager.listInstalled();
     }
 
     case 'modelCapability:get': {

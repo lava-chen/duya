@@ -99,6 +99,21 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS message_attachments (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      attachment_type TEXT NOT NULL,
+      mime_type TEXT,
+      data TEXT NOT NULL,
+      original_url TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS session_runtime_locks (
       session_id TEXT PRIMARY KEY,
       lock_id TEXT NOT NULL,
@@ -337,6 +352,8 @@ export function initializeSchema(db: BetterSqlite3Db): void {
 
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON message_attachments(message_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_attachments_session_id ON message_attachments(session_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON chat_sessions(updated_at DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_working_directory ON chat_sessions(working_directory)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_permission_requests_session ON permission_requests(session_id)`);
@@ -500,6 +517,25 @@ interface Migration {
   id: number;
   name: string;
   migrate: (db: BetterSqlite3Db) => void;
+}
+
+function ensureCriticalSchema(db: BetterSqlite3Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS message_attachments (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      attachment_type TEXT NOT NULL,
+      mime_type TEXT,
+      data TEXT NOT NULL,
+      original_url TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON message_attachments(message_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_attachments_session_id ON message_attachments(session_id)`);
 }
 
 function ensureMigrationsTable(db: BetterSqlite3Db): void {
@@ -1231,6 +1267,202 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 26,
+    name: 'ensure_message_attachments_table',
+    migrate: (db) => {
+      ensureCriticalSchema(db);
+    },
+  },
+  {
+    id: 27,
+    name: 'create_literature_plugin_tables',
+    migrate: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS literature_sources (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          authors_json TEXT NOT NULL DEFAULT '[]',
+          year INTEGER,
+          venue TEXT,
+          doi TEXT,
+          arxiv_id TEXT,
+          url TEXT,
+          file_path TEXT,
+          citation_key TEXT,
+          bibtex TEXT,
+          project_ids_json TEXT NOT NULL DEFAULT '[]',
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS literature_evidence_spans (
+          id TEXT PRIMARY KEY,
+          source_id TEXT NOT NULL,
+          page INTEGER,
+          section TEXT,
+          text TEXT NOT NULL,
+          quote TEXT,
+          bbox_json TEXT,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (source_id) REFERENCES literature_sources(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS literature_paper_cards (
+          id TEXT PRIMARY KEY,
+          source_id TEXT NOT NULL UNIQUE,
+          card_json TEXT NOT NULL,
+          evidence_span_ids_json TEXT NOT NULL DEFAULT '[]',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (source_id) REFERENCES literature_sources(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS literature_annotations (
+          id TEXT PRIMARY KEY,
+          source_id TEXT NOT NULL,
+          evidence_span_id TEXT,
+          content TEXT NOT NULL,
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (source_id) REFERENCES literature_sources(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_literature_sources_kind ON literature_sources(kind)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_literature_sources_title ON literature_sources(title)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_literature_spans_source ON literature_evidence_spans(source_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_literature_cards_source ON literature_paper_cards(source_id)`);
+    },
+  },
+  {
+    id: 28,
+    name: 'create_research_memory_tables',
+    migrate: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_project_states (
+          project_id TEXT PRIMARY KEY,
+          state_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES research_projects(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_memory_objects (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          content TEXT NOT NULL,
+          summary TEXT,
+          source_refs_json TEXT NOT NULL DEFAULT '[]',
+          relation_refs_json TEXT NOT NULL DEFAULT '[]',
+          valid_from INTEGER,
+          valid_to INTEGER,
+          status TEXT NOT NULL DEFAULT 'active',
+          confidence REAL NOT NULL DEFAULT 0.5,
+          importance REAL NOT NULL DEFAULT 0.5,
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES research_projects(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_hypotheses (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          statement TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'proposed',
+          supporting_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+          contradicting_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+          related_source_ids_json TEXT NOT NULL DEFAULT '[]',
+          superseded_by TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES research_projects(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_memory_candidates (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          proposed_type TEXT NOT NULL,
+          content TEXT NOT NULL,
+          rationale TEXT NOT NULL,
+          source_refs_json TEXT NOT NULL DEFAULT '[]',
+          confidence REAL NOT NULL DEFAULT 0.5,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_by_session_id TEXT,
+          created_at INTEGER NOT NULL,
+          reviewed_at INTEGER,
+          FOREIGN KEY (project_id) REFERENCES research_projects(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_memory_relations (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          from_memory_id TEXT NOT NULL,
+          to_memory_id TEXT NOT NULL,
+          relation_type TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES research_projects(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_objects_project ON research_memory_objects(project_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_objects_type ON research_memory_objects(type)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_hypotheses_project ON research_hypotheses(project_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_candidates_project ON research_memory_candidates(project_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_candidates_status ON research_memory_candidates(status)`);
+    },
+  },
+  {
+    id: 29,
+    name: 'add_embedding_json_to_research_memory_objects',
+    migrate(db: BetterSqlite3Db): void {
+      // Add embedding_json column for semantic vector search
+      // Uses dynamic column check to avoid errors on re-run
+      const tableInfo = db.prepare('PRAGMA table_info(research_memory_objects)').all() as Array<{ name: string }>;
+      const hasEmbeddingColumn = tableInfo.some((col) => col.name === 'embedding_json');
+      if (!hasEmbeddingColumn) {
+        db.exec(`ALTER TABLE research_memory_objects ADD COLUMN embedding_json TEXT`);
+      }
+    },
+  },
+  {
+    id: 30,
+    name: 'add_indexes_for_research_relations',
+    migrate(db: BetterSqlite3Db): void {
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_relations_from ON research_memory_relations(from_memory_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_relations_to ON research_memory_relations(to_memory_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_relations_project ON research_memory_relations(project_id)`);
+    },
+  },
 ];
 
 /**
@@ -1259,5 +1491,24 @@ export function runMigrations(db: BetterSqlite3Db): void {
       logger.error(`Migration ${migration.id} failed`, error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DBMigration);
       throw error;
     }
+  }
+}
+
+/**
+ * Run an explicit startup schema self-check and repair for critical tables.
+ */
+export function selfCheckAndRepairSchema(db: BetterSqlite3Db): void {
+  const logger = getLogger();
+  try {
+    ensureCriticalSchema(db);
+    logger.info('Schema self-check completed', { repaired: ['message_attachments'] }, LogComponent.DBMigration);
+  } catch (error) {
+    logger.error(
+      'Schema self-check failed',
+      error instanceof Error ? error : new Error(String(error)),
+      undefined,
+      LogComponent.DBMigration
+    );
+    throw error;
   }
 }

@@ -21,16 +21,49 @@ import {
   renameLegacyDatabase,
 } from '../config/boot-config';
 import { getLogger, LogComponent } from '../logging/logger';
-import { initializeSchema } from './schema';
+import { initializeSchema, selfCheckAndRepairSchema } from './schema';
 
 type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
 
 let BetterSqlite3Ctor: typeof import('better-sqlite3');
 let db: BetterSqlite3 | null = null;
 let safeModeReason: string | null = null;
+let walCheckpointer: ReturnType<typeof setInterval> | null = null;
 
 // Module-level logger instance for database operations
 const dbLogger = getLogger();
+
+function startWalCheckpoint(): void {
+  if (walCheckpointer) return;
+
+  const CHECKPOINT_INTERVAL_MS = 60000;
+
+  walCheckpointer = setInterval(() => {
+    if (!db) return;
+    try {
+      db.pragma('wal_checkpoint(PASSIVE)');
+    } catch {
+      // best-effort
+    }
+  }, CHECKPOINT_INTERVAL_MS);
+
+  dbLogger.info('WAL checkpoint scheduler started', { intervalMs: CHECKPOINT_INTERVAL_MS }, LogComponent.DB);
+}
+
+export function stopWalCheckpoint(): void {
+  if (walCheckpointer) {
+    clearInterval(walCheckpointer);
+    walCheckpointer = null;
+
+    if (db) {
+      try {
+        db.pragma('wal_checkpoint(TRUNCATE)');
+      } catch {
+        // best-effort
+      }
+    }
+  }
+}
 
 function loadBetterSqlite3(): typeof import('better-sqlite3') {
   const logger = getLogger();
@@ -132,6 +165,9 @@ export function initDatabaseFromBoot(): DbInitResult {
     db.pragma('foreign_keys = ON');
 
     initializeSchema(db);
+    selfCheckAndRepairSchema(db);
+
+    startWalCheckpoint();
 
     safeModeReason = null;
     return { success: true, dbPath };
@@ -190,6 +226,9 @@ export function initDatabase(dbDir: string): BetterSqlite3 {
   db.pragma('foreign_keys = ON');
 
   initializeSchema(db);
+  selfCheckAndRepairSchema(db);
+
+  startWalCheckpoint();
 
   return db;
 }
