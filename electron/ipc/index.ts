@@ -16,6 +16,7 @@ import { registerNetHandlers } from './net-handlers';
 import { registerAgentServerHandlers } from './agent-server-handlers';
 import { registerRecapHandlers } from './recap-handlers';
 import { registerWikiAgentHandlers } from './wiki-agent-handlers';
+import { registerPluginHandlers } from './plugin-handlers';
 
 export {
   registerSystemHandlers,
@@ -31,6 +32,7 @@ export {
   registerAgentServerHandlers,
   registerRecapHandlers,
   registerWikiAgentHandlers,
+  registerPluginHandlers,
 };
 
 /**
@@ -48,4 +50,5 @@ export function registerAllIpcHandlers(): void {
   registerAgentHandlers();
   registerNetHandlers();
   registerAgentServerHandlers();
+  registerPluginHandlers();
 }
