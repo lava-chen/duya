@@ -19,6 +19,8 @@ export interface ChatOptions {
   titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
   providerConfig?: Record<string, unknown>;
   workingDirectory?: string;
+  mode?: string;
+  wikiAgentEnabled?: boolean;
 }
 
 export interface AgentEvent {
@@ -41,8 +43,8 @@ export class AgentServerClient {
   private eventHandlers = new Map<string, Set<EventHandler>>();
   private receivedMessageIds = new Map<string, Set<string>>();
 
-  async getBaseUrl(): Promise<string | null> {
-    if (this.baseUrl) return this.baseUrl;
+  async getBaseUrl(forceRefresh = false): Promise<string | null> {
+    if (!forceRefresh && this.baseUrl) return this.baseUrl;
 
     const api = window.electronAPI?.agentServer;
     if (!api) {
@@ -53,6 +55,7 @@ export class AgentServerClient {
     const url = await api.getUrl();
     if (!url) {
       console.warn('[agent-http-client] Agent Server not running');
+      this.baseUrl = null;
       return null;
     }
 
@@ -66,7 +69,7 @@ export class AgentServerClient {
     prompt: string,
     options?: ChatOptions
   ): Promise<void> {
-    const baseUrl = await this.getBaseUrl();
+    const baseUrl = await this.getBaseUrl(true);
     if (!baseUrl) {
       throw new Error('Agent Server not available');
     }
@@ -105,8 +108,10 @@ export class AgentServerClient {
             files: options?.files,
             agentProfileId: options?.agentProfileId,
             outputStyleConfig: options?.outputStyleConfig,
+            mode: options?.mode,
             titleGenerationModel: options?.titleGenerationModel,
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
+            wikiAgentEnabled: options?.wikiAgentEnabled,
           },
           providerConfig: options?.providerConfig,
           workingDirectory: options?.workingDirectory,
@@ -213,6 +218,105 @@ export class AgentServerClient {
         }
       }
     } catch (error) {
+      // Retry once with a fresh Agent Server URL in case port changed after server restart.
+      const firstMessage = error instanceof Error ? error.message : String(error);
+      const shouldRetry =
+        firstMessage.includes('Failed to fetch') ||
+        firstMessage.includes('ECONNREFUSED') ||
+        firstMessage.includes('ERR_CONNECTION_REFUSED') ||
+        firstMessage.includes('NetworkError');
+
+      if (shouldRetry) {
+        try {
+          const freshBaseUrl = await this.getBaseUrl(true);
+          if (freshBaseUrl && freshBaseUrl !== baseUrl) {
+            console.warn('[agent-http-client] Retrying chat with refreshed Agent Server URL:', freshBaseUrl);
+            const retryResponse = await fetch(`${freshBaseUrl}/sessions/${sessionId}/chat`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream',
+              },
+              body: JSON.stringify({
+                prompt,
+                options: {
+                  messages: undefined,
+                  systemPrompt: options?.systemPrompt,
+                  permissionMode: options?.permissionMode,
+                  files: options?.files,
+                  agentProfileId: options?.agentProfileId,
+                  outputStyleConfig: options?.outputStyleConfig,
+                  mode: options?.mode,
+                  titleGenerationModel: options?.titleGenerationModel,
+                  titleGenerationModelConfig: options?.titleGenerationModelConfig,
+                },
+                providerConfig: options?.providerConfig,
+                workingDirectory: options?.workingDirectory,
+              }),
+              signal: abortController.signal,
+            });
+
+            if (!retryResponse.ok) {
+              const retryErrorText = await retryResponse.text();
+              throw new Error(`Retry HTTP ${retryResponse.status}: ${retryErrorText}`);
+            }
+
+            const reader = retryResponse.body?.getReader();
+            if (!reader) {
+              throw new Error('Retry response body is not readable');
+            }
+
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let currentEventType = 'message';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                streamEndedCleanly = true;
+                break;
+              }
+
+              const chunk = decoder.decode(value, { stream: true });
+              buffer += chunk;
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+
+              for (const line of lines) {
+                if (line.startsWith('event:')) {
+                  currentEventType = line.slice(6).trim();
+                  continue;
+                }
+                if (line.startsWith('data:')) {
+                  const dataStr = line.slice(5).trim();
+                  try {
+                    const event = JSON.parse(dataStr);
+                    const mappedEvent: AgentEvent = {
+                      type: currentEventType || event.type || 'unknown',
+                      sessionId: event.sessionId || sessionId,
+                      data: event.data,
+                      id: (event.data as Record<string, unknown>)?.id as string,
+                      name: (event.data as Record<string, unknown>)?.name as string,
+                      input: (event.data as Record<string, unknown>)?.input,
+                      result: (event.data as Record<string, unknown>)?.result,
+                      error: (event.data as Record<string, unknown>)?.error as string,
+                      content: (event.data as Record<string, unknown>)?.content as string,
+                    };
+                    this.emit(sessionId, mappedEvent);
+                    currentEventType = 'message';
+                  } catch {
+                    // skip invalid JSON
+                  }
+                }
+              }
+            }
+            return;
+          }
+        } catch (retryError) {
+          console.error('[agent-http-client] Retry failed:', retryError);
+        }
+      }
+
       if (error instanceof Error && error.name === 'AbortError') {
         console.log('[agent-http-client] Stream cancelled:', sessionId);
         streamEndedCleanly = false;
@@ -256,6 +360,81 @@ export class AgentServerClient {
       const response = await fetch(`${baseUrl}/sessions/${sessionId}/status`);
       if (!response.ok) return null;
       return (await response.json()) as { state: string; lastEventId: number };
+    } catch {
+      return null;
+    }
+  }
+
+  async resolveResearchClarification(
+    sessionId: string,
+    requestId: string,
+    answers: Record<string, string>,
+  ): Promise<void> {
+    const baseUrl = await this.getBaseUrl(true);
+    if (!baseUrl) {
+      throw new Error('Agent Server not available');
+    }
+
+    const postResolve = async (url: string): Promise<void> => {
+      const endpoint = `${url}/research/clarification`;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 10_000);
+      console.log('[agent-http-client] Resolving research request:', {
+        sessionId,
+        requestId,
+        endpoint,
+        answers,
+      });
+
+      let response: Response;
+      try {
+        response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId,
+          requestId,
+          answers,
+        }),
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timeout);
+      }
+
+      console.log('[agent-http-client] Research resolve response:', {
+        status: response.status,
+        ok: response.ok,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to resolve research request: ${response.status} ${errorText}`);
+      }
+    };
+
+    try {
+      await postResolve(baseUrl);
+    } catch (error) {
+      const refreshed = await this.getBaseUrl(true);
+      if (refreshed && refreshed !== baseUrl) {
+        await postResolve(refreshed);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async getResearchSnapshot(sessionId: string): Promise<Record<string, unknown> | null> {
+    const baseUrl = await this.getBaseUrl();
+    if (!baseUrl) return null;
+
+    try {
+      const response = await fetch(`${baseUrl}/research/snapshot/${sessionId}`);
+      if (!response.ok) return null;
+      return (await response.json()) as Record<string, unknown>;
     } catch {
       return null;
     }
