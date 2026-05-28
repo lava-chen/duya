@@ -1,5 +1,6 @@
 import base64
 import io
+import os
 import sys
 import traceback
 import pdfplumber
@@ -8,6 +9,9 @@ PDF_CONFIDENCE_THRESHOLD = 100
 
 
 class PdfParser:
+    def __init__(self) -> None:
+        self._poppler_path = self._resolve_poppler_path()
+
     async def parse(self, filepath: str) -> dict:
         text_parts: list[str] = []
         total_chars = 0
@@ -86,6 +90,7 @@ class PdfParser:
             first_page=1,
             last_page=1,
             fmt="png",
+            poppler_path=self._poppler_path,
         )
         if not images:
             return None
@@ -121,6 +126,7 @@ class PdfParser:
             first_page=1,
             last_page=min(page_count, 50),
             fmt="png",
+            poppler_path=self._poppler_path,
         )
 
         result: list[dict] = []
@@ -136,3 +142,24 @@ class PdfParser:
             buf.close()
 
         return result
+
+    def _resolve_poppler_path(self) -> str | None:
+        env_path = os.getenv("DUYA_POPPLER_PATH")
+        if env_path and os.path.isdir(env_path):
+            return env_path
+
+        runtime_base = None
+        if getattr(sys, "frozen", False):
+            runtime_base = os.path.dirname(sys.executable)
+        else:
+            sidecar_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            runtime_base = sidecar_root
+
+        candidates = [
+            os.path.join(runtime_base, "poppler", "Library", "bin"),
+            os.path.join(runtime_base, "poppler", "bin"),
+        ]
+        for candidate in candidates:
+            if os.path.isdir(candidate):
+                return candidate
+        return None
