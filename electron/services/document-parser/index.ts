@@ -35,6 +35,7 @@ export class DocumentParserService {
   private restartTimer: NodeJS.Timeout | null = null;
   private logger = getLogger();
   private pendingTimeouts = new Map<number, NodeJS.Timeout>();
+  private disabled = false;
 
   constructor() {
     this.cache = createDocumentCache();
@@ -48,7 +49,7 @@ export class DocumentParserService {
   }
 
   isReady(): boolean {
-    return this.process !== null && this.capabilities !== null;
+    return !this.disabled && this.process !== null && this.capabilities !== null;
   }
 
   async start(): Promise<void> {
@@ -83,6 +84,10 @@ export class DocumentParserService {
     const fileHash = this.computeFileHash(filePath);
     const cached = this.cache.get(fileHash);
     if (cached) return cached;
+
+    if (this.disabled) {
+      throw new Error('Document parser is disabled in this build (sidecar not available)');
+    }
 
     if (!this.isReady()) {
       throw new Error('Document parser not ready');
@@ -149,16 +154,22 @@ export class DocumentParserService {
   }
 
   private async spawnSidecar(): Promise<void> {
-    const { cmd, args } = this.getSidecarPath();
-
-    // In dev mode, verify Python is available; in packaged mode the exe is self-contained
-    if (!app.isPackaged) {
-      const pythonFound = await this.detectPython();
-      if (!pythonFound) {
+    const sidecar = await this.getSidecarCommand();
+    if (!sidecar) {
+      if (app.isPackaged) {
+        this.disabled = true;
+        this.logger.warn(
+          'Document parser sidecar unavailable in packaged app (missing executable and no Python fallback)',
+          undefined,
+          LogComponent.DocumentParser,
+        );
+      } else {
         this.logger.error('Python not found for document parser sidecar', new Error('No Python runtime detected'), undefined, LogComponent.DocumentParser);
-        return;
       }
+      return;
     }
+
+    const { cmd, args } = sidecar;
 
     this.logger.info(`Starting document parser sidecar: ${cmd} ${args.join(' ')}`, undefined, LogComponent.DocumentParser);
 
@@ -257,6 +268,9 @@ export class DocumentParserService {
   }
 
   private handleCrash(): void {
+    if (this.disabled) {
+      return;
+    }
     const crashedRequests = this.queue.requeueAll();
 
     if (this.restartAttempts >= MAX_RESTART_ATTEMPTS) {
@@ -290,19 +304,30 @@ export class DocumentParserService {
     return hash.digest('hex');
   }
 
-  private getSidecarPath(): { cmd: string; args: string[] } {
+  private async getSidecarCommand(): Promise<{ cmd: string; args: string[] } | null> {
     if (app.isPackaged) {
-      // Packaged: use PyInstaller-bundled executable from resources
-      const exePath = path.join(process.resourcesPath, 'document-parser');
-      return { cmd: exePath, args: [] };
+      const exePath = path.join(process.resourcesPath, 'document-parser', 'document-parser.exe');
+      if (fs.existsSync(exePath)) {
+        return { cmd: exePath, args: [] };
+      }
+      this.logger.error(
+        'Packaged document parser executable missing',
+        new Error(`Missing executable: ${exePath}`),
+        undefined,
+        LogComponent.DocumentParser,
+      );
+      return null;
     }
-    // Dev: use system Python to run main.py
-    // __dirname = dist-electron/ (esbuild bundles into flat structure)
+
     const sidecarScript = path.join(__dirname, '..', 'electron', 'services', 'document-parser', 'sidecar', 'main.py');
-    return { cmd: 'python', args: [sidecarScript] };
+    const pythonCmd = await this.detectPythonCommand();
+    if (!pythonCmd) {
+      return null;
+    }
+    return { cmd: pythonCmd, args: [sidecarScript] };
   }
 
-  private async detectPython(): Promise<boolean> {
+  private async detectPythonCommand(): Promise<string | null> {
     const candidates = ['python', 'python3', 'py'];
     for (const cmd of candidates) {
       try {
@@ -312,10 +337,10 @@ export class DocumentParserService {
           proc.on('error', reject);
         });
         this.logger.info(`Detected Python: ${cmd}`, undefined, LogComponent.DocumentParser);
-        return true;
+        return cmd;
       } catch { continue; }
     }
-    return false;
+    return null;
   }
 
   private startCacheCleanup(): void {
