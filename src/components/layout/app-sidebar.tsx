@@ -23,6 +23,7 @@ import {
   RobotIcon,
   QuestionIcon,
   ChannelIcon,
+  PlugIcon,
 } from "@/components/icons";
 import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab } from "@/stores/conversation-store";
 import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
@@ -56,6 +57,7 @@ const settingsNavItems: { id: SettingsTab; labelKey: string; icon: typeof HouseI
   { id: 'security', labelKey: 'settings.security', icon: ShieldCheckIcon },
   { id: 'usage', labelKey: 'settings.usage', icon: BarChartIcon },
   { id: 'support', labelKey: 'settings.support', icon: QuestionIcon },
+  { id: 'capabilities', labelKey: 'settings.capabilities', icon: PlugIcon },
 ];
 
 interface AppSidebarProps {

@@ -123,16 +123,18 @@ export function App() {
       // Do NOT call loadThreadMessages here — db_persisted event is the authoritative
       // signal that messages have been persisted and will trigger the DB reload.
       if (wasActive && !isActive) {
-        const optimistic = buildOptimisticMessages(snapshot);
-        if (optimistic.length > 0) {
-          const store = useConversationStore.getState();
-          const current = store.messages[activeThreadId] ?? [];
-          useConversationStore.setState({
-            messages: {
-              ...store.messages,
-              [activeThreadId]: [...current, ...optimistic],
-            },
-          });
+        if (!snapshot.dbPersisted?.success) {
+          const optimistic = buildOptimisticMessages(snapshot);
+          if (optimistic.length > 0) {
+            const store = useConversationStore.getState();
+            const current = store.messages[activeThreadId] ?? [];
+            useConversationStore.setState({
+              messages: {
+                ...store.messages,
+                [activeThreadId]: [...current, ...optimistic],
+              },
+            });
+          }
         }
         // DB reload is triggered by db_persisted event below — do not call loadThreadMessages here
       }
@@ -155,7 +157,7 @@ export function App() {
       console.log(`[App] db_persisted received: ${activeThreadId.slice(0, 8)}, success=${event.success}, elapsedSinceEvent=${event.timestamp ? (Date.now() - event.timestamp) : 'unknown'}ms`);
       if (event.success) {
         console.log(`[App] calling loadThreadMessages: ${activeThreadId.slice(0, 8)}`);
-        loadThreadMessages(activeThreadId);
+        loadThreadMessages(activeThreadId, { force: true });
       }
     });
 
@@ -175,7 +177,7 @@ export function App() {
   }, [setActiveThread]);
 
   const handleSendMessage = useCallback(
-    (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => {
+    (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string) => {
     if (!activeThreadId) return;
 
     // Strip markers before sending to API
@@ -190,7 +192,9 @@ export function App() {
         files,
         agentProfileId,
         outputStyleConfig: outputStyleConfig ?? undefined,
+        mode,
         titleGenerationModel: settings.titleGenerationModel,
+        wikiAgentEnabled,
       });
       return;
     }
@@ -213,7 +217,7 @@ export function App() {
       filesWithImageChunks: files?.filter(f => f.imageChunks)?.map(f => ({ name: f.name, chunks: f.imageChunks?.length })),
     });
 
-    addMessage(activeThreadId, userMsg);
+    addMessage(activeThreadId, userMsg, { persist: false });
 
     setIsStreaming(true);
 
@@ -228,7 +232,9 @@ export function App() {
       files,
       agentProfileId,
       outputStyleConfig: outputStyleConfig ?? undefined,
+      mode,
       titleGenerationModel: settings.titleGenerationModel,
+      wikiAgentEnabled,
     });
 
     setToolTimeoutCallback(activeThreadId, (retryContent: string) => {
@@ -241,12 +247,12 @@ export function App() {
         timestamp: Date.now(),
       };
 
-      addMessage(activeThreadId, retryMsg);
+      addMessage(activeThreadId, retryMsg, { persist: false });
       // Strip markers before sending to API
       const plainRetryContent = stripPastedContentMarkers(retryContent);
-      void startStream({ sessionId: activeThreadId, content: plainRetryContent, permissionMode: agentPermissionMode, model, agentProfileId, titleGenerationModel: settings.titleGenerationModel });
+      void startStream({ sessionId: activeThreadId, content: plainRetryContent, permissionMode: agentPermissionMode, model, agentProfileId, titleGenerationModel: settings.titleGenerationModel, wikiAgentEnabled });
     });
-  }, [activeThreadId, addMessage, settings.titleGenerationModel]);
+  }, [activeThreadId, addMessage, settings.titleGenerationModel, wikiAgentEnabled]);
 
   const handleInterrupt = useCallback(() => {
     if (!activeThreadId) return;

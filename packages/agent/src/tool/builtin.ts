@@ -43,6 +43,8 @@ import { duyaHealthTool } from './DuyaHealthTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
+import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
+import { ResearchMemory } from '../research-memory/index.js';
 
 /**
  * BashTool instance
@@ -62,7 +64,10 @@ const grepTool = new GrepTool();
 /**
  * Create registry with all built-in tools
  */
-export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig): ToolRegistry {
+export function createBuiltinRegistry(
+  domainBlockerConfig?: DomainBlockerConfig,
+  options?: { enabledPluginIds?: Set<string>; wikiAgentEnabled?: boolean }
+): ToolRegistry {
   const registry = new ToolRegistry();
 
   if (domainBlockerConfig) {
@@ -147,8 +152,20 @@ export function createBuiltinRegistry(domainBlockerConfig?: DomainBlockerConfig)
   registry.register(skillManageTool, skillManageTool);
 
   // Wiki tools - for searching and reading wiki knowledge base
-  registry.register(wikiSearchTool.toTool(), wikiSearchTool);
-  registry.register(wikiReadTool.toTool(), wikiReadTool);
+  // Only register if wiki agent experimental mode is enabled
+  if (options?.wikiAgentEnabled) {
+    registry.register(wikiSearchTool.toTool(), wikiSearchTool);
+    registry.register(wikiReadTool.toTool(), wikiReadTool);
+  }
+
+  // Bundled plugins - register plugin-owned tools via a single pluggable entrypoint
+  registerBundledAgentPlugins(registry, options);
+
+  // Research memory tools are a profile subsystem (not plugin-owned assets)
+  const researchMemory = new ResearchMemory();
+  for (const tool of researchMemory.tools) {
+    registry.register(tool.toTool(), tool);
+  }
 
   // show_widget tool - pass-through for generative UI widgets
   registry.register(

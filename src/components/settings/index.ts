@@ -9,4 +9,5 @@ export { AgentsSection } from "./AgentsSection";
 export { default as BridgeSection } from "./BridgeSection";
 export { default as BrowserExtensionSection } from "./BrowserExtensionSection";
 export { SupportSection } from "./SupportSection";
+export { CapabilitiesSection } from "./CapabilitiesSection";
 export { ProviderConnectDialog, type ProviderFormData } from "./ProviderConnectDialog";

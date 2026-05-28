@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useTranslation } from "@/hooks/useTranslation";
 import { ChevronDownIcon, FolderIcon } from "@/components/icons";
 
 interface SessionSelectorProps {
@@ -24,6 +25,7 @@ export function SessionSelector({
   children,
 }: SessionSelectorProps) {
   const { threads, projects, isHydrated } = useConversationStore();
+  const { t, locale } = useTranslation();
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -49,18 +51,19 @@ export function SessionSelector({
     const diff = now - timestamp;
     const days = Math.floor(diff / 86400000);
     const date = new Date(timestamp);
+    const localeStr = locale === 'zh' ? 'zh-CN' : 'en-US';
 
     if (days < 7) {
-      return date.toLocaleDateString("en-US", { weekday: "short" });
+      return date.toLocaleDateString(localeStr, { weekday: "short" });
     }
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return date.toLocaleDateString(localeStr, { month: "short", day: "numeric" });
   };
 
   return (
     <>
       {/* Project selector header */}
       <div className="welcome-input-header">
-        <span className="welcome-input-label">What do you want to build in</span>
+        <span className="welcome-input-label">{t('chat.whatToBuildIn')}</span>
         <div className="welcome-project-selector" ref={dropdownRef}>
           <button
             className="welcome-project-dropdown-trigger"
@@ -68,7 +71,7 @@ export function SessionSelector({
             disabled={!isHydrated}
           >
             <span className="welcome-project-name">
-              {selectedProject?.projectName || "Select project"}
+              {selectedProject?.projectName || t('chat.selectProject')}
             </span>
             <ChevronDownIcon size={14} />
           </button>
@@ -95,7 +98,7 @@ export function SessionSelector({
                 onClick={onOpenNewProject}
               >
                 <FolderIcon size={14} />
-                <span>Open New Project...</span>
+                <span>{t('chat.openNewProject')}</span>
               </button>
             </div>
           )}
@@ -108,7 +111,7 @@ export function SessionSelector({
       {/* Recent threads */}
       {showRecentThreads && recentThreads.length > 0 && (
         <div className="welcome-recent">
-          <h2>Recent Threads</h2>
+          <h2>{t('chat.recentThreads')}</h2>
           <div className="recent-list">
             {recentThreads.map((thread) => (
               <button

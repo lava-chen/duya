@@ -37,6 +37,24 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [30-mcp-loading-implementation](./active/30-mcp-loading-implementation.md) | MCP 服务器加载与连接实现 | P0 | Phase 1-3 ✅ |
 | [38-mcp-marketplace-install](./active/38-mcp-marketplace-install.md) | MCP 市场与一键安装实现 | P1 | 待开始 |
 | [38-chat-generative-ui](./active/38-chat-generative-ui.md) | Chat Generative UI — Widget 系统 V2 升级 | P1 | Phase 1-4 ✅  Phase 5 🔴 |
+| [82-researcher-codex-ui-alignment](./active/82-researcher-codex-ui-alignment.md) | Researcher Codex UI Alignment — Codex 级 Agent UX + 科研助手定位 | P0 | Planning |
+| [83-plugin-codex-ui-alignment](./active/83-plugin-codex-ui-alignment.md) | Plugin Codex UI Alignment — capability marketplace and settings UX | P1 | Planning |
+| [84-research-agent-memory-and-literature-plugin](./active/84-research-agent-memory-and-literature-plugin.md) | Research Agent Memory + Literature Plugin — 独立文献插件与研究记忆子系统 | P1 | Planning |
+
+### Plugin System Enhancement Plans (Claude Code Alignment)
+
+> Reference: [claude-code-haha plugin system comparison analysis](../design-docs/2026-05-28-plugin-system-comparison.md)
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [85-builtin-plugin-flexibilization](./active/85-builtin-plugin-flexibilization.md) | Built-in Plugin 约定优于配置 — 目录自描述 + Markdown 元信息 | P0 | Planning |
+| [86-schema-manifest-llm-friendly](./active/86-schema-manifest-llm-friendly.md) | Schema 宽松化 — Agent 可理解的 plugin.md 分层设计 | P0 | Planning |
+| [87-hook-system-full-enhancement](./active/87-hook-system-full-enhancement.md) | Hook 系统全面升级 — 4 类型 + 29 事件 + Async + Matcher | P0 | Planning |
+| [88-plugin-discovery-multi-source](./active/88-plugin-discovery-multi-source.md) | 插件多源发现 — GitHub / NPM / Git / URL / Local + 优先级合并 | P1 | Planning |
+| [89-plugin-lifecycle-version](./active/89-plugin-lifecycle-version.md) | 生命周期与版本管理 — 版本化缓存 + Scope + 依赖验证 + 自动更新 | P1 | Planning |
+| [90-marketplace-system-implementation](./active/90-marketplace-system-implementation.md) | 插件市场系统 — catalog + 企业策略 + 防冒名 + 同步管理 | P1 | Planning |
+| [91-structured-error-handling](./active/91-structured-error-handling.md) | 结构化错误处理 — 28 种可区分联合类型 PluginError | P1 | Planning |
+| [92-plugin-security-enterprise-policy](./active/92-plugin-security-enterprise-policy.md) | 安全与企业策略 — Trust Level + 路径防护 + 权限执行 + Enterprise Policy | P0 | Planning |
 
 ### Infrastructure & Architecture Plans
 
@@ -56,6 +74,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [48-canvas-element-data-model](./active/48-canvas-element-data-model.md) | Canvas Elements 类型系统 | P0 | 设计阶段 |
 | [54-electron-directory-restructure](./active/54-electron-directory-restructure.md) | Electron 目录架构重构 | P1 | Phase 1 ✅, Phase 2 🔴 |
 | [60-research-mode](./active/60-research-mode.md) | Research Mode — 迭代研究工作流 + Interactive Report | P1 | 规划中 |
+| [94-research-mode-loop-improvement](./active/94-research-mode-loop-improvement.md) | Research Mode Research Loop 核心改进 — 动态排序、StopDecision、SourceEvaluator、去重服务 | P1 | Milestone 1 ✅, M2.1-3 📋 |
 | [62-gateway-ipc-refactor](./active/62-gateway-ipc-refactor.md) | Gateway ↔ IPC 架构重整 | P0 | 进行中 |
 | [64-browser-parallel-isolation](./active/64-browser-parallel-isolation.md) | 浏览器多 Tab 隔离与并行执行 | P0 | 进行中 |
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — 离开回来后自动显示会话摘要 | P1 | Planning |

@@ -1,0 +1,202 @@
+/**
+ * verify-packaged-parity.mjs — Comprehensive packaged build verification
+ *
+ * Checks all critical artifacts exist in the packaged release directory.
+ * Supports Windows, macOS, and Linux.
+ *
+ * Usage:
+ *   node scripts/verify-packaged-parity.mjs                    # auto-detect platform
+ *   node scripts/verify-packaged-parity.mjs --platform win     # force Windows
+ *   node scripts/verify-packaged-parity.mjs --platform mac     # force macOS
+ *   node scripts/verify-packaged-parity.mjs --platform linux   # force Linux
+ *   node scripts/verify-packaged-parity.mjs --list             # list all expected files
+ */
+
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+
+const args = process.argv.slice(2);
+const forcePlatform = args.includes('--platform')
+  ? args[args.indexOf('--platform') + 1]
+  : null;
+const listOnly = args.includes('--list');
+const platform = forcePlatform || os.platform();
+
+function getReleaseDir() {
+  const base = path.join(PROJECT_ROOT, 'release');
+
+  if (platform === 'win32' || platform === 'win') {
+    return path.join(base, 'win-unpacked');
+  }
+  if (platform === 'darwin' || platform === 'mac') {
+    return path.join(base, 'mac', 'DUYA.app', 'Contents');
+  }
+  if (platform === 'linux') {
+    return path.join(base, 'linux-unpacked');
+  }
+  return path.join(base, 'win-unpacked');
+}
+
+function getResourcesPath() {
+  const releaseDir = getReleaseDir();
+
+  if (platform === 'darwin' || platform === 'mac') {
+    return path.join(releaseDir, 'Resources');
+  }
+  return path.join(releaseDir, 'resources');
+}
+
+const RESOURCES = getResourcesPath();
+
+const CHECKS = {
+  'App binary': [getReleaseDir(), false],
+  'Resources directory': [RESOURCES, true],
+
+  // Agent bundle (extraResources)
+  'agent-bundle/agent-process-entry.js': [path.join(RESOURCES, 'agent-bundle', 'agent-process-entry.js'), false],
+  'agent-bundle/BashTool/BashWorker.js': [path.join(RESOURCES, 'agent-bundle', 'BashTool', 'BashWorker.js'), false],
+
+  // Agent skills (extraResources)
+  'agent/skills/ directory': [path.join(RESOURCES, 'agent', 'skills'), true],
+
+  // better-sqlite3 native module (extraResources)
+  'better-sqlite3/build/Release/better_sqlite3.node': [path.join(RESOURCES, 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'), false],
+
+  // Assets (extraResources)
+  'assets/ directory': [path.join(RESOURCES, 'assets'), true],
+
+  // Public files (extraResources)
+  'public/ directory': [path.join(RESOURCES, 'public'), true],
+
+  // Extension (extraResources)
+  'extension/ directory': [path.join(RESOURCES, 'extension'), true],
+
+  // Document parser (extraResources)
+  'document-parser/ directory': [path.join(RESOURCES, 'document-parser'), true],
+
+  // Gateway bundle (extraResources)
+  'gateway-bundle/ directory': [path.join(RESOURCES, 'gateway-bundle'), true],
+
+  // app.asar (Electron main + renderer)
+  'app.asar': [path.join(RESOURCES, 'app.asar'), false],
+  'app.asar/dist-electron/main.js': [path.join(RESOURCES, 'app.asar', 'dist-electron', 'main.js'), false],
+  'app.asar/dist-electron/preload.js': [path.join(RESOURCES, 'app.asar', 'dist-electron', 'preload.js'), false],
+  'app.asar/dist-electron/agent-server.js': [path.join(RESOURCES, 'app.asar', 'dist-electron', 'agent-server.js'), false],
+  'app.asar/dist/index.html': [path.join(RESOURCES, 'app.asar', 'dist', 'index.html'), false],
+  'app.asar/dist/assets/': [path.join(RESOURCES, 'app.asar', 'dist', 'assets'), true],
+};
+
+const results = [];
+let totalChecks = 0;
+let passed = 0;
+let failed = 0;
+let skipped = 0;
+
+function checkExists(filePath, isDir = false) {
+  if (!fs.existsSync(filePath)) {
+    return { status: 'MISSING', detail: 'not found' };
+  }
+
+  try {
+    const stat = fs.statSync(filePath);
+    if (isDir && !stat.isDirectory()) {
+      return { status: 'WRONG_TYPE', detail: 'expected directory, got file' };
+    }
+    if (!isDir && !stat.isFile()) {
+      return { status: 'WRONG_TYPE', detail: 'expected file, got directory' };
+    }
+
+    if (isDir) {
+      const count = fs.readdirSync(filePath).length;
+      return { status: 'OK', detail: `${count} entries` };
+    }
+    const sizeKB = (stat.size / 1024).toFixed(1);
+    return { status: 'OK', detail: `${sizeKB} KB` };
+  } catch (err) {
+    return { status: 'ERROR', detail: `stat failed: ${err.message}` };
+  }
+}
+
+console.log('\n' + '='.repeat(80));
+console.log('  DUYA Packaged Build Verification');
+console.log(`  Platform: ${platform}`);
+console.log(`  Release Dir: ${getReleaseDir()}`);
+console.log(`  Resources: ${RESOURCES}`);
+console.log('='.repeat(80) + '\n');
+
+if (!fs.existsSync(RESOURCES)) {
+  console.error(`  ERROR: Resources directory not found at:\n  ${RESOURCES}\n`);
+  console.error('  Run npm run electron:pack or npm run electron:pack:win first.\n');
+  process.exit(1);
+}
+
+let currentCategory = '';
+
+for (const [label, [filePath, isDir]] of Object.entries(CHECKS)) {
+  totalChecks++;
+
+  // Extract category for grouping
+  const parent = label.includes('/') ? label.split('/')[0] : 'root';
+
+  if (currentCategory !== parent) {
+    currentCategory = parent;
+    console.log(`  ▸ ${parent}`);
+  }
+
+  if (listOnly) {
+    console.log(`    - ${label}: ${filePath}`);
+    skipped++;
+    continue;
+  }
+
+  const result = checkExists(filePath, isDir);
+  results.push({ label, ...result });
+
+  const icon = result.status === 'OK' ? '✓' : result.status === 'MISSING' ? '✗' : '⚠';
+  console.log(`    ${icon} ${path.basename(label) ? label : label}`);
+
+  if (result.status === 'OK') {
+    passed++;
+  } else if (result.status === 'MISSING') {
+    failed++;
+    console.error(`      → Expected at: ${filePath}`);
+  } else {
+    failed++;
+  }
+}
+
+// Summary
+console.log('\n' + '='.repeat(80));
+console.log('  SUMMARY');
+console.log('='.repeat(80));
+
+const missingItems = results.filter(r => r.status === 'MISSING' || r.status !== 'OK');
+
+if (listOnly) {
+  console.log(`  Listed ${totalChecks} expected artifacts.`);
+  console.log('  Run without --list to verify.');
+} else if (missingItems.length === 0) {
+  console.log(`  ✓ All ${totalChecks} checks passed.`);
+  console.log('');
+  console.log('  The packaged build is complete and ready for testing.');
+} else {
+  console.log(`  ✗ ${missingItems.length} issues found out of ${totalChecks} checks:`);
+  console.log('');
+  for (const item of missingItems) {
+    console.log(`  [${item.status}] ${item.label}`);
+  }
+  console.log('');
+}
+
+console.log(`  Passed: ${passed} | Failed: ${failed} | Skipped: ${skipped}`);
+console.log('='.repeat(80) + '\n');
+
+if (!listOnly && missingItems.length > 0) {
+  process.exit(1);
+}

@@ -32,6 +32,47 @@ import {
 } from './types.js';
 import type { ClarificationQuestion } from '../types.js';
 import type { ToolResult } from '../../tool/types.js';
+import { computeSourceReliability, sourceTypeFromQueryType, authorityLevelFromReliability, truncateResult, safeParseJSON } from './utils.js';
+import {
+  classifyQuery,
+  CLASSIFY_QUERY_VERSION,
+} from './prompts/classify-query.js';
+import {
+  generateClarification,
+  GENERATE_CLARIFICATION_VERSION,
+} from './prompts/generate-clarification.js';
+import {
+  generatePlan,
+  GENERATE_PLAN_VERSION,
+} from './prompts/generate-plan.js';
+import {
+  selectActions,
+  SELECT_ACTIONS_VERSION,
+} from './prompts/select-actions.js';
+import {
+  extractFindings,
+  EXTRACT_FINDINGS_VERSION,
+} from './prompts/extract-findings.js';
+import {
+  sourceCheck,
+  SOURCE_CHECK_VERSION,
+} from './prompts/source-check.js';
+import {
+  compare,
+  COMPARE_VERSION,
+} from './prompts/compare.js';
+import {
+  replan,
+  REPLAN_VERSION,
+} from './prompts/replan.js';
+import {
+  continueResearch,
+  CONTINUE_RESEARCH_VERSION,
+} from './prompts/continue-research.js';
+import {
+  synthesize,
+  SYNTHESIZE_VERSION,
+} from './prompts/synthesize.js';
 
 export const DEFAULT_ORCHESTRATOR_CONFIG: Required<OrchestratorConfig> = {
   maxIterations: 5,
@@ -107,42 +148,6 @@ const COMPLEXITY_CONFIG: Record<
     label: 'General (default depth)',
   },
 };
-
-function computeSourceReliability(
-  queryType: string
-): 'high' | 'medium' | 'low' | 'unverified' {
-  if (queryType === 'official_doc' || queryType === 'paper') return 'high';
-  if (queryType === 'oss' || queryType === 'en_resources') return 'medium';
-  if (queryType === 'news' || queryType === 'cn_resources') return 'low';
-  return 'unverified';
-}
-
-function sourceTypeFromQueryType(
-  queryType: string
-): ResearchFinding['sourceType'] {
-  switch (queryType) {
-    case 'official_doc': return 'official';
-    case 'paper': return 'paper';
-    case 'news': return 'news';
-    case 'oss': return 'code';
-    case 'cn_resources':
-    case 'en_resources': return 'blog';
-    default: return 'blog';
-  }
-}
-
-function authorityLevelFromReliability(
-  reliability: 'high' | 'medium' | 'low' | 'unverified'
-): 'high' | 'medium' | 'low' {
-  if (reliability === 'high') return 'high';
-  if (reliability === 'medium') return 'medium';
-  return 'low';
-}
-
-function truncateResult(result: string, maxChars = 8000): string {
-  if (result.length <= maxChars) return result;
-  return result.slice(0, maxChars) + '\n\n[... truncated, omitted ' + (result.length - maxChars) + ' chars]';
-}
 
 export class Orchestrator {
   private config: Required<OrchestratorConfig>;

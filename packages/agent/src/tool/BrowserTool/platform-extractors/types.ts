@@ -31,6 +31,7 @@ export type PlatformContentType =
   | 'github-repo'
   | 'wechat-article'
   | 'google-search'
+  | 'arxiv'
   | 'article';
 
 /**

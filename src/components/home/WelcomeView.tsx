@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useTranslation } from "@/hooks/useTranslation";
 import { MessageInput } from "@/components/chat/MessageInput";
 import { SessionSelector } from "./SessionSelector";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
@@ -14,6 +15,7 @@ interface WelcomeViewProps {
 
 export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps) {
   const { projects, createThread, isHydrated } = useConversationStore();
+  const { t } = useTranslation();
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask');
   const [sessionModel, setSessionModel] = useState<string>('');
@@ -38,7 +40,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   const handleOpenNewProject = () => {
     if (window.electronAPI?.dialog?.openFolder) {
       window.electronAPI.dialog.openFolder({
-        title: "Select Project Folder",
+        title: t('project.selectNewProjectFolder'),
       }).then((result: { canceled: boolean; filePaths: string[] }) => {
         if (!result.canceled && result.filePaths.length > 0) {
           const workingDirectory = result.filePaths[0];
@@ -123,7 +125,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
               onProviderChange={handleProviderChange}
               permissionMode={permissionMode}
               onPermissionModeChange={handlePermissionModeChange}
-              placeholder="Describe what you want to build..."
+              placeholder={t('chat.describeWhatToBuild')}
             />
           </div>
         </SessionSelector>

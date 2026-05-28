@@ -73,7 +73,11 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       permissionMode: (raw.permissionMode as AppSettings["permissionMode"]) ?? defaults.permissionMode,
       sandboxEnabled: raw.sandboxEnabled === "true",
       theme: (raw.theme as AppSettings["theme"]) ?? defaults.theme,
-      locale: raw.locale ?? defaults.locale,
+      locale: (() => {
+        const val = raw.locale;
+        if (!val) return defaults.locale;
+        try { return JSON.parse(val); } catch { return val; }
+      })(),
       provider: raw.provider ?? defaults.provider,
       messageFont: (raw.messageFont as AppSettings["messageFont"]) ?? defaults.messageFont,
       skillAdditionalPaths: raw.skillAdditionalPaths
@@ -277,6 +281,8 @@ export function useSettings(): {
             });
           } else if (key === 'visionLLMEnabled') {
             await window.electronAPI.vision?.set({ enabled: value as boolean });
+          } else if (typeof value === 'string') {
+            await window.electronAPI.settingsDb.set(key, value);
           } else {
             await window.electronAPI.settingsDb.setJson(key, value);
           }

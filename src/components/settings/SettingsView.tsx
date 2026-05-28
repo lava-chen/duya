@@ -12,6 +12,7 @@ import {
   MCPSection,
   AgentsSection,
   SupportSection,
+  CapabilitiesSection,
 } from "@/components/settings";
 import { UsageDashboard } from "@/components/usage";
 
@@ -32,6 +33,7 @@ export function SettingsView() {
         {settingsTab === "usage" && <UsageDashboard />}
         {settingsTab === "agents" && <AgentsSection />}
         {settingsTab === "support" && <SupportSection />}
+        {settingsTab === "capabilities" && <CapabilitiesSection />}
       </div>
     </div>
   );

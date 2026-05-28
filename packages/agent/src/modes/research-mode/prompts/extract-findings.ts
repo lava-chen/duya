@@ -1,5 +1,5 @@
 import type { ResearchFinding, SearchStrategy } from '../types.js';
-import { computeSourceReliability, sourceTypeFromQueryType, authorityLevelFromReliability } from '../Orchestrator.js';
+import { computeSourceReliability, sourceTypeFromQueryType, authorityLevelFromReliability } from '../utils.js';
 
 export const EXTRACT_FINDINGS_VERSION = '1.0.0';
 
@@ -108,4 +108,36 @@ export function parseResponse(
         authorityLevel: authorityLevelFromReliability(reliability),
         citationId: `[${idx}]`,
         stance: (item.stance as ResearchFinding['stance']) || 'neutral',
-        confidence: Math.min(1, Math.max(
+        confidence: Math.min(1, Math.max(0, item.confidence || 0.7)),
+        relevance: 0.7,
+        relatedQuestionIds: questionIds,
+        supports: [],
+        contradicts: [],
+        limitations: Array.isArray(item.limitations) ? item.limitations as string[] : [],
+        extractedEntities: [],
+        iteration,
+      });
+    }
+
+    return findings;
+  }
+
+  return [];
+}
+
+function safeParseJSON(response: string): Record<string, unknown> | null {
+  let cleaned = response.trim();
+  cleaned = cleaned.replace(/^```(?:json)?\s*/im, '');
+  cleaned = cleaned.replace(/\s*```\s*$/im, '');
+  cleaned = cleaned.replace(/\/\/.*$/gm, '');
+  cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch { return null; }
+    }
+    return null;
+  }
+}
