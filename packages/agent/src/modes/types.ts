@@ -1,5 +1,10 @@
 import type { LLMClient } from '../llm/base.js';
 import type { SSEEvent } from '../types.js';
+import type { LiteraturePluginRuntime } from '../plugins/literature/types.js';
+import type { ResearchMemoryRuntime } from '../research-memory/types.js';
+import type { ToolResult } from '../tool/types.js';
+
+export type { SSEEvent };
 
 export interface ClarificationQuestion {
   id: string;
@@ -18,11 +23,18 @@ export interface ModeContext {
   abortController: AbortController;
   sessionId?: string;
   workingDirectory?: string;
-  emitSSE: (event: SSEEvent) => void;
+  emitSSE?: (event: SSEEvent) => void;
   awaitClarification?: (
     questions: ClarificationQuestion[]
   ) => Promise<ClarificationAnswer[]>;
   persistState?: (data: Record<string, unknown>) => Promise<void>;
+  literature?: LiteraturePluginRuntime;
+  researchMemory?: ResearchMemoryRuntime;
+  toolExecute?: (name: string, input: Record<string, unknown>) => Promise<ToolResult>;
+  toolExecuteConcurrent?: (
+    calls: Array<{ name: string; input: Record<string, unknown> }>
+  ) => AsyncGenerator<ToolResult>;
+  forwardSSE?: (event: SSEEvent) => void;
 }
 
 export abstract class BaseMode {
