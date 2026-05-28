@@ -30,6 +30,9 @@ import { registerLoggerHandlers } from './ipc/logger-handlers';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerWikiAgentHandlers } from './ipc/wiki-agent-handlers';
+import { registerPluginHandlers } from './ipc/plugin-handlers';
+import { getMarketplaceSyncManager } from './plugins/marketplace';
+import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
 import { initWikiAgentRuntime } from './wiki-agent/WikiAgentRuntime';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import type { ExecutorRpcRequest } from './conductor/executor-types';
@@ -38,7 +41,7 @@ import type { ExecutorRpcRequest } from './conductor/executor-types';
 // Core modules (refactored from inline code)
 // =============================================================================
 
-import { isDev, DEBUG_IPC, debugLog, setupDevMode, initGlobalErrorHandlers, acquireSingleInstanceLock, setupSecondInstanceHandler } from './core/bootstrap';
+import { isDev, isPreviewMode, DEBUG_IPC, debugLog, setupDevMode, initGlobalErrorHandlers, acquireSingleInstanceLock, setupSecondInstanceHandler, logEnvironmentDiagnostic } from './core/bootstrap';
 import { getMainWindow, getIsQuitting, setIsQuitting, getIconPath, getRendererUrl, createWindow } from './core/window-manager';
 import { createSafeModeWindow, getSafeModeWindow } from './core/safe-mode';
 import { createTray } from './core/tray-manager';
@@ -73,6 +76,8 @@ if (gotTheLock) {
     if (process.platform === 'win32') {
       app.setAppUserModelId('com.duya.app');
     }
+
+    logEnvironmentDiagnostic();
 
     // ============================================================
     // Step 1: Read boot.json - resolve database path
@@ -432,6 +437,27 @@ registerLoggerHandlers();
 registerUpdaterHandlers();
 registerAgentServerHandlers();
 registerWikiAgentHandlers();
+registerPluginHandlers();
+
+// Marketplace: handle --add-dir CLI flag
+const addDirIndex = process.argv.indexOf('--add-dir');
+if (addDirIndex >= 0 && process.argv[addDirIndex + 1]) {
+  const dirPath = process.argv[addDirIndex + 1];
+  try {
+    const catalog = scanDirectoryForPlugins(dirPath);
+    const syncManager = getMarketplaceSyncManager();
+    syncManager.addLocalDir(`temp-dir-${Date.now()}`, dirPath);
+    logger.info('Loaded --add-dir marketplace', { dirPath, pluginCount: Object.keys(catalog.plugins).length }, 'Main');
+  } catch (err) {
+    logger.error('Failed to load --add-dir marketplace', err instanceof Error ? err : new Error(String(err)), undefined, 'Main');
+  }
+}
+
+// Marketplace: start auto-sync and preload catalogs
+void getMarketplaceSyncManager().preloadCatalogs().catch((err) => {
+  logger.warn('Marketplace catalog preload failed', { error: err instanceof Error ? err.message : String(err) }, 'Main');
+});
+getMarketplaceSyncManager().startAutoSync();
 
 // =============================================================================
 // Graceful Shutdown

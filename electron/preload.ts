@@ -404,6 +404,143 @@ export interface RecapAPI {
   onRecapResult: (callback: (data: { sessionId: string; recap: string; timestamp: number }) => void) => () => void
 }
 
+export interface PluginCatalogEntry {
+  id: string
+  name: string
+  version: string
+  description: string
+  author: { name: string; url?: string }
+  icon?: string
+  source: 'bundled' | 'marketplace' | 'local'
+  category: string
+  capabilityCounts: {
+    skills: number
+    mcpServers: number
+    cli: number
+    ui: number
+    hooks: number
+  }
+}
+
+export interface PluginRegistryEntry {
+  id: string
+  name: string
+  version: string
+  description: string
+  author: { name: string; url?: string }
+  icon?: string
+  enabled: boolean
+  installPath: string
+  installedAt: string
+  updatedAt?: string
+  source: 'bundled' | 'marketplace' | 'local'
+  runtimeStatus: 'enabled' | 'disabled' | 'needs_setup' | 'failed_to_load' | 'update_available'
+  permissionsGranted: string[]
+  permissionDenied: string[]
+  setupRequired: boolean
+  setupFields: Array<{
+    key: string
+    label: string
+    type: 'text' | 'password' | 'path' | 'url' | 'select' | 'boolean'
+    required: boolean
+    description?: string
+    defaultValue?: string | boolean
+    options?: Array<{ label: string; value: string }>
+    placeholder?: string
+  }>
+  manifest: Record<string, unknown>
+}
+
+export interface PluginHealthIssue {
+  type: string
+  severity: 'error' | 'warning'
+  message: string
+  detail?: string
+  actionable: boolean
+  action?: string
+}
+
+export interface PluginHealthReport {
+  pluginId: string
+  healthy: boolean
+  issues: PluginHealthIssue[]
+  lastCheckedAt: string
+}
+
+export interface PluginUpdateInfo {
+  name: string
+  current: string
+  latest: string
+  marketplace: string
+}
+
+export interface InstalledPluginInfoV2 {
+  marketplace: string
+  version: string
+  scope: string
+  installPath: string
+  capabilities: string[]
+  autoUpdate: boolean
+  installedAt?: number
+  source?: string
+}
+
+export interface PluginAPI {
+  catalog: {
+    list: (filters?: {
+      search?: string
+      category?: string
+      source?: string
+      installed?: boolean
+    }) => Promise<{ success: boolean; data: PluginCatalogEntry[]; error?: string }>
+  }
+  registry: {
+    list: () => Promise<{ success: boolean; data: PluginRegistryEntry[]; error?: string }>
+  }
+  detail: {
+    get: (pluginId: string) => Promise<{ success: boolean; data: PluginCatalogEntry | null; error?: string }>
+  }
+  health: {
+    list: () => Promise<{ success: boolean; data: PluginHealthReport[]; error?: string }>
+  }
+  install: (payload: { pluginId: string; scope?: string; autoUpdate?: boolean }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
+  enable: (pluginId: string) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
+  disable: (pluginId: string) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
+  remove: (payload: { pluginId: string; deleteData?: boolean }) => Promise<{ success: boolean; data?: { removed: boolean }; error?: string }>
+  doctor: (pluginId?: string) => Promise<{ success: boolean; data: PluginHealthReport[]; error?: string }>
+  capabilityIndex: () => Promise<{ success: boolean; data: Array<{
+    pluginId: string; name: string; version: string; status: string;
+    capabilities: { skills: number; mcpServers: number; cli: number; ui: number; hooks: number };
+    permissionSummary: { granted: string[]; denied: string[] };
+  }>; error?: string }>
+  checkUpdate: () => Promise<{ success: boolean; data: PluginUpdateInfo[]; error?: string }>
+  update: (payload: { pluginId: string; targetVersion: string }) => Promise<{ success: boolean; data?: { success: boolean; previousVersion: string; newVersion: string }; error?: string }>
+  installedV2: () => Promise<{ success: boolean; data: InstalledPluginInfoV2[]; error?: string }>
+  checkoutVersion: (payload: { pluginId: string; version: string }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
+  cacheStats: () => Promise<{ success: boolean; data?: { totalPlugins: number; totalVersions: number; totalSizeBytes: number }; error?: string }>
+  cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => Promise<{ success: boolean; data?: { removed: string[] }; error?: string }>
+}
+
+export interface MarketplaceEntry {
+  key: string
+  name: string
+  url: string
+  description?: string
+  autoUpdate: boolean
+  trusted?: boolean
+}
+
+export interface MarketplaceAPI {
+  list: () => Promise<{ success: boolean; data: MarketplaceEntry[]; error?: string }>
+  add: (payload: { key: string; entry: { name: string; url: string; description?: string; autoUpdate: boolean; trusted?: boolean } }) =>
+    Promise<{ success: boolean; data?: MarketplaceEntry; error?: string }>
+  update: (payload: { key: string; entry: { name?: string; url?: string; description?: string; autoUpdate?: boolean; trusted?: boolean } }) =>
+    Promise<{ success: boolean; data?: MarketplaceEntry; error?: string }>
+  remove: (payload: { key: string }) => Promise<{ success: boolean; data?: { removed: boolean }; error?: string }>
+  reset: () => Promise<{ success: boolean; data: MarketplaceEntry[]; error?: string }>
+  checkName: (name: string) => Promise<{ success: boolean; data?: { name: string; blocked: boolean }; error?: string }>
+}
+
 export interface ElectronAPI {
   versions: {
     electron: string
@@ -483,6 +620,8 @@ export interface ElectronAPI {
   browserExtension: BrowserExtensionAPI
   parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
+  plugin: PluginAPI
+  marketplace: MarketplaceAPI
   recap: RecapAPI
   wiki: WikiAPI
   // Agent Server API
@@ -1304,6 +1443,42 @@ const electronAPI: ElectronAPI = {
   },
   // Session management
   getInterruptedSessions: () => ipcRenderer.invoke('session:getInterruptedSessions'),
+  // Plugin API
+  plugin: {
+    catalog: {
+      list: (filters?: { search?: string; category?: string; source?: string; installed?: boolean }) =>
+        ipcRenderer.invoke('plugin:catalog:list', filters),
+    },
+    registry: {
+      list: () => ipcRenderer.invoke('plugin:registry:list'),
+    },
+    detail: {
+      get: (pluginId: string) => ipcRenderer.invoke('plugin:detail:get', pluginId),
+    },
+    health: {
+      list: () => ipcRenderer.invoke('plugin:health:list'),
+    },
+    install: (payload: { pluginId: string }) => ipcRenderer.invoke('plugin:install', payload),
+    enable: (pluginId: string) => ipcRenderer.invoke('plugin:enable', pluginId),
+    disable: (pluginId: string) => ipcRenderer.invoke('plugin:disable', pluginId),
+    remove: (payload: { pluginId: string; deleteData?: boolean }) => ipcRenderer.invoke('plugin:remove', payload),
+    doctor: (pluginId?: string) => ipcRenderer.invoke('plugin:doctor', pluginId),
+    capabilityIndex: () => ipcRenderer.invoke('plugin:capability-index'),
+    checkUpdate: () => ipcRenderer.invoke('plugin:check-update'),
+    update: (payload: { pluginId: string; targetVersion: string }) => ipcRenderer.invoke('plugin:update', payload),
+    installedV2: () => ipcRenderer.invoke('plugin:installed:v2'),
+    checkoutVersion: (payload: { pluginId: string; version: string }) => ipcRenderer.invoke('plugin:checkout-version', payload),
+    cacheStats: () => ipcRenderer.invoke('plugin:cache:stats'),
+    cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => ipcRenderer.invoke('plugin:cache:cleanup', payload),
+  },
+  marketplace: {
+    list: () => ipcRenderer.invoke('marketplace:list'),
+    add: (payload) => ipcRenderer.invoke('marketplace:add', payload),
+    update: (payload) => ipcRenderer.invoke('marketplace:update', payload),
+    remove: (payload) => ipcRenderer.invoke('marketplace:remove', payload),
+    reset: () => ipcRenderer.invoke('marketplace:reset'),
+    checkName: (name: string) => ipcRenderer.invoke('marketplace:check-name', name),
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
