@@ -13,6 +13,7 @@ import type {
 
 const DEFAULT_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = [30_000, 60_000, 300_000];
+const MAX_RUNS_PER_CRON = 500;
 
 export function normalizeCronStatus(value: string | undefined): CronStatus {
   if (value === 'enabled' || value === 'disabled' || value === 'error') return value;
@@ -204,5 +205,25 @@ export class CronPersistence {
 
   updateNextRunAt(id: string, nextRunAt: number | null): void {
     this.db.prepare('UPDATE automation_crons SET next_run_at = ?, updated_at = ? WHERE id = ?').run(nextRunAt, Date.now(), id);
+  }
+
+  cleanupOldRuns(): { deletedCount: number } {
+    const crons = this.db.prepare('SELECT id FROM automation_crons').all() as { id: string }[];
+    let totalDeleted = 0;
+
+    for (const cron of crons) {
+      const row = this.db.prepare(
+        'SELECT id FROM automation_cron_runs WHERE cron_id = ? ORDER BY created_at DESC LIMIT 1 OFFSET ?'
+      ).get(cron.id, MAX_RUNS_PER_CRON) as { id: string } | undefined;
+
+      if (row) {
+        const result = this.db.prepare(
+          'DELETE FROM automation_cron_runs WHERE cron_id = ? AND created_at <= (SELECT created_at FROM automation_cron_runs WHERE id = ?) AND id != ?'
+        ).run(cron.id, row.id, row.id);
+        totalDeleted += result.changes;
+      }
+    }
+
+    return { deletedCount: totalDeleted };
   }
 }

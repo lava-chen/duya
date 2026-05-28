@@ -36,7 +36,6 @@ import {
   ChatCircle,
   Robot,
   Lightning,
-  DownloadSimple,
   SquaresFour,
   CaretRight,
   DotsThreeVertical,
@@ -441,16 +440,6 @@ export function AutomationView() {
     setQuickChatModalOpen(true);
   }
 
-  function handleQuickTemplate(template: AutomationTemplate): void {
-    setSelectedTemplate(template);
-    setQuickChatModalOpen(true);
-  }
-
-  function handleManualCreate(): void {
-    setIsCreating(true);
-    setSelectedCronId(null);
-  }
-
   function handleViewTemplates(): void {
     setTemplateModalOpen(true);
   }
@@ -537,6 +526,8 @@ export function AutomationView() {
     return Math.round((success / runs.length) * 100);
   }, [runs]);
 
+  const showEmptyState = !loading && crons.length === 0 && !isCreating;
+
   // Last 7 days status
   const last7Days = useMemo(() => {
     const days: { date: string; status: 'success' | 'failed' | 'none' }[] = [];
@@ -562,15 +553,10 @@ export function AutomationView() {
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4">
         <h2 className="automation-title-copernicus" style={{ color: 'var(--text)' }}>Automation</h2>
+        {!showEmptyState && (
         <div className="flex items-center gap-2">
-          {/* Chat input hint */}
-          <div className="hidden lg:flex items-center gap-2 mr-3 px-3 py-1.5 rounded-lg text-xs" style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
-            <ChatCircle size={12} />
-            <span>Ask Duya to create automations...</span>
-          </div>
-
           <button
-            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all duration-200"
             style={{
               background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
               color: '#ffffff',
@@ -593,7 +579,7 @@ export function AutomationView() {
           </button>
 
           <button
-            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all duration-200"
             style={{
               background: 'var(--surface)',
               color: 'var(--text)',
@@ -607,23 +593,8 @@ export function AutomationView() {
             <SquaresFour size={16} />
             Templates
           </button>
-
-          <button
-            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200"
-            style={{
-              background: 'var(--surface)',
-              color: 'var(--text)',
-              border: '1px solid var(--border)',
-            }}
-            onClick={handleChatCreate}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-            type="button"
-          >
-            <DownloadSimple size={16} />
-            Import
-          </button>
         </div>
+        )}
       </div>
 
       {/* Error Banner */}
@@ -635,13 +606,10 @@ export function AutomationView() {
       )}
 
       {/* Main Content */}
-      {!loading && crons.length === 0 && !isCreating ? (
+      {showEmptyState ? (
         <div className="flex-1 overflow-hidden">
           <AutomationEmptyState
-            templates={templates}
-            onQuickTemplate={handleQuickTemplate}
             onChatCreate={handleChatCreate}
-            onManualCreate={handleManualCreate}
             onViewTemplates={handleViewTemplates}
           />
         </div>
