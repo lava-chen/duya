@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { XIcon, SpinnerGapIcon, ArrowUpIcon, StopIcon } from "@/components/icons";
 import { Clock } from "@phosphor-icons/react";
 import { getThreadIPC } from "@/lib/ipc-client";
+import { useSettings } from "@/hooks/useSettings";
 import type { Message } from "@/types";
 import { MessageList } from "@/components/chat/MessageList";
 import type { MessageListRef } from "@/components/chat/MessageList";
@@ -43,6 +44,8 @@ export function CronChatModal({
   const [streamingText, setStreamingText] = useState("");
   const messageListRef = useRef<MessageListRef>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { settings } = useSettings();
+  const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
   // Load messages for this session
   const loadMessages = useCallback(async () => {
@@ -141,8 +144,9 @@ export function CronChatModal({
     void startStream({
       sessionId,
       content: trimmed,
+      wikiAgentEnabled,
     });
-  }, [inputValue, isStreaming, sessionId]);
+  }, [inputValue, isStreaming, sessionId, wikiAgentEnabled]);
 
   const handleStop = useCallback(() => {
     void stopStream(sessionId);

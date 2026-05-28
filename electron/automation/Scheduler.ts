@@ -15,6 +15,7 @@ export class AutomationScheduler {
   private running = new Map<string, RunningExecution[]>();
   private queued = new Map<string, number>();
   private started = false;
+  private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(db: Database.Database) {
     this.persistence = new CronPersistence(db);
@@ -24,9 +25,24 @@ export class AutomationScheduler {
     if (this.started) return;
     this.started = true;
     for (const cron of this.persistence.loadEnabledCrons()) this.reschedule(cron);
+
+    this.cleanupInterval = setInterval(() => {
+      try {
+        const result = this.persistence.cleanupOldRuns();
+        if (result.deletedCount > 0) {
+          console.log(`[AutomationScheduler] Cleaned up ${result.deletedCount} old run records`);
+        }
+      } catch {
+        // best-effort
+      }
+    }, 12 * 60 * 60 * 1000); // every 12 hours
   }
 
   shutdown(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear(); this.running.clear(); this.queued.clear(); this.started = false;
   }
