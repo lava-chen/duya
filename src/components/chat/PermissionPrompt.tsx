@@ -24,6 +24,12 @@ interface PermissionPromptProps {
   toolUses?: ToolUseInfo[];
   /** Permission profile - 'full_access' skips prompts */
   permissionProfile?: 'default' | 'full_access';
+  /** Auto mode related info from the backend */
+  autoModeInfo?: {
+    active: boolean;
+    circuitBroken?: boolean;
+    denialReason?: string;
+  } | null;
 }
 
 /** Max lines to show in the tool input area before collapsing */
@@ -450,6 +456,7 @@ export function PermissionPrompt({
   onPermissionResponse,
   toolUses = [],
   permissionProfile,
+  autoModeInfo,
 }: PermissionPromptProps) {
   const { t } = useTranslation();
   const autoApprovedRef = useRef<string | null>(null);
@@ -479,6 +486,21 @@ export function PermissionPrompt({
       className="mb-2 w-full rounded-lg border px-3 py-2 shadow-sm"
       style={{ borderColor: 'var(--border)', backgroundColor: 'var(--main-bg)' }}
     >
+      {/* Auto mode indicator */}
+      {autoModeInfo?.active && (
+        <div className="mb-2 rounded px-2 py-1 text-[10px] font-medium"
+          style={{
+            backgroundColor: 'rgba(94, 109, 255, 0.1)',
+            color: 'var(--accent)',
+            border: '1px solid rgba(94, 109, 255, 0.2)',
+          }}
+        >
+          {autoModeInfo.circuitBroken
+            ? t('permission.autoModeCircuitBroken')
+            : t('permission.autoModeActive')}
+        </div>
+      )}
+
       {/* ExitPlanMode */}
       {pendingPermission?.toolName === 'ExitPlanMode' && !isResolved && (
         <ExitPlanModeUI

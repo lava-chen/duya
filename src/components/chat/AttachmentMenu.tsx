@@ -51,6 +51,7 @@ interface AttachmentMenuProps {
   thinkingEffort: string | null;
   onSelectThinkingEffort: (effort: string | null) => void;
   modelSupportsEffort?: boolean;
+  onRunResearchMode?: () => void;
 }
 
 type SubMenuType = 'skills' | 'mcp' | 'styles' | 'thinking' | null;
@@ -84,6 +85,7 @@ export function AttachmentMenu({
   thinkingEffort,
   onSelectThinkingEffort,
   modelSupportsEffort = true,
+  onRunResearchMode,
 }: AttachmentMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -332,6 +334,26 @@ export function AttachmentMenu({
                 <CaretRightIcon size={14} style={{ color: 'var(--muted)' }} />
               </button>
             </div>
+
+            {/* Research Mode entry (explicit mode, not profile switch) */}
+            {onRunResearchMode && (
+              <button
+                type="button"
+                onClick={() => {
+                  onRunResearchMode();
+                  setIsOpen(false);
+                  setHoveredSubmenu(null);
+                }}
+                className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+              >
+                <span style={{ color: 'var(--muted)' }}>
+                  <BrainIcon size={16} />
+                </span>
+                <span style={{ color: 'var(--foreground)' }}>
+                  Research Mode
+                </span>
+              </button>
+            )}
           </div>
 
           {/* Skills Submenu - appears to the right of main menu, bottom aligned */}

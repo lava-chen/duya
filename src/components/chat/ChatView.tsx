@@ -36,7 +36,7 @@ import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 interface ChatViewProps {
   sessionId: string;
   messages: Message[];
-  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => void;
+  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
   hasQueuedMessages?: boolean;
@@ -325,13 +325,13 @@ export function ChatView({
   }, [sessionId, parentSessionId, loadThreadMessages]);
 
   const handleSend = useCallback(
-    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => {
+    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string) => {
       lastUserContentRef.current = content;
       lastFilesRef.current = files;
       lastOutputStyleRef.current = outputStyleConfig;
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig);
+      onSendMessage(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig, mode);
     },
     [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]
   );
