@@ -205,6 +205,10 @@ export interface PromptContext {
   outputStyleConfig?: OutputStyleConfig | null
   /** Communication platform type (cli, duya-app, weixin, feishu, web, api) */
   communicationPlatform?: CommunicationPlatform
+  /** Optional research task intent for research prompt assembly */
+  researchIntent?: import('./research/types.js').ResearchTaskIntent
+  /** Optional research project ID */
+  researchProjectId?: string
 }
 
 // ============================================================
@@ -351,6 +355,8 @@ export interface PromptBuildContextOptions {
   isVerificationAgentEnabled?: boolean
   isSkillSearchEnabled?: boolean
   scratchpadDir?: string
+  researchIntent?: import('./research/types.js').ResearchTaskIntent
+  researchProjectId?: string
 }
 
 // ============================================================

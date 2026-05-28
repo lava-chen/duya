@@ -5,6 +5,7 @@
 import { CodePromptSystem } from './code/CodePromptSystem.js'
 import { GeneralPromptSystem } from './general/GeneralPromptSystem.js'
 import { ConductorPromptSystem } from './conductor/ConductorPromptSystem.js'
+import { ResearchPromptSystem } from './research/ResearchPromptSystem.js'
 import { WikiAgentPromptSystem } from '../wiki-agent/prompts/WikiAgentPromptSystem.js'
 import { PromptsRegistry } from './PromptsRegistry.js'
 import type { PromptProfile } from './modes/types.js'
@@ -22,6 +23,10 @@ const conductorFactory = {
   create: (profile?: PromptProfile) => new ConductorPromptSystem(profile),
 }
 
+const researchFactory = {
+  create: (profile?: PromptProfile) => new ResearchPromptSystem(profile),
+}
+
 const wikiAgentFactory = {
   create: (profile?: PromptProfile) => new WikiAgentPromptSystem(profile),
 }
@@ -30,6 +35,7 @@ const wikiAgentFactory = {
 PromptsRegistry.register('code', codeFactory)
 PromptsRegistry.register('general', generalFactory)
 PromptsRegistry.register('conductor', conductorFactory)
+PromptsRegistry.register('research', researchFactory)
 PromptsRegistry.register('wiki-agent', wikiAgentFactory)
 
 /**
@@ -37,7 +43,7 @@ PromptsRegistry.register('wiki-agent', wikiAgentFactory)
  * Defaults to 'general' if no promptSystem is specified.
  */
 export function resolvePromptSystemName(
-  promptSystem?: 'general' | 'code' | 'conductor',
+  promptSystem?: 'general' | 'code' | 'conductor' | 'research',
 ): string {
   return promptSystem ?? 'general'
 }

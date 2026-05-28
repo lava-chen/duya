@@ -53,6 +53,7 @@ export {
 } from './modes/index.js'
 
 export type { PromptBaseMode, PromptOverlay, PromptProfile } from './modes/types.js'
+export type { ResearchTaskIntent, ResearchPromptRuntimeContext } from './research/types.js'
 export { getSystemSection } from './sections/system.js'
 export { getGeneralTaskGuidanceSection } from './sections/generalTaskGuidance.js'
 export { getTaskHandlingSection } from './sections/taskHandling.js'
