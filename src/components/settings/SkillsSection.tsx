@@ -97,7 +97,7 @@ function SecurityBadge({ security, source }: { security?: SkillSecurity; source?
   const { t } = useTranslation();
   if (!security?.scanned) return null;
 
-  if (source === "bundled") {
+  if (source === "bundled" || source === "builtin-directory") {
     return (
       <span className="flex items-center gap-1 text-[0.7rem] text-emerald-600 dark:text-emerald-400">
         <ShieldIcon size={12} />
@@ -287,7 +287,7 @@ function SkillDetailModal({ skill, onClose }: { skill: SkillWithContent; onClose
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">{t('skills.securityStatus')}</h4>
               <div className="rounded-lg border border-border/50 p-4">
                 <div className="flex items-center gap-2 mb-3">
-                  {skill.source === "bundled" ? (
+                  {skill.source === "bundled" || skill.source === "builtin-directory" ? (
                     <>
                       <ShieldIcon size={18} className="text-green-500" />
                       <span className="text-sm font-medium text-green-500">{t('skills.trustedBuiltin')}</span>
@@ -342,7 +342,7 @@ function SkillDetailModal({ skill, onClose }: { skill: SkillWithContent; onClose
                     </div>
                   </div>
                 )}
-                {skill.source !== "bundled" && skill.security.verdict !== "safe" && (
+                {skill.source !== "bundled" && skill.source !== "builtin-directory" && skill.security.verdict !== "safe" && (
                   <div className="mt-4 pt-4 border-t border-border/50">
                     <p className="text-xs text-muted-foreground mb-3">{t('skills.skillBlocked')}</p>
                     <ol className="text-xs text-muted-foreground mb-4 list-decimal list-inside space-y-1">

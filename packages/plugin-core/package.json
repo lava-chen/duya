@@ -1,0 +1,12 @@
+{
+  "name": "@duya/plugin-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DUYA plugin core — error handling, security, and policy engine",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {}
+}

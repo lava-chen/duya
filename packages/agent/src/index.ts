@@ -42,6 +42,9 @@ import { logger } from './utils/logger.js';
 import { getAgentProfileService } from './agent-profile/AgentProfileService.js';
 import type { AgentProfile } from './agent-profile/types.js';
 import { resolveAllowedTools } from './agent-profile/ToolFilter.js';
+import { LiteraturePlugin } from './plugins/literature/plugin.js';
+import { ResearchMemory } from './research-memory/index.js';
+import { pluginDb } from './ipc/db-client.js';
 
 // Compaction system exports
 export type {
@@ -243,6 +246,8 @@ export {
 } from './agent-profile/index.js';
 
 // Mode System exports
+import { ModeRegistry } from './modes/index.js';
+import type { ModeContext } from './modes/index.js';
 import './modes/research-mode/index.js';
 export { ModeRegistry, BaseMode } from './modes/index.js';
 export type {
@@ -254,12 +259,31 @@ export type {
 export {
   OrchestratorPhase,
   ResearchMode,
+  ResearchContext,
+  Orchestrator,
 } from './modes/research-mode/index.js';
+export { convertToSSEEvent } from './modes/research-mode/index.js';
 export type {
+  ExtendedResearchSSEEvent,
+  QueryComplexity,
+  SearchQueryType,
+  SearchStrategy,
+  AnswerQuality,
   ResearchQuestion,
   ResearchFinding,
   FindingContradiction,
   ResearchEntity,
+  ResearchStateSummary,
+  OrchestratorConfig,
+  OrchestratorDependencies,
+  EvidenceChain,
+  EvidenceNode,
+  DiffAnalysis,
+  DiffPoint,
+  ExportResult,
+  ShareLink,
+  ContinueResearchResult,
+  ResearchEvent,
 } from './modes/research-mode/index.js';
 
 import { ToolRegistry } from './tool/registry.js';
@@ -321,6 +345,9 @@ export class duyaAgent {
   private visionClient?: LLMClient; // Optional vision model client
   private visionConfig?: import('./types.js').VisionConfig; // Vision model configuration
   private blockedDomains: string[] = [];
+  private literaturePlugin: LiteraturePlugin;
+  private researchMemoryRuntime: ResearchMemory;
+  private _activeMode: any = null;
 
   constructor(options: AgentOptions) {
     const provider = options.provider || inferProvider(options.baseURL || '');
@@ -501,6 +528,8 @@ export class duyaAgent {
 
     // Store blocked domains for browser tool
     this.blockedDomains = options.blockedDomains ?? [];
+    this.literaturePlugin = new LiteraturePlugin();
+    this.researchMemoryRuntime = new ResearchMemory();
   }
 
   private getDefaultBaseURL(provider: 'anthropic' | 'openai' | 'ollama'): string {
@@ -623,31 +652,173 @@ export class duyaAgent {
     this.abortController = new AbortController();
     logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}`);
 
-    // Get tools: use provided registry or default to built-in registry
-    logger.info(`[Agent] streamChat: Loading tools...`);
-    let registry = options?.toolRegistry;
-    if (!registry) {
-      const { createBuiltinRegistry } = await import('./tool/builtin.js');
-      registry = createBuiltinRegistry(
-        this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined
-      );
-    }
-    const allTools = registry.getAllTools();
-
-    // Apply agent profile if provided (before tool filtering)
+    // Fetch agent profile early so mode dispatch can use promptSystem for auto-resolution
     let appliedProfile: AgentProfile | undefined;
     if (options?.agentProfileId) {
       const profileService = getAgentProfileService();
       const profile = profileService.get(options.agentProfileId);
       if (profile) {
         appliedProfile = profile;
-        logger.info(`[Agent] Applying agent profile: ${profile.name} (${profile.id})`);
+        logger.info(`[Agent] Applying agent profile: ${profile.name} (${profile.id}), promptSystem=${profile.promptSystem || 'general'}`);
       } else {
         logger.warn(`[Agent] Agent profile not found: ${options.agentProfileId}`);
       }
     }
 
-    // Apply tool filtering: disabledTools -> agent profile allowedTools/disallowedTools
+    // === Mode Dispatch ===
+    // Resolve mode: explicit option > profile-derived (research agent → research mode) > 'normal'
+    // Execution modes must be explicitly requested by the caller. Agent
+    // profiles control prompt/tool behavior and must not silently switch the
+    // runtime into a specialized orchestration mode.
+    const requestedMode = options?.mode || 'normal';
+    if (requestedMode !== 'normal') {
+      if (!ModeRegistry.has(requestedMode)) {
+        yield {
+          type: 'error',
+          data: `Unknown mode: ${requestedMode}`,
+        } as SSEEvent;
+        return;
+      }
+
+      const mode = ModeRegistry.create(requestedMode);
+      if (!mode) {
+        yield {
+          type: 'error',
+          data: `Failed to create mode: ${requestedMode}`,
+        } as SSEEvent;
+        return;
+      }
+
+      logger.info(`[Agent] Dispatching to mode: ${requestedMode}`);
+      this._activeMode = mode;
+
+      const queryText = typeof prompt === 'string'
+        ? prompt
+        : prompt.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+
+      // Build tool registry for this mode
+      const { createBuiltinRegistry } = await import('./tool/builtin.js');
+      let enabledPluginIds: Set<string> | undefined;
+      try {
+        const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown }>;
+        const enabledIds = installed
+          .filter((item) => item.enabled === true && typeof item.id === 'string')
+          .map((item) => item.id as string);
+        enabledPluginIds = new Set(enabledIds);
+      } catch (err) {
+        logger.warn(`[Agent] Mode tool setup: Failed plugin registry; ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const modeRegistry = createBuiltinRegistry(
+        this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
+        { enabledPluginIds, wikiAgentEnabled: options?.wikiAgentEnabled }
+      );
+
+      const modeContext: ModeContext = {
+        llmClient: this.llmClient,
+        abortController: this.abortController,
+        sessionId: this.sessionId,
+        workingDirectory: this.workingDirectory,
+        literature: this.literaturePlugin,
+        researchMemory: this.researchMemoryRuntime,
+        toolExecute: (name: string, input: Record<string, unknown>) =>
+          modeRegistry.execute(name, input, this.workingDirectory).then((r) => {
+            if (!r) throw new Error(`Tool not found: ${name}`);
+            return r;
+          }),
+        toolExecuteConcurrent: async function* (
+          calls: Array<{ name: string; input: Record<string, unknown> }>
+        ) {
+          const batchSize = 5;
+          for (let i = 0; i < calls.length; i += batchSize) {
+            const batch = calls.slice(i, i + batchSize);
+            const results = await Promise.all(
+              batch.map((c) =>
+                modeRegistry.execute(c.name, c.input, undefined).then((r) => {
+                  if (!r) throw new Error(`Tool not found: ${c.name}`);
+                  return r;
+                })
+              )
+            );
+            for (const r of results) yield r;
+          }
+        },
+        persistState: async (data: Record<string, unknown>) => {
+          const context = data.context as string;
+          if (!context) return;
+
+          // Get or create research session for this chat session
+          let researchId: string;
+          const sessionId = this.sessionId;
+          if (sessionId) {
+            const { getResearchSessionBySessionId, createResearchSession, updateResearchSession } = await import('./session/db.js');
+            let row = getResearchSessionBySessionId(sessionId);
+            if (!row) {
+              const id = crypto.randomUUID();
+              createResearchSession({
+                id,
+                session_id: sessionId,
+                original_query: queryText,
+                context_json: context,
+                status: 'active',
+              });
+              researchId = id;
+            } else {
+              researchId = row.id;
+              updateResearchSession(row.id, {
+                context_json: context,
+                status: 'active',
+                current_phase: data.current_phase as string || 'researching',
+                iterations: data.iterations as number || row.iterations,
+                coverage: data.coverage as number || row.coverage,
+              });
+            }
+          }
+        },
+      };
+
+      try {
+        yield* mode.execute(queryText, modeContext);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error(`[Agent] Mode execution failed: ${message}`);
+        yield {
+          type: 'error',
+          data: `Research mode error: ${message}`,
+        } as SSEEvent;
+      } finally {
+        this._activeMode = null;
+      }
+      return;
+    }
+
+    // === Normal Mode ===
+    // (continue with existing tool-use loop below)
+
+    // Get tools: use provided registry or default to built-in registry
+    logger.info(`[Agent] streamChat: Loading tools...`);
+    let registry = options?.toolRegistry;
+    if (!registry) {
+      const { createBuiltinRegistry } = await import('./tool/builtin.js');
+      let enabledPluginIds: Set<string> | undefined;
+      try {
+        const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown }>;
+        const enabledIds = installed
+          .filter((item) => item.enabled === true && typeof item.id === 'string')
+          .map((item) => item.id as string);
+        enabledPluginIds = new Set(enabledIds);
+      } catch (err) {
+        logger.warn(
+          `[Agent] Failed to load plugin registry; falling back to default plugin tool set: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      registry = createBuiltinRegistry(
+        this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
+        { enabledPluginIds, wikiAgentEnabled: options?.wikiAgentEnabled }
+      );
+    }
+    const allTools = registry.getAllTools();
+
+    // Apply tool filtering: disabledTools -> agent profile allowedTools/disallowedTools (appliedProfile already fetched above)
     let tools: Tool[] = allTools;
 
     // Layer 1: Filter by disabledTools option
@@ -709,6 +880,8 @@ export class duyaAgent {
         modelName: this.model,
         enabledTools: new Set(enabledToolNames),
         outputStyleConfig: options?.outputStyleConfig,
+        researchIntent: options?.researchIntent,
+        researchProjectId: options?.researchProjectId,
       });
       const systemPromptResult = await promptSystem.buildSystemPrompt(context);
       systemPromptContent = [...systemPromptResult].join('\n\n');
@@ -740,13 +913,16 @@ export class duyaAgent {
         } as ToolPermissionContext,
       }),
       abortController: this.abortController!,
+      llmClient: this.llmClient,
+      classifierModel: this.model,
+      messages: this.messages,
     };
 
-    const canUseTool: CanUseToolFn = async (toolName: string) => {
+    const canUseTool: CanUseToolFn = async (toolName: string, toolInput?: Record<string, unknown>) => {
       try {
         const decision = await this.hasPermissionsToUseTool(
           toolName,
-          {},
+          toolInput ?? {},
           permissionContext
         );
         // Return detailed decision so StreamingToolExecutor can skip checkPermissions
@@ -783,6 +959,7 @@ export class duyaAgent {
 
     let turnCount = 0;
     const maxTurns = options?.maxTurns ?? 100;
+    let runtimePromptMessageId: string | null = null;
 
     // Generate a unique seq_index for this streamChat call
     // All messages created in this call (including multi-turn) will share this seq_index
@@ -827,23 +1004,29 @@ export class duyaAgent {
             lastMessageContent.trim() === compareContent.trim());
 
         const displayContent = options?.displayContent;
+        const persistedPromptContent = (displayContent !== undefined
+          ? displayContent
+          : prompt) as string | MessageContent[];
 
         if (!isDuplicate) {
-          messages.push({
+          const userMessage = {
             id: crypto.randomUUID(),
             role: 'user',
-            content: prompt as string | MessageContent[],
+            content: persistedPromptContent,
             displayContent: displayContent !== undefined ? displayContent : undefined,
             timestamp: Date.now(),
             seq_index: seqIndex,
             attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
-          } as Message);
+          } as Message;
+          messages.push(userMessage);
+          runtimePromptMessageId = userMessage.id ?? null;
         } else if (lastMessage) {
           lastMessage.seq_index = seqIndex;
+          runtimePromptMessageId = lastMessage.id ?? null;
           const newAttachments = (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments;
           if (newAttachments && newAttachments.length > 0) {
             lastMessage.attachments = newAttachments;
-            lastMessage.content = prompt as string | MessageContent[];
+            lastMessage.content = persistedPromptContent;
             lastMessage.displayContent = displayContent !== undefined ? displayContent : undefined;
           }
         }
@@ -917,7 +1100,17 @@ export class duyaAgent {
         logger.info(`[Agent] Turn ${turnCount}: Starting LLM stream, messages=${messages.length}, provider=${this.provider}`);
         let llmEventCount = 0;
         logger.info(`[Agent] Turn ${turnCount}: Calling llmClient.streamChat...`);
-        const streamGenerator = this.llmClient.streamChat(messages, {
+        const llmMessages = runtimePromptMessageId
+          ? messages.map((msg) => (
+              msg.id === runtimePromptMessageId
+                ? {
+                    ...msg,
+                    content: prompt as string | MessageContent[],
+                  }
+                : msg
+            ))
+          : messages;
+        const streamGenerator = this.llmClient.streamChat(llmMessages, {
           systemPrompt: systemPromptContent,
           tools,
           maxTokens: options?.maxTokens ?? 4096,

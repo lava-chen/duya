@@ -39,10 +39,10 @@ export interface AgentProfile {
   promptProfile?: PromptProfileOverride;
 
   /**
-   * Which prompt system to use: 'general', 'code', or 'conductor'.
+   * Which prompt system to use: 'general', 'code', 'conductor', or 'research'.
    * Defaults to 'general' if not specified.
    */
-  promptSystem?: 'general' | 'code' | 'conductor';
+  promptSystem?: 'general' | 'code' | 'conductor' | 'research';
 
   /** Whether this profile is selectable by users in the UI */
   userVisible: boolean;
@@ -114,11 +114,12 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     id: 'research',
     name: 'Research',
     description: 'Research, investigation and deep analysis',
-    allowedTools: ['file:read*', 'search:*', 'browser:*'],
+    allowedTools: ['file:read*', 'search:*', 'browser:*', 'literature:*', 'research_memory:*'],
     disallowedTools: ['file:write*', 'file:edit*', 'exec:*'],
     promptProfile: {
       disableSections: ['taskHandling', 'actions'],
     },
+    promptSystem: 'research',
     userVisible: true,
     isPreset: true,
     isEnabled: true,

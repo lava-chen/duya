@@ -134,6 +134,7 @@ interface ChatStartMessage {
     files?: FileAttachment[];
     agentProfileId?: string | null;
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
+    mode?: string;
     titleGenerationModel?: string;
     titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
   };
@@ -716,7 +717,6 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     case 'skill_review_completed':
       return { type: 'chat:skill_review_completed', data: event.data };
     case 'system': {
-      // Handle retry events from the retry mechanism
       const metadata = (event as { metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number } }).metadata;
       if (metadata?.retryAttempt !== undefined) {
         return {
@@ -729,9 +729,34 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       }
       return null;
     }
+    // Research mode events
+    case 'research_phase':
+      return { type: 'chat:research_phase', ...(event.data as object) };
+    case 'research_complexity':
+      return { type: 'chat:research_complexity', ...(event.data as object) };
+    case 'research_questions':
+      return { type: 'chat:research_questions', ...(event.data as object) };
+    case 'research_iteration':
+      return { type: 'chat:research_iteration', ...(event.data as object) };
+    case 'research_finding':
+      return { type: 'chat:research_finding', ...(event.data as object) };
+    case 'research_progress':
+      return { type: 'chat:research_progress', ...(event.data as object) };
+    case 'research_synthesis_chunk':
+      return { type: 'chat:text', content: (event.data as { delta: string }).delta };
+    case 'research_complete':
+      return { type: 'chat:research_complete', ...(event.data as object) };
+    case 'research_error':
+      return { type: 'chat:error', message: (event.data as { message: string }).message };
+    case 'report_complete':
+      return { type: 'chat:research_report', ...(event.data as object) };
+    case 'evidence_chain_response':
+      return { type: 'chat:research_evidence', ...(event.data as object) };
+    case 'continue_research_start':
+      return { type: 'chat:research_continue', ...(event.data as object) };
     default:
-      warn('[Agent-Process] Unknown SSE event type:', event.type);
-      return null;
+        warn('[Agent-Process] Unknown SSE event type:', event.type);
+        return null;
   }
 }
 
@@ -801,7 +826,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     titleGenerationModelConfig = null;
   }
 
-  log('[Agent-Process] handleChatStart:', { sessionId: msg.sessionId, promptLength: msg.prompt.length });
+  log('[Agent-Process] handleChatStart:', { sessionId: msg.sessionId, promptLength: msg.prompt.length, agentProfileId: msg.options?.agentProfileId || '(none)' });
   if (agent) {
     log('[Agent-Process] Agent LLM config:', {
       model: agent.model,
@@ -811,6 +836,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   }
   debugLog('chat:start received', {
     sessionId: msg.sessionId,
+    agentProfileId: msg.options?.agentProfileId || '(none)',
     hasOptionsMessages: Array.isArray(msg.options?.messages),
     optionsMessageCount: Array.isArray(msg.options?.messages) ? msg.options?.messages.length : 0,
     hasFiles: Array.isArray(msg.options?.files) && msg.options.files.length > 0,
@@ -1277,16 +1303,18 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       requestPermission,
       agentProfileId: msg.options?.agentProfileId,
       outputStyleConfig: msg.options?.outputStyleConfig,
+      mode: msg.options?.mode,
       attachments: files,
       displayContent: msg.prompt, // Store original prompt without synthetic pre-analysis/attachment context
     });
 
-    log('[Agent-Process] streamChat started, iterating events...');
+    log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
     let tokenUsage: { input_tokens: number; output_tokens: number; total_tokens?: number } | null = null;
     let eventCount = 0;
     const incrementalSaveQueue = new IncrementalSaveQueue(msg.sessionId);
     let lastIncrementalSave = Date.now();
     const INCREMENTAL_SAVE_INTERVAL = 5000; // Save every 5 seconds during streaming
+    let researchAccumulatedText = '';
 
     for await (const event of eventGen) {
       eventCount++;
@@ -1353,6 +1381,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // to avoid race condition where SSE closes before messages are saved
           continue;
         }
+        if (agentMsg.type === 'chat:text' && (agentMsg.content as string)) {
+          researchAccumulatedText += agentMsg.content as string;
+        }
         if (DEBUG_IPC && (
           agentMsg.type === 'chat:tool_use'
           || agentMsg.type === 'chat:tool_result'
@@ -1373,6 +1404,18 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           type: event.type,
         });
       }
+    }
+
+    // Flush accumulated research synthesis text into agent messages so DB persistence picks it up
+    if (researchAccumulatedText) {
+      const researchMsg: Message = {
+        id: `research-${Date.now()}`,
+        role: 'assistant',
+        content: researchAccumulatedText,
+        timestamp: Date.now(),
+      };
+      agent.addMessage(researchMsg);
+      log('[Agent-Process] Research mode: flushed accumulated text to agent messages', { textLength: researchAccumulatedText.length });
     }
 
     const agentMessages = agent.getMessages();
@@ -1720,11 +1763,10 @@ async function drainQueuedChatStart(): Promise<void> {
 
     log('[Agent-Process] Draining queued chat:start from priority queue');
     chatInProgress = true;
-    try {
-      await handleChatStart(next.rawMessage);
-    } finally {
+    handleChatStart(next.rawMessage).finally(() => {
       chatInProgress = false;
-    }
+      drainQueuedChatStart();
+    });
   }
 }
 
@@ -1858,12 +1900,10 @@ async function main(): Promise<void> {
             break;
           }
           chatInProgress = true;
-          try {
-            await handleChatStart(chatMsg);
-          } finally {
+          handleChatStart(chatMsg).finally(() => {
             chatInProgress = false;
-            await drainQueuedChatStart();
-          }
+            drainQueuedChatStart();
+          });
           break;
         }
 
@@ -2034,6 +2074,20 @@ async function main(): Promise<void> {
             }
           } else {
             warn('[Agent-Process] No pending IPC request found for requestId:', requestId);
+          }
+          break;
+        }
+
+        case 'research:clarification:resolve': {
+          const { requestId, answers } = msg as unknown as { requestId: string; answers: Record<string, string> };
+          const mode = agent?._activeMode;
+          if (mode && typeof mode.resolveClarification === 'function') {
+            const resolved = mode.resolveClarification(requestId, answers);
+            if (!resolved) {
+              warn('[Agent-Process] Clarification resolution failed: requestId not found', requestId);
+            }
+          } else {
+            warn('[Agent-Process] No active ResearchMode for clarification resolution');
           }
           break;
         }

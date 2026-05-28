@@ -105,8 +105,19 @@ export function hasPastedContentMarkers(content: string): boolean {
 
 /**
  * Strip pasted content markers from message content, returning plain text
+ * Replaces markers with the actual pasted content, preserving surrounding text
  */
 export function stripPastedContentMarkers(content: string): string {
   const parsed = parseMessageContentWithPasted(content);
-  return parsed.text;
+  const parts: string[] = [];
+
+  if (parsed.text) {
+    parts.push(parsed.text);
+  }
+
+  for (const pasted of parsed.pastedContents) {
+    parts.push(pasted.fullContent);
+  }
+
+  return parts.join('\n\n');
 }

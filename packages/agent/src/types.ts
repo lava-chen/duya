@@ -152,7 +152,9 @@ export type SSEEvent =
   | { type: 'skill_review_started' }
   | { type: 'skill_review_completed'; data: SkillReviewCompletedData }
   | { type: 'agent_progress'; data: AgentProgressEvent }
-  | { type: 'system'; data: string; metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number } };
+  | { type: 'system'; data: string; metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number } }
+  | { type: 'text_delta'; data: string }
+  | { type: 'thinking_delta'; data: string };
 
 /**
  * Data for skill_review_completed event
@@ -289,6 +291,12 @@ export interface ChatOptions {
   disableSystemPrompt?: boolean;
   /** Prefix to prepend to the system prompt */
   systemPromptPrefix?: string;
+  /** Optional research intent for research prompt assembly */
+  researchIntent?: import('./prompts/research/types.js').ResearchTaskIntent;
+  /** Optional research project ID for context selection */
+  researchProjectId?: string;
+  /** Enable wiki tools (wiki_search, wiki_read). Only effective when wiki agent experimental mode is enabled */
+  wikiAgentEnabled?: boolean;
 }
 
 // 会话信息

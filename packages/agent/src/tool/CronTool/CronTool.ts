@@ -30,6 +30,7 @@ type CreateCronInput = {
   description?: string | null;
   schedule: { kind: ScheduleKind; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null };
   prompt: string;
+  model: string;
   inputParams?: Record<string, unknown>;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
@@ -61,23 +62,45 @@ function resolveCronId(input: CronInput): string | undefined {
 
 function normalizeSchedule(raw: Record<string, unknown>): CreateCronInput['schedule'] {
   const kindRaw = asString(raw.kind);
-  const kind: ScheduleKind = kindRaw === 'at' || kindRaw === 'every' || kindRaw === 'cron' ? kindRaw : 'every';
+  const cronExpr = asString(raw.cronExpr) || asString(raw.expr) || asString(raw.cron);
+  const everyMs = asNumber(raw.everyMs);
+  const at = asString(raw.at);
+
+  let kind: ScheduleKind;
+  if (kindRaw === 'at' || kindRaw === 'every' || kindRaw === 'cron') {
+    kind = kindRaw;
+  } else if (cronExpr) {
+    kind = 'cron';
+  } else if (everyMs) {
+    kind = 'every';
+  } else if (at) {
+    kind = 'at';
+  } else {
+    kind = 'every';
+  }
+
   if (kind === 'at') {
-    return { kind: 'at', at: asString(raw.at) };
+    return { kind: 'at', at };
   }
   if (kind === 'every') {
-    return { kind: 'every', everyMs: asNumber(raw.everyMs) };
+    return { kind: 'every', everyMs };
   }
   return {
     kind: 'cron',
-    cronExpr: asString(raw.cronExpr) || asString(raw.expr) || asString(raw.cron),
+    cronExpr,
     cronTz: asNullableString(raw.cronTz) ?? asNullableString(raw.tz) ?? null,
   };
 }
 
 function normalizeCreateInput(raw: Record<string, unknown>): CreateCronInput {
   const payload = asRecord(raw.payload);
-  const scheduleRaw = asRecord(raw.schedule) ?? {};
+
+  const hasExplicitSchedule = asRecord(raw.schedule) !== null;
+  const hasBareScheduleKeys =
+    !hasExplicitSchedule &&
+    (asString(raw.cronExpr) || asString(raw.expr) || asString(raw.cron) ||
+     asString(raw.at) || asNumber(raw.everyMs));
+  const scheduleRaw = hasBareScheduleKeys ? raw : (asRecord(raw.schedule) ?? {});
 
   const prompt =
     asString(raw.prompt) ||
@@ -101,11 +124,17 @@ function normalizeCreateInput(raw: Record<string, unknown>): CreateCronInput {
 
   const name = asString(raw.name)?.trim() || `Cron ${new Date().toISOString()}`;
 
+  const model = asString(raw.model)?.trim();
+  if (!model) {
+    throw new Error('model is required');
+  }
+
   return {
     name,
     description: asNullableString(raw.description),
     schedule: normalizeSchedule(scheduleRaw),
     prompt,
+    model,
     inputParams: asRecord(raw.inputParams) || asRecord(raw.input_params) || undefined,
     concurrencyPolicy: (() => {
       const policy = asString(raw.concurrencyPolicy) || asString(raw.concurrency_policy);
@@ -184,8 +213,8 @@ export class CronTool implements Tool, ToolExecutor {
       id: { type: 'string', description: 'Cron ID (aliases: jobId, cronId)' },
       jobId: { type: 'string', description: 'Cron ID alias for compatibility' },
       cronId: { type: 'string', description: 'Cron ID alias' },
-      cron: { type: 'object', description: 'Create payload (alias: job)' },
-      job: { type: 'object', description: 'OpenClaw-style create payload alias' },
+      cron: { type: 'object', description: 'Full create payload with name, schedule, prompt, model. Schedule can be nested (schedule: { kind, cronExpr }) or at top-level (cronExpr, everyMs, at). Example: { name: "daily-news", cronExpr: "0 7 * * *", prompt: "Collect news", model: "gpt-4o" }' },
+      job: { type: 'object', description: 'OpenClaw-style create payload (alias for cron)' },
       patch: { type: 'object', description: 'Update patch payload' },
       limit: { type: 'number', description: 'Run list page size' },
       offset: { type: 'number', description: 'Run list offset' },

@@ -164,7 +164,7 @@ export interface CanUseToolDecision {
 /**
  * Callback type for checking if a tool can be used
  */
-export type CanUseToolFn = (toolName: string) => Promise<boolean | CanUseToolDecision>
+export type CanUseToolFn = (toolName: string, toolInput?: Record<string, unknown>) => Promise<boolean | CanUseToolDecision>
 
 /**
  * Executor configuration options
@@ -917,7 +917,7 @@ export class StreamingToolExecutor {
     this.updateProgress(tool, { stage: 'checking_permissions', currentOperation: 'Checking permissions...', percentComplete: 10 })
 
     try {
-      const canUseResult = await this.canUseTool(tool.block.name)
+      const canUseResult = await this.canUseTool(tool.block.name, tool.block.input as Record<string, unknown>)
       const canUse = typeof canUseResult === 'boolean' ? canUseResult : canUseResult.allowed
       const canUseBehavior = typeof canUseResult === 'boolean' ? undefined : canUseResult.behavior
 

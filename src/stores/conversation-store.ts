@@ -50,7 +50,7 @@ export interface ProjectGroup {
 
 // View types for state-driven UI
 export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor' | 'memory';
-export type SettingsTab = 'general' | 'appearance' | 'providers' | 'skills' | 'mcp' | 'channels' | 'browser' | 'security' | 'usage' | 'agents' | 'support';
+export type SettingsTab = 'general' | 'appearance' | 'providers' | 'skills' | 'mcp' | 'channels' | 'browser' | 'security' | 'usage' | 'agents' | 'support' | 'capabilities';
 
 interface ConversationState {
   // View state for zero-router UI
@@ -75,7 +75,7 @@ interface ConversationState {
   deleteThread: (id: string) => void;
   setActiveThread: (id: string) => void;
   goToParentSession: () => void;
-  addMessage: (threadId: string, message: Message) => void;
+  addMessage: (threadId: string, message: Message, options?: { persist?: boolean }) => void;
   clearMessages: (threadId: string) => void;
   rewindToMessage: (threadId: string, messageId: string) => Promise<void>;
   updateThreadTitle: (id: string, title: string) => void;
@@ -83,7 +83,7 @@ interface ConversationState {
   toggleProjectExpanded: (workingDirectory: string) => void;
   toggleThreadExpanded: (threadId: string) => void;
   loadFromDatabase: () => Promise<void>;
-  loadThreadMessages: (threadId: string) => Promise<void>;
+  loadThreadMessages: (threadId: string, options?: { force?: boolean }) => Promise<void>;
   syncThreadToDatabase: (thread: Thread) => Promise<void>;
   syncMessageToDatabase: (threadId: string, message: Message) => Promise<void>;
   syncThreadTitleToDatabase: (id: string, title: string) => Promise<void>;
@@ -304,23 +304,25 @@ export const useConversationStore = create<ConversationState>()(
         }
       },
 
-      loadThreadMessages: async (threadId) => {
+      loadThreadMessages: async (threadId, options) => {
         const startTime = performance.now();
         console.log(`[Store] loadThreadMessages START: ${threadId.slice(0, 8)}`);
         try {
           // Check if session is currently streaming - if so skip DB load
           // to avoid duplicates from SSE events
-          let isStreaming = false;
-          try {
-            const status = await getAgentServerClient().getSessionStatus(threadId);
-            if (status && status.state === 'STREAMING') {
-              console.log(`[Store] Skipping DB load for STREAMING session: ${threadId.slice(0, 8)}`);
-              isStreaming = true;
+          if (!options?.force) {
+            let isStreaming = false;
+            try {
+              const status = await getAgentServerClient().getSessionStatus(threadId);
+              if (status && status.state === 'STREAMING') {
+                console.log(`[Store] Skipping DB load for STREAMING session: ${threadId.slice(0, 8)}`);
+                isStreaming = true;
+              }
+            } catch {
+              // Ignore - Agent Server may not be running
             }
-          } catch {
-            // Ignore - Agent Server may not be running
+            if (isStreaming) return;
           }
-          if (isStreaming) return;
 
           const dbStart = performance.now();
           const data = await getThreadIPC(threadId);
@@ -381,7 +383,7 @@ export const useConversationStore = create<ConversationState>()(
         }
       },
 
-      addMessage: (threadId, message) => {
+      addMessage: (threadId, message, options) => {
         let shouldUpdateTitle = false;
         let titlePreview = '';
 
@@ -423,8 +425,9 @@ export const useConversationStore = create<ConversationState>()(
           }
         }
 
-        // Sync user message to database immediately
-        if (message.role === 'user') {
+        // Sync user message to database immediately only when explicitly requested.
+        // Chat send flow is optimistic-first; agent persistence is the authoritative write path.
+        if (message.role === 'user' && options?.persist) {
           get().syncMessageToDatabase(threadId, message);
         }
       },
