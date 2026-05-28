@@ -39,10 +39,10 @@ export function getAgentProcessPath(): string {
     return fallback;
   }
 
-  const devBundled = path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
-  if (fs.existsSync(devBundled)) return devBundled;
+  const devDist = path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
+  if (fs.existsSync(devDist)) return devDist;
 
-  return path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
+  return path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
 }
 
 export function getAgentRuntimeCommand(
