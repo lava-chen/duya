@@ -6,6 +6,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { handleDbRequest } from './db-bridge';
 import { killProcessTree } from '../lib/process-cleanup';
 import { getWikiAgentRuntime, initWikiAgentRuntime } from '../wiki-agent/WikiAgentRuntime';
+import { getDatabasePath } from '../db/connection';
 import type { ChatDonePayload } from '../wiki-agent/types';
 
 let agentServerPort: number | null = null;
@@ -18,16 +19,27 @@ let isShuttingDown = false;
 
 function getAgentServerPath(): string {
   if (app.isPackaged) {
-    const bundled = path.join(process.resourcesPath, 'agent-server.js');
-    if (fs.existsSync(bundled)) return bundled;
+    const asarPath = path.join(process.resourcesPath, 'app.asar', 'dist-electron', 'agent-server.js');
+    if (fs.existsSync(asarPath)) return asarPath;
 
     const alt = path.join(process.resourcesPath, 'dist-electron', 'agent-server.js');
     if (fs.existsSync(alt)) return alt;
 
-    return bundled;
+    const legacy = path.join(process.resourcesPath, 'agent-server.js');
+    if (fs.existsSync(legacy)) return legacy;
+
+    return asarPath;
   }
 
   return path.join(process.cwd(), 'dist-electron', 'agent-server.js');
+}
+
+function resolveBetterSqlite3Path(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'better-sqlite3');
+  }
+
+  return path.join(process.cwd(), 'node_modules', 'better-sqlite3');
 }
 
 export function spawnAgentServer(): Promise<number> {
@@ -50,6 +62,8 @@ export function spawnAgentServer(): Promise<number> {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       DUYA_AGENT_SERVER: 'true',
+      DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || resolveBetterSqlite3Path(),
+      DUYA_CUSTOM_DB_PATH: process.env.DUYA_CUSTOM_DB_PATH || getDatabasePath(),
     };
 
     let command: string;

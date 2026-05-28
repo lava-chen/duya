@@ -254,7 +254,11 @@ async function handlePostChat(
         console.log('[agent-server] Worker ready signal received', { sessionId });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error('[agent-server] Worker ready timeout', msg, { sessionId });
+        console.error('[agent-server] Worker ready timeout', msg, { sessionId, stdoutPreview: stdoutChunks.slice(-10) });
+        logger.error('Worker ready timeout', err instanceof Error ? err : new Error(msg), {
+          sessionId,
+          stdoutPreview: stdoutChunks.slice(-10),
+        });
         sendJson(res, 500, { error: 'Worker initialization timeout' });
         return;
       }
@@ -268,12 +272,15 @@ async function handlePostChat(
           handlePostChatNonSSE(sessionId, req, res, child, deps);
         }
 
+        // Pass wikiAgentEnabled from options to worker (passed from frontend)
+        const wikiAgentEnabled = parsed.options?.wikiAgentEnabled === true;
+
         workerManager.sendCommand(sessionId, {
           type: 'chat:start',
           sessionId,
           id: randomUUID(),
           prompt,
-          options: parsed.options || {},
+          options: { ...(parsed.options || {}), wikiAgentEnabled },
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -390,6 +397,26 @@ function handlePostChatSSE(
         } else if (msgType === 'chat:agent_progress' || msgType === 'chat:skill_review_started' || msgType === 'chat:skill_review_completed') {
           sseEvent = {
             type: msgType.replace('chat:', ''),
+            data: event,
+          };
+        } else if (msgType.startsWith('chat:research_')) {
+          sseEvent = {
+            type: msgType.replace('chat:', ''),
+            data: event,
+          };
+        } else if (msgType === 'chat:research_continue') {
+          sseEvent = {
+            type: 'research_continue',
+            data: event,
+          };
+        } else if (msgType === 'chat:research_evidence') {
+          sseEvent = {
+            type: 'research_evidence',
+            data: event,
+          };
+        } else if (msgType === 'chat:research_report') {
+          sseEvent = {
+            type: 'research_report',
             data: event,
           };
         } else if (msgType === 'chat:done') {
@@ -1256,6 +1283,84 @@ function handleConductorInterrupt(
   });
 }
 
+function handleResearchRoute(
+  method: string,
+  parts: string[],
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: RouterDeps,
+): void {
+  const { logger, workerManager } = deps;
+
+  // GET /api/research/snapshot/:sessionId
+  if (method === 'GET' && parts.length >= 2 && parts[1] === 'snapshot' && parts.length >= 3) {
+    const sessionId = parts[2];
+    const db = require('../db/connection');
+    const row = db.prepare('SELECT * FROM research_sessions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1').get(sessionId);
+    if (!row) {
+      sendJson(res, 404, { error: 'Research session not found' });
+      return;
+    }
+    sendJson(res, 200, row);
+    return;
+  }
+
+  // POST /api/research/clarification
+  if (method === 'POST' && parts.length >= 2 && parts[1] === 'clarification') {
+    let body = '';
+    req.on('data', (chunk: Buffer) => {
+      body += chunk.toString();
+      if (body.length > 64 * 1024) {
+        sendJson(res, 413, { error: 'Payload too large' });
+        req.destroy();
+      }
+    });
+
+    req.on('end', () => {
+      let parsed: { requestId?: string; answers?: Record<string, string>; sessionId?: string } = {};
+      try {
+        parsed = body ? JSON.parse(body) : {};
+      } catch {
+        sendJson(res, 400, { error: 'Invalid JSON' });
+        return;
+      }
+
+      const { requestId, answers, sessionId } = parsed;
+      if (!requestId || !answers || !sessionId) {
+        sendJson(res, 400, { error: 'Missing requestId, answers, or sessionId' });
+        return;
+      }
+
+      // Forward clarification resolution through the same stdin command channel
+      // used by init/chat:start. The worker command loop reads stdin JSON lines,
+      // not child_process IPC messages.
+      if (!workerManager.hasWorker(sessionId)) {
+        logger.warn('Research clarification: worker not found for session', { sessionId });
+        sendJson(res, 404, { error: 'Session not found' });
+        return;
+      }
+
+      const sent = workerManager.sendCommand(sessionId, {
+        type: 'research:clarification:resolve',
+        requestId,
+        answers,
+        sessionId,
+      });
+
+      if (!sent) {
+        logger.error('Research clarification: failed to send stdin command', { sessionId, requestId });
+        sendJson(res, 500, { error: 'Failed to deliver research clarification to worker' });
+        return;
+      }
+
+      sendJson(res, 200, { ok: true });
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'Not Found' });
+}
+
 export function createHandleRequest(
   deps: RouterDeps,
   workerDbRequests: Map<string, ChildProcess>,
@@ -1305,6 +1410,11 @@ export function createHandleRequest(
 
     if (parts[0] === 'conductor') {
       handleConductorRoute(method, parts, req, res, deps);
+      return;
+    }
+
+    if (parts[0] === 'research') {
+      handleResearchRoute(method, parts, req, res, deps);
       return;
     }
 

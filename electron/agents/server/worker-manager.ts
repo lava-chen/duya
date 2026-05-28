@@ -34,16 +34,28 @@ export class WorkerManager {
       SESSION_ID: sessionId,
       DUYA_AGENT_MODE: 'true',
       DUYA_AGENT_SERVER: 'true',
+      DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || this.resolveBetterSqlite3Path(),
+      DUYA_CUSTOM_DB_PATH: process.env.DUYA_CUSTOM_DB_PATH,
       NODE_OPTIONS: `--max-old-space-size=${maxMemoryMB}`,
     };
 
     const child = fork(workerPath, [], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'] as any,
-      env,
+      env: {
+        ...env,
+        ELECTRON_RUN_AS_NODE: '1',
+      },
+      execPath: process.execPath,
     });
 
     const workerPid = child.pid;
-    workerLogger.info('Worker spawned', { sessionId, pid: workerPid, workerPath, maxMemoryMB });
+    workerLogger.info('Worker spawned', {
+      sessionId,
+      pid: workerPid,
+      workerPath,
+      maxMemoryMB,
+      betterSqlite3Path: env.DUYA_BETTER_SQLITE3_PATH,
+    });
 
     this.sessionManager.transitionState(sessionId, SessionState.STREAMING);
 
@@ -179,40 +191,40 @@ export class WorkerManager {
   }
 
   private resolveWorkerPath(): string {
-    // Check if running in bundled Electron app
-    const isBundled = process.resourcesPath && !process.env.NODE_ENV;
+    const isPackaged = !!process.resourcesPath && !process.defaultApp;
 
-    if (isBundled) {
-      // In packaged app, worker is in resources
-      const bundled = path.join(
-        process.resourcesPath,
-        'packages',
-        'agent',
-        'dist',
-        'process',
-        'agent-process-entry.js'
-      );
+    if (isPackaged) {
+      const bundled = path.join(process.resourcesPath, 'agent-bundle', 'agent-process-entry.js');
       if (fs.existsSync(bundled)) {
         return bundled;
       }
 
-      // Alternative path structure
-      const alt = path.join(
-        process.resourcesPath,
-        'app',
-        'packages',
-        'agent',
-        'dist',
-        'process',
-        'agent-process-entry.js'
-      );
-      if (fs.existsSync(alt)) {
-        return alt;
+      const primary = path.join(process.resourcesPath, 'agent', 'process', 'agent-process-entry.js');
+      if (fs.existsSync(primary)) {
+        return primary;
+      }
+
+      const fallback = path.join(process.resourcesPath, 'agent', 'dist', 'process', 'agent-process-entry.js');
+      if (fs.existsSync(fallback)) {
+        return fallback;
       }
     }
 
-    // Development mode: use project source
-    return path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
+    const devDist = path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
+    if (fs.existsSync(devDist)) {
+      return devDist;
+    }
+
+    return path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
+  }
+
+  private resolveBetterSqlite3Path(): string {
+    const isPackaged = !!process.resourcesPath && !process.defaultApp;
+    if (isPackaged) {
+      return path.join(process.resourcesPath, 'better-sqlite3');
+    }
+
+    return path.join(process.cwd(), 'node_modules', 'better-sqlite3');
   }
 
   killAll(): void {
