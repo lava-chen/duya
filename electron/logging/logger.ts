@@ -91,6 +91,7 @@ export interface LoggerConfig {
   level: LogLevel
   format: 'text' | 'json'
   retentionDays: number
+  maxFileSizeMB: number
   sampleRate: number
   async: boolean
   console: boolean
@@ -125,6 +126,8 @@ class Logger extends EventEmitter {
   private flushInterval: NodeJS.Timeout | null = null
   private currentTraceId: string | null = null
   private currentDate: string = ''
+  private currentFileSerial: number = 0
+  private readonly MAX_QUEUE_SIZE = 5000
 
   constructor(config: Partial<LoggerConfig> = {}) {
     super()
@@ -136,6 +139,7 @@ class Logger extends EventEmitter {
       level: (process.env.LOG_LEVEL as LogLevel) || 'INFO',
       format: (process.env.LOG_FORMAT as 'text' | 'json') || 'text',
       retentionDays: 7,
+      maxFileSizeMB: 50,
       sampleRate: 1.0,
       async: true,
       console: this.isDev,
@@ -307,6 +311,9 @@ class Logger extends EventEmitter {
 
     if (this.config.async && this.writeStream) {
       this.rotateIfNeeded()
+      if (this.logQueue.length >= this.MAX_QUEUE_SIZE) {
+        this.logQueue.shift()
+      }
       this.logQueue.push(formatted)
     } else {
       try {
@@ -344,8 +351,24 @@ class Logger extends EventEmitter {
   private rotateIfNeeded(): void {
     try {
       const today = this.getDateString()
-      if (today === this.currentDate) {
-        return
+      const dateChanged = today !== this.currentDate;
+
+      let sizeExceeded = false;
+      if (!dateChanged) {
+        try {
+          if (fs.existsSync(this.logPath)) {
+            const stats = fs.statSync(this.logPath);
+            if (stats.size > this.config.maxFileSizeMB * 1024 * 1024) {
+              sizeExceeded = true;
+            }
+          }
+        } catch {
+          // best-effort
+        }
+      }
+
+      if (!dateChanged && !sizeExceeded) {
+        return;
       }
 
       // Close current stream
@@ -354,17 +377,23 @@ class Logger extends EventEmitter {
         this.writeStream = null
       }
 
-      // Archive previous day's log if it exists and has content
+      // Archive current log if it exists and has content
       if (this.currentDate && fs.existsSync(this.logPath)) {
         const stats = fs.statSync(this.logPath)
         if (stats.size > 0) {
-          const backupPath = path.join(this.logDir, `app.log.${this.currentDate}`)
+          const suffix = sizeExceeded
+            ? `${this.currentDate}.${++this.currentFileSerial}`
+            : this.currentDate;
+          const backupPath = path.join(this.logDir, `app.log.${suffix}`)
           fs.renameSync(this.logPath, backupPath)
         } else {
           fs.unlinkSync(this.logPath)
         }
       }
 
+      if (dateChanged) {
+        this.currentFileSerial = 0;
+      }
       this.currentDate = today
       this.cleanupOldLogs()
     } catch {

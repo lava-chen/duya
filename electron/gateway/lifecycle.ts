@@ -25,14 +25,15 @@ export function isGatewayRunning(): boolean {
 
 function getGatewayProcessPath(): string {
   if (app.isPackaged) {
-    const bundled = path.join(
-      process.resourcesPath,
-      'gateway',
-      'index.js'
-    );
+    const bundled = path.join(process.resourcesPath, 'gateway-bundle', 'gateway-process-entry.js');
     if (fs.existsSync(bundled)) return bundled;
-    const alt = path.join(process.resourcesPath, 'dist-electron', 'gateway.js');
+
+    const alt = path.join(process.resourcesPath, 'gateway', 'index.js');
     if (fs.existsSync(alt)) return alt;
+
+    const asarPath = path.join(process.resourcesPath, 'app.asar', 'dist-electron', 'gateway.js');
+    if (fs.existsSync(asarPath)) return asarPath;
+
     return bundled;
   }
   return path.join(process.cwd(), 'packages', 'gateway', 'dist', 'index.js');
@@ -101,6 +102,12 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
   getLogger().info('Starting gateway process', { path: gatewayPath, platforms: initConfig.platforms?.length ?? 0 }, LogComponent.Gateway);
   console.log('[STARTUP] startGatewayProcess: platforms =', JSON.stringify(initConfig.platforms?.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!(p.credentials && Object.keys(p.credentials).length > 0), credentialsKeys: Object.keys(p.credentials || {}) }))));
 
+  if (!fs.existsSync(gatewayPath)) {
+    const err = new Error(`Gateway entry not found: ${gatewayPath}`);
+    getLogger().error('Gateway entry not found', err, { gatewayPath }, LogComponent.Gateway);
+    throw err;
+  }
+
   if (gatewayProcess && !gatewayProcess.killed) {
     getLogger().info('Gateway already running, stopping first', undefined, LogComponent.Gateway);
     stopGatewayProcess();
@@ -114,6 +121,7 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
     DUYA_GATEWAY_WORKER_TEMP_DIR: initConfig.gatewayWorkerTempDir || process.env.DUYA_GATEWAY_WORKER_TEMP_DIR || '',
     DUYA_AGENT_SERVER_PORT: String(agentServerPort || process.env.DUYA_AGENT_SERVER_PORT || '0'),
     NODE_ENV: process.env.NODE_ENV || 'production',
+    ELECTRON_RUN_AS_NODE: '1',
   };
 
   if (initConfig.platforms && initConfig.platforms.length > 0) {
@@ -151,14 +159,18 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
   child.stdout!.on('data', (data: Buffer) => {
     const lines = data.toString().trim().split('\n');
     for (const line of lines) {
-      if (line) console.log(`[gateway:stdout] ${line}`);
+      if (!line) continue;
+      console.log(`[gateway:stdout] ${line}`);
+      getLogger().info(`[gateway:stdout] ${line}`, undefined, LogComponent.Gateway);
     }
   });
 
   child.stderr!.on('data', (data: Buffer) => {
     const lines = data.toString().trim().split('\n');
     for (const line of lines) {
-      if (line) console.error(`[gateway:stderr] ${line}`);
+      if (!line) continue;
+      console.error(`[gateway:stderr] ${line}`);
+      getLogger().warn(`[gateway:stderr] ${line}`, undefined, LogComponent.Gateway);
     }
   });
 

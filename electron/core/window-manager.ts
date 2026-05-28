@@ -2,7 +2,7 @@ import { app, BrowserWindow, shell, dialog, MessageChannelMain } from 'electron'
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
-import { isDev } from './bootstrap';
+import { isDev, isPreviewMode } from './bootstrap';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getChannelManager } from '../messaging/port-manager';
 import { getConfigManager } from '../config/manager';
@@ -85,6 +85,22 @@ async function detectDevServerPort(): Promise<number | null> {
 }
 
 export async function getRendererUrl(): Promise<string> {
+  if (isPreviewMode) {
+    const distPath = path.join(process.cwd(), 'dist');
+    const indexPath = path.join(distPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      logger.info('Preview mode: loading from dist/', undefined, LogComponent.Main);
+      return `file://${indexPath}`;
+    }
+    logger.warn('Preview mode: dist/index.html not found, trying Vite preview on port 4173', undefined, LogComponent.Main);
+    const previewPort = await detectDevServerPort();
+    if (previewPort && previewPort !== 3000) {
+      return `http://localhost:${previewPort}`;
+    }
+    logger.warn('Preview mode: falling back to port 4173', undefined, LogComponent.Main);
+    return 'http://localhost:4173';
+  }
+
   if (isDev) {
     const detectedPort = await detectDevServerPort();
     if (detectedPort) {
@@ -194,7 +210,7 @@ export async function createWindow(
     logger.info(`Loading URL: ${rendererUrl}`, undefined, 'Main');
     mainWindow.loadURL(rendererUrl);
 
-    if (isDev) {
+    if (isDev && !isPreviewMode) {
       mainWindow.webContents.openDevTools();
     }
   } catch (err) {

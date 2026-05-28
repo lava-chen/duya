@@ -11,6 +11,7 @@ import { getAutomationScheduler } from '../automation/Scheduler';
 import { getDocumentParser } from '../services/document-parser/index';
 import { getConfigManager } from '../config/manager';
 import { getDatabase } from '../ipc/db-handlers';
+import { stopWalCheckpoint } from '../db/connection';
 import { cleanupUpdater } from '../services/updater';
 
 let isShuttingDown = false;
@@ -97,6 +98,11 @@ export async function performGracefulShutdown(): Promise<void> {
   // 7. Shutdown config manager
   try {
     getConfigManager().shutdown();
+  } catch {}
+
+  // 7.5 Stop WAL checkpoint scheduler
+  try {
+    stopWalCheckpoint();
   } catch {}
 
   // 8. Close database connection (last step)
