@@ -1,38 +1,36 @@
 /**
- * Permissions System for duya Agent
- *
- * This module provides permission checking and management for tool execution.
- * It supports multiple permission modes and rule-based permission configuration.
+ * Permissions Module - Public API
  */
 
 // Types
 export type {
-  PermissionBehavior,
-  PermissionDecision,
-  PermissionDecisionReason,
   PermissionMode,
-  ExternalPermissionMode,
-  PermissionResult,
+  PermissionBehavior,
   PermissionRule,
-  PermissionRuleSource,
-  PermissionRuleValue,
+  PermissionDecision,
+  PermissionAllowDecision,
+  PermissionAskDecision,
+  PermissionDenyDecision,
+  PermissionResult,
+  PermissionDecisionReason,
   ToolPermissionContext,
-  ToolPermissionRulesBySource,
-  PermissionUpdate,
-  PermissionUpdateDestination,
-  AdditionalWorkingDirectory,
   YoloClassifierResult,
-  RiskLevel,
-  PermissionExplanation,
+  ClassifierUsage,
+  ClassifierResult,
+  ClassifierBehavior,
 } from './types.js'
 
-// Permission Mode
 export {
-  PERMISSION_MODES,
   EXTERNAL_PERMISSION_MODES,
+  INTERNAL_PERMISSION_MODES,
+  PERMISSION_MODES,
+} from './types.js'
+
+// Permission Mode Logic
+export {
+  permissionModeFromString,
   permissionModeTitle,
   permissionModeShortTitle,
-  permissionModeFromString,
   isDefaultMode,
   isExternalPermissionMode,
   toExternalPermissionMode,
@@ -41,7 +39,7 @@ export {
   isBypassMode,
 } from './PermissionMode.js'
 
-// Permission Rule
+// Rule Parser
 export {
   permissionRuleValueFromString,
   permissionRuleValueToString,
@@ -54,55 +52,69 @@ export {
 // Permission Result
 export { getRuleBehaviorDescription } from './PermissionResult.js'
 
-// Permissions Core
+// Main Permissions
 export {
-  createHasPermissionsToUseTool,
   getAllowRules,
   getDenyRules,
   getAskRules,
-  toolAlwaysAllowedRule,
-  getDenyRuleForTool,
-  getAskRuleForTool,
-  getRuleByContentsForToolName,
-  permissionRuleSourceDisplayString,
+  createHasPermissionsToUseTool,
+} from './permissions.js'
+export type {
+  HasPermissionsFn,
+  ToolPermissionCheckContext,
 } from './permissions.js'
 
-export type { HasPermissionsFn, ToolPermissionCheckContext } from './permissions.js'
-
-// Permissions Loader
+// Bash Classifier
 export {
-  loadAllPermissionRulesFromDisk,
-  getPermissionRulesForSource,
-  deletePermissionRuleFromSettings,
-  addPermissionRulesToSettings,
-  settingsJsonToRules,
-  type PermissionsJson,
-} from './permissionsLoader.js'
+  PROMPT_PREFIX,
+  extractPromptDescription,
+  createPromptRuleContent,
+  isClassifierPermissionsEnabled,
+  getBashPromptDenyDescriptions,
+  getBashPromptAskDescriptions,
+  getBashPromptAllowDescriptions,
+  classifyBashCommand,
+  generateGenericDescription,
+} from './bashClassifier.js'
+export type { ClassifierResult as BashClassifierResult, ClassifierBehavior as BashClassifierBehavior } from './bashClassifier.js'
 
-// Classifier
+// Classifier Decision
 export {
   isAutoModeAllowlistedTool,
 } from './classifierDecision.js'
 
+// YOLO Classifier
 export {
-  isClassifierPermissionsEnabled,
-  classifyBashCommand,
-  getBashPromptDenyDescriptions,
-  getBashPromptAskDescriptions,
-  getBashPromptAllowDescriptions,
-  createPromptRuleContent,
-  extractPromptDescription,
-  generateGenericDescription,
-} from './bashClassifier.js'
+  classifyAction,
+  buildTranscriptEntries,
+  buildYoloSystemPrompt,
+  formatActionForClassifier,
+} from './yoloClassifier.js'
+export type {
+  YoloClassifierOptions,
+} from './yoloClassifier.js'
 
-export type { ClassifierResult as BashClassifierResult, ClassifierBehavior } from './bashClassifier.js'
+// Auto Mode State
+export {
+  setAutoModeActive,
+  isAutoModeActive,
+  setAutoModeCircuitBroken,
+  isAutoModeCircuitBroken,
+} from './autoModeState.js'
+
+// Auto Mode Denials
+export {
+  recordAutoModeDenial,
+  getAutoModeDenials,
+} from './autoModeDenials.js'
+export type { AutoModeDenial } from './autoModeDenials.js'
 
 // Denial Tracking
 export {
-  DENIAL_LIMITS,
   createDenialTrackingState,
+  DENIAL_LIMITS,
   recordDenial,
   recordSuccess,
   shouldFallbackToPrompting,
-  type DenialTrackingState,
 } from './denialTracking.js'
+export type { DenialTrackingState } from './denialTracking.js'
