@@ -2,7 +2,7 @@
  * Base interface for LLM clients
  */
 
-import type { Message, SSEEvent } from '../types.js';
+import type { Message, SSEEvent, TokenUsage } from '../types.js';
 
 export interface LLMClient {
   /**
@@ -23,6 +23,20 @@ export interface LLMClient {
       signal?: AbortSignal;
     }
   ): AsyncGenerator<SSEEvent, void, unknown>;
+
+  /**
+   * Non-streaming chat completion for classifier/automated decisions.
+   * Returns the text response and usage stats.
+   */
+  chat?(
+    messages: Message[],
+    options?: {
+      systemPrompt?: string;
+      maxTokens?: number;
+      temperature?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<{ content: string; usage?: TokenUsage }>;
 }
 
 export interface LLMClientOptions {

@@ -306,6 +306,8 @@ function isHookEqual(
   switch (a.type) {
     case 'command':
       return b.type === 'command' && a.command === b.command && sameIf(a, b);
+    case 'prompt':
+      return b.type === 'prompt' && a.prompt === b.prompt && sameIf(a, b);
     case 'http':
       return b.type === 'http' && a.url === b.url && sameIf(a, b);
     case 'agent':

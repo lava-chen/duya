@@ -882,6 +882,51 @@ export class AnthropicClient implements LLMClient {
     yield { type: 'done' };
   }
 
+  async chat(
+    messages: Message[],
+    options?: {
+      systemPrompt?: string;
+      maxTokens?: number;
+      temperature?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<{ content: string; usage?: TokenUsage }> {
+    let anthropicMessages = toAnthropicMessages(messages, this.baseURL);
+
+    if (anthropicMessages.length === 0) {
+      anthropicMessages.push({ role: 'user', content: '' });
+    }
+
+    const response = await this.client.messages.create(
+      {
+        model: this.model,
+        max_tokens: options?.maxTokens ?? 4096,
+        temperature: options?.temperature ?? 0,
+        system: options?.systemPrompt || '',
+        messages: anthropicMessages as MessageParam[],
+      },
+      {
+        signal: options?.signal,
+      }
+    );
+
+    const textBlocks = response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+      .map(b => b.text);
+
+    const usageRecord = response.usage as unknown as Record<string, number>;
+
+    return {
+      content: textBlocks.join('\n'),
+      usage: {
+        input_tokens: response.usage.input_tokens,
+        output_tokens: response.usage.output_tokens,
+        cache_hit_tokens: usageRecord.cache_read_input_tokens,
+        cache_creation_tokens: usageRecord.cache_creation_input_tokens,
+      },
+    };
+  }
+
   /**
    * Report cache observation to monitor if available.
    */

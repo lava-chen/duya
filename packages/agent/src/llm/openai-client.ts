@@ -5,7 +5,7 @@
 
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseContent, ToolResultContent } from '../types.js';
+import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseContent, ToolResultContent, TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
 
@@ -330,6 +330,18 @@ export class OpenAIClient implements LLMClient {
         throw error;
       }
     }
+  }
+
+  async chat(
+    _messages: Message[],
+    _options?: {
+      systemPrompt?: string;
+      maxTokens?: number;
+      temperature?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<{ content: string; usage?: TokenUsage }> {
+    throw new Error('chat() is not supported for OpenAI client. Use streamChat() instead.');
   }
 
   private async *doStreamChat(

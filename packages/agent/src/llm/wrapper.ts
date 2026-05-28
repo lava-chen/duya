@@ -8,7 +8,8 @@
  * - Third-party API passthrough
  */
 
-import type { LLMProvider } from '../types.js';
+import type { LLMProvider, Message, SSEEvent } from '../types.js';
+import type { TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { AnthropicClient } from './anthropic-client.js';
 import { OpenAIClient } from './openai-client.js';
@@ -72,10 +73,36 @@ export class LLMClientWrapper implements LLMClient {
   }
 
   async *streamChat(
-    messages: Parameters<LLMClient['streamChat']>[0],
-    options?: Parameters<LLMClient['streamChat']>[1]
-  ): AsyncGenerator<Parameters<LLMClient['streamChat']>[1] extends undefined ? never : Awaited<ReturnType<LLMClient['streamChat']>> extends AsyncGenerator<infer T, void, unknown> ? T : never, void, unknown> {
+    messages: Message[],
+    options?: {
+      systemPrompt?: string;
+      tools?: Array<{
+        name: string;
+        description: string;
+        input_schema: Record<string, unknown>;
+      }>;
+      maxTokens?: number;
+      temperature?: number;
+      disableThinking?: boolean;
+      signal?: AbortSignal;
+    }
+  ): AsyncGenerator<SSEEvent, void, unknown> {
     yield* this.client.streamChat(messages, options);
+  }
+
+  async chat(
+    messages: Message[],
+    options?: {
+      systemPrompt?: string;
+      maxTokens?: number;
+      temperature?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<{ content: string; usage?: TokenUsage }> {
+    if (!this.client.chat) {
+      throw new Error(`Provider ${this.provider} does not support non-streaming chat`);
+    }
+    return this.client.chat(messages, options);
   }
 }
 

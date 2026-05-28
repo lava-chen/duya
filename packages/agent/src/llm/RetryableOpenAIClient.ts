@@ -4,7 +4,7 @@
  * Wraps OpenAIClient with automatic retry logic for transient failures.
  */
 
-import type { Message, SSEEvent, Tool } from '../types.js';
+import type { Message, SSEEvent, Tool, TokenUsage } from '../types.js';
 import { OpenAIClient } from './openai-client.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { withRetry, type RetryConfig } from './withRetry.js';
@@ -82,6 +82,18 @@ export class RetryableOpenAIClient implements LLMClient {
         this.retryConfig.onHeartbeat?.(remainingMs);
       },
     });
+  }
+
+  async chat(
+    messages: Message[],
+    options?: {
+      systemPrompt?: string;
+      maxTokens?: number;
+      temperature?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<{ content: string; usage?: TokenUsage }> {
+    return this.client.chat(messages, options);
   }
 }
 
