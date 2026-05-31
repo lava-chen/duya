@@ -42,6 +42,26 @@ interface LogEntry {
   ts: number;
 }
 
+interface ExtensionConnectionState {
+  verified: boolean;
+}
+
+interface PendingExtensionApprovalInternal {
+  ws: WebSocket;
+  connectionState: ExtensionConnectionState;
+  extensionId: string | null;
+  extensionName: string;
+  extensionVersion: string | null;
+  requestedAt: number;
+}
+
+export interface PendingExtensionApprovalStatus {
+  extensionId: string | null;
+  extensionName: string;
+  extensionVersion: string | null;
+  requestedAt: number;
+}
+
 // ─── State ───────────────────────────────────────────────────────────
 
 let extensionWs: WebSocket | null = null;
@@ -71,6 +91,8 @@ const ALLOWED_EXTENSION_IDS: string[] = [
   // Add your DUYA Browser Bridge extension ID here after first connection attempt
   // The ID is shown in the logs when an extension tries to connect
 ];
+let allowedExtensionIds: string[] = [...ALLOWED_EXTENSION_IDS];
+let pendingExtensionApproval: PendingExtensionApprovalInternal | null = null;
 
 // ─── Logger ──────────────────────────────────────────────────────────
 
@@ -284,31 +306,80 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 // ─── WebSocket for Extension ─────────────────────────────────────────
 
+function sanitizeExtensionIdList(ids: string[]): string[] {
+  return Array.from(new Set(
+    ids
+      .filter((id) => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0),
+  ));
+}
+
+function toPendingExtensionApprovalStatus(
+  pendingApproval: PendingExtensionApprovalInternal | null,
+): PendingExtensionApprovalStatus | null {
+  if (!pendingApproval) return null;
+  return {
+    extensionId: pendingApproval.extensionId,
+    extensionName: pendingApproval.extensionName,
+    extensionVersion: pendingApproval.extensionVersion,
+    requestedAt: pendingApproval.requestedAt,
+  };
+}
+
+function clearPendingApprovalIfMatches(ws: WebSocket): void {
+  if (pendingExtensionApproval?.ws === ws) {
+    pendingExtensionApproval = null;
+  }
+}
+
+function setVerifiedExtensionConnection(
+  ws: WebSocket,
+  connectionState: ExtensionConnectionState,
+  extensionNameValue: string,
+  extensionVersionValue: string | null,
+  extensionIdValue: string | null,
+): void {
+  if (extensionWs && extensionWs !== ws && extensionWs.readyState === WebSocket.OPEN) {
+    extensionWs.close(1000, 'Replaced by newer verified extension connection');
+  }
+  connectionState.verified = true;
+  extensionWs = ws;
+  extensionName = extensionNameValue;
+  extensionVersion = extensionVersionValue;
+  extensionId = extensionIdValue;
+  clearPendingApprovalIfMatches(ws);
+  log('info', `Extension verified: ${extensionNameValue} v${extensionVersionValue} (${extensionIdValue})`);
+}
+
 function setupWebSocket(server: ReturnType<typeof createServer>): void {
   wss = new WebSocketServer({
     server,
     path: '/ext',
     verifyClient: ({ req }: { req: IncomingMessage }) => {
       const origin = req.headers['origin'] as string | undefined;
-      return !origin || origin.startsWith('chrome-extension://');
+      const ua = req.headers['user-agent'] as string | undefined;
+      log('info', `WS verifyClient: origin=${origin ?? 'none'} ua=${ua ?? 'none'} path=${req.url}`);
+      const ok = !origin || origin.startsWith('chrome-extension://') || origin.startsWith('null') || origin.startsWith('chrome://');
+      if (!ok) {
+        log('warn', `WS verifyClient REJECTED: origin=${origin}`);
+      }
+      return ok;
     },
   });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const origin = req.headers['origin'] as string | undefined;
-    const extId = origin?.replace('chrome-extension://', '') ?? 'unknown';
-    
-    // Check if this extension ID is in the allowed list (if list is not empty)
-    if (ALLOWED_EXTENSION_IDS.length > 0 && !ALLOWED_EXTENSION_IDS.includes(extId)) {
-      log('warn', `Rejected connection from unknown extension ID: ${extId}`);
-      ws.close(1008, 'Extension ID not allowed');
-      return;
-    }
-    
-    log('info', `Extension connection attempt from ${extId}`);
+    const isChromeExtensionOrigin = origin?.startsWith('chrome-extension://');
+    const extId = isChromeExtensionOrigin
+      ? origin!.replace('chrome-extension://', '')
+      : null;
+    log('info', `WS connection established extId=${extId ?? 'none'} (origin=${origin ?? 'none'})`);
+
+    log('info', `Extension connection attempt extId=${extId ?? 'none'}`);
 
     // Don't accept connection immediately - wait for hello message with name
-    let verified = false;
+    const connectionState: ExtensionConnectionState = { verified: false };
 
     // Heartbeat: ping every 15s, close if 2 pongs missed
     let missedPongs = 0;
@@ -335,7 +406,7 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
       try {
         const rawMsg = data.toString();
         const msg = JSON.parse(rawMsg) as {
-          id?: string; type?: string; version?: string; name?: string;
+          id?: string; type?: string; version?: string; name?: string; extensionId?: string;
           level?: string; msg?: string; ts?: number; ok?: boolean;
           error?: string; domains?: string[];
           sessionId?: string;
@@ -345,33 +416,66 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
         // Handle hello message from extension
         if (msg.type === 'hello') {
           const receivedName = typeof msg.name === 'string' ? msg.name : null;
-          extensionVersion = typeof msg.version === 'string' ? msg.version : null;
+          const receivedVersion = typeof msg.version === 'string' ? msg.version : null;
+          const helloExtensionId = typeof msg.extensionId === 'string' && msg.extensionId.trim().length > 0
+            ? msg.extensionId.trim()
+            : null;
+          const resolvedExtensionId = extId ?? helloExtensionId;
 
-          log('info', `Received hello from extension: name="${receivedName}", version="${extensionVersion}", raw=${rawMsg.slice(0, 200)}`);
+          log('info', `Received hello from extension: name="${receivedName}", version="${receivedVersion}", id="${resolvedExtensionId ?? 'none'}", raw=${rawMsg.slice(0, 200)}`);
 
           // Verify extension name - must match exactly
           if (receivedName !== EXPECTED_EXTENSION_NAME) {
             log('warn', `Rejected connection from unknown extension: "${receivedName}" (expected: "${EXPECTED_EXTENSION_NAME}")`);
+            try { ws.send(JSON.stringify({ type: 'hello_ack', ok: false, reason: 'invalid_name' })); } catch {}
             ws.close(1008, 'Invalid extension name');
             return;
           }
 
-          verified = true;
-          extensionName = receivedName;
-          extensionId = extId;
-          extensionWs = ws;
-          log('info', `Extension verified: ${extensionName} v${extensionVersion} (${extId})`);
-          
-          // Auto-add this extension ID to allowed list if not already present
-          if (!ALLOWED_EXTENSION_IDS.includes(extId)) {
-            ALLOWED_EXTENSION_IDS.push(extId);
-            log('info', `Added extension ID to allowed list: ${extId}`);
+          const requiresApproval =
+            allowedExtensionIds.length > 0 &&
+            resolvedExtensionId !== null &&
+            !allowedExtensionIds.includes(resolvedExtensionId);
+
+          if (requiresApproval) {
+            if (pendingExtensionApproval?.ws && pendingExtensionApproval.ws !== ws) {
+              pendingExtensionApproval.ws.close(1008, 'Superseded by newer pending extension request');
+            }
+            pendingExtensionApproval = {
+              ws,
+              connectionState,
+              extensionId: resolvedExtensionId,
+              extensionName: receivedName,
+              extensionVersion: receivedVersion,
+              requestedAt: Date.now(),
+            };
+            log('warn', `Extension approval required for unknown ID: ${resolvedExtensionId}`);
+            try { ws.send(JSON.stringify({ type: 'hello_ack', ok: false, reason: 'pending_approval', extensionId: resolvedExtensionId })); } catch {}
+            return;
           }
+
+          setVerifiedExtensionConnection(
+            ws,
+            connectionState,
+            receivedName,
+            receivedVersion,
+            resolvedExtensionId,
+          );
+
+          if (resolvedExtensionId && !allowedExtensionIds.includes(resolvedExtensionId)) {
+            allowedExtensionIds.push(resolvedExtensionId);
+            log('info', `Added extension ID to allowed list: ${resolvedExtensionId}`);
+            if (onAutoApprovedExtensionId) {
+              onAutoApprovedExtensionId(resolvedExtensionId);
+            }
+          }
+
+          try { ws.send(JSON.stringify({ type: 'hello_ack', ok: true })); } catch {}
           return;
         }
 
         // Reject messages from unverified extensions
-        if (!verified) {
+        if (!connectionState.verified) {
           log('warn', 'Rejecting message from unverified extension');
           return;
         }
@@ -411,6 +515,7 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
 
     ws.on('close', () => {
       clearInterval(heartbeatInterval);
+      clearPendingApprovalIfMatches(ws);
       if (extensionWs === ws) {
         log('info', `Extension disconnected: ${extensionName} (${extensionId})`);
         extensionWs = null;
@@ -431,6 +536,7 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
     ws.on('error', (err) => {
       log('error', `Extension WebSocket error: ${err.message}`);
       clearInterval(heartbeatInterval);
+      clearPendingApprovalIfMatches(ws);
       if (extensionWs === ws) {
         extensionWs = null;
         extensionVersion = null;
@@ -448,7 +554,7 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
 
     // Timeout: close connection if not verified within 5 seconds
     setTimeout(() => {
-      if (!verified && ws.readyState === WebSocket.OPEN) {
+      if (!connectionState.verified && ws.readyState === WebSocket.OPEN && pendingExtensionApproval?.ws !== ws) {
         log('warn', 'Extension verification timeout - closing connection');
         ws.close(1008, 'Verification timeout');
       }
@@ -528,6 +634,7 @@ export function stopBrowserDaemon(): Promise<void> {
     pending.clear();
     commandSessionMap.clear();
     sessionTabMap.clear();
+    pendingExtensionApproval = null;
 
     // Close WebSocket server and all connections
     if (wss) {
@@ -543,6 +650,9 @@ export function stopBrowserDaemon(): Promise<void> {
       extensionWs.terminate();
       extensionWs = null;
     }
+    extensionVersion = null;
+    extensionName = null;
+    extensionId = null;
 
     if (httpServer) {
       // Force close all active connections
@@ -585,6 +695,7 @@ export interface BrowserExtensionStatus {
   extensionVersion: string | null;
   extensionName: string | null;
   extensionId: string | null;
+  pendingExtensionApproval: PendingExtensionApprovalStatus | null;
   pendingCommands: number;
   port: number;
 }
@@ -596,7 +707,64 @@ export function getBrowserExtensionStatus(): BrowserExtensionStatus {
     extensionVersion,
     extensionName,
     extensionId,
+    pendingExtensionApproval: toPendingExtensionApprovalStatus(pendingExtensionApproval),
     pendingCommands: pending.size,
     port: PORT,
   };
+}
+
+export function setAllowedExtensionIds(ids: string[]): void {
+  allowedExtensionIds = sanitizeExtensionIdList(ids);
+}
+
+export function getAllowedExtensionIds(): string[] {
+  return [...allowedExtensionIds];
+}
+
+let onAutoApprovedExtensionId: ((extensionId: string) => void) | null = null;
+
+export function setOnAutoApprovedExtensionId(callback: ((extensionId: string) => void) | null): void {
+  onAutoApprovedExtensionId = callback;
+}
+
+export function approvePendingExtensionApproval(): { success: boolean; extensionId?: string; error?: string } {
+  if (!pendingExtensionApproval) {
+    return { success: false, error: 'No pending extension approval request' };
+  }
+
+  const pendingApproval = pendingExtensionApproval;
+  const pendingId = pendingApproval.extensionId;
+
+  if (!pendingId) {
+    pendingApproval.ws.close(1008, 'Cannot approve extension without ID');
+    pendingExtensionApproval = null;
+    return { success: false, error: 'Pending extension has no ID' };
+  }
+
+  if (!allowedExtensionIds.includes(pendingId)) {
+    allowedExtensionIds.push(pendingId);
+  }
+
+  setVerifiedExtensionConnection(
+    pendingApproval.ws,
+    pendingApproval.connectionState,
+    pendingApproval.extensionName,
+    pendingApproval.extensionVersion,
+    pendingId,
+  );
+
+  return { success: true, extensionId: pendingId };
+}
+
+export function denyPendingExtensionApproval(reason = 'Denied by user'): { success: boolean; denied: boolean } {
+  if (!pendingExtensionApproval) {
+    return { success: true, denied: false };
+  }
+
+  const pendingApproval = pendingExtensionApproval;
+  pendingExtensionApproval = null;
+  if (pendingApproval.ws.readyState === WebSocket.OPEN) {
+    pendingApproval.ws.close(1008, reason);
+  }
+  return { success: true, denied: true };
 }

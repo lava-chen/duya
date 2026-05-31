@@ -348,6 +348,12 @@ export interface BrowserExtensionStatus {
   extensionVersion: string | null;
   extensionName: string | null;
   extensionId: string | null;
+  pendingExtensionApproval: {
+    extensionId: string | null;
+    extensionName: string;
+    extensionVersion: string | null;
+    requestedAt: number;
+  } | null;
   pendingCommands: number;
   port: number;
 }
@@ -355,6 +361,8 @@ export interface BrowserExtensionStatus {
 export interface BrowserExtensionAPI {
   getStatus: () => Promise<{ success: boolean; status?: BrowserExtensionStatus; error?: string }>
   getExtensionPath: () => Promise<string>
+  approvePending: () => Promise<{ success: boolean; status?: BrowserExtensionStatus; error?: string }>
+  denyPending: () => Promise<{ success: boolean; status?: BrowserExtensionStatus; error?: string }>
 }
 
 export interface DocumentParserAPI {
@@ -504,6 +512,7 @@ export interface PluginAPI {
     list: () => Promise<{ success: boolean; data: PluginHealthReport[]; error?: string }>
   }
   install: (payload: { pluginId: string; scope?: string; autoUpdate?: boolean }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
+  installLocal: (payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
   enable: (pluginId: string) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
   disable: (pluginId: string) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
   remove: (payload: { pluginId: string; deleteData?: boolean }) => Promise<{ success: boolean; data?: { removed: boolean }; error?: string }>
@@ -661,6 +670,15 @@ export interface ElectronAPI {
     onDownloaded: (callback: (e: unknown, info: unknown) => void) => () => void
     onError: (callback: (e: unknown, msg: string) => void) => () => void
   }
+  import: ImportAPI
+}
+
+interface ImportAPI {
+  detect: () => Promise<{ claude: boolean; codex: boolean }>
+  scan: (params: { source: string; projectPath?: string }) => Promise<unknown>
+  apply: (params: unknown) => Promise<unknown>
+  rollback: (params: { batchId: string }) => Promise<void>
+  history: () => Promise<unknown[]>
 }
 
 // Callback registry for sync events
@@ -1311,6 +1329,8 @@ const electronAPI: ElectronAPI = {
   browserExtension: {
     getStatus: () => ipcRenderer.invoke('browser-extension:get-status'),
     getExtensionPath: () => ipcRenderer.invoke('browser-extension:get-path'),
+    approvePending: () => ipcRenderer.invoke('browser-extension:approve-pending'),
+    denyPending: () => ipcRenderer.invoke('browser-extension:deny-pending'),
   },
   parser: {
     parse: (filePath, options) => ipcRenderer.invoke('parser:parse', filePath, options),
@@ -1459,6 +1479,7 @@ const electronAPI: ElectronAPI = {
       list: () => ipcRenderer.invoke('plugin:health:list'),
     },
     install: (payload: { pluginId: string }) => ipcRenderer.invoke('plugin:install', payload),
+    installLocal: (payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }) => ipcRenderer.invoke('plugin:install-local', payload),
     enable: (pluginId: string) => ipcRenderer.invoke('plugin:enable', pluginId),
     disable: (pluginId: string) => ipcRenderer.invoke('plugin:disable', pluginId),
     remove: (payload: { pluginId: string; deleteData?: boolean }) => ipcRenderer.invoke('plugin:remove', payload),
@@ -1478,6 +1499,13 @@ const electronAPI: ElectronAPI = {
     remove: (payload) => ipcRenderer.invoke('marketplace:remove', payload),
     reset: () => ipcRenderer.invoke('marketplace:reset'),
     checkName: (name: string) => ipcRenderer.invoke('marketplace:check-name', name),
+  },
+  import: {
+    detect: () => ipcRenderer.invoke('import:detect'),
+    scan: (params: { source: string; projectPath?: string }) => ipcRenderer.invoke('import:scan', params),
+    apply: (params: unknown) => ipcRenderer.invoke('import:apply', params),
+    rollback: (params: { batchId: string }) => ipcRenderer.invoke('import:rollback', params),
+    history: () => ipcRenderer.invoke('import:history'),
   },
 }
 

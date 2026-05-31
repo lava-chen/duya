@@ -1,6 +1,8 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol } from 'electron';
 import { randomUUID } from 'crypto';
 import { platform as getPlatform } from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
 
 import { registerDbHandlers, registerConductorHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase } from './db/connection';
@@ -14,7 +16,7 @@ import { initSessionManager, getSessionManager } from './agents/session-manager'
 import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
-import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus } from './services/browser/daemon';
+import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds } from './services/browser/daemon';
 import { getAutomationScheduler, initAutomationScheduler } from './automation/Scheduler';
 import { initLogger, getLogger, LogComponent } from './logging/index';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, cleanupUpdater } from './services/updater';
@@ -31,11 +33,13 @@ import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerWikiAgentHandlers } from './ipc/wiki-agent-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
+import { registerImportHandlers } from './import/import-handlers';
 import { getMarketplaceSyncManager } from './plugins/marketplace';
 import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
 import { initWikiAgentRuntime } from './wiki-agent/WikiAgentRuntime';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import type { ExecutorRpcRequest } from './conductor/executor-types';
+import { getJsonSetting } from './db/queries/settings';
 
 // =============================================================================
 // Core modules (refactored from inline code)
@@ -234,10 +238,54 @@ if (gotTheLock) {
     // Step 5: Start Browser Daemon
     // ============================================================
     try {
+      const allowedExtensionIds = getJsonSetting<string[]>('browserExtensionAllowedIds', []);
+      const normalizedExtensionIds = Array.from(new Set(
+        (Array.isArray(allowedExtensionIds) ? allowedExtensionIds : [])
+          .filter((id) => typeof id === 'string')
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0),
+      ));
+      setAllowedExtensionIds(normalizedExtensionIds);
       await startBrowserDaemon();
     } catch (error) {
       logger.error('Failed to start Browser Daemon', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
+
+    // ============================================================
+    // Step 5.5: Register custom file protocol for widget image embedding
+    // ============================================================
+    protocol.handle('duya-file', async (request) => {
+      try {
+        const url = new URL(request.url);
+        let filePath = decodeURIComponent(url.pathname);
+
+        if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(filePath)) {
+          filePath = filePath.slice(1);
+        }
+        filePath = filePath.replace(/\//g, path.sep);
+
+        const data = await fs.promises.readFile(filePath);
+
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.gif': 'image/gif',
+          '.svg': 'image/svg+xml',
+          '.webp': 'image/webp',
+          '.bmp': 'image/bmp',
+        };
+        const mimeType = mimeTypes[ext] || 'application/octet-stream';
+
+        return new Response(data, {
+          status: 200,
+          headers: { 'Content-Type': mimeType, 'Cache-Control': 'public, max-age=3600' },
+        });
+      } catch {
+        return new Response('Not Found', { status: 404 });
+      }
+    });
 
     // ============================================================
     // Step 6: Launch UI
@@ -438,6 +486,7 @@ registerUpdaterHandlers();
 registerAgentServerHandlers();
 registerWikiAgentHandlers();
 registerPluginHandlers();
+registerImportHandlers();
 
 // Marketplace: handle --add-dir CLI flag
 const addDirIndex = process.argv.indexOf('--add-dir');

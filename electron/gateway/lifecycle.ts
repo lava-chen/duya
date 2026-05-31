@@ -160,7 +160,6 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
     const lines = data.toString().trim().split('\n');
     for (const line of lines) {
       if (!line) continue;
-      console.log(`[gateway:stdout] ${line}`);
       getLogger().info(`[gateway:stdout] ${line}`, undefined, LogComponent.Gateway);
     }
   });
@@ -169,7 +168,10 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
     const lines = data.toString().trim().split('\n');
     for (const line of lines) {
       if (!line) continue;
-      console.error(`[gateway:stderr] ${line}`);
+      // Filter out noisy Weixin session expired logs during development
+      if (line.includes('[Weixin] Session expired, need to re-authenticate')) {
+        continue;
+      }
       getLogger().warn(`[gateway:stderr] ${line}`, undefined, LogComponent.Gateway);
     }
   });
