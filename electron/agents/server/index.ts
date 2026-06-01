@@ -91,6 +91,7 @@ const deps: RouterDeps = {
   logger,
   httpLogger,
   sessionLogger,
+  dbRequest,
 };
 
 const handleRequest = createHandleRequest(deps, workerDbRequests, activeConnections, () => isShuttingDown);

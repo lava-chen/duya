@@ -178,6 +178,17 @@ export class WorkerManager {
     return true;
   }
 
+  broadcastCommand(cmd: Record<string, unknown>): number {
+    let count = 0;
+    for (const [sessionId] of this.workers) {
+      if (this.sendCommand(sessionId, cmd)) {
+        count++;
+      }
+    }
+    workerLogger.info('Broadcast command to workers', { commandType: cmd.type, workerCount: count });
+    return count;
+  }
+
   getWorker(sessionId: string): ChildProcess | undefined {
     return this.workers.get(sessionId);
   }

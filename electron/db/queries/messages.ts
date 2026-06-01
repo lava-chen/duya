@@ -116,7 +116,7 @@ export function addMessage(data: AddMessageInput): MessageRow {
 
 export function getMessagesBySession(sessionId: string): MessageRow[] {
   return db().prepare(
-    'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC'
+    'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
   ).all(sessionId) as MessageRow[];
 }
 

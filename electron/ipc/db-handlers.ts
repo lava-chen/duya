@@ -314,7 +314,7 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:message:getBySession', (_event, sessionId: string) => {
     const result = db!.prepare(
-      'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC'
+      'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
     ).all(sessionId);
     return result;
   });
