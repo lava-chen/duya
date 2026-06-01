@@ -196,7 +196,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     case 'session:loadMessages': {
       const sessionId = p.sessionId as string;
-      const messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC').all(sessionId);
+      const messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC').all(sessionId);
       const attachmentRows = db.prepare(
         "SELECT * FROM message_attachments WHERE session_id = ? AND attachment_type = 'parsed_document' ORDER BY created_at ASC"
       ).all(sessionId) as Array<{
@@ -262,7 +262,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     case 'message:getBySession':
-      return db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC').all(p.sessionId);
+      return db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC').all(p.sessionId);
 
     case 'message:getCount': {
       const result = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(p.sessionId) as { count: number };
@@ -1261,11 +1261,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       db.prepare(`
         INSERT INTO research_sessions (
           id, session_id, original_query, clarification, context_json,
-          status, current_phase, iterations, coverage, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'idle', 0, 0, ?, ?)
+          status, current_phase, iterations, coverage, created_at, updated_at,
+          title, run_status, plan_version, active_step_id, progress_summary, completed_at, error_json
+        ) VALUES (?, ?, ?, ?, ?, ?, 'idle', 0, 0, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
       `).run(
         p.id, p.session_id, p.original_query, p.clarification || null,
-        p.context_json, p.status || 'active', now, now
+        p.context_json, p.status || 'active', now, now,
+        p.title || null, p.run_status || null
       );
       return db.prepare('SELECT * FROM research_sessions WHERE id = ?').get(p.id);
     }
@@ -1292,6 +1294,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       if (p.current_phase !== undefined) { fields.push('current_phase = ?'); params.push(p.current_phase); }
       if (p.iterations !== undefined) { fields.push('iterations = ?'); params.push(p.iterations); }
       if (p.coverage !== undefined) { fields.push('coverage = ?'); params.push(p.coverage); }
+      if (p.title !== undefined) { fields.push('title = ?'); params.push(p.title); }
+      if (p.run_status !== undefined) { fields.push('run_status = ?'); params.push(p.run_status); }
+      if (p.plan_version !== undefined) { fields.push('plan_version = ?'); params.push(p.plan_version); }
+      if (p.active_step_id !== undefined) { fields.push('active_step_id = ?'); params.push(p.active_step_id); }
+      if (p.progress_summary !== undefined) { fields.push('progress_summary = ?'); params.push(p.progress_summary); }
+      if (p.completed_at !== undefined) { fields.push('completed_at = ?'); params.push(p.completed_at); }
+      if (p.error_json !== undefined) { fields.push('error_json = ?'); params.push(p.error_json); }
       params.push(id);
 
       db.prepare(`UPDATE research_sessions SET ${fields.join(', ')} WHERE id = ?`).run(...params);
@@ -1312,6 +1321,114 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return db.prepare(
         'SELECT * FROM research_sessions WHERE status = ? ORDER BY updated_at DESC'
       ).all(p.status);
+    }
+
+    case 'researchSession:getActiveRun': {
+      return db.prepare(
+        `SELECT * FROM research_sessions
+         WHERE session_id = ? AND run_status IN ('planning', 'awaiting_approval', 'running', 'paused', 'synthesizing')
+         ORDER BY created_at DESC LIMIT 1`
+      ).get(p.sessionId);
+    }
+
+    case 'researchSession:listActiveRuns': {
+      return db.prepare(
+        `SELECT * FROM research_sessions
+         WHERE run_status IN ('planning', 'awaiting_approval', 'running', 'paused', 'synthesizing')
+         ORDER BY updated_at DESC`
+      ).all();
+    }
+
+    // ==================== Research Plan Steps ====================
+
+    case 'researchPlanStep:createSteps': {
+      const runId = p.runId as string;
+      const steps = p.steps as Array<{
+        id: string;
+        order_num: number;
+        user_facing_label: string;
+        internal_question_ids: string[];
+      }>;
+      const stmt = db.prepare(`
+        INSERT OR REPLACE INTO research_plan_steps (id, run_id, order_num, user_facing_label, internal_question_ids, status)
+        VALUES (?, ?, ?, ?, ?, 'pending')
+      `);
+      const txn = db.transaction(() => {
+        for (const step of steps) {
+          stmt.run(step.id, runId, step.order_num, step.user_facing_label, JSON.stringify(step.internal_question_ids));
+        }
+      });
+      txn();
+      return db.prepare('SELECT * FROM research_plan_steps WHERE run_id = ? ORDER BY order_num ASC').all(runId);
+    }
+
+    case 'researchPlanStep:getByRunId': {
+      return db.prepare('SELECT * FROM research_plan_steps WHERE run_id = ? ORDER BY order_num ASC').all(p.runId);
+    }
+
+    case 'researchPlanStep:update': {
+      const stepId = p.stepId as string;
+      const fields: string[] = [];
+      const params: unknown[] = [];
+      if (p.status !== undefined) { fields.push('status = ?'); params.push(p.status); }
+      if (p.started_at !== undefined) { fields.push('started_at = ?'); params.push(p.started_at); }
+      if (p.completed_at !== undefined) { fields.push('completed_at = ?'); params.push(p.completed_at); }
+      if (fields.length === 0) return null;
+      params.push(stepId);
+      db.prepare(`UPDATE research_plan_steps SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+      return db.prepare('SELECT * FROM research_plan_steps WHERE id = ?').get(stepId);
+    }
+
+    case 'researchPlanStep:deleteByRunId': {
+      return db.prepare('DELETE FROM research_plan_steps WHERE run_id = ?').run(p.runId);
+    }
+
+    // ==================== Research Activities ====================
+
+    case 'researchActivity:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_activities (id, run_id, sequence, kind, title, detail, visibility, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(p.id, p.run_id, p.sequence, p.kind, p.title, p.detail || null, p.visibility || 'user', now);
+      return db.prepare('SELECT * FROM research_activities WHERE id = ?').get(p.id);
+    }
+
+    case 'researchActivity:getByRunId': {
+      const runId = p.runId as string;
+      const visibility = p.visibility as string | undefined;
+      const limit = (p.limit as number) || 200;
+      const afterSequence = p.afterSequence as number | undefined;
+
+      if (visibility) {
+        if (afterSequence !== undefined) {
+          return db.prepare(
+            'SELECT * FROM research_activities WHERE run_id = ? AND visibility = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
+          ).all(runId, visibility, afterSequence, limit);
+        }
+        return db.prepare(
+          'SELECT * FROM research_activities WHERE run_id = ? AND visibility = ? ORDER BY sequence ASC LIMIT ?'
+        ).all(runId, visibility, limit);
+      }
+      if (afterSequence !== undefined) {
+        return db.prepare(
+          'SELECT * FROM research_activities WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
+        ).all(runId, afterSequence, limit);
+      }
+      return db.prepare(
+        'SELECT * FROM research_activities WHERE run_id = ? ORDER BY sequence ASC LIMIT ?'
+      ).all(runId, limit);
+    }
+
+    case 'researchActivity:getMaxSequence': {
+      const result = db.prepare(
+        'SELECT MAX(sequence) as max_seq FROM research_activities WHERE run_id = ?'
+      ).get(p.runId) as { max_seq: number | null };
+      return { max_seq: result?.max_seq ?? 0 };
+    }
+
+    case 'researchActivity:deleteByRunId': {
+      return db.prepare('DELETE FROM research_activities WHERE run_id = ?').run(p.runId);
     }
 
     // ==================== Literature Plugin actions ====================

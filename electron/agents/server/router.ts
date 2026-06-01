@@ -17,6 +17,7 @@ export interface RouterDeps {
   logger: Logger;
   httpLogger: Logger;
   sessionLogger: Logger;
+  dbRequest: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export function sendJson(res: http.ServerResponse, statusCode: number, data: unknown): void {
@@ -114,7 +115,7 @@ async function handlePostChat(
   });
 
   req.on('end', async () => {
-    let parsed: { prompt?: string; options?: Record<string, unknown>; providerConfig?: Record<string, unknown>; workingDirectory?: string; systemPrompt?: string };
+    let parsed: { prompt?: string; options?: Record<string, unknown>; providerConfig?: Record<string, unknown>; workingDirectory?: string; systemPrompt?: string; defaultWorkspaceDirectory?: string };
     try {
       parsed = body ? JSON.parse(body) : {};
     } catch {
@@ -127,6 +128,7 @@ async function handlePostChat(
     const prompt = parsed.prompt || '';
     const providerConfig = parsed.providerConfig;
     const workingDirectory = parsed.workingDirectory;
+    const defaultWorkspaceDirectory = parsed.defaultWorkspaceDirectory;
 
     try {
       const totalMem = os.totalmem();
@@ -208,11 +210,16 @@ async function handlePostChat(
             reject(new Error('Worker ready timeout (30s)'));
           }, 30000);
 
+          let readyBuffer = '';
+
           const readyHandler = (data: Buffer): void => {
-            const buffer = data.toString();
-            const lines = buffer.split('\n');
-            for (const line of lines) {
-              if (!line.trim() || !line.startsWith('{')) continue;
+            readyBuffer += data.toString();
+            const lines = readyBuffer.split('\n');
+            readyBuffer = lines.pop() || '';
+
+            for (const rawLine of lines) {
+              const line = rawLine.trim();
+              if (!line || !line.startsWith('{')) continue;
               try {
                 const msg = JSON.parse(line);
                 if (msg.type === 'ready' || msg.type === 'conductor:ready') {
@@ -243,9 +250,11 @@ async function handlePostChat(
         sessionId,
         providerConfig,
         workingDirectory: workingDirectory || '',
+        defaultWorkspaceDirectory: defaultWorkspaceDirectory || '',
         systemPrompt: parsed.systemPrompt,
         language: 'zh',
         communicationPlatform: parsed.options?.platform,
+        securityScanEnabled: parsed.options?.securityScanEnabled,
       });
 
       try {
@@ -333,9 +342,26 @@ function handlePostChatSSE(
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
 
+    let multiLineBuffer = '';
+
     for (const rawLine of lines) {
-      const line = rawLine.trim();
+      let line = rawLine.trim();
       if (!line) continue;
+
+      // If accumulating a multi-line JSON fragment, keep appending
+      if (multiLineBuffer) {
+        multiLineBuffer += '\n' + rawLine;
+        try {
+          JSON.parse(multiLineBuffer);
+          line = multiLineBuffer;
+          multiLineBuffer = '';
+        } catch {
+          if (multiLineBuffer.length > 100000) {
+            multiLineBuffer = '';
+          }
+          continue;
+        }
+      }
 
       // Skip non-JSON lines (console.log, debug output from worker)
       if (!line.startsWith('{')) {
@@ -538,8 +564,8 @@ function handlePostChatSSE(
         sessionManager.updateLastEventId(sessionId, seqNum);
         sessionManager.recordEvent(sessionId, eventType, sseEvent, seqNum);
         res.write(`event: ${eventType}\nid: ${seqNum}\ndata: ${JSON.stringify(sseEvent)}\n\n`);
-      } catch (err) {
-        console.warn('[agent-server] Failed to parse worker stdout line:', rawLine.substring(0, 100), err);
+      } catch {
+        multiLineBuffer = rawLine;
       }
     }
   };
@@ -576,12 +602,39 @@ function handlePostChatNonSSE(
   httpLogger.info('Non-SSE chat started', { sessionId });
   let allEvents: unknown[] = [];
   let doneReceived = false;
+  let nonSseBuffer = '';
 
   child.stdout!.on('data', (data: Buffer) => {
     if (doneReceived) return;
 
-    const lines = data.toString().split('\n').filter(Boolean);
-    for (const line of lines) {
+    nonSseBuffer += data.toString();
+    const lines = nonSseBuffer.split('\n');
+    nonSseBuffer = lines.pop() || '';
+
+    let multiLineBuffer = '';
+
+    for (const rawLine of lines) {
+      if (doneReceived) return;
+
+      let line = rawLine.trim();
+      if (!line) continue;
+
+      if (multiLineBuffer) {
+        multiLineBuffer += '\n' + rawLine;
+        try {
+          JSON.parse(multiLineBuffer);
+          line = multiLineBuffer;
+          multiLineBuffer = '';
+        } catch {
+          if (multiLineBuffer.length > 100000) {
+            multiLineBuffer = '';
+          }
+          continue;
+        }
+      }
+
+      if (!line.startsWith('{')) continue;
+
       try {
         const event = JSON.parse(line);
         allEvents.push(event);
@@ -593,7 +646,7 @@ function handlePostChatNonSSE(
           return;
         }
       } catch {
-        // Skip
+        multiLineBuffer = rawLine;
       }
     }
   });
@@ -727,35 +780,62 @@ function handlePostCompact(
 
   // Listen for compact events from worker stdout
   let compactDone = false;
+  let compactBuffer = '';
   const onData = (data: Buffer): void => {
     if (compactDone) return;
 
-    const line = data.toString().trim();
-    if (!line || !line.startsWith('{')) return;
+    compactBuffer += data.toString();
+    const lines = compactBuffer.split('\n');
+    compactBuffer = lines.pop() || '';
 
-    try {
-      const event = JSON.parse(line);
-      const eventType = event.type as string;
+    let multiLineBuffer = '';
 
-      if (eventType === 'compact:done') {
-        httpLogger.info('Compaction done', { sessionId });
-        res.write(`event: compact:done\ndata: ${JSON.stringify(event)}\n\n`);
-        compactDone = true;
-        res.end();
-        child.stdout?.removeListener('data', onData);
-        return;
+    for (const rawLine of lines) {
+      if (compactDone) return;
+
+      let line = rawLine.trim();
+      if (!line) continue;
+
+      if (multiLineBuffer) {
+        multiLineBuffer += '\n' + rawLine;
+        try {
+          JSON.parse(multiLineBuffer);
+          line = multiLineBuffer;
+          multiLineBuffer = '';
+        } catch {
+          if (multiLineBuffer.length > 100000) {
+            multiLineBuffer = '';
+          }
+          continue;
+        }
       }
 
-      if (eventType === 'compact:error') {
-        httpLogger.error('Compaction error', new Error(event.message || 'Unknown error'), { sessionId });
-        res.write(`event: compact:error\ndata: ${JSON.stringify(event)}\n\n`);
-        compactDone = true;
-        res.end();
-        child.stdout?.removeListener('data', onData);
-        return;
+      if (!line.startsWith('{')) continue;
+
+      try {
+        const event = JSON.parse(line);
+        const eventType = event.type as string;
+
+        if (eventType === 'compact:done') {
+          httpLogger.info('Compaction done', { sessionId });
+          res.write(`event: compact:done\ndata: ${JSON.stringify(event)}\n\n`);
+          compactDone = true;
+          res.end();
+          child.stdout?.removeListener('data', onData);
+          return;
+        }
+
+        if (eventType === 'compact:error') {
+          httpLogger.error('Compaction error', new Error(event.message || 'Unknown error'), { sessionId });
+          res.write(`event: compact:error\ndata: ${JSON.stringify(event)}\n\n`);
+          compactDone = true;
+          res.end();
+          child.stdout?.removeListener('data', onData);
+          return;
+        }
+      } catch {
+        multiLineBuffer = rawLine;
       }
-    } catch {
-      // Ignore parse errors
     }
   };
 
@@ -817,13 +897,39 @@ function handleGetChat(
 
   let seqNum = 0;
   let doneReceived = false;
+  let reconnectBuffer = '';
 
   const onData = (data: Buffer) => {
     if (doneReceived) return;
 
-    const lines = data.toString().split('\n').filter(Boolean);
-    for (const line of lines) {
+    reconnectBuffer += data.toString();
+    const lines = reconnectBuffer.split('\n');
+    reconnectBuffer = lines.pop() || '';
+
+    let multiLineBuffer = '';
+
+    for (const rawLine of lines) {
       if (doneReceived) return;
+
+      let line = rawLine.trim();
+      if (!line) continue;
+
+      // If accumulating a multi-line JSON fragment, keep appending
+      if (multiLineBuffer) {
+        multiLineBuffer += '\n' + rawLine;
+        try {
+          JSON.parse(multiLineBuffer);
+          line = multiLineBuffer;
+          multiLineBuffer = '';
+        } catch {
+          if (multiLineBuffer.length > 100000) {
+            multiLineBuffer = '';
+          }
+          continue;
+        }
+      }
+
+      if (!line.startsWith('{')) continue;
 
       try {
         const event = JSON.parse(line);
@@ -851,7 +957,7 @@ function handleGetChat(
         const sseEventType = mapEventType(eventType);
         res.write(`event: ${sseEventType}\nid: ${seqNum}\ndata: ${JSON.stringify(event)}\n\n`);
       } catch {
-        // Skip invalid JSON
+        multiLineBuffer = rawLine;
       }
     }
   };
@@ -1283,25 +1389,43 @@ function handleConductorInterrupt(
   });
 }
 
-function handleResearchRoute(
+async function handleResearchRoute(
   method: string,
   parts: string[],
   req: http.IncomingMessage,
   res: http.ServerResponse,
   deps: RouterDeps,
-): void {
-  const { logger, workerManager } = deps;
+): Promise<void> {
+  const { logger, workerManager, dbRequest } = deps;
 
   // GET /api/research/snapshot/:sessionId
   if (method === 'GET' && parts.length >= 2 && parts[1] === 'snapshot' && parts.length >= 3) {
     const sessionId = parts[2];
-    const db = require('../db/connection');
-    const row = db.prepare('SELECT * FROM research_sessions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1').get(sessionId);
-    if (!row) {
-      sendJson(res, 404, { error: 'Research session not found' });
-      return;
+    try {
+      const row = await dbRequest('researchSession:getBySessionId', {
+        sessionId,
+      }) as Record<string, unknown> | null;
+      if (!row) {
+        sendJson(res, 404, { error: 'Research session not found' });
+        return;
+      }
+
+      // Also fetch plan steps from the dedicated table
+      const runId = row.id as string | undefined;
+      let planSteps: unknown[] = [];
+      if (runId) {
+        try {
+          planSteps = await dbRequest('researchPlanStep:getByRunId', { runId }) as unknown[];
+        } catch {
+          // non-fatal: plan steps may not exist
+        }
+      }
+
+      sendJson(res, 200, { ...row, planSteps });
+    } catch (error) {
+      logger.error('Failed to fetch research session', error instanceof Error ? error : new Error(String(error)), { sessionId });
+      sendJson(res, 500, { error: 'Database error' });
     }
-    sendJson(res, 200, row);
     return;
   }
 
@@ -1414,7 +1538,16 @@ export function createHandleRequest(
     }
 
     if (parts[0] === 'research') {
-      handleResearchRoute(method, parts, req, res, deps);
+      handleResearchRoute(method, parts, req, res, deps).catch(() => {
+        sendJson(res, 500, { error: 'Internal server error' });
+      });
+      return;
+    }
+
+    if (parts[0] === 'plugins' && parts[1] === 'reload' && method === 'POST') {
+      const count = deps.workerManager.broadcastCommand({ type: 'reload:skills' });
+      deps.workerManager.broadcastCommand({ type: 'reload:mcp' });
+      sendJson(res, 200, { ok: true, workersNotified: count });
       return;
     }
 

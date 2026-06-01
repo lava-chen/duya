@@ -1463,6 +1463,47 @@ const migrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_research_relations_project ON research_memory_relations(project_id)`);
     },
   },
+  {
+    id: 31,
+    name: 'create_import_tables',
+    migrate(db: BetterSqlite3Db): void {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS import_batches (
+          id TEXT PRIMARY KEY,
+          source TEXT NOT NULL,
+          source_project_path TEXT,
+          target_project_path TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          total_items INTEGER NOT NULL DEFAULT 0,
+          applied_items INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          rolled_back_at INTEGER
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS import_items (
+          id TEXT PRIMARY KEY,
+          batch_id TEXT NOT NULL REFERENCES import_batches(id),
+          source_type TEXT NOT NULL,
+          source_path TEXT NOT NULL,
+          source_hash TEXT,
+          target_type TEXT NOT NULL,
+          target_path TEXT NOT NULL,
+          title TEXT NOT NULL,
+          summary TEXT,
+          risk_level TEXT NOT NULL DEFAULT 'safe',
+          requires_auth INTEGER NOT NULL DEFAULT 0,
+          is_enabled INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'imported',
+          created_at INTEGER NOT NULL
+        )
+      `);
+
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_import_items_batch ON import_items(batch_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_import_batches_project ON import_batches(target_project_path)`);
+    },
+  },
 ];
 
 /**
