@@ -56,13 +56,16 @@ function SkillCard({
   isExpanded,
   onToggle,
   onToggleEnabled,
+  isToggling,
 }: {
   skill: SkillWithContent;
   isExpanded: boolean;
   onToggle: () => void;
   onToggleEnabled: (skill: SkillWithContent) => void;
+  isToggling: boolean;
 }) {
   const categoryColor = getCategoryColor(skill.category);
+  const isEnabled = skill.enabled !== false;
 
   return (
     <div className={`transition-all duration-200 ${isExpanded ? "md:col-span-2" : ""}`}>
@@ -100,8 +103,32 @@ function SkillCard({
             </p>
           </div>
           <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center text-xs font-medium" style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}>
-            {isExpanded ? '−' : '+'}
+            {isExpanded ? "-" : "+"}
           </div>
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span
+            className={`text-[0.72rem] font-medium ${
+              isEnabled ? "text-[var(--success)]" : "text-[var(--warning)]"
+            }`}
+          >
+            {isEnabled ? "Enabled for agent" : "Disabled for agent"}
+          </span>
+          <button
+            type="button"
+            disabled={isToggling}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleEnabled(skill);
+            }}
+            className={`shrink-0 px-3 py-1.5 rounded-full text-[0.72rem] font-medium border transition-colors ${
+              isEnabled
+                ? "border-[var(--success-soft)] text-[var(--success)] hover:bg-[var(--success-bg)]"
+                : "border-[var(--warning-soft)] text-[var(--warning)] hover:bg-[var(--warning-bg)]"
+            } disabled:opacity-60 disabled:cursor-not-allowed`}
+          >
+            {isToggling ? "Updating..." : isEnabled ? "Disable" : "Enable"}
+          </button>
         </div>
       </div>
 
@@ -365,6 +392,7 @@ export function SkillsView() {
               isExpanded={expandedSkill === skill.name}
               onToggle={() => handleToggleSkill(skill.name)}
               onToggleEnabled={handleToggleEnabled}
+              isToggling={togglingSkillName === skill.name}
             />
           ))}
         </div>
