@@ -45,3 +45,62 @@ export type {
   PluginMarketplaceError,
   PluginCompatError,
 } from './types';
+
+// MCP — types and pure functions added in Phase 0 of plan 97.
+// Flat re-exports so consumers can `import { scopedPluginServerName } from '@duya/plugin-core'`.
+// The MCP namespace re-export is kept for consumers that prefer the grouped form.
+export {
+  PLUGIN_SCOPE_PREFIX,
+  MCP_INTERNAL_PREFIX,
+  MCP_INTERNAL_SEP,
+  scopedPluginServerName,
+  toolInternalKey,
+  unscopedServerName,
+  pluginIdFromScopedName,
+  isPluginScopedName,
+  buildInventoryId,
+  AnthropicToolNamePolicy,
+  OpenAIToolNamePolicy,
+  shortStableHash,
+  sanitizeProviderToolName,
+  allocateUniqueProviderToolName,
+  expandEnvVarsInString,
+  substitutePluginVariables,
+  substituteUserConfigVariables,
+  expandMcpServerConfig,
+  applySourceShadowing,
+  resolveMCPDiscovery,
+  getMCPErrorMessage,
+  getMCPErrorSeverity,
+  getMCPSuggestedAction,
+} from './mcp';
+export type {
+  MCPDiscoveryStatus,
+  MCPConnectionStatus,
+  MCPDiscoveryError,
+  MCPConnectionError,
+  MCPRegistrationError,
+  MCPError,
+  MCPIssue,
+  MCPPhase,
+  MCPSource,
+  MCPSettingsSubOrigin,
+  MCPSourceContext,
+  MCPCandidate,
+  ResolutionContext,
+  MCPServerInventoryEntry,
+  ResolvedMCPServerConfig,
+  ResolutionResult,
+  MCPToolDescriptor,
+  MCPHealthReport,
+  BuiltinFallbackReplacement,
+  ShadowApplicationResult,
+  ProviderToolNamePolicy,
+} from './mcp';
+
+export {
+  isMCPError,
+  toMCPError,
+  withMCPError,
+} from './error-wrapper';
+export type { MCPResult } from './error-wrapper';
