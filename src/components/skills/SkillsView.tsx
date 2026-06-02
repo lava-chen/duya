@@ -7,9 +7,12 @@ import { useTranslation } from "@/hooks/useTranslation";
 
 interface SkillMetadata {
   name: string;
+  skillId?: string;
   description: string;
   category?: string;
   source?: string;
+  sourceId?: string;
+  enabled?: boolean;
   userInvocable?: boolean;
   whenToUse?: string;
   allowedTools?: string[];
@@ -48,7 +51,17 @@ function getCategoryColor(category?: string) {
   return CATEGORY_COLORS[category || "other"] || CATEGORY_COLORS.other;
 }
 
-function SkillCard({ skill, isExpanded, onToggle }: { skill: SkillWithContent; isExpanded: boolean; onToggle: () => void }) {
+function SkillCard({
+  skill,
+  isExpanded,
+  onToggle,
+  onToggleEnabled,
+}: {
+  skill: SkillWithContent;
+  isExpanded: boolean;
+  onToggle: () => void;
+  onToggleEnabled: (skill: SkillWithContent) => void;
+}) {
   const categoryColor = getCategoryColor(skill.category);
 
   return (
@@ -97,14 +110,20 @@ function SkillCard({ skill, isExpanded, onToggle }: { skill: SkillWithContent; i
           className="mt-3 surface-card border-[var(--accent)]"
           style={{ animation: "fadeInSlideDown 0.2s ease-out" }}
         >
-          <SkillDetail skill={skill} />
+          <SkillDetail skill={skill} onToggleEnabled={onToggleEnabled} />
         </div>
       )}
     </div>
   );
 }
 
-function SkillDetail({ skill }: { skill: SkillWithContent }) {
+function SkillDetail({
+  skill,
+  onToggleEnabled,
+}: {
+  skill: SkillWithContent;
+  onToggleEnabled: (skill: SkillWithContent) => void;
+}) {
   const { t } = useTranslation();
   const metadataFields = [
     { key: t('skills.category'), value: skill.category },
@@ -116,6 +135,24 @@ function SkillDetail({ skill }: { skill: SkillWithContent }) {
 
   return (
     <div className="p-4">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="text-[0.78rem] text-[var(--muted)]">
+          {skill.enabled === false
+            ? "Disabled: this skill is filtered out from agent prompt and runtime"
+            : "Enabled: available to agent prompt and runtime"}
+        </div>
+        <button
+          type="button"
+          onClick={() => onToggleEnabled(skill)}
+          className={`px-3 py-1.5 rounded-lg text-[0.78rem] font-medium border ${
+            skill.enabled === false
+              ? "border-[var(--warning-soft)] text-[var(--warning)]"
+              : "border-[var(--success-soft)] text-[var(--success)]"
+          }`}
+        >
+          {skill.enabled === false ? "Enable Skill" : "Disable Skill"}
+        </button>
+      </div>
       <div className="mb-4">
         <h4 className="text-[0.75rem] font-semibold text-[var(--muted)] uppercase tracking-wider mb-3">
           {t('skills.metadata')}
@@ -168,6 +205,7 @@ export function SkillsView() {
   const [error, setError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [togglingSkillName, setTogglingSkillName] = useState<string | null>(null);
 
   const loadSkills = useCallback(async () => {
     try {
@@ -221,6 +259,28 @@ export function SkillsView() {
   const handleToggleSkill = (skillName: string) => {
     setExpandedSkill(expandedSkill === skillName ? null : skillName);
   };
+
+  const handleToggleEnabled = useCallback(async (skill: SkillWithContent) => {
+    const win = window as unknown as {
+      electronAPI?: {
+        skills?: {
+          setEnabled: (skillName: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+        };
+      };
+    };
+    if (!win.electronAPI?.skills?.setEnabled) {
+      return;
+    }
+    const nextEnabled = skill.enabled === false;
+    setTogglingSkillName(skill.name);
+    const result = await win.electronAPI.skills.setEnabled(skill.name, nextEnabled);
+    setTogglingSkillName(null);
+    if (!result.success) {
+      setError(result.error || "Failed to update skill state");
+      return;
+    }
+    setSkills(prev => prev.map(s => s.name === skill.name ? { ...s, enabled: nextEnabled } : s));
+  }, []);
 
   return (
     <div className="page skills-page">
@@ -304,8 +364,14 @@ export function SkillsView() {
               skill={skill}
               isExpanded={expandedSkill === skill.name}
               onToggle={() => handleToggleSkill(skill.name)}
+              onToggleEnabled={handleToggleEnabled}
             />
           ))}
+        </div>
+      )}
+      {togglingSkillName && (
+        <div className="text-[0.78rem] text-[var(--muted)] mt-2">
+          Updating: {togglingSkillName}
         </div>
       )}
     </div>

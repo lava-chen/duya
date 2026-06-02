@@ -128,6 +128,8 @@ export interface SafeModeAPI {
 
 export interface SkillsAPI {
   list: () => Promise<{ success: boolean; skills: unknown[]; error?: string }>
+  getEnabledOverrides: () => Promise<{ success: boolean; overrides: Record<string, boolean>; error?: string }>
+  setEnabled: (skillName: string, enabled: boolean) => Promise<{ success: boolean; overrides?: Record<string, boolean>; error?: string }>
   getSecurityBypass: () => Promise<{ success: boolean; skills: string[]; error?: string }>
   setSecurityBypass: (skillName: string, bypass: boolean) => Promise<{ success: boolean; skills: string[]; error?: string }>
 }
@@ -1313,6 +1315,8 @@ const electronAPI: ElectronAPI = {
   },
   skills: {
     list: () => ipcRenderer.invoke('skills:list'),
+    getEnabledOverrides: () => ipcRenderer.invoke('skills:getEnabledOverrides'),
+    setEnabled: (skillName: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', skillName, enabled),
     getSecurityBypass: () => ipcRenderer.invoke('skills:getSecurityBypass'),
     setSecurityBypass: (skillName: string, bypass: boolean) => ipcRenderer.invoke('skills:setSecurityBypass', skillName, bypass),
   },

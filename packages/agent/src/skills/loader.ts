@@ -15,6 +15,10 @@ import { getSkillRegistry } from './registry.js';
 import { scanSkillFile, shouldAllowInstall, type SkillFinding } from '../security/skillScanner.js';
 import { registerConditionalSkill, separateConditionalSkills } from './conditionalSkills.js';
 import { normalizeRequiredEnvVars } from './envVarCollector.js';
+import { settingDb } from '../ipc/db-client.js';
+
+const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
+type SkillEnabledOverrides = Record<string, boolean>;
 
 /**
  * Check if the current platform matches the skill's supported platforms
@@ -423,6 +427,22 @@ export interface SkillLoadOptions {
   skipSecurityScan?: boolean;
 }
 
+async function loadDisabledSkillNamesFromSettings(): Promise<Set<string>> {
+  try {
+    const overridesRaw = await settingDb.getJson<SkillEnabledOverrides | null>(SKILL_ENABLED_OVERRIDES_KEY, {});
+    if (!overridesRaw || typeof overridesRaw !== 'object') {
+      return new Set();
+    }
+    return new Set(
+      Object.entries(overridesRaw)
+        .filter(([, enabled]) => enabled === false)
+        .map(([name]) => name),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 /**
  * Get the default skill directories
  * Default: ~/.duya/skills (user) and <cwd>/.duya/skills (project)
@@ -560,8 +580,13 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
     }
   }
 
+  const disabledSkillNames = await loadDisabledSkillNamesFromSettings();
+  const effectiveSkills = disabledSkillNames.size > 0
+    ? allSkills.filter((skill) => !disabledSkillNames.has(skill.name))
+    : allSkills;
+
   // Separate unconditional and conditional skills
-  const [unconditionalSkills, conditionalSkillsList] = separateConditionalSkills(allSkills);
+  const [unconditionalSkills, conditionalSkillsList] = separateConditionalSkills(effectiveSkills);
 
   // Register unconditional skills immediately
   for (const skill of unconditionalSkills) {
@@ -580,9 +605,13 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
     console.log(`[Skills] ${conditionalCount} conditional skill(s) pending activation (matched by file paths)`);
   }
 
+  const disabledCount = allSkills.length - effectiveSkills.length;
+  if (disabledCount > 0) {
+    console.log(`[Skills] Filtered ${disabledCount} disabled skill(s) from runtime`);
+  }
   console.log(`[Skills] Loaded ${unconditionalSkills.length} unconditional + ${conditionalCount} conditional skills`);
 
-  return allSkills;
+  return effectiveSkills;
 }
 
 /**

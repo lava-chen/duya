@@ -9,11 +9,54 @@
 import { ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as http from 'http';
 import { homedir, platform as getPlatform } from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getConfigManager } from '../config/manager';
 import { parseSkillFrontmatter, parseAllowedTools } from '../utils/skill-parser';
 import { scanSkillFile, type SkillFinding } from '../../packages/agent/src/security/skillScanner.js';
+import { getJsonSetting, setJsonSetting } from '../db/index';
+import { getPluginManager } from '../plugins/PluginManager';
+
+const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
+type SkillEnabledOverrides = Record<string, boolean>;
+
+let cachedAgentServerUrl: string | null = null;
+
+async function getAgentServerUrl(): Promise<string | null> {
+  if (cachedAgentServerUrl) return cachedAgentServerUrl;
+  try {
+    const { getAgentServerPort } = await import('../agents/agent-server-lifecycle');
+    const port = getAgentServerPort();
+    if (port) {
+      cachedAgentServerUrl = `http://127.0.0.1:${port}`;
+    }
+    return cachedAgentServerUrl;
+  } catch {
+    return null;
+  }
+}
+
+async function notifyAgentServerSkillsReload(): Promise<void> {
+  const url = await getAgentServerUrl();
+  if (!url) return;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const reqObj = http.request(`${url}/plugins/reload`, { method: 'POST' }, (res) => {
+        res.resume();
+        resolve();
+      });
+      reqObj.on('error', reject);
+      reqObj.setTimeout(2000, () => {
+        reqObj.destroy();
+        resolve();
+      });
+      reqObj.end();
+    });
+  } catch {
+    // Agent server may not be running. Ignore.
+  }
+}
 
 function isPlatformSupported(platforms?: string[]): boolean {
   if (!platforms || platforms.length === 0) return true;
@@ -40,9 +83,12 @@ export function registerSkillsHandlers(): void {
     try {
       const skills: Array<{
         name: string;
+        skillId: string;
         description: string;
         category?: string;
         source?: string;
+        sourceId?: string;
+        enabled?: boolean;
         userInvocable?: boolean;
         whenToUse?: string;
         allowedTools?: string[];
@@ -59,7 +105,7 @@ export function registerSkillsHandlers(): void {
       const loadedNames = new Set<string>();
       const logger = getLogger();
 
-      const loadSkillsFromDir = (baseDir: string, source: string) => {
+      const loadSkillsFromDir = (baseDir: string, source: string, sourceId?: string) => {
         if (!fs.existsSync(baseDir)) return;
 
         const entries = fs.readdirSync(baseDir);
@@ -108,9 +154,11 @@ export function registerSkillsHandlers(): void {
 
                 skills.push({
                   name: skillEntry,
+                  skillId: skillEntry,
                   description: (frontmatter.description as string) || skillEntry,
                   category: entry,
                   source,
+                  sourceId,
                   userInvocable: frontmatter['user-invocable'] !== false,
                   whenToUse: frontmatter['when-to-use'] as string | undefined,
                   allowedTools: parseAllowedTools(frontmatter['allowed-tools']),
@@ -149,9 +197,11 @@ export function registerSkillsHandlers(): void {
 
               skills.push({
                 name: entry,
+                skillId: entry,
                 description: (frontmatter.description as string) || entry,
                 category: (frontmatter.category as string) || 'other',
                 source,
+                sourceId,
                 userInvocable: frontmatter['user-invocable'] !== false,
                 whenToUse: frontmatter['when-to-use'] as string | undefined,
                 allowedTools: parseAllowedTools(frontmatter['allowed-tools']),
@@ -225,12 +275,73 @@ export function registerSkillsHandlers(): void {
         }
       }
 
+      // Load plugin skills (enabled plugins only)
+      const pluginManager = getPluginManager();
+      const enabledPlugins = pluginManager.listInstalled().filter(p => p.enabled);
+      for (const plugin of enabledPlugins) {
+        const pluginSkillsDir = path.join(plugin.installPath, 'skills');
+        if (fs.existsSync(pluginSkillsDir)) {
+          loadSkillsFromDir(pluginSkillsDir, 'plugin', plugin.id);
+        }
+      }
+
+      let skillOverrides: SkillEnabledOverrides = {};
+      try {
+        skillOverrides = getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
+      } catch {
+        skillOverrides = {};
+      }
+      const skillsWithState = skills.map(skill => ({
+        ...skill,
+        enabled: skillOverrides[skill.name] !== false,
+      }));
+
       logger.info(`Loaded ${skills.length} skills total`, undefined, LogComponent.Skills);
-      return { success: true, skills, syncStatus };
+      return { success: true, skills: skillsWithState, syncStatus };
     } catch (error) {
       const logger = getLogger();
       logger.error('Failed to list skills', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Skills);
       return { success: false, error: String(error), skills: [], syncStatus: null };
+    }
+  });
+
+  ipcMain.handle('skills:getEnabledOverrides', async () => {
+    try {
+      let overrides: SkillEnabledOverrides = {};
+      try {
+        overrides = getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
+      } catch {
+        overrides = {};
+      }
+      return { success: true, overrides };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to get skill enabled overrides', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Skills);
+      return { success: false, error: String(error), overrides: {} };
+    }
+  });
+
+  ipcMain.handle('skills:setEnabled', async (_event, skillName: string, enabled: boolean) => {
+    try {
+      let current: SkillEnabledOverrides = {};
+      try {
+        current = getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
+      } catch {
+        current = {};
+      }
+      const next = { ...current };
+      if (enabled) {
+        delete next[skillName];
+      } else {
+        next[skillName] = false;
+      }
+      setJsonSetting(SKILL_ENABLED_OVERRIDES_KEY, next);
+      await notifyAgentServerSkillsReload();
+      return { success: true, overrides: next };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to set skill enabled state', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Skills);
+      return { success: false, error: String(error) };
     }
   });
 
