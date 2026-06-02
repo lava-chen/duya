@@ -136,22 +136,18 @@ function SecurityBadge({ security, source }: { security?: SkillSecurity; source?
 function SkillCard({
   skill,
   isEnabled,
-  isToggling,
   onClick,
-  onToggleEnabled,
 }: {
   skill: SkillWithContent;
   isEnabled?: boolean;
-  isToggling?: boolean;
   onClick: () => void;
-  onToggleEnabled: (skill: SkillWithContent) => void;
 }) {
   return (
     <div
       className="group p-4 rounded-xl border border-border/50 bg-surface/50 hover:border-accent/30 hover:bg-accent/[0.02] hover:shadow-sm hover:-translate-y-0.5 transition-all duration-200 cursor-pointer"
       onClick={onClick}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-center gap-3">
         <SkillIcon category={skill.category} size="md" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -159,27 +155,12 @@ function SkillCard({
             <SecurityBadge security={skill.security} source={skill.source} />
           </div>
           <p className="text-xs text-muted-foreground leading-[1.4] line-clamp-1 mt-0.5">{skill.description}</p>
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <span className={`text-[0.72rem] font-medium ${isEnabled ? "text-emerald-500" : "text-amber-500"}`}>
-              {isEnabled ? "Enabled for agent" : "Disabled for agent"}
-            </span>
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggleEnabled(skill);
-              }}
-              disabled={isToggling}
-              className={`px-3 py-1.5 rounded-full text-[0.72rem] font-medium border transition-colors ${
-                isEnabled
-                  ? "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
-                  : "border-amber-500/30 text-amber-500 hover:bg-amber-500/10"
-              } disabled:opacity-60 disabled:cursor-not-allowed`}
-            >
-              {isToggling ? "Updating..." : isEnabled ? "Disable" : "Enable"}
-            </button>
-          </div>
         </div>
+        {isEnabled && (
+          <div className="w-6 h-6 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
+            <CheckIcon size={14} className="text-accent" />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -659,9 +640,7 @@ export function SkillsSection() {
                       key={skill.name}
                       skill={skill}
                       isEnabled={skill.enabled !== false}
-                      isToggling={togglingSkillName === skill.name}
                       onClick={() => setSelectedSkill(skill)}
-                      onToggleEnabled={handleToggleEnabled}
                     />
                   ))}
                 </div>
