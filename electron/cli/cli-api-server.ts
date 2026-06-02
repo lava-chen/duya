@@ -23,6 +23,11 @@ import { generateToken, checkBearer } from './auth';
 import { writeCliApiRuntime, removeCliApiRuntime } from './runtime-config';
 import { handleStatus } from './handlers/status.js';
 import { handleListPlugins, handleGetPlugin } from './handlers/plugins.js';
+import {
+  handleListSessions,
+  handleGetSession,
+  parseQuery as parseSessionsQuery,
+} from './handlers/sessions.js';
 import { getLogger } from '../logging/logger';
 
 const COMPONENT = 'CliApiServer' as const;
@@ -64,6 +69,18 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // /v1/plugins
   if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'plugins') {
     handleListPlugins(req, res);
+    return;
+  }
+
+  // /v1/sessions
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'sessions') {
+    handleListSessions(req, res, parseSessionsQuery(req.url));
+    return;
+  }
+
+  // /v1/sessions/:id
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'sessions') {
+    handleGetSession(req, res, parts[2]);
     return;
   }
 

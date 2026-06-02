@@ -201,3 +201,134 @@ export function setSessionAgentProfile(sessionId: string, agentProfileId: string
     'UPDATE chat_sessions SET agent_profile_id = ?, updated_at = ? WHERE id = ?'
   ).run(agentProfileId, now, sessionId);
 }
+
+// =============================================================================
+// Phase 1 CLI control plane: safe DTO query functions
+//
+// `listSessionSummaries` and `getSessionSummary` are the canonical read-only
+// entry points for the CLI control plane. They enforce the user-visible
+// session filter (top-level, non-automation, non-gateway, not deleted) and
+// return a safe DTO that excludes every internal field. The CLI handler
+// layer is a thin HTTP adapter; no field stripping is performed there.
+//
+// Locked contract (see docs/design-docs/cli-control-plane/phase-1-audit.md
+// §12, §15):
+//   WHERE: is_deleted = 0
+//          AND mode != 'automation'   (mode is NOT NULL DEFAULT 'code')
+//          AND id NOT LIKE 'gw-%'
+//          AND parent_id IS NULL
+//   ORDER: updated_at DESC, id DESC   (deterministic tiebreaker)
+//   SELECT: id, title, created_at, updated_at, model, COUNT(messages)
+// =============================================================================
+
+/** Bounds for `listSessionSummaries` pagination. */
+export const SESSION_LIST_DEFAULT_LIMIT = 20;
+export const SESSION_LIST_MIN_LIMIT = 1;
+export const SESSION_LIST_MAX_LIMIT = 100;
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+  model: string;
+  message_count: number;
+}
+
+export interface ListSessionSummariesOptions {
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Returns top-level user-visible sessions as a safe DTO.
+ * Filters: not deleted, not automation, not gateway, parent_id IS NULL.
+ * Sorted by updated_at DESC, id DESC (deterministic).
+ *
+ * IMPORTANT: the SQL is the single source of truth for the filter and
+ * field selection. The CLI handler must NOT re-filter on these rows.
+ */
+export function listSessionSummaries(
+  options: ListSessionSummariesOptions = {},
+): SessionSummary[] {
+  const limit = clampLimit(options.limit ?? SESSION_LIST_DEFAULT_LIMIT);
+  const offset = clampOffset(options.offset ?? 0);
+  return db()
+    .prepare(
+      `SELECT
+         s.id,
+         s.title,
+         s.created_at,
+         s.updated_at,
+         s.model,
+         (SELECT COUNT(*) FROM messages WHERE session_id = s.id) AS message_count
+       FROM chat_sessions s
+       WHERE s.is_deleted = 0
+         AND s.mode != 'automation'
+         AND s.id NOT LIKE 'gw-%'
+         AND s.parent_id IS NULL
+       ORDER BY s.updated_at DESC, s.id DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(limit, offset) as SessionSummary[];
+}
+
+/**
+ * Returns a single top-level user-visible session as a safe DTO, or
+ * `null` if the session is not found / not deleted / is automation /
+ * is a gateway session / is a sub-agent. Callers must not distinguish
+ * between these cases; the CLI surface maps `null` to 404 session_not_found.
+ */
+export function getSessionSummary(id: string): SessionSummary | null {
+  const row = db()
+    .prepare(
+      `SELECT
+         s.id,
+         s.title,
+         s.created_at,
+         s.updated_at,
+         s.model,
+         (SELECT COUNT(*) FROM messages WHERE session_id = s.id) AS message_count
+       FROM chat_sessions s
+       WHERE s.id = ?
+         AND s.is_deleted = 0
+         AND s.mode != 'automation'
+         AND s.id NOT LIKE 'gw-%'
+         AND s.parent_id IS NULL`,
+    )
+    .get(id) as SessionSummary | undefined;
+  return row ?? null;
+}
+
+function clampLimit(raw: number): number {
+  if (!Number.isInteger(raw)) {
+    throw new InvalidPaginationParam('limit', 'must be an integer');
+  }
+  if (raw < SESSION_LIST_MIN_LIMIT || raw > SESSION_LIST_MAX_LIMIT) {
+    throw new InvalidPaginationParam(
+      'limit',
+      `must be between ${SESSION_LIST_MIN_LIMIT} and ${SESSION_LIST_MAX_LIMIT}`,
+    );
+  }
+  return raw;
+}
+
+function clampOffset(raw: number): number {
+  if (!Number.isInteger(raw)) {
+    throw new InvalidPaginationParam('offset', 'must be an integer');
+  }
+  if (raw < 0) {
+    throw new InvalidPaginationParam('offset', 'must be a non-negative integer');
+  }
+  return raw;
+}
+
+export class InvalidPaginationParam extends Error {
+  constructor(
+    public readonly param: 'limit' | 'offset',
+    public readonly reason: string,
+  ) {
+    super(`Invalid ${param}: ${reason}`);
+    this.name = 'InvalidPaginationParam';
+  }
+}
