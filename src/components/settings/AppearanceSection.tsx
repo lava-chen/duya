@@ -20,6 +20,13 @@ const FONT_KEYS = [
   { value: "jetbrains", key: 'settings.appearance.fontJetbrains' },
 ];
 
+const FONT_FAMILY_MAP: Record<string, string> = {
+  system: "'Styrene', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+  geist: "'Styrene', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+  inter: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+  jetbrains: "'JetBrains Mono', 'Fira Mono', 'Cascadia Mono', 'Consolas', monospace",
+};
+
 export function AppearanceSection() {
   const { t } = useTranslation();
   const { settings, loading, save } = useSettings();
@@ -159,36 +166,40 @@ export function AppearanceSection() {
 
       {/* Preview Section */}
       <SettingsSection title={t('settings.appearance.previewTitle')} description={t('settings.appearance.previewDesc')}>
-        <SettingsCard className="p-4">
-          <div className="space-y-3">
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
-                <span className="text-xs font-medium text-accent">AI</span>
-              </div>
-              <div className="flex-1 space-y-1">
+        <SettingsCard className="p-3">
+          <div className="space-y-2.5" style={{ fontFamily: FONT_FAMILY_MAP[font] || FONT_FAMILY_MAP.system }}>
+            <div className="flex items-start gap-2.5">
+              {showAvatars && (
+                <div className="w-7 h-7 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
+                  <span className="text-[11px] font-medium text-accent">AI</span>
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{t('settings.appearance.previewAssistant')}</span>
+                  <span className="text-xs font-medium">{t('settings.appearance.previewAssistant')}</span>
                   {showTimestamps && (
-                    <span className="text-xs text-muted-foreground">12:34 PM</span>
+                    <span className="text-[10px] text-muted-foreground">12:34</span>
                   )}
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs text-muted-foreground mt-0.5">
                   {t('settings.appearance.previewMessageAi')}
                 </p>
               </div>
             </div>
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                <span className="text-xs font-medium">{t('settings.appearance.previewYou')}</span>
-              </div>
-              <div className="flex-1 space-y-1">
+            <div className="flex items-start gap-2.5">
+              {showAvatars && (
+                <div className="w-7 h-7 rounded-full bg-[var(--surface)] flex items-center justify-center shrink-0">
+                  <span className="text-[11px] font-medium">{t('settings.appearance.previewYou')}</span>
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{t('settings.appearance.previewYou')}</span>
+                  <span className="text-xs font-medium">{t('settings.appearance.previewYou')}</span>
                   {showTimestamps && (
-                    <span className="text-xs text-muted-foreground">12:35 PM</span>
+                    <span className="text-[10px] text-muted-foreground">12:35</span>
                   )}
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs text-muted-foreground mt-0.5">
                   {t('settings.appearance.previewMessageUser')}
                 </p>
               </div>

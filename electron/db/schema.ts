@@ -1504,6 +1504,174 @@ const migrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_import_batches_project ON import_batches(target_project_path)`);
     },
   },
+  {
+    id: 32,
+    name: 'create_deep_research_artifact_tables',
+    migrate(db: BetterSqlite3Db): void {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_sessions (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          original_query TEXT NOT NULL,
+          clarification TEXT,
+          context_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'active',
+          current_phase TEXT NOT NULL DEFAULT 'idle',
+          iterations INTEGER NOT NULL DEFAULT 0,
+          coverage REAL NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          title TEXT,
+          run_status TEXT,
+          plan_version INTEGER NOT NULL DEFAULT 0,
+          active_step_id TEXT,
+          progress_summary TEXT,
+          completed_at INTEGER,
+          error_json TEXT,
+          FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_plan_steps (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          order_num INTEGER NOT NULL,
+          user_facing_label TEXT NOT NULL,
+          internal_question_ids TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'pending',
+          started_at INTEGER,
+          completed_at INTEGER,
+          FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_activities (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          detail TEXT,
+          visibility TEXT NOT NULL DEFAULT 'user',
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_events (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          visibility TEXT NOT NULL DEFAULT 'user',
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE,
+          UNIQUE(run_id, sequence)
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_sources (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          url TEXT,
+          canonical_url TEXT,
+          source_type TEXT NOT NULL DEFAULT 'web',
+          allowed_by_policy INTEGER NOT NULL DEFAULT 1,
+          reliability_json TEXT,
+          dedupe_key TEXT,
+          rejected_reason TEXT,
+          metadata_json TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_reports (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          title TEXT,
+          markdown TEXT NOT NULL,
+          outline_json TEXT,
+          source_ids_json TEXT NOT NULL DEFAULT '[]',
+          citation_ids_json TEXT NOT NULL DEFAULT '[]',
+          activity_summary_json TEXT,
+          export_metadata_json TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_citations (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          report_id TEXT,
+          source_id TEXT NOT NULL,
+          finding_id TEXT,
+          claim TEXT NOT NULL,
+          locator_json TEXT,
+          quoted_evidence TEXT,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE,
+          FOREIGN KEY (report_id) REFERENCES research_reports(id) ON DELETE SET NULL,
+          FOREIGN KEY (source_id) REFERENCES research_sources(id) ON DELETE CASCADE
+        )
+      `);
+
+      const sessionColumns = db.prepare('PRAGMA table_info(research_sessions)').all() as Array<{ name: string }>;
+      const columnNames = sessionColumns.map((col) => col.name);
+      const columnsToAdd: Array<{ name: string; ddl: string }> = [
+        { name: 'title', ddl: 'ALTER TABLE research_sessions ADD COLUMN title TEXT' },
+        { name: 'run_status', ddl: 'ALTER TABLE research_sessions ADD COLUMN run_status TEXT' },
+        { name: 'plan_version', ddl: 'ALTER TABLE research_sessions ADD COLUMN plan_version INTEGER NOT NULL DEFAULT 0' },
+        { name: 'active_step_id', ddl: 'ALTER TABLE research_sessions ADD COLUMN active_step_id TEXT' },
+        { name: 'progress_summary', ddl: 'ALTER TABLE research_sessions ADD COLUMN progress_summary TEXT' },
+        { name: 'completed_at', ddl: 'ALTER TABLE research_sessions ADD COLUMN completed_at INTEGER' },
+        { name: 'error_json', ddl: 'ALTER TABLE research_sessions ADD COLUMN error_json TEXT' },
+      ];
+      for (const col of columnsToAdd) {
+        if (!columnNames.includes(col.name)) {
+          db.exec(col.ddl);
+        }
+      }
+
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sessions_session ON research_sessions(session_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sessions_status ON research_sessions(status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_plan_steps_run ON research_plan_steps(run_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_activities_run ON research_activities(run_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_activities_seq ON research_activities(run_id, sequence)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_events_run_seq ON research_events(run_id, sequence)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sources_run ON research_sources(run_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sources_policy ON research_sources(run_id, allowed_by_policy)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_reports_run ON research_reports(run_id, updated_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_citations_run ON research_citations(run_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_citations_report ON research_citations(report_id)`);
+    },
+  },
+  {
+    id: 33,
+    name: 'enforce_research_event_sequence_uniqueness',
+    migrate(db: BetterSqlite3Db): void {
+      db.exec(`
+        DELETE FROM research_events
+        WHERE rowid NOT IN (
+          SELECT MIN(rowid)
+          FROM research_events
+          GROUP BY run_id, sequence
+        )
+      `);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_research_events_run_seq ON research_events(run_id, sequence)`);
+    },
+  },
 ];
 
 /**

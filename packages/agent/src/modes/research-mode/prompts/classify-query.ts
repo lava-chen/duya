@@ -1,4 +1,4 @@
-import type { ResearchClassification, QueryComplexity } from '../types.js';
+import type { QueryComplexity } from '../types.js';
 
 export const CLASSIFY_QUERY_VERSION = '1.0.0';
 
@@ -8,45 +8,34 @@ export interface ClassifyQueryInput {
 
 export interface ClassifyQueryOutput {
   complexity: QueryComplexity;
-  freshness: ResearchClassification['freshness'];
-  sourceDepth: ResearchClassification['sourceDepth'];
-  riskLevel: ResearchClassification['riskLevel'];
+  freshness: 'stable' | 'recent' | 'latest';
+  sourceDepth: 'light' | 'standard' | 'deep';
+  riskLevel: 'low' | 'medium' | 'high';
   needsTools: string[];
 }
 
 export function buildPrompt(input: ClassifyQueryInput): string {
   return `
-Classify this research query along multiple dimensions.
+Classify the following research query. Determine its complexity and metadata.
 
 Query: "${input.query}"
 
-Categories for complexity:
-- factual: Simple fact lookup, quick answer expected
-- conceptual: Explaining concepts, moderate depth needed
-- comparative: Comparing multiple things, need side-by-side sources
-- analytical: Deep analysis, multiple perspectives required
-- literature_review: Survey of academic literature or field progress
-- technical_design: Implementation, architecture, or engineering approach
+Complexity levels:
+- factual: Simple fact lookup (e.g., "What is X?")
+- conceptual: Understanding a concept (e.g., "How does X work?")
+- comparative: Comparing multiple things (e.g., "X vs Y")
+- analytical: Deep analysis required (e.g., "Why did X happen?")
+- literature_review: Requires surveying multiple sources
+- technical_design: Requires understanding technical architecture
 - unknown: Cannot determine
-
-Freshness requirements:
-- stable: Doesn't change (e.g., math concepts, fundamental physics)
-- recent: 1-3 year window (e.g., current best practices, recent research)
-- latest: Very time-sensitive (e.g., latest releases, breaking news)
-
-Source depth:
-- light: 1-2 searches per question
-- standard: 2-4 searches per question
-- deep: 4+ searches, must include primary sources
 
 Return JSON:
 {
-  "complexity": "analytical",
+  "complexity": "conceptual",
   "freshness": "recent",
-  "sourceDepth": "deep",
-  "riskLevel": "medium",
-  "needsTools": ["browser"],
-  "reason": "..."
+  "sourceDepth": "standard",
+  "riskLevel": "low",
+  "needsTools": ["browser"]
 }
 `.trim();
 }
@@ -54,11 +43,11 @@ Return JSON:
 export function parseResponse(raw: string): ClassifyQueryOutput {
   const parsed = safeParseJSON(raw);
   return {
-    complexity: (parsed?.complexity as QueryComplexity) ?? 'unknown',
-    freshness: (parsed?.freshness as ResearchClassification['freshness']) ?? 'recent',
-    sourceDepth: (parsed?.sourceDepth as ResearchClassification['sourceDepth']) ?? 'standard',
-    riskLevel: (parsed?.riskLevel as ResearchClassification['riskLevel']) ?? 'medium',
-    needsTools: Array.isArray(parsed?.needsTools) ? (parsed.needsTools as string[]) : ['browser'],
+    complexity: (parsed?.complexity as QueryComplexity) || 'unknown',
+    freshness: (parsed?.freshness as ClassifyQueryOutput['freshness']) || 'recent',
+    sourceDepth: (parsed?.sourceDepth as ClassifyQueryOutput['sourceDepth']) || 'standard',
+    riskLevel: (parsed?.riskLevel as ClassifyQueryOutput['riskLevel']) || 'medium',
+    needsTools: Array.isArray(parsed?.needsTools) ? parsed.needsTools as string[] : ['browser'],
   };
 }
 
@@ -78,3 +67,9 @@ function safeParseJSON(response: string): Record<string, unknown> | null {
     return null;
   }
 }
+
+export const classifyQuery = {
+  buildPrompt,
+  parseResponse,
+  version: CLASSIFY_QUERY_VERSION,
+};

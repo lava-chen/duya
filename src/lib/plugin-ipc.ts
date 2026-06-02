@@ -37,6 +37,12 @@ export function getPluginAPI() {
       install: async (payload: { pluginId: string }): Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }> => {
         return api.plugin.install(payload) as unknown as Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>;
       },
+      installLocal: async (payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }): Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }> => {
+        return (api.plugin as any).installLocal(payload) as Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>;
+      },
+      mcpList: async (): Promise<{ success: boolean; data: Array<{ pluginId: string; pluginName: string; name: string; command: string; args?: string[]; env?: Record<string, string> }>; error?: string }> => {
+        return (api.plugin as any).mcpList() as Promise<{ success: boolean; data: Array<{ pluginId: string; pluginName: string; name: string; command: string; args?: string[]; env?: Record<string, string> }>; error?: string }>;
+      },
       enable: async (pluginId: string): Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }> => {
         return api.plugin.enable(pluginId) as unknown as Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>;
       },

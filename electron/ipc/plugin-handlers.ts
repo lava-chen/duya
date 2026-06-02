@@ -11,7 +11,8 @@
  */
 
 import { ipcMain } from 'electron';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
+import * as http from 'http';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginManager } from '../plugins/PluginManager';
 import {
@@ -31,6 +32,43 @@ import { isBlockedMarketplaceName } from '../plugins/marketplace/impersonation-d
 import type { MarketplaceEntry } from '../plugins/marketplace/types';
 
 const COMPONENT = 'PluginHandlers' as LogComponent;
+
+let cachedAgentServerUrl: string | null = null;
+
+async function getAgentServerUrl(): Promise<string | null> {
+  if (cachedAgentServerUrl) return cachedAgentServerUrl;
+  try {
+    const { getAgentServerPort } = await import('../agents/agent-server-lifecycle');
+    const port = getAgentServerPort();
+    if (port) {
+      cachedAgentServerUrl = `http://127.0.0.1:${port}`;
+    }
+    return cachedAgentServerUrl;
+  } catch {
+    return null;
+  }
+}
+
+async function notifyAgentServerPluginReload(): Promise<void> {
+  const url = await getAgentServerUrl();
+  if (!url) return;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const reqObj = http.request(`${url}/plugins/reload`, { method: 'POST' }, (res) => {
+        res.resume();
+        resolve();
+      });
+      reqObj.on('error', reject);
+      reqObj.setTimeout(2000, () => {
+        reqObj.destroy();
+        resolve();
+      });
+      reqObj.end();
+    });
+  } catch {
+    // Silently ignore - agent server may not be running
+  }
+}
 
 function buildHealthIssue(err: PluginError) {
   return {
@@ -188,6 +226,9 @@ export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:install', async (_event, payload: { pluginId: string }) => {
     try {
       const result = await manager.installFromCatalog(payload.pluginId);
+      if (result.success) {
+        notifyAgentServerPluginReload();
+      }
       return handleResult(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -196,10 +237,28 @@ export function registerPluginHandlers(): void {
     }
   });
 
+  // --- plugin:install-local ---
+  ipcMain.handle('plugin:install-local', async (_event, payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }) => {
+    try {
+      const result = await manager.installFromPath(payload.pluginPath, payload.scope as 'user' | undefined, payload.autoUpdate ?? false);
+      if (result.success) {
+        notifyAgentServerPluginReload();
+      }
+      return handleResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:install-local failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
   // --- plugin:enable ---
   ipcMain.handle('plugin:enable', async (_event, pluginId: string) => {
     try {
       const result = await manager.setEnabled(pluginId, true);
+      if (result.success) {
+        notifyAgentServerPluginReload();
+      }
       return handleResult(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -212,6 +271,9 @@ export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:disable', async (_event, pluginId: string) => {
     try {
       const result = await manager.setEnabled(pluginId, false);
+      if (result.success) {
+        notifyAgentServerPluginReload();
+      }
       return handleResult(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -224,6 +286,9 @@ export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:remove', async (_event, payload: { pluginId: string; deleteData?: boolean }) => {
     try {
       const result = await manager.remove(payload.pluginId, payload.deleteData ?? false);
+      if (result.success) {
+        notifyAgentServerPluginReload();
+      }
       return handleResult(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -371,6 +436,7 @@ export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:update', async (_event, payload: { pluginId: string; targetVersion: string }) => {
     try {
       const result = await manager.updatePlugin(payload.pluginId, payload.targetVersion);
+      notifyAgentServerPluginReload();
       return { success: true, data: result };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -387,6 +453,50 @@ export function registerPluginHandlers(): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('plugin:installed:v2 failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:mcp:list ---
+  ipcMain.handle('plugin:mcp:list', async () => {
+    try {
+      const installed = manager.getInstalledV2();
+      const path = await import('path');
+      const pluginMCPs: Array<{
+        pluginId: string;
+        pluginName: string;
+        name: string;
+        command: string;
+        args?: string[];
+        env?: Record<string, string>;
+      }> = [];
+
+      for (const [pluginId, info] of Object.entries(installed)) {
+        const manifestPath = path.join(info.installPath, 'plugin.json');
+        if (!existsSync(manifestPath)) continue;
+        try {
+          const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+          const servers = manifest?.capabilities?.mcpServers;
+          if (!Array.isArray(servers)) continue;
+          for (const server of servers) {
+            pluginMCPs.push({
+              pluginId,
+              pluginName: manifest.name || pluginId,
+              name: server.name || 'unnamed',
+              command: server.command || '',
+              args: server.args,
+              env: server.env,
+            });
+          }
+        } catch {
+          // skip unreadable manifests
+        }
+      }
+
+      return { success: true, data: pluginMCPs };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:mcp:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
       return { success: false, data: [], error: message };
     }
   });

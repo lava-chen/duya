@@ -20,6 +20,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useBrowserExtension } from '@/hooks/useBrowserExtension';
 import { useSettings } from '@/hooks/useSettings';
 import { SettingsSection, SettingsCard, SettingsRow } from '@/components/settings/ui';
+import { ExtensionConfirmDialog } from '@/components/ExtensionConfirmDialog';
 
 // Chrome Web Store extension URL
 const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
@@ -51,6 +52,7 @@ export default function BrowserExtensionSection() {
   const [showManualInstall, setShowManualInstall] = useState(false);
   const [extensionPath, setExtensionPath] = useState('');
   const [checkingStore, setCheckingStore] = useState(false);
+  const [confirmingExtension, setConfirmingExtension] = useState(false);
 
   // Browser Security state
   const [blockedDomains, setBlockedDomains] = useState<string[]>([]);
@@ -85,6 +87,38 @@ export default function BrowserExtensionSection() {
         .catch(() => {});
     }
   }, [showManualInstall]);
+
+  useEffect(() => {
+    // Keep status checks responsive while disconnected so pending approval
+    // prompts appear quickly without waiting for the default 30s poll.
+    if (status === 'connected') return;
+    const timer = setInterval(() => {
+      void checkExtension();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [status, checkExtension]);
+
+  const handleApprovePendingExtension = useCallback(async () => {
+    if (!window.electronAPI?.browserExtension?.approvePending) return;
+    setConfirmingExtension(true);
+    try {
+      await window.electronAPI.browserExtension.approvePending();
+    } finally {
+      setConfirmingExtension(false);
+      await checkExtension();
+    }
+  }, [checkExtension]);
+
+  const handleDenyPendingExtension = useCallback(async () => {
+    if (!window.electronAPI?.browserExtension?.denyPending) return;
+    setConfirmingExtension(true);
+    try {
+      await window.electronAPI.browserExtension.denyPending();
+    } finally {
+      setConfirmingExtension(false);
+      await checkExtension();
+    }
+  }, [checkExtension]);
 
   const handleAddDomain = useCallback(() => {
     if (!newDomain.trim()) return;
@@ -198,6 +232,7 @@ export default function BrowserExtensionSection() {
   const statusConfig = getStatusConfig();
 
   return (
+    <>
     <div className="settings-section">
       {/* Hero Status Card */}
       <SettingsCard
@@ -464,5 +499,16 @@ export default function BrowserExtensionSection() {
         )}
       </SettingsSection>
     </div>
+
+    <ExtensionConfirmDialog
+      isOpen={Boolean(health?.pendingExtensionApproval) && !confirmingExtension}
+      extName={health?.pendingExtensionApproval?.extensionName ?? 'Unknown Extension'}
+      extId={health?.pendingExtensionApproval?.extensionId ?? 'unknown'}
+      version={health?.pendingExtensionApproval?.extensionVersion ?? null}
+      onApprove={() => { void handleApprovePendingExtension(); }}
+      onDeny={() => { void handleDenyPendingExtension(); }}
+    />
+    </>
+
   );
 }

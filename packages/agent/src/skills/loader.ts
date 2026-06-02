@@ -172,6 +172,7 @@ async function createSkillFromDirectory(
   source: SkillSource,
   inheritedCategory?: SkillCategory,
   securityBypassSkills?: string[],
+  skipSecurityScan?: boolean,
 ): Promise<PromptSkill | null> {
   const skillFilePath = path.join(skillDir, 'SKILL.md');
 
@@ -189,9 +190,10 @@ async function createSkillFromDirectory(
   // Scan SKILL.md for injection/exfiltration/destructive patterns
   // Skip security scan for bundled (built-in) skills - they are trusted
   // Also skip if user has explicitly chosen to bypass security for this skill
+  // Also skip if global security scan is disabled via settings
   const isBypassed = securityBypassSkills?.includes(skillName) ?? false;
   let findings: ReturnType<typeof scanSkillFile> = [];
-  if (source !== 'bundled' && !isBypassed) {
+  if (source !== 'bundled' && !isBypassed && !skipSecurityScan) {
     findings = scanSkillFile(markdownContent, 'SKILL.md');
     if (findings.length > 0) {
       // Determine verdict from findings
@@ -350,6 +352,7 @@ async function loadSkillsFromDirectory(
   parentCategory?: SkillCategory,
   securityBypassSkills?: string[],
   bundledSkillNames?: Set<string>,
+  skipSecurityScan?: boolean,
 ): Promise<PromptSkill[]> {
   const skills: PromptSkill[] = [];
 
@@ -392,13 +395,13 @@ async function loadSkillsFromDirectory(
     const effectiveSource: SkillSource =
       (source === 'user' && bundledSkillNames?.has(entry)) ? 'bundled' : source;
 
-    const skill = await createSkillFromDirectory(entryPath, entry, effectiveSource, inheritedCategory, securityBypassSkills);
+    const skill = await createSkillFromDirectory(entryPath, entry, effectiveSource, inheritedCategory, securityBypassSkills, skipSecurityScan);
     if (skill) {
       skills.push(skill);
     } else {
       // If not a skill directory, recursively try to load as category directory
       // This handles nested category structures like skills/apple/apple-notes/
-      const nestedSkills = await loadSkillsFromDirectory(entryPath, effectiveSource, inheritedCategory, securityBypassSkills, bundledSkillNames);
+      const nestedSkills = await loadSkillsFromDirectory(entryPath, effectiveSource, inheritedCategory, securityBypassSkills, bundledSkillNames, skipSecurityScan);
       skills.push(...nestedSkills);
     }
   }
@@ -416,6 +419,8 @@ export interface SkillLoadOptions {
   syncBundled?: boolean;
   /** List of skill names to bypass security checks for */
   securityBypassSkills?: string[];
+  /** Skip all security scanning (default: false). Controlled by securityScanEnabled setting */
+  skipSecurityScan?: boolean;
 }
 
 /**
@@ -527,10 +532,12 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
     }
   }
 
+  const skipSecurityScan = options?.skipSecurityScan ?? false;
+
   // Load all skills from user directory (~/.duya/skills/)
   // This includes synced built-in skills AND user-added skills
   // bundledSkillNames is passed so that synced bundled skills use source='bundled' to skip security scans
-  const userSkills = await loadSkillsFromDirectory(user, 'user', undefined, securityBypassSkills, bundledSkillNames);
+  const userSkills = await loadSkillsFromDirectory(user, 'user', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
 
   if (bundledSkillNames.size > 0) {
     console.log(`[Skills] ${bundledSkillNames.size} bundled skills loaded with security bypass`);
@@ -538,7 +545,7 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
   allSkills.push(...userSkills);
 
   // Load project-level skills
-  const projectSkills = await loadSkillsFromDirectory(project, 'project', undefined, securityBypassSkills, bundledSkillNames);
+  const projectSkills = await loadSkillsFromDirectory(project, 'project', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
   allSkills.push(...projectSkills);
 
   // Load skills from additional custom paths
@@ -548,7 +555,7 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
       const resolvedPath = path.isAbsolute(additionalPath)
         ? additionalPath
         : path.join(cwd, additionalPath);
-      const additionalSkills = await loadSkillsFromDirectory(resolvedPath, 'user', undefined, securityBypassSkills, bundledSkillNames);
+      const additionalSkills = await loadSkillsFromDirectory(resolvedPath, 'user', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
       allSkills.push(...additionalSkills);
     }
   }

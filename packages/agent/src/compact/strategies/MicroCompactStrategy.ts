@@ -50,20 +50,55 @@ export interface FileStateEntry {
 }
 
 /**
- * Extract text content from messages for summarization
+ * Extract text content from messages for summarization.
+ * Includes tool_use names and key inputs so the micro summary preserves
+ * the action trail without the full tool result content.
  */
 function extractTextFromMessages(messages: Message[]): string {
+  const MAX_MSG_LENGTH = 3000
+
   return messages
     .map(msg => {
       if (typeof msg.content === 'string') {
-        return `[${msg.role.toUpperCase()}]: ${msg.content}`
+        const content = msg.content.length > MAX_MSG_LENGTH
+          ? msg.content.slice(0, MAX_MSG_LENGTH) + '...'
+          : msg.content
+        return `[${msg.role.toUpperCase()}]: ${content}`
       }
       if (Array.isArray(msg.content)) {
-        const textContent = msg.content
-          .filter(block => block.type === 'text')
-          .map(block => (block as { type: 'text'; text: string }).text)
-          .join('\n')
-        return `[${msg.role.toUpperCase()}]: ${textContent}`
+        const parts: string[] = []
+        for (const block of msg.content) {
+          const b = block as unknown as Record<string, unknown>
+          if (b.type === 'text') {
+            const text = (b.text as string) || ''
+            if (text.trim()) {
+              parts.push(text.length > MAX_MSG_LENGTH
+                ? text.slice(0, MAX_MSG_LENGTH) + '...'
+                : text)
+            }
+          } else if (b.type === 'tool_use') {
+            const name = (b.name as string) || 'unknown'
+            const input = (b.input as Record<string, unknown>) || {}
+            const keyFields: Record<string, string> = {
+              Read: 'file_path', Write: 'file_path', Edit: 'file_path',
+              Bash: 'command', Grep: 'pattern', Glob: 'pattern',
+              WebSearch: 'query', WebFetch: 'url', Task: 'query',
+            }
+            const keyField = keyFields[name]
+            const keyVal = keyField && typeof input[keyField] === 'string' && input[keyField]
+              ? `: ${(input[keyField] as string).slice(0, 80)}`
+              : ''
+            parts.push(`[Tool: ${name}${keyVal}]`)
+          } else if (b.type === 'tool_result') {
+            parts.push(`[Tool Result]`)
+          } else if (b.type === 'thinking') {
+            const thinking = (b.thinking as string) || ''
+            if (thinking.trim()) parts.push(`[Thinking: ${thinking.slice(0, 200)}]`)
+          }
+        }
+        return parts.length > 0
+          ? `[${msg.role.toUpperCase()}]:\n${parts.join('\n')}`
+          : ''
       }
       return ''
     })
@@ -403,6 +438,7 @@ export class MicroCompactStrategy implements CompactionStrategy {
 
     // Create summary message with continuation instruction
     const boundaryId = crypto.randomUUID();
+    const compactedIds = olderMessages.map(m => m.id).filter((id): id is string => !!id)
 
     const summaryMessage: Message = {
       role: 'system',
@@ -411,6 +447,7 @@ export class MicroCompactStrategy implements CompactionStrategy {
       isCompactSummary: true,
       compactBoundaryId: boundaryId,
       compactedMessageCount: olderMessages.length,
+      compactedMessageIds: compactedIds,
     }
 
     // Build compressed history: system + summary + recent
@@ -438,9 +475,10 @@ function getDefaultMicroCompactPrompt(): string {
 Focus on:
 1. What was requested by the user
 2. Key files that were examined or modified
-3. Important decisions made
-4. Current state of work
-5. Any errors encountered and their resolution
+3. What tools were used (Read, Write, Bash, etc.) and their purpose
+4. Important decisions made
+5. Current state of work
+6. Any errors encountered and their resolution
 
 Keep the summary concise (under 500 words). Do NOT include full code snippets unless absolutely critical.
 

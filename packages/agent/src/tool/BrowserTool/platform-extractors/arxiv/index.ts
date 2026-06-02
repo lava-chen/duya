@@ -107,7 +107,16 @@ export class ArxivExtractor extends BaseExtractor {
     }
 
     try {
-      const resp = await fetch(apiUrl);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      let resp: Response;
+      try {
+        resp = await fetch(apiUrl, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
       if (!resp.ok) {
         console.warn(`[ArxivExtractor] API HTTP ${resp.status}`);
         return null;

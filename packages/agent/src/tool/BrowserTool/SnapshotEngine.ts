@@ -152,7 +152,7 @@ export function getFormStateJs(): string {
  *   |scroll|<div> (0.5↑ 3.2↓)
  *     *[58]<a href=/r/1>Result 1</a>
  */
-function generateSnapshotJs(opts: SnapshotOptions = {}): string {
+export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
   const viewportExpand = opts.viewportExpand ?? DEFAULT_VIEWPORT_EXPAND;
   const maxDepth = Math.max(1, Math.min(opts.maxDepth ?? DEFAULT_MAX_DEPTH, 200));
   const interactiveOnly = opts.interactiveOnly ?? false;
@@ -165,6 +165,7 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
 
   return `
 (() => {
+  try {
   'use strict';
 
   // ── Config ─────────────────────────────────────────────────────────
@@ -781,14 +782,14 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
       line += ' (' + parts.join(', ') + ')';
       if (childLinesCount > 0) line += ':';
     } else if (text && childLinesCount === 0) {
-      line += ' "' + text.replace(/"/g, '').replace(/\n/g, ' ') + '"';
+      line += ' "' + text.replace(/"/g, '').replace(/\\n/g, ' ') + '"';
     } else if (childLinesCount > 0) {
       line += ':';
     }
 
     lines.splice(origLen, 0, line);
     if (text && childLinesCount > 0) {
-      lines.splice(origLen + 1, 0, indent + '  - text: "' + text.replace(/"/g, '').replace(/\n/g, ' ') + '"');
+      lines.splice(origLen + 1, 0, indent + '  - text: "' + text.replace(/"/g, '').replace(/\\n/g, ' ') + '"');
     }
 
     return interactive || hasInteractiveDescendant;
@@ -914,6 +915,12 @@ function generateSnapshotJs(opts: SnapshotOptions = {}): string {
   try { window.__opencli_ref_identity = refIdentity; } catch {}
 
   return lines.join('\\n');
+  } catch (_err) {
+    return 'url: ' + (typeof location !== 'undefined' ? location.href : 'unknown') +
+      '\\ntitle: ' + (typeof document !== 'undefined' ? document.title : 'unknown') +
+      '\\n---\\nSnapshot generation failed: ' +
+      (_err && _err.message ? _err.message : String(_err || 'unknown error'));
+  }
 })()
   `.trim();
 }
@@ -965,7 +972,7 @@ export class SnapshotEngine {
     const title = await this.cdp.getTitle();
 
     // Generate OpenCLI-style snapshot JS
-    const snapshotJs = generateSnapshotJs({
+    const snapshotJs = generateSnapshotJsPrompt({
       ...options,
       interactiveOnly,
       previousHashes: this.prevHashes,
@@ -986,7 +993,8 @@ export class SnapshotEngine {
         } catch { /* ignore */ }
       }
     } catch (error) {
-      console.warn('[SnapshotEngine] OpenCLI-style snapshot failed:', error instanceof Error ? error.message : error);
+      console.warn('[SnapshotEngine] OpenCLI-style snapshot failed at', url, ':',
+        error instanceof Error ? error.message : String(error));
     }
 
     // Fallback: try CDP DOM.getDocument
@@ -998,12 +1006,24 @@ export class SnapshotEngine {
       }
     }
 
-    // If all approaches failed, return error message
+    // Fallback: try simple text extraction as last resort
+    if (!snapshot || snapshot.trim().length < 50) {
+      try {
+        const textContent = await this.captureViaSimpleText();
+        if (textContent) {
+          snapshot = textContent;
+        }
+      } catch (error) {
+        console.warn('[SnapshotEngine] Simple text fallback failed:', error instanceof Error ? error.message : error);
+      }
+    }
+
+    // If all approaches failed, return minimal info so agent can still see context
     if (!snapshot || snapshot.trim().length < 50) {
       return {
         url,
         title,
-        snapshot: 'Failed to capture DOM - page may not be fully loaded.',
+        snapshot: `Unable to capture full DOM snapshot.\nURL: ${url}\nTitle: ${title}\n\nThe page is loaded but DOM access failed. Try a different action (e.g., screenshot or click).`,
         interactiveElements: [],
         truncated: false,
       };
@@ -1046,6 +1066,30 @@ export class SnapshotEngine {
           interactiveOnly: options.interactiveOnly ?? false,
           depth: 0,
         });
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /**
+   * Last-resort fallback: extract plain text content from the page
+   */
+  private async captureViaSimpleText(): Promise<string | null> {
+    try {
+      const result = await this.cdp.evaluate(`
+        (function() {
+          var body = document.body;
+          if (!body) return 'Page body not available.';
+          var text = body.innerText || body.textContent || '';
+          var lines = text.split('\\n').filter(function(l) { return l.trim(); });
+          if (lines.length > 200) {
+            lines = lines.slice(0, 100).concat(['... (truncated ' + (lines.length - 100) + ' lines)'], lines.slice(-100));
+          }
+          return 'url: ' + location.href + '\\ntitle: ' + document.title + '\\n---\\n' + lines.join('\\n');
+        })()
+      `);
+      if (typeof result === 'string' && result.trim().length > 20) {
+        return result;
       }
     } catch { /* ignore */ }
     return null;

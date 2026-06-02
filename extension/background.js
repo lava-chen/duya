@@ -18,6 +18,9 @@ let ws = null;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let isConnecting = false;
+let connectTimeoutTimer = null;
+let connectPromise = null;
+let helloSent = false;
 
 /** @type {Map<string, chrome.debugger.Debuggee>} */
 const attachedTabs = new Map();
@@ -237,67 +240,148 @@ chrome.windows.onRemoved.addListener((windowId) => {
 // ─── WebSocket Connection ────────────────────────────────────────────
 
 function connect() {
-  if (isConnecting || (ws && ws.readyState === WebSocket.OPEN)) return;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    return Promise.resolve(sendHello(ws));
+  }
+  if (connectPromise) return connectPromise;
+
   isConnecting = true;
 
-  try {
-    ws = new WebSocket(DAEMON_URL);
+  connectPromise = new Promise((resolve) => {
+    let settled = false;
+    let waitingForAck = false;
+    let ackTimeout = null;
+    const socket = new WebSocket(DAEMON_URL);
+    ws = socket;
+    helloSent = false;
 
-    ws.onopen = async () => {
-      console.log('[DUYA Bridge] Connected to daemon');
-      reconnectAttempts = 0;
-      isConnecting = false;
-
-      // Send hello message with name and version
-      const manifest = chrome.runtime.getManifest();
-      sendMessage({
-        type: 'hello',
-        name: manifest.name,
-        version: manifest.version,
-        compatRange: '^1.0.0',
-      });
-
-      // Send blocked domains to daemon
-      const blockedDomains = await getBlockedDomains();
-      sendMessage({
-        type: 'blocked_domains',
-        domains: blockedDomains,
-      });
-
-      // Send connection log to daemon
-      sendMessage({
-        type: 'log',
-        level: 'info',
-        msg: 'Connected to daemon',
-      });
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      waitingForAck = false;
+      connectPromise = null;
+      if (ackTimeout) { clearTimeout(ackTimeout); ackTimeout = null; }
+      resolve(result);
     };
 
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        await handleCommand(msg);
-      } catch (error) {
-        console.error('[DUYA Bridge] Error handling message:', error);
-        sendResult(msg.id, { ok: false, error: error.message });
+    const clearConnectTimeout = () => {
+      if (connectTimeoutTimer) {
+        clearTimeout(connectTimeoutTimer);
+        connectTimeoutTimer = null;
       }
     };
 
-    ws.onclose = () => {
-      console.log('[DUYA Bridge] Disconnected from daemon');
-      ws = null;
+    if (connectTimeoutTimer) clearTimeout(connectTimeoutTimer);
+    connectTimeoutTimer = setTimeout(() => {
+      if (ws === socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) && !settled) {
+        console.warn('[DUYA Bridge] WebSocket connect timeout, forcing reconnect');
+        try { socket.close(); } catch {}
+        ws = null;
+        isConnecting = false;
+        if (ackTimeout) { clearTimeout(ackTimeout); ackTimeout = null; }
+        finish({ ok: false, connected: false, phase: 'timeout' });
+        scheduleReconnect();
+      }
+    }, 5000);
+
+    socket.onopen = async () => {
+      try {
+        console.log('[DUYA Bridge] Connected to daemon');
+        reconnectAttempts = 0;
+        isConnecting = false;
+        clearConnectTimeout();
+
+        const helloResult = sendHello(socket);
+        if (!helloResult.ok) {
+          finish(helloResult);
+          return;
+        }
+
+        // Wait for daemon hello_ack instead of resolving immediately
+        waitingForAck = true;
+        ackTimeout = setTimeout(() => {
+          if (waitingForAck && !settled) {
+            console.warn('[DUYA Bridge] No hello_ack received, closing');
+            try { socket.close(); } catch {}
+            finish({ ok: false, connected: false, phase: 'ack_timeout' });
+          }
+        }, 4000);
+      } catch (error) {
+        console.error('[DUYA Bridge] onopen handshake failed:', error);
+        isConnecting = false;
+        finish({ ok: false, connected: false, phase: 'handshake_failed', error: error?.message ?? String(error) });
+        try { socket.close(); } catch {}
+      }
+    };
+
+    socket.onmessage = async (event) => {
+      let msg = null;
+      try {
+        msg = JSON.parse(event.data);
+
+        // Intercept hello_ack during the handshake phase
+        if (msg.type === 'hello_ack' && waitingForAck && !settled) {
+          clearTimeout(ackTimeout);
+          ackTimeout = null;
+
+          if (msg.ok) {
+            finish({ ok: true, connected: true, phase: 'verified' });
+            // Send non-critical messages after connection is verified
+            try {
+              const blockedDomains = await getBlockedDomains();
+              sendSocketMessage(socket, { type: 'blocked_domains', domains: blockedDomains });
+            } catch {}
+            sendSocketMessage(socket, { type: 'log', level: 'info', msg: 'Connected to daemon' });
+          } else {
+            finish({
+              ok: false,
+              connected: false,
+              phase: msg.reason === 'pending_approval' ? 'pending_approval' : 'rejected',
+              reason: msg.reason ?? 'unknown',
+              extensionId: msg.extensionId ?? null,
+            });
+          }
+          return;
+        }
+
+        // Silently ignore stale hello_ack (e.g., from heartbeat re-hello)
+        if (msg.type === 'hello_ack') return;
+
+        await handleCommand(msg);
+      } catch (error) {
+        console.error('[DUYA Bridge] Error handling message:', error);
+        if (msg && msg.id) {
+          sendResult(msg.id, { ok: false, error: error.message });
+        }
+      }
+    };
+
+    socket.onclose = (event) => {
+      console.log('[DUYA Bridge] Disconnected from daemon', event.code, event.reason || '');
+      clearConnectTimeout();
+      if (ackTimeout) { clearTimeout(ackTimeout); ackTimeout = null; }
+      if (ws === socket) ws = null;
+      helloSent = false;
       isConnecting = false;
+      finish({
+        ok: false,
+        connected: false,
+        phase: 'closed',
+        closeCode: event.code,
+        closeReason: event.reason || '',
+      });
       scheduleReconnect();
     };
 
-    ws.onerror = (error) => {
+    socket.onerror = (error) => {
       console.error('[DUYA Bridge] WebSocket error:', error);
+      clearConnectTimeout();
+      if (ackTimeout) { clearTimeout(ackTimeout); ackTimeout = null; }
       isConnecting = false;
     };
-  } catch (error) {
-    console.error('[DUYA Bridge] Failed to connect:', error);
-    isConnecting = false;
-    scheduleReconnect();
-  }
+  });
+
+  return connectPromise;
 }
 
 function scheduleReconnect() {
@@ -310,13 +394,47 @@ function scheduleReconnect() {
   console.log(`[DUYA Bridge] Reconnecting in ${RECONNECT_INTERVAL}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
 
   if (reconnectTimer) clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(() => connect(), RECONNECT_INTERVAL);
+  reconnectTimer = setTimeout(() => { void connect(); }, RECONNECT_INTERVAL);
+}
+
+function sendSocketMessage(socket, msg) {
+  if (socket.readyState === WebSocket.OPEN) {
+    try {
+      socket.send(JSON.stringify(msg));
+      return true;
+    } catch (error) {
+      console.error('[DUYA Bridge] Failed to send WS message:', error, msg?.type ?? 'unknown');
+    }
+  }
+  return false;
+}
+
+function sendHello(socket) {
+  const manifest = chrome.runtime.getManifest();
+  const sent = sendSocketMessage(socket, {
+    type: 'hello',
+    name: manifest.name,
+    version: manifest.version,
+    extensionId: chrome.runtime.id,
+    compatRange: '^1.0.0',
+  });
+
+  if (sent) {
+    helloSent = true;
+    console.log('[DUYA Bridge] Hello sent', { id: chrome.runtime.id, name: manifest.name, version: manifest.version });
+    return { ok: true, connected: true, phase: 'hello_sent', helloSent: true };
+  }
+
+  helloSent = false;
+  console.warn('[DUYA Bridge] Hello not sent because socket is not open', socket.readyState);
+  return { ok: false, connected: false, phase: 'hello_not_sent', helloSent: false, readyState: socket.readyState };
 }
 
 function sendMessage(msg) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(msg));
+  if (ws) {
+    return sendSocketMessage(ws, msg);
   }
+  return false;
 }
 
 function sendResult(id, result) {
@@ -988,10 +1106,18 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'ping') {
     sendResponse({ ok: true, connected: ws?.readyState === WebSocket.OPEN });
+    return false;
   }
   if (msg?.type === 'connect') {
-    void connect().then(() => sendResponse({ ok: true }));
-    return true; // async response
+    const startedAt = Date.now();
+    connect()
+      .then((result) => {
+        sendResponse({ ...result, elapsedMs: Date.now() - startedAt });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, connected: false, phase: 'error', error: error?.message ?? String(error) });
+      });
+    return true;
   }
   return false;
 });

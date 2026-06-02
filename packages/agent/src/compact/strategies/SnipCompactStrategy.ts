@@ -75,13 +75,16 @@ export class SnipCompactStrategy implements CompactionStrategy {
     const removedCount = messages.length - systemMessages.length - recentMessages.length
 
     // Build compressed history with a boundary marker
+    const compactedIds = conversationMessages.slice(0, -this.config.maxMessagesToKeep)
+      .map(m => m.id).filter((id): id is string => !!id)
     const snipNotice: Message = {
       role: 'system',
       content: `[Earlier messages truncated — ${removedCount} messages removed to stay within context limits]`,
       timestamp: Date.now(),
       isCompactBoundary: true,
       compactedMessageCount: removedCount,
-    }
+      compactedMessageIds: compactedIds,
+        }
 
     const compressedMessages: Message[] = [
       ...systemMessages,

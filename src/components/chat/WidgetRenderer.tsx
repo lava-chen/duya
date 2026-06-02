@@ -5,6 +5,7 @@ import { buildReceiverSrcdoc, sanitizeForStreaming } from '@/lib/widget-sanitize
 import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from '@/lib/widget-css-bridge';
 import { CopyIcon, CheckIcon, DownloadSimpleIcon, SquaresFourIcon } from '@/components/icons';
 import { addChatWidgetToCanvas } from '@/lib/chat-widget-to-canvas';
+import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
 
 interface WidgetRendererProps {
   widgetCode: string;
@@ -196,6 +197,7 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
   const [height, setHeight] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const lastCodeRef = useRef(widgetCode);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeReadyRef = useRef(false);
@@ -264,6 +266,11 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
           if (e.data.text && typeof window !== 'undefined') {
             const bridge = ((window as unknown) as Record<string, unknown>).__widgetSendMessage as ((text: string) => void) | undefined;
             bridge?.(e.data.text);
+          }
+          break;
+        case 'widget:previewImage':
+          if (e.data.src) {
+            setPreviewImage({ src: e.data.src, alt: e.data.alt || '' });
           }
           break;
       }
@@ -378,6 +385,13 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
             onLoad={iframeLoad}
           />
         </>
+      )}
+      {previewImage && (
+        <ImagePreviewModal
+          src={previewImage.src}
+          alt={previewImage.alt}
+          onClose={() => setPreviewImage(null)}
+        />
       )}
     </div>
   );

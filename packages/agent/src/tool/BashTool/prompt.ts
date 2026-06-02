@@ -190,6 +190,21 @@ function getDangerWarningItems(): string[] {
 }
 
 // ============================================================
+// Windows Encoding & Path Guidance
+// ============================================================
+
+function getWindowsEncodingItems(): string[] {
+  return [
+    'On Windows, the shell environment is UTF-8. When writing Chinese or other non-ASCII characters:',
+    '  - Use `printf` instead of `echo` for writing files with Chinese content (e.g., `printf \'{"name":"陈炫羽"}\' > file.json`)',
+    '  - Use `python -X utf8` or set `PYTHONUTF8=1` env var when running Python scripts that output Chinese',
+    '  - For file paths: use forward slashes (`/c/Users/...`) in Git Bash, or use native Windows paths with proper quoting. Git Bash handles both.',
+    '  - Avoid `>nul` redirect syntax — use `/dev/null` instead (Git Bash does not understand `nul`)',
+    '  - If output is truncated, use more specific commands (e.g., `head -n 20`, `grep`) or redirect to a file',
+  ]
+}
+
+// ============================================================
 // Main Prompt
 // ============================================================
 
@@ -204,6 +219,7 @@ export function getBashPrompt(): string {
   const sleepSubitems = getSleepSubitems()
   const backgroundNote = getBackgroundUsageNote()
   const dangerWarningItems = getDangerWarningItems()
+  const windowsEncodingItems = getWindowsEncodingItems()
 
   const maxTimeout = getMaxTimeoutMs()
   const defaultTimeout = getDefaultTimeoutMs()
@@ -220,6 +236,8 @@ export function getBashPrompt(): string {
     gitSubitems,
     'Avoid unnecessary `sleep` commands:',
     sleepSubitems,
+    'For Windows encoding/path handling:',
+    windowsEncodingItems,
   ]
 
   return [
@@ -253,6 +271,7 @@ export function getSimplePrompt(): string {
   const gitSubitems = getGitSubitems()
   const sleepSubitems = getSleepSubitems()
   const backgroundNote = getBackgroundUsageNote()
+  const windowsEncodingItems = getWindowsEncodingItems()
 
   const maxTimeout = getMaxTimeoutMs()
   const defaultTimeout = getDefaultTimeoutMs()
@@ -267,6 +286,8 @@ export function getSimplePrompt(): string {
     gitSubitems,
     'Avoid `sleep` commands:',
     sleepSubitems,
+    'For Windows encoding/path handling:',
+    windowsEncodingItems,
   ]
 
   return [

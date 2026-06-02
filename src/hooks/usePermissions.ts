@@ -15,8 +15,8 @@ import { subscribeToPhase, getSnapshot } from '@/lib/stream-session-manager';
 export interface UsePermissionsOptions {
   /** Session ID for permission resolution forwarding */
   sessionId?: string;
-  /** Permission profile - 'full_access' skips prompts */
-  permissionProfile?: 'default' | 'full_access';
+  /** Permission profile - 'full_access' skips prompts, 'auto' uses YOLO classifier */
+  permissionProfile?: 'default' | 'auto' | 'full_access';
   /** Callback when permission is resolved */
   onPermissionResolved?: (decision: 'allow' | 'deny', request: PermissionRequestEvent) => void;
 }

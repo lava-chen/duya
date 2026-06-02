@@ -50,7 +50,7 @@ export interface ProjectGroup {
 
 // View types for state-driven UI
 export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor' | 'memory';
-export type SettingsTab = 'general' | 'appearance' | 'providers' | 'skills' | 'mcp' | 'channels' | 'browser' | 'security' | 'usage' | 'agents' | 'support' | 'capabilities';
+export type SettingsTab = 'general' | 'appearance' | 'providers' | 'skills' | 'mcp' | 'channels' | 'browser' | 'security' | 'usage' | 'agents' | 'support' | 'plugins';
 
 interface ConversationState {
   // View state for zero-router UI

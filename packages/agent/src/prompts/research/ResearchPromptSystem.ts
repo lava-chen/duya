@@ -19,6 +19,7 @@ import { getResearchMemoryContextPromptSection } from './sections/researchMemory
 import { getEvidencePolicyPromptSection } from './sections/evidencePolicy.js'
 import { getOutputFormatPromptSection } from './sections/outputFormat.js'
 import { getMemoryWriteProposalPromptSection } from './sections/memoryWriteProposal.js'
+import { getToneAndStylePromptSection } from './sections/toneAndStyle.js'
 import type { ResearchTaskIntent } from './types.js'
 
 export class ResearchPromptSystem extends PromptSystem {
@@ -37,6 +38,7 @@ export class ResearchPromptSystem extends PromptSystem {
       cachedPromptSection('literaturePluginToolPolicy', () => getLiteraturePluginToolPromptSection()),
       cachedPromptSection('evidencePolicy', () => getEvidencePolicyPromptSection()),
       cachedPromptSection('memoryWriteProposal', () => getMemoryWriteProposalPromptSection()),
+      cachedPromptSection('toneAndStyle', () => getToneAndStylePromptSection(_context)),
     ]
   }
 

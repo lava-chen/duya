@@ -78,6 +78,14 @@ What is the user trying to accomplish? What are their explicit goals?
 ## Key Technical Concepts
 Important technologies, frameworks, patterns, APIs mentioned or used
 
+## Tool Actions Taken
+List each tool call that was made and what it accomplished:
+- For Read: what file was read, key findings
+- For Write/Edit: what file was created/modified, what changed (briefly)
+- For Bash: what command was run, key output
+- For WebSearch/WebFetch: what was searched/fetched, key results
+- For Grep/Glob: what was searched, key matches
+
 ## Files and Code Sections
 List each file that was examined, created, or modified:
 - For modified files: what changed (briefly)
@@ -86,6 +94,7 @@ List each file that was examined, created, or modified:
 
 ## Errors and Problems
 Any errors encountered and how they were resolved. This helps avoid repeating mistakes.
+Pay special attention to [Result: ... (ERROR)] entries in the conversation.
 
 ## Decisions Made
 Important architectural or implementation decisions with rationale
@@ -100,6 +109,7 @@ Format your response as a JSON object with these fields:
 {
   "primaryRequest": "...",
   "keyTechnicalConcepts": ["..."],
+  "toolActions": [{"tool": "...", "input": "...", "result": "..."}],
   "filesAndCode": [{"path": "...", "operation": "read|write|edit|create", "summary": "..."}],
   "errorsAndProblems": [{"error": "...", "resolution": "..."}],
   "decisionsMade": [{"decision": "...", "rationale": "..."}],
@@ -226,7 +236,6 @@ function hasToolCallsInLastTurn(messages: Message[]): boolean {
  */
 function formatSessionMemorySummary(memoryText: string): string {
   try {
-    // Try to parse as JSON first
     const parsed = JSON.parse(memoryText)
 
     let formatted = `## Session Memory Summary\n\n`
@@ -236,12 +245,16 @@ function formatSessionMemorySummary(memoryText: string): string {
       formatted += `**Key Concepts**:\n${parsed.keyTechnicalConcepts.map((c: string) => `- ${c}`).join('\n')}\n\n`
     }
 
+    if (parsed.toolActions?.length > 0) {
+      formatted += `**Tool Actions Taken**:\n${parsed.toolActions.map((t: { tool?: string; input?: string; result?: string }) => `- \`${t.tool || 'unknown'}\`: ${t.input || 'N/A'} → ${(t.result || 'N/A').slice(0, 200)}`).join('\n')}\n\n`
+    }
+
     if (parsed.filesAndCode?.length > 0) {
-      formatted += `**Files**:\n${parsed.filesAndCode.map((f: any) => `- \`${f.path}\` (${f.operation}): ${f.summary || ''}`).join('\n')}\n\n`
+      formatted += `**Files**:\n${parsed.filesAndCode.map((f: { path?: string; operation?: string; summary?: string }) => `- \`${f.path || 'unknown'}\` (${f.operation || 'unknown'}): ${f.summary || ''}`).join('\n')}\n\n`
     }
 
     if (parsed.errorsAndProblems?.length > 0) {
-      formatted += `**Errors Resolved**:\n${parsed.errorsAndProblems.map((e: any) => `- ${e.error} → ${e.resolution}`).join('\n')}\n\n`
+      formatted += `**Errors Resolved**:\n${parsed.errorsAndProblems.map((e: { error?: string; resolution?: string }) => `- ${e.error || 'unknown'} → ${e.resolution || 'unknown'}`).join('\n')}\n\n`
     }
 
     formatted += `**Current State**: ${parsed.currentWorkState || 'N/A'}\n\n`
@@ -252,9 +265,43 @@ function formatSessionMemorySummary(memoryText: string): string {
 
     return formatted
   } catch {
-    // If not valid JSON, return as plain text
     return memoryText
   }
+}
+
+/**
+ * Extract key inputs from tool calls for compact summaries.
+ * Extracts file paths, search queries, command strings, and other
+ * actionable details that are essential for context continuity
+ * after compaction.
+ */
+function extractKeyToolInputs(
+  toolName: string,
+  input: Record<string, unknown>,
+): string[] {
+  const keyFields: Record<string, string[]> = {
+    Read: ['file_path'],
+    Write: ['file_path'],
+    Edit: ['file_path'],
+    Bash: ['command'],
+    Grep: ['pattern', 'path'],
+    Glob: ['pattern', 'path'],
+    WebSearch: ['query'],
+    WebFetch: ['url'],
+    Task: ['query', 'description'],
+    skill_manage: ['name'],
+  }
+
+  const fields = keyFields[toolName] || []
+  const results: string[] = []
+  for (const field of fields) {
+    const val = input[field]
+    if (typeof val === 'string' && val.trim()) {
+      const truncated = val.length > 120 ? val.slice(0, 117) + '...' : val
+      results.push(`${field}=${truncated}`)
+    }
+  }
+  return results
 }
 
 /**
@@ -297,20 +344,75 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
   }
 
   /**
-   * Extract text content from messages for summarization
+   * Extract text content from messages for summarization.
+   * Enhanced to include tool_use details and tool_result summaries so the
+   * compaction summary preserves actionable context — file paths, command
+   * arguments, and result excerpts are retained for future turns.
    */
   private extractTextFromMessages(messages: Message[]): string {
+    const MAX_TOOL_RESULT_LENGTH = 500
+    // Track per-message tool_use blocks so we can attach them to tool_results
+    const toolUseById = new Map<string, { name: string; input: Record<string, unknown> }>()
+    for (const msg of messages) {
+      if (!Array.isArray(msg.content)) continue
+      for (const block of msg.content) {
+        if (block.type === 'tool_use' && (block as unknown as Record<string, unknown>).id) {
+          toolUseById.set((block as unknown as Record<string, string>).id as string, {
+            name: (block as unknown as Record<string, string>).name as string || 'unknown',
+            input: (block as unknown as Record<string, unknown>).input as Record<string, unknown> || {},
+          })
+        }
+      }
+    }
+
     return messages
       .map(msg => {
         if (typeof msg.content === 'string') {
-          return `[${msg.role.toUpperCase()}]: ${msg.content}`
+          return `[${msg.role.toUpperCase()}]: ${msg.content.slice(0, 2000)}`
         }
         if (Array.isArray(msg.content)) {
-          const textContent = msg.content
-            .filter(block => block.type === 'text')
-            .map(block => (block as { type: 'text'; text: string }).text)
-            .join('\n')
-          return `[${msg.role.toUpperCase()}]: ${textContent}`
+          const blocks = msg.content as unknown as Array<Record<string, unknown>>
+          const parts: string[] = []
+
+          for (const block of blocks) {
+            if (block.type === 'text') {
+              const text = (block as { text: string }).text || ''
+              if (text.trim()) parts.push(text.slice(0, 2000))
+            } else if (block.type === 'tool_use') {
+              const name = (block as { name: string }).name || 'unknown'
+              const input = (block as { input: Record<string, unknown> }).input || {}
+              const keyInputs = extractKeyToolInputs(name, input)
+              const inputSummary = keyInputs.length > 0
+                ? ` (${keyInputs.join(', ')})`
+                : ''
+              parts.push(`[Tool Call: ${name}${inputSummary}]`)
+            } else if (block.type === 'tool_result') {
+              const toolUseId = (block as { tool_use_id: string }).tool_use_id || ''
+              const toolInfo = toolUseById.get(toolUseId as string)
+              const toolName = toolInfo?.name || 'unknown'
+              const content = (block as { content: string | Array<{ type: string; text: string }> }).content
+              let resultText = ''
+              if (typeof content === 'string') {
+                resultText = content
+              } else if (Array.isArray(content)) {
+                resultText = content
+                  .filter((c: { type: string }) => c.type === 'text')
+                  .map((c: { text: string }) => c.text || '')
+                  .join('\n')
+              }
+              const isError = typeof content === 'string' && content.includes('<tool_error>')
+              const truncated = resultText.slice(0, MAX_TOOL_RESULT_LENGTH)
+              const suffix = resultText.length > MAX_TOOL_RESULT_LENGTH ? '...' : ''
+              parts.push(`[Result: ${toolName}${isError ? ' (ERROR)' : ''}]: ${truncated}${suffix}`)
+            } else if (block.type === 'thinking') {
+              const thinking = (block as { thinking: string }).thinking || ''
+              if (thinking.trim()) parts.push(`[Thinking]: ${thinking.slice(0, 500)}`)
+            }
+          }
+
+          const label = msg.role.toUpperCase()
+          const content = parts.join('\n')
+          return content ? `[${label}]:\n${content}` : ''
         }
         return ''
       })
@@ -396,6 +498,7 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
     }
 
     // Create summary message with continuation instruction
+    const compactedIds = olderMessages.map(m => m.id).filter((id): id is string => !!id)
     const summaryMessage: Message = {
       role: 'system',
       content: `This session is being continued from a previous conversation that ran out of context. The session memory below covers the earlier portion of the conversation.
@@ -406,11 +509,13 @@ Continue the conversation from where it left off without asking the user any fur
       timestamp: Date.now(),
       isCompactSummary: true,
       compactedMessageCount: olderMessages.length,
+      compactedMessageIds: compactedIds,
       metadata: {
         strategy: 'session_memory',
         messagesCompressed: olderMessages.length,
         fileOperations: extractFileOperations(olderMessages).length,
         toolCalls: countToolCalls(olderMessages),
+        compactedAt: Date.now(),
       },
     }
 

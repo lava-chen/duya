@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "duya.plugin.v1",
+  "id": "com.duya.{{plugin-name}}",
+  "name": "{{plugin-name}}",
+  "version": "0.1.0",
+  "description": "{{plugin-description}}",
+  "author": {
+    "name": "{{author-name}}"
+  },
+  "capabilities": {
+    "mcpServers": [
+      {
+        "name": "{{server-name}}",
+        "command": "{{command}}",
+        "args": []
+      }
+    ]
+  },
+  "permissions": [],
+  "engines": {
+    "duya": ">=0.9.0"
+  }
+}

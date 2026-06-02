@@ -95,4 +95,8 @@ export interface AppSettings {
   favoriteAgentIds: string[];
   // Agent prompt language preference (e.g. 'Chinese', 'English')
   agentLanguage?: string;
+  // Security settings
+  securityScanEnabled: boolean;
+  // Default workspace directory for creating new projects
+  workspaceDir?: string;
 }

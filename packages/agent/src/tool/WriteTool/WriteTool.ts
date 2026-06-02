@@ -16,7 +16,8 @@ import type {
   PermissionCheckResult,
 } from '../types.js';
 import type { ToolUseContext } from '../../types.js';
-import { isBypassMode } from '../../permissions/PermissionMode.js';
+import type { ToolPermissionContext } from '../../permissions/types.js';
+import { checkPathWritePermission } from '../../permissions/pathPermission.js';
 import { expandPath } from '../../utils/path.js';
 
 // ============================================================
@@ -169,22 +170,13 @@ export function isUNCPath(filePath: string): boolean {
 /**
  * Comprehensive security check
  */
-export function checkWriteSecurity(filePath: string, workingDirectory?: string, bypassPermissions = false): { safe: boolean; reason?: string } {
+export function checkWriteSecurity(filePath: string): { safe: boolean; reason?: string } {
   if (isUNCPath(filePath)) {
     return { safe: false, reason: 'UNC paths are not allowed' };
   }
 
-  // Check blocked paths (always enforce, even in bypass mode, for system safety)
   if (isBlockedPath(filePath)) {
     return { safe: false, reason: 'Writing to system critical directories is not allowed' };
-  }
-
-  // Check path traversal (skip in bypass mode)
-  if (!bypassPermissions) {
-    const traversalCheck = checkPathTraversal(filePath, workingDirectory);
-    if (!traversalCheck.safe) {
-      return traversalCheck;
-    }
   }
 
   return { safe: true };
@@ -233,18 +225,20 @@ export class WriteTool extends BaseTool {
 
     const { file_path } = validation.data;
 
-    // Check for blocked paths
-    const securityCheck = checkWriteSecurity(file_path, context.workingDirectory);
-    if (!securityCheck.safe) {
-      return {
-        allowed: true,
-        requiresUserConfirmation: true,
-        reason: securityCheck.reason,
-      };
+    const appState = context.getAppState();
+    const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
+
+    const pathResult = checkPathWritePermission(
+      file_path,
+      context.workingDirectory,
+      permissionContext,
+    );
+    if (!pathResult.allowed) return pathResult;
+
+    if (isBlockedPath(expandPath(file_path, context.workingDirectory))) {
+      return { allowed: false, reason: 'Writing to system critical directories is not allowed' };
     }
 
-    // Always ask for confirmation for file writes (user should know what's being created/modified)
-    // This is a security measure to prevent unintended file modifications
     return {
       allowed: true,
       requiresUserConfirmation: true,
@@ -270,13 +264,7 @@ export class WriteTool extends BaseTool {
 
     const { file_path, content, encoding = 'utf-8' } = validation.data;
 
-    const appState = context?.getAppState?.();
-    const mode = (appState?.toolPermissionContext as { mode?: string } | undefined)?.mode;
-    // Check if this tool use was explicitly approved via permission request
-    const toolUseId = context?.toolUseId;
-    const isExplicitlyApproved = !!(toolUseId && (appState?._approvedToolUses as Record<string, boolean> | undefined)?.[toolUseId]);
-    const bypass = isBypassMode(mode as string) || isExplicitlyApproved;
-    const securityCheck = checkWriteSecurity(file_path, workingDirectory, bypass);
+    const securityCheck = checkWriteSecurity(file_path);
     if (!securityCheck.safe) {
       return {
         id,

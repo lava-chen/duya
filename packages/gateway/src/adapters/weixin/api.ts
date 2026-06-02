@@ -471,7 +471,6 @@ async function httpsPost(
   const { headers: reqHeaders, body, timeoutMs, useProxy = true } = options;
   const urlObj = new URL(url);
   const proxyUrl = useProxy ? detectProxy() : undefined;
-  console.log(`[Weixin] httpsPost: url=${urlObj.hostname}, proxy=${proxyUrl || 'none'}`);
   let consecutiveFailures = 0;
   let totalRetries = 0;
   let backoffCycles = 0;
@@ -480,7 +479,6 @@ async function httpsPost(
     try {
       const result = await new Promise<{ data: string; status: number }>((resolve, reject) => {
         if (proxyUrl && proxyUrl.startsWith('http://')) {
-          console.log(`[Weixin] Using proxy tunnel to ${urlObj.hostname}`);
           const proxyUrlObj = new URL(proxyUrl);
           const proxyOptions: https.RequestOptions = {
             hostname: proxyUrlObj.hostname,
@@ -531,7 +529,6 @@ async function httpsPost(
           });
           proxyReq.end();
         } else {
-          console.log(`[Weixin] Direct connection to ${urlObj.hostname}`);
           const requestOptions: https.RequestOptions = {
             hostname: urlObj.hostname,
             port: urlObj.port || 443,
@@ -564,10 +561,8 @@ async function httpsPost(
       consecutiveFailures = 0;
       totalRetries = 0;
       backoffCycles = 0;
-      console.log(`[Weixin] httpsPost success: status=${result.status}, dataLen=${result.data.length}`);
       return result;
     } catch (err) {
-      console.warn(`[Weixin] httpsPost error: ${(err as Error).message}`);
       totalRetries++;
 
       if (!isNetworkError(err as Error)) {
@@ -575,12 +570,10 @@ async function httpsPost(
       }
 
       consecutiveFailures++;
-      console.warn(`[Weixin] HTTPS request failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}, total=${totalRetries}/${MAX_TOTAL_RETRIES}): ${(err as Error).message}`);
 
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         const waitMs = BACKOFF_DELAY_SECONDS * 1000;
         backoffCycles++;
-        console.warn(`[Weixin] Max failures reached, backing off for ${waitMs}ms (cycle ${backoffCycles}/${MAX_BACKOFF_CYCLES})`);
         await sleep(waitMs);
         consecutiveFailures = 0;
       } else {
@@ -766,12 +759,6 @@ export const wxApi = {
     });
 
     const response = JSON.parse(data) as GetUpdatesResponse;
-
-    // Handle session expired (errcode -14)
-    if (response.errcode === SESSION_EXPIRED_ERRCODE || response.ret === SESSION_EXPIRED_ERRCODE) {
-      console.warn('[Weixin] Session expired, need to re-authenticate');
-    }
-
     return response;
   },
 

@@ -42,9 +42,15 @@ function initUI() {
 
   document.getElementById('connectBtn').addEventListener('click', async function () {
     setState('checking', 'Connecting...', 'Triggering reconnect');
-    await chrome.runtime.sendMessage({ type: 'connect' });
-    await new Promise(function (r) { return setTimeout(r, 800); });
-    await checkStatus();
+    try {
+      await chrome.runtime.sendMessage({ type: 'connect' });
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      setState('disconnected', 'Reconnect Failed', message);
+    } finally {
+      await new Promise(function (r) { return setTimeout(r, 800); });
+      await checkStatus();
+    }
   });
 
   document.getElementById('settingsBtn').addEventListener('click', function () {

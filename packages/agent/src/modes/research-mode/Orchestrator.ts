@@ -12,6 +12,7 @@ import {
   type ResearchClassification,
   type OrchestratorConfig,
   type OrchestratorDependencies,
+  type ResearchRunDB,
   type ResearchPlan,
   type ResearchIntent,
   type ResearchScope,
@@ -29,6 +30,15 @@ import {
   type CompareAction,
   type PlanDelta,
   type PlanDeltaType,
+  type ResearchState,
+  type QuestionCoverageStatus,
+  type HypothesisStatus,
+  type EvidenceConflict,
+  type Hypothesis,
+  type QuestionLayer,
+  type AgentCallInput,
+  type ToolCallResult,
+  type ToolSpec,
 } from './types.js';
 import type { ClarificationQuestion } from '../types.js';
 import type { ToolResult } from '../../tool/types.js';
@@ -64,6 +74,7 @@ import {
 import {
   replan,
   REPLAN_VERSION,
+  type ReplanInput,
 } from './prompts/replan.js';
 import {
   continueResearch,
@@ -73,15 +84,21 @@ import {
   synthesize,
   SYNTHESIZE_VERSION,
 } from './prompts/synthesize.js';
+import {
+  exploreAgent,
+  EXPLORE_AGENT_SYSTEM_PROMPT,
+  buildExplorePrompt,
+  parseExploreResponse,
+} from './prompts/explore-agent.js';
 
 export const DEFAULT_ORCHESTRATOR_CONFIG: Required<OrchestratorConfig> = {
-  maxIterations: 5,
-  concurrencyLimit: 8,
+  maxIterations: 15,
+  concurrencyLimit: 12,
   coverageThreshold: 0.9,
   requireClarification: false,
   maxClarificationQuestions: 3,
-  maxQuestionsPerIteration: 4,
-  maxTotalQuestions: 15,
+  maxQuestionsPerIteration: 8,
+  maxTotalQuestions: 60,
 
   // M1.1: 动态问题排序权重
   questionRankingWeights: {
@@ -95,8 +112,8 @@ export const DEFAULT_ORCHESTRATOR_CONFIG: Required<OrchestratorConfig> = {
   },
 
   // M1.5: 并发控制
-  maxToolCallsPerIteration: 8,
-  maxSearchResultsPerQuery: 10,
+  maxToolCallsPerIteration: 12,
+  maxSearchResultsPerQuery: 20,
   enableUrlDeduplication: true,
   enableQueryDeduplication: true,
 };
@@ -113,41 +130,95 @@ const COMPLEXITY_CONFIG: Record<
   }
 > = {
   factual: {
-    maxIterations: 2, coverageThreshold: 0.8,
+    maxIterations: 3, coverageThreshold: 0.8,
     freshness: 'stable', sourceDepth: 'light', riskLevel: 'low',
     label: 'Factual (quick answer)',
   },
   conceptual: {
-    maxIterations: 3, coverageThreshold: 0.8,
+    maxIterations: 6, coverageThreshold: 0.8,
     freshness: 'stable', sourceDepth: 'standard', riskLevel: 'low',
     label: 'Conceptual (moderate depth)',
   },
   comparative: {
-    maxIterations: 4, coverageThreshold: 0.85,
+    maxIterations: 10, coverageThreshold: 0.85,
     freshness: 'recent', sourceDepth: 'standard', riskLevel: 'medium',
     label: 'Comparative (side-by-side analysis)',
   },
   analytical: {
-    maxIterations: 5, coverageThreshold: 0.9,
+    maxIterations: 15, coverageThreshold: 0.9,
     freshness: 'recent', sourceDepth: 'deep', riskLevel: 'high',
     label: 'Analytical (deep research)',
   },
   literature_review: {
-    maxIterations: 6, coverageThreshold: 0.9,
+    maxIterations: 20, coverageThreshold: 0.9,
     freshness: 'recent', sourceDepth: 'deep', riskLevel: 'high',
     label: 'Literature Review (comprehensive survey)',
   },
   technical_design: {
-    maxIterations: 5, coverageThreshold: 0.85,
+    maxIterations: 12, coverageThreshold: 0.85,
     freshness: 'latest', sourceDepth: 'deep', riskLevel: 'medium',
     label: 'Technical Design (implementation-focused)',
   },
   unknown: {
-    maxIterations: 4, coverageThreshold: 0.85,
+    maxIterations: 8, coverageThreshold: 0.85,
     freshness: 'recent', sourceDepth: 'standard', riskLevel: 'medium',
     label: 'General (default depth)',
   },
 };
+
+function buildSearchUrl(query: string): string {
+  const encoded = encodeURIComponent(query);
+  return `https://html.duckduckgo.com/html/?q=${encoded}`;
+}
+
+function extractDomain(url: string): string {
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+const BROWSER_TOOLS: ToolSpec[] = [
+  {
+    name: 'browser',
+    description: `Navigate and interact with web pages using a real browser.
+
+PRIMARY OPERATION — use this FIRST every time:
+- parallel_fetch: Fetch MULTIPLE URLs simultaneously. Pass {"urls": ["url1", "url2", ...]}.
+  Open 5-15 known authoritative URLs at once. This is your main research tool.
+  Examples: docs.python.org, en.wikipedia.org/wiki/..., arxiv.org/abs/..., github.com/.../...
+
+SECONDARY — after reviewing parallel_fetch results:
+- navigate: Go to a specific URL for detailed reading. Returns compact page snapshot.
+- snapshot: Get a full structured text snapshot of the current page.
+
+FALLBACK ONLY — when you don't know specific URLs:
+- navigate to "https://html.duckduckgo.com/html/?q=YOUR+QUERY"`,
+
+    input_schema: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: ['navigate', 'snapshot', 'parallel_fetch'],
+          description: 'The browser operation. Use parallel_fetch FIRST to batch-open known URLs.',
+        },
+        url: {
+          type: 'string',
+          description: 'URL to navigate to (for navigate operation)',
+        },
+        urls: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of URLs for parallel_fetch. Include 5-15 diverse sources.',
+        },
+      },
+      required: ['operation'],
+    },
+  },
+];
 
 export class Orchestrator {
   private config: Required<OrchestratorConfig>;
@@ -157,9 +228,15 @@ export class Orchestrator {
   private currentClassification: ResearchClassification;
   private clarificationAnswers: Record<string, string> = {};
   private readonly originalQuery: string;
+  private researchState: ResearchState;
+  private readonly runDB: ResearchRunDB | undefined;
+  private readonly sessionId: string;
+  private activitySeq: number = 0;
+  private stepMap: Map<string, string> = new Map();
 
   private llmComplete: (prompt: string, systemPrompt?: string) => Promise<string>;
   private llmStreamFn?: (prompt: string, systemPrompt?: string) => AsyncIterable<string>;
+  private llmAgentCall?: (input: AgentCallInput) => Promise<{ content: string; toolCalls: ToolCallResult[] }>;
   private toolExecute: (name: string, input: Record<string, unknown>) => Promise<ToolResult>;
   private toolExecuteConcurrent: (
     calls: Array<{ name: string; input: Record<string, unknown> }>
@@ -167,6 +244,8 @@ export class Orchestrator {
   private emitSSE: (event: ResearchEvent) => void;
   private awaitClarification: (questions: ClarificationQuestion[], requestId: string) => Promise<Record<string, string>>;
   private persistState?: (contextJSON: string) => Promise<void>;
+  private cancelled = false;
+  private readonly localAbortController = new AbortController();
 
   constructor(
     initialQuery: string,
@@ -193,11 +272,30 @@ export class Orchestrator {
     };
     this.llmComplete = deps.llmComplete;
     this.llmStreamFn = deps.llmStreamFn;
-    this.toolExecute = deps.toolExecute;
+    this.llmAgentCall = deps.llmAgentCall;
+    this.toolExecute = this._wrapToolExecute(deps.toolExecute);
     this.toolExecuteConcurrent = deps.toolExecuteConcurrent;
     this.emitSSE = deps.emitSSE;
     this.awaitClarification = deps.awaitClarification;
     this.persistState = deps.persistState;
+    this.runDB = deps.runDB;
+    this.sessionId = deps.sessionId || '';
+    if (deps.abortSignal) {
+      if (deps.abortSignal.aborted) {
+        this.localAbortController.abort();
+      } else {
+        deps.abortSignal.addEventListener('abort', () => this.localAbortController.abort(), { once: true });
+      }
+    }
+    this.researchState = {
+      iteration: 0,
+      questionCoverage: [],
+      hypothesisStatuses: [],
+      conflicts: [],
+      gapFindings: [],
+      saturationSignals: [],
+      overallCoverageScore: 0,
+    };
   }
 
   getPhase(): OrchestratorPhase {
@@ -214,39 +312,75 @@ export class Orchestrator {
 
   async execute(): Promise<void> {
     try {
+      this.throwIfCancelled();
       this.transitionTo(OrchestratorPhase.PLANNING);
+
+      await this._updateRunStatus('classifying');
+      await this._logActivity('phase', '正在分析研究任务并制定计划');
       await this.classifyQuery();
 
-      this.transitionTo(OrchestratorPhase.PLANNING);
+      await this._updateRunStatus('planning');
+      await this._logActivity('phase', '正在生成研究方案与调查问题');
       await this.executePlanning();
+      await this._persistContext();
+      this.throwIfCancelled();
 
       const plan = this.context.getResearchPlan();
       if (plan && plan.scope.clarificationNeeded && plan.scope.blockingQuestions.length > 0) {
         this.transitionTo(OrchestratorPhase.CLARIFICATION);
+        await this._updateRunStatus('awaiting_clarification');
         await this.executeClarification();
+        await this._persistContext();
+        this.throwIfCancelled();
       }
 
-      this.transitionTo(OrchestratorPhase.PLANNING);
+      await this._updateRunStatus('awaiting_approval');
       await this.executePlanApproval();
+      await this._persistContext();
+      this.throwIfCancelled();
 
       this.transitionTo(OrchestratorPhase.RESEARCH_LOOP);
+      await this._updateRunStatus('running');
+      await this._logActivity('milestone', '开始执行研究调查，查阅在线来源');
       await this.executeResearchLoop();
+      this.throwIfCancelled();
 
       this.transitionTo(OrchestratorPhase.SYNTHESIS);
+      await this._updateRunStatus('synthesizing');
+      await this._logActivity('milestone', '正在组织研究报告与引用');
       await this.executeSynthesis();
+      this.throwIfCancelled();
 
       this.transitionTo(OrchestratorPhase.COMPLETE);
+      await this._updateRunStatus('completed');
+      const finalCoverage = this.context.calculateCoverage();
+      const finalFindings = this.context.getFindingCount();
+      await this._updateRun({
+        run_status: 'completed',
+        completed_at: Date.now(),
+        progress_summary: `Research complete: ${finalFindings} findings, ${Math.round(finalCoverage * 100)}% coverage in ${this.currentIteration} iterations`,
+      });
+
       this.emit({
         type: 'complete',
         summary: this.buildSummary(),
         iterations: this.currentIteration,
-        coverage: this.context.calculateCoverage(),
-        findingsCount: this.context.getFindingCount(),
+        coverage: finalCoverage,
+        findingsCount: finalFindings,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.emit({ type: 'error', message });
+      const cancelled = isResearchCancelledError(err) || this.cancelled;
+      if (!cancelled) {
+        this.emit({ type: 'error', message });
+      }
       this.transitionTo(OrchestratorPhase.ABORTED);
+      await this._updateRun({
+        run_status: cancelled ? 'aborted' : 'failed',
+        completed_at: Date.now(),
+        error_json: JSON.stringify({ code: cancelled ? 'CANCELLED' : 'EXECUTION_ERROR', message, recoverable: false }),
+        progress_summary: cancelled ? `Research aborted: ${message}` : `Research failed: ${message}`,
+      });
     }
   }
 
@@ -257,22 +391,20 @@ export class Orchestrator {
   }
 
   async continueResearch(additionalQuery: string): Promise<void> {
-    const prompt = `
-Additional research query: ${additionalQuery}
-
-Existing questions:
-${this.context.getQuestions().map((q) => `- [${q.id}] (${q.status}) ${q.text}`).join('\n')}
-
-Generate 1-3 new research questions to extend this research. Return JSON:
-{"questions": [{"text": "...", "purpose": "evidence", "priority": 1}, ...]}
-`.trim();
+    const prompt = continueResearch.buildPrompt({
+      additionalQuery,
+      existingQuestions: this.context.getQuestions().map((q) => `- [${q.id}] (${q.status}) ${q.text}`).join('\n'),
+      iteration: 0,
+      maxIterations: 0,
+      isLoopEvaluation: false,
+    });
 
     const response = await this.llmComplete(prompt);
-    const parsed = this.safeParseJSON(response);
+    const parsed = continueResearch.parseResponse(response);
     const newQuestions: ResearchQuestion[] = [];
 
-    if (parsed?.questions && Array.isArray(parsed.questions)) {
-      for (const q of parsed.questions as Array<{ text: string; purpose?: string; priority: number }>) {
+    if (parsed.questions.length > 0) {
+      for (const q of parsed.questions) {
         const id = `q${Date.now()}_${newQuestions.length}`;
         newQuestions.push({
           id,
@@ -331,64 +463,168 @@ Generate 1-3 new research questions to extend this research. Return JSON:
   }
 
   abort(): void {
+    this.cancelled = true;
+    this.localAbortController.abort();
     this.transitionTo(OrchestratorPhase.ABORTED);
+  }
+
+  getRunId(): string | undefined {
+    return this.runDB?.runId;
+  }
+
+  // === Run DB helpers ===
+
+  private async _updateRunStatus(status: string): Promise<void> {
+    if (!this.runDB) return;
+    try {
+      await this.runDB.updateRun({ run_status: status });
+    } catch {
+      // non-fatal
+    }
+    this.emit({ type: 'run_status', status, phase: this.currentPhase });
+  }
+
+  private async _updateRun(data: Parameters<ResearchRunDB['updateRun']>[0]): Promise<void> {
+    if (!this.runDB) return;
+    try {
+      await this.runDB.updateRun(data);
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private async _persistContext(): Promise<void> {
+    if (!this.persistState) return;
+    try {
+      await this.persistState(this.context.toJSON());
+    } catch {
+      // persist failure is non-fatal
+    }
+  }
+
+  private async _logActivity(
+    kind: string,
+    title: string,
+    detail?: string,
+    visibility: 'user' | 'debug' = 'user',
+    sources?: Array<{ url: string; title: string }>,
+  ): Promise<void> {
+    this.activitySeq++;
+    if (this.runDB) {
+      try {
+        await this.runDB.logActivity({ kind, title, detail, visibility, sources });
+      } catch {
+        // non-fatal
+      }
+    }
+    this.emit({ type: 'activity', kind, title, detail, sequence: this.activitySeq, sources });
+  }
+
+  private async _createPlanSteps(): Promise<void> {
+    if (!this.runDB) return;
+    const plan = this.context.getResearchPlan();
+    if (!plan || plan.researchQuestions.length === 0) return;
+
+    const steps = plan.researchQuestions.map((q, i) => ({
+      id: `step_${q.id}`,
+      order_num: i + 1,
+      user_facing_label: q.text,
+      internal_question_ids: [q.id],
+    }));
+
+    try {
+      await this.runDB.createPlanSteps(steps);
+      this.stepMap.clear();
+      for (const s of steps) {
+        this.stepMap.set(s.internal_question_ids[0], s.id);
+      }
+      this.emit({
+        type: 'plan_steps_created',
+        steps: steps.map((s) => ({ id: s.id, order: s.order_num, label: s.user_facing_label })),
+      });
+      await this._persistContext();
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private async _updateActiveStep(questionId: string): Promise<void> {
+    if (!this.runDB) return;
+    const stepId = this.stepMap.get(questionId);
+    if (!stepId) return;
+
+    try {
+      await this.runDB.updatePlanStep(stepId, {
+        status: 'active',
+        started_at: Date.now(),
+      });
+      await this.runDB.updateRun({ active_step_id: stepId });
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private async _completeStep(questionId: string): Promise<void> {
+    if (!this.runDB) return;
+    const stepId = this.stepMap.get(questionId);
+    if (!stepId) return;
+
+    try {
+      await this.runDB.updatePlanStep(stepId, {
+        status: 'completed',
+        completed_at: Date.now(),
+      });
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private _wrapToolExecute(
+    original: (name: string, input: Record<string, unknown>) => Promise<ToolResult>,
+  ): (name: string, input: Record<string, unknown>) => Promise<ToolResult> {
+    return async (name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+      if (name === 'browser') {
+        const operation = input.operation as string | undefined;
+        if (operation === 'navigate' && input.url) {
+          const url = String(input.url);
+          const domain = extractDomain(url);
+          void this._logActivity('browse', '正在检索页面', `${domain}`);
+        } else if (operation === 'parallel_fetch' && Array.isArray(input.urls)) {
+          const urls = input.urls as string[];
+          const domains = [...new Set(urls.map((u) => extractDomain(String(u))))];
+          void this._logActivity(
+            'browse',
+            '正在检索多个来源',
+            domains.length > 0 ? domains.join(', ') : `${urls.length} 个页面`,
+            'user',
+            urls.map((u) => ({ url: String(u), title: extractDomain(String(u)) })),
+          );
+        }
+      }
+      return original(name, input);
+    };
   }
 
   // === Phase: Classify ===
 
   private async classifyQuery(): Promise<void> {
-    const prompt = `
-Classify this research query along multiple dimensions.
-
-Query: "${this.originalQuery}"
-
-Categories for complexity:
-- factual: Simple fact lookup, quick answer expected
-- conceptual: Explaining concepts, moderate depth needed
-- comparative: Comparing multiple things, need side-by-side sources
-- analytical: Deep analysis, multiple perspectives required
-- literature_review: Survey of academic literature or field progress
-- technical_design: Implementation, architecture, or engineering approach
-- unknown: Cannot determine
-
-Freshness requirements:
-- stable: Doesn't change (e.g., math concepts, fundamental physics)
-- recent: 1-3 year window (e.g., current best practices, recent research)
-- latest: Very time-sensitive (e.g., latest releases, breaking news)
-
-Source depth:
-- light: 1-2 searches per question
-- standard: 2-4 searches per question
-- deep: 4+ searches, must include primary sources
-
-Return JSON:
-{
-  "complexity": "analytical",
-  "freshness": "recent",
-  "sourceDepth": "deep",
-  "riskLevel": "medium",
-  "needsTools": ["browser"],
-  "reason": "..."
-}
-`.trim();
+    const prompt = classifyQuery.buildPrompt({ query: this.originalQuery });
 
     try {
       const response = await this.llmComplete(prompt);
-      const parsed = this.safeParseJSON(response);
-      const complexity: QueryComplexity = (parsed?.complexity as QueryComplexity) ?? 'unknown';
+      const result = classifyQuery.parseResponse(response);
+      const complexity: QueryComplexity = result.complexity;
       const cfg = COMPLEXITY_CONFIG[complexity];
 
       this.currentClassification = {
         complexity,
         maxIterations: cfg.maxIterations,
         coverageThreshold: cfg.coverageThreshold,
-        freshness: (parsed?.freshness as ResearchClassification['freshness']) ?? cfg.freshness,
-        sourceDepth: (parsed?.sourceDepth as ResearchClassification['sourceDepth']) ?? cfg.sourceDepth,
-        riskLevel: (parsed?.riskLevel as ResearchClassification['riskLevel']) ?? cfg.riskLevel,
+        freshness: result.freshness,
+        sourceDepth: result.sourceDepth,
+        riskLevel: result.riskLevel,
         needsCitations: complexity !== 'factual',
-        needsTools: Array.isArray(parsed?.needsTools)
-          ? (parsed.needsTools as string[])
-          : ['browser'],
+        needsTools: result.needsTools,
       };
 
       this.config.maxIterations = cfg.maxIterations;
@@ -434,26 +670,12 @@ Return JSON:
   }
 
   private async generateClarificationQuestions(): Promise<ClarificationQuestion[]> {
-    const prompt = `
-Analyze this research query and generate clarification questions. Only ask questions where the answer would fundamentally change the research direction.
-
-Query: "${this.originalQuery}"
-
-Rules:
-- Only generate questions for hard blockers (research cannot continue without the answer)
-- Do not ask about scope preferences that can be reasonably assumed
-- Maximum 2 questions
-
-Return JSON:
-{"questions": [{"id": "q1", "question": "...", "type": "single_choice", "options": ["A", "B", "C"]}, ...]}
-`.trim();
+    const prompt = generateClarification.buildPrompt({ query: this.originalQuery });
 
     try {
       const response = await this.llmComplete(prompt);
-      const parsed = this.safeParseJSON(response);
-      if (parsed?.questions && Array.isArray(parsed.questions)) {
-        return parsed.questions as ClarificationQuestion[];
-      }
+      const result = generateClarification.parseResponse(response);
+      return result.questions;
     } catch {
       // fall through
     }
@@ -469,6 +691,7 @@ Return JSON:
     if (plan) {
       this.context.setResearchPlan(plan);
       this.context.addQuestions(plan.researchQuestions);
+      await this._createPlanSteps();
     } else {
       this.addFallbackQuestion();
     }
@@ -478,126 +701,18 @@ Return JSON:
     const classification = this.currentClassification;
     const userAnswers = this.clarificationAnswers;
 
-    const prompt = `
-You are the planning module of a deep research agent.
-
-Your job is NOT to answer the user directly. Your job is to transform the user's query into an executable research plan that another research agent can follow.
-
-Original user query:
-"${this.originalQuery}"
-
-${userAnswers && Object.keys(userAnswers).length > 0 ? 'Clarification answers: ' + JSON.stringify(userAnswers) : ''}
-
-Classified complexity: ${classification.complexity}
-Max iterations: ${classification.maxIterations}
-Freshness requirement: ${classification.freshness}
-Source depth: ${classification.sourceDepth}
-
-You must produce a structured research plan with:
-1. The user's likely research intent (taskType, userGoal, expectedOutput, audienceLevel)
-2. The expected final output type
-3. Scope boundaries: what to include, what to exclude, assumptions, and whether clarification is necessary
-4. A set of research questions (3-8). Each question must have a purpose, priority, dependencies, search queries, and evidence requirements
-5. A source strategy: what types of sources should be trusted most, what sources are weak, and whether primary sources are required
-6. A counter-evidence strategy: what claims need verification, what alternative explanations or objections should be checked
-7. Quality gates: what must be true before synthesis can begin
-8. A synthesis outline for the final answer
-
-Important rules:
-- Do NOT create generic sub-questions like "What is X?" unless a definition is genuinely needed
-- Prefer task-specific questions that directly reduce uncertainty
-- Avoid generic survey questions that could apply to any AI topic
-- Every research question must contain topic-specific concepts, candidate entities, or evaluation dimensions
-- For every question, state the uncertainty it resolves and what evidence is required to resolve it
-- Separate factual lookup questions from analytical interpretation questions
-- Include at least one question that searches for limitations, failures, controversies, or counterexamples when the task is analytical, comparative, or conceptual
-- If the query requires recent or fast-changing information, set freshnessRequirement as "latest"
-- If the query concerns academic research, prioritize peer-reviewed papers, preprints, official datasets, benchmark repositories, and authoritative survey papers
-- If the query concerns implementation, include documentation, source code, issue discussions, and changelogs as source types
-- If clarification is necessary (hard blocker), set clarificationNeeded=true and add blockingQuestions
-- If clarification would be helpful but NOT necessary, add them to nonBlockingSuggestions instead
-- Proceed with explicit assumptions when clarification is not essential
-
-Question purposes:
-- definition: Define key terms or concepts
-- mechanism: Explain how something works
-- evidence: Gather factual evidence or data
-- comparison: Compare alternatives or approaches
-- critique: Find limitations, failures, or counterarguments
-- trend: Identify patterns or trajectory over time
-- implementation: Technical details, code, architecture
-- decision: Information needed to make a decision
-
-Return ONLY valid JSON matching this schema:
-{
-  "intent": {
-    "taskType": "analytical",
-    "userGoal": "Summarize the current state and challenges...",
-    "expectedOutput": "structured_report",
-    "audienceLevel": "expert"
-  },
-  "scope": {
-    "included": ["key topics to cover"],
-    "excluded": ["topics to explicitly avoid"],
-    "timeRange": "2020-2025",
-    "geography": null,
-    "domains": ["domain1", "domain2"],
-    "assumptions": ["assumptions made"],
-    "clarificationNeeded": false,
-    "blockingQuestions": [],
-    "nonBlockingSuggestions": []
-  },
-  "researchQuestions": [
-    {
-      "text": "question text",
-      "purpose": "evidence",
-      "uncertaintyResolved": "what unknown this question resolves",
-      "requiredEvidenceRationale": "why this evidence is required",
-      "priority": 1,
-      "dependsOn": [],
-      "searchQueries": ["specific search query 1", "specific search query 2"],
-      "requiredEvidence": {
-        "sourceTypes": ["paper", "official"],
-        "minSources": 3,
-        "needsPrimarySource": true,
-        "needsRecentSource": true,
-        "needsCounterEvidence": false
-      }
-    }
-  ],
-  "evidenceStrategy": {
-    "sourceTypes": ["paper", "review", "official", "code"],
-    "authorityRules": ["Prefer peer-reviewed journals", "Official docs > blog posts"],
-    "freshnessRequirement": "recent",
-    "minIndependentSources": 3,
-    "mustFindPrimarySources": true,
-    "mustFindCounterEvidence": true
-  },
-  "searchStrategy": {
-    "seedQueries": ["seed query 1", "seed query 2"],
-    "queryExpansionRules": ["When finding papers, search related papers by same authors"],
-    "priorityOrder": ["official docs first", "then papers", "then news"]
-  },
-  "qualityGates": {
-    "coverageThreshold": ${classification.coverageThreshold},
-    "requiredFindings": ["finding description 1"],
-    "stopConditions": ["All questions have authoritative sources"],
-    "failureConditions": ["No peer-reviewed sources found after 3 iterations"]
-  },
-  "synthesisPlan": {
-    "recommendedStructure": ["Executive Summary", "Background", "Key Findings", "Analysis", "Limitations", "References"],
-    "comparisonDimensions": ["dim1", "dim2"],
-    "expectedCaveats": ["Some data may be preliminary", "Results may be sensitive to methodology"]
-  }
-}
-`.trim();
+    const prompt = generatePlan.buildPrompt({
+      query: this.originalQuery,
+      classification,
+      userAnswers: userAnswers && Object.keys(userAnswers).length > 0 ? userAnswers : undefined,
+    });
 
     try {
       const response = await this.llmComplete(prompt);
-      const parsed = this.safeParseJSON(response);
+      const parsed = generatePlan.parseResponse(response);
 
       if (parsed && typeof parsed === 'object') {
-        return this.parseResearchPlan(parsed);
+        return this.parseResearchPlan(parsed as unknown as Record<string, unknown>);
       }
     } catch {
       // fall through
@@ -693,6 +808,8 @@ Return ONLY valid JSON matching this schema:
           id,
           text: qText,
           purpose: qPurpose,
+          questionLayer: ((q.questionLayer as string) || undefined) as QuestionLayer | undefined,
+          hypothesisLink: (q.hypothesisLink as string) || undefined,
           priority: qPriority as 1 | 2 | 3,
           dependsOn: qDependsOn,
           searchQueries: qSearchQueries,
@@ -706,12 +823,26 @@ Return ONLY valid JSON matching this schema:
     return {
       intent,
       scope,
+      hypotheses: this.extractHypotheses(raw),
       researchQuestions,
       evidenceStrategy,
       searchStrategy,
       qualityGates,
       synthesisPlan,
     };
+  }
+
+  private extractHypotheses(raw: Record<string, unknown>): Hypothesis[] | undefined {
+    const rawHyps = raw.hypotheses;
+    if (!Array.isArray(rawHyps) || rawHyps.length === 0) return undefined;
+
+    return (rawHyps as Array<Record<string, unknown>>).map((h) => ({
+      statement: (h.statement as string) || '',
+      type: (h.type as Hypothesis['type']) || 'subsidiary',
+      verificationApproach: (h.verificationApproach as string) || '',
+      expectedEvidence: (h.expectedEvidence as string) || '',
+      falsificationCriteria: (h.falsificationCriteria as string) || '',
+    }));
   }
 
   private addFallbackQuestion(): void {
@@ -736,15 +867,78 @@ Return ONLY valid JSON matching this schema:
 
   private async executePlanApproval(): Promise<void> {
     const plan = this.context.getResearchPlan();
-    if (!plan || plan.researchQuestions.length === 0) {
+    const questions = this.context.getQuestions().filter((q) => q.status !== 'obsolete');
+    if (questions.length === 0) {
       return;
     }
+
+    const effectivePlan = plan || {
+      intent: {
+        userGoal: this.originalQuery,
+        taskType: 'analytical' as const,
+        expectedOutput: 'structured_report' as const,
+        audienceLevel: 'intermediate' as const,
+      },
+      scope: {
+        included: [this.originalQuery],
+        excluded: [],
+        timeRange: '',
+        geography: '',
+        assumptions: [],
+        domains: [],
+        clarificationNeeded: false,
+        blockingQuestions: [],
+        nonBlockingSuggestions: [],
+      },
+      researchQuestions: questions.map((q) => ({
+        id: q.id,
+        text: q.text,
+        purpose: q.purpose || ('evidence' as const),
+        questionLayer: (q.questionLayer || 'analytical') as 'analytical',
+        priority: (q.priority || 1) as 1 | 2 | 3,
+        dependsOn: q.dependsOn || [],
+        searchQueries: q.searchQueries || [q.text],
+        requiredEvidence: q.requiredEvidence || {
+          sourceTypes: ['news'],
+          minSources: 1,
+          needsPrimarySource: false,
+          needsRecentSource: true,
+          needsCounterEvidence: false,
+        },
+        status: (q.status || 'pending') as ResearchQuestion['status'],
+        sources: q.sources || [],
+      })),
+      evidenceStrategy: {
+        sourceTypes: ['news' as const],
+        authorityRules: [],
+        freshnessRequirement: 'recent' as const,
+        minIndependentSources: 2,
+        mustFindPrimarySources: false,
+        mustFindCounterEvidence: false,
+      },
+      qualityGates: {
+        coverageThreshold: 0.5,
+        requiredFindings: [],
+        stopConditions: ['all_questions_answered'],
+        failureConditions: [],
+      },
+      searchStrategy: {
+        seedQueries: [this.originalQuery],
+        queryExpansionRules: ['synonyms', 'related_concepts'],
+        priorityOrder: ['recent', 'authoritative'],
+      },
+      hypotheses: [],
+      synthesisPlan: {
+        recommendedStructure: ['summary', 'findings', 'conclusion'],
+        expectedCaveats: [],
+      },
+    };
 
     const requestId = `plan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.emit({
       type: 'planning_complete',
       requestId,
-      plan,
+      plan: effectivePlan as ResearchPlan,
       approvalRequired: true,
       complexity: this.currentClassification.complexity,
       maxIterations: this.config.maxIterations,
@@ -765,7 +959,7 @@ Return ONLY valid JSON matching this schema:
     }
 
     if (action === 'increase_depth') {
-      this.config.maxIterations = Math.min(this.config.maxIterations + 2, 10);
+      this.config.maxIterations = Math.min(this.config.maxIterations + 5, 20);
     }
     if (action === 'decrease_depth') {
       this.config.maxIterations = Math.max(this.config.maxIterations - 1, 1);
@@ -774,10 +968,46 @@ Return ONLY valid JSON matching this schema:
 
   // === Phase: Research Loop ===
 
+  private initResearchState(): void {
+    const plan = this.context.getResearchPlan();
+    const questions = this.context.getQuestions();
+
+    const questionCoverage: QuestionCoverageStatus[] = questions
+      .filter((q) => q.status !== 'obsolete')
+      .map((q) => ({
+        questionId: q.id,
+        questionLayer: q.questionLayer || 'analytical',
+        status: 'pending' as const,
+        anchorFindings: [],
+        coverageScore: 0,
+      }));
+
+    const hypothesisStatuses: HypothesisStatus[] = (plan?.hypotheses || []).map((h) => ({
+      statement: h.statement,
+      verdict: 'unexamined' as const,
+      supportingFindings: [],
+      contradictingFindings: [],
+      confidenceLevel: 'insufficient-evidence' as const,
+    }));
+
+    this.researchState = {
+      iteration: 0,
+      questionCoverage,
+      hypothesisStatuses,
+      conflicts: [],
+      gapFindings: [],
+      saturationSignals: [],
+      overallCoverageScore: 0,
+    };
+  }
+
   private async executeResearchLoop(): Promise<void> {
     const maxIter = this.config.maxIterations;
 
+    this.initResearchState();
+
     for (let i = 0; i < maxIter; i++) {
+      this.throwIfCancelled();
       this.currentIteration = i + 1;
 
       if (this.abortController?.signal.aborted) {
@@ -799,6 +1029,19 @@ Return ONLY valid JSON matching this schema:
         questions: activeQs.map((q) => q.text),
       });
 
+      const activeQuestionIds = activeQs.map((q) => q.id);
+      const questionPreview = activeQs.slice(0, 2).map((q) => q.text).join('、');
+      const questionSuffix = activeQs.length > 2 ? ` 等 ${activeQs.length} 个问题` : '';
+      await this._logActivity(
+        'search',
+        `正在调查关键问题`,
+        `${questionPreview}${questionSuffix}`
+      );
+
+      if (activeQs.length > 0) {
+        await this._updateActiveStep(activeQs[0].id);
+      }
+
       const qualityReport = this.context.calculateQualityReport();
 
       if (qualityReport.nextActions.length > 0) {
@@ -811,12 +1054,12 @@ Return ONLY valid JSON matching this schema:
         }
       }
 
-      // M2.1: 使用 ResearchAction[] 替代 SearchStrategy[]
-      const actions = await this.llmSelectResearchActions(activeQs, qualityReport);
-
       let findingCount = 0;
-      if (actions.length > 0) {
-        const results = await this.executeResearchActions(actions);
+
+      if (this.llmAgentCall) {
+        this.throwIfCancelled();
+        const results = await this.exploreIteration(activeQs);
+        this.throwIfCancelled();
 
         for (const result of results) {
           this.emit({ type: 'action_executed', result });
@@ -844,6 +1087,42 @@ Return ONLY valid JSON matching this schema:
             }
           }
         }
+      } else {
+        // Fallback: rigid select-actions → execute pipeline
+        this.throwIfCancelled();
+        const actions = await this.llmSelectResearchActions(activeQs, qualityReport);
+
+        if (actions.length > 0) {
+          const results = await this.executeResearchActions(actions);
+          this.throwIfCancelled();
+
+          for (const result of results) {
+            this.emit({ type: 'action_executed', result });
+
+            if (result.findings) {
+              for (const f of result.findings) {
+                this.context.addFinding(f);
+                this.emit({ type: 'finding_added', finding: f });
+
+                if (f.stance === 'contradicts') {
+                  const existingSupports = this.context
+                    .getFindingsByQuestionId(f.questionId)
+                    .filter((ef) => ef.stance === 'supports' && ef.id !== f.id);
+                  if (existingSupports.length > 0) {
+                    this.emit({
+                      type: 'research_conflict_detected',
+                      findingId1: existingSupports[0].id,
+                      findingId2: f.id,
+                      description: f.claim,
+                    });
+                  }
+                }
+
+                findingCount++;
+              }
+            }
+          }
+        }
       }
 
       const updatedReport = this.context.calculateQualityReport();
@@ -854,6 +1133,18 @@ Return ONLY valid JSON matching this schema:
         findingsCount: findingCount,
         coverage: this.context.calculateQualityCoverage(),
         qualityReport: updatedReport,
+      });
+
+      for (const q of activeQs) {
+        if (q.status === 'answered' || q.status === 'obsolete') {
+          await this._completeStep(q.id);
+        }
+      }
+
+      const coverage = this.context.calculateQualityCoverage();
+      await this._updateRun({
+        progress_summary: `Iteration ${this.currentIteration}/${maxIter}: ${findingCount} new findings, ${Math.round(coverage * 100)}% coverage`,
+        current_phase: 'researching',
       });
 
       if (updatedReport.blockers.length > 0) {
@@ -879,6 +1170,11 @@ Return ONLY valid JSON matching this schema:
         }
       }
 
+      this.researchState.iteration = this.currentIteration;
+
+      await this.evaluateCoverageViaLLM(i);
+      this.throwIfCancelled();
+
       // M1.3: 使用 StopDecision 替代 shouldStop
       const stopDecision = this.evaluateStop(updatedReport);
       this.emit({ type: 'research_stop_decision', decision: stopDecision });
@@ -896,9 +1192,210 @@ Return ONLY valid JSON matching this schema:
       }
 
       if (i < maxIter - 1) {
-        await this.replan(updatedReport);
+        const hasConflicts = this.researchState.conflicts.filter((c) => !c.resolved).length > 0;
+        const hasRefutedHypothesis = this.researchState.hypothesisStatuses.some(
+          (hs) => hs.verdict === 'refuted'
+        );
+        const hasBlockedQuestions = this.researchState.questionCoverage.some(
+          (qc) => qc.status === 'blocked'
+        );
+
+        if (hasConflicts || hasRefutedHypothesis || hasBlockedQuestions) {
+          const triggerReason: ReplanInput['triggerReason'] = hasRefutedHypothesis
+            ? 'hypothesis-refuted'
+            : hasBlockedQuestions
+              ? 'evidence-gap'
+              : 'unexpected-finding';
+
+          const refutedHypothesis = hasRefutedHypothesis
+            ? this.researchState.hypothesisStatuses.find((hs) => hs.verdict === 'refuted')?.statement
+            : undefined;
+
+          await this.replan(updatedReport, triggerReason, refutedHypothesis);
+          this.throwIfCancelled();
+        }
       }
     }
+  }
+
+  // === Autonomous Exploration ===
+
+  private async exploreIteration(
+    questions: ResearchQuestion[]
+  ): Promise<ResearchActionResult[]> {
+    this.throwIfCancelled();
+    if (!this.llmAgentCall) {
+      return [];
+    }
+
+    const results: ResearchActionResult[] = [];
+
+    const questionPreview = questions.slice(0, 2).map((q) => q.text).join('、');
+    const questionSuffix = questions.length > 2 ? ` 等 ${questions.length} 个问题` : '';
+    await this._logActivity(
+      'search',
+      '正在搜索核心来源',
+      `调查 ${questionPreview}${questionSuffix}`
+    );
+
+    const plan = this.context.getResearchPlan();
+    const existingFindings = this.context.getAllFindings().slice(-30);
+
+    const userPrompt = buildExplorePrompt({
+      questions,
+      plan: plan ?? null,
+      existingFindings,
+      researchState: this.researchState,
+      iteration: this.currentIteration,
+      maxIterations: this.config.maxIterations,
+      query: this.originalQuery,
+    });
+
+    try {
+      const response = await this.llmAgentCall({
+        systemPrompt: EXPLORE_AGENT_SYSTEM_PROMPT,
+        userPrompt,
+        tools: BROWSER_TOOLS,
+        maxToolCalls: this.config.maxToolCallsPerIteration,
+        toolExecute: this.toolExecute,
+      });
+      this.throwIfCancelled();
+
+      // Extract structured findings from agent's JSON response
+      const parsed = parseExploreResponse(response.content);
+      const allFindings: ResearchFinding[] = [];
+
+      for (let i = 0; i < parsed.findings.length; i++) {
+        const f = parsed.findings[i];
+        const questionIndex = typeof f.questionIndex === 'number' ? f.questionIndex : 0;
+        const targetQuestion = questions[questionIndex];
+        const questionId = targetQuestion?.id || (questions[0]?.id || 'unknown');
+
+        const finding: ResearchFinding = {
+          id: `f_explore_${Date.now()}_${i}`,
+          questionId,
+          type: 'web',
+          claim: f.claim,
+          evidence: f.evidence || f.claim,
+          content: f.claim,
+          source: 'browser',
+          sourceId: `src_explore_${Date.now()}_${i}`,
+          sourceType: 'blog' as ResearchFinding['sourceType'],
+          title: f.sourceTitle,
+          url: f.sourceUrl,
+          accessedAt: new Date().toISOString(),
+          sourceReliability: f.confidence >= 0.8 ? 'medium' : f.confidence >= 0.6 ? 'low' : 'unverified',
+          authorityLevel: f.confidence >= 0.8 ? 'medium' : 'low',
+          stance: (f.stance as ResearchFinding['stance']) || 'neutral',
+          confidence: Math.min(1, Math.max(0, f.confidence || 0.7)),
+          relevance: 0.7,
+          relatedQuestionIds: [questionId],
+          supports: [],
+          contradicts: [],
+          limitations: Array.isArray(f.limitations) ? f.limitations : [],
+          extractedEntities: [],
+          iteration: this.currentIteration - 1,
+          evidenceType: f.evidenceType,
+        };
+
+        allFindings.push(finding);
+      }
+
+      if (allFindings.length > 0) {
+        results.push({
+          actionId: `explore_${Date.now()}`,
+          action: {
+            id: `explore_${Date.now()}`,
+            type: 'search',
+            targetQuestionId: questions[0]?.id || '',
+            params: {},
+            priority: 1,
+            reason: 'Autonomous agent exploration',
+            expectedOutcome: `Investigated ${questions.length} questions, found ${allFindings.length} findings`,
+          },
+          status: 'success',
+          findings: allFindings,
+          retryable: false,
+          attempts: 1,
+        });
+      }
+
+      // Mark answered questions
+      const answeredQuestions: string[] = [];
+      for (const qi of parsed.questionsAnswered) {
+        const q = questions[qi];
+        if (q) {
+          this.context.markQuestionAnswered(q.id);
+          answeredQuestions.push(q.text);
+        }
+      }
+
+      for (const qi of parsed.questionsPartiallyAnswered) {
+        const q = questions[qi];
+        if (q) {
+          this.context.markQuestionPartial(q.id);
+        }
+      }
+
+      // Emit source-based activity with extracted source URLs
+      const sourceUrls = new Map<string, string>();
+      for (const f of parsed.findings) {
+        if (f.sourceUrl && f.sourceTitle) {
+          sourceUrls.set(f.sourceUrl, f.sourceTitle);
+        }
+      }
+      const sources = Array.from(sourceUrls.entries()).map(([url, title]) => ({
+        url,
+        title: title || extractDomain(url),
+      }));
+
+      await this._logActivity(
+        'finding',
+        allFindings.length > 0 ? `发现 ${allFindings.length} 条关键证据` : '搜索完成，正在整理信息',
+        sources.length > 0 ? `来源：${sources.map((s) => s.title).join('、')}` : undefined,
+        'user',
+        sources.length > 0 ? sources : undefined,
+      );
+
+      // Emit activity for each answered question
+      for (const qText of answeredQuestions.slice(0, 3)) {
+        await this._logActivity(
+          'question_answered',
+          '已回答',
+          qText.length > 40 ? qText.slice(0, 40) + '...' : qText,
+        );
+      }
+
+      // Report gaps
+      if (parsed.gapsIdentified.length > 0) {
+        this.emit({
+          type: 'research_gap_detected',
+          gaps: parsed.gapsIdentified,
+          nextActions: parsed.nextSuggestedQueries,
+        });
+      }
+
+      // Update hypothesis statuses
+      for (const hu of parsed.hypothesisUpdates) {
+        const existing = this.researchState.hypothesisStatuses.find(
+          (hs) => hs.statement === hu.statement
+        );
+        if (existing) {
+          existing.verdict = hu.verdict;
+          existing.confidenceLevel = hu.verdict === 'supported' ? 'high' :
+            hu.verdict === 'refuted' ? 'high' : 'medium';
+        }
+      }
+    } catch (err) {
+      if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      await this._logActivity('error', '搜索过程遇到问题', message);
+      this.emit({ type: 'error', message: `Exploration failed: ${message}` });
+    }
+
+    return results;
   }
 
   // === M2.1: Research Action Dispatch ===
@@ -906,6 +1403,7 @@ Return ONLY valid JSON matching this schema:
   private async executeResearchActions(
     actions: ResearchAction[]
   ): Promise<ResearchActionResult[]> {
+    this.throwIfCancelled();
     const results: ResearchActionResult[] = [];
 
     const searchActions = actions.filter((a) => a.type === 'search');
@@ -914,6 +1412,12 @@ Return ONLY valid JSON matching this schema:
     );
     const compareActions = actions.filter(
       (a) => a.type === 'compare'
+    );
+    const conflictActions = actions.filter(
+      (a) => a.type === 'conflict_resolve' || a.type === 'gap_probe'
+    );
+    const terminalActions = actions.filter(
+      (a) => a.type === 'replan' || a.type === 'terminate'
     );
     const otherActions = actions.filter(
       (a) => a.type === 'backtrack' || a.type === 'stop_question'
@@ -932,6 +1436,30 @@ Return ONLY valid JSON matching this schema:
     if (compareActions.length > 0) {
       const compareResults = await this.executeCompare(compareActions as unknown as CompareAction[]);
       results.push(...compareResults);
+    }
+
+    if (conflictActions.length > 0) {
+      for (const action of conflictActions) {
+        results.push({
+          actionId: action.id,
+          action,
+          status: 'skipped',
+          retryable: false,
+          attempts: 1,
+        });
+      }
+    }
+
+    if (terminalActions.length > 0) {
+      for (const action of terminalActions) {
+        results.push({
+          actionId: action.id,
+          action,
+          status: 'skipped',
+          retryable: false,
+          attempts: 1,
+        });
+      }
     }
 
     for (const action of otherActions) {
@@ -958,7 +1486,10 @@ Return ONLY valid JSON matching this schema:
 
     const calls = validActions.map((a) => ({
       name: 'browser',
-      input: { query: a.params.query, queryType: 'en_resources' },
+      input: {
+        operation: 'navigate',
+        url: buildSearchUrl(a.params.query!),
+      },
     }));
 
     let callIndex = 0;
@@ -983,7 +1514,7 @@ Return ONLY valid JSON matching this schema:
           toolResult.name,
           truncated,
           strategies.length > 0 ? strategies : [],
-          iteration
+          iteration,
         );
 
         if (findings.length > 0) {
@@ -1039,47 +1570,36 @@ Return ONLY valid JSON matching this schema:
 
       try {
         const toolResult = await this.toolExecute('browser', {
-          query: action.params.url,
-          queryType: 'source_check',
+          operation: 'navigate',
+          url: action.params.url!,
         });
 
         const truncated = truncateResult(toolResult.result || '', 4000);
-        const prompt = `
-Analyze this source for reliability and relevance:
-
-URL: ${action.params.url}
-Content excerpt: ${truncated.slice(0, 3000)}
-
-Evaluate:
-1. Authority: Is this an official, peer-reviewed, or well-known source?
-2. Relevance: Does this relate to the research question?
-3. Freshness: Is the information current?
-4. Independence: Is this an original source or a re-report?
-
-Return JSON:
-{"reliability": "high"|"medium"|"low"|"unverified", "relevance": 0.0-1.0, "summary": "one-line assessment"}
-`.trim();
+        const prompt = sourceCheck.buildPrompt({
+          url: action.params.url,
+          contentExcerpt: truncated,
+        });
 
         const response = await this.llmComplete(prompt);
-        const parsed = this.safeParseJSON(response);
+        const parsed = sourceCheck.parseResponse(response);
 
         const finding: ResearchFinding = {
           id: `f_src_${Date.now()}`,
           questionId: action.targetQuestionId,
           type: 'web',
-          claim: (parsed?.summary as string) || `Source check: ${action.params.url}`,
+          claim: parsed.summary || `Source check: ${action.params.url}`,
           evidence: '',
-          content: (parsed?.summary as string) || '',
+          content: parsed.summary || '',
           source: 'browser',
           sourceId: action.params.sourceId || `src_${Date.now()}`,
           sourceType: 'blog',
           url: action.params.url,
           accessedAt: new Date().toISOString(),
-          sourceReliability: (parsed?.reliability as ResearchFinding['sourceReliability']) || 'unverified',
-          authorityLevel: (parsed?.reliability === 'high') ? 'high' : 'medium',
+          sourceReliability: (parsed.reliability as ResearchFinding['sourceReliability']) || 'unverified',
+          authorityLevel: (parsed.reliability === 'high') ? 'high' : 'medium',
           stance: 'neutral',
-          confidence: (parsed?.relevance as number) || 0.5,
-          relevance: (parsed?.relevance as number) || 0.5,
+          confidence: parsed.relevance || 0.5,
+          relevance: parsed.relevance || 0.5,
           relatedQuestionIds: [action.targetQuestionId],
           supports: [],
           contradicts: [],
@@ -1120,46 +1640,22 @@ Return JSON:
       try {
         const contextText = this.context.toPromptContext();
 
-        const prompt = `
-You are performing a comparison analysis for a deep research agent.
-
-Comparison type: ${action.comparisonType}
-Goal: ${action.comparisonGoal}
-
-Compare the following sources:
-${action.sourceIds.slice(0, 5).map((sid, i) => `Source ${i + 1}: id=${sid}`).join('\n')}
-
-Research context:
-${contextText.slice(0, 3000)}
-
-Identify:
-1. Common ground across sources
-2. Key differences or disagreements
-3. Which source is most reliable for each differing point
-4. A synthesized interpretation
-
-Return JSON:
-{
-  "agreement": "agree"|"disagree"|"complement"|"unrelated",
-  "commonPoints": ["point 1", "point 2"],
-  "differingPoints": [
-    {"aspect": "aspect name", "view1": "...", "view2": "...", "verdict": "text1_preferred"|"text2_preferred"|"both_valid"|"needs_clarification"}
-  ],
-  "synthesis": "synthesized conclusion"
-}
-`.trim();
+        const prompt = compare.buildPrompt({
+          action,
+          contextText,
+        });
 
         const response = await this.llmComplete(prompt);
-        const parsed = this.safeParseJSON(response);
+        const parsed = compare.parseResponse(response);
 
         const cmpId = `cmp_${Date.now()}`;
         const finding: ResearchFinding = {
           id: `f_${cmpId}`,
           questionId: action.targetQuestionId,
           type: 'concept',
-          claim: (parsed?.synthesis as string) || `Comparison: ${action.comparisonGoal}`,
+          claim: parsed.synthesis || `Comparison: ${action.comparisonGoal}`,
           evidence: JSON.stringify(parsed || {}),
-          content: (parsed?.synthesis as string) || '',
+          content: parsed.synthesis || '',
           source: 'compare_analysis',
           sourceId: cmpId,
           sourceType: 'blog',
@@ -1228,99 +1724,22 @@ Return JSON:
     const plan = this.context.getResearchPlan();
     const contextText = this.context.toPromptContext();
 
-    const prompt = `
-You are the research loop controller for a deep research agent.
-
-You are given:
-- The original query
-- The approved research plan
-- Current findings and quality report
-- Remaining iteration budget
-
-Your task is to decide the next best research actions. You can choose from multiple action types:
-
-Action types:
-- search: Execute a web search query (most common)
-- source_check: Evaluate a specific source's reliability, originality, date, author
-- claim_verify: Verify whether a claim is supported by other sources
-- fetch: Fetch page content for detailed analysis (provides URL)
-- compare: Compare multiple sources on a specific dimension
-- backtrack: Revisit a previously skipped question
-- stop_question: Mark a question as no longer actionable
-
-Rules:
-- Do NOT repeat searches that have already produced sufficient evidence
-- Prefer actions that reduce the largest uncertainty or unblock synthesis
-- If authoritative sources are missing, search for primary sources first
-- If only supporting evidence exists, search for counter-evidence or limitations
-- If findings conflict, search for adjudicating sources
-- Each question needs at least 2 strategies with different approaches
-- For analytical/critique questions, always include counter-view searches
-- Limit total actions to ${this.config.concurrencyLimit}
-
-Quality Report:
-- Score: ${(qualityReport.score * 100).toFixed(0)}%
-- Ready: ${qualityReport.readyForSynthesis}
-- Blockers: ${qualityReport.blockers.join('; ') || 'none'}
-- Next Actions: ${qualityReport.nextActions.join('; ') || 'none'}
-
-Plan:
-${plan ? `- Source strategy: ${JSON.stringify(plan.evidenceStrategy)}
-- Must find primary sources: ${plan.evidenceStrategy.mustFindPrimarySources}
-- Must find counter evidence: ${plan.evidenceStrategy.mustFindCounterEvidence}
-- Seed queries: ${plan.searchStrategy.seedQueries.join(', ')}` : 'No plan available'}
-
-Context:
-${contextText}
-
-Questions (max ${this.config.concurrencyLimit} actions total):
-${questions.map((q) => `- [${q.id}] (${q.purpose}) ${q.text} → searchQueries: ${q.searchQueries.join('; ') || 'none'}`).join('\n')}
-
-Return JSON:
-{"actions": [
-  {"type": "search", "targetQuestionId": "q0", "params": {"query": "specific search query"}, "priority": 1, "reason": "need official docs", "expectedOutcome": "find official documentation"},
-  {"type": "source_check", "targetQuestionId": "q1", "params": {"url": "https://...", "sourceId": "src_xxx"}, "priority": 2, "reason": "verify source quality", "expectedOutcome": "assess reliability"},
-  {"type": "compare", "targetQuestionId": "q2", "params": {"compareItems": ["src_a", "src_b"]}, "priority": 2, "reason": "reconcile conflicting sources", "expectedOutcome": "resolve contradiction"}
-]}
-`.trim();
+    const prompt = selectActions.buildPrompt({
+      questions,
+      qualityReport,
+      plan: plan ?? null,
+      contextText,
+      concurrencyLimit: this.config.concurrencyLimit,
+    });
 
     try {
       const response = await this.llmComplete(prompt);
-      const parsed = this.safeParseJSON(response);
-
-      if (parsed?.actions && Array.isArray(parsed.actions)) {
-        return (parsed.actions as Array<{
-          type: string;
-          targetQuestionId: string;
-          params?: { query?: string; url?: string; sourceId?: string; compareItems?: string[] };
-          priority?: number;
-          reason?: string;
-          expectedOutcome?: string;
-        }>).map((a, idx) => ({
-          id: `action_${Date.now()}_${idx}`,
-          type: (['search', 'source_check', 'claim_verify', 'fetch', 'compare', 'backtrack', 'stop_question'].includes(a.type)
-            ? a.type
-            : 'search') as ResearchActionType,
-          targetQuestionId: a.targetQuestionId || '',
-          params: a.params || {},
-          priority: a.priority || 2,
-          reason: a.reason || '',
-          expectedOutcome: a.expectedOutcome || '',
-        }));
-      }
+      return selectActions.parseResponse(response, questions, this.config.concurrencyLimit);
     } catch {
       // fall through
     }
 
-    return questions.slice(0, this.config.concurrencyLimit).map((q, idx) => ({
-      id: `action_fb_${Date.now()}_${idx}`,
-      type: 'search' as const,
-      targetQuestionId: q.id,
-      params: { query: q.searchQueries[0] || q.text },
-      priority: q.priority,
-      reason: `Research: ${q.text.slice(0, 60)}`,
-      expectedOutcome: `Evidence for: ${q.text.slice(0, 60)}`,
-    }));
+    return selectActions.parseResponse('', questions, this.config.concurrencyLimit);
   }
 
   private async llmExtractFindings(
@@ -1330,107 +1749,23 @@ Return JSON:
     iteration: number,
   ): Promise<ResearchFinding[]> {
     const existingFindings = this.context.getAllFindings().slice(-15);
+    const questions = this.context.getQuestions();
+    const questionTexts = questions
+      .map((q) => `[${q.id}] (${q.status}, ${q.purpose}) ${q.text}`)
+      .join('\n');
 
-    const prompt = `
-Extract discrete findings from this search result.
-
-Source: ${toolName}
-
-Result:
-${result}
-
-Existing findings to avoid duplication:
-${existingFindings.map((f) => `- [${f.id}] ${f.content.slice(0, 100)}`).join('\n') || '(none)'}
-
-For each finding extract:
-- claim: A concise factual statement (1-2 sentences)
-- evidence: The specific supporting data or quote
-- content: Same as claim (for compatibility)
-- stance: "supports", "contradicts", or "neutral" relative to the research question
-- sourceReliability: "high", "medium", "low", or "unverified"
-- confidence: 0.0-1.0
-- limitations: Any known limitations of this finding
-
-Return JSON:
-{"findings": [
-  {
-    "claim": "...",
-    "evidence": "...",
-    "stance": "supports",
-    "sourceReliability": "high",
-    "confidence": 0.9,
-    "title": "...",
-    "author": "...",
-    "publishedAt": "...",
-    "limitations": ["limitation 1"]
-  },
-  ...
-]}
-`.trim();
+    const prompt = extractFindings.buildPrompt({
+      toolName,
+      result,
+      strategies,
+      iteration,
+      existingFindingsSummary: existingFindings.map((f) => `- [${f.id}] ${f.content.slice(0, 100)}`).join('\n') || '(none)',
+      questionTexts,
+    });
 
     try {
       const response = await this.llmComplete(prompt);
-      const parsed = this.safeParseJSON(response);
-
-      if (parsed?.findings && Array.isArray(parsed.findings)) {
-        const findings: ResearchFinding[] = [];
-        let idx = 0;
-
-        for (const item of parsed.findings as Array<{
-          claim: string;
-          evidence: string;
-          content?: string;
-          stance: string;
-          sourceReliability: string;
-          confidence: number;
-          title?: string;
-          author?: string;
-          publishedAt?: string;
-          limitations?: string[];
-        }>) {
-          if (!item.claim && !item.content) continue;
-
-          const questionIds = strategies.map((s) => s.questionId);
-          const queryType = strategies[0]?.queryType ?? 'en_resources';
-          const reliability = (item.sourceReliability as ResearchFinding['sourceReliability'])
-            || computeSourceReliability(queryType);
-
-          const claimText = item.claim || item.content || '';
-          const evidenceText = item.evidence || claimText;
-
-          findings.push({
-            id: `f_${Date.now()}_${idx++}`,
-            questionId: strategies[0]?.questionId || '',
-            type: 'web',
-            claim: claimText,
-            evidence: evidenceText,
-            content: claimText,
-            source: toolName,
-            sourceId: `src_${Date.now()}_${idx}`,
-            sourceType: sourceTypeFromQueryType(queryType),
-            title: item.title,
-            author: item.author,
-            publishedAt: item.publishedAt,
-            accessedAt: new Date().toISOString(),
-            snippet: claimText.slice(0, 150),
-            rawExcerpt: claimText.slice(0, 500),
-            sourceReliability: reliability,
-            authorityLevel: authorityLevelFromReliability(reliability),
-            citationId: `[${idx}]`,
-            stance: (item.stance as ResearchFinding['stance']) || 'neutral',
-            confidence: Math.min(1, Math.max(0, item.confidence || 0.7)),
-            relevance: 0.7,
-            relatedQuestionIds: questionIds,
-            supports: [],
-            contradicts: [],
-            limitations: Array.isArray(item.limitations) ? item.limitations as string[] : [],
-            extractedEntities: [],
-            iteration,
-          });
-        }
-
-        return findings;
-      }
+      return extractFindings.parseResponse(response, strategies, toolName, iteration);
     } catch {
       // fall through
     }
@@ -1438,8 +1773,110 @@ Return JSON:
     return [];
   }
 
+  private async evaluateCoverageViaLLM(iterationIndex: number): Promise<void> {
+    const plan = this.context.getResearchPlan();
+    const questions = this.context.getActiveQuestions();
+    const allFindings = this.context.getAllFindings();
+    const newFindings = allFindings.filter((f) => f.iteration === iterationIndex);
+
+    const existingQuestions = questions
+      .map((q) => `[${q.id}] (${q.status}, layer=${q.questionLayer || 'analytical'}, purpose=${q.purpose}) ${q.text}`)
+      .join('\n');
+
+    const newFindingsSummary = newFindings
+      .map((f) => `[${f.id}] q=${f.questionId} stance=${f.stance} "${f.claim.slice(0, 120)}"`)
+      .join('\n') || '(none)';
+
+    const researchStateSummary = JSON.stringify({
+      iteration: this.researchState.iteration,
+      overallCoverageScore: this.researchState.overallCoverageScore,
+      questionCoverage: this.researchState.questionCoverage.map((qc) => ({
+        questionId: qc.questionId,
+        status: qc.status,
+        coverageScore: qc.coverageScore,
+      })),
+      hypothesisStatuses: this.researchState.hypothesisStatuses.map((hs) => ({
+        statement: hs.statement,
+        verdict: hs.verdict,
+        confidenceLevel: hs.confidenceLevel,
+      })),
+      saturationSignals: this.researchState.saturationSignals,
+    });
+
+    const prompt = continueResearch.buildPrompt({
+      existingQuestions,
+      plan: plan ?? null,
+      researchStateSummary,
+      newFindingsSummary,
+      iteration: this.currentIteration,
+      maxIterations: this.config.maxIterations,
+      isLoopEvaluation: true,
+    });
+
+    try {
+      const response = await this.llmComplete(prompt);
+      const parsed = continueResearch.parseResponse(response);
+
+      this.researchState.questionCoverage = parsed.updatedCoverage.map((uc) => ({
+        questionId: uc.questionId,
+        questionLayer: (uc.questionLayer as QuestionCoverageStatus['questionLayer']) || 'analytical',
+        status: uc.status,
+        anchorFindings: uc.anchorFindings || [],
+        coverageScore: uc.coverageScore || 0,
+        blockedReason: uc.blockedReason,
+      }));
+
+      this.researchState.hypothesisStatuses = parsed.updatedHypotheses.map((uh) => ({
+        statement: uh.statement,
+        verdict: uh.verdict,
+        supportingFindings: uh.supportingFindings || [],
+        contradictingFindings: uh.contradictingFindings || [],
+        confidenceLevel: uh.confidenceLevel,
+      }));
+
+      this.researchState.conflicts = parsed.newConflicts.map((nc) => ({
+        topic: nc.topic,
+        positionA: nc.positionA,
+        positionB: nc.positionB,
+        findingIds: nc.findingIds || [],
+        resolved: nc.resolved || false,
+        resolution: nc.resolution,
+      }));
+
+      this.researchState.saturationSignals = parsed.saturationSignals || [];
+      this.researchState.overallCoverageScore = parsed.overallCoverageScore;
+
+      if (parsed.saturationSignals.length > 0) {
+        for (const signal of parsed.saturationSignals.slice(0, 3)) {
+          this.emit({
+            type: 'research_next_action',
+            action: `Saturation: ${signal}`,
+            reason: 'Coverage saturation detected',
+          });
+        }
+      }
+
+      if (parsed.newConflicts.length > 0) {
+        for (const conflict of parsed.newConflicts.slice(0, 3)) {
+          this.emit({
+            type: 'research_conflict_detected',
+            findingId1: conflict.findingIds[0] || '',
+            findingId2: conflict.findingIds[1] || '',
+            description: `${conflict.topic}: ${conflict.positionA} vs ${conflict.positionB}`,
+          });
+        }
+      }
+    } catch {
+      // LLM evaluation is optional, silent failure is acceptable
+    }
+  }
+
   // M2.2: PlanDelta-driven replan with goal_change confirmation
-  private async replan(qualityReport: QualityReport): Promise<void> {
+  private async replan(
+    qualityReport: QualityReport,
+    triggerReason?: ReplanInput['triggerReason'],
+    refutedHypothesis?: string,
+  ): Promise<void> {
     const contextText = this.context.toPromptContext();
     const activeCount = this.context.getActiveQuestions().length;
     const remaining = Math.min(
@@ -1452,43 +1889,28 @@ Return JSON:
     const plan = this.context.getResearchPlan();
     const currentGoal = plan?.intent?.userGoal || this.originalQuery;
 
-    const prompt = `
-Review research progress and quality report. You may add up to ${remaining} new sub-questions or obsolete irrelevant ones.
-Only add questions that are genuinely needed for completeness, especially to address blockers.
-Also classify the nature of changes: are these minor additions, a major new direction, or a goal change?
-
-Research goal: "${currentGoal}"
-
-${contextText}
-
-Quality Report:
-- Score: ${(qualityReport.score * 100).toFixed(0)}%
-- Ready: ${qualityReport.readyForSynthesis}
-- Blockers: ${qualityReport.blockers.join('; ') || 'none'}
-- Next Actions: ${qualityReport.nextActions.join('; ') || 'none'}
-
-Return JSON:
-{
-  "add": [{"text": "...", "purpose": "evidence", "priority": 2}, ...],
-  "obsolete": ["q_id1", "q_id2", ...],
-  "deltaType": "minor" | "major" | "goal_change",
-  "goalChangeReason": "only if deltaType is goal_change: why the goal should change"
-}
-`.trim();
+    const prompt = replan.buildPrompt({
+      contextText,
+      qualityReport,
+      remaining,
+      currentGoal,
+      triggerReason,
+      refutedHypothesis,
+    });
 
     try {
       const response = await this.llmComplete(prompt);
-      const parsed = this.safeParseJSON(response);
+      const parsed = replan.parseResponse(response);
 
-      const deltaType: PlanDeltaType = (parsed?.deltaType as PlanDeltaType) || 'minor';
+      const deltaType: PlanDeltaType = parsed.deltaType;
       const obsoletedIds: string[] = [];
       const newQuestions: ResearchQuestion[] = [];
       let goalChange: PlanDelta['goalChange'] | undefined;
 
       // Process obsolete questions
-      if (parsed?.obsolete && Array.isArray(parsed.obsolete)) {
+      if (parsed.obsolete.length > 0) {
         const obsoletedQs: ResearchQuestion[] = [];
-        for (const qid of parsed.obsolete as string[]) {
+        for (const qid of parsed.obsolete) {
           const q = this.context.getQuestion(qid);
           if (q && q.status !== 'obsolete') {
             this.context.markQuestionObsolete(qid);
@@ -1502,9 +1924,8 @@ Return JSON:
       }
 
       // Process new questions (M2.2: max 2 per iteration)
-      if (parsed?.add && Array.isArray(parsed.add)) {
-        const addArr = parsed.add as Array<{ text: string; purpose?: string; priority: number }>;
-        const limited = addArr.slice(0, 2);
+      if (parsed.add.length > 0) {
+        const limited = parsed.add.slice(0, 2);
         let idx = activeCount;
         for (const q of limited) {
           if (q.text) {
@@ -1537,7 +1958,7 @@ Return JSON:
 
       // M2.2: Handle goal_change confirmation
       if (deltaType === 'goal_change') {
-        const proposedGoal = (parsed?.goalChangeReason as string) || 'research direction shift';
+        const proposedGoal = parsed.goalChangeReason || 'research direction shift';
         goalChange = {
           from: currentGoal,
           to: proposedGoal,
@@ -1603,7 +2024,6 @@ Return JSON:
 
   // M1.3: 停止决策评估
   private evaluateStop(report: QualityReport): StopDecision {
-    // 1. 达到最大迭代 → 强制停止
     if (this.currentIteration >= this.config.maxIterations) {
       return {
         shouldStop: true,
@@ -1614,21 +2034,22 @@ Return JSON:
       };
     }
 
-    // 2. 存在 critical blocker → 不停止
     if (report.criticalBlockers && report.criticalBlockers.length > 0) {
       return {
         shouldStop: false,
-        reason: 'no_more_actions',
+        reason: 'critical_blockers_exist',
         forced: false,
         unresolvedBlockers: [],
         qualityScore: report.score,
       };
     }
 
-    // 3. 覆盖度达标 + 必要问题已回答 + readyForSynthesis
+    const hasBlockers = report.blockers.length > 0;
+
     if (report.score >= this.config.coverageThreshold &&
-        (report as { requiredQuestionsAnswered?: boolean }).requiredQuestionsAnswered !== false &&
-        report.readyForSynthesis) {
+        !hasBlockers &&
+        report.readyForSynthesis &&
+        this.currentIteration >= Math.max(3, Math.floor(this.config.maxIterations * 0.4))) {
       return {
         shouldStop: true,
         reason: 'coverage_threshold_met',
@@ -1638,20 +2059,9 @@ Return JSON:
       };
     }
 
-    // 4. 无阻塞 + 可合成
-    if (report.blockers.length === 0 && report.readyForSynthesis) {
-      return {
-        shouldStop: true,
-        reason: 'ready_for_synthesis',
-        forced: false,
-        unresolvedBlockers: [],
-        qualityScore: report.score,
-      };
-    }
-
     return {
       shouldStop: false,
-      reason: 'no_more_actions',
+      reason: hasBlockers ? 'blockers_remain' : 'insufficient_coverage',
       forced: false,
       unresolvedBlockers: [],
       qualityScore: report.score,
@@ -1659,12 +2069,13 @@ Return JSON:
   }
 
   private get abortController(): AbortController | undefined {
-    return undefined;
+    return this.localAbortController;
   }
 
   // === Phase: Synthesis ===
 
   private async executeSynthesis(): Promise<void> {
+    this.throwIfCancelled();
     this.emit({ type: 'synthesis_start' });
 
     const prompt = this.buildSynthesisPrompt();
@@ -1676,18 +2087,22 @@ Return JSON:
           prompt,
           'You are the synthesis module of a deep research agent. Write using only the collected findings. Do not introduce unsupported facts.',
         )) {
+          this.throwIfCancelled();
           this.emit({ type: 'synthesis_chunk', delta, total: total + delta.length });
           total += delta.length;
         }
       } catch {
+        this.throwIfCancelled();
         const fallback = await this.llmComplete(prompt);
         this.emit({ type: 'synthesis_chunk', delta: fallback, total: fallback.length });
       }
     } else {
+      this.throwIfCancelled();
       const report = await this.llmComplete(prompt);
       this.emit({ type: 'synthesis_chunk', delta: report, total: report.length });
     }
 
+    this.throwIfCancelled();
     const reportId = `report_${Date.now()}`;
     this.emit({
       type: 'report_complete',
@@ -1703,115 +2118,50 @@ Return JSON:
     const findings = this.context.getAllFindings();
     const qualityReport = this.context.calculateQualityReport();
 
-    const questionGroups = new Map<string, ResearchFinding[]>();
-    for (const f of findings) {
-      for (const qid of f.relatedQuestionIds) {
-        if (!questionGroups.has(qid)) questionGroups.set(qid, []);
-        questionGroups.get(qid)!.push(f);
-      }
-    }
+    const unresolvedConflicts = this.researchState.conflicts
+      .filter((c) => !c.resolved)
+      .map((c) => ({
+        topic: c.topic,
+        positionA: c.positionA,
+        positionB: c.positionB,
+        findingIds: c.findingIds,
+      }));
 
-    const sections: string[] = [];
+    const confirmedGaps = this.researchState.questionCoverage
+      .filter((qc) => qc.status === 'blocked')
+      .map((qc) => `${qc.questionId}: ${qc.blockedReason || 'insufficient evidence'}`);
 
-    for (const q of questions) {
-      const related = questionGroups.get(q.id) || [];
-      const supports = related.filter((f) => f.stance === 'supports');
-      const contradicts = related.filter((f) => f.stance === 'contradicts');
-      const neutrals = related.filter((f) => f.stance === 'neutral');
+    const result = synthesize.buildPrompt({
+      query: this.originalQuery,
+      plan: plan ?? null,
+      questions,
+      findings,
+      qualityReport,
+      hypothesisStatuses: this.researchState.hypothesisStatuses.map((hs) => ({
+        statement: hs.statement,
+        verdict: hs.verdict,
+        supportingFindings: hs.supportingFindings,
+        contradictingFindings: hs.contradictingFindings,
+        confidenceLevel: hs.confidenceLevel,
+      })),
+      unresolvedConflicts: unresolvedConflicts.length > 0 ? unresolvedConflicts : undefined,
+      confirmedGaps: confirmedGaps.length > 0 ? confirmedGaps : undefined,
+    });
 
-      let section = `## ${q.text} (purpose: ${q.purpose}, status: ${q.status})\n\n`;
-
-      if (supports.length > 0) {
-        section += `### Supporting Evidence\n\n`;
-        for (const f of supports) {
-          section += `- ${f.citationId || ''} [${f.sourceReliability}, authority: ${f.authorityLevel}] ${f.claim}`;
-          if (f.evidence && f.evidence !== f.claim) {
-            section += `\n  Evidence: ${f.evidence}`;
-          }
-          if (f.title) section += `\n  Source: ${f.title}`;
-          if (f.limitations.length > 0) {
-            section += `\n  Limitations: ${f.limitations.join('; ')}`;
-          }
-          section += '\n';
-        }
-      }
-
-      if (contradicts.length > 0) {
-        section += `\n### Contradicting Evidence\n\n`;
-        for (const f of contradicts) {
-          section += `- ${f.citationId || ''} [${f.sourceReliability}] ${f.claim}`;
-          if (f.title) section += `\n  Source: ${f.title}`;
-          section += '\n';
-        }
-      }
-
-      if (neutrals.length > 0 && supports.length === 0 && contradicts.length === 0) {
-        section += `\n### Findings\n\n`;
-        for (const f of neutrals) {
-          section += `- ${f.citationId || ''} [${f.sourceReliability}] ${f.claim}`;
-          if (f.title) section += `\n  Source: ${f.title}`;
-          section += '\n';
-        }
-      }
-
-      sections.push(section);
-    }
-
-    const citations = findings.map(
-      (f) => `${f.citationId || ''} ${f.title || 'Untitled'} — ${f.url || f.source} (${f.accessedAt.slice(0, 10)}) [${f.sourceReliability}, ${f.authorityLevel}]`
-    );
-
-    const structure = plan?.synthesisPlan.recommendedStructure?.join('\n') ||
-      `1. Executive Summary\n2. Key Findings (organized by topic)\n3. Analysis & Synthesis\n4. Contested Points\n5. Gaps & Limitations\n6. Practical Implications\n7. References`;
-
-    const caveats = plan?.synthesisPlan.expectedCaveats || [];
-    const caveatLines = caveats.length > 0
-      ? `\nKnown caveats from planning:\n${caveats.map((c) => `- ${c}`).join('\n')}`
-      : '';
-
-    return `Research Query: ${this.originalQuery}
-
-You are the synthesis module of a deep research agent.
-
-Write the final answer using ONLY the approved research plan and collected findings below.
-DO NOT introduce unsupported facts.
-For each major claim, use the strongest available evidence.
-Separate clearly:
-- Established facts (well-supported, authoritative)
-- Likely interpretations (moderate support)
-- Contested points (conflicting sources)
-- Open questions (no or weak evidence)
-- Practical implications
-
-Rules:
-- If evidence is weak, say so explicitly
-- If sources conflict, present the conflict and explain which source is more reliable and why
-- Do NOT overstate certainty
-- Follow the recommended structure unless a better structure is clearly justified
-- Cite sources using the citationId in brackets (e.g. [1], [2])
-- Note source reliability level and authority when relevant
-- Include a dedicated section for limitations and unresolved questions
-
-Quality Assessment:
-- Overall score: ${(qualityReport.score * 100).toFixed(0)}%
-- Blockers: ${qualityReport.blockers.length > 0 ? qualityReport.blockers.join('; ') : 'none'}${caveatLines}
-
-Recommended structure:
-${structure}
-
-Findings:
-
-${sections.join('\n')}
-
-References:
-${citations.map((c) => `- ${c}`).join('\n')}
-`.trim();
+    return result.prompt;
   }
 
   // === Utilities ===
 
   private emit(event: ResearchEvent): void {
     this.emitSSE(event);
+  }
+
+  private throwIfCancelled(): void {
+    if (this.cancelled || this.localAbortController.signal.aborted) {
+      this.cancelled = true;
+      throw new ResearchCancelledError('Research cancelled');
+    }
   }
 
   private transitionTo(newPhase: OrchestratorPhase): void {
@@ -1826,26 +2176,15 @@ ${citations.map((c) => `- ${c}`).join('\n')}
     const questions = this.context.getQuestions().length;
     return `Research complete: ${findings} findings across ${questions} questions, ${coverage}% coverage in ${this.currentIteration} iterations.`;
   }
+}
 
-  private safeParseJSON(response: string): Record<string, unknown> | null {
-    let cleaned = response.trim();
-    cleaned = cleaned.replace(/^```(?:json)?\s*/im, '');
-    cleaned = cleaned.replace(/\s*```\s*$/im, '');
-    cleaned = cleaned.replace(/\/\/.*$/gm, '');
-    cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
-
-    try {
-      return JSON.parse(cleaned);
-    } catch {
-      const match = cleaned.match(/\{[\s\S]*\}/);
-      if (match) {
-        try {
-          return JSON.parse(match[0]);
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    }
+class ResearchCancelledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ResearchCancelledError';
   }
+}
+
+function isResearchCancelledError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'ResearchCancelledError';
 }

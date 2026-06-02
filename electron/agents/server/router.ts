@@ -1413,15 +1413,45 @@ async function handleResearchRoute(
       // Also fetch plan steps from the dedicated table
       const runId = row.id as string | undefined;
       let planSteps: unknown[] = [];
+      let activities: unknown[] = [];
+      let events: unknown[] = [];
+      let sources: unknown[] = [];
+      let report: unknown = null;
+      let citations: unknown[] = [];
       if (runId) {
         try {
           planSteps = await dbRequest('researchPlanStep:getByRunId', { runId }) as unknown[];
         } catch {
           // non-fatal: plan steps may not exist
         }
+        try {
+          activities = await dbRequest('researchActivity:getByRunId', { runId, visibility: 'user', limit: 200 }) as unknown[];
+        } catch {
+          // non-fatal: activities may not exist
+        }
+        try {
+          events = await dbRequest('researchEvent:getByRunId', { runId, visibility: 'user', limit: 500 }) as unknown[];
+        } catch {
+          // non-fatal: events may not exist
+        }
+        try {
+          sources = await dbRequest('researchSource:getByRunId', { runId }) as unknown[];
+        } catch {
+          // non-fatal: sources may not exist
+        }
+        try {
+          report = await dbRequest('researchReport:getLatest', { runId }) as unknown;
+        } catch {
+          // non-fatal: report may not exist
+        }
+        try {
+          citations = await dbRequest('researchCitation:getByRunId', { runId }) as unknown[];
+        } catch {
+          // non-fatal: citations may not exist
+        }
       }
 
-      sendJson(res, 200, { ...row, planSteps });
+      sendJson(res, 200, { ...row, planSteps, activities, events, sources, report, citations });
     } catch (error) {
       logger.error('Failed to fetch research session', error instanceof Error ? error : new Error(String(error)), { sessionId });
       sendJson(res, 500, { error: 'Database error' });

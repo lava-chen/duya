@@ -25,27 +25,30 @@ export function SettingsSegmented({
   return (
     <div
       className={cn(
-        "inline-flex bg-muted rounded-lg p-1 gap-1",
+        "inline-flex bg-[var(--surface)] rounded-lg p-1 gap-1",
         disabled && "opacity-50 pointer-events-none",
         className
       )}
     >
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onValueChange(option.value)}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200",
-            value === option.value
-              ? "bg-accent text-white shadow-sm ring-1 ring-accent/50"
-              : "text-muted-foreground hover:text-foreground hover:bg-surface"
-          )}
-        >
-          {option.icon}
-          <span>{option.label}</span>
-        </button>
-      ))}
+      {options.map((option) => {
+        const isActive = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onValueChange(option.value)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive
+                ? "bg-accent text-white shadow-sm"
+                : "text-[var(--muted)] hover:text-foreground hover:bg-[var(--surface-hover)]"
+            )}
+          >
+            {option.icon}
+            <span>{option.label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

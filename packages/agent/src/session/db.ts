@@ -16,6 +16,7 @@ import { getConfigDatabasePath } from '../config/index.js';
 import * as ipcDbClient from '../ipc/db-client.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { logger } from '../utils/logger.js';
+import { isCDNImageUrl } from '../utils/urlSafety.js';
 
 // =============================================================================
 // IPC Mode Detection
@@ -196,6 +197,94 @@ export interface ResearchSessionRow {
   current_phase: string;
   iterations: number;
   coverage: number;
+  created_at: number;
+  updated_at: number;
+  // v2: Research Run model extensions
+  title: string | null;
+  run_status: string | null;
+  plan_version: number;
+  active_step_id: string | null;
+  progress_summary: string | null;
+  completed_at: number | null;
+  error_json: string | null;
+}
+
+/** Research plan step row */
+export interface ResearchPlanStepRow {
+  id: string;
+  run_id: string;
+  order_num: number;
+  user_facing_label: string;
+  internal_question_ids: string;  // JSON array of question IDs
+  status: 'pending' | 'active' | 'completed' | 'skipped' | 'failed';
+  started_at: number | null;
+  completed_at: number | null;
+}
+
+/** Research activity row */
+export interface ResearchActivityRow {
+  id: string;
+  run_id: string;
+  sequence: number;
+  kind: string;
+  title: string;
+  detail: string | null;
+  visibility: 'user' | 'debug';
+  created_at: number;
+}
+
+/** Persisted user-facing research event for replay and recovery. */
+export interface ResearchEventRow {
+  id: string;
+  run_id: string;
+  sequence: number;
+  event_type: string;
+  payload_json: string;
+  visibility: 'user' | 'debug';
+  created_at: number;
+}
+
+/** Canonical source row for a research run. */
+export interface ResearchSourceRow {
+  id: string;
+  run_id: string;
+  title: string;
+  url: string | null;
+  canonical_url: string | null;
+  source_type: string;
+  allowed_by_policy: number;
+  reliability_json: string | null;
+  dedupe_key: string | null;
+  rejected_reason: string | null;
+  metadata_json: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Citation edge from a report claim back to a source/finding. */
+export interface ResearchCitationRow {
+  id: string;
+  run_id: string;
+  report_id: string | null;
+  source_id: string;
+  finding_id: string | null;
+  claim: string;
+  locator_json: string | null;
+  quoted_evidence: string | null;
+  created_at: number;
+}
+
+/** Final report artifact for a research run. */
+export interface ResearchReportRow {
+  id: string;
+  run_id: string;
+  title: string | null;
+  markdown: string;
+  outline_json: string | null;
+  source_ids_json: string;
+  citation_ids_json: string;
+  activity_summary_json: string | null;
+  export_metadata_json: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -605,6 +694,172 @@ function initializeSchema(db: BetterSqlite3.Database): void {
   } catch (error) {
     logger.error('Migration failed: creating research_sessions table', error instanceof Error ? error : undefined, undefined, 'DB');
   }
+
+  // Schema migration: Add v2 columns to research_sessions (Research Run model)
+  try {
+    const tableInfo = db.prepare('PRAGMA table_info(research_sessions)').all() as Array<{ name: string }>;
+    const columns = tableInfo.map(c => c.name);
+    if (!columns.includes('title')) {
+      db.exec(`ALTER TABLE research_sessions ADD COLUMN title TEXT`);
+      logger.info('Migration: Added title column to research_sessions', undefined, 'DB');
+    }
+    if (!columns.includes('run_status')) {
+      db.exec(`ALTER TABLE research_sessions ADD COLUMN run_status TEXT`);
+      logger.info('Migration: Added run_status column to research_sessions', undefined, 'DB');
+    }
+    if (!columns.includes('plan_version')) {
+      db.exec(`ALTER TABLE research_sessions ADD COLUMN plan_version INTEGER NOT NULL DEFAULT 0`);
+      logger.info('Migration: Added plan_version column to research_sessions', undefined, 'DB');
+    }
+    if (!columns.includes('active_step_id')) {
+      db.exec(`ALTER TABLE research_sessions ADD COLUMN active_step_id TEXT`);
+      logger.info('Migration: Added active_step_id column to research_sessions', undefined, 'DB');
+    }
+    if (!columns.includes('progress_summary')) {
+      db.exec(`ALTER TABLE research_sessions ADD COLUMN progress_summary TEXT`);
+      logger.info('Migration: Added progress_summary column to research_sessions', undefined, 'DB');
+    }
+    if (!columns.includes('completed_at')) {
+      db.exec(`ALTER TABLE research_sessions ADD COLUMN completed_at INTEGER`);
+      logger.info('Migration: Added completed_at column to research_sessions', undefined, 'DB');
+    }
+    if (!columns.includes('error_json')) {
+      db.exec(`ALTER TABLE research_sessions ADD COLUMN error_json TEXT`);
+      logger.info('Migration: Added error_json column to research_sessions', undefined, 'DB');
+    }
+  } catch (error) {
+    logger.error('Migration failed: adding v2 columns to research_sessions', error instanceof Error ? error : undefined, undefined, 'DB');
+  }
+
+  // Schema migration: Create research_plan_steps table
+  try {
+    const stepsTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='research_plan_steps'").get();
+    if (!stepsTableInfo) {
+      db.exec(`
+        CREATE TABLE research_plan_steps (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          order_num INTEGER NOT NULL,
+          user_facing_label TEXT NOT NULL,
+          internal_question_ids TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'pending',
+          started_at INTEGER,
+          completed_at INTEGER,
+          FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_plan_steps_run ON research_plan_steps(run_id)`);
+      logger.info('Migration: Created research_plan_steps table', undefined, 'DB');
+    }
+  } catch (error) {
+    logger.error('Migration failed: creating research_plan_steps table', error instanceof Error ? error : undefined, undefined, 'DB');
+  }
+
+  // Schema migration: Create research_activities table
+  try {
+    const activitiesTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='research_activities'").get();
+    if (!activitiesTableInfo) {
+      db.exec(`
+        CREATE TABLE research_activities (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          detail TEXT,
+          visibility TEXT NOT NULL DEFAULT 'user',
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_activities_run ON research_activities(run_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_activities_seq ON research_activities(run_id, sequence)`);
+      logger.info('Migration: Created research_activities table', undefined, 'DB');
+    }
+  } catch (error) {
+    logger.error('Migration failed: creating research_activities table', error instanceof Error ? error : undefined, undefined, 'DB');
+  }
+
+  // Schema migration: Create durable research event/report/source/citation tables (Deep Research P0)
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS research_events (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        visibility TEXT NOT NULL DEFAULT 'user',
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE,
+        UNIQUE(run_id, sequence)
+      );
+
+      CREATE TABLE IF NOT EXISTS research_sources (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        url TEXT,
+        canonical_url TEXT,
+        source_type TEXT NOT NULL DEFAULT 'web',
+        allowed_by_policy INTEGER NOT NULL DEFAULT 1,
+        reliability_json TEXT,
+        dedupe_key TEXT,
+        rejected_reason TEXT,
+        metadata_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS research_reports (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        title TEXT,
+        markdown TEXT NOT NULL,
+        outline_json TEXT,
+        source_ids_json TEXT NOT NULL DEFAULT '[]',
+        citation_ids_json TEXT NOT NULL DEFAULT '[]',
+        activity_summary_json TEXT,
+        export_metadata_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS research_citations (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        report_id TEXT,
+        source_id TEXT NOT NULL,
+        finding_id TEXT,
+        claim TEXT NOT NULL,
+        locator_json TEXT,
+        quoted_evidence TEXT,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES research_sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY (report_id) REFERENCES research_reports(id) ON DELETE SET NULL,
+        FOREIGN KEY (source_id) REFERENCES research_sources(id) ON DELETE CASCADE
+      );
+    `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_research_events_run_seq ON research_events(run_id, sequence)`);
+    db.exec(`
+      DELETE FROM research_events
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM research_events
+        GROUP BY run_id, sequence
+      )
+    `);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_research_events_run_seq ON research_events(run_id, sequence)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sources_run ON research_sources(run_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sources_policy ON research_sources(run_id, allowed_by_policy)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_research_reports_run ON research_reports(run_id, updated_at DESC)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_research_citations_run ON research_citations(run_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_research_citations_report ON research_citations(report_id)`);
+  } catch (error) {
+    logger.error('Migration failed: creating research artifact tables', error instanceof Error ? error : undefined, undefined, 'DB');
+  }
 }
 
 /**
@@ -966,7 +1221,7 @@ export function getMessages(sessionId: string): MessageRow[] {
   }
 
   const db = getDb();
-  const stmt = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC');
+  const stmt = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC');
   return stmt.all(sessionId) as MessageRow[];
 }
 
@@ -982,7 +1237,7 @@ export function getMessagesWithAttachments(sessionId: string): Message[] {
   }
 
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC').all(sessionId) as MessageRow[];
+  const rows = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC').all(sessionId) as MessageRow[];
 
   // Bulk-load all attachments for the session for efficient rehydration
   const attachmentMap = getAttachmentsForSession(sessionId);
@@ -1327,10 +1582,6 @@ export function rehydrateContentWithAttachments(
   if (typeof content === 'string' || !Array.isArray(content)) {
     return content;
   }
-
-  // Import shared CDN URL detection utility
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { isCDNImageUrl } = require('../utils/urlSafety.js');
 
   const results: MessageContent[] = [];
   let needsRehydration = false;
@@ -1994,6 +2245,8 @@ export function createResearchSession(data: {
   clarification?: string;
   context_json: string;
   status?: 'active' | 'completed' | 'aborted';
+  title?: string;
+  run_status?: string;
 }): ResearchSessionRow {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.researchSessionDb.create(data) as unknown as ResearchSessionRow;
@@ -2005,8 +2258,9 @@ export function createResearchSession(data: {
   db.prepare(`
     INSERT INTO research_sessions (
       id, session_id, original_query, clarification, context_json,
-      status, current_phase, iterations, coverage, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'idle', 0, 0, ?, ?)
+      status, current_phase, iterations, coverage, created_at, updated_at,
+      title, run_status, plan_version, active_step_id, progress_summary, completed_at, error_json
+    ) VALUES (?, ?, ?, ?, ?, ?, 'idle', 0, 0, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
   `).run(
     data.id,
     data.session_id,
@@ -2015,7 +2269,9 @@ export function createResearchSession(data: {
     data.context_json,
     data.status ?? 'active',
     now,
-    now
+    now,
+    data.title ?? null,
+    data.run_status ?? null
   );
 
   return {
@@ -2030,6 +2286,13 @@ export function createResearchSession(data: {
     coverage: 0,
     created_at: now,
     updated_at: now,
+    title: data.title ?? null,
+    run_status: data.run_status ?? null,
+    plan_version: 0,
+    active_step_id: null,
+    progress_summary: null,
+    completed_at: null,
+    error_json: null,
   };
 }
 
@@ -2069,6 +2332,14 @@ export function updateResearchSession(
     current_phase?: string;
     iterations?: number;
     coverage?: number;
+    // v2 fields
+    title?: string;
+    run_status?: string;
+    plan_version?: number;
+    active_step_id?: string | null;
+    progress_summary?: string | null;
+    completed_at?: number | null;
+    error_json?: string | null;
   }
 ): ResearchSessionRow | null {
   if (USE_IPC_MODE && getIpcClient()) {
@@ -2104,6 +2375,35 @@ export function updateResearchSession(
   if (data.coverage !== undefined) {
     fields.push('coverage = ?');
     params.push(data.coverage);
+  }
+  // v2 fields
+  if (data.title !== undefined) {
+    fields.push('title = ?');
+    params.push(data.title);
+  }
+  if (data.run_status !== undefined) {
+    fields.push('run_status = ?');
+    params.push(data.run_status);
+  }
+  if (data.plan_version !== undefined) {
+    fields.push('plan_version = ?');
+    params.push(data.plan_version);
+  }
+  if (data.active_step_id !== undefined) {
+    fields.push('active_step_id = ?');
+    params.push(data.active_step_id);
+  }
+  if (data.progress_summary !== undefined) {
+    fields.push('progress_summary = ?');
+    params.push(data.progress_summary);
+  }
+  if (data.completed_at !== undefined) {
+    fields.push('completed_at = ?');
+    params.push(data.completed_at);
+  }
+  if (data.error_json !== undefined) {
+    fields.push('error_json = ?');
+    params.push(data.error_json);
   }
 
   params.push(id);
@@ -2147,6 +2447,466 @@ export function listResearchSessionsByStatus(status: 'active' | 'completed' | 'a
 
   const db = getDb();
   return db.prepare('SELECT * FROM research_sessions WHERE status = ? ORDER BY updated_at DESC').all(status) as ResearchSessionRow[];
+}
+
+// =============================================================================
+// Research Plan Steps CRUD
+// =============================================================================
+
+export function createResearchPlanSteps(
+  runId: string,
+  steps: Array<{
+    id: string;
+    order_num: number;
+    user_facing_label: string;
+    internal_question_ids: string[];
+  }>,
+): ResearchPlanStepRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchPlanStepDb.createSteps(runId, steps) as unknown as ResearchPlanStepRow[];
+  }
+
+  const db = getDb();
+  const now = Date.now();
+
+  const stmt = db.prepare(`
+    INSERT INTO research_plan_steps (id, run_id, order_num, user_facing_label, internal_question_ids, status, started_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, 'pending', NULL, NULL)
+  `);
+
+  const rows: ResearchPlanStepRow[] = [];
+  const txn = db.transaction(() => {
+    for (const step of steps) {
+      stmt.run(
+        step.id,
+        runId,
+        step.order_num,
+        step.user_facing_label,
+        JSON.stringify(step.internal_question_ids),
+      );
+      rows.push({
+        id: step.id,
+        run_id: runId,
+        order_num: step.order_num,
+        user_facing_label: step.user_facing_label,
+        internal_question_ids: JSON.stringify(step.internal_question_ids),
+        status: 'pending',
+        started_at: null,
+        completed_at: null,
+      });
+    }
+  });
+  txn();
+
+  void now;
+  return rows;
+}
+
+export function getResearchPlanSteps(runId: string): ResearchPlanStepRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchPlanStepDb.getByRunId(runId) as unknown as ResearchPlanStepRow[];
+  }
+
+  const db = getDb();
+  return db.prepare('SELECT * FROM research_plan_steps WHERE run_id = ? ORDER BY order_num ASC').all(runId) as ResearchPlanStepRow[];
+}
+
+export function updateResearchPlanStep(
+  stepId: string,
+  data: {
+    status?: 'pending' | 'active' | 'completed' | 'skipped' | 'failed';
+    started_at?: number | null;
+    completed_at?: number | null;
+  },
+): ResearchPlanStepRow | null {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchPlanStepDb.update(stepId, data) as unknown as ResearchPlanStepRow | null;
+  }
+
+  const db = getDb();
+  const fields: string[] = [];
+  const params: unknown[] = [];
+
+  if (data.status !== undefined) {
+    fields.push('status = ?');
+    params.push(data.status);
+  }
+  if (data.started_at !== undefined) {
+    fields.push('started_at = ?');
+    params.push(data.started_at);
+  }
+  if (data.completed_at !== undefined) {
+    fields.push('completed_at = ?');
+    params.push(data.completed_at);
+  }
+
+  if (fields.length === 0) return null;
+
+  params.push(stepId);
+  db.prepare(`UPDATE research_plan_steps SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+  return db.prepare('SELECT * FROM research_plan_steps WHERE id = ?').get(stepId) as ResearchPlanStepRow | null;
+}
+
+export function deleteResearchPlanSteps(runId: string): number {
+  if (USE_IPC_MODE && getIpcClient()) {
+    const result = getIpcClient()!.researchPlanStepDb.deleteByRunId(runId) as unknown as { changes?: number } | number;
+    return typeof result === 'number' ? result : result.changes ?? 0;
+  }
+
+  const db = getDb();
+  const result = db.prepare('DELETE FROM research_plan_steps WHERE run_id = ?').run(runId);
+  return result.changes;
+}
+
+// =============================================================================
+// Research Activities CRUD
+// =============================================================================
+
+export function createResearchActivity(data: {
+  id: string;
+  run_id: string;
+  sequence: number;
+  kind: string;
+  title: string;
+  detail?: string;
+  visibility?: 'user' | 'debug';
+}): ResearchActivityRow {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchActivityDb.create(data) as unknown as ResearchActivityRow;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+
+  db.prepare(`
+    INSERT INTO research_activities (id, run_id, sequence, kind, title, detail, visibility, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    data.id,
+    data.run_id,
+    data.sequence,
+    data.kind,
+    data.title,
+    data.detail ?? null,
+    data.visibility ?? 'user',
+    now,
+  );
+
+  return {
+    id: data.id,
+    run_id: data.run_id,
+    sequence: data.sequence,
+    kind: data.kind,
+    title: data.title,
+    detail: data.detail ?? null,
+    visibility: data.visibility ?? 'user',
+    created_at: now,
+  };
+}
+
+export function getResearchActivities(
+  runId: string,
+  options?: { visibility?: 'user' | 'debug'; limit?: number; afterSequence?: number },
+): ResearchActivityRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchActivityDb.getByRunId(runId, options) as unknown as ResearchActivityRow[];
+  }
+
+  const db = getDb();
+  const visibility = options?.visibility;
+  const limit = options?.limit ?? 200;
+  const afterSequence = options?.afterSequence;
+
+  if (visibility) {
+    if (afterSequence !== undefined) {
+      return db.prepare(
+        'SELECT * FROM research_activities WHERE run_id = ? AND visibility = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
+      ).all(runId, visibility, afterSequence, limit) as ResearchActivityRow[];
+    }
+    return db.prepare(
+      'SELECT * FROM research_activities WHERE run_id = ? AND visibility = ? ORDER BY sequence ASC LIMIT ?'
+    ).all(runId, visibility, limit) as ResearchActivityRow[];
+  }
+
+  if (afterSequence !== undefined) {
+    return db.prepare(
+      'SELECT * FROM research_activities WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
+    ).all(runId, afterSequence, limit) as ResearchActivityRow[];
+  }
+
+  return db.prepare(
+    'SELECT * FROM research_activities WHERE run_id = ? ORDER BY sequence ASC LIMIT ?'
+  ).all(runId, limit) as ResearchActivityRow[];
+}
+
+export function getResearchActivityMaxSequence(runId: string): number {
+  if (USE_IPC_MODE && getIpcClient()) {
+    const result = getIpcClient()!.researchActivityDb.getMaxSequence(runId) as unknown as { max_seq?: number };
+    return result?.max_seq ?? 0;
+  }
+
+  const db = getDb();
+  const result = db.prepare(
+    'SELECT MAX(sequence) as max_seq FROM research_activities WHERE run_id = ?'
+  ).get(runId) as { max_seq: number | null };
+  return result?.max_seq ?? 0;
+}
+
+export function deleteResearchActivities(runId: string): number {
+  if (USE_IPC_MODE && getIpcClient()) {
+    const result = getIpcClient()!.researchActivityDb.deleteByRunId(runId) as unknown as { changes?: number } | number;
+    return typeof result === 'number' ? result : result.changes ?? 0;
+  }
+
+  const db = getDb();
+  const result = db.prepare('DELETE FROM research_activities WHERE run_id = ?').run(runId);
+  return result.changes;
+}
+
+// =============================================================================
+// Research Events / Sources / Citations / Reports CRUD
+// =============================================================================
+
+export function createResearchEvent(data: {
+  id: string;
+  run_id: string;
+  sequence: number;
+  event_type: string;
+  payload_json: string;
+  visibility?: 'user' | 'debug';
+}): ResearchEventRow | Promise<ResearchEventRow> {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchEventDb.create(data) as Promise<ResearchEventRow>;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO research_events (id, run_id, sequence, event_type, payload_json, visibility, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(data.id, data.run_id, data.sequence, data.event_type, data.payload_json, data.visibility ?? 'user', now);
+  return db.prepare('SELECT * FROM research_events WHERE run_id = ? AND sequence = ?').get(data.run_id, data.sequence) as ResearchEventRow;
+}
+
+export function getResearchEvents(runId: string, options?: { afterSequence?: number; limit?: number; visibility?: 'user' | 'debug' }): ResearchEventRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchEventDb.getByRunId(runId, options) as unknown as ResearchEventRow[];
+  }
+
+  const db = getDb();
+  const limit = options?.limit ?? 500;
+  const afterSequence = options?.afterSequence ?? -1;
+  if (options?.visibility) {
+    return db.prepare(
+      'SELECT * FROM research_events WHERE run_id = ? AND visibility = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
+    ).all(runId, options.visibility, afterSequence, limit) as ResearchEventRow[];
+  }
+  return db.prepare(
+    'SELECT * FROM research_events WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
+  ).all(runId, afterSequence, limit) as ResearchEventRow[];
+}
+
+export async function getResearchEventMaxSequence(runId: string): Promise<number> {
+  if (USE_IPC_MODE && getIpcClient()) {
+    const result = await getIpcClient()!.researchEventDb.getMaxSequence(runId) as { max_seq?: number };
+    return result?.max_seq ?? 0;
+  }
+
+  const db = getDb();
+  const result = db.prepare('SELECT MAX(sequence) as max_seq FROM research_events WHERE run_id = ?').get(runId) as { max_seq: number | null };
+  return result?.max_seq ?? 0;
+}
+
+export function upsertResearchSource(data: {
+  id: string;
+  run_id: string;
+  title: string;
+  url?: string | null;
+  canonical_url?: string | null;
+  source_type?: string;
+  allowed_by_policy?: boolean;
+  reliability_json?: string | null;
+  dedupe_key?: string | null;
+  rejected_reason?: string | null;
+  metadata_json?: string | null;
+}): ResearchSourceRow {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSourceDb.upsert(data) as unknown as ResearchSourceRow;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO research_sources (
+      id, run_id, title, url, canonical_url, source_type, allowed_by_policy,
+      reliability_json, dedupe_key, rejected_reason, metadata_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      title = excluded.title,
+      url = excluded.url,
+      canonical_url = excluded.canonical_url,
+      source_type = excluded.source_type,
+      allowed_by_policy = excluded.allowed_by_policy,
+      reliability_json = excluded.reliability_json,
+      dedupe_key = excluded.dedupe_key,
+      rejected_reason = excluded.rejected_reason,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `).run(
+    data.id,
+    data.run_id,
+    data.title,
+    data.url ?? null,
+    data.canonical_url ?? data.url ?? null,
+    data.source_type ?? 'web',
+    data.allowed_by_policy === false ? 0 : 1,
+    data.reliability_json ?? null,
+    data.dedupe_key ?? null,
+    data.rejected_reason ?? null,
+    data.metadata_json ?? null,
+    now,
+    now,
+  );
+  return db.prepare('SELECT * FROM research_sources WHERE id = ?').get(data.id) as ResearchSourceRow;
+}
+
+export function getResearchSources(runId: string): ResearchSourceRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchSourceDb.getByRunId(runId) as unknown as ResearchSourceRow[];
+  }
+
+  const db = getDb();
+  return db.prepare('SELECT * FROM research_sources WHERE run_id = ? ORDER BY created_at ASC').all(runId) as ResearchSourceRow[];
+}
+
+export function createResearchCitation(data: {
+  id: string;
+  run_id: string;
+  report_id?: string | null;
+  source_id: string;
+  finding_id?: string | null;
+  claim: string;
+  locator_json?: string | null;
+  quoted_evidence?: string | null;
+}): ResearchCitationRow {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchCitationDb.create(data) as unknown as ResearchCitationRow;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+  db.prepare(`
+    INSERT OR REPLACE INTO research_citations (
+      id, run_id, report_id, source_id, finding_id, claim, locator_json, quoted_evidence, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    data.id,
+    data.run_id,
+    data.report_id ?? null,
+    data.source_id,
+    data.finding_id ?? null,
+    data.claim,
+    data.locator_json ?? null,
+    data.quoted_evidence ?? null,
+    now,
+  );
+  return db.prepare('SELECT * FROM research_citations WHERE id = ?').get(data.id) as ResearchCitationRow;
+}
+
+export function getResearchCitations(runId: string, reportId?: string): ResearchCitationRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchCitationDb.getByRunId(runId, reportId) as unknown as ResearchCitationRow[];
+  }
+
+  const db = getDb();
+  if (reportId) {
+    return db.prepare('SELECT * FROM research_citations WHERE run_id = ? AND report_id = ? ORDER BY created_at ASC').all(runId, reportId) as ResearchCitationRow[];
+  }
+  return db.prepare('SELECT * FROM research_citations WHERE run_id = ? ORDER BY created_at ASC').all(runId) as ResearchCitationRow[];
+}
+
+export function upsertResearchReport(data: {
+  id: string;
+  run_id: string;
+  title?: string | null;
+  markdown: string;
+  outline_json?: string | null;
+  source_ids_json?: string;
+  citation_ids_json?: string;
+  activity_summary_json?: string | null;
+  export_metadata_json?: string | null;
+}): ResearchReportRow {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchReportDb.upsert(data) as unknown as ResearchReportRow;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO research_reports (
+      id, run_id, title, markdown, outline_json, source_ids_json, citation_ids_json,
+      activity_summary_json, export_metadata_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      title = excluded.title,
+      markdown = excluded.markdown,
+      outline_json = excluded.outline_json,
+      source_ids_json = excluded.source_ids_json,
+      citation_ids_json = excluded.citation_ids_json,
+      activity_summary_json = excluded.activity_summary_json,
+      export_metadata_json = excluded.export_metadata_json,
+      updated_at = excluded.updated_at
+  `).run(
+    data.id,
+    data.run_id,
+    data.title ?? null,
+    data.markdown,
+    data.outline_json ?? null,
+    data.source_ids_json ?? '[]',
+    data.citation_ids_json ?? '[]',
+    data.activity_summary_json ?? null,
+    data.export_metadata_json ?? null,
+    now,
+    now,
+  );
+  return db.prepare('SELECT * FROM research_reports WHERE id = ?').get(data.id) as ResearchReportRow;
+}
+
+export function getLatestResearchReport(runId: string): ResearchReportRow | null {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.researchReportDb.getLatest(runId) as unknown as ResearchReportRow | null;
+  }
+
+  const db = getDb();
+  return db.prepare('SELECT * FROM research_reports WHERE run_id = ? ORDER BY updated_at DESC LIMIT 1').get(runId) as ResearchReportRow | null;
+}
+
+// =============================================================================
+// Research Run Query Helpers
+// =============================================================================
+
+/**
+ * Get active research run for a chat session.
+ */
+export function getActiveResearchRun(sessionId: string): ResearchSessionRow | null {
+  const db = getDb();
+  return db.prepare(
+    `SELECT * FROM research_sessions
+     WHERE session_id = ? AND run_status IN ('planning', 'awaiting_approval', 'running', 'paused', 'synthesizing')
+     ORDER BY created_at DESC LIMIT 1`
+  ).get(sessionId) as ResearchSessionRow | null;
+}
+
+/**
+ * List active research runs across all sessions.
+ */
+export function listActiveResearchRuns(): ResearchSessionRow[] {
+  const db = getDb();
+  return db.prepare(
+    `SELECT * FROM research_sessions
+     WHERE run_status IN ('planning', 'awaiting_approval', 'running', 'paused', 'synthesizing')
+     ORDER BY updated_at DESC`
+  ).all() as ResearchSessionRow[];
 }
 
 // ── Model Capabilities Cache ──────────────────────────────────────────

@@ -51,6 +51,10 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     favoriteAgentIds: ['general-purpose', 'code-expert', 'plan'],
     // Agent prompt language preference
     agentLanguage: undefined,
+    // Security settings
+    securityScanEnabled: true,
+    // Default workspace directory for creating new projects
+    workspaceDir: undefined,
   };
 
   try {
@@ -151,6 +155,10 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       favoriteAgentIds: raw.favoriteAgentIds ? JSON.parse(raw.favoriteAgentIds) : defaults.favoriteAgentIds,
       // Agent prompt language preference
       agentLanguage: raw.agentLanguage || undefined,
+      // Security settings
+      securityScanEnabled: raw.securityScanEnabled !== "false",
+      // Default workspace directory for creating new projects
+      workspaceDir: raw.workspaceDir || undefined,
     };
   } catch {
     return defaults;
@@ -216,6 +224,10 @@ export function useSettings(): {
     favoriteAgentIds: ['general-purpose', 'code-expert', 'plan'],
     // Agent prompt language preference
     agentLanguage: undefined,
+    // Security settings
+    securityScanEnabled: true,
+    // Default workspace directory for creating new projects
+    workspaceDir: undefined,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

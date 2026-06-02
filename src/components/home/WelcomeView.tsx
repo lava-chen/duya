@@ -5,6 +5,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { MessageInput } from "@/components/chat/MessageInput";
 import { SessionSelector } from "./SessionSelector";
+import { InputDialog } from "@/components/ui/InputDialog";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
 import type { FileAttachment } from "@/types/message";
 
@@ -20,6 +21,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask');
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
+  const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
 
   const onSendMessageRef = useRef(onSendMessage);
   onSendMessageRef.current = onSendMessage;
@@ -37,7 +39,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     setSelectedProject(project);
   };
 
-  const handleOpenNewProject = () => {
+  const handleUseExistingFolder = () => {
     if (window.electronAPI?.dialog?.openFolder) {
       window.electronAPI.dialog.openFolder({
         title: t('project.selectNewProjectFolder'),
@@ -48,6 +50,26 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           setSelectedProject({ workingDirectory, projectName });
         }
       });
+    }
+  };
+
+  const handleNewBlankProject = () => {
+    setIsNameProjectDialogOpen(true);
+  };
+
+  const handleCreateNamedProject = async (name: string) => {
+    setIsNameProjectDialogOpen(false);
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+      if (window.electronAPI?.app?.createProjectFolder) {
+        const result = await window.electronAPI.app.createProjectFolder(trimmed);
+        if (result.success && result.path) {
+          setSelectedProject({ workingDirectory: result.path, projectName: trimmed });
+        }
+      }
+    } catch (error) {
+      console.error("[WelcomeView] Failed to create blank project:", error);
     }
   };
 
@@ -111,7 +133,8 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
         <SessionSelector
           selectedProject={selectedProject}
           onSelectProject={handleSelectProject}
-          onOpenNewProject={handleOpenNewProject}
+          onNewBlankProject={handleNewBlankProject}
+          onUseExistingFolder={handleUseExistingFolder}
           onSelectThread={onSelectThread}
         >
           {/* Message Input rendered between selector and recent threads */}
@@ -130,6 +153,17 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           </div>
         </SessionSelector>
       </div>
+
+      <InputDialog
+        isOpen={isNameProjectDialogOpen}
+        title={t('project.nameProject')}
+        description={t('project.nameProjectDescription')}
+        placeholder={t('project.nameProjectPlaceholder')}
+        onConfirm={(value) => {
+          handleCreateNamedProject(value);
+        }}
+        onCancel={() => setIsNameProjectDialogOpen(false)}
+      />
     </div>
   );
 }

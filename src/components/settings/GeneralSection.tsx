@@ -26,6 +26,9 @@ import {
   SettingsSelectRow,
   SettingsInput,
 } from "@/components/settings/ui";
+import { ImportFlow } from "@/components/import/ImportFlow";
+import { historyImportIPC, detectImportIPC } from "@/lib/import-ipc";
+import type { ImportSource } from "@/types/import";
 
 interface MigrationInfo {
   needed: boolean;
@@ -53,6 +56,13 @@ export function GeneralSection() {
 
   const [notificationTestStatus, setNotificationTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
 
+  // Import state
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showImportFlow, setShowImportFlow] = useState(false);
+  const [lastImportTime, setLastImportTime] = useState<number | null>(null);
+  const [detectedSources, setDetectedSources] = useState<Record<string, boolean>>({});
+  const [selectedSources, setSelectedSources] = useState<Record<string, boolean>>({});
+
   // Gateway models from providers
   const [gatewayModels, setGatewayModels] = useState<{ value: string; label: string }[]>([]);
 
@@ -74,6 +84,29 @@ export function GeneralSection() {
       }
     }
     loadAutoStartStatus();
+  }, []);
+
+  // Load import history and detect available sources
+  useEffect(() => {
+    async function loadImportInfo() {
+      try {
+        const [history, detected] = await Promise.all([
+          historyImportIPC(),
+          detectImportIPC(),
+        ]);
+        if (history.length > 0) {
+          setLastImportTime(history[0].createdAt);
+        }
+        const sources: Record<string, boolean> = {};
+        if (detected.claude) sources["claude-code"] = true;
+        if (detected.codex) sources["codex"] = true;
+        setDetectedSources(sources);
+        setSelectedSources({ ...sources });
+      } catch (err) {
+        console.error("Failed to load import info:", err);
+      }
+    }
+    loadImportInfo();
   }, []);
 
   useEffect(() => {
@@ -208,6 +241,22 @@ export function GeneralSection() {
     }
   };
 
+  const selectWorkspaceFolder = async () => {
+    if (typeof window !== "undefined" && window.electronAPI?.dialog) {
+      try {
+        const result = await window.electronAPI.dialog.openFolder({
+          title: "Select Workspace Directory",
+          defaultPath: settings?.workspaceDir || undefined,
+        });
+        if (result && !result.canceled && result.filePaths.length > 0) {
+          await save({ workspaceDir: result.filePaths[0] });
+        }
+      } catch (err) {
+        console.error("Failed to open folder dialog:", err);
+      }
+    }
+  };
+
   const handleMigrateConfirm = async () => {
     if (!migrationInfo?.sourcePath || !pendingPath) return;
     const success = await executeMigration(migrationInfo.sourcePath, pendingPath);
@@ -248,6 +297,20 @@ export function GeneralSection() {
     } catch {
       setNotificationTestStatus("error");
     }
+  };
+
+  const handleReimport = () => {
+    setShowImportModal(true);
+  };
+
+  const handleImportContinue = () => {
+    setShowImportModal(false);
+    setShowImportFlow(true);
+  };
+
+  const handleImportCustom = () => {
+    setShowImportModal(false);
+    setShowImportFlow(true);
   };
 
   if (loading) {
@@ -377,14 +440,17 @@ export function GeneralSection() {
             )}
           </SettingsRow>
           <SettingsRow
-            label={t("settings.general.databaseLocation")}
-            description={settings?.databasePath || t("settings.general.databaseLocationDesc")}
+            label={t("settings.general.dataStorage")}
+            description={t("settings.general.dataStorageDesc")}
             action={
               <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground max-w-[200px] truncate">
+                  {settings?.databasePath || t("settings.general.defaultLocation")}
+                </span>
                 <button
                   onClick={selectDatabaseFolder}
                   className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
-                  title={t("common.select")}
+                  title={t("common.open")}
                 >
                   <FolderIcon size={16} />
                 </button>
@@ -400,9 +466,36 @@ export function GeneralSection() {
               </div>
             }
           />
+          <SettingsRow
+            label={t("settings.general.defaultWorkspace")}
+            description={t("settings.general.defaultWorkspaceDesc")}
+            action={
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground max-w-[200px] truncate">
+                  {settings?.workspaceDir || t("settings.general.defaultWorkspacePlaceholder")}
+                </span>
+                <button
+                  onClick={selectWorkspaceFolder}
+                  className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
+                  title={t("common.change")}
+                >
+                  <FolderIcon size={16} />
+                </button>
+                {settings?.workspaceDir && (
+                  <button
+                    onClick={() => save({ workspaceDir: undefined })}
+                    className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
+                    title={t("common.reset")}
+                  >
+                    <XIcon size={16} />
+                  </button>
+                )}
+              </div>
+            }
+          />
           <SettingsToggle
-            label="Wiki Agent (Experimental)"
-            description="Enable background wiki memory extraction and status display. Experimental feature, disabled by default."
+            label={t("settings.general.wikiAgent")}
+            description={t("settings.general.wikiAgentDesc")}
             checked={settings?.wikiAgentEnabled ?? false}
             onCheckedChange={(checked) => save({ wikiAgentEnabled: checked })}
           />
@@ -452,6 +545,131 @@ export function GeneralSection() {
         </SettingsCard>
       </SettingsSection>
 
+      {/* Import Section */}
+      <SettingsSection title={t("settings.general.importTitle")} description={t("settings.general.importDesc")}>
+        <SettingsCard>
+          <SettingsRow
+            label={t("settings.general.importedAgentSettings")}
+            description={
+              lastImportTime
+                ? t("settings.general.lastImported", {
+                    time: new Date(lastImportTime).toLocaleDateString(),
+                  })
+                : t("settings.general.noImportHistory")
+            }
+            action={
+              <button
+                onClick={handleReimport}
+                className="px-4 py-2 rounded-lg text-sm font-medium border border-border/50 hover:bg-muted transition-colors"
+              >
+                {t("settings.general.reimport")}
+              </button>
+            }
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Import Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setShowImportModal(false)} />
+          <div className="relative z-10 w-full max-w-md mx-4 bg-[var(--bg-surface)] border border-border/50 rounded-xl shadow-xl p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold">{t("settings.general.importFromAIApps")}</h3>
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="p-1 hover:bg-muted rounded transition-colors"
+              >
+                <XIcon size={18} />
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <p className="text-sm text-muted-foreground mb-3">{t("settings.general.detectedApps")}</p>
+              <div className="space-y-3">
+                {Object.keys(detectedSources).length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.general.noDetectedApps")}
+                  </p>
+                )}
+                {detectedSources["claude-code"] && (
+                  <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-[#d97757]/10 flex items-center justify-center text-[#d97757] text-sm font-bold">
+                        &lt;/&gt;
+                      </div>
+                      <span className="text-sm font-medium">Claude Code</span>
+                    </div>
+                    <SettingsToggle
+                      label=""
+                      checked={selectedSources["claude-code"] ?? false}
+                      onCheckedChange={(checked) =>
+                        setSelectedSources((prev) => ({ ...prev, "claude-code": checked }))
+                      }
+                    />
+                  </div>
+                )}
+                {detectedSources["codex"] && (
+                  <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center text-accent text-sm font-bold">
+                        ⚡
+                      </div>
+                      <span className="text-sm font-medium">Codex</span>
+                    </div>
+                    <SettingsToggle
+                      label=""
+                      checked={selectedSources["codex"] ?? false}
+                      onCheckedChange={(checked) =>
+                        setSelectedSources((prev) => ({ ...prev, codex: checked }))
+                      }
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground mb-6">
+              {t("settings.general.importDisclaimer")}
+            </p>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                onClick={handleImportCustom}
+                className="px-4 py-2 rounded-lg text-sm border border-border/50 hover:bg-muted transition-colors"
+              >
+                {t("settings.general.customize")}
+              </button>
+              <button
+                onClick={handleImportContinue}
+                className="px-4 py-2 rounded-lg text-sm bg-accent text-white hover:bg-accent/90 transition-colors"
+                disabled={!Object.values(selectedSources).some(Boolean)}
+              >
+                {t("common.continue")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Flow Overlay */}
+      {showImportFlow && (
+        <ImportFlow
+          onComplete={() => {
+            setShowImportFlow(false);
+            historyImportIPC().then((history) => {
+              if (history.length > 0) setLastImportTime(history[0].createdAt);
+            });
+          }}
+          onClose={() => setShowImportFlow(false)}
+        />
+      )}
     </div>
   );
 }

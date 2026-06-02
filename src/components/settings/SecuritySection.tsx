@@ -17,16 +17,19 @@ export function SecuritySection() {
   const { t } = useTranslation();
   const [permissionMode, setPermissionMode] = useState(settings.permissionMode);
   const [sandboxEnabled, setSandboxEnabled] = useState(settings.sandboxEnabled);
+  const [securityScanEnabled, setSecurityScanEnabled] = useState(settings.securityScanEnabled);
   const [isDirty, setIsDirty] = useState(false);
 
   const PERMISSION_MODE_OPTIONS = [
     { value: "ask", label: t('settings.security.permissionModeAsk') },
+    { value: "auto", label: t('settings.security.permissionModeAuto') },
     { value: "bypass", label: t('settings.security.permissionModeBypass') },
   ];
 
   useEffect(() => {
     setPermissionMode(settings.permissionMode);
     setSandboxEnabled(settings.sandboxEnabled);
+    setSecurityScanEnabled(settings.securityScanEnabled);
     setIsDirty(false);
   }, [settings]);
 
@@ -40,13 +43,19 @@ export function SecuritySection() {
     setIsDirty(true);
   }, []);
 
+  const handleSecurityScanToggle = useCallback((checked: boolean) => {
+    setSecurityScanEnabled(checked);
+    setIsDirty(true);
+  }, []);
+
   const handleSave = useCallback(async () => {
     await save({
       permissionMode,
       sandboxEnabled,
+      securityScanEnabled,
     });
     setIsDirty(false);
-  }, [permissionMode, sandboxEnabled, save]);
+  }, [permissionMode, sandboxEnabled, securityScanEnabled, save]);
 
   if (loading) {
     return (
@@ -83,6 +92,12 @@ export function SecuritySection() {
             checked={sandboxEnabled}
             onCheckedChange={handleSandboxToggle}
           />
+          <SettingsToggle
+            label={t('settings.security.skillSecurityScan')}
+            description={t('settings.security.skillSecurityScanDesc')}
+            checked={securityScanEnabled}
+            onCheckedChange={handleSecurityScanToggle}
+          />
         </SettingsCard>
 
         {permissionMode === "bypass" && (
@@ -93,6 +108,20 @@ export function SecuritySection() {
                 <p className="text-sm font-medium text-yellow-500">{t('settings.security.warningTitle')}</p>
                 <p className="text-xs text-yellow-500/80 mt-1">
                   {t('settings.security.warningDesc')}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {permissionMode === "auto" && (
+          <div className="mt-4 rounded-lg border border-blue-500/30 bg-blue-500/10 p-4">
+            <div className="flex items-start gap-3">
+              <ShieldCheckIcon size={18} className="text-blue-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-blue-500">{t('permissionMode.auto')}</p>
+                <p className="text-xs text-blue-500/80 mt-1">
+                  {t('permissionMode.autoWarningDesc')}
                 </p>
               </div>
             </div>

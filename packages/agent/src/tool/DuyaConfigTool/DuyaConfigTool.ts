@@ -3,7 +3,7 @@ import { DUYA_CONFIG_TOOL_NAME } from './constants.js';
 import { DESCRIPTION } from './prompt.js';
 import type { Tool, ToolResult } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
-import { configDb } from '../../ipc/db-client.js';
+import { configDb, pluginDb } from '../../ipc/db-client.js';
 
 const actionSchema = z.enum([
   'providers_list',
@@ -263,7 +263,36 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
         case 'mcp_server_list': {
           const settings = await configDb.agentGetSettings();
           const mcpServers = (settings as Record<string, unknown>)?.mcpServers ?? {};
-          return toolSuccess({ mcpServers });
+
+          const pluginServers: Array<{ name: string; pluginId: string; pluginName: string }> = [];
+          try {
+            const installed = await pluginDb.registryList() as Array<{
+              id?: unknown;
+              enabled?: unknown;
+              installPath?: unknown;
+              name?: unknown;
+              manifest?: unknown;
+            }>;
+            for (const plugin of installed) {
+              if (plugin.enabled !== true) continue;
+              const manifest = plugin.manifest as Record<string, unknown> | undefined;
+              const servers = manifest?.capabilities
+                ? (manifest.capabilities as Record<string, unknown>)?.mcpServers as Array<Record<string, unknown>> | undefined
+                : undefined;
+              if (!Array.isArray(servers)) continue;
+              for (const server of servers) {
+                pluginServers.push({
+                  name: server.name as string,
+                  pluginId: plugin.id as string,
+                  pluginName: (plugin.name || plugin.id) as string,
+                });
+              }
+            }
+          } catch {
+            // plugin registry not available — that's OK
+          }
+
+          return toolSuccess({ mcpServers, pluginMcpServers: pluginServers });
         }
 
         case 'mcp_server_add': {

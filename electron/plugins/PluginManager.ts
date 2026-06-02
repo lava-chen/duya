@@ -2,8 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getPluginCatalog, getPluginCatalogEntry } from './catalog';
-import { listCapabilityKinds } from './manifest';
+import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths } from './catalog';
+import { listCapabilityKinds, readPluginManifest } from './manifest';
 import { PluginRegistryStore } from './PluginRegistryStore';
 import { getInstalledPluginsManager } from './installed/installed-plugins-manager';
 import {
@@ -142,8 +142,20 @@ export class PluginManager {
       const stagingPath = path.join(stagingDir, operationId);
 
       ensureDir(stagingPath);
-      const manifestPath = path.join(stagingPath, 'plugin.json');
-      fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
+
+      if (catalogEntry.source === 'local') {
+        const localPaths = getLocalPluginPaths();
+        const sourceDir = localPaths.get(catalogEntry.name) || localPaths.get(pluginId);
+        if (sourceDir && fs.existsSync(sourceDir)) {
+          copyDirectoryRecursive(sourceDir, stagingPath);
+        } else {
+          const manifestPath = path.join(stagingPath, 'plugin.json');
+          fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
+        }
+      } else {
+        const manifestPath = path.join(stagingPath, 'plugin.json');
+        fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
+      }
 
       removeDirSafe(cacheDir);
       copyDirectoryRecursive(stagingPath, cacheDir);
@@ -198,6 +210,96 @@ export class PluginManager {
       });
 
       this.logger.info('Plugin installed from catalog', { pluginId, version, scope }, LogComponent.Main);
+      return entry;
+    });
+  }
+
+  async installFromPath(
+    pluginPath: string,
+    scope: PluginScope = 'user',
+    autoUpdate: boolean = false,
+  ): Promise<PluginResult<PluginRegistryEntry>> {
+    const resolvedPath = path.resolve(pluginPath);
+    return withPluginError(resolvedPath, 'install', async () => {
+      if (!fs.existsSync(resolvedPath)) {
+        const err: PluginError = {
+          type: 'path-not-found',
+          plugin: resolvedPath,
+          path: resolvedPath,
+        };
+        throw err;
+      }
+
+      const manifest = readPluginManifest(resolvedPath);
+      const pluginId = manifest.id;
+      const version = resolvePluginVersion('', manifest);
+      const pluginName = manifest.name;
+
+      const trustInfo = this.trustEngine.determineTrustLevel('local', undefined);
+      const marketplace = 'local';
+      const cacheDir = ensurePluginCacheDir(marketplace, pluginId, version);
+
+      const { dataDir, stagingDir } = this.store.getPaths();
+      const pluginDataPath = path.join(dataDir, pluginId);
+      const operationId = randomUUID();
+      const stagingPath = path.join(stagingDir, operationId);
+
+      ensureDir(stagingPath);
+      copyDirectoryRecursive(resolvedPath, stagingPath);
+
+      removeDirSafe(cacheDir);
+      copyDirectoryRecursive(stagingPath, cacheDir);
+      removeDirSafe(stagingPath);
+
+      createInstalledSymlink(pluginId, cacheDir);
+      ensureDir(pluginDataPath);
+
+      if (manifest.permissions?.length) {
+        const perms = manifest.permissions.map((p) => ({
+          name: p.name,
+          scope: p.scope as 'plugin' | 'project' | 'system' | undefined,
+          domains: p.domains,
+        }));
+        await this.permissionService.confirmPluginPermissions(pluginId, perms);
+      }
+
+      const now = new Date().toISOString();
+      const entry: PluginRegistryEntry = {
+        id: pluginId,
+        name: pluginName,
+        version,
+        enabled: true,
+        installPath: cacheDir,
+        dataPath: pluginDataPath,
+        source: 'local',
+        trustLevel: trustInfo.level,
+        scope,
+        marketplace,
+        autoUpdate,
+        installedAt: now,
+        updatedAt: now,
+        grantedPermissions: manifest.permissions,
+        setupState: manifest.setup?.some((f) => f.required) ? 'needs_setup' : 'complete',
+        health: {
+          status: manifest.setup?.some((f) => f.required) ? 'needs_setup' : 'ready',
+          reasons: [],
+          checkedAt: now,
+        },
+      };
+
+      this.store.upsertPlugin(entry);
+      this.installedMgr.addPlugin({
+        id: pluginId,
+        version,
+        scope,
+        marketplace,
+        installPath: cacheDir,
+        autoUpdate,
+        source: 'local',
+        installedAt: Date.now(),
+      });
+
+      this.logger.info('Plugin installed from path', { pluginId, version, path: resolvedPath }, LogComponent.Main);
       return entry;
     });
   }

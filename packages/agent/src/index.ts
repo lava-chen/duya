@@ -42,9 +42,9 @@ import { logger } from './utils/logger.js';
 import { getAgentProfileService } from './agent-profile/AgentProfileService.js';
 import type { AgentProfile } from './agent-profile/types.js';
 import { resolveAllowedTools } from './agent-profile/ToolFilter.js';
-import { LiteraturePlugin } from './plugins/literature/plugin.js';
 import { ResearchMemory } from './research-memory/index.js';
 import { pluginDb } from './ipc/db-client.js';
+import { MCPManager } from './mcp/index.js';
 
 // Compaction system exports
 export type {
@@ -91,6 +91,28 @@ export type {
   CanUseToolFn,
   CanUseToolDecision,
 } from './tool/StreamingToolExecutor.js';
+
+function extractTextFromContent(content: string | MessageContent[]): string {
+  if (typeof content === 'string') return content
+  const parts: string[] = []
+  for (const block of content) {
+    if (block.type === 'text') {
+      parts.push((block as { text: string }).text || '')
+    } else if (block.type === 'tool_use') {
+      const b = block as unknown as { name: string }
+      parts.push(`[Tool call: ${b.name || 'unknown'}]`)
+    } else if (block.type === 'tool_result') {
+      const b = block as unknown as { content: string | Array<{ type: string; text: string }> }
+      const resultText = typeof b.content === 'string'
+        ? b.content
+        : Array.isArray(b.content)
+          ? b.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
+          : ''
+      parts.push(`[Tool result: ${resultText.slice(0, 300)}]`)
+    }
+  }
+  return parts.join('\n')
+}
 
 function collectRecentImageAttachments(messages: Message[]): Array<{
   name: string;
@@ -339,14 +361,15 @@ export class duyaAgent {
   private provider: 'anthropic' | 'openai' | 'ollama';
   private sessionId?: string; // Session ID for task persistence
   private workingDirectory?: string; // Working directory for tool execution
+  private defaultWorkspaceDirectory?: string; // Default workspace directory for permission checking
   private permissionMode: PermissionMode = 'default'; // Permission mode for tool execution
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
   private selfImprover: SelfImprover; // Self-improvement tracker for skill creation
   private visionClient?: LLMClient; // Optional vision model client
   private visionConfig?: import('./types.js').VisionConfig; // Vision model configuration
   private blockedDomains: string[] = [];
-  private literaturePlugin: LiteraturePlugin;
   private researchMemoryRuntime: ResearchMemory;
+  private mcpManager: MCPManager | null = null;
   private _activeMode: any = null;
 
   constructor(options: AgentOptions) {
@@ -400,6 +423,7 @@ export class duyaAgent {
     this.baseURL = options.baseURL;
     this.authStyle = options.authStyle;
     this.workingDirectory = options.workingDirectory;
+    this.defaultWorkspaceDirectory = options.defaultWorkspaceDirectory;
     this.sessionInfo = {
       id: crypto.randomUUID(),
       createdAt: Date.now(),
@@ -528,7 +552,6 @@ export class duyaAgent {
 
     // Store blocked domains for browser tool
     this.blockedDomains = options.blockedDomains ?? [];
-    this.literaturePlugin = new LiteraturePlugin();
     this.researchMemoryRuntime = new ResearchMemory();
   }
 
@@ -712,14 +735,43 @@ export class duyaAgent {
         this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
         { enabledPluginIds, wikiAgentEnabled: options?.wikiAgentEnabled }
       );
+      this.registerMCPTools(modeRegistry);
+
+      let researchRunId = '';
+
+      if (requestedMode === 'research') {
+        const { getResearchSessionBySessionId, createResearchSession } = await import('./session/db.js');
+        const sessionId = this.sessionId;
+        if (sessionId) {
+          let row = getResearchSessionBySessionId(sessionId);
+          if (!row) {
+            const id = crypto.randomUUID();
+            createResearchSession({
+              id,
+              session_id: sessionId,
+              original_query: queryText,
+              context_json: '{}',
+              status: 'active',
+              run_status: 'classifying',
+            });
+            researchRunId = id;
+          } else {
+            researchRunId = row.id;
+            const { updateResearchSession } = await import('./session/db.js');
+            updateResearchSession(row.id, {
+              run_status: 'classifying',
+            });
+          }
+        }
+      }
 
       const modeContext: ModeContext = {
         llmClient: this.llmClient,
         abortController: this.abortController,
         sessionId: this.sessionId,
         workingDirectory: this.workingDirectory,
-        literature: this.literaturePlugin,
         researchMemory: this.researchMemoryRuntime,
+        _researchRunId: researchRunId,
         toolExecute: (name: string, input: Record<string, unknown>) =>
           modeRegistry.execute(name, input, this.workingDirectory).then((r) => {
             if (!r) throw new Error(`Tool not found: ${name}`);
@@ -773,6 +825,121 @@ export class duyaAgent {
               });
             }
           }
+        },
+        runDB: {
+          updateRun: async (runId: string, data: Record<string, unknown>) => {
+            if (!runId) return;
+            const { updateResearchSession } = await import('./session/db.js');
+            updateResearchSession(runId, data as Record<string, unknown>);
+          },
+          createPlanSteps: async (runId: string, steps: Array<Record<string, unknown>>) => {
+            if (!runId || steps.length === 0) return;
+            const { createResearchPlanSteps } = await import('./session/db.js');
+            createResearchPlanSteps(runId, steps as Array<{
+              id: string;
+              order_num: number;
+              user_facing_label: string;
+              internal_question_ids: string[];
+            }>);
+          },
+          updatePlanStep: async (stepId: string, data: Record<string, unknown>) => {
+            if (!stepId) return;
+            const { updateResearchPlanStep } = await import('./session/db.js');
+            const status = data.status as string | undefined;
+            updateResearchPlanStep(stepId, {
+              status: (status === 'pending' || status === 'active' || status === 'completed' || status === 'skipped' || status === 'failed')
+                ? status as 'pending' | 'active' | 'completed' | 'skipped' | 'failed'
+                : undefined,
+              started_at: data.started_at as number | null | undefined,
+              completed_at: data.completed_at as number | null | undefined,
+            });
+          },
+          logActivity: async (data: Record<string, unknown>) => {
+            const { createResearchActivity } = await import('./session/db.js');
+            const runId = data.run_id as string;
+            if (!runId) return;
+            createResearchActivity({
+              id: crypto.randomUUID(),
+              run_id: runId,
+              sequence: (data.sequence as number) || 0,
+              kind: (data.kind as string) || 'info',
+              title: (data.title as string) || '',
+              detail: data.detail as string | undefined,
+              visibility: (data.visibility as 'user' | 'debug') || 'user',
+            });
+          },
+          getEventMaxSequence: async (runId: string) => {
+            if (!runId) return 0;
+            const { getResearchEventMaxSequence } = await import('./session/db.js');
+            return await getResearchEventMaxSequence(runId);
+          },
+          logEvent: async (data: Record<string, unknown>) => {
+            const { createResearchEvent } = await import('./session/db.js');
+            const runId = data.run_id as string;
+            if (!runId) return;
+            await createResearchEvent({
+              id: crypto.randomUUID(),
+              run_id: runId,
+              sequence: (data.sequence as number) || 0,
+              event_type: (data.event_type as string) || 'unknown',
+              payload_json: (data.payload_json as string) || '{}',
+              visibility: (data.visibility as 'user' | 'debug') || 'user',
+            });
+          },
+          upsertSource: async (data: Record<string, unknown>) => {
+            const { upsertResearchSource } = await import('./session/db.js');
+            const runId = data.run_id as string;
+            const id = data.id as string;
+            if (!runId || !id) return;
+            await upsertResearchSource({
+              id,
+              run_id: runId,
+              title: (data.title as string) || 'Untitled source',
+              url: data.url as string | null | undefined,
+              canonical_url: data.canonical_url as string | null | undefined,
+              source_type: (data.source_type as string) || 'web',
+              allowed_by_policy: data.allowed_by_policy as boolean | undefined,
+              reliability_json: data.reliability_json as string | null | undefined,
+              dedupe_key: data.dedupe_key as string | null | undefined,
+              rejected_reason: data.rejected_reason as string | null | undefined,
+              metadata_json: data.metadata_json as string | null | undefined,
+            });
+          },
+          createCitation: async (data: Record<string, unknown>) => {
+            const { createResearchCitation } = await import('./session/db.js');
+            const runId = data.run_id as string;
+            const id = data.id as string;
+            const sourceId = data.source_id as string;
+            if (!runId || !id || !sourceId) return;
+            await createResearchCitation({
+              id,
+              run_id: runId,
+              report_id: data.report_id as string | null | undefined,
+              source_id: sourceId,
+              finding_id: data.finding_id as string | null | undefined,
+              claim: (data.claim as string) || '',
+              locator_json: data.locator_json as string | null | undefined,
+              quoted_evidence: data.quoted_evidence as string | null | undefined,
+            });
+          },
+          upsertReport: async (data: Record<string, unknown>) => {
+            const { upsertResearchReport } = await import('./session/db.js');
+            const runId = data.run_id as string;
+            const id = data.id as string;
+            const markdown = data.markdown as string;
+            if (!runId || !id || !markdown) return;
+            await upsertResearchReport({
+              id,
+              run_id: runId,
+              title: data.title as string | null | undefined,
+              markdown,
+              outline_json: data.outline_json as string | null | undefined,
+              source_ids_json: data.source_ids_json as string | undefined,
+              citation_ids_json: data.citation_ids_json as string | undefined,
+              activity_summary_json: data.activity_summary_json as string | null | undefined,
+              export_metadata_json: data.export_metadata_json as string | null | undefined,
+            });
+          },
         },
       };
 
@@ -910,6 +1077,7 @@ export class duyaAgent {
           alwaysDenyRules: {},
           alwaysAskRules: {},
           isBypassPermissionsModeAvailable: true,
+          defaultWorkspaceDirectory: this.defaultWorkspaceDirectory,
         } as ToolPermissionContext,
       }),
       abortController: this.abortController!,
@@ -944,17 +1112,50 @@ export class duyaAgent {
     // if this.messages is empty (shouldn't happen in normal flow).
     let messages: Message[];
 
+    logger.info(`[Agent] streamChat start: this.messages has ${this.messages.length} messages`);
+
     if (this.messages.length > 0) {
       // Normal case: use this.messages as source of truth
       messages = this.messages;
+      logger.info(`[Agent] Using this.messages as source of truth (${messages.length} messages)`);
     } else if (options?.messages && options.messages.length > 0) {
       // Fallback: this.messages is empty, use options.messages as base
       // This shouldn't happen in normal flow since getOrCreateAgent reloads from DB
       this.messages = [...options.messages];
       messages = this.messages;
+      logger.info(`[Agent] Fallback: using options.messages (${messages.length} messages)`);
     } else {
       // Edge case: both empty, start fresh
       messages = this.messages;
+      logger.info(`[Agent] Edge case: both empty, starting fresh`);
+    }
+
+    // Extract system-role messages from message history (compaction summaries,
+    // session memory, etc.) and merge into the system prompt.
+    // Anthropic API does not support system-role messages in the messages array;
+    // they must go through the separate `system` parameter. If left in the
+    // messages array, toAnthropicMessages skips them silently, dropping all
+    // compaction context and causing the agent to "forget" earlier turns.
+    {
+      const systemContentParts: string[] = [];
+      const nonSystemMessages: Message[] = [];
+      for (const msg of messages) {
+        if (msg.role === 'system') {
+          systemContentParts.push(typeof msg.content === 'string' ? msg.content : extractTextFromContent(msg.content));
+        } else {
+          nonSystemMessages.push(msg);
+        }
+      }
+      if (systemContentParts.length > 0) {
+        if (systemPromptContent) {
+          systemPromptContent += '\n\n---\n\n## Conversation Context\n\n' + systemContentParts.join('\n\n---\n\n');
+        } else {
+          systemPromptContent = systemContentParts.join('\n\n---\n\n');
+        }
+        messages = nonSystemMessages;
+        this.messages = nonSystemMessages;
+        logger.info(`[Agent] Extracted ${systemContentParts.length} system messages into system prompt`);
+      }
     }
 
     let turnCount = 0;
@@ -1597,6 +1798,38 @@ export class duyaAgent {
   clearMessages(): void {
     this.messages = [];
     this.sessionInfo.updatedAt = Date.now();
+  }
+
+  async initMCPServers(configs: MCPServerConfig[]): Promise<void> {
+    if (!configs || configs.length === 0) return;
+    this.mcpManager = new MCPManager();
+    for (const config of configs) {
+      try {
+        await this.mcpManager.addServer(config);
+      } catch (err) {
+        logger.warn(`[Agent] Failed to connect to MCP server "${config.name}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  private registerMCPTools(registry: ToolRegistry): void {
+    if (!this.mcpManager) return;
+    const tools = this.mcpManager.getAllTools();
+    for (const tool of tools) {
+      registry.register(
+        {
+          name: tool.name,
+          description: tool.description,
+          input_schema: tool.input_schema,
+        },
+        {
+          execute: async (input: Record<string, unknown>) => {
+            return this.mcpManager!.callTool(tool.serverName, tool.name, input);
+          },
+        }
+      );
+    }
+    logger.info(`[Agent] Registered ${tools.length} MCP tools from connected servers`);
   }
 
   /**

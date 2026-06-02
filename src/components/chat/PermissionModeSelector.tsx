@@ -1,12 +1,11 @@
-// PermissionModeSelector.tsx - Simplified two-mode permission toggle
-// Design reference: CodePilot ChatPermissionSelector
+// PermissionModeSelector.tsx - Three-mode permission toggle: Ask, Auto (YOLO), Bypass
 
 'use client';
 
 import React, { useState } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
 
-export type PermissionMode = 'ask' | 'bypass';
+export type PermissionMode = 'ask' | 'auto' | 'bypass';
 
 interface PermissionModeSelectorProps {
   value: PermissionMode;
@@ -14,24 +13,29 @@ interface PermissionModeSelectorProps {
   disabled?: boolean;
 }
 
+const MODE_ORDER: PermissionMode[] = ['ask', 'auto', 'bypass'];
+
 export function PermissionModeSelector({ value, onChange, disabled = false }: PermissionModeSelectorProps) {
   const { t } = useTranslation();
   const [showWarning, setShowWarning] = useState(false);
   const [pendingMode, setPendingMode] = useState<PermissionMode | null>(null);
 
+  const isAsk = value === 'ask';
+  const isAuto = value === 'auto';
   const isBypass = value === 'bypass';
 
   const handleToggle = () => {
-    const nextMode = isBypass ? 'ask' : 'bypass';
-    if (nextMode === 'bypass') {
-      setPendingMode('bypass');
+    const currentIndex = MODE_ORDER.indexOf(value);
+    const nextMode = MODE_ORDER[(currentIndex + 1) % MODE_ORDER.length];
+    if (nextMode === 'auto' || nextMode === 'bypass') {
+      setPendingMode(nextMode);
       setShowWarning(true);
       return;
     }
     onChange(nextMode);
   };
 
-  const confirmBypass = () => {
+  const confirmMode = () => {
     if (pendingMode) {
       onChange(pendingMode);
     }
@@ -39,9 +43,54 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
     setPendingMode(null);
   };
 
-  const cancelBypass = () => {
+  const cancelMode = () => {
     setShowWarning(false);
     setPendingMode(null);
+  };
+
+  const getModeLabel = () => {
+    if (isAuto) return t('permissionMode.auto');
+    if (isBypass) return t('permissionMode.bypass');
+    return t('permissionMode.ask');
+  };
+
+  const getModeTitle = () => {
+    if (isAuto) return t('permissionMode.autoTooltip');
+    if (isBypass) return t('permissionMode.bypassTooltip');
+    return t('permissionMode.askTooltip');
+  };
+
+  const getModeStyle = () => {
+    if (isBypass) return 'bg-warning-soft text-warning border border-warning/30';
+    if (isAuto) return 'bg-blue-500/10 text-blue-400 border border-blue-500/30';
+    return 'text-muted-foreground border border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50';
+  };
+
+  const getModeIcon = () => {
+    if (isAuto) {
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          <path d="M12 15v1" />
+        </svg>
+      );
+    }
+    if (isBypass) {
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+      );
+    }
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        <line x1="12" y1="16" x2="12" y2="20" />
+      </svg>
+    );
   };
 
   return (
@@ -53,29 +102,14 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
         className={`
           flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium
           ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-          ${isBypass
-            ? 'bg-warning-soft text-warning border border-warning/30'
-            : 'text-muted-foreground border border-border/60 hover:text-foreground hover:border-foreground/30 hover:bg-accent/50'
-          }
+          ${getModeStyle()}
         `}
-        title={isBypass ? t('permissionMode.bypassTooltip') : t('permissionMode.askTooltip')}
+        title={getModeTitle()}
       >
-        {isBypass ? (
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-          </svg>
-        ) : (
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            <line x1="12" y1="16" x2="12" y2="20" />
-          </svg>
-        )}
-        <span>{isBypass ? t('permissionMode.bypass') : t('permissionMode.ask')}</span>
+        {getModeIcon()}
+        <span>{getModeLabel()}</span>
       </button>
 
-      {/* Warning Dialog for Bypass Mode */}
       {showWarning && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div
@@ -88,16 +122,20 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
           >
             <div className="space-y-2">
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                {t('permissionMode.bypassWarningTitle')}
+                {pendingMode === 'auto'
+                  ? t('permissionMode.autoWarningTitle')
+                  : t('permissionMode.bypassWarningTitle')}
               </h3>
               <p className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>
-                {t('permissionMode.bypassWarningDesc')}
+                {pendingMode === 'auto'
+                  ? t('permissionMode.autoWarningDesc')
+                  : t('permissionMode.bypassWarningDesc')}
               </p>
             </div>
             <div className="flex items-center justify-end gap-2 pt-1">
               <button
                 type="button"
-                onClick={cancelBypass}
+                onClick={cancelMode}
                 className="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
                 style={{
                   backgroundColor: 'var(--surface)',
@@ -109,11 +147,13 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
               </button>
               <button
                 type="button"
-                onClick={confirmBypass}
+                onClick={confirmMode}
                 className="px-3 py-1.5 rounded-md text-xs font-medium transition-colors text-white"
-                style={{ backgroundColor: 'var(--error)' }}
+                style={{ backgroundColor: pendingMode === 'auto' ? 'var(--accent)' : 'var(--error)' }}
               >
-                {t('permissionMode.bypassConfirm')}
+                {pendingMode === 'auto'
+                  ? t('permissionMode.autoConfirm')
+                  : t('permissionMode.bypassConfirm')}
               </button>
             </div>
           </div>

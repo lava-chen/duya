@@ -3,12 +3,13 @@
 import { useState, useRef, useEffect } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
-import { ChevronDownIcon, FolderIcon } from "@/components/icons";
+import { ChevronDownIcon, FileIcon, FolderOpenIcon } from "@/components/icons";
 
 interface SessionSelectorProps {
   selectedProject: { workingDirectory: string; projectName: string } | null;
   onSelectProject: (project: { workingDirectory: string; projectName: string }) => void;
-  onOpenNewProject: () => void;
+  onNewBlankProject: () => void;
+  onUseExistingFolder: () => void;
   onSelectThread: (threadId: string) => void;
   showRecentThreads?: boolean;
   maxRecentThreads?: number;
@@ -18,7 +19,8 @@ interface SessionSelectorProps {
 export function SessionSelector({
   selectedProject,
   onSelectProject,
-  onOpenNewProject,
+  onNewBlankProject,
+  onUseExistingFolder,
   onSelectThread,
   showRecentThreads = true,
   maxRecentThreads = 8,
@@ -95,10 +97,21 @@ export function SessionSelector({
               <div className="welcome-project-dropdown-divider" />
               <button
                 className="welcome-project-dropdown-item new-project"
-                onClick={onOpenNewProject}
+                onClick={onNewBlankProject}
               >
-                <FolderIcon size={14} />
-                <span>{t('chat.openNewProject')}</span>
+                <span style={{ color: 'var(--muted)' }}>
+                  <FileIcon size={15} />
+                </span>
+                <span>{t('project.newBlankProject')}</span>
+              </button>
+              <button
+                className="welcome-project-dropdown-item new-project"
+                onClick={onUseExistingFolder}
+              >
+                <span style={{ color: 'var(--muted)' }}>
+                  <FolderOpenIcon size={15} />
+                </span>
+                <span>{t('project.useExistingFolder')}</span>
               </button>
             </div>
           )}

@@ -21,6 +21,8 @@ export interface ChatOptions {
   workingDirectory?: string;
   mode?: string;
   wikiAgentEnabled?: boolean;
+  defaultWorkspaceDirectory?: string;
+  securityScanEnabled?: boolean;
 }
 
 export interface AgentEvent {
@@ -112,9 +114,11 @@ export class AgentServerClient {
             titleGenerationModel: options?.titleGenerationModel,
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
             wikiAgentEnabled: options?.wikiAgentEnabled,
+            securityScanEnabled: options?.securityScanEnabled,
           },
           providerConfig: options?.providerConfig,
           workingDirectory: options?.workingDirectory,
+          defaultWorkspaceDirectory: options?.defaultWorkspaceDirectory,
         }),
         signal: abortController.signal,
       });
@@ -249,9 +253,11 @@ export class AgentServerClient {
                   mode: options?.mode,
                   titleGenerationModel: options?.titleGenerationModel,
                   titleGenerationModelConfig: options?.titleGenerationModelConfig,
+                  securityScanEnabled: options?.securityScanEnabled,
                 },
                 providerConfig: options?.providerConfig,
                 workingDirectory: options?.workingDirectory,
+                defaultWorkspaceDirectory: options?.defaultWorkspaceDirectory,
               }),
               signal: abortController.signal,
             });

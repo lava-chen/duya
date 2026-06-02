@@ -1,6 +1,6 @@
-import type { ResearchPlan, ResearchQuestion, ResearchFinding, QualityReport } from '../types.js';
+import type { ResearchPlan, ResearchQuestion, ResearchFinding, QualityReport, HypothesisStatus, EvidenceConflict } from '../types.js';
 
-export const SYNTHESIZE_VERSION = '1.0.0';
+export const SYNTHESIZE_VERSION = '2.0.0';
 
 export interface SynthesizeContext {
   query: string;
@@ -8,6 +8,20 @@ export interface SynthesizeContext {
   questions: ResearchQuestion[];
   findings: ResearchFinding[];
   qualityReport: QualityReport;
+  hypothesisStatuses?: Array<{
+    statement: string;
+    verdict: string;
+    supportingFindings: string[];
+    contradictingFindings: string[];
+    confidenceLevel: string;
+  }>;
+  unresolvedConflicts?: Array<{
+    topic: string;
+    positionA: string;
+    positionB: string;
+    findingIds: string[];
+  }>;
+  confirmedGaps?: string[];
 }
 
 export interface SynthesizePromptResult {
@@ -16,8 +30,12 @@ export interface SynthesizePromptResult {
   citationList: string;
 }
 
+export function parseResponse(raw: string): SynthesizePromptResult {
+  return { prompt: raw, structuredSections: '', citationList: '' };
+}
+
 export function buildPrompt(ctx: SynthesizeContext): SynthesizePromptResult {
-  const { query, plan, questions, findings, qualityReport } = ctx;
+  const { query, plan, questions, findings, qualityReport, hypothesisStatuses, unresolvedConflicts, confirmedGaps } = ctx;
 
   const questionGroups = new Map<string, ResearchFinding[]>();
   for (const f of findings) {
@@ -85,6 +103,22 @@ export function buildPrompt(ctx: SynthesizeContext): SynthesizePromptResult {
     ? `\nKnown caveats from planning:\n${caveats.map((c) => `- ${c}`).join('\n')}`
     : '';
 
+  const hypothesisBlock = hypothesisStatuses && hypothesisStatuses.length > 0
+    ? `\n\nHypothesis Verification:\n${hypothesisStatuses.map((h) =>
+        `- [${h.verdict}] "${h.statement}" (confidence: ${h.confidenceLevel})${h.supportingFindings.length > 0 ? ' | supported by: ' + h.supportingFindings.join(', ') : ''}${h.contradictingFindings.length > 0 ? ' | contradicted by: ' + h.contradictingFindings.join(', ') : ''}`
+      ).join('\n')}\n`
+    : '';
+
+  const conflictBlock = unresolvedConflicts && unresolvedConflicts.length > 0
+    ? `\n\nUnresolved Conflicts (must be noted in report):\n${unresolvedConflicts.map((c) =>
+        `- "${c.topic}": Position A - "${c.positionA}" vs Position B - "${c.positionB}" (findings: ${c.findingIds.join(', ')})`
+      ).join('\n')}\n`
+    : '';
+
+  const gapsBlock = confirmedGaps && confirmedGaps.length > 0
+    ? `\n\nConfirmed Research Gaps (must be in Limitations section):\n${confirmedGaps.map((g) => `- ${g}`).join('\n')}\n`
+    : '';
+
   const prompt = `Research Query: ${query}
 
 You are the synthesis module of a deep research agent.
@@ -110,7 +144,7 @@ Rules:
 
 Quality Assessment:
 - Overall score: ${(qualityReport.score * 100).toFixed(0)}%
-- Blockers: ${qualityReport.blockers.length > 0 ? qualityReport.blockers.join('; ') : 'none'}${caveatLines}
+- Blockers: ${qualityReport.blockers.length > 0 ? qualityReport.blockers.join('; ') : 'none'}${caveatLines}${hypothesisBlock}${conflictBlock}${gapsBlock}
 
 Recommended structure:
 ${structure}
@@ -129,3 +163,5 @@ ${citations.map((c) => `- ${c}`).join('\n')}
     citationList: citations.map((c) => `- ${c}`).join('\n'),
   };
 }
+
+export const synthesize = { buildPrompt, parseResponse, version: SYNTHESIZE_VERSION };
