@@ -118,7 +118,7 @@ export function useSlashCommands(opts: {
     [triggerPos, popoverMode, closePopover, onCommand, inputValue, popoverFilter, textareaRef, setInputValue, setBadge],
   );
 
-  // Fetch skills for / command (registry commands + agent skills from settings)
+  // Fetch skills for / command (registry commands + enabled agent skills)
   const fetchSkills = useCallback(async () => {
     const builtIns = registryCommands;
 
@@ -127,11 +127,18 @@ export function useSlashCommands(opts: {
     }
 
     try {
-      if (window.electronAPI?.settingsDb?.getJson) {
-        const skills = await window.electronAPI.settingsDb.getJson<Array<{ name: string; description?: string; source?: string; userInvocable?: boolean; isHidden?: boolean }>>('skills', []);
-        if (Array.isArray(skills)) {
-          const skillItems: PopoverItem[] = skills
-            .filter((s) => s.userInvocable !== false && !s.isHidden)
+      if (window.electronAPI?.skills?.list) {
+        const result = await window.electronAPI.skills.list();
+        if (result.success && Array.isArray(result.skills)) {
+          const skillItems: PopoverItem[] = (result.skills as Array<{
+            name: string;
+            description?: string;
+            source?: string;
+            userInvocable?: boolean;
+            isHidden?: boolean;
+            enabled?: boolean;
+          }>)
+            .filter((s) => s.userInvocable !== false && !s.isHidden && s.enabled !== false)
             .map((skill) => ({
               label: `/${skill.name}`,
               value: `/${skill.name}`,
