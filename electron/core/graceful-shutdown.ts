@@ -27,7 +27,22 @@ export async function performGracefulShutdown(): Promise<void> {
   const logger = getLogger();
   logger.info('Starting graceful shutdown...', undefined, 'Main');
 
-  // 0. Stop Agent Server
+  // 0. Stop CLI API server (Phase 0) — runs first so we don't accept new
+  // requests after other subsystems begin tearing down.
+  try {
+    const { stopCliApiServer } = await import('../cli/cli-api-server');
+    await stopCliApiServer();
+    logger.info('CLI API server stopped', undefined, 'Main');
+  } catch (err) {
+    logger.error(
+      'Error stopping CLI API server',
+      err instanceof Error ? err : new Error(String(err)),
+      undefined,
+      LogComponent.Main,
+    );
+  }
+
+  // 0.5 Stop Agent Server
   try {
     await stopAgentServer();
   } catch (err) {
