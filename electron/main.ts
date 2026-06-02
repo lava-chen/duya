@@ -488,6 +488,30 @@ registerWikiAgentHandlers();
 registerPluginHandlers();
 registerImportHandlers();
 
+// =============================================================================
+// Step 4.6: Start CLI API server (Phase 0 — read-only control plane)
+//
+// Only runs inside the single-instance main process (gotTheLock === true).
+// Placement is intentionally BEFORE marketplace preload / auto-sync so the
+// CLI control plane is never blocked by network catalog fetches. The server
+// depends only on the local PluginManager (lazy singleton + synchronous
+// registry read), so no other init step is required for it to serve requests.
+// =============================================================================
+void (async () => {
+  try {
+    const { startCliApiServer } = await import('./cli/cli-api-server');
+    const handle = await startCliApiServer();
+    logger.info('CLI API server listening', { port: handle.port, pid: process.pid }, 'Main');
+  } catch (error) {
+    logger.error(
+      'Failed to start CLI API server',
+      error instanceof Error ? error : new Error(String(error)),
+      undefined,
+      'Main',
+    );
+  }
+})();
+
 // Marketplace: handle --add-dir CLI flag
 const addDirIndex = process.argv.indexOf('--add-dir');
 if (addDirIndex >= 0 && process.argv[addDirIndex + 1]) {

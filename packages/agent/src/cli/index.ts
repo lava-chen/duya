@@ -805,7 +805,6 @@ program
   .option('--print', 'Print mode: single query and exit')
   .option('--headless', 'Headless mode: read from script file')
   .option('--script <path>', 'Script file path for headless mode')
-  .option('-f, --format <format>', 'Output format: text, json, markdown')
   .option('--continue [sessionId]', 'Continue a previous session (optional session ID)')
   .option('--resume [sessionId]', 'Resume a session (alias for --continue)')
   .option('--summary-provider <provider>', 'Provider for session search summarization: anthropic or openai')
@@ -872,6 +871,59 @@ function parseCLIArgs(args: string[]): CLIParsedArgs {
 // ============================================================================
 // Subcommands
 // ============================================================================
+
+// ----------------------------------------------------------------------------
+// Phase 0: CLI control plane (duya status / duya plugin ...).
+//
+// These subcommands connect to the local HTTP API exposed by the running
+// DUYA desktop app. They do NOT spawn a separate agent runtime. The legacy
+// execution-type commands (--print / -t / --headless / REPL / setup) are
+// untouched below.
+//
+// Phase 0 only ships read-only commands; no --api / --token flags are
+// accepted, and the bearer token is read solely from
+// <userData>/runtime/cli-api.json. Dev/test userData override goes through
+// the DUYA_CLI_USER_DATA_DIR environment variable.
+// ----------------------------------------------------------------------------
+
+import { runStatusCommand } from './commands/status.js';
+import { runPluginCommand } from './commands/plugin.js';
+import { parseFormat } from './api/format.js';
+
+program
+  .command('status')
+  .description('Show the running DUYA desktop app status')
+  // Note: we use only --format (no -f) here to avoid colliding with the
+  // global program -f / --format flag, which is owned by the legacy
+  // --print / --headless path.
+  .option('--format <format>', 'Output format: text|json', 'text')
+  .action(async (opts: { format?: string }) => {
+    const code = await runStatusCommand(parseFormat(opts.format));
+    process.exit(code);
+  });
+
+program
+  .command('plugin')
+  .description('Inspect installed plugins via the DUYA desktop app')
+  .addCommand(
+    new Command('list')
+      .description('List installed plugins (id / name / version / enabled / capabilities / source)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (opts: { format?: string }) => {
+        const code = await runPluginCommand.list(parseFormat(opts.format));
+        process.exit(code);
+      }),
+  )
+  .addCommand(
+    new Command('info')
+      .argument('<id>', 'Plugin id (e.g. com.duya.literature)')
+      .description('Show details for one installed plugin (adds description + permissions)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (id: string, opts: { format?: string }) => {
+        const code = await runPluginCommand.info(id, parseFormat(opts.format));
+        process.exit(code);
+      }),
+  );
 
 // Session subcommands
 program
