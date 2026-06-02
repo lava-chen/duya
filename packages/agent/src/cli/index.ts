@@ -888,6 +888,7 @@ function parseCLIArgs(args: string[]): CLIParsedArgs {
 
 import { runStatusCommand } from './commands/status.js';
 import { runPluginCommand } from './commands/plugin.js';
+import { runSessionCommand } from './commands/session.js';
 import { parseFormat } from './api/format.js';
 
 program
@@ -926,17 +927,37 @@ program
   );
 
 // Session subcommands
+//
+// Phase 1 control plane: `list` and `show` connect to the local API
+// exposed by the running DUYA desktop app. The legacy placeholders
+// `continue` and `delete` are intentionally kept untouched (not deleted
+// or re-implemented) per Phase 1.2 scope.
 program
   .command('session')
   .description('Session management')
   .addCommand(
     new Command('list')
-      .description('List recent sessions')
-      .action(async () => {
-        // Placeholder - will integrate with actual session DB
-        printHeader('Recent Sessions')
-        console.log(color('  (Session storage not yet implemented)', Colors.DIM))
-      })
+      .description('List top-level user-visible sessions (id / title / updatedAt / messageCount)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .option('--limit <n>', 'Page size (1–100, default 20)')
+      .option('--offset <n>', 'Page offset (≥ 0, default 0)')
+      .action(async (opts: { format?: string; limit?: string; offset?: string }) => {
+        const code = await runSessionCommand.list(parseFormat(opts.format), {
+          limit: opts.limit,
+          offset: opts.offset,
+        });
+        process.exit(code);
+      }),
+  )
+  .addCommand(
+    new Command('show')
+      .argument('<id>', 'Session id')
+      .description('Show details for one top-level session (id / title / createdAt / updatedAt / model / messageCount)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (id: string, opts: { format?: string }) => {
+        const code = await runSessionCommand.show(id, parseFormat(opts.format));
+        process.exit(code);
+      }),
   )
   .addCommand(
     new Command('continue')

@@ -129,6 +129,15 @@ export class CliApiClient {
         404,
       );
     }
+    if (res.status >= 400 && res.status < 500) {
+      const serverMsg = extractServerMessage(res.body);
+      throw new CliApiError(
+        'server_error',
+        serverMsg ?? `HTTP ${res.status}`,
+        serverMsg ?? `Server responded with ${res.status}.`,
+        res.status,
+      );
+    }
     if (res.status >= 500) {
       throw new CliApiError(
         'server_error',
