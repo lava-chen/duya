@@ -1,0 +1,13 @@
+{
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "matcher": "{{ToolName}}(*)",
+      "command": {
+        "type": "command",
+        "command": "echo 'Hook triggered'",
+        "timeout": 5000
+      }
+    }
+  ]
+}

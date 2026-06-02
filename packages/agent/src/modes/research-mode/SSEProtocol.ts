@@ -230,6 +230,39 @@ export interface ActionExecutedEvent {
   timestamp: number;
 }
 
+// v2: Run status event
+export interface ResearchRunStatusEvent {
+  runStatus: string;
+  phase: string;
+  timestamp: number;
+}
+
+export interface ResearchActivitySource {
+  url: string;
+  title: string;
+}
+
+// v2: Activity log event
+export interface ResearchActivityEvent {
+  activityId: string;
+  kind: string;
+  title: string;
+  detail?: string;
+  sequence: number;
+  timestamp: number;
+  sources?: ResearchActivitySource[];
+}
+
+// v2: Plan steps event
+export interface ResearchPlanStepsEvent {
+  steps: Array<{
+    id: string;
+    order: number;
+    label: string;
+  }>;
+  timestamp: number;
+}
+
 export type ResearchSSEEvent =
   | { type: 'research_phase'; data: ResearchPhaseEvent }
   | { type: 'research_questions'; data: ResearchQuestionsEvent }
@@ -251,7 +284,11 @@ export type ResearchSSEEvent =
   | { type: 'plan_delta'; data: PlanDeltaEvent }
   | { type: 'query_deduplicated'; data: QueryDeduplicatedEvent }
   | { type: 'finding_deduplicated'; data: FindingDeduplicatedEvent }
-  | { type: 'action_executed'; data: ActionExecutedEvent };
+  | { type: 'action_executed'; data: ActionExecutedEvent }
+  // v2 events
+  | { type: 'research_run_status'; data: ResearchRunStatusEvent }
+  | { type: 'research_activity'; data: ResearchActivityEvent }
+  | { type: 'research_plan_steps'; data: ResearchPlanStepsEvent };
 
 export type ExtendedResearchSSEEvent =
   | ResearchSSEEvent
@@ -661,6 +698,42 @@ export function convertToSSEEvent(event: ResearchEvent): ExtendedResearchSSEEven
             retryable: event.result.retryable,
             attempts: event.result.attempts,
           },
+          timestamp,
+        },
+      };
+
+    // v2: run status event
+    case 'run_status':
+      return {
+        type: 'research_run_status',
+        data: {
+          runStatus: event.status,
+          phase: event.phase,
+          timestamp,
+        },
+      };
+
+    // v2: activity event
+    case 'activity':
+      return {
+        type: 'research_activity',
+        data: {
+          activityId: `act_${Date.now()}_${event.sequence}`,
+          kind: event.kind,
+          title: event.title,
+          detail: event.detail,
+          sequence: event.sequence,
+          sources: event.sources,
+          timestamp,
+        },
+      };
+
+    // v2: plan steps created event
+    case 'plan_steps_created':
+      return {
+        type: 'research_plan_steps',
+        data: {
+          steps: event.steps,
           timestamp,
         },
       };

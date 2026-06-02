@@ -4,9 +4,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 export type ExtensionStatus = 'checking' | 'connected' | 'disconnected' | 'error';
 
-// Chrome Web Store extension URL
-const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
-
 export interface ExtensionHealth {
   status: 'ok' | 'unavailable';
   extensionConnected: boolean;
@@ -14,6 +11,12 @@ export interface ExtensionHealth {
   extensionVersion: string | null;
   extensionName: string | null;
   extensionId: string | null;
+  pendingExtensionApproval: {
+    extensionId: string | null;
+    extensionName: string;
+    extensionVersion: string | null;
+    requestedAt: number;
+  } | null;
   pendingCommands: number;
   port: number;
 }
@@ -34,30 +37,52 @@ const CHECK_INTERVAL = 30000; // Check every 30 seconds
 const STORE_CHECK_TIMEOUT = 5000;
 
 function getElectronAPI() {
-  return (window as unknown as { electronAPI?: { browserExtension?: { getStatus: () => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }> } } }).electronAPI;
+  return (
+    window as unknown as {
+      electronAPI?: {
+        browserExtension?: {
+          getStatus: () => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }>;
+          approvePending?: () => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }>;
+          denyPending?: () => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }>;
+        };
+      };
+    }
+  ).electronAPI;
 }
 
 /**
- * Check if Chrome Web Store is accessible
- * Uses no-cors mode - we only care if the request succeeds (no network error)
+ * Check if Chrome Web Store is accessible.
+ *
+ * We use a lightweight image probe instead of fetch() because Chrome Web Store
+ * returns 403 for no-cors HEAD requests (causing noisy console errors).
+ * An Image load attempt is truly silent on failure and works with no-cors.
  */
-async function checkStoreAvailabilityInternal(): Promise<boolean> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), STORE_CHECK_TIMEOUT);
+function checkStoreAvailabilityInternal(): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    if (!navigator.onLine) {
+      resolve(false);
+      return;
+    }
 
-  try {
-    // Use no-cors mode - we can't read the response, but we can detect network errors
-    await fetch(CHROME_STORE_URL, {
-      method: 'HEAD',
-      mode: 'no-cors',
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    return true;
-  } catch {
-    clearTimeout(timeoutId);
-    return false;
-  }
+    const img = new Image();
+    const timer = setTimeout(() => {
+      img.src = '';
+      resolve(false);
+    }, STORE_CHECK_TIMEOUT);
+
+    img.onload = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+
+    // Use a favicon from the Chrome Web Store domain.
+    // The favicon is a small, always-available resource on the same origin.
+    img.src = 'https://chromewebstore.google.com/favicon.ico';
+  });
 }
 
 /**
@@ -95,6 +120,7 @@ export function useBrowserExtension(
         extensionVersion: null,
         extensionName: null,
         extensionId: null,
+        pendingExtensionApproval: null,
         pendingCommands: 0,
         port: 19825,
       });
@@ -114,6 +140,7 @@ export function useBrowserExtension(
           extensionVersion: null,
           extensionName: null,
           extensionId: null,
+          pendingExtensionApproval: null,
           pendingCommands: 0,
           port: 19825,
         });
@@ -132,6 +159,23 @@ export function useBrowserExtension(
         extensionVersion: typeof s.extensionVersion === 'string' ? s.extensionVersion : null,
         extensionName: typeof s.extensionName === 'string' ? s.extensionName : null,
         extensionId: typeof s.extensionId === 'string' ? s.extensionId : null,
+        pendingExtensionApproval:
+          s.pendingExtensionApproval && typeof s.pendingExtensionApproval === 'object'
+            ? {
+                extensionId: typeof (s.pendingExtensionApproval as Record<string, unknown>).extensionId === 'string'
+                  ? (s.pendingExtensionApproval as Record<string, unknown>).extensionId as string
+                  : null,
+                extensionName: typeof (s.pendingExtensionApproval as Record<string, unknown>).extensionName === 'string'
+                  ? (s.pendingExtensionApproval as Record<string, unknown>).extensionName as string
+                  : 'Unknown Extension',
+                extensionVersion: typeof (s.pendingExtensionApproval as Record<string, unknown>).extensionVersion === 'string'
+                  ? (s.pendingExtensionApproval as Record<string, unknown>).extensionVersion as string
+                  : null,
+                requestedAt: typeof (s.pendingExtensionApproval as Record<string, unknown>).requestedAt === 'number'
+                  ? (s.pendingExtensionApproval as Record<string, unknown>).requestedAt as number
+                  : Date.now(),
+              }
+            : null,
         pendingCommands: typeof s.pendingCommands === 'number' ? s.pendingCommands : 0,
         port: typeof s.port === 'number' ? s.port : 19825,
       };
@@ -155,6 +199,7 @@ export function useBrowserExtension(
         extensionVersion: null,
         extensionName: null,
         extensionId: null,
+        pendingExtensionApproval: null,
         pendingCommands: 0,
         port: 19825,
       });

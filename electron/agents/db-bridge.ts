@@ -1431,6 +1431,146 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return db.prepare('DELETE FROM research_activities WHERE run_id = ?').run(p.runId);
     }
 
+    // ==================== Research Events / Sources / Citations / Reports ====================
+
+    case 'researchEvent:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_events (id, run_id, sequence, event_type, payload_json, visibility, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(p.id, p.run_id, p.sequence, p.event_type, p.payload_json, p.visibility || 'user', now);
+      return db.prepare('SELECT * FROM research_events WHERE run_id = ? AND sequence = ?').get(p.run_id, p.sequence);
+    }
+
+    case 'researchEvent:getByRunId': {
+      const runId = p.runId as string;
+      const limit = (p.limit as number) || 500;
+      const afterSequence = (p.afterSequence as number | undefined) ?? -1;
+      const visibility = p.visibility as string | undefined;
+      if (visibility) {
+        return db.prepare(
+          'SELECT * FROM research_events WHERE run_id = ? AND visibility = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
+        ).all(runId, visibility, afterSequence, limit);
+      }
+      return db.prepare(
+        'SELECT * FROM research_events WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
+      ).all(runId, afterSequence, limit);
+    }
+
+    case 'researchEvent:getMaxSequence': {
+      const result = db.prepare(
+        'SELECT MAX(sequence) as max_seq FROM research_events WHERE run_id = ?'
+      ).get(p.runId) as { max_seq: number | null };
+      return { max_seq: result?.max_seq ?? 0 };
+    }
+
+    case 'researchSource:upsert': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_sources (
+          id, run_id, title, url, canonical_url, source_type, allowed_by_policy,
+          reliability_json, dedupe_key, rejected_reason, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          url = excluded.url,
+          canonical_url = excluded.canonical_url,
+          source_type = excluded.source_type,
+          allowed_by_policy = excluded.allowed_by_policy,
+          reliability_json = excluded.reliability_json,
+          dedupe_key = excluded.dedupe_key,
+          rejected_reason = excluded.rejected_reason,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at
+      `).run(
+        p.id,
+        p.run_id,
+        p.title,
+        p.url ?? null,
+        p.canonical_url ?? p.url ?? null,
+        p.source_type ?? 'web',
+        p.allowed_by_policy === false ? 0 : 1,
+        p.reliability_json ?? null,
+        p.dedupe_key ?? null,
+        p.rejected_reason ?? null,
+        p.metadata_json ?? null,
+        now,
+        now,
+      );
+      return db.prepare('SELECT * FROM research_sources WHERE id = ?').get(p.id);
+    }
+
+    case 'researchSource:getByRunId': {
+      return db.prepare('SELECT * FROM research_sources WHERE run_id = ? ORDER BY created_at ASC').all(p.runId);
+    }
+
+    case 'researchCitation:create': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT OR REPLACE INTO research_citations (
+          id, run_id, report_id, source_id, finding_id, claim, locator_json, quoted_evidence, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        p.id,
+        p.run_id,
+        p.report_id ?? null,
+        p.source_id,
+        p.finding_id ?? null,
+        p.claim,
+        p.locator_json ?? null,
+        p.quoted_evidence ?? null,
+        now,
+      );
+      return db.prepare('SELECT * FROM research_citations WHERE id = ?').get(p.id);
+    }
+
+    case 'researchCitation:getByRunId': {
+      if (p.reportId) {
+        return db.prepare(
+          'SELECT * FROM research_citations WHERE run_id = ? AND report_id = ? ORDER BY created_at ASC'
+        ).all(p.runId, p.reportId);
+      }
+      return db.prepare('SELECT * FROM research_citations WHERE run_id = ? ORDER BY created_at ASC').all(p.runId);
+    }
+
+    case 'researchReport:upsert': {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO research_reports (
+          id, run_id, title, markdown, outline_json, source_ids_json, citation_ids_json,
+          activity_summary_json, export_metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          markdown = excluded.markdown,
+          outline_json = excluded.outline_json,
+          source_ids_json = excluded.source_ids_json,
+          citation_ids_json = excluded.citation_ids_json,
+          activity_summary_json = excluded.activity_summary_json,
+          export_metadata_json = excluded.export_metadata_json,
+          updated_at = excluded.updated_at
+      `).run(
+        p.id,
+        p.run_id,
+        p.title ?? null,
+        p.markdown,
+        p.outline_json ?? null,
+        p.source_ids_json ?? '[]',
+        p.citation_ids_json ?? '[]',
+        p.activity_summary_json ?? null,
+        p.export_metadata_json ?? null,
+        now,
+        now,
+      );
+      return db.prepare('SELECT * FROM research_reports WHERE id = ?').get(p.id);
+    }
+
+    case 'researchReport:getLatest': {
+      return db.prepare(
+        'SELECT * FROM research_reports WHERE run_id = ? ORDER BY updated_at DESC LIMIT 1'
+      ).get(p.runId);
+    }
+
     // ==================== Literature Plugin actions ====================
 
     case 'literature:source:create': {

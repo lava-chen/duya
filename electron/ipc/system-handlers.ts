@@ -123,6 +123,33 @@ export function registerSystemHandlers(): void {
     return defaultWorkspace;
   });
 
+  ipcMain.handle('app:create-project-folder', async (_event, projectName: string) => {
+    if (typeof projectName !== 'string' || projectName.length === 0 || projectName.length > 255) {
+      return { success: false, error: 'Invalid project name', path: '' };
+    }
+    // Sanitize project name for filesystem
+    const sanitized = projectName.replace(/[<>:"|?*\x00-\x1f]/g, '_').trim();
+    if (sanitized.length === 0) {
+      return { success: false, error: 'Invalid project name', path: '' };
+    }
+    try {
+      const workspaceDir = path.join(homedir(), '.duya', 'workspace');
+      if (!fs.existsSync(workspaceDir)) {
+        fs.mkdirSync(workspaceDir, { recursive: true });
+      }
+      const projectDir = path.join(workspaceDir, sanitized);
+      if (fs.existsSync(projectDir)) {
+        return { success: false, error: 'Project folder already exists', path: projectDir };
+      }
+      fs.mkdirSync(projectDir, { recursive: true });
+      return { success: true, error: '', path: projectDir };
+    } catch (err) {
+      const logger = getLogger();
+      logger.error('Failed to create project folder', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.System);
+      return { success: false, error: String(err), path: '' };
+    }
+  });
+
   // Parser handlers
   ipcMain.handle('parser:parse', async (_event, filePath: string, options?: { timeout?: number }) => {
     const docParser = getDocumentParser();

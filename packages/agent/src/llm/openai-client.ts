@@ -72,6 +72,84 @@ function filterCDNImageUrls(parts: Array<OpenAI.Chat.ChatCompletionContentPart>)
   });
 }
 
+function hasAssistantContent(message: OpenAI.Chat.ChatCompletionAssistantMessageParam): boolean {
+  const content = message.content;
+  if (typeof content === 'string') {
+    return content.trim().length > 0;
+  }
+  if (Array.isArray(content)) {
+    return content.length > 0;
+  }
+  return content != null;
+}
+
+function dropPendingToolCalls(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  pendingToolCallIds: Set<string>,
+): void {
+  if (pendingToolCallIds.size === 0) {
+    return;
+  }
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'assistant') {
+      continue;
+    }
+
+    const assistantMessage = message as OpenAI.Chat.ChatCompletionAssistantMessageParam;
+    const toolCalls = assistantMessage.tool_calls;
+    if (!toolCalls?.length) {
+      continue;
+    }
+
+    const keptToolCalls = toolCalls.filter((toolCall) => !pendingToolCallIds.has(toolCall.id));
+    if (keptToolCalls.length > 0) {
+      assistantMessage.tool_calls = keptToolCalls;
+    } else {
+      delete assistantMessage.tool_calls;
+      if (!hasAssistantContent(assistantMessage)) {
+        messages.splice(i, 1);
+      }
+    }
+    pendingToolCallIds.clear();
+    return;
+  }
+
+  pendingToolCallIds.clear();
+}
+
+function normalizeOpenAIToolMessages(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const normalized: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+  const pendingToolCallIds = new Set<string>();
+
+  for (const message of messages) {
+    if (message.role === 'tool') {
+      const toolCallId = message.tool_call_id;
+      if (toolCallId && pendingToolCallIds.has(toolCallId)) {
+        normalized.push(message);
+        pendingToolCallIds.delete(toolCallId);
+      }
+      continue;
+    }
+
+    dropPendingToolCalls(normalized, pendingToolCallIds);
+    normalized.push(message);
+
+    if (message.role === 'assistant') {
+      const assistantMessage = message as OpenAI.Chat.ChatCompletionAssistantMessageParam;
+      for (const toolCall of assistantMessage.tool_calls ?? []) {
+        pendingToolCallIds.add(toolCall.id);
+      }
+    }
+  }
+
+  dropPendingToolCalls(normalized, pendingToolCallIds);
+  return normalized;
+}
+
 /**
  * Convert duya Message[] to OpenAI ChatCompletionMessageParam[]
  * @param includeToolCalls - Whether to include tool_calls in assistant messages (default: true)
@@ -135,6 +213,11 @@ function toOpenAIMessages(messages: Message[], includeToolCalls: boolean = true)
         }
       }
       textContent = stripCDNUrlsFromText(textContent);
+      // Skip assistant messages that contain neither textual content nor tool calls.
+      // These are typically thinking-only artifacts and can degrade context quality.
+      if (!textContent.trim() && (!toolCalls || toolCalls.length === 0)) {
+        continue;
+      }
       const assistantMsg: OpenAI.Chat.ChatCompletionAssistantMessageParam = {
         role: 'assistant',
         content: textContent || undefined,
@@ -155,7 +238,7 @@ function toOpenAIMessages(messages: Message[], includeToolCalls: boolean = true)
     }
   }
 
-  return result;
+  return normalizeOpenAIToolMessages(result);
 }
 
 /**

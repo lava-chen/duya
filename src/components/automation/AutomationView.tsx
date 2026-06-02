@@ -32,18 +32,9 @@ import {
   CheckCircle,
   XCircle,
   SpinnerGap,
-  Gear,
-  ChatCircle,
   Robot,
-  Lightning,
   SquaresFour,
-  CaretRight,
-  DotsThreeVertical,
   ArrowRight,
-  GitBranch,
-  Globe,
-  MagnifyingGlass,
-  FileText,
 } from '@phosphor-icons/react';
 import { AutomationEmptyState } from './AutomationEmptyState';
 import { QuickCronChatModal } from './QuickCronChatModal';
@@ -166,38 +157,6 @@ function getStatusIcon(status: string) {
   }
 }
 
-function getRunStatusIcon(status: string) {
-  switch (status) {
-    case 'success':
-      return <CheckCircle size={14} weight="fill" className="text-[var(--success)]" />;
-    case 'failed':
-      return <XCircle size={14} weight="fill" className="text-[var(--error)]" />;
-    case 'running':
-      return <SpinnerGap size={14} className="animate-spin text-[var(--accent)]" />;
-    case 'pending':
-      return <Clock size={14} className="text-[var(--warning)]" />;
-    case 'cancelled':
-    default:
-      return <XCircle size={14} className="text-[var(--muted)]" />;
-  }
-}
-
-function getRunStatusDot(status: string) {
-  switch (status) {
-    case 'success':
-      return <div className="w-2 h-2 rounded-full bg-[var(--success)]" />;
-    case 'failed':
-      return <div className="w-2 h-2 rounded-full bg-[var(--error)]" />;
-    case 'running':
-      return <div className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />;
-    case 'pending':
-      return <div className="w-2 h-2 rounded-full bg-[var(--warning)]" />;
-    case 'cancelled':
-    default:
-      return <div className="w-2 h-2 rounded-full bg-[var(--muted)]" />;
-  }
-}
-
 const DEFAULT_EDITOR: EditorState = {
   name: '',
   description: '',
@@ -225,13 +184,13 @@ function parsePromptSteps(prompt: string): string[] {
 }
 
 // Mock capabilities based on prompt content
-function inferCapabilities(prompt: string): { name: string; available: boolean; icon: React.ReactNode }[] {
+function inferCapabilities(prompt: string): { name: string; available: boolean }[] {
   const p = prompt.toLowerCase();
   return [
-    { name: 'Git', available: p.includes('git') || p.includes('commit') || p.includes('pr') || p.includes('branch'), icon: <GitBranch size={12} /> },
-    { name: 'PR Review', available: p.includes('pr') || p.includes('pull request') || p.includes('review'), icon: <FileText size={12} /> },
-    { name: 'Browser', available: p.includes('browser') || p.includes('web') || p.includes('url') || p.includes('site'), icon: <Globe size={12} /> },
-    { name: 'Search', available: p.includes('search') || p.includes('find') || p.includes('lookup'), icon: <MagnifyingGlass size={12} /> },
+    { name: 'Git', available: p.includes('git') || p.includes('commit') || p.includes('pr') || p.includes('branch') },
+    { name: 'PR Review', available: p.includes('pr') || p.includes('pull request') || p.includes('review') },
+    { name: 'Browser', available: p.includes('browser') || p.includes('web') || p.includes('url') || p.includes('site') },
+    { name: 'Search', available: p.includes('search') || p.includes('find') || p.includes('lookup') },
   ];
 }
 
@@ -614,10 +573,10 @@ export function AutomationView() {
           />
         </div>
       ) : (
-        <div className="flex-1 overflow-hidden px-6 pb-6">
-          <div className="h-full grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="flex-1 overflow-hidden px-6 pb-6 min-h-0">
+          <div className="h-full min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Cron Jobs List - Left Side */}
-          <section className="flex flex-col h-full lg:col-span-1">
+          <section className="flex flex-col h-full min-h-0 lg:col-span-1">
             <div className="flex-1 overflow-y-auto scrollbar-thin">
               {loading ? (
                 <div className="flex items-center justify-center h-32" style={{ color: 'var(--muted)' }}>
@@ -671,7 +630,7 @@ export function AutomationView() {
           </section>
 
           {/* Detail/Editor Panel - Right Side */}
-          <section className="flex flex-col h-full rounded-xl overflow-hidden lg:col-span-2" style={{ border: '1px solid var(--border)' }}>
+          <section className="flex flex-col h-full min-h-0 rounded-xl overflow-hidden lg:col-span-2" style={{ border: '1px solid var(--border)' }}>
             {isCreating ? (
               <CronEditor
                 availableModels={availableModels}
@@ -1291,30 +1250,21 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {/* Daily Brief Section */}
         <div className="p-4 border-b border-[var(--border)]">
-          <div className="flex items-center gap-2 mb-3">
-            <Lightning size={14} weight="fill" style={{ color: 'var(--accent)' }} />
-            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Daily Brief</span>
-          </div>
+          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Daily Brief</span>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 mt-3">
             {/* Status Card */}
             <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <div className="flex items-center gap-2 mb-1">
-                {getRunStatusIcon(cron.status === 'error' ? 'failed' : lastResult?.status || 'pending')}
-                <span className="text-sm font-medium capitalize" style={{ color: 'var(--text)' }}>
-                  {cron.status === 'error' ? 'Error' : lastResult?.status || 'No runs yet'}
-                </span>
-              </div>
-              <p className="text-xs" style={{ color: 'var(--muted)' }}>{cron.name}</p>
+              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Status</span>
+              <p className="text-sm font-medium capitalize mt-1" style={{ color: 'var(--text)' }}>
+                {cron.status === 'error' ? 'Error' : lastResult?.status || 'No runs yet'}
+              </p>
             </div>
 
             {/* Next Run Card */}
             <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <div className="flex items-center gap-2 mb-1">
-                <Clock size={14} style={{ color: 'var(--accent)' }} />
-                <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Next Run</span>
-              </div>
-              <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>
+              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Next Run</span>
+              <p className="text-sm font-medium mt-1" style={{ color: 'var(--text)' }}>
                 {formatDateShort(cron.next_run_at)}
               </p>
               <p className="text-xs" style={{ color: 'var(--muted)' }}>
@@ -1324,13 +1274,10 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
             {/* Last Result Card */}
             <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <div className="flex items-center gap-2 mb-1">
-                <CaretRight size={14} style={{ color: 'var(--accent)' }} />
-                <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Last Result</span>
-              </div>
+              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Last Result</span>
               {lastResult ? (
                 <>
-                  <p className="text-sm font-medium capitalize" style={{
+                  <p className="text-sm font-medium capitalize mt-1" style={{
                     color: lastResult.status === 'success' ? 'var(--success)' : lastResult.status === 'failed' ? 'var(--error)' : 'var(--text)'
                   }}>
                     {lastResult.status === 'success' ? 'Success' : lastResult.status === 'failed' ? `Failed: ${lastResult.error || 'Unknown'}` : lastResult.status}
@@ -1340,27 +1287,23 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                   )}
                 </>
               ) : (
-                <p className="text-sm" style={{ color: 'var(--muted)' }}>No runs yet</p>
+                <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>No runs yet</p>
               )}
             </div>
 
             {/* Capabilities Card */}
             <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <div className="flex items-center gap-2 mb-2">
-                <Gear size={14} style={{ color: 'var(--accent)' }} />
-                <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Capabilities</span>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
+              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Capabilities</span>
+              <div className="flex flex-wrap gap-1.5 mt-2">
                 {capabilities.map((cap) => (
                   <span
                     key={cap.name}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium"
+                    className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium"
                     style={{
                       background: cap.available ? 'var(--success-soft)' : 'var(--chip)',
                       color: cap.available ? 'var(--success)' : 'var(--muted)',
                     }}
                   >
-                    {cap.available ? <CheckCircle size={10} weight="fill" /> : <XCircle size={10} />}
                     {cap.name}
                   </span>
                 ))}
@@ -1371,11 +1314,8 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
         {/* Task Spec Section */}
         <div className="p-4 border-b border-[var(--border)]">
-          <div className="flex items-center gap-2 mb-3">
-            <FileText size={14} style={{ color: 'var(--accent)' }} />
-            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Task</span>
-          </div>
-          <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Task</span>
+          <div className="rounded-lg p-3 mt-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
             <p className="text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
               {promptSteps[0] || cron.prompt}
             </p>
@@ -1394,24 +1334,18 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
         {/* Execution Graph Section */}
         <div className="p-4 border-b border-[var(--border)]">
-          <div className="flex items-center gap-2 mb-3">
-            <GitBranch size={14} style={{ color: 'var(--accent)' }} />
-            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Execution Graph</span>
-          </div>
-          <div className="flex items-center gap-1 overflow-x-auto pb-2">
+          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Execution Graph</span>
+          <div className="flex items-center gap-1 overflow-x-auto pb-2 mt-3">
             {executionGraph.map((node, i) => (
               <div key={i} className="flex items-center gap-1 flex-shrink-0">
                 <div
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium"
+                  className="flex items-center px-2.5 py-1.5 rounded-lg text-xs font-medium"
                   style={{
                     background: node.status === 'failed' ? 'var(--error-soft)' : node.status === 'success' ? 'var(--success-soft)' : 'var(--surface)',
                     color: node.status === 'failed' ? 'var(--error)' : node.status === 'success' ? 'var(--success)' : 'var(--muted)',
                     border: `1px solid ${node.status === 'failed' ? 'rgba(239, 68, 68, 0.3)' : node.status === 'success' ? 'rgba(34, 197, 94, 0.3)' : 'var(--border)'}`,
                   }}
                 >
-                  {node.status === 'failed' && <XCircle size={10} weight="fill" />}
-                  {node.status === 'success' && <CheckCircle size={10} weight="fill" />}
-                  {node.status === 'running' && <SpinnerGap size={10} className="animate-spin" />}
                   {node.name}
                 </div>
                 {i < executionGraph.length - 1 && (
@@ -1425,10 +1359,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
         {/* Runs Timeline Section */}
         <div className="p-4">
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Clock size={14} style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Recent Runs</span>
-            </div>
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Recent Runs</span>
             {successRate !== null && (
               <div className="flex items-center gap-2">
                 <span className="text-xs" style={{ color: 'var(--muted)' }}>Success rate</span>
@@ -1473,7 +1404,6 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
           {runs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
-              <Play size={28} className="mb-2 opacity-30" style={{ color: 'var(--muted)' }} />
               <p className="text-sm" style={{ color: 'var(--muted)' }}>No runs yet</p>
               <p className="text-xs mt-1" style={{ color: 'var(--muted)', opacity: 0.7 }}>Click "Run Now" to execute manually</p>
             </div>
@@ -1482,28 +1412,16 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
               {displayedRuns.map((run, index) => (
                 <div
                   key={run.id}
-                  className="flex items-start gap-3 py-3"
+                  className="flex items-start gap-3 py-3 relative"
                   style={{
                     borderLeft: '2px solid var(--border)',
                     paddingLeft: '12px',
                     marginLeft: '6px',
                   }}
                 >
-                  {/* Timeline dot */}
-                  <div
-                    className="absolute w-3 h-3 rounded-full border-2 flex-shrink-0"
-                    style={{
-                      marginLeft: '-21px',
-                      marginTop: '2px',
-                      background: run.run_status === 'success' ? 'var(--success)' : run.run_status === 'failed' ? 'var(--error)' : 'var(--surface)',
-                      borderColor: run.run_status === 'success' ? 'var(--success)' : run.run_status === 'failed' ? 'var(--error)' : 'var(--border)',
-                    }}
-                  />
-
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
-                        {getRunStatusDot(run.run_status)}
                         <span className="text-sm font-medium capitalize" style={{ color: 'var(--text)' }}>
                           {run.run_status}
                         </span>
@@ -1528,10 +1446,9 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                       {run.session_id && onViewSession && (
                         <button
                           onClick={() => onViewSession(run)}
-                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all duration-150"
+                          className="px-2 py-0.5 rounded text-[10px] font-medium transition-all duration-150"
                           style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
                         >
-                          <ChatCircle size={10} />
                           View logs
                         </button>
                       )}

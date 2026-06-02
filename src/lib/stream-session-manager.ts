@@ -10,6 +10,10 @@ import type {
   ResearchPendingRequest,
   ResearchSessionSnapshot,
   ResearchPlanDetail,
+  ResearchPersistedCitation,
+  ResearchPersistedEvent,
+  ResearchPersistedSource,
+  ResearchReportArtifact,
 } from '@/types/research';
 import type { PermissionRequestEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
@@ -231,6 +235,8 @@ interface StartStreamParams {
   titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
   mode?: string;
   wikiAgentEnabled?: boolean;
+  defaultWorkspaceDirectory?: string;
+  securityScanEnabled?: boolean;
 }
 
 interface StartStreamResult {
@@ -443,6 +449,15 @@ function createInitialResearchState(sessionId: string): Omit<ResearchSessionStat
     activities: [],
     startedAt: null,
     completedAt: null,
+    runId: null,
+    runStatus: null,
+    planSteps: [],
+    progressSummary: null,
+    visitedPagesCount: 0,
+    persistedEvents: [],
+    persistedSources: [],
+    persistedCitations: [],
+    reportArtifact: null,
   };
 }
 
@@ -505,7 +520,31 @@ function isActivePhase(phase: StreamPhase): boolean {
   return ACTIVE_PHASES.includes(phase);
 }
 
-function mapPhaseToStage(phase: string | undefined): ResearchSessionSnapshot['stage'] {
+function mapPhaseToStageAndRunStatus(
+  phase: string | undefined,
+  runStatus: string | null,
+): ResearchSessionSnapshot['stage'] {
+  if (runStatus) {
+    switch (runStatus) {
+      case 'classifying':
+      case 'planning':
+        return 'planning';
+      case 'awaiting_clarification':
+        return 'clarifying';
+      case 'awaiting_approval':
+        return 'awaiting_plan_approval';
+      case 'running':
+        return 'researching';
+      case 'synthesizing':
+        return 'synthesizing';
+      case 'completed':
+        return 'complete';
+      case 'failed':
+        return 'error';
+      case 'aborted':
+        return 'aborted';
+    }
+  }
   switch (phase) {
     case 'planning':
       return 'planning';
@@ -525,6 +564,15 @@ function mapPhaseToStage(phase: string | undefined): ResearchSessionSnapshot['st
       return 'aborted';
     default:
       return 'idle';
+  }
+}
+
+function parsePersistedResearchEvent(row: ResearchPersistedEvent): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(row.payload_json) as Record<string, unknown>;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -940,7 +988,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, model, maxTokens, systemPrompt, initialGeneration, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled } = params;
+    const { sessionId, content, model, maxTokens, systemPrompt, initialGeneration, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled } = params;
 
     // Resolve workingDirectory from the thread store — sessionId IS the threadId
     let workingDirectory: string | undefined;
@@ -1093,7 +1141,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, model, maxTokens, systemPrompt, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled },
+      { content, model, maxTokens, systemPrompt, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled },
       nextGeneration
     );
 
@@ -1118,6 +1166,8 @@ class StreamSessionManager {
       workingDirectory?: string;
       mode?: string;
       wikiAgentEnabled?: boolean;
+      defaultWorkspaceDirectory?: string;
+      securityScanEnabled?: boolean;
     },
     generation: number
   ): Promise<void> {
@@ -1268,6 +1318,18 @@ class StreamSessionManager {
           this.handleResearchErrorEvent(sessionId, event.data as ResearchErrorEventData | undefined);
           break;
 
+        case 'research_run_status':
+          this.handleResearchRunStatusEvent(sessionId, event.data as { runStatus: string; phase: string; timestamp: number } | undefined);
+          break;
+
+        case 'research_activity':
+          this.handleResearchActivityEvent(sessionId, event.data as { activityId: string; kind: string; title: string; detail?: string; sequence: number; timestamp: number } | undefined);
+          break;
+
+        case 'research_plan_steps':
+          this.handleResearchPlanStepsEvent(sessionId, event.data as { steps: Array<{ id: string; order: number; label: string }>; timestamp: number } | undefined);
+          break;
+
         default:
           // Try to handle as generic message with data
           if (event.data) {
@@ -1303,6 +1365,8 @@ class StreamSessionManager {
         providerConfig: params.providerConfig as unknown as Record<string, unknown> | undefined,
         workingDirectory: params.workingDirectory,
         wikiAgentEnabled: params.wikiAgentEnabled,
+        defaultWorkspaceDirectory: params.defaultWorkspaceDirectory,
+        securityScanEnabled: params.securityScanEnabled,
       });
     } catch (error) {
       console.error('[stream-session-manager] Agent Server error:', error);
@@ -1521,6 +1585,7 @@ class StreamSessionManager {
     }
 
     this.pushResearchActivity(sessionId, {
+      kind: 'phase',
       title: `Phase: ${data.to.replace(/_/g, ' ')}`,
       timestamp: data.timestamp,
     });
@@ -1544,6 +1609,7 @@ class StreamSessionManager {
         allowSkip: data.allowSkip,
       };
       this.pushResearchActivity(sessionId, {
+        kind: 'milestone',
         title: 'Waiting for clarification',
         detail: `${data.questions.length} question${data.questions.length === 1 ? '' : 's'} need input.`,
         timestamp: data.timestamp,
@@ -1585,6 +1651,7 @@ class StreamSessionManager {
       }
       state.stage = 'awaiting_plan_approval';
       this.pushResearchActivity(sessionId, {
+        kind: 'milestone',
         title: 'Research plan ready',
         detail: `${data.questions.length} planned steps prepared for approval.`,
         timestamp: data.timestamp,
@@ -1614,6 +1681,7 @@ class StreamSessionManager {
       }
 
       this.pushResearchActivity(sessionId, {
+        kind: 'milestone',
         title: data.changeType === 'obsoleted' ? 'Plan updated' : 'New research questions added',
         detail: `${data.questions.length} question${data.questions.length === 1 ? '' : 's'} ${data.changeType === 'obsoleted' ? 'closed' : 'added'}.`,
         timestamp: data.timestamp,
@@ -1634,6 +1702,7 @@ class StreamSessionManager {
     state.complexityDescription = data.description;
     state.maxIterations = data.maxIterations;
     this.pushResearchActivity(sessionId, {
+      kind: 'milestone',
       title: 'Complexity classified',
       detail: data.description,
       timestamp: data.timestamp,
@@ -1664,6 +1733,7 @@ class StreamSessionManager {
             : question.status,
       }));
       this.pushResearchActivity(sessionId, {
+        kind: 'search',
         title: `Iteration ${data.iteration} started`,
         detail: data.questions[0] || 'Collecting sources.',
         timestamp: data.timestamp,
@@ -1675,6 +1745,7 @@ class StreamSessionManager {
           : question,
       );
       this.pushResearchActivity(sessionId, {
+        kind: 'milestone',
         title: data.phase === 'early_stop' ? 'Research stopped early' : `Iteration ${data.iteration} complete`,
         detail: `${Math.round(data.coverage * 100)}% coverage, ${data.findingsCount} findings.`,
         timestamp: data.timestamp,
@@ -1718,6 +1789,7 @@ class StreamSessionManager {
     state.findings = [data.finding, ...state.findings].slice(0, 80);
     state.findingsCount = Math.max(state.findingsCount, state.findings.length);
     this.pushResearchActivity(sessionId, {
+      kind: 'finding',
       title: data.finding.title || data.finding.source || 'New source found',
       detail: data.finding.content,
       timestamp: data.timestamp,
@@ -1754,6 +1826,7 @@ class StreamSessionManager {
     state.pendingRequest = null;
     state.completedAt = data.timestamp;
     this.pushResearchActivity(sessionId, {
+      kind: 'milestone',
       title: 'Research complete',
       detail: data.summary,
       timestamp: data.timestamp,
@@ -1773,11 +1846,100 @@ class StreamSessionManager {
     state.error = data.message;
     state.completedAt = data.timestamp;
     this.pushResearchActivity(sessionId, {
+      kind: 'error',
       title: 'Research error',
       detail: data.message,
       timestamp: data.timestamp,
       tone: 'warning',
     });
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchRunStatusEvent(
+    sessionId: string,
+    data: { runStatus: string; phase: string; timestamp: number } | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.runStatus = data.runStatus as ResearchSessionSnapshot['runStatus'];
+
+    switch (data.runStatus) {
+      case 'classifying':
+      case 'planning':
+        state.stage = 'planning';
+        break;
+      case 'awaiting_clarification':
+        state.stage = 'clarifying';
+        break;
+      case 'awaiting_approval':
+        state.stage = 'awaiting_plan_approval';
+        break;
+      case 'running':
+        state.stage = 'researching';
+        break;
+      case 'synthesizing':
+        state.stage = 'synthesizing';
+        break;
+      case 'completed':
+        state.stage = 'complete';
+        state.active = false;
+        break;
+      case 'failed':
+        state.stage = 'error';
+        state.active = false;
+        break;
+      case 'aborted':
+        state.stage = 'aborted';
+        state.active = false;
+        break;
+    }
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchActivityEvent(
+    sessionId: string,
+    data: {
+      activityId: string;
+      kind: string;
+      title: string;
+      detail?: string;
+      sequence: number;
+      timestamp: number;
+      sources?: Array<{ url: string; title: string }>;
+    } | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    if (data.kind === 'browse') {
+      state.visitedPagesCount = (state.visitedPagesCount || 0) + 1;
+    }
+    this.pushResearchActivity(sessionId, {
+      kind: data.kind as ResearchActivityItem['kind'] || 'milestone',
+      title: data.title,
+      detail: data.detail,
+      timestamp: data.timestamp,
+      sources: data.sources,
+      tone: data.kind === 'finding' || data.kind === 'question_answered' ? 'success'
+        : data.kind === 'error' ? 'warning'
+        : 'neutral',
+    });
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchPlanStepsEvent(
+    sessionId: string,
+    data: { steps: Array<{ id: string; order: number; label: string }>; timestamp: number } | undefined,
+  ): void {
+    if (!data || !data.steps || data.steps.length === 0) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.planSteps = data.steps.map((s) => ({
+      id: s.id,
+      order: s.order,
+      label: s.label,
+      status: 'pending' as const,
+      startedAt: null,
+      completedAt: null,
+    }));
     this.notifyResearchListeners(sessionId);
   }
 
@@ -2284,49 +2446,82 @@ class StreamSessionManager {
   async restoreResearchStateFromDB(sessionId: string): Promise<boolean> {
     const client = getAgentServerClient();
     const dbRow = await client.getResearchSnapshot(sessionId);
-    if (!dbRow || dbRow.status === 'completed' || dbRow.status === 'aborted') {
+    if (!dbRow) {
+      return false;
+    }
+
+    const runStatus = dbRow.run_status as string | null;
+    const legacyStatus = dbRow.status as string;
+    const isActive = runStatus
+      ? ['classifying', 'planning', 'awaiting_clarification', 'awaiting_approval', 'running', 'paused', 'synthesizing'].includes(runStatus)
+      : legacyStatus === 'active';
+    const isCompleted = runStatus === 'completed' || legacyStatus === 'completed';
+    const isFailed = runStatus === 'failed' || legacyStatus === 'aborted';
+
+    if (!isActive && !isCompleted && !isFailed) {
       return false;
     }
 
     const state = this.getOrCreateResearchState(sessionId);
     state.mode = 'research';
-    state.active = dbRow.status === 'active';
+    state.active = isActive;
     state.originalQuery = (dbRow.original_query as string) || '';
-    state.stage = mapPhaseToStage(dbRow.current_phase as string);
+    state.stage = mapPhaseToStageAndRunStatus(dbRow.current_phase as string, runStatus);
     state.currentIteration = (dbRow.iterations as number) || 0;
     state.coverage = (dbRow.coverage as number) || 0;
     state.startedAt = dbRow.created_at as number || null;
-    state.completedAt = null;
+    state.completedAt = dbRow.completed_at as number || null;
+    state.runId = dbRow.id as string || null;
+    state.runStatus = (runStatus as ResearchSessionSnapshot['runStatus']) || null;
+    state.progressSummary = dbRow.progress_summary as string || null;
+    state.error = dbRow.error_json
+      ? (() => { try { return JSON.parse(dbRow.error_json as string).message; } catch { return null; } })()
+      : null;
 
     // Restore from context_json
     if (dbRow.context_json && typeof dbRow.context_json === 'string') {
       try {
         const context = JSON.parse(dbRow.context_json);
-        // Restore plan questions
-        if (context.planQuestions && Array.isArray(context.planQuestions)) {
-          state.planQuestions = context.planQuestions.map((q: Record<string, unknown>) => ({
-            id: String(q.id),
-            text: String(q.text),
-            status: (q.status as 'pending' | 'active' | 'done' | 'obsolete') || 'pending',
-            purpose: q.purpose as string | undefined,
-            priority: q.priority as number | undefined,
-            dependsOn: q.dependsOn as string[] | undefined,
-            requiredEvidence: q.requiredEvidence as Record<string, unknown> | undefined,
-          }));
+
+        // ResearchContext.toJSON() saves questions as "questions", not "planQuestions"
+        const rawQuestions = context.planQuestions || context.questions;
+        if (rawQuestions && Array.isArray(rawQuestions)) {
+          state.planQuestions = rawQuestions.map((q: Record<string, unknown>) => {
+            const backendStatus = String(q.status || 'pending');
+            let status: ResearchPanelQuestion['status'] = 'pending';
+            if (backendStatus === 'answered') status = 'done';
+            else if (backendStatus === 'searching' || backendStatus === 'partial' || backendStatus === 'blocked') status = 'active';
+            else if (backendStatus === 'obsolete') status = 'obsolete';
+
+            return {
+              id: String(q.id),
+              text: String(q.text),
+              status,
+              purpose: q.purpose as string | undefined,
+              priority: [1, 2, 3].includes(q.priority as number) ? (q.priority as 1 | 2 | 3) : undefined,
+              dependsOn: q.dependsOn as string[] | undefined,
+              requiredEvidence: q.requiredEvidence as unknown as ResearchPanelQuestion['requiredEvidence'],
+            };
+          });
           state.questionCount = state.planQuestions.length;
         }
-        // Restore pending request
         if (context.pendingRequest) {
           state.pendingRequest = context.pendingRequest as ResearchPendingRequest;
         }
-        // Restore plan
-        if (context.plan) {
-          state.plan = context.plan as ResearchPlanDetail;
+        // ResearchContext.toJSON() saves plan as "researchPlan", not "plan"
+        const rawPlan = context.plan || context.researchPlan;
+        if (rawPlan) {
+          state.plan = rawPlan as ResearchPlanDetail;
         }
-        // Restore findings
         if (context.findings && Array.isArray(context.findings)) {
           state.findings = context.findings as ResearchPanelFinding[];
           state.findingsCount = state.findings.length;
+        }
+        if (context.reportText) {
+          state.reportText = String(context.reportText);
+        }
+        if (context.summary) {
+          state.summary = String(context.summary);
         }
       } catch {
         // context_json parsing failed, continue with basic restoration
@@ -2338,8 +2533,137 @@ class StreamSessionManager {
       state.activities = dbRow.activities as ResearchActivityItem[];
     }
 
+    // Restore plan steps from db if available
+    if (dbRow.planSteps && Array.isArray(dbRow.planSteps)) {
+      state.planSteps = (dbRow.planSteps as Array<Record<string, unknown>>).map((s) => ({
+        id: String(s.id),
+        order: Number(s.order_num),
+        label: String(s.user_facing_label),
+        status: (s.status as ResearchSessionSnapshot['planSteps'][0]['status']) || 'pending',
+        startedAt: typeof s.started_at === 'number' ? s.started_at : null,
+        completedAt: typeof s.completed_at === 'number' ? s.completed_at : null,
+      }));
+    }
+
+    if (dbRow.events && Array.isArray(dbRow.events)) {
+      state.persistedEvents = (dbRow.events as ResearchPersistedEvent[])
+        .slice()
+        .sort((a, b) => a.sequence - b.sequence);
+    }
+
+    if (dbRow.sources && Array.isArray(dbRow.sources)) {
+      state.persistedSources = dbRow.sources as ResearchPersistedSource[];
+    }
+
+    if (dbRow.citations && Array.isArray(dbRow.citations)) {
+      state.persistedCitations = dbRow.citations as ResearchPersistedCitation[];
+    }
+
+    if (dbRow.report && typeof dbRow.report === 'object') {
+      state.reportArtifact = dbRow.report as ResearchReportArtifact;
+      if (!state.reportText && state.reportArtifact.markdown) {
+        state.reportText = state.reportArtifact.markdown;
+      }
+    }
+
+    if (state.persistedEvents.length > 0) {
+      this.rebuildResearchProgressFromEvents(sessionId, state.persistedEvents);
+      if (state.reportArtifact?.markdown) {
+        state.reportText = state.reportArtifact.markdown;
+      }
+    }
+
+    // Restore complexity / max iterations
+    if (dbRow.complexity) {
+      state.complexity = dbRow.complexity as string;
+    }
+    if (dbRow.max_iterations) {
+      state.maxIterations = dbRow.max_iterations as number;
+    }
+
     this.notifyResearchListeners(sessionId);
     return true;
+  }
+
+  private rebuildResearchProgressFromEvents(
+    sessionId: string,
+    events: ResearchPersistedEvent[],
+  ): void {
+    const state = this.getOrCreateResearchState(sessionId);
+    const persistedEvents = state.persistedEvents;
+    const persistedSources = state.persistedSources;
+    const persistedCitations = state.persistedCitations;
+    const reportArtifact = state.reportArtifact;
+
+    state.planQuestions = [];
+    state.plan = null;
+    state.findings = [];
+    state.reportText = '';
+    state.summary = undefined;
+    state.error = null;
+    state.pendingRequest = null;
+    state.activities = [];
+    state.currentIteration = 0;
+    state.coverage = 0;
+    state.findingsCount = 0;
+    state.questionCount = 0;
+
+    for (const row of events) {
+      const event = parsePersistedResearchEvent(row);
+      if (!event) continue;
+
+      switch (event.type) {
+        case 'research_phase':
+          this.handleResearchPhaseEvent(sessionId, event.data as { from: string; to: string; timestamp: number } | undefined);
+          break;
+        case 'research_questions':
+          this.handleResearchQuestionsEvent(sessionId, event.data as ResearchQuestionEventData | undefined);
+          break;
+        case 'research_iteration':
+          this.handleResearchIterationEvent(sessionId, event.data as ResearchIterationEventData | undefined);
+          break;
+        case 'research_finding':
+          this.handleResearchFindingEvent(sessionId, event.data as ResearchFindingEventData | undefined);
+          break;
+        case 'research_progress':
+          this.handleResearchProgressEvent(sessionId, event.data as ResearchProgressEventData | undefined);
+          break;
+        case 'research_synthesis_chunk':
+          this.handleResearchSynthesisChunkEvent(sessionId, event.data as { delta: string; total: number; timestamp: number } | undefined);
+          break;
+        case 'research_complete':
+          this.handleResearchCompleteEvent(sessionId, event.data as ResearchCompleteEventData | undefined);
+          break;
+        case 'research_complexity':
+          this.handleResearchComplexityEvent(sessionId, event.data as ResearchComplexityEventData | undefined);
+          break;
+        case 'research_error':
+          this.handleResearchErrorEvent(sessionId, event.data as ResearchErrorEventData | undefined);
+          break;
+        case 'research_run_status':
+          this.handleResearchRunStatusEvent(sessionId, event.data as { runStatus: string; phase: string; timestamp: number } | undefined);
+          break;
+        case 'research_activity':
+          this.handleResearchActivityEvent(sessionId, event.data as { activityId: string; kind: string; title: string; detail?: string; sequence: number; timestamp: number } | undefined);
+          break;
+        case 'research_plan_steps':
+          this.handleResearchPlanStepsEvent(sessionId, event.data as { steps: Array<{ id: string; order: number; label: string }>; timestamp: number } | undefined);
+          break;
+        case 'report_complete':
+          state.stage = 'complete';
+          state.active = false;
+          state.completedAt = typeof event.timestamp === 'number' ? event.timestamp : state.completedAt;
+          state.reportText = typeof event.content === 'string' ? event.content : state.reportText;
+          break;
+        default:
+          break;
+      }
+    }
+
+    state.persistedEvents = persistedEvents;
+    state.persistedSources = persistedSources;
+    state.persistedCitations = persistedCitations;
+    state.reportArtifact = reportArtifact;
   }
 
   private notifyResearchListeners(sessionId: string): void {
@@ -2361,11 +2685,19 @@ class StreamSessionManager {
     activity: Omit<ResearchActivityItem, 'id'>,
   ): void {
     const state = this.getOrCreateResearchState(sessionId);
+    const uniqueSuffix = Math.random().toString(36).substring(2, 6);
+    const item: ResearchActivityItem = {
+      id: `${activity.timestamp}-${state.activities.length}-${uniqueSuffix}`,
+      kind: activity.kind || 'milestone',
+      title: activity.title,
+      detail: activity.detail,
+      timestamp: activity.timestamp,
+      tone: activity.tone,
+      iconType: activity.iconType,
+      sources: activity.sources,
+    };
     state.activities = [
-      {
-        id: `${activity.timestamp}-${state.activities.length}`,
-        ...activity,
-      },
+      item,
       ...state.activities,
     ].slice(0, 40);
   }

@@ -187,7 +187,7 @@ export function App() {
       enqueueMessage(activeThreadId, {
         sessionId: activeThreadId,
         content: plainContent,
-        permissionMode: uiPermissionMode === 'bypass' ? 'bypassPermissions' : 'default',
+        permissionMode: uiPermissionMode === 'bypass' ? 'bypassPermissions' : uiPermissionMode === 'auto' ? 'auto' : 'default',
         model,
         files,
         agentProfileId,
@@ -222,7 +222,7 @@ export function App() {
     setIsStreaming(true);
 
     // Map UI permission mode to agent internal mode
-    const agentPermissionMode = uiPermissionMode === 'bypass' ? 'bypassPermissions' : 'default';
+    const agentPermissionMode = uiPermissionMode === 'bypass' ? 'bypassPermissions' : uiPermissionMode === 'auto' ? 'auto' : 'default';
 
     void startStream({
       sessionId: activeThreadId,
@@ -235,6 +235,7 @@ export function App() {
       mode,
       titleGenerationModel: settings.titleGenerationModel,
       wikiAgentEnabled,
+      defaultWorkspaceDirectory: settings.workspaceDir,
     });
 
     setToolTimeoutCallback(activeThreadId, (retryContent: string) => {
@@ -250,7 +251,7 @@ export function App() {
       addMessage(activeThreadId, retryMsg, { persist: false });
       // Strip markers before sending to API
       const plainRetryContent = stripPastedContentMarkers(retryContent);
-      void startStream({ sessionId: activeThreadId, content: plainRetryContent, permissionMode: agentPermissionMode, model, agentProfileId, titleGenerationModel: settings.titleGenerationModel, wikiAgentEnabled });
+      void startStream({ sessionId: activeThreadId, content: plainRetryContent, permissionMode: agentPermissionMode, model, agentProfileId, titleGenerationModel: settings.titleGenerationModel, wikiAgentEnabled, defaultWorkspaceDirectory: settings.workspaceDir });
     });
   }, [activeThreadId, addMessage, settings.titleGenerationModel, wikiAgentEnabled]);
 

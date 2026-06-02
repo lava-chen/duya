@@ -28,5 +28,24 @@ This is YOUR decision — no hook or middleware triggers it automatically. Modul
 - Do NOT add CSS animations — the platform adds a reveal animation automatically
 - Text explanations go in regular response text, not inside widget_code
 - Each diagram is one tool call; interleave multiple calls with explanatory text
+
+## Embedding images inside widgets
+When you need to display any image file inside a widget (chart output, screenshots, photos, generated images):
+
+1. ALWAYS use the \`duya-file://\` protocol with an absolute path
+2. ALWAYS use forward slashes in the path, even on Windows
+3. NEVER use relative paths — they will not render in the widget iframe
+
+Correct examples:
+- Windows: \`<img src="duya-file:///C:/Users/alice/project/output.png" alt="Chart">\`
+- macOS: \`<img src="duya-file:////Users/alice/project/output.png" alt="Chart">\`
+- Linux: \`<img src="duya-file:////home/alice/project/output.png" alt="Chart">\`
+
+Incorrect (will fail):
+- \`<img src="Attachments/image.png">\`
+- \`<img src="./output.png">\`
+- \`<img src="file:///C:/Users/...">\`
+
+Images embedded this way are interactive: users can click any image to open a full-screen preview lightbox.
 </widget-capability>`;
 }

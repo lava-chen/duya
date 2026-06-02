@@ -345,24 +345,121 @@ function formatCookiesResult(result: Record<string, unknown>): string {
 
 function formatParallelFetchResult(result: Record<string, unknown>): string {
   const results = result.results;
-  const lines: string[] = ['### Parallel Fetch Results'];
+  const total = result.total as number | undefined;
+  const successful = result.successful as number | undefined;
+  const mode = result.mode as string | undefined;
+  const poolStats = result.poolStats as Record<string, unknown> | undefined;
+
+  const lines: string[] = [];
+
+  lines.push('### Parallel Fetch Results');
+
+  if (mode) {
+    lines.push(`Mode: \`${mode}\``);
+  }
+
+  if (total !== undefined) {
+    const successCount = successful ?? 0;
+    const failedCount = total - successCount;
+    lines.push(`Total: ${total} | Success: ${successCount} | Failed: ${failedCount}`);
+  }
+
+  if (poolStats) {
+    const tabs = poolStats.totalTabs as number | undefined;
+    const active = poolStats.activeTabs as number | undefined;
+    if (tabs !== undefined && active !== undefined) {
+      lines.push(`Pool: ${active}/${tabs} tabs active`);
+    }
+  }
 
   if (Array.isArray(results)) {
-    for (const r of results) {
-      if (typeof r === 'object' && r !== null) {
-        const item = r as Record<string, unknown>;
-        const url = String(item.url || '').slice(0, 80);
-        if (item.error) {
-          lines.push(`- ${url}: ERROR - ${item.error}`);
-        } else {
-          const size = typeof item.content === 'string' ? `${item.content.length} chars` : '—';
-          lines.push(`- ${url}: ${size}`);
-        }
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (typeof r !== 'object' || r === null) continue;
+
+      const item = r as Record<string, unknown>;
+      const url = String(item.url || '');
+      const title = String(item.title || '');
+      const error = item.error ? String(item.error) : '';
+      const duration = item.durationMs ? `${item.durationMs}ms` : '';
+      const index = typeof item.id === 'string' ? item.id : `${i + 1}`;
+      const platformType = item.platformType ? String(item.platformType) : undefined;
+
+      if (error) {
+        lines.push('');
+        lines.push(`#### [${index}] ${url}`);
+        lines.push(`| Status | ${duration ? 'Duration | ' : ''}Error |`);
+        lines.push(`|--------|${duration ? '----------|' : ''}-------|`);
+        const durCol = duration ? ` ${duration} |` : '';
+        lines.push(`| :red_circle: FAILED |${durCol} ${error.slice(0, 200)} |`);
+        continue;
+      }
+
+      lines.push('');
+      lines.push(`#### [${index}] ${url}`);
+
+      const metadataParts: string[] = [];
+      if (title) metadataParts.push(`**Title**: ${title.slice(0, 120)}`);
+      if (duration) metadataParts.push(`**Duration**: ${duration}`);
+      if (platformType) metadataParts.push(`**Platform**: ${platformType}`);
+      if (metadataParts.length > 0) {
+        lines.push(metadataParts.join(' | '));
+      }
+
+      const snapshotStr = formatPerItemSnapshot(item, title, platformType);
+      if (snapshotStr) {
+        lines.push('');
+        lines.push(snapshotStr);
+      }
+
+      const interactiveStr = extractInteractiveElements(item);
+      if (interactiveStr) {
+        lines.push('');
+        lines.push(interactiveStr);
       }
     }
   }
 
   return lines.join('\n');
+}
+
+function formatPerItemSnapshot(
+  item: Record<string, unknown>,
+  title: string,
+  platformType: string | undefined,
+): string {
+  const rawSnapshot: string | null =
+    (typeof item.compactSnapshot === 'string' ? item.compactSnapshot :
+     typeof item.snapshot === 'string' ? item.snapshot :
+     typeof item.content === 'string' ? item.content :
+     null);
+
+  const snapshot = extractSnapshot({ compactSnapshot: rawSnapshot }, 'compactSnapshot');
+  const summary = snapshot ? buildSnapshotSummary(snapshot, title, platformType) : null;
+  const visibleText = snapshot ? extractVisibleText(snapshot) : [];
+
+  const parts: string[] = [];
+
+  if (summary) {
+    parts.push('### Summary');
+    parts.push(summary);
+  }
+
+  if (visibleText.length > 0) {
+    parts.push('');
+    parts.push('### Visible Text');
+    for (const t of visibleText) {
+      parts.push(`- ${t}`);
+    }
+  }
+
+  if (snapshot) {
+    parts.push('');
+    parts.push('### Snapshot');
+    parts.push(snapshot);
+  }
+
+  return parts.join('\n');
 }
 
 function formatCloseWindowResult(_result: Record<string, unknown>): string {

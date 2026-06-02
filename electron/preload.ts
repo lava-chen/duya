@@ -525,6 +525,7 @@ export interface PluginAPI {
   checkUpdate: () => Promise<{ success: boolean; data: PluginUpdateInfo[]; error?: string }>
   update: (payload: { pluginId: string; targetVersion: string }) => Promise<{ success: boolean; data?: { success: boolean; previousVersion: string; newVersion: string }; error?: string }>
   installedV2: () => Promise<{ success: boolean; data: InstalledPluginInfoV2[]; error?: string }>
+  mcpList: () => Promise<{ success: boolean; data: Array<{ pluginId: string; pluginName: string; name: string; command: string; args?: string[]; env?: Record<string, string> }>; error?: string }>
   checkoutVersion: (payload: { pluginId: string; version: string }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
   cacheStats: () => Promise<{ success: boolean; data?: { totalPlugins: number; totalVersions: number; totalSizeBytes: number }; error?: string }>
   cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => Promise<{ success: boolean; data?: { removed: string[] }; error?: string }>
@@ -573,6 +574,7 @@ export interface ElectronAPI {
     getVersion: () => Promise<string>
     quit: () => Promise<void>
     getDefaultWorkspace: () => Promise<string>
+    createProjectFolder: (projectName: string) => Promise<{ success: boolean; error: string; path: string }>
   }
   agent: AgentAPI
   projects: {
@@ -1117,6 +1119,7 @@ const electronAPI: ElectronAPI = {
     getVersion: () => ipcRenderer.invoke('app:get-version'),
     quit: () => ipcRenderer.invoke('app:quit'),
     getDefaultWorkspace: () => ipcRenderer.invoke('app:get-default-workspace'),
+    createProjectFolder: (projectName: string) => ipcRenderer.invoke('app:create-project-folder', projectName),
   },
   agent: {
     streamChat: (prompt, options) => ipcRenderer.invoke('agent:stream', { prompt, options }),
@@ -1488,6 +1491,7 @@ const electronAPI: ElectronAPI = {
     checkUpdate: () => ipcRenderer.invoke('plugin:check-update'),
     update: (payload: { pluginId: string; targetVersion: string }) => ipcRenderer.invoke('plugin:update', payload),
     installedV2: () => ipcRenderer.invoke('plugin:installed:v2'),
+    mcpList: () => ipcRenderer.invoke('plugin:mcp:list'),
     checkoutVersion: (payload: { pluginId: string; version: string }) => ipcRenderer.invoke('plugin:checkout-version', payload),
     cacheStats: () => ipcRenderer.invoke('plugin:cache:stats'),
     cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => ipcRenderer.invoke('plugin:cache:cleanup', payload),

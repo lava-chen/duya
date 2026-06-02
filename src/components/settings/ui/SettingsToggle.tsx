@@ -43,7 +43,9 @@ export function SettingsToggle({
         onClick={() => onCheckedChange(!checked)}
         className={cn(
           "relative w-11 h-6 rounded-full transition-colors shrink-0",
-          checked ? "bg-accent" : "bg-muted",
+          checked
+            ? "bg-accent"
+            : "bg-[rgba(0,0,0,0.15)] dark:bg-[rgba(255,255,255,0.15)]",
           disabled && "cursor-not-allowed"
         )}
       >

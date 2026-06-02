@@ -114,8 +114,8 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     id: 'research',
     name: 'Research',
     description: 'Research, investigation and deep analysis',
-    allowedTools: ['file:read*', 'search:*', 'browser:*', 'literature:*', 'research_memory:*'],
-    disallowedTools: ['file:write*', 'file:edit*', 'exec:*'],
+    allowedTools: ['*'],
+    disallowedTools: ['Agent', 'canvas_*', 'skill_manage', 'duya_*', 'WebSearch', 'WebFetch'],
     promptProfile: {
       disableSections: ['taskHandling', 'actions'],
     },

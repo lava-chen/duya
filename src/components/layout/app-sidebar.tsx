@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, forwardRef, useCallback } from "react";
+import { useState, useEffect, useMemo, forwardRef, useCallback, useRef } from "react";
 import {
   GearSixIcon,
   PlusIcon,
@@ -24,6 +24,8 @@ import {
   QuestionIcon,
   ChannelIcon,
   PlugIcon,
+  FileIcon,
+  FolderOpenIcon,
 } from "@/components/icons";
 import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab } from "@/stores/conversation-store";
 import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
@@ -45,19 +47,47 @@ const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.Compone
   { view: 'memory', labelKey: 'nav.memory', icon: BrainIcon },
 ];
 
-const settingsNavItems: { id: SettingsTab; labelKey: string; icon: typeof HouseIcon }[] = [
-  { id: 'general', labelKey: 'settings.general', icon: HouseIcon },
-  { id: 'appearance', labelKey: 'settings.appearance', icon: MonitorIcon },
-  { id: 'providers', labelKey: 'settings.providers', icon: KeyIcon },
-  { id: 'agents', labelKey: 'settings.agents', icon: RobotIcon },
-  { id: 'skills', labelKey: 'settings.skills', icon: LightningIcon },
-  { id: 'mcp', labelKey: 'settings.mcp', icon: CubeIcon },
-  { id: 'channels', labelKey: 'settings.channels', icon: ChannelIcon },
-  { id: 'browser', labelKey: 'settings.browser', icon: ChromeIcon },
-  { id: 'security', labelKey: 'settings.security', icon: ShieldCheckIcon },
-  { id: 'usage', labelKey: 'settings.usage', icon: BarChartIcon },
-  { id: 'support', labelKey: 'settings.support', icon: QuestionIcon },
-  { id: 'capabilities', labelKey: 'settings.capabilities', icon: PlugIcon },
+const settingsNavGroups: {
+  id: string;
+  labelKey: string;
+  items: { id: SettingsTab; labelKey: string; icon: typeof HouseIcon }[];
+}[] = [
+  {
+    id: 'application',
+    labelKey: 'settings.group.application',
+    items: [
+      { id: 'general', labelKey: 'settings.general', icon: HouseIcon },
+      { id: 'appearance', labelKey: 'settings.appearance', icon: MonitorIcon },
+      { id: 'security', labelKey: 'settings.security', icon: ShieldCheckIcon },
+    ],
+  },
+  {
+    id: 'aiSetup',
+    labelKey: 'settings.group.aiSetup',
+    items: [
+      { id: 'providers', labelKey: 'settings.providers', icon: KeyIcon },
+      { id: 'agents', labelKey: 'settings.agents', icon: RobotIcon },
+      { id: 'browser', labelKey: 'settings.browser', icon: ChromeIcon },
+      { id: 'channels', labelKey: 'settings.channels', icon: ChannelIcon },
+    ],
+  },
+  {
+    id: 'extensions',
+    labelKey: 'settings.group.extensions',
+    items: [
+      { id: 'plugins', labelKey: 'settings.plugins', icon: PlugIcon },
+      { id: 'skills', labelKey: 'settings.skills', icon: LightningIcon },
+      { id: 'mcp', labelKey: 'settings.mcp', icon: CubeIcon },
+    ],
+  },
+  {
+    id: 'system',
+    labelKey: 'settings.group.system',
+    items: [
+      { id: 'usage', labelKey: 'settings.usage', icon: BarChartIcon },
+      { id: 'support', labelKey: 'settings.support', icon: QuestionIcon },
+    ],
+  },
 ];
 
 interface AppSidebarProps {
@@ -72,6 +102,9 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const [theme, setTheme] = useState<ThemeMode>("dark");
     const [isLoading, setIsLoading] = useState(true);
     const [isInputDialogOpen, setIsInputDialogOpen] = useState(false);
+    const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
+    const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
+    const projectMenuRef = useRef<HTMLDivElement>(null);
 
     const {
       threads,
@@ -138,6 +171,19 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       });
     };
 
+    // Close project menu when clicking outside
+    useEffect(() => {
+      function handleClickOutside(event: MouseEvent) {
+        if (projectMenuRef.current && !projectMenuRef.current.contains(event.target as Node)) {
+          setIsProjectMenuOpen(false);
+        }
+      }
+      if (isProjectMenuOpen) {
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+      }
+    }, [isProjectMenuOpen]);
+
     const handleCreateProjectFromPath = useCallback(async (workingDirectory: string) => {
       if (workingDirectory.trim()) {
         const projectName = workingDirectory.trim().split(/[\\/]/).pop() || "Untitled";
@@ -148,11 +194,12 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       }
     }, [createThread, setCurrentView]);
 
-    const handleNewProject = async () => {
+    const handleOpenExistingFolder = async () => {
+      setIsProjectMenuOpen(false);
       try {
         if (window.electronAPI?.dialog?.openFolder) {
           const result = await window.electronAPI.dialog.openFolder({
-            title: "Select New Project Folder",
+            title: t('project.selectNewProjectFolder'),
           });
 
           if (!result.canceled && result.filePaths.length > 0) {
@@ -163,7 +210,32 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           setIsInputDialogOpen(true);
         }
       } catch (error) {
-        console.error("[AppSidebar] Failed to create new project:", error);
+        console.error("[AppSidebar] Failed to open existing folder:", error);
+      }
+    };
+
+    const handleNewBlankProject = () => {
+      setIsProjectMenuOpen(false);
+      setIsNameProjectDialogOpen(true);
+    };
+
+    const handleCreateNamedProject = async (projectName: string) => {
+      setIsNameProjectDialogOpen(false);
+      if (!projectName.trim()) return;
+      try {
+        if (window.electronAPI?.app?.createProjectFolder) {
+          const result = await window.electronAPI.app.createProjectFolder(projectName.trim());
+          if (result.success && result.path) {
+            const thread = await createThread({ workingDirectory: result.path, projectName: projectName.trim() });
+            if (thread) {
+              setCurrentView('chat');
+            }
+          } else {
+            console.error("[AppSidebar] Failed to create project folder:", result.error);
+          }
+        }
+      } catch (error) {
+        console.error("[AppSidebar] Failed to create blank project:", error);
       }
     };
 
@@ -232,24 +304,31 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           <div className="sidebar-divider" />
 
           <nav className="sidebar-settings-nav" aria-label="Settings Navigation">
-            {settingsNavItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = useConversationStore.getState().settingsTab === item.id;
+            {settingsNavGroups.map((group) => (
+              <div key={group.id} className="sidebar-settings-group">
+                <div className="sidebar-section-header">
+                  <span className="sidebar-section-label">{t(group.labelKey as never)}</span>
+                </div>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = useConversationStore.getState().settingsTab === item.id;
 
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => handleSettingsTabChange(item.id)}
-                  className={`sidebar-settings-link${isActive ? " active" : ""}`}
-                >
-                  <span className="nav-icon">
-                    <Icon size={16} weight="regular" />
-                  </span>
-                  <span>{t(item.labelKey as never)}</span>
-                </button>
-              );
-            })}
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleSettingsTabChange(item.id)}
+                      className={`sidebar-settings-link${isActive ? " active" : ""}`}
+                    >
+                      <span className="nav-icon">
+                        <Icon size={16} weight="regular" />
+                      </span>
+                      <span>{t(item.labelKey as never)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
         </aside>
       );
@@ -286,14 +365,63 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         {projectGroups.length > 0 && (
           <div className="sidebar-section-header">
             <span className="sidebar-section-label">{t('common.projects')}</span>
-            <button
-              type="button"
-              className="sidebar-section-action"
-              onClick={handleNewProject}
-              title="New Project"
-            >
-              <PlusIcon size={14} />
-            </button>
+            <div className="relative" ref={projectMenuRef}>
+              <button
+                type="button"
+                className="sidebar-section-action"
+                onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
+                title={t('project.newProject')}
+              >
+                <PlusIcon size={14} />
+              </button>
+              {isProjectMenuOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1.5 py-1.5 rounded-lg z-50"
+                  style={{
+                    backgroundColor: 'var(--bg-canvas)',
+                    border: '1px solid var(--border)',
+                    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.15)',
+                    minWidth: '200px',
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left rounded-md mx-1"
+                    style={{ color: 'var(--text)', width: 'calc(100% - 8px)' }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                    onClick={handleNewBlankProject}
+                  >
+                    <span className="flex-shrink-0" style={{ color: 'var(--muted)' }}>
+                      <FileIcon size={15} />
+                    </span>
+                    <span className="whitespace-nowrap">{t('project.newBlankProject')}</span>
+                  </button>
+                  <div className="mx-3 my-1" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left rounded-md mx-1"
+                    style={{ color: 'var(--text)', width: 'calc(100% - 8px)' }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                    onClick={handleOpenExistingFolder}
+                  >
+                    <span className="flex-shrink-0" style={{ color: 'var(--muted)' }}>
+                      <FolderOpenIcon size={15} />
+                    </span>
+                    <span className="whitespace-nowrap">{t('project.useExistingFolder')}</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -336,14 +464,24 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           {projectGroups.length === 0 && noProjectThreads.length === 0 && (
             <div className="empty-state">
               <p>{t('common.noProjectsYet')}</p>
-              <button
-                type="button"
-                className="empty-state-action"
-                onClick={handleNewProject}
-              >
-                <FolderIcon size={16} />
-                <span>{t('common.openProjectFolder')}</span>
-              </button>
+              <div className="flex flex-col gap-2 mt-3">
+                <button
+                  type="button"
+                  className="empty-state-action"
+                  onClick={handleNewBlankProject}
+                >
+                  <FileIcon size={16} />
+                  <span>{t('project.newBlankProject')}</span>
+                </button>
+                <button
+                  type="button"
+                  className="empty-state-action"
+                  onClick={handleOpenExistingFolder}
+                >
+                  <FolderOpenIcon size={16} />
+                  <span>{t('project.useExistingFolder')}</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -383,6 +521,17 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             handleCreateProjectFromPath(value);
           }}
           onCancel={() => setIsInputDialogOpen(false)}
+        />
+
+        <InputDialog
+          isOpen={isNameProjectDialogOpen}
+          title={t('project.nameProject')}
+          description={t('project.nameProjectDescription')}
+          placeholder={t('project.nameProjectPlaceholder')}
+          onConfirm={(value) => {
+            handleCreateNamedProject(value);
+          }}
+          onCancel={() => setIsNameProjectDialogOpen(false)}
         />
       </aside>
     );

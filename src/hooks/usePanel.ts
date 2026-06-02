@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
 
-export type PanelTab = 'canvas' | 'files';
+export type PanelTab = 'canvas' | 'files' | 'research';
 
 export interface PanelContextValue {
   panelOpen: boolean;

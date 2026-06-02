@@ -26,6 +26,15 @@ const EMPTY_RESEARCH_SNAPSHOT: ResearchSessionSnapshot = {
   activities: [],
   startedAt: null,
   completedAt: null,
+  runId: null,
+  runStatus: null,
+  planSteps: [],
+  progressSummary: null,
+  visitedPagesCount: 0,
+  persistedEvents: [],
+  persistedSources: [],
+  persistedCitations: [],
+  reportArtifact: null,
 };
 
 export function useResearchSession(sessionId: string): ResearchSessionSnapshot {

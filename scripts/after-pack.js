@@ -42,69 +42,72 @@ module.exports = async function afterPack(context) {
 
   const projectDir = process.cwd();
 
-  // Step 1: Rebuild better-sqlite3 for Electron ABI (main process)
-  console.log('[afterPack] Step 1: Rebuilding better-sqlite3 for Electron ABI...');
-  try {
-    const rebuildCmd = `npx electron-rebuild -f -o better-sqlite3 -v ${electronVersion} -a ${archName}`;
-    console.log(`[afterPack] Running: ${rebuildCmd}`);
-    execSync(rebuildCmd, {
-      cwd: projectDir,
-      stdio: 'inherit',
-      timeout: 300000,
-    });
-    console.log('[afterPack] Electron ABI rebuild completed successfully');
-  } catch (err) {
-    console.error('[afterPack] Failed to rebuild better-sqlite3 for Electron ABI:', err.message);
-    try {
-      const { rebuild } = require('@electron/rebuild');
-      await rebuild({
-        buildPath: projectDir,
-        electronVersion: electronVersion,
-        arch: archName,
-        onlyModules: ['better-sqlite3'],
-        force: true,
-      });
-      console.log('[afterPack] Rebuild via @electron/rebuild API succeeded');
-    } catch (err2) {
-      console.error('[afterPack] @electron/rebuild API also failed:', err2.message);
-      throw new Error('Cannot rebuild better-sqlite3 for Electron ABI');
-    }
-  }
+  // Step 1: Ensure better-sqlite3 is available for Electron ABI
+  console.log('[afterPack] Step 1: Ensuring better-sqlite3 for Electron ABI...');
 
-  const rebuiltSource = path.join(
-    projectDir, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'
-  );
-
-  if (!fs.existsSync(rebuiltSource)) {
-    throw new Error(`[afterPack] Rebuilt better_sqlite3.node not found at ${rebuiltSource}`);
-  }
-
-  console.log(`[afterPack] Rebuilt .node file: ${rebuiltSource}`);
-
-  // Replace all better_sqlite3.node files in electron resources
-  let replaced = 0;
-
-  function walkAndReplace(dir) {
+  // Check if electron-builder already provided a prebuilt binary
+  let foundPrebuilt = false;
+  function findPrebuiltNode(dir) {
     if (!fs.existsSync(dir)) return;
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        walkAndReplace(fullPath);
+        findPrebuiltNode(fullPath);
       } else if (entry.name === 'better_sqlite3.node') {
-        fs.copyFileSync(rebuiltSource, fullPath);
-        console.log(`[afterPack] Replaced ${fullPath}`);
-        replaced++;
+        console.log(`[afterPack] Found prebuilt binary: ${fullPath}`);
+        foundPrebuilt = true;
       }
     }
   }
+  findPrebuiltNode(path.join(appOutDir, 'resources'));
 
-  walkAndReplace(path.join(appOutDir, 'resources'));
-
-  if (replaced > 0) {
-    console.log(`[afterPack] Successfully replaced ${replaced} better_sqlite3.node file(s) with Electron ABI version`);
+  if (foundPrebuilt) {
+    console.log('[afterPack] Prebuilt better-sqlite3 binary already exists, skipping rebuild');
   } else {
-    console.warn('[afterPack] WARNING: No better_sqlite3.node files found in resources!');
+    console.log('[afterPack] No prebuilt binary found, attempting rebuild...');
+    try {
+      const rebuildCmd = `npx electron-rebuild -f -o better-sqlite3 -v ${electronVersion} -a ${archName}`;
+      console.log(`[afterPack] Running: ${rebuildCmd}`);
+      execSync(rebuildCmd, {
+        cwd: projectDir,
+        stdio: 'inherit',
+        timeout: 300000,
+      });
+      console.log('[afterPack] Electron ABI rebuild completed successfully');
+    } catch (err) {
+      console.error('[afterPack] Failed to rebuild better-sqlite3 for Electron ABI:', err.message);
+      try {
+        const { rebuild } = require('@electron/rebuild');
+        await rebuild({
+          buildPath: projectDir,
+          electronVersion: electronVersion,
+          arch: archName,
+          onlyModules: ['better-sqlite3'],
+          force: true,
+        });
+        console.log('[afterPack] Rebuild via @electron/rebuild API succeeded');
+      } catch (err2) {
+        console.error('[afterPack] @electron/rebuild API also failed:', err2.message);
+        console.warn('[afterPack] WARNING: Could not rebuild better-sqlite3. If the prebuilt binary is available in resources, the app may still work.');
+      }
+    }
+
+    const rebuiltSource = path.join(
+      projectDir, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'
+    );
+
+    if (fs.existsSync(rebuiltSource)) {
+      console.log(`[afterPack] Rebuilt .node file: ${rebuiltSource}`);
+
+      const targetDir = path.join(appOutDir, 'resources', 'better-sqlite3', 'build', 'Release');
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+      const targetNode = path.join(targetDir, 'better_sqlite3.node');
+      fs.copyFileSync(rebuiltSource, targetNode);
+      console.log(`[afterPack] Copied rebuilt .node to ${targetNode}`);
+    }
   }
 
   // Step 2: Copy bindings dependencies to extraResources better-sqlite3

@@ -184,6 +184,12 @@ const RECEIVER_SCRIPT = /* js */ `
         window.parent.postMessage({ type: 'widget:link', href: a.href }, '*');
         return;
       }
+      var img = e.target.closest('img');
+      if (img && img.src) {
+        e.preventDefault();
+        window.parent.postMessage({ type: 'widget:previewImage', src: img.src, alt: img.getAttribute('alt') || '' }, '*');
+        return;
+      }
       var btn = e.target.closest('[data-send-message]');
       if (btn) {
         var text = btn.getAttribute('data-send-message');
@@ -317,7 +323,7 @@ export function buildReceiverSrcdoc(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline' ${SCRIPT_SRC_ALLOWLIST}; connect-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline' ${SCRIPT_SRC_ALLOWLIST}; connect-src 'none'; img-src 'self' duya-file: data: blob: https:;">
 ${cdnScriptsHtml}
 <style>
   *, *::before, *::after { box-sizing: border-box; }
@@ -406,7 +412,8 @@ ${cdnScriptsHtml}
     border-color: rgba(255,255,255,0.25);
   }
   .widget-root canvas { max-width: 100%; }
-  .widget-root img { max-width: 100%; height: auto; }
+  .widget-root img { max-width: 100%; height: auto; cursor: pointer; }
+  .widget-root img:hover { opacity: 0.88; transition: opacity 0.15s; }
   table { border-collapse: collapse; width: 100%; }
   th, td { padding: 6px 8px; border: 1px solid var(--color-border-tertiary, rgba(255,255,255,0.1)); }
   /* === Tag / Badge Classes === */

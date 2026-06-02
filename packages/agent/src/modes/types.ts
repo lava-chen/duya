@@ -1,6 +1,5 @@
 import type { LLMClient } from '../llm/base.js';
 import type { SSEEvent } from '../types.js';
-import type { LiteraturePluginRuntime } from '../plugins/literature/types.js';
 import type { ResearchMemoryRuntime } from '../research-memory/types.js';
 import type { ToolResult } from '../tool/types.js';
 
@@ -23,12 +22,23 @@ export interface ModeContext {
   abortController: AbortController;
   sessionId?: string;
   workingDirectory?: string;
+  _researchRunId?: string;
   emitSSE?: (event: SSEEvent) => void;
   awaitClarification?: (
     questions: ClarificationQuestion[]
   ) => Promise<ClarificationAnswer[]>;
   persistState?: (data: Record<string, unknown>) => Promise<void>;
-  literature?: LiteraturePluginRuntime;
+  runDB?: {
+    updateRun: (runId: string, data: Record<string, unknown>) => Promise<void>;
+    createPlanSteps: (runId: string, steps: Array<Record<string, unknown>>) => Promise<void>;
+    updatePlanStep: (stepId: string, data: Record<string, unknown>) => Promise<void>;
+    logActivity: (data: Record<string, unknown>) => Promise<void>;
+    getEventMaxSequence?: (runId: string) => Promise<number>;
+    logEvent?: (data: Record<string, unknown>) => Promise<void>;
+    upsertSource?: (data: Record<string, unknown>) => Promise<void>;
+    createCitation?: (data: Record<string, unknown>) => Promise<void>;
+    upsertReport?: (data: Record<string, unknown>) => Promise<void>;
+  };
   researchMemory?: ResearchMemoryRuntime;
   toolExecute?: (name: string, input: Record<string, unknown>) => Promise<ToolResult>;
   toolExecuteConcurrent?: (

@@ -1,6 +1,169 @@
 import type { ResearchClassification, ResearchPlan } from '../types.js';
 
-export const GENERATE_PLAN_VERSION = '1.0.0';
+export const GENERATE_PLAN_VERSION = '2.1.0';
+
+// ============================================================================
+// Task Types
+// ============================================================================
+
+export type TaskType =
+  | 'survey'           // Literature/field overview
+  | 'comparative'      // Compare alternatives
+  | 'replication'      // Reproduce/verify findings
+  | 'gap-analysis'     // Identify unknown unknowns
+  | 'implementation'   // Technical/how-to
+  | 'factual'          // Direct lookup
+  | 'analytical';      // Root cause / mechanistic analysis
+
+export type AudienceLevel = 'beginner' | 'intermediate' | 'expert' | 'researcher';
+
+export type QuestionLayer =
+  | 'foundational'    // Must answer first (prerequisite knowledge)
+  | 'analytical'      // Core investigation questions
+  | 'critical'        // Seek failures, limitations, contradictions
+  | 'synthetic';      // So-what: what does all evidence imply?
+
+export type HypothesisType = 'central' | 'subsidiary' | 'null';
+
+export type StructureTemplate =
+  | 'survey'              // Literature overview
+  | 'comparison-matrix'   // Side-by-side comparison
+  | 'argument-rebuttal'   // Thesis-antithesis-synthesis
+  | 'timeline'            // Historical/evolutionary
+  | 'problem-solution'    // Challenge-resolution pairs
+  | 'custom';
+
+export type PreprintPolicy = 'prefer-published' | 'allow-recent' | 'include-all';
+
+export type SourceTierLevel = 'tier1' | 'tier2' | 'tier3' | 'avoid';
+
+// ============================================================================
+// Schema: Hypothesis
+// ============================================================================
+
+export interface Hypothesis {
+  statement: string;             // Falsifiable proposition
+  type: HypothesisType;
+  verificationApproach: string; // How to verify this hypothesis
+  expectedEvidence: string;     // What evidence would support it
+  falsificationCriteria: string; // What evidence would overturn it
+}
+
+// ============================================================================
+// Schema: Research Question (Enhanced)
+// ============================================================================
+
+export interface ResearchQuestion {
+  // Core
+  text: string;
+  purpose: string;
+  uncertaintyResolved?: string;
+  requiredEvidenceRationale?: string;
+  priority: number;
+  dependsOn: string[];
+
+  // NEW: Question layering (required for academic rigor)
+  questionLayer: QuestionLayer;
+  // Which hypothesis this question tests (optional)
+  hypothesisLink?: string;
+
+  // Legacy search queries (general)
+  searchQueries: string[];
+
+  // NEW: Academic-specific search queries
+  academicSearchQueries?: {
+    semantic_scholar?: string[];
+    arxiv?: string[];
+    general?: string[];
+  };
+
+  requiredEvidence: {
+    sourceTypes: string[];
+    minSources: number;
+    needsPrimarySource: boolean;
+    needsRecentSource: boolean;
+    needsCounterEvidence: boolean;
+  };
+}
+
+// ============================================================================
+// Schema: Evidence Strategy (Enhanced)
+// ============================================================================
+
+export interface AcademicTiers {
+  tier1: string[];   // e.g. ["Nature", "Science", "NeurIPS", "ICML", "ACL"]
+  tier2: string[];   // e.g. ["peer-reviewed conference", "AAAI", "EMNLP", "ICLR"]
+  tier3: string[];   // e.g. ["arXiv preprint", "workshop paper", "technical report"]
+  avoid: string[];   // e.g. ["blog post without citations", "Wikipedia", "news article"]
+}
+
+export interface EvidenceStrategy {
+  sourceTypes: string[];
+  authorityRules: string[];
+  freshnessRequirement: string;
+  minIndependentSources: number;
+  mustFindPrimarySources: boolean;
+  mustFindCounterEvidence: boolean;
+
+  // NEW: Academic evidence tiers
+  academicTiers?: AcademicTiers;
+  citationThreshold?: number;     // Minimum citations for "classic" papers
+  preprintPolicy?: PreprintPolicy;
+  conflictResolutionStrategy?: string; // How to resolve conflicting evidence
+}
+
+// ============================================================================
+// Schema: Gap Analysis
+// ============================================================================
+
+export interface GapAnalysis {
+  openQuestions: string[];           // Known unknowns in the field
+  methodologicalLimitations: string[]; // Why certain questions can't be answered
+  dataLimitations: string[];         // Data availability issues
+  futureDirections: string[];        // Promising research directions
+}
+
+// ============================================================================
+// Schema: Scope (Enhanced)
+// ============================================================================
+
+export interface Scope {
+  included: string[];
+  excluded: string[];
+  timeRange?: string;
+  geography?: string | null;
+  domains: string[];
+  assumptions: string[];
+  clarificationNeeded: boolean;
+  blockingQuestions: Array<{ id: string; question: string; type: string; options: string[] }>;
+  nonBlockingSuggestions: Array<{ id: string; question: string; type: string; options: string[] }>;
+
+  // NEW: Explicit research boundaries
+  knownGaps?: string[];     // Known research gaps in this area
+  outOfScope?: string[];    // Topics explicitly excluded with reasons
+}
+
+// ============================================================================
+// Schema: Synthesis Plan (Enhanced)
+// ============================================================================
+
+export interface SynthesisPlan {
+  // Legacy
+  recommendedStructure: string[];
+
+  // NEW: Dynamic structure based on taskType
+  structureTemplate: StructureTemplate;
+  comparisonDimensions?: string[];
+  expectedCaveats: string[];
+
+  // NEW: Argumentation
+  argumentationStrategy?: string;        // How to build the argument
+  conflictingEvidenceHandling?: string;  // When sources disagree
+}
+
+// ============================================================================
+// Input Interface
+// ============================================================================
 
 export interface GeneratePlanInput {
   query: string;
@@ -8,149 +171,131 @@ export interface GeneratePlanInput {
   userAnswers?: Record<string, string>;
 }
 
+// ============================================================================
+// Main Output Interface
+// ============================================================================
+
 export interface LLMPlanOutput {
   intent: {
-    taskType: string;
+    taskType: TaskType;
     userGoal: string;
     expectedOutput: string;
-    audienceLevel: string;
+    audienceLevel: AudienceLevel;
+    // NEW: Academic rigor flag
+    academicRigor: boolean;
   };
-  scope: {
-    included: string[];
-    excluded: string[];
-    timeRange?: string;
-    geography?: string | null;
-    domains: string[];
-    assumptions: string[];
-    clarificationNeeded: boolean;
-    blockingQuestions: Array<{ id: string; question: string; type: string; options: string[] }>;
-    nonBlockingSuggestions: Array<{ id: string; question: string; type: string; options: string[] }>;
-  };
-  researchQuestions: Array<{
-    text: string;
-    purpose: string;
-    uncertaintyResolved?: string;
-    requiredEvidenceRationale?: string;
-    priority: number;
-    dependsOn: string[];
-    searchQueries: string[];
-    requiredEvidence: {
-      sourceTypes: string[];
-      minSources: number;
-      needsPrimarySource: boolean;
-      needsRecentSource: boolean;
-      needsCounterEvidence: boolean;
-    };
-  }>;
-  evidenceStrategy: {
-    sourceTypes: string[];
-    authorityRules: string[];
-    freshnessRequirement: string;
-    minIndependentSources: number;
-    mustFindPrimarySources: boolean;
-    mustFindCounterEvidence: boolean;
-  };
+
+  // NEW: Hypothesis layer (core of hypothesis-driven research)
+  hypotheses?: Hypothesis[];
+
+  scope: Scope;
+
+  researchQuestions: ResearchQuestion[];
+
+  evidenceStrategy: EvidenceStrategy;
+
   searchStrategy: {
     seedQueries: string[];
     queryExpansionRules: string[];
     priorityOrder: string[];
   };
+
   qualityGates: {
     coverageThreshold: number;
     requiredFindings: string[];
     stopConditions: string[];
     failureConditions: string[];
   };
-  synthesisPlan: {
-    recommendedStructure: string[];
-    comparisonDimensions: string[];
-    expectedCaveats: string[];
-  };
+
+  // NEW: Gap Analysis block
+  gapAnalysis?: GapAnalysis;
+
+  synthesisPlan: SynthesisPlan;
 }
 
 export function buildPrompt(input: GeneratePlanInput): string {
   const { query, classification, userAnswers } = input;
 
-  return `
-You are the planning module of a deep research agent.
+  return `You are the planning module of a deep research agent. Your job is to decompose a user query into a concrete, actionable research plan.
 
-Your job is NOT to answer the user directly. Your job is to transform the user's query into an executable research plan that another research agent can follow.
+USER QUERY: "${query}"
 
-Original user query:
-"${query}"
+${userAnswers && Object.keys(userAnswers).length > 0 ? 'CLARIFICATION ANSWERS: ' + JSON.stringify(userAnswers) : ''}
 
-${userAnswers && Object.keys(userAnswers).length > 0 ? 'Clarification answers: ' + JSON.stringify(userAnswers) : ''}
+CONTEXT:
+- Complexity: ${classification.complexity}
+- Max iterations: ${classification.maxIterations}
+- Freshness: ${classification.freshness}
+- Source depth: ${classification.sourceDepth}
 
-Classified complexity: ${classification.complexity}
-Max iterations: ${classification.maxIterations}
-Freshness requirement: ${classification.freshness}
-Source depth: ${classification.sourceDepth}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL RULES — Violate these and the plan is useless
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-You must produce a structured research plan with:
-1. The user's likely research intent (taskType, userGoal, expectedOutput, audienceLevel)
-2. The expected final output type
-3. Scope boundaries: what to include, what to exclude, assumptions, and whether clarification is necessary
-4. A set of research questions (3-8). Each question must have a purpose, priority, dependencies, search queries, and evidence requirements
-5. A source strategy: what types of sources should be trusted most, what sources are weak, and whether primary sources are required
-6. A counter-evidence strategy: what claims need verification, what alternative explanations or objections should be checked
-7. Quality gates: what must be true before synthesis can begin
-8. A synthesis outline for the final answer
+1. EVERY research question MUST contain topic-specific entities.
+   BAD:  "What are the key approaches?" → generic, applies to anything
+   GOOD: "How do Mamba state-space models compare to transformers on long-sequence benchmarks?
+          Focus on perplexity, throughput, and memory."
+   GOOD: "What concrete performance regressions did Python 3.12 introduce for async workloads,
+          and which CPython commits caused them?"
 
-Important rules:
-- Do NOT create generic sub-questions like "What is X?" unless a definition is genuinely needed
-- Prefer task-specific questions that directly reduce uncertainty
-- Avoid generic survey questions that could apply to any AI topic
-- Every research question must contain topic-specific concepts, candidate entities, or evaluation dimensions
-- For every question, state the uncertainty it resolves and what evidence is required to resolve it
-- Separate factual lookup questions from analytical interpretation questions
-- Include at least one question that searches for limitations, failures, controversies, or counterexamples when the task is analytical, comparative, or conceptual
-- If the query requires recent or fast-changing information, set freshnessRequirement as "latest"
-- If the query concerns academic research, prioritize peer-reviewed papers, preprints, official datasets, benchmark repositories, and authoritative survey papers
-- If the query concerns implementation, include documentation, source code, issue discussions, and changelogs as source types
-- If clarification is necessary (hard blocker), set clarificationNeeded=true and add blockingQuestions
-- If clarification would be helpful but NOT necessary, add them to nonBlockingSuggestions instead
-- Proceed with explicit assumptions when clarification is not essential
+2. Questions must resolve SPECIFIC uncertainty. State exactly what unknown you're addressing.
+   BAD:  "Understand the latest developments" → vague
+   GOOD: "What is the relationship between semantic compression and hallucination rates in RAG systems,
+          and at what compression threshold does quality degrade?"
 
-Question purposes:
-- definition: Define key terms or concepts
-- mechanism: Explain how something works
-- evidence: Gather factual evidence or data
-- comparison: Compare alternatives or approaches
-- critique: Find limitations, failures, or counterarguments
-- trend: Identify patterns or trajectory over time
-- implementation: Technical details, code, architecture
-- decision: Information needed to make a decision
+3. For comparison queries: name the CANDIDATES and the EVALUATION DIMENSIONS.
+   BAD:  "Compare alternatives" → alternatives to what? on what axes?
+   GOOD: "Compare Bun vs Deno vs Node.js 22 on: cold start time, Docker image size,
+          npm ecosystem compatibility, and Web API coverage."
 
-Return ONLY valid JSON matching this schema:
+4. For "latest/current state" queries: define the TIME WINDOW explicitly.
+   BAD:  "What is the latest in X?" → latest of when?
+   GOOD: "What breakthroughs in AI code generation happened in 2025? Focus on
+          new architectures, benchmark scores, and production deployments."
+
+5. Include at least ONE counter-evidence or critique question per plan.
+   This forces the research to find limitations, not just supporting evidence.
+
+6. The plan must be EXECUTABLE by a web research agent.
+   Every question should be answerable by visiting specific websites, docs, papers, or repos.
+   If a question requires internal knowledge only, break it down until it has observable answers.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Return ONLY valid JSON. Do not include markdown fences, explanations, or extra text.
+
 {
   "intent": {
-    "taskType": "analytical",
-    "userGoal": "Summarize the current state and challenges...",
-    "expectedOutput": "structured_report",
-    "audienceLevel": "expert"
+    "taskType": "analytical|comparative|survey|factual|implementation|gap-analysis",
+    "userGoal": "One sentence: what should the final report achieve?",
+    "expectedOutput": "structured_report|comparison_table|timeline|problem_solution|literature_review",
+    "audienceLevel": "beginner|intermediate|expert|researcher",
+    "academicRigor": false
   },
   "scope": {
-    "included": ["key topics to cover"],
-    "excluded": ["topics to explicitly avoid"],
-    "timeRange": "2020-2025",
-    "geography": null,
-    "domains": ["domain1", "domain2"],
-    "assumptions": ["assumptions made"],
+    "included": ["specific topics to cover — use concrete names"],
+    "excluded": ["specific topics to avoid — explain why"],
+    "timeRange": "e.g. 2023-2025 or null",
+    "domains": ["specific domains, e.g. NLP, compilers, distributed systems"],
+    "assumptions": ["working assumptions — be explicit"],
     "clarificationNeeded": false,
     "blockingQuestions": [],
     "nonBlockingSuggestions": []
   },
   "researchQuestions": [
     {
-      "text": "question text",
-      "purpose": "evidence",
-      "uncertaintyResolved": "what unknown this question resolves",
-      "requiredEvidenceRationale": "why this evidence is required",
+      "text": "Topic-specific research question with named entities/dimensions",
+      "purpose": "evidence|comparison|critique|mechanism|trend|definition|implementation",
+      "questionLayer": "foundational|analytical|critical|synthetic",
+      "uncertaintyResolved": "What specific unknown does this question resolve?",
       "priority": 1,
       "dependsOn": [],
-      "searchQueries": ["specific search query 1", "specific search query 2"],
+      "searchQueries": ["3-5 specific search queries with concrete terms, NOT generic keywords"],
       "requiredEvidence": {
-        "sourceTypes": ["paper", "official"],
+        "sourceTypes": ["paper", "official_doc", "repo", "benchmark", "news"],
         "minSources": 3,
         "needsPrimarySource": true,
         "needsRecentSource": true,
@@ -159,54 +304,134 @@ Return ONLY valid JSON matching this schema:
     }
   ],
   "evidenceStrategy": {
-    "sourceTypes": ["paper", "review", "official", "code"],
-    "authorityRules": ["Prefer peer-reviewed journals", "Official docs > blog posts"],
-    "freshnessRequirement": "recent",
+    "sourceTypes": ["paper", "official_doc", "repo", "benchmark"],
+    "authorityRules": ["e.g. Prefer official docs over blog posts", "Prefer benchmark results over claims"],
+    "freshnessRequirement": "latest|recent|any",
     "minIndependentSources": 3,
     "mustFindPrimarySources": true,
     "mustFindCounterEvidence": true
   },
   "searchStrategy": {
-    "seedQueries": ["seed query 1", "seed query 2"],
-    "queryExpansionRules": ["When finding papers, search related papers by same authors"],
-    "priorityOrder": ["official docs first", "then papers", "then news"]
+    "seedQueries": ["5-10 specific search queries — use exact terms, names, versions"],
+    "queryExpansionRules": ["e.g. When finding a paper, search for papers that cited or contradicted it"],
+    "priorityOrder": ["e.g. official docs first, then papers, then community discussion"]
   },
   "qualityGates": {
     "coverageThreshold": ${classification.coverageThreshold},
-    "requiredFindings": ["finding description 1"],
-    "stopConditions": ["All questions have authoritative sources"],
-    "failureConditions": ["No peer-reviewed sources found after 3 iterations"]
+    "requiredFindings": ["2-4 concrete things that MUST be found before synthesis"],
+    "stopConditions": ["When to stop searching"],
+    "failureConditions": ["When the research has failed"]
   },
   "synthesisPlan": {
-    "recommendedStructure": ["Executive Summary", "Background", "Key Findings", "Analysis", "Limitations", "References"],
-    "comparisonDimensions": ["dim1", "dim2"],
-    "expectedCaveats": ["Some data may be preliminary", "Results may be sensitive to methodology"]
+    "structureTemplate": "survey|comparison-matrix|argument-rebuttal|timeline|problem-solution",
+    "recommendedStructure": ["Section 1", "Section 2", "..."],
+    "comparisonDimensions": ["dimension1", "dimension2"],
+    "expectedCaveats": ["known limitations of this research approach"]
   }
 }
-`.trim();
+
+QUESTIONS PER LAYER (minimums):
+- foundational: 1 question (prerequisite knowledge, define key concepts with concrete examples)
+- analytical: 2-4 questions (core investigation — the meat of the research)
+- critical: 1 question (seek limitations, failures, counterarguments)
+- synthetic: 1 question (integrate all evidence into a conclusion)
+
+STOP. Before outputting, verify:
+□ Every question mentions at least one specific technology, methodology, paper, person, company, benchmark, or measurable dimension
+□ None of the questions could apply to a different query with just a search-replace
+□ The seed queries contain exact technical terms, version numbers, or proper names
+□ At least one question actively seeks counter-evidence or limitations`.trim();
 }
 
 export function parseResponse(raw: string): LLMPlanOutput | null {
   const parsed = safeParseJSON(raw);
   if (parsed && typeof parsed === 'object') {
-    return parsed as LLMPlanOutput;
+    return parsed as unknown as LLMPlanOutput;
   }
   return null;
 }
 
 function safeParseJSON(response: string): Record<string, unknown> | null {
-  let cleaned = response.trim();
+  const trimmed = response.trim();
+
+  // 1. Try direct parse
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // ignore
+  }
+
+  // 2. Strip markdown code block markers and try again
+  let cleaned = trimmed;
   cleaned = cleaned.replace(/^```(?:json)?\s*/im, '');
   cleaned = cleaned.replace(/\s*```\s*$/im, '');
-  cleaned = cleaned.replace(/\/\/.*$/gm, '');
-  cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
   try {
     return JSON.parse(cleaned);
   } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch { return null; }
-    }
-    return null;
+    // ignore
   }
+
+  // 3. Fix trailing commas (common LLM mistake) — only outside strings
+  const withoutTrailingCommas = cleaned.replace(/,(\s*[}\]])/g, '$1');
+  try {
+    return JSON.parse(withoutTrailingCommas);
+  } catch {
+    // ignore
+  }
+
+  // 4. Extract the largest balanced JSON object using brace counting
+  const extracted = extractBalancedJSON(withoutTrailingCommas);
+  if (extracted) {
+    try {
+      return JSON.parse(extracted);
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
 }
+
+function extractBalancedJSON(text: string): string | null {
+  let firstBrace = -1;
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (char === '{') {
+      if (depth === 0) {
+        firstBrace = i;
+      }
+      depth++;
+    } else if (char === '}') {
+      depth--;
+      if (depth === 0 && firstBrace !== -1) {
+        return text.slice(firstBrace, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+export const generatePlan = { buildPrompt, parseResponse, version: GENERATE_PLAN_VERSION };

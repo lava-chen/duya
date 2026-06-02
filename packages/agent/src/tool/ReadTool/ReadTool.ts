@@ -5,17 +5,17 @@
  */
 
 import { readFile, stat } from 'node:fs/promises';
-import { resolve, sep } from 'node:path';
-import { homedir } from 'node:os';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
 import type {
   ToolContext,
   RenderedToolMessage,
   ToolInterruptBehavior,
+  PermissionCheckResult,
 } from '../types.js';
 import type { ToolUseContext } from '../../types.js';
-import { isBypassMode } from '../../permissions/PermissionMode.js';
+import type { ToolPermissionContext } from '../../permissions/types.js';
+import { checkPathReadPermission } from '../../permissions/pathPermission.js';
 import { expandPath } from '../../utils/path.js';
 
 // ============================================================
@@ -104,17 +104,9 @@ function isUNCPath(filePath: string): boolean {
 /**
  * Security check for read operations
  */
-function checkReadSecurity(filePath: string, bypassPermissions = false): { safe: boolean; reason?: string } {
+function checkReadSecurity(filePath: string): { safe: boolean; reason?: string } {
   if (isUNCPath(filePath)) {
     return { safe: false, reason: 'UNC paths are not allowed' };
-  }
-
-  // In bypass mode, skip /proc and /sys checks (user has explicitly allowed)
-  if (!bypassPermissions) {
-    const normalizedPath = filePath.replace(/\\/g, '/');
-    if (normalizedPath.startsWith('/proc/') || normalizedPath.startsWith('/sys/')) {
-      return { safe: false, reason: 'Access to /proc or /sys is not allowed' };
-    }
   }
 
   return { safe: true };
@@ -183,16 +175,29 @@ export class ReadTool extends BaseTool {
     return true;
   }
 
+  checkPermissions(input: unknown, context: ToolContext): PermissionCheckResult {
+    const validation = validateReadInput(input);
+    if (!validation.valid) {
+      return { allowed: false, reason: 'Invalid input' };
+    }
+
+    const appState = context.getAppState();
+    const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
+
+    return checkPathReadPermission(
+      validation.data.file_path,
+      context.workingDirectory,
+      permissionContext,
+    );
+  }
+
   async execute(input: Record<string, unknown>, workingDirectory?: string, context?: ToolUseContext): Promise<ToolResult> {
     const id = crypto.randomUUID();
-    const appState = context?.getAppState?.();
-    const mode = (appState?.toolPermissionContext as { mode?: string } | undefined)?.mode;
-    const bypass = isBypassMode(mode as string);
     return readFileContent(
       input as unknown as ReadInput,
       id,
       workingDirectory,
-      bypass
+      context,
     );
   }
 
@@ -253,7 +258,7 @@ export async function readFileContent(
   input: ReadInput,
   id: string,
   workingDirectory?: string,
-  bypassPermissions = false
+  _context?: ToolUseContext
 ): Promise<ToolResult> {
   // Input validation
   const validation = validateReadInput(input);
@@ -269,7 +274,7 @@ export async function readFileContent(
   const { file_path, line_range } = validation.data;
 
   // Security check
-  const securityCheck = checkReadSecurity(file_path, bypassPermissions);
+  const securityCheck = checkReadSecurity(file_path);
   if (!securityCheck.safe) {
     return {
       id,
@@ -283,45 +288,6 @@ export async function readFileContent(
     // Resolve path using expandPath for cross-platform compatibility
     // This handles ~ expansion, POSIX paths on Windows (/c/Users/...), etc.
     const resolvedPath = expandPath(file_path, workingDirectory);
-
-    // Check path is within working directory or in allowed extra directories
-    // Skip this check when bypassPermissions mode is active
-    if (workingDirectory && !bypassPermissions) {
-      const resolvedWorkingDir = resolve(workingDirectory);
-      const resolvedFilePath = resolve(resolvedPath);
-      // Normalize paths for comparison (handle both Windows and Unix separators)
-      let normalizedWorkingDir = resolvedWorkingDir.replace(/\\/g, '/');
-      let normalizedFilePath = resolvedFilePath.replace(/\\/g, '/');
-      // On Windows, paths are case-insensitive; on Unix, they are case-sensitive
-      if (process.platform === 'win32') {
-        normalizedWorkingDir = normalizedWorkingDir.toLowerCase();
-        normalizedFilePath = normalizedFilePath.toLowerCase();
-      }
-      // Ensure working directory ends with slash for proper prefix check
-      const workingDirPrefix = normalizedWorkingDir.endsWith('/')
-        ? normalizedWorkingDir
-        : normalizedWorkingDir + '/';
-
-      // Always allow reading skill files from user's home .duya/skills directory
-      const homeDir = homedir();
-      const normalizedHomeDir = (process.platform === 'win32' ? homeDir.toLowerCase() : homeDir).replace(/\\/g, '/');
-      const skillsDirPrefix = normalizedHomeDir + '/.duya/skills/';
-      const isSkillFile = normalizedFilePath.startsWith(skillsDirPrefix) || normalizedFilePath === skillsDirPrefix.slice(0, -1);
-
-      const isInWorkingDir = normalizedFilePath.startsWith(workingDirPrefix) || normalizedFilePath === normalizedWorkingDir;
-
-      if (!isInWorkingDir && !isSkillFile) {
-        return {
-          id,
-          name: 'read',
-          result: `Security check failed: path traversal outside working directory. ` +
-            `The read tool can only access files within the working directory (${workingDirectory}) ` +
-            `or skill files in ~/.duya/skills/. ` +
-            `To read files outside these locations, use the skill_manage tool with action='read' instead.`,
-          error: true,
-        };
-      }
-    }
 
     // Check if path exists and is a file
     try {

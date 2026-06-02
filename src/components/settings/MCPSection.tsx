@@ -25,6 +25,7 @@ import {
 import type { MCPCategory } from "@/data/preset-mcp-servers";
 import { listAgentProfiles } from "@/lib/agent-profile-ipc";
 import type { AgentProfile } from "@/lib/agent-profile-ipc";
+import { getPluginAPI } from "@/lib/plugin-ipc";
 import {
   SettingsSection,
   SettingsCard,
@@ -39,6 +40,15 @@ interface MCPServerFormData {
   env: string;
   enabled: boolean;
   allowedAgentIds: string[];
+}
+
+interface PluginMCPEntry {
+  pluginId: string;
+  pluginName: string;
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
 }
 
 function parseArgs(argsStr: string): string[] {
@@ -125,9 +135,20 @@ export function MCPSection() {
   const [presetSearch, setPresetSearch] = useState("");
 
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
+  const [pluginMCPs, setPluginMCPs] = useState<PluginMCPEntry[]>([]);
 
   useEffect(() => {
     listAgentProfiles().then(setAgentProfiles).catch(() => setAgentProfiles([]));
+  }, []);
+
+  useEffect(() => {
+    const pluginApi = getPluginAPI();
+    if (!pluginApi) return;
+    pluginApi.registry.mcpList().then((res: { success: boolean; data: PluginMCPEntry[]; error?: string }) => {
+      if (res.success && res.data) {
+        setPluginMCPs(res.data);
+      }
+    }).catch(() => setPluginMCPs([]));
   }, []);
 
   const servers = settings.mcpServers || [];
@@ -513,6 +534,47 @@ export function MCPSection() {
             </button>
           </div>
         </>
+      )}
+
+      {/* Plugin MCP Servers */}
+      {pluginMCPs.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-sm font-semibold text-muted-foreground mb-3">
+            MCP Servers from Plugins
+          </h3>
+          {pluginMCPs.map((pmcp) => (
+            <SettingsCard key={`${pmcp.pluginId}-${pmcp.name}`} className="mb-3">
+              <div className="px-4 py-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500/10 text-blue-600">
+                      <ServerIcon size={20} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-medium text-foreground">{pmcp.name}</h3>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 font-medium">
+                          Plugin
+                        </span>
+                      </div>
+                      <p className="text-sm text-muted-foreground font-mono mt-0.5">
+                        {pmcp.command} {pmcp.args ? pmcp.args.join(' ') : ''}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Provided by: {pmcp.pluginName}
+                      </p>
+                      {pmcp.env && Object.keys(pmcp.env).length > 0 && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Env: {Object.keys(pmcp.env).join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </SettingsCard>
+          ))}
+        </div>
       )}
 
       {/* Import Dialog */}

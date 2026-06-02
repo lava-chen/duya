@@ -80,3 +80,5 @@ function safeParseJSON(response: string): Record<string, unknown> | null {
     return null;
   }
 }
+
+export const compare = { buildPrompt, parseResponse, version: COMPARE_VERSION };

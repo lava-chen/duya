@@ -80,6 +80,8 @@ export interface Message {
   isCompactSummary?: boolean;
   /** Number of messages that were compacted into this summary */
   compactedMessageCount?: number;
+  /** IDs of the original messages that were compacted into this summary */
+  compactedMessageIds?: string[];
   /** Unique ID of the compact boundary this summary belongs to */
   compactBoundaryId?: string;
 }
@@ -243,6 +245,8 @@ export interface AgentOptions {
   blockedDomains?: string[];
   /** Language preference for agent responses (e.g. 'Chinese', 'English') */
   language?: string;
+  /** Default workspace directory for permission checking. Defaults to ~/.duya/workspace */
+  defaultWorkspaceDirectory?: string;
 }
 
 // 对话选项

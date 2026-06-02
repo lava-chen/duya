@@ -30,6 +30,7 @@ import { ContextUsageRing } from './ContextUsageRing';
 import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
+import { InputDialog } from '@/components/ui/InputDialog';
 import { RecapBanner } from './RecapBanner';
 import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 
@@ -116,6 +117,7 @@ export function ChatView({
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
   const [recapBanner, setRecapBanner] = useState<string | null>(null);
+  const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
 
@@ -137,7 +139,7 @@ export function ChatView({
     setThreadWorkingDirectory(sessionId, project.workingDirectory, project.projectName);
   }, [sessionId, setThreadWorkingDirectory]);
 
-  const handleOpenNewProject = useCallback(() => {
+  const handleUseExistingFolder = useCallback(() => {
     if (window.electronAPI?.dialog?.openFolder) {
       window.electronAPI.dialog.openFolder({
         title: "Select Project Folder",
@@ -148,6 +150,26 @@ export function ChatView({
           setThreadWorkingDirectory(sessionId, workingDirectory, projectName);
         }
       });
+    }
+  }, [sessionId, setThreadWorkingDirectory]);
+
+  const handleNewBlankProject = useCallback(() => {
+    setIsNameProjectDialogOpen(true);
+  }, []);
+
+  const handleCreateNamedProject = useCallback(async (name: string) => {
+    setIsNameProjectDialogOpen(false);
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+      if (window.electronAPI?.app?.createProjectFolder) {
+        const result = await window.electronAPI.app.createProjectFolder(trimmed);
+        if (result.success && result.path) {
+          setThreadWorkingDirectory(sessionId, result.path, trimmed);
+        }
+      }
+    } catch (error) {
+      console.error("[ChatView] Failed to create blank project:", error);
     }
   }, [sessionId, setThreadWorkingDirectory]);
 
@@ -172,7 +194,7 @@ export function ChatView({
     handlePermissionRequest,
   } = usePermissions({
     sessionId,
-    permissionProfile: permissionMode === 'bypass' ? 'full_access' : 'default',
+    permissionProfile: permissionMode === 'bypass' ? 'full_access' : permissionMode === 'auto' ? 'auto' : 'default',
   });
 
   // Load session model and permission mode on mount
@@ -211,11 +233,16 @@ export function ChatView({
             }
 
             if (data.thread.permissionProfile) {
-              // Map DB values to UI PermissionMode: 'full_access'/'bypassPermissions' -> 'bypass', others -> 'ask'
+              // Map DB values to UI PermissionMode:
+              // 'full_access'/'bypassPermissions'/'bypass' -> 'bypass'
+              // 'auto' -> 'auto'
+              // 'default' and others -> 'ask'
               const dbProfile = data.thread.permissionProfile;
               const mappedMode: PermissionMode = (dbProfile === 'full_access' || dbProfile === 'bypassPermissions' || dbProfile === 'bypass')
                 ? 'bypass'
-                : 'ask';
+                : dbProfile === 'auto'
+                  ? 'auto'
+                  : 'ask';
               setPermissionMode(mappedMode);
             }
 
@@ -271,11 +298,11 @@ export function ChatView({
   }, [sessionId]);
 
   // Handle permission mode change - persist to session
-  // DB stores 'default' for ask mode and 'full_access' for bypass mode (CodePilot compatible)
+  // DB stores 'default' for ask, 'auto' for auto, 'full_access' for bypass
   const handlePermissionModeChange = useCallback((mode: PermissionMode) => {
     setPermissionMode(mode);
     if (sessionId) {
-      const dbProfile = mode === 'bypass' ? 'full_access' : 'default';
+      const dbProfile = mode === 'bypass' ? 'full_access' : mode === 'auto' ? 'auto' : 'default';
       updateThreadIPC(sessionId, { permissionProfile: dbProfile }).catch(console.error);
     }
   }, [sessionId]);
@@ -518,7 +545,8 @@ export function ChatView({
               <SessionSelector
                 selectedProject={selectedProject}
                 onSelectProject={handleSelectProject}
-                onOpenNewProject={handleOpenNewProject}
+                onNewBlankProject={handleNewBlankProject}
+                onUseExistingFolder={handleUseExistingFolder}
                 onSelectThread={handleSelectThread}
               >
                 {/* Input between selector and recent threads */}
@@ -690,6 +718,17 @@ export function ChatView({
           </div>
         </div>
       )}
+
+      <InputDialog
+        isOpen={isNameProjectDialogOpen}
+        title={t('project.nameProject')}
+        description={t('project.nameProjectDescription')}
+        placeholder={t('project.nameProjectPlaceholder')}
+        onConfirm={(value) => {
+          handleCreateNamedProject(value);
+        }}
+        onCancel={() => setIsNameProjectDialogOpen(false)}
+      />
     </div>
   );
 }

@@ -6,35 +6,52 @@ export interface SourceCheckInput {
 }
 
 export interface SourceCheckOutput {
-  reliability: 'high' | 'medium' | 'low' | 'unverified';
-  relevance: number;
   summary: string;
+  reliability: string;
+  relevance: number;
+  authorityLevel?: string;
+  freshness?: string;
+  bias?: string;
 }
 
 export function buildPrompt(input: SourceCheckInput): string {
   return `
-Analyze this source for reliability and relevance:
+Evaluate the reliability and relevance of the following web source.
 
 URL: ${input.url}
-Content excerpt: ${input.contentExcerpt.slice(0, 3000)}
 
-Evaluate:
-1. Authority: Is this an official, peer-reviewed, or well-known source?
-2. Relevance: Does this relate to the research question?
-3. Freshness: Is the information current?
-4. Independence: Is this an original source or a re-report?
+Content Excerpt:
+${input.contentExcerpt}
+
+Assess:
+- summary: A brief summary of what this source contains (1-2 sentences)
+- reliability: "high", "medium", "low", or "unverified"
+- relevance: 0.0-1.0 score for the research topic
+- authorityLevel: "high", "medium", or "low" based on source authority
+- freshness: "current", "outdated", or "timeless"
+- bias: "neutral", "slight", or "strong"
 
 Return JSON:
-{"reliability": "high"|"medium"|"low"|"unverified", "relevance": 0.0-1.0, "summary": "one-line assessment"}
+{
+  "summary": "...",
+  "reliability": "medium",
+  "relevance": 0.7,
+  "authorityLevel": "medium",
+  "freshness": "current",
+  "bias": "neutral"
+}
 `.trim();
 }
 
 export function parseResponse(raw: string): SourceCheckOutput {
   const parsed = safeParseJSON(raw);
   return {
-    reliability: (parsed?.reliability as SourceCheckOutput['reliability']) || 'unverified',
-    relevance: (parsed?.relevance as number) || 0.5,
-    summary: (parsed?.summary as string) || `Source check completed`,
+    summary: (parsed?.summary as string) || '',
+    reliability: (parsed?.reliability as string) || 'unverified',
+    relevance: typeof parsed?.relevance === 'number' ? parsed.relevance : 0.5,
+    authorityLevel: parsed?.authorityLevel as string | undefined,
+    freshness: parsed?.freshness as string | undefined,
+    bias: parsed?.bias as string | undefined,
   };
 }
 
@@ -54,3 +71,9 @@ function safeParseJSON(response: string): Record<string, unknown> | null {
     return null;
   }
 }
+
+export const sourceCheck = {
+  buildPrompt,
+  parseResponse,
+  version: SOURCE_CHECK_VERSION,
+};

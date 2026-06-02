@@ -9,10 +9,11 @@ export interface ExtractFindingsInput {
   strategies: SearchStrategy[];
   iteration: number;
   existingFindingsSummary: string;
+  questionTexts: string;
 }
 
 export function buildPrompt(input: ExtractFindingsInput): string {
-  const { toolName, result, existingFindingsSummary } = input;
+  const { toolName, result, existingFindingsSummary, questionTexts } = input;
 
   return `
 Extract discrete findings from this search result.
@@ -21,6 +22,9 @@ Source: ${toolName}
 
 Result:
 ${result}
+
+Research questions being investigated:
+${questionTexts || '(none)'}
 
 Existing findings to avoid duplication:
 ${existingFindingsSummary || '(none)'}
@@ -33,6 +37,11 @@ For each finding extract:
 - sourceReliability: "high", "medium", "low", or "unverified"
 - confidence: 0.0-1.0
 - limitations: Any known limitations of this finding
+- answersQuestionId: Which specific research question this finding answers (use the question ID from the list)
+- hypothesisLink: Which hypothesis this supports or contradicts
+- evidenceType: "empirical", "theoretical", "anecdotal", or "expert-opinion"
+- replicationStatus: "replicated", "single-study", "preprint-only", or "unknown"
+- conflictsWith: Array of finding IDs this conflicts with (use IDs from existing findings list)
 
 Return JSON:
 {"findings": [
@@ -45,7 +54,12 @@ Return JSON:
     "title": "...",
     "author": "...",
     "publishedAt": "...",
-    "limitations": ["limitation 1"]
+    "limitations": ["limitation 1"],
+    "answersQuestionId": "q0",
+    "hypothesisLink": "...",
+    "evidenceType": "empirical",
+    "replicationStatus": "single-study",
+    "conflictsWith": []
   },
   ...
 ]}
@@ -63,6 +77,11 @@ export interface FindingItem {
   author?: string;
   publishedAt?: string;
   limitations?: string[];
+  answersQuestionId?: string;
+  hypothesisLink?: string;
+  evidenceType?: string;
+  replicationStatus?: string;
+  conflictsWith?: string[];
 }
 
 export function parseResponse(
@@ -90,7 +109,7 @@ export function parseResponse(
 
       findings.push({
         id: `f_${Date.now()}_${idx++}`,
-        questionId: strategies[0]?.questionId || '',
+        questionId: item.answersQuestionId || strategies[0]?.questionId || '',
         type: 'web',
         claim: claimText,
         evidence: evidenceText,
@@ -116,6 +135,10 @@ export function parseResponse(
         limitations: Array.isArray(item.limitations) ? item.limitations as string[] : [],
         extractedEntities: [],
         iteration,
+        evidenceType: (item.evidenceType as ResearchFinding['evidenceType']),
+        replicationStatus: (item.replicationStatus as ResearchFinding['replicationStatus']),
+        conflictsWith: Array.isArray(item.conflictsWith) ? item.conflictsWith as string[] : undefined,
+        hypothesisLink: item.hypothesisLink,
       });
     }
 
@@ -141,3 +164,5 @@ function safeParseJSON(response: string): Record<string, unknown> | null {
     return null;
   }
 }
+
+export const extractFindings = { buildPrompt, parseResponse, version: EXTRACT_FINDINGS_VERSION };

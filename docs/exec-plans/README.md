@@ -55,6 +55,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [90-marketplace-system-implementation](./active/90-marketplace-system-implementation.md) | 插件市场系统 — catalog + 企业策略 + 防冒名 + 同步管理 | P1 | Planning |
 | [91-structured-error-handling](./active/91-structured-error-handling.md) | 结构化错误处理 — 28 种可区分联合类型 PluginError | P1 | Planning |
 | [92-plugin-security-enterprise-policy](./active/92-plugin-security-enterprise-policy.md) | 安全与企业策略 — Trust Level + 路径防护 + 权限执行 + Enterprise Policy | P0 | Planning |
+| [96-duya-cli-tool](./active/96-duya-cli-tool.md) | DUYA CLI — 统一命令行工具 (plugin / config / doctor / install-cli) | P0 | Planning |
 
 ### Infrastructure & Architecture Plans
 
@@ -63,6 +64,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [15-bash-worker-implementation](./active/15-bash-worker-implementation.md) | Bash Worker 多进程实现 | P0 | 设计完成 |
 | [27-logging-and-auto-update](./active/27-logging-and-auto-update.md) | 日志系统与自动更新功能 | P1 | 代码完成，待 UI 集成 |
 | [28-multi-source-update-fallback](./active/28-multi-source-update-fallback.md) | 自动更新多源回退方案 | P1 | 待实现 |
+| [97-tool-path-permission-refactor](./active/97-tool-path-permission-refactor.md) | Read/Write/Edit 路径权限重构 — 委托到权限系统，修复 bypass 模式 | P0 | Planning |
 | [31-conductor-overview](./active/31-conductor-overview.md) | Conductor 动态 Agent 工作台总览 | P0 | 待开始 |
 | [32-conductor-foundation](./active/32-conductor-foundation.md) | Conductor 数据、通信与架构护栏 | P0 | Phase 1 ✅ |
 | [33-conductor-canvas-ui](./active/33-conductor-canvas-ui.md) | Conductor 画布 UI 与内置 Widget V1 | P0 | Phase 1-4 ✅ |
@@ -78,6 +80,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [62-gateway-ipc-refactor](./active/62-gateway-ipc-refactor.md) | Gateway ↔ IPC 架构重整 | P0 | 进行中 |
 | [64-browser-parallel-isolation](./active/64-browser-parallel-isolation.md) | 浏览器多 Tab 隔离与并行执行 | P0 | 进行中 |
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — 离开回来后自动显示会话摘要 | P1 | Planning |
+| [95-external-agent-import](./active/95-external-agent-import.md) | External Agent Workspace Import — 从 Claude Code / Codex 导入项目上下文、记忆、技能 | P1 | Phase 1 ✅ |
 
 ### Canvas V2 Whimsical 风格重设计
 

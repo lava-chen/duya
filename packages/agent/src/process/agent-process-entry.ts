@@ -18,12 +18,15 @@
 
 import { randomUUID } from 'crypto';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import * as path from 'node:path';
 import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js';
 import { buildAttachmentContext } from '../llm/attachment-context.js';
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
-import type { Message, MessageContent } from '../types.js';
+import type { Message, MessageContent, MCPServerConfig } from '../types.js';
 import { messageDb } from '../ipc/db-client.js';
+import { pluginDb } from '../ipc/db-client.js';
 import { IncrementalSaveQueue } from './incremental-save-queue.js';
 import {
   enqueue,
@@ -41,7 +44,8 @@ import type { PromptProfile } from '../prompts/modes/types.js';
 import type { ConductorSnapshot } from '../conductor/ConductorProfile.js';
 import { setConductorCanvasState } from '../prompts/sections/dynamic/conductorCanvas.js';
 import { duyaAgent } from '../index.js';
-import { sendEvent, parseStdin } from './worker-protocol.js';
+import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
+import { loadMCPConfigs } from '../mcp/config.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
@@ -79,12 +83,14 @@ interface InitMessage {
     visionConfig?: VisionConfig;
   };
   workingDirectory?: string;
+  defaultWorkspaceDirectory?: string;
   systemPrompt?: string;
   skillPaths?: string[];
   communicationPlatform?: string;
   blockedDomains?: string[];
   language?: string;
   sandboxEnabled?: boolean;
+  securityScanEnabled?: boolean;
 }
 
 interface ConductorInitMessage {
@@ -151,6 +157,7 @@ let agent: any = null;
 let sessionId: string | null = null;
 let initializing = false;
 let chatInProgress = false;
+let currentSecurityScanEnabled = true;
 let lastInterruptTime = 0;
 const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
 let sessionSystemPrompt: string | undefined = undefined;
@@ -530,7 +537,7 @@ function summarizeConversationForWiki(messages: Message[], maxMessages = 12): st
 // Agent Initialization
 // ============================================================================
 
-async function initAgent(config: InitMessage['providerConfig'], workDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string): Promise<void> {
+async function initAgent(config: InitMessage['providerConfig'], workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string): Promise<void> {
   // Dynamic import - .js extension required for NodeNext moduleResolution
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const agentModule = await import('../index.js') as any;
@@ -564,6 +571,7 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
     visionConfig: config.visionConfig,
     blockedDomains,
     language,
+    defaultWorkspaceDirectory: defaultWorkspaceDir,
   });
 
   if (setSandboxEnabled) {
@@ -580,29 +588,38 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
   log('[Agent-Process] Agent core initialized');
 }
 
-async function loadAgentSkills(workDir?: string, skillPaths?: string[]): Promise<void> {
+async function loadAgentSkills(workDir?: string, skillPaths?: string[], securityScanEnabled?: boolean): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const agentModule = await import('../index.js') as any;
   const loadSkills = agentModule.loadSkills;
   const getSkillRegistry = agentModule.getSkillRegistry;
 
   try {
-    const loadOptions: { additionalPaths?: string[]; syncBundled?: boolean; securityBypassSkills?: string[] } = {
+    const loadOptions: { additionalPaths?: string[]; syncBundled?: boolean; securityBypassSkills?: string[]; skipSecurityScan?: boolean } = {
       syncBundled: true,
     };
-    if (skillPaths?.length) {
-      loadOptions.additionalPaths = skillPaths;
+
+    // Discover plugin skill directories dynamically
+    const pluginSkillPaths = await discoverPluginSkillPaths();
+    const allSkillPaths = [...(skillPaths || []), ...pluginSkillPaths];
+
+    if (allSkillPaths.length > 0) {
+      loadOptions.additionalPaths = allSkillPaths;
     }
     // Read security bypass list from environment variable
     const bypassSkillsEnv = process.env.DUYA_SECURITY_BYPASS_SKILLS;
     if (bypassSkillsEnv) {
       loadOptions.securityBypassSkills = bypassSkillsEnv.split(',').map(s => s.trim()).filter(Boolean);
     }
+    // Honor the securityScanEnabled setting from the UI
+    if (securityScanEnabled === false) {
+      loadOptions.skipSecurityScan = true;
+    }
     // Use workDir if provided, otherwise use process.cwd()
     const skillsCwd = workDir || process.cwd();
     await loadSkills(skillsCwd, loadOptions);
     const skills = getSkillRegistry().list();
-    log(`[Agent-Process] Loaded ${skills.length} skills`);
+    log(`[Agent-Process] Loaded ${skills.length} skills (${pluginSkillPaths.length} from plugins)`);
     if (skills.length === 0) {
       sendToMain({
         type: 'skills:status',
@@ -743,17 +760,43 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     case 'research_progress':
       return { type: 'chat:research_progress', ...(event.data as object) };
     case 'research_synthesis_chunk':
-      return { type: 'chat:text', content: (event.data as { delta: string }).delta };
+      return { type: 'chat:research_synthesis_chunk', ...(event.data as object) };
     case 'research_complete':
       return { type: 'chat:research_complete', ...(event.data as object) };
     case 'research_error':
       return { type: 'chat:error', message: (event.data as { message: string }).message };
-    case 'report_complete':
-      return { type: 'chat:research_report', ...(event.data as object) };
-    case 'evidence_chain_response':
-      return { type: 'chat:research_evidence', ...(event.data as object) };
-    case 'continue_research_start':
-      return { type: 'chat:research_continue', ...(event.data as object) };
+    case 'report_complete': {
+      const { type: _t, ...rest } = event as Record<string, unknown>;
+      return { type: 'chat:research_report', ...rest };
+    }
+    case 'evidence_chain_response': {
+      const { type: _t, ...rest } = event as Record<string, unknown>;
+      return { type: 'chat:research_evidence', ...rest };
+    }
+    case 'continue_research_start': {
+      const { type: _t, ...rest } = event as Record<string, unknown>;
+      return { type: 'chat:research_continue', ...rest };
+    }
+    case 'research_source_found':
+      return { type: 'chat:research_source_found', ...(event.data as object) };
+    case 'research_source_rejected':
+      return { type: 'chat:research_source_rejected', ...(event.data as object) };
+    case 'research_gap_detected':
+      return { type: 'chat:research_gap_detected', ...(event.data as object) };
+    case 'research_next_action':
+      return { type: 'chat:research_next_action', ...(event.data as object) };
+    case 'research_conflict_detected':
+      return { type: 'chat:research_conflict_detected', ...(event.data as object) };
+    case 'research_stop_decision':
+      return { type: 'chat:research_stop_decision', ...(event.data as object) };
+    case 'plan_delta':
+      return { type: 'chat:plan_delta', ...(event.data as object) };
+    // Internal events: debug panel only, silently skip for now
+    case 'research_quality_snapshot':
+    case 'query_deduplicated':
+    case 'finding_deduplicated':
+    case 'action_executed':
+      return null;
     default:
         warn('[Agent-Process] Unknown SSE event type:', event.type);
         return null;
@@ -1298,6 +1341,54 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
     }
 
+    // Defensive sync: ensure agent's in-memory messages match the DB state.
+    // During long-running sessions, the agent accumulates messages in memory.
+    // If an out-of-band modification occurs (e.g., concurrent process, crash
+    // recovery with partial persist), the agent's view can become stale.
+    // Reload from DB when the count diverges to guarantee consistency.
+    const agentMsgCountBeforeSync = agent.getMessages().length;
+    log(`[Agent-Process] Before sync: agent has ${agentMsgCountBeforeSync} messages, existingMessageCount=${existingMessageCount}`);
+    
+    if (existingMessageCount > 0) {
+      try {
+        const dbCount = await messageDb.getCount(msg.sessionId) as number;
+        log(`[Agent-Process] DB message count: ${dbCount}`);
+        if (dbCount > existingMessageCount) {
+          log(`[Agent-Process] DB has ${dbCount} messages but agent has ${existingMessageCount}, syncing...`);
+          const loaded = await messageDb.loadMessages(msg.sessionId) as { messages: MessageRow[] };
+          const allRows = loaded.messages;
+          if (allRows.length > existingMessageCount) {
+            const attachmentMap = getAttachmentsForSession(msg.sessionId);
+            const allMsgs = allRows.map(row => messageRowToMessage(row, attachmentMap));
+            const validated = validateMessageHistory(allMsgs);
+            agent.setMessages(validated);
+            existingMessageCount = validated.length;
+            log(`[Agent-Process] Synced ${validated.length} messages from DB`);
+          }
+        }
+      } catch (syncErr) {
+        log('[Agent-Process] Message resync failed (non-critical):', syncErr);
+      }
+    } else if (agentMsgCountBeforeSync === 0) {
+      // If existingMessageCount is 0 but agent also has no messages, try loading from DB
+      try {
+        const dbCount = await messageDb.getCount(msg.sessionId) as number;
+        if (dbCount > 0) {
+          log(`[Agent-Process] Agent has no messages but DB has ${dbCount}, loading...`);
+          const loaded = await messageDb.loadMessages(msg.sessionId) as { messages: MessageRow[] };
+          const allRows = loaded.messages;
+          const attachmentMap = getAttachmentsForSession(msg.sessionId);
+          const allMsgs = allRows.map(row => messageRowToMessage(row, attachmentMap));
+          const validated = validateMessageHistory(allMsgs);
+          agent.setMessages(validated);
+          existingMessageCount = validated.length;
+          log(`[Agent-Process] Loaded ${validated.length} messages from DB`);
+        }
+      } catch (loadErr) {
+        log('[Agent-Process] Message load failed (non-critical):', loadErr);
+      }
+    }
+
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
       requestPermission,
@@ -1314,7 +1405,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     const incrementalSaveQueue = new IncrementalSaveQueue(msg.sessionId);
     let lastIncrementalSave = Date.now();
     const INCREMENTAL_SAVE_INTERVAL = 5000; // Save every 5 seconds during streaming
-    let researchAccumulatedText = '';
 
     for await (const event of eventGen) {
       eventCount++;
@@ -1381,9 +1471,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // to avoid race condition where SSE closes before messages are saved
           continue;
         }
-        if (agentMsg.type === 'chat:text' && (agentMsg.content as string)) {
-          researchAccumulatedText += agentMsg.content as string;
-        }
         if (DEBUG_IPC && (
           agentMsg.type === 'chat:tool_use'
           || agentMsg.type === 'chat:tool_result'
@@ -1404,18 +1491,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           type: event.type,
         });
       }
-    }
-
-    // Flush accumulated research synthesis text into agent messages so DB persistence picks it up
-    if (researchAccumulatedText) {
-      const researchMsg: Message = {
-        id: `research-${Date.now()}`,
-        role: 'assistant',
-        content: researchAccumulatedText,
-        timestamp: Date.now(),
-      };
-      agent.addMessage(researchMsg);
-      log('[Agent-Process] Research mode: flushed accumulated text to agent messages', { textLength: researchAccumulatedText.length });
     }
 
     const agentMessages = agent.getMessages();
@@ -1465,6 +1540,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         }
 
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: result.success, messageCount: agentMessages.length });
+
+        // Update existingMessageCount to reflect the newly persisted messages.
+        // This ensures subsequent chats correctly calculate the delta for incremental saves.
+        existingMessageCount = agentMessages.length;
+        log(`[Agent-Process] Updated existingMessageCount to ${existingMessageCount}`);
+
         // Send chat:done AFTER persistence completes to ensure messages are saved
         // before the SSE stream closes (router.ts starts 2s timeout on done event)
         sendToMain({
@@ -1776,26 +1857,173 @@ const log = (...args: unknown[]): void => { console.error('[Agent-Process]', ...
 const warn = (...args: unknown[]): void => { console.warn('[Agent-Process]', ...args); };
 
 // ============================================================================
+// Bundled MCP Server Config Resolution
+// ============================================================================
+
+function resolveBundledMCPServerConfigs(): MCPServerConfig[] {
+  const configs: MCPServerConfig[] = [];
+
+  const isPackaged = !!process.resourcesPath && !process.defaultApp;
+
+  const literatureBundlePath = isPackaged
+    ? path.join(process.resourcesPath, 'agent-bundle', 'literature-mcp-server.js')
+    : path.join(process.cwd(), 'packages', 'agent', 'bundle', 'literature-mcp-server.js');
+
+  if (existsSync(literatureBundlePath)) {
+    configs.push({
+      name: 'literature',
+      command: 'node',
+      args: [literatureBundlePath, '--db-path', process.env.DUYA_CUSTOM_DB_PATH || ''],
+      env: {
+        DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || '',
+      },
+    });
+  } else {
+    warn('[Agent-Process] Literature MCP server bundle not found:', literatureBundlePath);
+  }
+
+  return configs;
+}
+
+// ============================================================================
+// Plugin Skill & MCP Discovery
+// ============================================================================
+
+interface PluginManifestData {
+  capabilities?: {
+    skills?: string[];
+    mcpServers?: Array<{
+      name: string;
+      command: string;
+      args?: string[];
+    }>;
+  };
+}
+
+async function discoverPluginSkillPaths(): Promise<string[]> {
+  const paths: string[] = [];
+  try {
+    const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown; installPath?: unknown }>;
+    const enabledPlugins = installed.filter(
+      (item) => item.enabled === true && typeof item.id === 'string' && typeof item.installPath === 'string'
+    );
+    for (const plugin of enabledPlugins) {
+      const installPath = plugin.installPath as string;
+      const skillsDir = path.join(installPath, 'skills');
+      if (existsSync(skillsDir)) {
+        paths.push(skillsDir);
+      }
+    }
+    if (paths.length > 0) {
+      log(`[Agent-Process] Discovered ${paths.length} plugin skill directories`);
+    }
+  } catch (err) {
+    warn('[Agent-Process] Failed to discover plugin skill paths:', err);
+  }
+  return paths;
+}
+
+async function discoverPluginMCPServerConfigs(): Promise<MCPServerConfig[]> {
+  const configs: MCPServerConfig[] = [];
+  try {
+    const installed = await pluginDb.registryList() as Array<{
+      id?: unknown;
+      enabled?: unknown;
+      installPath?: unknown;
+      manifest?: unknown;
+    }>;
+    const enabledPlugins = installed.filter(
+      (item) => item.enabled === true && typeof item.id === 'string' && typeof item.installPath === 'string'
+    );
+    for (const plugin of enabledPlugins) {
+      const installPath = plugin.installPath as string;
+      let manifest: PluginManifestData | null = null;
+      if (plugin.manifest && typeof plugin.manifest === 'object') {
+        manifest = plugin.manifest as PluginManifestData;
+      } else {
+        const manifestPath = path.join(installPath, 'duya-plugin.json');
+        if (existsSync(manifestPath)) {
+          try {
+            const raw = await readFile(manifestPath, 'utf-8');
+            manifest = JSON.parse(raw) as PluginManifestData;
+          } catch {
+            // manifest not found or invalid, skip
+          }
+        }
+      }
+      if (manifest?.capabilities?.mcpServers) {
+        for (const server of manifest.capabilities.mcpServers) {
+          configs.push({
+            name: server.name,
+            command: server.command,
+            args: server.args || [],
+          });
+        }
+      }
+    }
+    if (configs.length > 0) {
+      log(`[Agent-Process] Discovered ${configs.length} plugin MCP server configs`);
+    }
+  } catch (err) {
+    warn('[Agent-Process] Failed to discover plugin MCP server configs:', err);
+  }
+  return configs;
+}
+
+async function reloadSkills(): Promise<void> {
+  try {
+    const getSkillRegistry = (await import('../index.js')).getSkillRegistry;
+    const registry = getSkillRegistry();
+    // Clear existing non-bundled skills
+    const allSkills = registry.list();
+    for (const skill of allSkills) {
+      if (skill.source !== 'bundled') {
+        registry.unregister(skill.name);
+      }
+    }
+    // Reload with plugin discovery
+    await loadAgentSkills(agent?.workingDirectory, [], currentSecurityScanEnabled);
+    sendToMain({ type: 'skills:reloaded', count: registry.list().length });
+  } catch (err) {
+    warn('[Agent-Process] Failed to reload skills:', err);
+    sendToMain({ type: 'skills:reload:error', error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function reloadMCP(): Promise<void> {
+  if (!agent) return;
+  try {
+    const pluginConfigs = await discoverPluginMCPServerConfigs();
+    const bundledConfigs = resolveBundledMCPServerConfigs();
+    const settingsResult = await loadMCPConfigs();
+    const allConfigs = [...bundledConfigs, ...pluginConfigs, ...settingsResult.configs];
+    if (allConfigs.length > 0) {
+      await agent.initMCPServers(allConfigs);
+      log(`[Agent-Process] Reloaded MCP servers: ${allConfigs.length} total (${bundledConfigs.length} bundled, ${pluginConfigs.length} plugin, ${settingsResult.configs.length} settings)`);
+    }
+    sendToMain({ type: 'mcp:reloaded', count: allConfigs.length });
+  } catch (err) {
+    warn('[Agent-Process] Failed to reload MCP:', err);
+    sendToMain({ type: 'mcp:reload:error', error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// ============================================================================
 // Main Message Loop (stdin/stdout JSON-RPC)
 // ============================================================================
 
-async function main(): Promise<void> {
-  log('Process started, session:', process.env.SESSION_ID);
-  log('cwd:', process.cwd());
+async function handleCommand(msg: WorkerCommand): Promise<void> {
+  const msgType = msg.type as string;
+  log('[Agent-Process] Received command:', msgType, 'sessionId:', (msg as Record<string, unknown>).sessionId);
 
-  try {
-    for await (const msg of parseStdin()) {
-      const msgType = msg.type as string;
-      log('[Agent-Process] Received command from stdin:', msgType, 'sessionId:', (msg as Record<string, unknown>).sessionId);
-
-      switch (msgType) {
-        case 'init': {
+  switch (msgType) {
+    case 'init': {
           const initMsg = msg as unknown as InitMessage;
           log('[Agent-Process] Received init for session:', initMsg.sessionId);
           // Guard: reject re-init while chat is in progress to prevent mid-flight agent destruction
           if (chatInProgress) {
             log('[Agent-Process] Rejecting init: chat in progress, cannot reinit now');
-            sendEvent({ type: 'ready', sessionId: initMsg.sessionId, status: 'deferred', reason: 'chat_in_progress' });
+            sendToMain({ type: 'ready', sessionId: initMsg.sessionId, status: 'deferred', reason: 'chat_in_progress' });
             break;
           }
           sessionId = initMsg.sessionId;
@@ -1814,7 +2042,7 @@ async function main(): Promise<void> {
             const waitForInit = setInterval(() => {
               if (!initializing) {
                 clearInterval(waitForInit);
-                sendEvent({ type: 'ready', sessionId });
+                sendToMain({ type: 'ready', sessionId });
               }
             }, 50);
             break;
@@ -1832,13 +2060,44 @@ async function main(): Promise<void> {
             } : 'MISSING!',
           });
           try {
-            await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform);
+            await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform);
+
+            // Initialize bundled MCP servers (Literature Plugin etc.)
+            try {
+              const mcpConfigs = resolveBundledMCPServerConfigs();
+              if (mcpConfigs.length > 0) {
+                await agent.initMCPServers(mcpConfigs);
+              }
+            } catch (mcpErr) {
+              warn('[Agent-Process] Failed to initialize bundled MCP servers:', mcpErr);
+            }
+
+            // Initialize plugin MCP servers
+            try {
+              const pluginConfigs = await discoverPluginMCPServerConfigs();
+              if (pluginConfigs.length > 0) {
+                await agent.initMCPServers(pluginConfigs);
+              }
+            } catch (pluginMcpErr) {
+              warn('[Agent-Process] Failed to initialize plugin MCP servers:', pluginMcpErr);
+            }
+
+            // Initialize settings-based MCP servers
+            try {
+              const settingsResult = await loadMCPConfigs();
+              if (settingsResult.configs.length > 0) {
+                await agent.initMCPServers(settingsResult.configs);
+              }
+            } catch (settingsMcpErr) {
+              warn('[Agent-Process] Failed to initialize settings MCP servers:', settingsMcpErr);
+            }
 
             try {
               // Parallel: skills loading (disk I/O) + DB message loading (IPC)
               // Skills errors are handled inside loadAgentSkills; DB errors caught below
+              currentSecurityScanEnabled = initMsg.securityScanEnabled !== false;
               const [_, loadedData] = await Promise.all([
-                loadAgentSkills(initMsg.workingDirectory, initMsg.skillPaths),
+                loadAgentSkills(initMsg.workingDirectory, initMsg.skillPaths, initMsg.securityScanEnabled),
                 messageDb.loadMessages(sessionId!) as Promise<{ messages: MessageRow[]; parsedDocuments: ParsedDocumentAttachment[] }>,
               ]);
               const existingRows = loadedData.messages;
@@ -1881,7 +2140,7 @@ async function main(): Promise<void> {
             await drainQueuedChatStart();
           }
 
-          sendEvent({ type: 'ready', sessionId });
+          sendToMain({ type: 'ready', sessionId });
           break;
         }
 
@@ -1940,14 +2199,14 @@ async function main(): Promise<void> {
 
         case 'ping': {
           lastPongTime = Date.now();
-          sendEvent({ type: 'pong', timestamp: lastPongTime });
+          sendToMain({ type: 'pong', timestamp: lastPongTime });
           break;
         }
 
         case 'compact': {
           log('[Agent-Process] Received compact for session:', sessionId);
           if (!agent) {
-            sendEvent({ type: 'compact:error', sessionId, message: 'Agent not initialized' });
+            sendToMain({ type: 'compact:error', sessionId, message: 'Agent not initialized' });
             break;
           }
           try {
@@ -1960,12 +2219,24 @@ async function main(): Promise<void> {
             await appendMessages(sessionId!, currentMessages);
             existingMessageCount = currentMessages.length;
             log(`[Agent-Process] Compaction: appended messages, new count=${existingMessageCount}`);
-            sendEvent({ type: 'compact:done', sessionId, result });
+            sendToMain({ type: 'compact:done', sessionId, result });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             log('[Agent-Process] Compaction failed:', errorMessage);
-            sendEvent({ type: 'compact:error', sessionId, message: errorMessage });
+            sendToMain({ type: 'compact:error', sessionId, message: errorMessage });
           }
+          break;
+        }
+
+        case 'reload:skills': {
+          log('[Agent-Process] Received reload:skills');
+          void reloadSkills();
+          break;
+        }
+
+        case 'reload:mcp': {
+          log('[Agent-Process] Received reload:mcp');
+          void reloadMCP();
           break;
         }
 
@@ -2092,9 +2363,26 @@ async function main(): Promise<void> {
           break;
         }
 
-        default:
-          warn('[Agent-Process] Unknown message type:', msgType);
-      }
+    default:
+      warn('[Agent-Process] Unknown message type:', msgType);
+  }
+}
+
+async function main(): Promise<void> {
+  log('Process started, session:', process.env.SESSION_ID);
+  log('cwd:', process.cwd());
+
+  // Handle IPC messages from AgentProcessPool (cronjob, conductor, etc.)
+  // Agent Server uses stdin/stdout, but AgentProcessPool uses IPC child.send()
+  process.on('message', (msg: unknown) => {
+    if (msg && typeof msg === 'object') {
+      void handleCommand(msg as WorkerCommand);
+    }
+  });
+
+  try {
+    for await (const msg of parseStdin()) {
+      await handleCommand(msg);
     }
   } catch (err) {
     log('[Agent-Process] Fatal error in main loop:', err);

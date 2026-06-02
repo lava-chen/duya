@@ -198,13 +198,18 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
 - Use dark-friendly colors where possible (#4f8cff for primary, #ff6b6b for errors)
 - Keep widgets self-contained - embed all data and styling inline
 - Specify fixed dimensions (e.g., width=600, height=400) for reliability
-- Avoid external API calls from widgets to prevent network errors`,
+- Avoid external API calls from widgets to prevent network errors
+- **Embedding images**: To include any image file (chart output, screenshot, photo, etc.) in a widget, you MUST use the custom protocol with an absolute path: <img src="duya-file:///ABSOLUTE_PATH">. Use forward slashes in the path. Examples:
+  - Windows: <img src="duya-file:///C:/Users/name/output.png">
+  - macOS/Linux: <img src="duya-file:////Users/name/output.png">
+  - NEVER use relative paths (e.g., src="Attachments/image.png") — they will not render
+  - The platform provides a click-to-preview lightbox for all embedded images`,
       input_schema: {
         type: 'object',
         properties: {
           widget_code: {
             type: 'string',
-            description: 'Raw HTML/SVG/JS content. For SVG diagrams, use injected CSS classes as defined in the design modules (loaded via read_module). Output order: <style> → content HTML → <script>.',
+            description: 'Raw HTML/SVG/JS content. For SVG diagrams, use injected CSS classes as defined in the design modules (loaded via read_module). Output order: <style> → content HTML → <script>. When including images, use duya-file:/// protocol with absolute paths.',
           },
         },
         required: ['widget_code'],

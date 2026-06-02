@@ -1,29 +1,23 @@
-export { classifyQuery } from './classify-query.js';
-export * from './classify-query.js';
+export { classifyQuery, CLASSIFY_QUERY_VERSION } from './classify-query.js';
+export { generateClarification, GENERATE_CLARIFICATION_VERSION } from './generate-clarification.js';
+export { generatePlan, GENERATE_PLAN_VERSION } from './generate-plan.js';
+export { selectActions, SELECT_ACTIONS_VERSION } from './select-actions.js';
+export { extractFindings, EXTRACT_FINDINGS_VERSION } from './extract-findings.js';
+export { sourceCheck, SOURCE_CHECK_VERSION } from './source-check.js';
+export { compare, COMPARE_VERSION } from './compare.js';
+export { replan, REPLAN_VERSION } from './replan.js';
+export { continueResearch, CONTINUE_RESEARCH_VERSION } from './continue-research.js';
+export { synthesize, SYNTHESIZE_VERSION } from './synthesize.js';
+export { exploreAgent, EXPLORE_AGENT_VERSION, EXPLORE_AGENT_SYSTEM_PROMPT, buildExplorePrompt, parseExploreResponse } from './explore-agent.js';
 
-export { generateClarification } from './generate-clarification.js';
-export * from './generate-clarification.js';
-
-export { generatePlan } from './generate-plan.js';
-export * from './generate-plan.js';
-
-export { selectActions } from './select-actions.js';
-export * from './select-actions.js';
-
-export { extractFindings } from './extract-findings.js';
-export * from './extract-findings.js';
-
-export { sourceCheck } from './source-check.js';
-export * from './source-check.js';
-
-export { compare } from './compare.js';
-export * from './compare.js';
-
-export { replan } from './replan.js';
-export * from './replan.js';
-
-export { continueResearch } from './continue-research.js';
-export * from './continue-research.js';
-
-export { synthesize } from './synthesize.js';
-export * from './synthesize.js';
+export type { ClassifyQueryInput, ClassifyQueryOutput } from './classify-query.js';
+export type { GenerateClarificationInput, GenerateClarificationOutput } from './generate-clarification.js';
+export type { GeneratePlanInput, LLMPlanOutput } from './generate-plan.js';
+export type { SelectActionsInput } from './select-actions.js';
+export type { ExtractFindingsInput, FindingItem } from './extract-findings.js';
+export type { SourceCheckInput, SourceCheckOutput } from './source-check.js';
+export type { CompareInput, CompareOutput } from './compare.js';
+export type { ReplanInput, ReplanOutput } from './replan.js';
+export type { ContinueResearchInput, ContinueResearchOutput } from './continue-research.js';
+export type { SynthesizeContext, SynthesizePromptResult } from './synthesize.js';
+export type { ExploreAgentInput, ExploreAgentOutput } from './explore-agent.js';

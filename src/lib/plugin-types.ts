@@ -207,16 +207,46 @@ export interface InstalledPluginsFileV2 {
   plugins: Record<string, InstalledPluginInfoV2>;
 }
 
+export interface PluginPermissionDisplay {
+  id: string;
+  title: string;
+  description: string;
+  required: boolean;
+  enabled: boolean;
+  riskLevel: 'low' | 'medium' | 'high';
+}
+
+export interface PluginCapabilityDisplay {
+  id: string;
+  name: string;
+  type: 'skill' | 'mcp' | 'tool' | 'cli' | 'connector';
+  description: string;
+  required: boolean;
+  enabled: boolean;
+}
+
+export interface UsageExample {
+  title?: string;
+  prompt: string;
+}
+
 export interface PluginCatalogEntry {
   id: string;
   name: string;
   version: string;
   description: string;
+  shortDescription?: string;
+  longDescription?: string;
   author: { name: string; url?: string };
+  developer?: string;
   icon?: string;
   source: PluginSource;
   category: PluginCategory;
   trustLevel?: PluginTrustLevel;
+  status?: 'enabled' | 'disabled' | 'needs_attention';
+  installed?: boolean;
+  enabled?: boolean;
+  featured?: boolean;
   capabilityCounts: {
     skills: number;
     mcpServers: number;
@@ -224,6 +254,13 @@ export interface PluginCatalogEntry {
     ui: number;
     hooks: number;
   };
+  capabilities?: PluginCapabilityDisplay[];
+  permissions?: PluginPermissionDisplay[];
+  usageExamples?: UsageExample[];
+  website?: string;
+  documentationUrl?: string;
+  updatedAt?: string;
+  manifest?: PluginManifest;
 }
 
 // ============================================================================

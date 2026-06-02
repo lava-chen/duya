@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "{{server-name}}": {
+      "command": "{{command}}",
+      "args": [],
+      "description": "{{server-description}}"
+    }
+  }
+}

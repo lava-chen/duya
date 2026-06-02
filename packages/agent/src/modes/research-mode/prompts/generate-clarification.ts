@@ -63,3 +63,5 @@ function safeParseJSON(response: string): Record<string, unknown> | null {
     return null;
   }
 }
+
+export const generateClarification = { buildPrompt, parseResponse, version: GENERATE_CLARIFICATION_VERSION };

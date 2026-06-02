@@ -4,11 +4,13 @@ import { useCallback } from "react";
 import {
   SquaresFourIcon,
   FolderIcon,
+  BrainIcon,
 } from "@/components/icons";
 import { usePanel, type PanelTab } from "@/hooks/usePanel";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import { FileTreePanel } from "@/components/layout/panels/FileTreePanel";
 import { SidebarConductorView } from "@/components/layout/panels/SidebarConductorView";
+import { ResearchActivityPanel } from "@/components/layout/panels/ResearchActivityPanel";
 
 interface TabDef {
   id: PanelTab;
@@ -19,6 +21,7 @@ interface TabDef {
 const tabs: TabDef[] = [
   { id: 'canvas', label: 'Canvas', icon: SquaresFourIcon },
   { id: 'files', label: 'Files', icon: FolderIcon },
+  { id: 'research', label: 'Research', icon: BrainIcon },
 ];
 
 export function SidebarPanel() {
@@ -58,6 +61,9 @@ export function SidebarPanel() {
           )}
           {activeTab === 'canvas' && (
             <SidebarConductorView />
+          )}
+          {activeTab === 'research' && (
+            <ResearchActivityPanel />
           )}
         </div>
       </div>

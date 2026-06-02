@@ -1,6 +1,8 @@
 appId: com.duya.app
 productName: DUYA
 
+npmRebuild: false
+
 # Publish configuration
 # - github: uploads release assets to GitHub Releases during build
 # - generic: tells auto-updater where to download updates at runtime
@@ -35,6 +37,9 @@ files:
 # The agent bundle is built with esbuild (bundle: true) so all runtime
 # dependencies are inlined into a single file. No node_modules copying needed.
 extraResources:
+  - from: resources/automation-templates/
+    to: automation-templates/
+    filter: ["**/*"]
   - from: assets/
     to: assets/
     filter: ["**/*"]

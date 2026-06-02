@@ -1,6 +1,5 @@
 import type { ToolRegistry } from '../tool/registry.js';
-import type { BaseTool } from '../tool/BaseTool.js';
-import { LiteraturePlugin } from './literature/plugin.js';
+import type { BaseTool } from '../tool/types.js';
 import { listBuiltinPlugins } from './builtin/_registry.js';
 import { parsePluginMd } from './builtin/plugin-md-parser.js';
 import { discoverAllCapabilities } from './builtin/capability-discovery.js';
@@ -36,8 +35,7 @@ export interface BuiltinPluginDescriptor {
   };
 }
 
-const runtimeFactories: Record<string, () => BaseTool[]> = {
-  literature: () => new LiteraturePlugin().tools,
+const runtimeFactories: Record<string, () => any[]> = {
 };
 
 let _descriptorsCache: BuiltinPluginDescriptor[] | null = null;

@@ -71,14 +71,24 @@ export interface PluginManifest {
   };
 }
 
+export type PluginCategory = 'productivity' | 'development' | 'research' | 'data' | 'communication' | 'media' | 'automation' | 'other';
+
 export interface PluginCatalogEntry {
   id: string;
   name: string;
   version: string;
   description: string;
   source: PluginSource;
+  category?: PluginCategory;
   trustLevel: PluginTrustLevel;
   manifest: PluginManifest;
+  capabilityCounts?: {
+    skills: number;
+    mcpServers: number;
+    cli: number;
+    ui: number;
+    hooks: number;
+  };
 }
 
 export interface PluginRuntimeHealth {

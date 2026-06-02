@@ -54,6 +54,30 @@ fs.writeFileSync(
   JSON.stringify(packageJson, null, 2)
 );
 
+// Build Literature MCP server as a separate CommonJS bundle
+await build({
+  entryPoints: ['packages/agent/src/plugins/literature/server/mcp-server.ts'],
+  outfile: path.join(outdir, 'literature-mcp-server.js'),
+  bundle: true,
+  platform: 'node',
+  target: 'node18',
+  format: 'cjs',
+  sourcemap: false,
+  minify: true,
+  external: [
+    'better-sqlite3',
+  ],
+  banner: {
+    js: importMetaUrlPolyfill,
+  },
+  define: {
+    'import.meta.url': 'import_meta_url',
+  },
+});
+
+const mcpServerStats = fs.statSync(path.join(outdir, 'literature-mcp-server.js'));
+console.log(`[build-agent-bundle] Built literature-mcp-server.js (${(mcpServerStats.size / 1024 / 1024).toFixed(2)} MB)`);
+
 // Build BashWorker.js as CommonJS bundle (separate from main bundle)
 // WorkerPool looks for workers relative to its location
 const bashToolDestDir = path.join(outdir, 'BashTool');

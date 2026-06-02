@@ -38,15 +38,20 @@ Action types:
 - compare: Compare multiple sources on a specific dimension
 - backtrack: Revisit a previously skipped question
 - stop_question: Mark a question as no longer actionable
+- conflict_resolve: Investigate a specific evidence conflict to determine which position is more reliable
+- gap_probe: Search for "X remains unsolved/unknown" queries to probe research gaps
+- replan: Signal that the plan needs restructuring (hypothesis refuted, unexpected scope)
+- terminate: Signal that research is complete and ready for synthesis
 
 Rules:
-- Do NOT repeat searches that have already produced sufficient evidence
-- Prefer actions that reduce the largest uncertainty or unblock synthesis
+- Be exhaustive: fill as many actions as possible (close to ${concurrencyLimit}), preferring search over other types
+- The vast majority of actions should be "search" — use other types only when genuinely needed
+- Use diverse search queries for the same question: different angles, different keywords, different phrasings
 - If authoritative sources are missing, search for primary sources first
 - If only supporting evidence exists, search for counter-evidence or limitations
 - If findings conflict, search for adjudicating sources
-- Each question needs at least 2 strategies with different approaches
 - For analytical/critique questions, always include counter-view searches
+- Do NOT repeat searches that have already produced sufficient evidence
 - Limit total actions to ${concurrencyLimit}
 
 Quality Report:
@@ -85,6 +90,7 @@ export function parseResponse(
   const validTypes = [
     'search', 'source_check', 'claim_verify', 'fetch',
     'compare', 'backtrack', 'stop_question',
+    'conflict_resolve', 'gap_probe', 'replan', 'terminate',
   ];
 
   if (parsed?.actions && Array.isArray(parsed.actions)) {
@@ -133,3 +139,5 @@ function safeParseJSON(response: string): Record<string, unknown> | null {
     return null;
   }
 }
+
+export const selectActions = { buildPrompt, parseResponse, version: SELECT_ACTIONS_VERSION };

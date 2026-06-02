@@ -297,7 +297,11 @@ export type WorkerEvent =
   | CompactErrorEvent;
 
 export function sendEvent(event: Record<string, unknown>): void {
-  process.stdout.write(JSON.stringify({ ...event, _logger: 'worker' }) + '\n');
+  const payload = JSON.stringify({ ...event, _logger: 'worker' });
+  if (payload.includes('\n')) {
+    console.error('[worker-protocol] CRITICAL: sendEvent payload contains newline, event type:', event.type);
+  }
+  process.stdout.write(payload + '\n');
 }
 
 export async function* parseStdin(): AsyncGenerator<WorkerCommand> {

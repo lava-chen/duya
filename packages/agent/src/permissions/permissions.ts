@@ -482,11 +482,17 @@ function isToolWithinWorkspace(
     allowedDirs.push(path.resolve(dirPath))
   }
 
-  // Add default workspace directory (~/.duya/workspace)
-  const homeDir = process.env.HOME || process.env.USERPROFILE || ''
-  if (homeDir) {
-    allowedDirs.push(path.resolve(path.join(homeDir, '.duya', 'workspace')))
-    allowedDirs.push(path.resolve(path.join(homeDir, '.duya')))
+  // Add default workspace directory from context or fallback to ~/.duya/workspace
+  if (context.defaultWorkspaceDirectory) {
+    allowedDirs.push(path.resolve(context.defaultWorkspaceDirectory))
+    allowedDirs.push(path.resolve(path.join(context.defaultWorkspaceDirectory, '..')))
+  } else {
+    // Fallback to default ~/.duya/workspace
+    const homeDir = process.env.HOME || process.env.USERPROFILE || ''
+    if (homeDir) {
+      allowedDirs.push(path.resolve(path.join(homeDir, '.duya', 'workspace')))
+      allowedDirs.push(path.resolve(path.join(homeDir, '.duya')))
+    }
   }
 
   // Check if all paths are within allowed directories

@@ -118,3 +118,9 @@ export {
   shouldFallbackToPrompting,
 } from './denialTracking.js'
 export type { DenialTrackingState } from './denialTracking.js'
+
+// Path Permission
+export {
+  checkPathReadPermission,
+  checkPathWritePermission,
+} from './pathPermission.js'

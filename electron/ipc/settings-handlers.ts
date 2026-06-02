@@ -11,12 +11,71 @@ import { ipcMain, app } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getConfigManager, toLLMProvider } from '../config/manager';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
-import { getBrowserExtensionStatus } from '../services/browser/daemon';
+import {
+  getBrowserExtensionStatus,
+  setAllowedExtensionIds,
+  getAllowedExtensionIds,
+  approvePendingExtensionApproval,
+  denyPendingExtensionApproval,
+  setOnAutoApprovedExtensionId,
+} from '../services/browser/daemon';
 import { getDatabase } from './db-handlers';
 import { setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from '../services/auto-start';
-import { getGatewayProxyConfig, setGatewayProxyConfig, GatewayProxyConfig } from '../db/queries/settings';
+import {
+  getGatewayProxyConfig,
+  setGatewayProxyConfig,
+  GatewayProxyConfig,
+  getJsonSetting,
+  setJsonSetting,
+} from '../db/queries/settings';
+
+const BROWSER_EXTENSION_ALLOWED_IDS_KEY = 'browserExtensionAllowedIds';
+let allowedExtensionIdsLoaded = false;
+
+function normalizeExtensionIds(ids: string[]): string[] {
+  return Array.from(new Set(
+    ids
+      .filter((id) => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0),
+  ));
+}
+
+function ensureAllowedExtensionIdsLoaded(): void {
+  if (allowedExtensionIdsLoaded) return;
+  const persisted = getJsonSetting<string[]>(BROWSER_EXTENSION_ALLOWED_IDS_KEY, []);
+  const normalized = normalizeExtensionIds(Array.isArray(persisted) ? persisted : []);
+  setAllowedExtensionIds(normalized);
+  allowedExtensionIdsLoaded = true;
+}
+
+function persistAllowedExtensionIds(ids: string[]): void {
+  const normalized = normalizeExtensionIds(ids);
+  setAllowedExtensionIds(normalized);
+  setJsonSetting(BROWSER_EXTENSION_ALLOWED_IDS_KEY, normalized);
+}
+
+function syncAllowedExtensionIdsToSettings(): void {
+  const runtimeIds = normalizeExtensionIds(getAllowedExtensionIds());
+  const persistedIds = normalizeExtensionIds(
+    getJsonSetting<string[]>(BROWSER_EXTENSION_ALLOWED_IDS_KEY, []),
+  );
+  if (runtimeIds.length !== persistedIds.length || runtimeIds.some((id, index) => id !== persistedIds[index])) {
+    persistAllowedExtensionIds(runtimeIds);
+  }
+}
 
 export function registerSettingsHandlers(): void {
+  // Persist auto-approved extension IDs immediately
+  setOnAutoApprovedExtensionId((extensionId: string) => {
+    ensureAllowedExtensionIdsLoaded();
+    const current = getAllowedExtensionIds();
+    if (!current.includes(extensionId)) {
+      current.push(extensionId);
+    }
+    persistAllowedExtensionIds(current);
+  });
+
   // Auto-start settings
   ipcMain.handle('settings:set-auto-start', async (_event, enabled: boolean) => {
     try {
@@ -59,11 +118,42 @@ export function registerSettingsHandlers(): void {
   // Browser extension status
   ipcMain.handle('browser-extension:get-status', async () => {
     try {
+      ensureAllowedExtensionIdsLoaded();
+      syncAllowedExtensionIdsToSettings();
       const status = getBrowserExtensionStatus();
       return { success: true, status };
     } catch (error) {
       const logger = getLogger();
       logger.error('Failed to get browser extension status', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('browser-extension:approve-pending', async () => {
+    try {
+      ensureAllowedExtensionIdsLoaded();
+      const approvalResult = approvePendingExtensionApproval();
+      if (!approvalResult.success) {
+        return { success: false, error: approvalResult.error, status: getBrowserExtensionStatus() };
+      }
+
+      persistAllowedExtensionIds(getAllowedExtensionIds());
+      return { success: true, status: getBrowserExtensionStatus() };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to approve pending browser extension', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('browser-extension:deny-pending', async () => {
+    try {
+      ensureAllowedExtensionIdsLoaded();
+      denyPendingExtensionApproval();
+      return { success: true, status: getBrowserExtensionStatus() };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to deny pending browser extension', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
       return { success: false, error: String(error) };
     }
   });

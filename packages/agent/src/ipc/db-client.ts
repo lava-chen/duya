@@ -363,6 +363,8 @@ export const researchSessionDb = {
     clarification?: string;
     context_json: string;
     status?: 'active' | 'completed' | 'aborted';
+    title?: string;
+    run_status?: string;
   }) => sendDbRequest('researchSession:create', data),
 
   get: (id: string) => sendDbRequest('researchSession:get', { id }),
@@ -377,6 +379,13 @@ export const researchSessionDb = {
     current_phase?: string;
     iterations?: number;
     coverage?: number;
+    title?: string;
+    run_status?: string;
+    plan_version?: number;
+    active_step_id?: string | null;
+    progress_summary?: string | null;
+    completed_at?: number | null;
+    error_json?: string | null;
   }) => sendDbRequest('researchSession:update', { id, ...data }),
 
   delete: (id: string) => sendDbRequest('researchSession:delete', { id }),
@@ -385,6 +394,135 @@ export const researchSessionDb = {
 
   listByStatus: (status: 'active' | 'completed' | 'aborted') =>
     sendDbRequest('researchSession:listByStatus', { status }),
+
+  getActiveRun: (sessionId: string) =>
+    sendDbRequest('researchSession:getActiveRun', { sessionId }),
+
+  listActiveRuns: () =>
+    sendDbRequest('researchSession:listActiveRuns', {}),
+};
+
+// ==================== Research Plan Step Operations ====================
+
+export const researchPlanStepDb = {
+  createSteps: (runId: string, steps: Array<{
+    id: string;
+    order_num: number;
+    user_facing_label: string;
+    internal_question_ids: string[];
+  }>) => sendDbRequest('researchPlanStep:createSteps', { runId, steps }),
+
+  getByRunId: (runId: string) =>
+    sendDbRequest('researchPlanStep:getByRunId', { runId }),
+
+  update: (stepId: string, data: {
+    status?: 'pending' | 'active' | 'completed' | 'skipped' | 'failed';
+    started_at?: number | null;
+    completed_at?: number | null;
+  }) => sendDbRequest('researchPlanStep:update', { stepId, ...data }),
+
+  deleteByRunId: (runId: string) =>
+    sendDbRequest('researchPlanStep:deleteByRunId', { runId }),
+};
+
+// ==================== Research Activity Operations ====================
+
+export const researchActivityDb = {
+  create: (data: {
+    id: string;
+    run_id: string;
+    sequence: number;
+    kind: string;
+    title: string;
+    detail?: string;
+    visibility?: 'user' | 'debug';
+  }) => sendDbRequest('researchActivity:create', data),
+
+  getByRunId: (runId: string, options?: {
+    visibility?: 'user' | 'debug';
+    limit?: number;
+    afterSequence?: number;
+  }) => sendDbRequest('researchActivity:getByRunId', { runId, ...options }),
+
+  getMaxSequence: (runId: string) =>
+    sendDbRequest('researchActivity:getMaxSequence', { runId }),
+
+  deleteByRunId: (runId: string) =>
+    sendDbRequest('researchActivity:deleteByRunId', { runId }),
+};
+
+// ==================== Research Artifact Operations ====================
+
+export const researchEventDb = {
+  create: (data: {
+    id: string;
+    run_id: string;
+    sequence: number;
+    event_type: string;
+    payload_json: string;
+    visibility?: 'user' | 'debug';
+  }) => sendDbRequest('researchEvent:create', data),
+
+  getByRunId: (runId: string, options?: {
+    visibility?: 'user' | 'debug';
+    limit?: number;
+    afterSequence?: number;
+  }) => sendDbRequest('researchEvent:getByRunId', { runId, ...options }),
+
+  getMaxSequence: (runId: string) =>
+    sendDbRequest('researchEvent:getMaxSequence', { runId }),
+};
+
+export const researchSourceDb = {
+  upsert: (data: {
+    id: string;
+    run_id: string;
+    title: string;
+    url?: string | null;
+    canonical_url?: string | null;
+    source_type?: string;
+    allowed_by_policy?: boolean;
+    reliability_json?: string | null;
+    dedupe_key?: string | null;
+    rejected_reason?: string | null;
+    metadata_json?: string | null;
+  }) => sendDbRequest('researchSource:upsert', data),
+
+  getByRunId: (runId: string) =>
+    sendDbRequest('researchSource:getByRunId', { runId }),
+};
+
+export const researchCitationDb = {
+  create: (data: {
+    id: string;
+    run_id: string;
+    report_id?: string | null;
+    source_id: string;
+    finding_id?: string | null;
+    claim: string;
+    locator_json?: string | null;
+    quoted_evidence?: string | null;
+  }) => sendDbRequest('researchCitation:create', data),
+
+  getByRunId: (runId: string, reportId?: string) =>
+    sendDbRequest('researchCitation:getByRunId', { runId, reportId }),
+};
+
+export const researchReportDb = {
+  upsert: (data: {
+    id: string;
+    run_id: string;
+    title?: string | null;
+    markdown: string;
+    outline_json?: string | null;
+    source_ids_json?: string;
+    citation_ids_json?: string;
+    activity_summary_json?: string | null;
+    export_metadata_json?: string | null;
+  }) => sendDbRequest('researchReport:upsert', data),
+
+  getLatest: (runId: string) =>
+    sendDbRequest('researchReport:getLatest', { runId }),
 };
 
 // ==================== Literature Plugin Operations ====================

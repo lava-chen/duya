@@ -1,3 +1,0 @@
-# Wiki Index
-
-## Nodes

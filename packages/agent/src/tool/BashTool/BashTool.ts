@@ -6,7 +6,7 @@
 import { execa, ExecaError, type Options } from 'execa';
 import type { ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
-import { BaseTool, ToolExecutionError, ToolPermissionError } from '../BaseTool.js';
+import { BaseTool } from '../BaseTool.js';
 import type {
   ToolContext,
   ToolValidationResult,
@@ -30,6 +30,44 @@ import {
 } from '../../utils/bash/commands.js';
 
 type Severity = 'low' | 'medium' | 'high' | 'critical';
+
+// ============================================================================
+// Windows Encoding & Path Fixes
+// ============================================================================
+
+/**
+ * Returns environment variables to force UTF-8 encoding on Windows.
+ * Fixes Python print() Chinese garbled output and echo Chinese file corruption.
+ *
+ * - PYTHONIOENCODING=utf-8: Force Python stdout/stderr to UTF-8
+ * - PYTHONUTF8=1: Python 3.7+ PEP 540 UTF-8 mode
+ * - LANG/LC_ALL: Force shell and subprocesses to UTF-8 locale
+ */
+function getWindowsEncodingEnv(): Record<string, string> {
+  if (process.platform !== 'win32') return {};
+  return {
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUTF8: '1',
+    LANG: 'en_US.UTF-8',
+    LC_ALL: 'en_US.UTF-8',
+  };
+}
+
+/**
+ * Rewrites Windows CMD-style `>nul` redirects to POSIX `/dev/null`.
+ *
+ * The model occasionally emits Windows CMD syntax (e.g., `ls 2>nul`)
+ * even when the shell is Git Bash. When Git Bash sees `2>nul`, it creates
+ * a literal file named `nul` — a Windows reserved device name that is
+ * extremely hard to delete and breaks git operations.
+ *
+ * Adapted from claude-code-haha.
+ */
+const NUL_REDIRECT_REGEX = /(\d?&?>+\s*)[Nn][Uu][Ll](?=\s|$|[|&;)\n])/g;
+
+function rewriteWindowsNullRedirect(command: string): string {
+  return command.replace(NUL_REDIRECT_REGEX, '$1/dev/null');
+}
 
 interface DangerousPattern {
   pattern: RegExp;
@@ -806,13 +844,16 @@ export class BashTool extends BaseTool implements ToolExecutor {
     const shellInfo = detectShell();
     const cwd = workingDirectory || process.cwd();
 
+    // Normalize command: rewrite Windows CMD-style `>nul` to `/dev/null`
+    const normalizedCommand = rewriteWindowsNullRedirect(command);
+
     try {
       const provider = await getActiveProvider();
 
       // Docker execution path — full isolation
       if (provider === 'docker') {
         try {
-          const sandboxResult = await executeIsolated(command, cwd, {
+          const sandboxResult = await executeIsolated(normalizedCommand, cwd, {
             filesystem: {
               allowRead: [],
               allowWrite: workingDirectory ? [workingDirectory] : [],
@@ -858,9 +899,12 @@ export class BashTool extends BaseTool implements ToolExecutor {
       }
 
       // Non-Docker path: wrap command (bubblewrap or none) then execa
-      let finalCommand = await wrapCommand(command, cwd);
+      let finalCommand = await wrapCommand(normalizedCommand, cwd);
 
-      const sanitizedEnv = { ...process.env };
+      const sanitizedEnv = {
+        ...process.env,
+        ...getWindowsEncodingEnv(),
+      };
       const sensitiveKeys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'API_KEY', 'SECRET', 'PASSWORD', 'TOKEN'];
       for (const key of sensitiveKeys) {
         delete sanitizedEnv[key];
@@ -1029,8 +1073,8 @@ export class BashTool extends BaseTool implements ToolExecutor {
       const preview = result.result.split('\n').slice(0, 20).join('\n');
       return {
         type: 'code',
-        content: `${output}\n\n[... ${lines - 20} more lines]`,
-        metadata: { ...result.metadata, lineCount: lines },
+        content: `${output}\n\n[Output truncated: ${lines - 20} more lines not shown. Use a more specific command or redirect to a file to see the full output.]`,
+        metadata: { ...result.metadata, lineCount: lines, truncated: true },
       };
     }
 

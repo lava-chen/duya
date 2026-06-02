@@ -33,7 +33,7 @@ export function SettingsView() {
         {settingsTab === "usage" && <UsageDashboard />}
         {settingsTab === "agents" && <AgentsSection />}
         {settingsTab === "support" && <SupportSection />}
-        {settingsTab === "capabilities" && <CapabilitiesSection />}
+        {settingsTab === "plugins" && <CapabilitiesSection />}
       </div>
     </div>
   );

@@ -9,6 +9,27 @@ export type ResearchPanelStage =
   | 'error'
   | 'aborted';
 
+export type ResearchRunStatus =
+  | 'classifying'
+  | 'planning'
+  | 'awaiting_clarification'
+  | 'awaiting_approval'
+  | 'running'
+  | 'paused'
+  | 'synthesizing'
+  | 'completed'
+  | 'failed'
+  | 'aborted';
+
+export interface ResearchPlanStep {
+  id: string;
+  order: number;
+  label: string;
+  status: 'pending' | 'active' | 'completed' | 'skipped' | 'failed';
+  startedAt: number | null;
+  completedAt: number | null;
+}
+
 export interface ResearchPanelQuestion {
   id: string;
   text: string;
@@ -39,12 +60,82 @@ export interface ResearchPanelFinding {
   relatedQuestionIds: string[];
 }
 
+export type ResearchActivityKind =
+  | 'search'
+  | 'browse'
+  | 'source_found'
+  | 'finding'
+  | 'question_answered'
+  | 'milestone'
+  | 'phase'
+  | 'synthesis'
+  | 'error';
+
+export type ResearchActivityIconType =
+  | 'search'
+  | 'globe'
+  | 'file-text'
+  | 'check'
+  | 'link'
+  | 'brain'
+  | 'download'
+  | 'alert';
+
+export interface ResearchActivitySource {
+  url: string;
+  title: string;
+}
+
 export interface ResearchActivityItem {
   id: string;
   title: string;
   detail?: string;
   timestamp: number;
   tone?: 'neutral' | 'success' | 'warning';
+  kind: ResearchActivityKind;
+  iconType?: ResearchActivityIconType;
+  sources?: ResearchActivitySource[];
+}
+
+export interface ResearchPersistedEvent {
+  id: string;
+  sequence: number;
+  event_type: string;
+  payload_json: string;
+  visibility: 'user' | 'debug';
+  created_at: number;
+}
+
+export interface ResearchPersistedSource {
+  id: string;
+  title: string;
+  url: string | null;
+  canonical_url: string | null;
+  source_type: string;
+  allowed_by_policy: number;
+  reliability_json: string | null;
+  rejected_reason: string | null;
+}
+
+export interface ResearchPersistedCitation {
+  id: string;
+  report_id: string | null;
+  source_id: string;
+  finding_id: string | null;
+  claim: string;
+  locator_json: string | null;
+  quoted_evidence: string | null;
+}
+
+export interface ResearchReportArtifact {
+  id: string;
+  title: string | null;
+  markdown: string;
+  outline_json: string | null;
+  source_ids_json: string;
+  citation_ids_json: string;
+  export_metadata_json: string | null;
+  updated_at: number;
 }
 
 export interface ResearchPendingRequest {
@@ -157,4 +248,14 @@ export interface ResearchSessionSnapshot {
   activities: ResearchActivityItem[];
   startedAt: number | null;
   completedAt: number | null;
+  // v2 fields
+  runId: string | null;
+  runStatus: ResearchRunStatus | null;
+  planSteps: ResearchPlanStep[];
+  progressSummary: string | null;
+  visitedPagesCount: number;
+  persistedEvents: ResearchPersistedEvent[];
+  persistedSources: ResearchPersistedSource[];
+  persistedCitations: ResearchPersistedCitation[];
+  reportArtifact: ResearchReportArtifact | null;
 }

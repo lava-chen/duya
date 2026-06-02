@@ -59,6 +59,12 @@ export type QuestionStatus =
   | 'blocked'
   | 'obsolete';
 
+export type QuestionLayer =
+  | 'foundational'
+  | 'analytical'
+  | 'critical'
+  | 'synthetic';
+
 export type QuestionPurpose =
   | 'definition'
   | 'mechanism'
@@ -95,6 +101,8 @@ export interface ResearchQuestion {
   id: string;
   text: string;
   purpose: QuestionPurpose;
+  questionLayer?: QuestionLayer;
+  hypothesisLink?: string;
   priority: 1 | 2 | 3;
   dependsOn: string[];
   searchQueries: string[];
@@ -103,6 +111,42 @@ export interface ResearchQuestion {
   status: QuestionStatus;
   sources: string[];
   parentId?: string;
+}
+
+export interface QuestionCoverageStatus {
+  questionId: string;
+  questionLayer: QuestionLayer;
+  status: 'pending' | 'partial' | 'covered' | 'saturated' | 'blocked';
+  anchorFindings: string[];
+  coverageScore: number;
+  blockedReason?: string;
+}
+
+export interface HypothesisStatus {
+  statement: string;
+  verdict: 'unexamined' | 'supported' | 'refuted' | 'inconclusive' | 'partially-supported';
+  supportingFindings: string[];
+  contradictingFindings: string[];
+  confidenceLevel: 'high' | 'medium' | 'low' | 'insufficient-evidence';
+}
+
+export interface EvidenceConflict {
+  topic: string;
+  positionA: string;
+  positionB: string;
+  findingIds: string[];
+  resolved: boolean;
+  resolution?: string;
+}
+
+export interface ResearchState {
+  iteration: number;
+  questionCoverage: QuestionCoverageStatus[];
+  hypothesisStatuses: HypothesisStatus[];
+  conflicts: EvidenceConflict[];
+  gapFindings: string[];
+  saturationSignals: string[];
+  overallCoverageScore: number;
 }
 
 export interface FindingContradiction {
@@ -150,6 +194,12 @@ export interface ResearchFinding {
   doi?: string;
   arxivId?: string;
   canonicalUrl?: string;
+
+  // --- v2: Structured binding ---
+  evidenceType?: 'empirical' | 'theoretical' | 'anecdotal' | 'expert-opinion';
+  replicationStatus?: 'replicated' | 'single-study' | 'preprint-only' | 'unknown';
+  conflictsWith?: string[];
+  hypothesisLink?: string;
 }
 
 export interface ResearchEntity {
@@ -189,7 +239,7 @@ export interface QualityReport {
 // M1.3: 停止决策
 export interface StopDecision {
   shouldStop: boolean;
-  reason: 'max_iterations' | 'ready_for_synthesis' | 'coverage_threshold_met' | 'no_more_actions' | 'user_cancelled';
+  reason: 'max_iterations' | 'ready_for_synthesis' | 'coverage_threshold_met' | 'no_more_actions' | 'user_cancelled' | 'critical_blockers_exist' | 'blockers_remain' | 'insufficient_coverage';
   forced: boolean;                     // 是否被预算强制停止
   unresolvedBlockers: string[];        // 未解决的阻塞项（报告用）
   qualityScore: number;
@@ -280,9 +330,18 @@ export interface SynthesisPlan {
   expectedCaveats: string[];
 }
 
+export interface Hypothesis {
+  statement: string;
+  type: 'central' | 'subsidiary' | 'null';
+  verificationApproach: string;
+  expectedEvidence: string;
+  falsificationCriteria: string;
+}
+
 export interface ResearchPlan {
   intent: ResearchIntent;
   scope: ResearchScope;
+  hypotheses?: Hypothesis[];
   researchQuestions: ResearchQuestion[];
   evidenceStrategy: EvidenceStrategy;
   searchStrategy: ResearchSearchStrategy;
@@ -342,10 +401,38 @@ export interface OrchestratorConfig {
   enableQueryDeduplication?: boolean;    // 默认 true
 }
 
+export interface ToolSpec {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+export interface ToolCallRequest {
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface ToolCallResult {
+  name: string;
+  content: string;
+  error?: boolean;
+}
+
+export interface AgentCallInput {
+  systemPrompt: string;
+  userPrompt: string;
+  tools: ToolSpec[];
+  maxToolCalls: number;
+  toolExecute?: (name: string, input: Record<string, unknown>) => Promise<ToolResult>;
+}
+
 export interface OrchestratorDependencies {
   config?: Partial<OrchestratorConfig>;
+  sessionId?: string;
+  abortSignal?: AbortSignal;
   llmComplete: (prompt: string, systemPrompt?: string) => Promise<string>;
   llmStreamFn?: (prompt: string, systemPrompt?: string) => AsyncIterable<string>;
+  llmAgentCall?: (input: AgentCallInput) => Promise<{ content: string; toolCalls: ToolCallResult[] }>;
   toolExecute: (name: string, input: Record<string, unknown>) => Promise<ToolResult>;
   toolExecuteConcurrent: (
     calls: Array<{ name: string; input: Record<string, unknown> }>
@@ -353,11 +440,81 @@ export interface OrchestratorDependencies {
   emitSSE: (event: ResearchEvent) => void;
   awaitClarification: (questions: ClarificationQuestion[], requestId: string) => Promise<Record<string, string>>;
   persistState?: (contextJSON: string) => Promise<void>;
+  runDB?: ResearchRunDB;
   traceEvidence?: (conclusion: string, context: ResearchContext) => Promise<EvidenceChain>;
   compareTexts?: (text1: string, text2: string, context: ResearchContext) => Promise<DiffAnalysis>;
   exportReport?: (format: 'markdown' | 'pdf' | 'obsidian', content: string) => Promise<ExportResult>;
   generateShareLink?: (sessionId: string, expiresIn?: number) => Promise<ShareLink>;
   continueResearch?: (additionalQuery: string, context: ResearchContext) => Promise<ContinueResearchResult>;
+}
+
+export interface ResearchRunDB {
+  runId: string;
+  updateRun: (data: {
+    run_status?: string;
+    title?: string;
+    current_phase?: string;
+    active_step_id?: string | null;
+    progress_summary?: string | null;
+    error_json?: string | null;
+    completed_at?: number | null;
+  }) => Promise<void>;
+  createPlanSteps: (steps: Array<{
+    id: string;
+    order_num: number;
+    user_facing_label: string;
+    internal_question_ids: string[];
+  }>) => Promise<void>;
+  updatePlanStep: (stepId: string, data: {
+    status?: 'pending' | 'active' | 'completed' | 'skipped' | 'failed';
+    started_at?: number | null;
+    completed_at?: number | null;
+  }) => Promise<void>;
+  logActivity: (activity: {
+    kind: string;
+    title: string;
+    detail?: string;
+    visibility?: 'user' | 'debug';
+    sources?: Array<{ url: string; title: string }>;
+  }) => Promise<void>;
+  getEventMaxSequence?: () => Promise<number>;
+  logEvent?: (event: {
+    sequence: number;
+    event_type: string;
+    payload_json: string;
+    visibility?: 'user' | 'debug';
+  }) => Promise<void>;
+  upsertSource?: (source: {
+    id: string;
+    title: string;
+    url?: string | null;
+    canonical_url?: string | null;
+    source_type?: string;
+    allowed_by_policy?: boolean;
+    reliability_json?: string | null;
+    dedupe_key?: string | null;
+    rejected_reason?: string | null;
+    metadata_json?: string | null;
+  }) => Promise<void>;
+  createCitation?: (citation: {
+    id: string;
+    report_id?: string | null;
+    source_id: string;
+    finding_id?: string | null;
+    claim: string;
+    locator_json?: string | null;
+    quoted_evidence?: string | null;
+  }) => Promise<void>;
+  upsertReport?: (report: {
+    id: string;
+    title?: string | null;
+    markdown: string;
+    outline_json?: string | null;
+    source_ids_json?: string;
+    citation_ids_json?: string;
+    activity_summary_json?: string | null;
+    export_metadata_json?: string | null;
+  }) => Promise<void>;
 }
 
 export interface EvidenceChain {
@@ -423,7 +580,11 @@ export type ResearchActionType =
   | 'fetch'
   | 'compare'
   | 'backtrack'
-  | 'stop_question';
+  | 'stop_question'
+  | 'conflict_resolve'
+  | 'gap_probe'
+  | 'replan'
+  | 'terminate';
 
 // M1.6: 研究动作结果
 export interface ResearchAction {
@@ -515,6 +676,10 @@ export type ResearchEvent =
   | { type: 'error'; message: string }
   | { type: 'research_stop_decision'; decision: StopDecision }
   | { type: 'research_goal_change_request'; requestId: string; currentGoal: string; proposedGoal: string; changeType: PlanDeltaType }
+  // === v2: Run status & activity ===
+  | { type: 'run_status'; status: string; phase: OrchestratorPhase }
+  | { type: 'activity'; kind: string; title: string; detail?: string; sequence: number; sources?: Array<{ url: string; title: string }> }
+  | { type: 'plan_steps_created'; steps: Array<{ id: string; order: number; label: string }> }
   // === Internal (debug panel) ===
   | { type: 'research_quality_snapshot'; qualityReport: QualityReport }
   | { type: 'plan_delta'; data: PlanDelta }

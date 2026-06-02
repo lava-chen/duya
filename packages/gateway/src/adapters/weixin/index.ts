@@ -406,18 +406,13 @@ export class WeixinAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
 
   private startPollLoop(): void {
-    console.log('[Weixin] startPollLoop called, running flag:', this.running);
-
     const poll = async () => {
       if (!this.running) {
-        console.log('[Weixin] poll: running is false, skipping');
         return;
       }
 
       try {
-        console.log('[Weixin] poll: calling wxApi.getUpdates, syncBuf length:', this.pollSyncBuf.length);
         const response = await wxApi.getUpdates(this.pollSyncBuf, LONG_POLL_TIMEOUT_MS);
-        console.log('[Weixin] poll: got response, ret:', response.ret, 'msgs count:', response.msgs?.length ?? 0);
 
         const newSyncBuf = response.get_updates_buf;
         if (newSyncBuf) {
@@ -426,10 +421,6 @@ export class WeixinAdapter extends BaseAdapter {
 
         this.consecutiveFailures = 0;
 
-        if (response.msgs && response.msgs.length > 0) {
-          console.log('[Weixin] poll: processing', response.msgs.length, 'messages');
-        }
-
         for (const msg of response.msgs ?? []) {
           await this.processMessage(msg).catch((err) => {
             console.error('[Weixin] Message processing error:', err);
@@ -437,14 +428,9 @@ export class WeixinAdapter extends BaseAdapter {
         }
       } catch (err) {
         this.consecutiveFailures++;
-        console.error(
-          `[Weixin] Poll error (${this.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`,
-          err instanceof Error ? err.message : String(err),
-        );
 
         if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           this.updateHealthError(err);
-          console.log(`[Weixin] Max failures reached, backing off for ${BACKOFF_DELAY_SECONDS}s`);
           this.consecutiveFailures = 0;
           this.pollTimer = setTimeout(poll, BACKOFF_DELAY_SECONDS * 1000);
           return;
@@ -456,7 +442,6 @@ export class WeixinAdapter extends BaseAdapter {
       }
     };
 
-    console.log('[Weixin] startPollLoop: calling poll()');
     poll();
   }
 

@@ -16,7 +16,8 @@ import type {
   PermissionCheckResult,
 } from '../types.js';
 import type { ToolUseContext } from '../../types.js';
-import { isBypassMode } from '../../permissions/PermissionMode.js';
+import type { ToolPermissionContext } from '../../permissions/types.js';
+import { checkPathWritePermission } from '../../permissions/pathPermission.js';
 
 // ============================================================
 // Types
@@ -149,16 +150,16 @@ export class EditTool extends BaseTool {
 
     const { file_path } = validation.data;
 
-    // Check path safety using the working directory from context
-    if (!isPathSafe(file_path, context.workingDirectory)) {
-      return {
-        allowed: true,
-        requiresUserConfirmation: true,
-        reason: 'Path traversal outside working directory',
-      };
-    }
+    const appState = context.getAppState();
+    const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
 
-    // Always ask for confirmation for file edits
+    const pathResult = checkPathWritePermission(
+      file_path,
+      context.workingDirectory,
+      permissionContext,
+    );
+    if (!pathResult.allowed) return pathResult;
+
     return {
       allowed: true,
       requiresUserConfirmation: true,
@@ -177,13 +178,7 @@ export class EditTool extends BaseTool {
       };
     }
 
-    const appState = context?.getAppState?.();
-    const mode = (appState?.toolPermissionContext as { mode?: string } | undefined)?.mode;
-    // Check if this tool use was explicitly approved via permission request
-    const toolUseId = context?.toolUseId;
-    const isExplicitlyApproved = !!(toolUseId && (appState?._approvedToolUses as Record<string, boolean> | undefined)?.[toolUseId]);
-    const bypass = isBypassMode(mode as string) || isExplicitlyApproved;
-    return executeEdit(crypto.randomUUID(), validation.data, workingDirectory, bypass);
+    return executeEdit(crypto.randomUUID(), validation.data, workingDirectory);
   }
 
   renderToolResultMessage(result: ToolResult): RenderedToolMessage {
@@ -238,7 +233,6 @@ export async function executeEdit(
   toolUseId: string,
   input: EditToolInput,
   workingDirectory?: string,
-  bypassPermissions = false
 ): Promise<ToolResult> {
   const { file_path, old_string, new_string } = input;
 
@@ -246,16 +240,6 @@ export async function executeEdit(
   let resolvedPath = file_path;
   if (!isAbsolute(resolvedPath)) {
     resolvedPath = resolve(workingDirectory || process.cwd(), file_path);
-  }
-
-  // Security check (skip path traversal check in bypass mode, but keep blocked path check)
-  if (workingDirectory && !bypassPermissions && !isPathSafe(resolvedPath, workingDirectory)) {
-    return {
-      id: toolUseId,
-      name: 'edit',
-      result: 'Security check failed: path traversal outside working directory',
-      error: true,
-    };
   }
 
   try {

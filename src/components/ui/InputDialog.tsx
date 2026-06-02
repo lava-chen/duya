@@ -6,6 +6,7 @@ import { XIcon } from "@/components/icons";
 interface InputDialogProps {
   isOpen: boolean;
   title: string;
+  description?: string;
   placeholder?: string;
   defaultValue?: string;
   onConfirm: (value: string) => void;
@@ -15,6 +16,7 @@ interface InputDialogProps {
 export function InputDialog({
   isOpen,
   title,
+  description,
   placeholder = "",
   defaultValue = "",
   onConfirm,
@@ -63,9 +65,16 @@ export function InputDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-medium" style={{ color: "var(--text)" }}>
-            {title}
-          </h3>
+          <div className="flex-1">
+            <h3 className="text-lg font-medium" style={{ color: "var(--text)" }}>
+              {title}
+            </h3>
+            {description && (
+              <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
+                {description}
+              </p>
+            )}
+          </div>
           <button
             onClick={onCancel}
             className="p-1 rounded-lg transition-colors"

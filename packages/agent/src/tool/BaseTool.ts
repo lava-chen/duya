@@ -205,11 +205,16 @@ export abstract class BaseTool implements Tool {
    * Convert to legacy Tool interface for compatibility
    */
   toTool(): { name: string; description: string; input_schema: Record<string, unknown> } {
-    // Return the actual input schema so LLM knows the correct parameters
+    let inputSchema: Record<string, unknown>;
+    if (this.input_schema instanceof z.ZodType) {
+      inputSchema = z.toJSONSchema(this.input_schema);
+    } else {
+      inputSchema = this.input_schema as Record<string, unknown>;
+    }
     return {
       name: this.name,
       description: this.description,
-      input_schema: this.input_schema as Record<string, unknown>,
+      input_schema: inputSchema,
     };
   }
 }
