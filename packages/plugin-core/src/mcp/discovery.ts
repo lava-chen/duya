@@ -123,6 +123,25 @@ export interface ResolutionResult {
 }
 
 /**
+ * The COLLECTOR's return contract. Distinct from `ResolutionResult`
+ * because the collector only emits source-read errors (e.g.
+ * `mcp-settings-invalid` for a malformed legacyFile). It does NOT
+ * emit env-missing, script-missing, tool-collision, or any other
+ * issue that belongs to the resolution or connection phase. The
+ * resolution engine may also re-emit source-read issues as
+ * `phase: 'discovery'` issues; that is the expected composition.
+ *
+ * `candidates` is the full collected list, even for sources that
+ * later fail validation. The settings page can render every
+ * collected row plus every collected issue.
+ */
+export interface MCPCollectionResult {
+  candidates: MCPCandidate[];
+  /** Issues produced during source reading. Phase is always 'discovery'. */
+  issues: MCPIssue[];
+}
+
+/**
  * Builtin fallback replacement map (Rev 5.1).
  *
  * `BUILTIN_FALLBACK_REPLACEMENTS` is a narrow, hard-coded list of bundled

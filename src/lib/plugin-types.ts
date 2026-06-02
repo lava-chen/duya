@@ -25,6 +25,7 @@ export type {
   MCPServerInventoryEntry,
   ResolvedMCPServerConfig,
   ResolutionResult,
+  MCPCollectionResult,
   MCPToolDescriptor,
   MCPHealthReport,
 } from '@duya/plugin-core';

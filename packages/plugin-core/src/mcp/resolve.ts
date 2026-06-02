@@ -196,6 +196,19 @@ function scriptNotFoundIssue(
   );
 }
 
+function bundledMissingIssue(
+  c: MCPCandidate,
+  inventoryId: string | undefined,
+  bundlePath: string,
+): MCPIssue {
+  return makeIssue(
+    c,
+    { type: 'mcp-bundled-missing', source: buildSourceContext(c), bundlePath },
+    'resolution',
+    inventoryId,
+  );
+}
+
 function allowedPathsViolationIssue(
   c: MCPCandidate,
   inventoryId: string | undefined,
@@ -351,6 +364,18 @@ function staticPathCheck(
           }
         }
         if (!existsSync(resolved)) {
+          // Bundled entries are special: when the literal bundled
+          // script is missing, the issue type is `mcp-bundled-missing`
+          // (not `mcp-script-not-found`). This is a stable Phase 1B
+          // contract: bundled absence is a build/installation problem
+          // and should be displayed distinctly from per-plugin
+          // script-missing errors.
+          if (c.source === 'bundled') {
+            return {
+              status: 'script_missing',
+              issue: bundledMissingIssue(c, inventoryId, resolved),
+            };
+          }
           return {
             status: 'script_missing',
             issue: scriptNotFoundIssue(c, inventoryId, resolved),
