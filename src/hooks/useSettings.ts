@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
-import type { AppSettings, VisionLLMConfig } from "@/types";
+import type { AppSettings, MCPServerConfig, VisionLLMConfig } from "@/types";
 import { getAllSettingsIPC } from "@/lib/ipc-client";
+import { uiPermissionModeToSettings } from "@/lib/permission-mode";
 
 /**
  * Convert raw settings (Record<string, string>) to AppSettings format
@@ -43,8 +44,6 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     // Appearance settings
     font: undefined,
     compactMode: false,
-    showTimestamps: true,
-    showAvatars: true,
     // Browser security settings
     blockedDomains: [],
     // Favorite agent profiles for quick access (max 3)
@@ -53,6 +52,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     agentLanguage: undefined,
     // Security settings
     securityScanEnabled: true,
+    cronPermissionMode: "default",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
   };
@@ -147,16 +147,26 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       // Appearance settings
       font: raw.font ?? defaults.font,
       compactMode: raw.compactMode === "true",
-      showTimestamps: raw.showTimestamps !== "false",
-      showAvatars: raw.showAvatars !== "false",
       // Browser security settings
       blockedDomains: raw.blockedDomains ? JSON.parse(raw.blockedDomains) : defaults.blockedDomains,
       // Favorite agent profiles for quick access (max 3)
       favoriteAgentIds: raw.favoriteAgentIds ? JSON.parse(raw.favoriteAgentIds) : defaults.favoriteAgentIds,
       // Agent prompt language preference
-      agentLanguage: raw.agentLanguage || undefined,
+      agentLanguage: (() => {
+        const val = raw.agentLanguage;
+        if (!val) return undefined;
+        if (typeof val === 'string' && val.startsWith('"') && val.endsWith('"')) {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return val;
+          }
+        }
+        return val;
+      })(),
       // Security settings
       securityScanEnabled: raw.securityScanEnabled !== "false",
+      cronPermissionMode: (raw.cronPermissionMode as AppSettings["cronPermissionMode"]) ?? defaults.cronPermissionMode,
       // Default workspace directory for creating new projects
       workspaceDir: raw.workspaceDir || undefined,
     };
@@ -216,8 +226,6 @@ export function useSettings(): {
     // Appearance settings
     font: undefined,
     compactMode: false,
-    showTimestamps: true,
-    showAvatars: true,
     // Browser security settings
     blockedDomains: [],
     // Favorite agent profiles for quick access (max 3)
@@ -226,6 +234,7 @@ export function useSettings(): {
     agentLanguage: undefined,
     // Security settings
     securityScanEnabled: true,
+    cronPermissionMode: "default",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
   });
@@ -264,6 +273,17 @@ export function useSettings(): {
         }
       }
 
+      if (typeof window !== 'undefined' && window.electronAPI?.settings?.getMcpServers) {
+        try {
+          const mcpResult = await window.electronAPI.settings.getMcpServers();
+          if (mcpResult?.success && Array.isArray(mcpResult.data)) {
+            parsed.mcpServers = mcpResult.data as MCPServerConfig[];
+          }
+        } catch {
+          // Keep SQLite mcpServers as fallback.
+        }
+      }
+
       setSettings(parsed);
     } catch {
       setError("Failed to load settings");
@@ -293,14 +313,24 @@ export function useSettings(): {
             });
           } else if (key === 'visionLLMEnabled') {
             await window.electronAPI.vision?.set({ enabled: value as boolean });
-          } else if (typeof value === 'string') {
-            await window.electronAPI.settingsDb.set(key, value);
-          } else {
-            await window.electronAPI.settingsDb.setJson(key, value);
+          } else if (key === 'mcpServers') {
+            const mcpServers = Array.isArray(value) ? value as MCPServerConfig[] : [];
+            await window.electronAPI.settingsDb.setJson('mcpServers', mcpServers);
+            if (window.electronAPI.settings?.setMcpServers) {
+              await window.electronAPI.settings.setMcpServers(mcpServers);
+            }
+        } else if (key === 'permissionMode' && typeof value === 'string') {
+          await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
+        } else if (key === 'cronPermissionMode' && typeof value === 'string') {
+          await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
+        } else if (typeof value === 'string') {
+          await window.electronAPI.settingsDb.set(key, value);
+        } else {
+          await window.electronAPI.settingsDb.setJson(key, value);
           }
         }
         const raw = await getAllSettingsIPC();
-        setSettings(parseAppSettings(raw));
+      setSettings(parseAppSettings(raw));
       } else {
         setError('Settings storage not available');
       }

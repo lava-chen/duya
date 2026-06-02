@@ -37,6 +37,10 @@ import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 interface ChatViewProps {
   sessionId: string;
   messages: Message[];
+  /**
+   * 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生.
+   * 第一个参数 permissionMode 保留签名兼容 (App.handleSendMessage 还在声明), 但不使用.
+   */
   onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
@@ -111,7 +115,8 @@ export function ChatView({
   const { settings, save: saveSettings } = useSettings();
   const [compressionNotification, setCompressionNotification] = useState<string | null>(null);
   const [sessionModel, setSessionModel] = useState<string>('');
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask');
+  const [permissionMode, setPermissionMode] = useState<PermissionMode | null>(null);
+  const [permissionUpdatePending, setPermissionUpdatePending] = useState(false);
   const [agentMode, setAgentMode] = useState<AgentMode>('main');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -244,6 +249,11 @@ export function ChatView({
                   ? 'auto'
                   : 'ask';
               setPermissionMode(mappedMode);
+            } else {
+              // 历史 row 缺 permission_profile, 极少见 (schema DEFAULT 'default' 一直在).
+              // 保守置 'ask', 让 selector 立即可用, 后续用户切 mode 会写入 row.
+              console.warn('[ChatView] thread missing permissionProfile, defaulting UI to ask', { sessionId });
+              setPermissionMode('ask');
             }
 
             // Load agent profile binding and sync to mode
@@ -297,13 +307,21 @@ export function ChatView({
     }
   }, [sessionId]);
 
-  // Handle permission mode change - persist to session
-  // DB stores 'default' for ask, 'auto' for auto, 'full_access' for bypass
-  const handlePermissionModeChange = useCallback((mode: PermissionMode) => {
+  // Handle permission mode change - persist to session.
+  // 改为 async + 设置 permissionUpdatePending, 防止用户切 mode 后立即发送, 出现 row 未落库就发消息的竞态.
+  // DB stores 'default' for ask, 'auto' for auto, 'full_access' for bypass.
+  const handlePermissionModeChange = useCallback(async (mode: PermissionMode) => {
     setPermissionMode(mode);
     if (sessionId) {
       const dbProfile = mode === 'bypass' ? 'full_access' : mode === 'auto' ? 'auto' : 'default';
-      updateThreadIPC(sessionId, { permissionProfile: dbProfile }).catch(console.error);
+      setPermissionUpdatePending(true);
+      try {
+        await updateThreadIPC(sessionId, { permissionProfile: dbProfile });
+      } catch (err) {
+        console.error('[ChatView] failed to persist permission mode', err);
+      } finally {
+        setPermissionUpdatePending(false);
+      }
     }
   }, [sessionId]);
 
@@ -358,7 +376,7 @@ export function ChatView({
       lastOutputStyleRef.current = outputStyleConfig;
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig, mode);
+      onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode);
     },
     [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]
   );
@@ -372,7 +390,7 @@ export function ChatView({
     if (lastContent) {
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       // Use saved files and parsed docs for retry
-      onSendMessage(lastContent, permissionMode, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current);
+      onSendMessage(lastContent, permissionMode ?? undefined, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current);
     }
   }, [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]);
 
@@ -513,7 +531,7 @@ export function ChatView({
       )}
 
       {/* Agent error banner with retry */}
-      {(phase === 'error' || streamingError) && (
+      {(phase === 'error' || (streamingError && phase !== 'aborted')) && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
           <div className="flex flex-col gap-2 px-4 py-3 bg-red-500/90 text-white text-sm rounded-lg shadow-lg backdrop-blur-sm max-w-md">
             <div className="flex items-center gap-2">
@@ -564,6 +582,7 @@ export function ChatView({
                     onProviderChange={handleProviderChange}
                     permissionMode={permissionMode}
                     onPermissionModeChange={handlePermissionModeChange}
+                    permissionUpdatePending={permissionUpdatePending}
                     placeholder={t('chat.typeMessage')}
                     messages={messages}
                   />
@@ -680,6 +699,7 @@ export function ChatView({
               onProviderChange={handleProviderChange}
               permissionMode={permissionMode}
               onPermissionModeChange={handlePermissionModeChange}
+              permissionUpdatePending={permissionUpdatePending}
               placeholder={t('chat.typeMessage')}
               messages={messages}
             />

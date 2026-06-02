@@ -185,6 +185,8 @@ export class CronPersistence {
   }
 
   insertChatSession(sessionId: string, name: string, model: string, providerId: string): void {
+    // Cron 路径固定 permission_profile='default'. 不读 desktop settings.permissionMode, 走 cronPermissionMode 独立字段.
+    // 这是与 ChatView 默认 session 的明确切分, 避免用户的桌面设置污染定时任务.
     const now = Date.now();
     this.db.prepare(`INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, context_summary, context_summary_updated_at, is_deleted, generation) VALUES (?, ?, ?, ?, ?, '', '', '', 'active', 'automation', 'default', ?, '', 0, 0, 0)`)
       .run(sessionId, name, now, now, model, providerId);

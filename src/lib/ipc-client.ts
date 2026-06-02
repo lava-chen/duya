@@ -317,6 +317,8 @@ export async function createThreadIPC(data: {
   agentType?: string
   agentName?: string
 }): Promise<Thread | null> {
+  // permissionProfile 不在前端传, 由后端 query 层 (resolvePermissionProfile) 统一 fallback.
+  // 避免前端忘传 / 误传导致权限路径不一致.
   const dbThread = await window.electronAPI!.thread!.create({
     id: data.id,
     title: data.title,

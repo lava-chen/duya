@@ -6,6 +6,8 @@
  */
 
 import { getDatabase } from '../connection';
+import { resolvePermissionProfile } from '../permission-resolver';
+import type { PermissionProfile } from '../../lib/permission-profile';
 
 type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
 
@@ -52,20 +54,38 @@ export interface CreateSessionInput {
   parent_session_id?: string;
   agent_type?: string;
   agent_name?: string;
+  permission_profile?: string;
+  /**
+   * trusted internal caller 才传 true. 普通 UI/IPC 不传.
+   * 控制派生 session 显式 override 是否允许 (与 resolver 配合).
+   */
+  is_trusted_permission_override?: boolean;
+  created_at?: number;
+  updated_at?: number;
 }
 
 export function createSession(data: CreateSessionInput): SessionRow {
   const now = Date.now();
+  const createdAt = data.created_at ?? now;
+  const updatedAt = data.updated_at ?? createdAt;
+  // 派生关系字段统一: DB 列是 parent_id, IPC DTO 同时接受 parent_id / parent_session_id.
+  const parentSessionId = data.parent_session_id ?? data.parent_id ?? null;
+  // 在 INSERT 前一次性解析 permission_profile. 严禁两阶段写入.
+  const permissionProfile: PermissionProfile = resolvePermissionProfile(
+    data.permission_profile,
+    parentSessionId,
+    { isTrustedOverride: data.is_trusted_permission_override === true },
+  );
   db().prepare(`
     INSERT INTO chat_sessions (
       id, title, model, system_prompt, working_directory,
       project_name, status, mode, provider_id, generation,
-      parent_id, agent_type, agent_name,
+      parent_id, permission_profile, agent_type, agent_name,
       created_at, updated_at, is_deleted
     ) VALUES (
       @id, @title, @model, @system_prompt, @working_directory,
       @project_name, @status, @mode, @provider_id, @generation,
-      @parent_id, @agent_type, @agent_name,
+      @parent_id, @permission_profile, @agent_type, @agent_name,
       @created_at, @updated_at, 0
     )
     ON CONFLICT(id) DO UPDATE SET
@@ -92,11 +112,12 @@ export function createSession(data: CreateSessionInput): SessionRow {
     mode: data.mode ?? 'code',
     provider_id: data.provider_id ?? 'env',
     generation: data.generation ?? 0,
-    parent_id: data.parent_id ?? data.parent_session_id ?? null,
+    parent_id: parentSessionId,
+    permission_profile: permissionProfile,
     agent_type: data.agent_type ?? 'main',
     agent_name: data.agent_name ?? '',
-    created_at: now,
-    updated_at: now,
+    created_at: createdAt,
+    updated_at: updatedAt,
   });
   return db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(data.id) as SessionRow;
 }

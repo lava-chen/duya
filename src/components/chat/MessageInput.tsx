@@ -5,7 +5,7 @@
 import React, { useState, useRef, useCallback, KeyboardEvent, FormEvent, useEffect } from 'react';
 import {
   ArrowUpIcon,
-  BrainIcon,
+  TelescopeIcon,
   XIcon,
   StopIcon,
   FileIcon,
@@ -59,8 +59,13 @@ interface MessageInputProps {
   onProviderChange?: (providerId: string) => void;
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
-  permissionMode?: PermissionMode;
+  permissionMode?: PermissionMode | null;
   onPermissionModeChange?: (mode: PermissionMode) => void;
+  /**
+   * selector 切 mode 后, IPC updateThreadIPC 落库期间为 true.
+   * 发送按钮在此期间 disabled, 防止 row 未落库就发消息, 引发 worker 读到旧值.
+   */
+  permissionUpdatePending?: boolean;
   placeholder?: string;
   // For chat commands (/help, /clear, /cost) - execute locally
   onExecuteCommand?: (command: string) => { content: string } | null;
@@ -127,6 +132,7 @@ export function MessageInput({
   onEffortChange,
   permissionMode = 'ask',
   onPermissionModeChange,
+  permissionUpdatePending = false,
   placeholder,
   onExecuteCommand,
   onClearMessages,
@@ -406,8 +412,8 @@ export function MessageInput({
           const result = await window.electronAPI.skills.list();
           if (result.success && Array.isArray(result.skills)) {
             // Filter to only user-invocable skills (same as claude-code-haha)
-            const filteredSkills = (result.skills as Array<{ userInvocable?: boolean; name: string; description?: string; category?: string; whenToUse?: string }>)
-              .filter((s) => s.userInvocable !== false)
+            const filteredSkills = (result.skills as Array<{ userInvocable?: boolean; enabled?: boolean; name: string; description?: string; category?: string; whenToUse?: string }>)
+              .filter((s) => s.userInvocable !== false && s.enabled !== false)
               .map((s) => ({
                 name: s.name,
                 description: s.description || s.whenToUse || '',
@@ -417,14 +423,39 @@ export function MessageInput({
           }
         }
 
-        // Fetch MCP servers
-        if (window.electronAPI?.settingsDb?.getJson) {
-          const mcpData = await window.electronAPI.settingsDb.getJson<Record<string, { description?: string; enabled?: boolean }>>('mcpServers', {});
-          const servers = Object.entries(mcpData).map(([name, config]) => ({
-            name,
-            description: config.description,
-            enabled: config.enabled !== false,
-          }));
+        // Fetch MCP servers (prefer ConfigManager agentSettings source)
+        if (window.electronAPI?.settings?.getMcpServers) {
+          const mcpResult = await window.electronAPI.settings.getMcpServers();
+          if (mcpResult.success && Array.isArray(mcpResult.data)) {
+            setMcpServers(
+              mcpResult.data
+                .filter((item) => typeof item?.name === 'string' && item.name.length > 0)
+                .map((item) => ({
+                  name: item.name,
+                  description: item.command,
+                  enabled: item.enabled !== false,
+                }))
+            );
+          } else {
+            setMcpServers([]);
+          }
+        } else if (window.electronAPI?.settingsDb?.getJson) {
+          const mcpData = await window.electronAPI.settingsDb.getJson<
+            Array<{ name?: string; command?: string; enabled?: boolean }> | Record<string, { description?: string; enabled?: boolean }>
+          >('mcpServers', []);
+          const servers = Array.isArray(mcpData)
+            ? mcpData
+                .filter((item): item is { name: string; command?: string; enabled?: boolean } => typeof item?.name === 'string' && item.name.length > 0)
+                .map((item) => ({
+                  name: item.name,
+                  description: item.command,
+                  enabled: item.enabled !== false,
+                }))
+            : Object.entries(mcpData || {}).map(([name, config]) => ({
+                name,
+                description: config?.description,
+                enabled: config?.enabled !== false,
+              }));
           setMcpServers(servers);
         }
 
@@ -609,6 +640,10 @@ export function MessageInput({
       const hasUnparsedDocs = attachedFiles.some(f => f.path && !f.text && !f.type.startsWith('image/'));
       if (isParsing && hasUnparsedDocs) return;
 
+      // Block sending while permission profile is being persisted to DB.
+      // 否则 worker 会读到旧的 row 值, 出现"用户切到 ask 但工具仍按 bypass 执行"的竞态.
+      if (permissionUpdatePending) return;
+
       const clearDraft = () => {
         draftLoadedRef.current = false;
         if (sessionId) {
@@ -695,7 +730,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode],
+    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
   );
 
   const handleKeyDown = useCallback(
@@ -885,22 +920,6 @@ export function MessageInput({
             </div>
           )}
 
-          {sendMode === 'research' && (
-            <div className="mt-2 flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium" style={{ background: 'rgba(37, 99, 235, 0.14)', color: '#7db4ff' }}>
-                <BrainIcon size={12} />
-                深度研究已开启
-              </span>
-              <button
-                type="button"
-                onClick={() => setSendMode(undefined)}
-                className="w-4 h-4 rounded-full bg-gray-700 flex items-center justify-center hover:bg-gray-600 transition-colors"
-              >
-                <XIcon size={10} />
-              </button>
-            </div>
-          )}
-
           {/* Bottom Toolbar */}
           <div className="mt-1 px-2 flex items-center justify-between">
             {/* Left: Plus Button (with file attach, model selector, effort) & Permission */}
@@ -993,12 +1012,29 @@ export function MessageInput({
 
               {/* Permission Mode Selector */}
               <PermissionModeSelector
-                value={permissionMode}
+                value={permissionMode ?? 'ask'}
                 onChange={onPermissionModeChange || (() => {})}
                 disabled={isStreaming}
               />
 
-
+              {/* Research Mode Badge */}
+              {sendMode === 'research' && (
+                <button
+                  type="button"
+                  onClick={() => setSendMode(undefined)}
+                  className="group flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium text-[#7db4ff] border border-transparent hover:bg-[rgba(37,99,235,0.18)] hover:border-[#7db4ff]/40"
+                >
+                  <XIcon
+                    size={14}
+                    className="hidden group-hover:block"
+                  />
+                  <TelescopeIcon
+                    size={14}
+                    className="block group-hover:hidden"
+                  />
+                  <span>深度研究</span>
+                </button>
+              )}
             </div>
 
             {/* Right: Send/Stop Button */}

@@ -34,7 +34,15 @@ export interface ChatStartCommand {
   options?: {
     messages?: Array<{ role: string; content: string }>;
     systemPrompt?: string;
+    language?: string;
+    /**
+     * @deprecated 由 session row.permission_profile 派生. worker 严格忽略此字段, 防止残留发送路径覆盖 DB 决定.
+     */
     permissionMode?: string;
+    /**
+     * 显式单次 override (trusted caller only). 类型: agent internal mode, 不是 DB profile.
+     */
+    permissionModeOverride?: 'default' | 'auto' | 'bypassPermissions';
     files?: Array<{
       id: string;
       name: string;

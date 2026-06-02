@@ -25,8 +25,7 @@ import { buildAttachmentContext } from '../llm/attachment-context.js';
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
 import type { Message, MessageContent, MCPServerConfig } from '../types.js';
-import { messageDb } from '../ipc/db-client.js';
-import { pluginDb } from '../ipc/db-client.js';
+import { configDb, messageDb, pluginDb, settingDb, sessionDb } from '../ipc/db-client.js';
 import { IncrementalSaveQueue } from './incremental-save-queue.js';
 import {
   enqueue,
@@ -45,6 +44,7 @@ import type { ConductorSnapshot } from '../conductor/ConductorProfile.js';
 import { setConductorCanvasState } from '../prompts/sections/dynamic/conductorCanvas.js';
 import { duyaAgent } from '../index.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
+import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { loadMCPConfigs } from '../mcp/config.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
@@ -106,6 +106,7 @@ interface ConductorInitMessage {
   snapshot: ConductorSnapshot;
   systemPrompt?: string;
   workingDirectory?: string;
+  language?: string;
 }
 
 interface ConductorStartMessage {
@@ -113,6 +114,7 @@ interface ConductorStartMessage {
   sessionId: string;
   prompt: string;
   snapshot?: ConductorSnapshot;
+  language?: string;
 }
 
 interface FileAttachment {
@@ -136,7 +138,10 @@ interface ChatStartMessage {
   options?: {
     messages?: Array<{ role: string; content: string }>;
     systemPrompt?: string;
+    language?: string;
+    /** @deprecated 由 session row.permission_profile 派生, worker 严格忽略. */
     permissionMode?: string;
+    permissionModeOverride?: 'default' | 'auto' | 'bypassPermissions';
     files?: FileAttachment[];
     agentProfileId?: string | null;
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
@@ -618,8 +623,33 @@ async function loadAgentSkills(workDir?: string, skillPaths?: string[], security
     // Use workDir if provided, otherwise use process.cwd()
     const skillsCwd = workDir || process.cwd();
     await loadSkills(skillsCwd, loadOptions);
-    const skills = getSkillRegistry().list();
-    log(`[Agent-Process] Loaded ${skills.length} skills (${pluginSkillPaths.length} from plugins)`);
+    const registry = getSkillRegistry();
+
+    // Apply user overrides from settings (disabled skills are fully removed from runtime registry)
+    try {
+      const overridesRaw = await settingDb.getJson<Record<string, boolean>>('skillEnabledOverrides', {});
+      const overrides = (overridesRaw && typeof overridesRaw === 'object')
+        ? overridesRaw as Record<string, boolean>
+        : {};
+      const disabledNames = new Set<string>(
+        Object.entries(overrides)
+          .filter(([, enabled]) => enabled === false)
+          .map(([name]) => name)
+      );
+      if (disabledNames.size > 0) {
+        for (const skill of registry.list()) {
+          if (disabledNames.has(skill.name)) {
+            registry.unregister(skill.name);
+          }
+        }
+        log(`[Agent-Process] Disabled ${disabledNames.size} skill(s) via user overrides`);
+      }
+    } catch (overrideErr) {
+      warn('[Agent-Process] Failed to apply skill enabled overrides:', overrideErr);
+    }
+
+    const skills = registry.list();
+    log(`[Agent-Process] Loaded ${skills.length} skills after filtering (${pluginSkillPaths.length} plugin skill paths)`);
     if (skills.length === 0) {
       sendToMain({
         type: 'skills:status',
@@ -869,6 +899,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     titleGenerationModelConfig = null;
   }
 
+  if (msg.options?.language && agent?.promptManager?.updateOptions) {
+    agent.promptManager.updateOptions({ language: msg.options.language });
+  }
+
   log('[Agent-Process] handleChatStart:', { sessionId: msg.sessionId, promptLength: msg.prompt.length, agentProfileId: msg.options?.agentProfileId || '(none)' });
   if (agent) {
     log('[Agent-Process] Agent LLM config:', {
@@ -905,11 +939,25 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     };
     // Use session system prompt if available, fallback to options.systemPrompt
     const effectiveSystemPrompt = sessionSystemPrompt || msg.options?.systemPrompt;
-    // Apply permission mode from chat start options if provided
-    const permissionMode = msg.options?.permissionMode;
-    if (permissionMode) {
-      agent.setPermissionMode(permissionMode);
+    // Resolve permission mode from session row, with explicit override allowed.
+    // 严格忽略 msg.options.permissionMode (旧字段), 防止残留发送路径覆盖 DB 决定.
+    let rowProfile: string | null = null;
+    try {
+      const sessionRow = sessionDb.get(msg.sessionId);
+      rowProfile = (sessionRow as { permission_profile?: string | null } | null)?.permission_profile ?? null;
+    } catch {
+      // 静默降级, 走 default
     }
+    const resolved = resolveChatStartAgentMode({
+      rowProfile,
+      optionOverride: msg.options?.permissionModeOverride,
+      deprecatedOption: msg.options?.permissionMode,
+    });
+    if (resolved.ignoredDeprecated) {
+      log('[chat:start] ignored deprecated options.permissionMode:', resolved.ignoredDeprecated);
+    }
+    log('[chat:start] agentMode:', resolved.agentMode, 'fromRow:', resolved.fromRow, 'override:', resolved.override);
+    agent.setPermissionMode(resolved.agentMode);
 
     // Build document context from inline file attachments.
     // Document files (pdf, docx, etc.) carry their parsed text and imageChunks
@@ -1682,6 +1730,9 @@ async function handleConductorInit(msg: ConductorInitMessage): Promise<void> {
   if (msg.workingDirectory) {
     promptManager.setWorkingDirectory(msg.workingDirectory);
   }
+  if (msg.language) {
+    promptManager.updateOptions({ language: msg.language });
+  }
 
   conductorAgent = new duyaAgent({
     apiKey: msg.providerConfig.apiKey,
@@ -1701,6 +1752,11 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
   if (!conductorAgent) {
     sendToMain({ type: 'conductor:error', sessionId: msg.sessionId, message: 'Conductor agent not initialized' });
     return;
+  }
+
+  if (msg.language) {
+    (conductorAgent as unknown as { promptManager?: { updateOptions: (options: { language?: string }) => void } })
+      .promptManager?.updateOptions({ language: msg.language });
   }
 
   // Update canvas state snapshot for every message (not just init)
@@ -1872,7 +1928,9 @@ function resolveBundledMCPServerConfigs(): MCPServerConfig[] {
   if (existsSync(literatureBundlePath)) {
     configs.push({
       name: 'literature',
-      command: 'node',
+      // Use the current runtime executable to avoid hard dependency on system `node`
+      // in packaged desktop environments.
+      command: process.execPath,
       args: [literatureBundlePath, '--db-path', process.env.DUYA_CUSTOM_DB_PATH || ''],
       env: {
         DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || '',
@@ -1883,6 +1941,88 @@ function resolveBundledMCPServerConfigs(): MCPServerConfig[] {
   }
 
   return configs;
+}
+
+function resolveBundledAgentBundleScript(scriptPath: string): string | null {
+  const scriptName = path.basename(scriptPath);
+  const isPackaged = !!process.resourcesPath && !process.defaultApp;
+  const candidates = isPackaged
+    ? [
+        path.join(process.resourcesPath, 'agent-bundle', scriptName),
+      ]
+    : [
+        path.join(process.cwd(), 'packages', 'agent', 'bundle', scriptName),
+        path.join(process.cwd(), 'agent-bundle', scriptName),
+      ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function resolvePluginMCPPath(installPath: string, rawPath: string): string {
+  if (!rawPath.startsWith('./') && !rawPath.startsWith('../')) {
+    return rawPath;
+  }
+
+  const installRelativePath = path.resolve(installPath, rawPath);
+  if (existsSync(installRelativePath)) {
+    return installRelativePath;
+  }
+
+  if (rawPath.includes('agent-bundle')) {
+    const bundledPath = resolveBundledAgentBundleScript(rawPath);
+    if (bundledPath) {
+      return bundledPath;
+    }
+  }
+
+  return installRelativePath;
+}
+
+function normalizePluginMCPServerConfig(
+  pluginId: string,
+  installPath: string,
+  server: PluginMCPServerManifest,
+): MCPServerConfig | null {
+  const rawCommand = server.command?.trim();
+  if (!rawCommand) {
+    warn(`[Agent-Process] Skipping MCP server with empty command from plugin ${pluginId}`);
+    return null;
+  }
+
+  const command = rawCommand === 'node'
+    ? process.execPath
+    : resolvePluginMCPPath(installPath, rawCommand);
+
+  const args = (server.args || []).map((arg: string) => resolvePluginMCPPath(installPath, arg));
+
+  const scriptArg = args[0];
+  const runsNodeScript = command === process.execPath || command.endsWith('node') || command.endsWith('node.exe');
+  if (runsNodeScript && scriptArg && !existsSync(scriptArg)) {
+    warn(
+      `[Agent-Process] Skipping MCP server "${server.name}" from plugin ${pluginId}: script not found at ${scriptArg}`,
+    );
+    return null;
+  }
+
+  if (command !== process.execPath && (command.startsWith('./') || command.startsWith('../')) && !existsSync(command)) {
+    warn(
+      `[Agent-Process] Skipping MCP server "${server.name}" from plugin ${pluginId}: command not found at ${command}`,
+    );
+    return null;
+  }
+
+  return {
+    name: server.name,
+    command,
+    args,
+    env: server.env,
+  };
 }
 
 // ============================================================================
@@ -1896,7 +2036,102 @@ interface PluginManifestData {
       name: string;
       command: string;
       args?: string[];
+      env?: Record<string, string>;
     }>;
+  };
+}
+
+type PluginMCPServerManifest = {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function parseMcpServerConfigs(raw: unknown): MCPServerConfig[] {
+  const toConfig = (name: string, value: Record<string, unknown>): MCPServerConfig | null => {
+    const command = typeof value.command === 'string' ? value.command : '';
+    if (!name || !command) return null;
+    if (value.enabled === false) return null;
+    const args = Array.isArray(value.args)
+      ? value.args.filter((arg): arg is string => typeof arg === 'string')
+      : [];
+    const env = isObject(value.env)
+      ? Object.fromEntries(
+          Object.entries(value.env).filter(([, envValue]) => typeof envValue === 'string') as Array<[string, string]>,
+        )
+      : undefined;
+    return { name, command, args, env };
+  };
+
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((item): item is Record<string, unknown> => isObject(item))
+      .map((item) => {
+        const itemName = typeof item.name === 'string' ? item.name : '';
+        return toConfig(itemName, item);
+      })
+      .filter((item): item is MCPServerConfig => item !== null);
+  }
+
+  if (isObject(raw)) {
+    const fromObject: MCPServerConfig[] = [];
+    for (const [name, value] of Object.entries(raw)) {
+      if (!isObject(value)) continue;
+      const config = toConfig(name, value);
+      if (config) {
+        fromObject.push(config);
+      }
+    }
+    return fromObject;
+  }
+
+  return [];
+}
+
+async function discoverSettingsMCPServerConfigs(): Promise<{
+  configs: MCPServerConfig[];
+  counts: { legacyFile: number; settingsKv: number; agentSettings: number };
+}> {
+  let legacyFile: MCPServerConfig[] = [];
+  let settingsKv: MCPServerConfig[] = [];
+  let agentSettings: MCPServerConfig[] = [];
+
+  try {
+    const legacyResult = await loadMCPConfigs();
+    legacyFile = legacyResult.configs;
+  } catch (err) {
+    warn('[Agent-Process] Failed to load MCP from legacy settings file:', err);
+  }
+
+  try {
+    const kvRaw = await settingDb.getJson<unknown>('mcpServers', []);
+    settingsKv = parseMcpServerConfigs(kvRaw);
+  } catch (err) {
+    warn('[Agent-Process] Failed to load MCP from settings KV:', err);
+  }
+
+  try {
+    const agentSettingsRaw = await configDb.agentGetSettings();
+    const rawServers = isObject(agentSettingsRaw) ? agentSettingsRaw.mcpServers : undefined;
+    agentSettings = parseMcpServerConfigs(rawServers);
+  } catch (err) {
+    warn('[Agent-Process] Failed to load MCP from config:agent:getSettings:', err);
+  }
+
+  return {
+    // Priority order: legacy file < settings KV < ConfigManager agentSettings
+    // (later entries win when deduped by name in initMCPServers()).
+    configs: [...legacyFile, ...settingsKv, ...agentSettings],
+    counts: {
+      legacyFile: legacyFile.length,
+      settingsKv: settingsKv.length,
+      agentSettings: agentSettings.length,
+    },
   };
 }
 
@@ -1941,7 +2176,9 @@ async function discoverPluginMCPServerConfigs(): Promise<MCPServerConfig[]> {
       if (plugin.manifest && typeof plugin.manifest === 'object') {
         manifest = plugin.manifest as PluginManifestData;
       } else {
-        const manifestPath = path.join(installPath, 'duya-plugin.json');
+        const manifestPath = existsSync(path.join(installPath, 'plugin.json'))
+          ? path.join(installPath, 'plugin.json')
+          : path.join(installPath, 'duya-plugin.json');
         if (existsSync(manifestPath)) {
           try {
             const raw = await readFile(manifestPath, 'utf-8');
@@ -1953,11 +2190,14 @@ async function discoverPluginMCPServerConfigs(): Promise<MCPServerConfig[]> {
       }
       if (manifest?.capabilities?.mcpServers) {
         for (const server of manifest.capabilities.mcpServers) {
-          configs.push({
-            name: server.name,
-            command: server.command,
-            args: server.args || [],
-          });
+          const normalized = normalizePluginMCPServerConfig(
+            plugin.id as string,
+            installPath,
+            server,
+          );
+          if (normalized) {
+            configs.push(normalized);
+          }
         }
       }
     }
@@ -1995,11 +2235,12 @@ async function reloadMCP(): Promise<void> {
   try {
     const pluginConfigs = await discoverPluginMCPServerConfigs();
     const bundledConfigs = resolveBundledMCPServerConfigs();
-    const settingsResult = await loadMCPConfigs();
+    const settingsResult = await discoverSettingsMCPServerConfigs();
     const allConfigs = [...bundledConfigs, ...pluginConfigs, ...settingsResult.configs];
     if (allConfigs.length > 0) {
       await agent.initMCPServers(allConfigs);
-      log(`[Agent-Process] Reloaded MCP servers: ${allConfigs.length} total (${bundledConfigs.length} bundled, ${pluginConfigs.length} plugin, ${settingsResult.configs.length} settings)`);
+      log(`[Agent-Process] Reloaded MCP servers: ${allConfigs.length} total (${bundledConfigs.length} bundled, ${pluginConfigs.length} plugin, ${settingsResult.configs.length} settings)` +
+        ` [legacyFile=${settingsResult.counts.legacyFile}, settingsKv=${settingsResult.counts.settingsKv}, agentSettings=${settingsResult.counts.agentSettings}]`);
     }
     sendToMain({ type: 'mcp:reloaded', count: allConfigs.length });
   } catch (err) {
@@ -2062,36 +2303,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           try {
             await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform);
 
-            // Initialize bundled MCP servers (Literature Plugin etc.)
-            try {
-              const mcpConfigs = resolveBundledMCPServerConfigs();
-              if (mcpConfigs.length > 0) {
-                await agent.initMCPServers(mcpConfigs);
-              }
-            } catch (mcpErr) {
-              warn('[Agent-Process] Failed to initialize bundled MCP servers:', mcpErr);
-            }
-
-            // Initialize plugin MCP servers
-            try {
-              const pluginConfigs = await discoverPluginMCPServerConfigs();
-              if (pluginConfigs.length > 0) {
-                await agent.initMCPServers(pluginConfigs);
-              }
-            } catch (pluginMcpErr) {
-              warn('[Agent-Process] Failed to initialize plugin MCP servers:', pluginMcpErr);
-            }
-
-            // Initialize settings-based MCP servers
-            try {
-              const settingsResult = await loadMCPConfigs();
-              if (settingsResult.configs.length > 0) {
-                await agent.initMCPServers(settingsResult.configs);
-              }
-            } catch (settingsMcpErr) {
-              warn('[Agent-Process] Failed to initialize settings MCP servers:', settingsMcpErr);
-            }
-
             try {
               // Parallel: skills loading (disk I/O) + DB message loading (IPC)
               // Skills errors are handled inside loadAgentSkills; DB errors caught below
@@ -2141,6 +2352,52 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           }
 
           sendToMain({ type: 'ready', sessionId });
+
+          // Initialize MCP servers asynchronously after sending ready so that slow or hung
+          // MCP servers do not block the worker from becoming ready.
+          (async () => {
+            try {
+              const bundledConfigs = (() => {
+                try {
+                  return resolveBundledMCPServerConfigs();
+                } catch (mcpErr) {
+                  warn('[Agent-Process] Failed to resolve bundled MCP servers:', mcpErr);
+                  return [] as MCPServerConfig[];
+                }
+              })();
+
+              const pluginConfigs = await (async () => {
+                try {
+                  return await discoverPluginMCPServerConfigs();
+                } catch (pluginMcpErr) {
+                  warn('[Agent-Process] Failed to discover plugin MCP servers:', pluginMcpErr);
+                  return [] as MCPServerConfig[];
+                }
+              })();
+
+              const settingsMcpPayload = await (async () => {
+                try {
+                  return await discoverSettingsMCPServerConfigs();
+                } catch (settingsMcpErr) {
+                  warn('[Agent-Process] Failed to discover settings MCP servers:', settingsMcpErr);
+                  return {
+                    configs: [] as MCPServerConfig[],
+                    counts: { legacyFile: 0, settingsKv: 0, agentSettings: 0 },
+                  };
+                }
+              })();
+              const settingsConfigs = settingsMcpPayload.configs;
+
+              const allMcpConfigs = [...bundledConfigs, ...pluginConfigs, ...settingsConfigs];
+              if (allMcpConfigs.length > 0) {
+                await agent.initMCPServers(allMcpConfigs);
+                log(`[Agent-Process] Initialized MCP servers: ${allMcpConfigs.length} total (${bundledConfigs.length} bundled, ${pluginConfigs.length} plugin, ${settingsConfigs.length} settings)` +
+                  ` [legacyFile=${settingsMcpPayload.counts.legacyFile}, settingsKv=${settingsMcpPayload.counts.settingsKv}, agentSettings=${settingsMcpPayload.counts.agentSettings}]`);
+              }
+            } catch (mcpErr) {
+              warn('[Agent-Process] Failed to initialize MCP servers after ready:', mcpErr);
+            }
+          })();
           break;
         }
 

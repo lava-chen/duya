@@ -226,8 +226,13 @@ interface StartStreamParams {
   model?: string;
   maxTokens?: number;
   systemPrompt?: string;
+  language?: string;
   initialGeneration?: number;
-  permissionMode?: string;
+  /**
+   * 显式单次 override (trusted caller only). 类型: agent internal mode, 不是 DB profile.
+   * 普通 send payload **不**携带此字段; worker 从 session row.permission_profile 派生默认 mode.
+   */
+  permissionModeOverride?: 'default' | 'auto' | 'bypassPermissions';
   files?: FileAttachment[];
   agentProfileId?: string | null;
   outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
@@ -621,6 +626,7 @@ class StreamSessionManager {
     content: string;
     snapshot?: unknown;
     model?: string;
+    language?: string;
   }): string {
     const streamId = crypto.randomUUID();
     const state: ConductorSessionState = {
@@ -651,6 +657,7 @@ class StreamSessionManager {
         snapshot: params.snapshot,
         canvasId: params.canvasId,
         model: params.model,
+        language: params.language,
       });
     }
 
@@ -988,7 +995,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, model, maxTokens, systemPrompt, initialGeneration, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled } = params;
+    const { sessionId, content, model, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled } = params;
 
     // Resolve workingDirectory from the thread store — sessionId IS the threadId
     let workingDirectory: string | undefined;
@@ -1141,7 +1148,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, model, maxTokens, systemPrompt, permissionMode, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled },
+      { content, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled },
       nextGeneration
     );
 
@@ -1156,7 +1163,8 @@ class StreamSessionManager {
       model?: string;
       maxTokens?: number;
       systemPrompt?: string;
-      permissionMode?: string;
+      language?: string;
+      permissionModeOverride?: 'default' | 'auto' | 'bypassPermissions';
       files?: FileAttachment[];
       agentProfileId?: string | null;
       outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
@@ -1330,6 +1338,10 @@ class StreamSessionManager {
           this.handleResearchPlanStepsEvent(sessionId, event.data as { steps: Array<{ id: string; order: number; label: string }>; timestamp: number } | undefined);
           break;
 
+        case 'agent_progress':
+          this.handleAgentProgressEvent(sessionId, streamId, event.data as AgentProgressEvent | undefined);
+          break;
+
         default:
           // Try to handle as generic message with data
           if (event.data) {
@@ -1355,7 +1367,8 @@ class StreamSessionManager {
         model: params.model,
         maxTokens: params.maxTokens,
         systemPrompt: params.systemPrompt,
-        permissionMode: params.permissionMode,
+        language: params.language,
+        permissionModeOverride: params.permissionModeOverride,
         files: params.files,
         agentProfileId: params.agentProfileId,
         outputStyleConfig: params.outputStyleConfig,
@@ -1541,6 +1554,21 @@ class StreamSessionManager {
     s.streamingEvents = [...s.streamingEvents, { type: 'tool_result', toolResult: info, timestamp: Date.now() }];
     this.notifyToolListeners(sessionId);
     this.notifyStreamingEventsListeners(sessionId);
+    this.resetIdleTimeout(sessionId);
+  }
+
+  private handleAgentProgressEvent(sessionId: string, streamId: string, data: AgentProgressEvent | undefined): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    if (!data) return;
+
+    const event: AgentProgressEvent = {
+      ...data,
+      receivedAt: data.receivedAt ?? Date.now(),
+    };
+
+    s.agentProgressEvents = [...s.agentProgressEvents, event];
+    this.notifyAgentProgressListeners(sessionId, event);
     this.resetIdleTimeout(sessionId);
   }
 
@@ -2984,7 +3012,7 @@ export const getResearchSnapshot = (sessionId: string) =>
   streamSessionManager.getResearchSnapshot(sessionId);
 
 // Re-export conductor types and session manager methods
-export const startConductorStream = (params: { canvasId: string; content: string; snapshot?: unknown; model?: string }) =>
+export const startConductorStream = (params: { canvasId: string; content: string; snapshot?: unknown; model?: string; language?: string }) =>
   streamSessionManager.startConductorStream(params);
 
 export const stopConductorStream = (canvasId: string) =>
