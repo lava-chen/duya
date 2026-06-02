@@ -41,6 +41,15 @@ coverage/
 *.test.tsx
 *.spec.ts
 *.spec.tsx
+# Untrack unit-test source for these packages.
+!packages/agent/tests/**/*.test.ts
+!packages/agent/tests/**/*.test.tsx
+!packages/agent/tests/**/*.spec.ts
+!packages/agent/tests/**/*.spec.tsx
+!packages/plugin-core/tests/**/*.test.ts
+!packages/plugin-core/tests/**/*.test.tsx
+!packages/plugin-core/tests/**/*.spec.ts
+!packages/plugin-core/tests/**/*.spec.tsx
 
 # Project specific
 ui-screenshot-*.png
@@ -61,8 +70,10 @@ docs/*/
 docs/*.md
 
 # Tests
-tests/
-packages/agent/tests/
+# Tests: only the root-level `tests/` scratch directory is ignored.
+# `packages/agent/tests/` and `packages/plugin-core/tests/` are intentionally
+# tracked — they hold the project's unit-test source.
+/tests/
 
 # Bundled output
 packages/agent/bundle/

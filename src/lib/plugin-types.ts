@@ -3,6 +3,58 @@ import type { PluginError } from './plugin-error-types';
 import type { PluginTrustLevel } from './plugin-security-types';
 
 // ============================================================================
+// MCP re-exports from @duya/plugin-core (plan 97, Phase 0)
+// Pure types only — no I/O, no runtime calls. Renderer surfaces these to
+// the MCP settings page and to MCP-aware UI components.
+// ============================================================================
+
+export type {
+  MCPDiscoveryStatus,
+  MCPConnectionStatus,
+  MCPDiscoveryError,
+  MCPConnectionError,
+  MCPRegistrationError,
+  MCPError,
+  MCPIssue,
+  MCPPhase,
+  MCPSource,
+  MCPSettingsSubOrigin,
+  MCPSourceContext,
+  MCPCandidate,
+  ResolutionContext,
+  MCPServerInventoryEntry,
+  ResolvedMCPServerConfig,
+  ResolutionResult,
+  MCPToolDescriptor,
+  MCPHealthReport,
+} from '@duya/plugin-core';
+
+export {
+  PLUGIN_SCOPE_PREFIX,
+  MCP_INTERNAL_PREFIX,
+  MCP_INTERNAL_SEP,
+  scopedPluginServerName,
+  toolInternalKey,
+  unscopedServerName,
+  pluginIdFromScopedName,
+  isPluginScopedName,
+  buildInventoryId,
+  AnthropicToolNamePolicy,
+  OpenAIToolNamePolicy,
+  sanitizeProviderToolName,
+  allocateUniqueProviderToolName,
+  expandEnvVarsInString,
+  substitutePluginVariables,
+  substituteUserConfigVariables,
+  expandMcpServerConfig,
+  getMCPErrorMessage,
+  getMCPErrorSeverity,
+  getMCPSuggestedAction,
+} from '@duya/plugin-core';
+
+export type { ProviderToolNamePolicy } from '@duya/plugin-core';
+
+// ============================================================================
 // Lenient Validation Types (for LLM-friendly plugin descriptions)
 // ============================================================================
 
