@@ -25,6 +25,7 @@ export type {
   MCPServerInventoryEntry,
   ResolvedMCPServerConfig,
   ResolutionResult,
+  MCPCollectionResult,
   MCPToolDescriptor,
   MCPHealthReport,
   BuiltinFallbackReplacement,
