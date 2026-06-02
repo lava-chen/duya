@@ -56,7 +56,7 @@ export interface AppSettings {
   defaultModel: string;
   lastSelectedModel: string; // User's last selected model, remembered across sessions
   mcpServers: MCPServerConfig[];
-  permissionMode: "default" | "bypass" | "auto" | "dontAsk";
+  permissionMode: "default" | "bypass" | "auto";
   sandboxEnabled: boolean;
   theme: "dark" | "light" | "system";
   locale: string;
@@ -87,8 +87,6 @@ export interface AppSettings {
   // Appearance settings
   font?: string;
   compactMode?: boolean;
-  showTimestamps?: boolean;
-  showAvatars?: boolean;
   // Browser security settings
   blockedDomains: string[];
   // Favorite agent profiles for quick access (max 3)
@@ -97,6 +95,7 @@ export interface AppSettings {
   agentLanguage?: string;
   // Security settings
   securityScanEnabled: boolean;
+  cronPermissionMode?: "default" | "bypass" | "auto";
   // Default workspace directory for creating new projects
   workspaceDir?: string;
 }

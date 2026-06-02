@@ -17,6 +17,7 @@ import * as ipcDbClient from '../ipc/db-client.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { logger } from '../utils/logger.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
+import { resolveAgentPermissionProfile } from './permission-resolver.js';
 
 // =============================================================================
 // IPC Mode Detection
@@ -115,6 +116,17 @@ export interface CreateSessionData {
   agent_profile_id?: string | null;
   agent_type?: string;
   agent_name?: string;
+  /**
+   * DB permission profile 显式值. 若不传, 由 resolveAgentPermissionProfile 解析.
+   * agent 端无 settings 表, 普通 new 不传则落 'default'.
+   * 派生 session 应通过 is_trusted_permission_override + 此字段表达内部 fork 意图.
+   */
+  permission_profile?: string | null;
+  /**
+   * trusted internal caller 才传 true. 普通 CLI / 外部调用不传.
+   * 控制派生 session 显式 override 是否允许 (与 resolver 配合).
+   */
+  is_trusted_permission_override?: boolean;
 }
 
 /** Message data for creation */
@@ -931,16 +943,24 @@ export function createSession(data: CreateSessionData): ChatSession {
 
   const db = getDb();
   const now = Date.now();
+  // 派生关系字段统一: DB 列是 parent_id, 同时接受 parent_session_id.
+  const parentSessionId = data.parent_session_id ?? data.parent_id ?? null;
+  // 在 INSERT 前一次性解析 permission_profile. agent 端无 settings 表, 普通 new 落 default.
+  const permissionProfile = resolveAgentPermissionProfile(
+    data.permission_profile,
+    parentSessionId,
+    { isTrustedOverride: data.is_trusted_permission_override === true },
+  );
 
   const stmt = db.prepare(`
     INSERT INTO chat_sessions (
       id, title, model, system_prompt, working_directory,
-      project_name, status, mode, provider_id, generation,
+      project_name, status, mode, permission_profile, provider_id, generation,
       agent_profile_id, parent_id, parent_session_id, agent_type, agent_name,
       created_at, updated_at, is_deleted
     ) VALUES (
       @id, @title, @model, @system_prompt, @working_directory,
-      @project_name, @status, @mode, @provider_id, @generation,
+      @project_name, @status, @mode, @permission_profile, @provider_id, @generation,
       @agent_profile_id, @parent_id, @parent_session_id, @agent_type, @agent_name,
       @created_at, @updated_at, 0
     )
@@ -955,6 +975,7 @@ export function createSession(data: CreateSessionData): ChatSession {
     project_name: data.project_name ?? '',
     status: data.status ?? 'active',
     mode: data.mode ?? 'code',
+    permission_profile: permissionProfile,
     provider_id: data.provider_id ?? 'env',
     generation: data.generation ?? 0,
     agent_profile_id: data.agent_profile_id ?? null,

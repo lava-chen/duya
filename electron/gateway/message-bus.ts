@@ -6,6 +6,13 @@ import { GatewayInitConfig, GatewayProxyConfig } from './types';
 import { startGatewayProcess, stopGatewayProcess, waitForGatewayReady, isGatewayRunning, getGatewayProcess } from './lifecycle';
 import { GatewaySessionState } from './types';
 import { dispatchGatewayDbAction } from './db-bridge';
+
+/**
+ * Gateway (IM 通道: 飞书/微信/Telegram 等) 创建的 session 固定 permission_profile='default'.
+ * 不读 desktop settings.permissionMode, 避免桌面端用户切 bypass 污染 IM 通道权限.
+ * Gateway 自身的权限控制走 IM 平台白名单/配对机制.
+ */
+const GATEWAY_PERMISSION_PROFILE = 'default';
 import { execSync } from 'child_process';
 import { testBridgeChannel } from '../services/network/bridge-tester';
 import { getPairingStore } from './pairing';
@@ -486,10 +493,10 @@ export function handleGatewayMessage(
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
           `).run(sessionId, title, 'gateway', '', now, now);
           db.prepare(`
-            INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-          `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
+          `).run(sessionId, title, '', '', '', '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
 
           // Create user mapping atomically (saves one IPC round-trip from Gateway)
           db.prepare(`
@@ -552,10 +559,10 @@ export function handleGatewayMessage(
           `).run(sessionId, title, 'gateway', '', now, now);
           // Also insert into chat_sessions so messages can be persisted via replaceMessages
           db.prepare(`
-            INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-          `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
+          `).run(sessionId, title, '', '', '', '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
         } catch (err) {
           getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
         }

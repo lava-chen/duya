@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import { getLogger, LogComponent } from '../logging/logger';
+import { createSession } from '../db/queries/sessions';
 import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import {
@@ -135,50 +136,8 @@ export function registerDbHandlers(): void {
   // ==================== Session Handlers ====================
 
   ipcMain.handle('db:session:create', (_event, data) => {
-    const now = Date.now();
-    db!.prepare(`
-      INSERT INTO chat_sessions (
-        id, title, model, system_prompt, working_directory,
-        project_name, status, mode, provider_id, generation,
-        parent_id, agent_type, agent_name,
-        created_at, updated_at, is_deleted
-      ) VALUES (
-        @id, @title, @model, @system_prompt, @working_directory,
-        @project_name, @status, @mode, @provider_id, @generation,
-        @parent_id, @agent_type, @agent_name,
-        @created_at, @updated_at, 0
-      )
-      ON CONFLICT(id) DO UPDATE SET
-        title = excluded.title,
-        model = excluded.model,
-        system_prompt = excluded.system_prompt,
-        working_directory = excluded.working_directory,
-        project_name = excluded.project_name,
-        status = excluded.status,
-        mode = excluded.mode,
-        provider_id = excluded.provider_id,
-        parent_id = COALESCE(excluded.parent_id, chat_sessions.parent_id),
-        agent_type = COALESCE(excluded.agent_type, chat_sessions.agent_type),
-        agent_name = COALESCE(excluded.agent_name, chat_sessions.agent_name),
-        updated_at = excluded.updated_at
-    `).run({
-      id: data.id,
-      title: data.title ?? 'New Chat',
-      model: data.model ?? '',
-      system_prompt: data.system_prompt ?? '',
-      working_directory: data.working_directory ?? '',
-      project_name: data.project_name ?? '',
-      status: data.status ?? 'active',
-      mode: data.mode ?? 'code',
-      provider_id: data.provider_id ?? 'env',
-      generation: data.generation ?? 0,
-      parent_id: data.parent_id ?? (data as Record<string, unknown>).parent_session_id as string ?? null,
-      agent_type: data.agent_type ?? 'main',
-      agent_name: data.agent_name ?? '',
-      created_at: now,
-      updated_at: now,
-    });
-    return db!.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(data.id);
+    // 委托 query 层, 自动走 permission-resolver 完成 settings → profile 派生 / 父继承逻辑.
+    return createSession(data);
   });
 
   ipcMain.handle('db:session:get', (_event, sessionId: string) => {

@@ -177,17 +177,65 @@ export function App() {
   }, [setActiveThread]);
 
   const handleSendMessage = useCallback(
-    (content: string, uiPermissionMode: PermissionMode = 'ask', model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string) => {
-    if (!activeThreadId) return;
+    // 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生默认 mode.
+    // uiPermissionMode 参数保留签名兼容 (ChatView 还在传), 但不使用.
+    (
+      content: string,
+      _uiPermissionMode?: PermissionMode,
+      model?: string,
+      files?: FileAttachment[],
+      agentProfileId?: string | null,
+      outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
+      mode?: string,
+    ) => {
+      if (!activeThreadId) return;
 
-    // Strip markers before sending to API
-    const plainContent = stripPastedContentMarkers(content);
+      // Strip markers before sending to API
+      const plainContent = stripPastedContentMarkers(content);
 
-    if (!canSend(activeThreadId)) {
-      enqueueMessage(activeThreadId, {
+      if (!canSend(activeThreadId)) {
+        enqueueMessage(activeThreadId, {
+          sessionId: activeThreadId,
+          content: plainContent,
+          // 不再携带 permissionMode; worker 从 session row 派生.
+          model,
+          files,
+          agentProfileId,
+          outputStyleConfig: outputStyleConfig ?? undefined,
+          mode,
+          titleGenerationModel: settings.titleGenerationModel,
+          wikiAgentEnabled,
+        });
+        return;
+      }
+
+      const now = Date.now();
+
+      // Store message — attachments now carry full parsed data (images + documents)
+      const userMsgId = crypto.randomUUID();
+      const userMsg: Message = {
+        id: userMsgId,
+        role: "user",
+        content,
+        timestamp: now,
+        attachments: files,
+      };
+      console.log('[App] handleSendMessage:', {
+        contentLength: content.length,
+        filesCount: files?.length,
+        filesWithText: files?.filter(f => f.text)?.map(f => ({ name: f.name, textLength: f.text?.length })),
+        filesWithImageChunks: files?.filter(f => f.imageChunks)?.map(f => ({ name: f.name, chunks: f.imageChunks?.length })),
+      });
+
+      addMessage(activeThreadId, userMsg, { persist: false });
+
+      setIsStreaming(true);
+
+      void startStream({
         sessionId: activeThreadId,
         content: plainContent,
-        permissionMode: uiPermissionMode === 'bypass' ? 'bypassPermissions' : uiPermissionMode === 'auto' ? 'auto' : 'default',
+        language: settings.agentLanguage,
+        // 不再携带 permissionMode; worker 从 session row 派生.
         model,
         files,
         agentProfileId,
@@ -195,65 +243,36 @@ export function App() {
         mode,
         titleGenerationModel: settings.titleGenerationModel,
         wikiAgentEnabled,
+        defaultWorkspaceDirectory: settings.workspaceDir,
       });
-      return;
-    }
 
-    const now = Date.now();
+      setToolTimeoutCallback(activeThreadId, (retryContent: string) => {
+        if (!activeThreadId || !canSend(activeThreadId)) return;
 
-    // Store message — attachments now carry full parsed data (images + documents)
-    const userMsgId = crypto.randomUUID();
-    const userMsg: Message = {
-      id: userMsgId,
-      role: "user",
-      content,
-      timestamp: now,
-      attachments: files,
-    };
-    console.log('[App] handleSendMessage:', {
-      contentLength: content.length,
-      filesCount: files?.length,
-      filesWithText: files?.filter(f => f.text)?.map(f => ({ name: f.name, textLength: f.text?.length })),
-      filesWithImageChunks: files?.filter(f => f.imageChunks)?.map(f => ({ name: f.name, chunks: f.imageChunks?.length })),
-    });
+        const retryMsg: Message = {
+          id: crypto.randomUUID(),
+          role: "user",
+          content: retryContent,
+          timestamp: Date.now(),
+        };
 
-    addMessage(activeThreadId, userMsg, { persist: false });
-
-    setIsStreaming(true);
-
-    // Map UI permission mode to agent internal mode
-    const agentPermissionMode = uiPermissionMode === 'bypass' ? 'bypassPermissions' : uiPermissionMode === 'auto' ? 'auto' : 'default';
-
-    void startStream({
-      sessionId: activeThreadId,
-      content: plainContent,
-      permissionMode: agentPermissionMode,
-      model,
-      files,
-      agentProfileId,
-      outputStyleConfig: outputStyleConfig ?? undefined,
-      mode,
-      titleGenerationModel: settings.titleGenerationModel,
-      wikiAgentEnabled,
-      defaultWorkspaceDirectory: settings.workspaceDir,
-    });
-
-    setToolTimeoutCallback(activeThreadId, (retryContent: string) => {
-      if (!activeThreadId || !canSend(activeThreadId)) return;
-
-      const retryMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: retryContent,
-        timestamp: Date.now(),
-      };
-
-      addMessage(activeThreadId, retryMsg, { persist: false });
-      // Strip markers before sending to API
-      const plainRetryContent = stripPastedContentMarkers(retryContent);
-      void startStream({ sessionId: activeThreadId, content: plainRetryContent, permissionMode: agentPermissionMode, model, agentProfileId, titleGenerationModel: settings.titleGenerationModel, wikiAgentEnabled, defaultWorkspaceDirectory: settings.workspaceDir });
-    });
-  }, [activeThreadId, addMessage, settings.titleGenerationModel, wikiAgentEnabled]);
+        addMessage(activeThreadId, retryMsg, { persist: false });
+        // Strip markers before sending to API
+        const plainRetryContent = stripPastedContentMarkers(retryContent);
+        void startStream({
+          sessionId: activeThreadId,
+          content: plainRetryContent,
+          language: settings.agentLanguage,
+          model,
+          agentProfileId,
+          titleGenerationModel: settings.titleGenerationModel,
+          wikiAgentEnabled,
+          defaultWorkspaceDirectory: settings.workspaceDir,
+        });
+      });
+    },
+    [activeThreadId, addMessage, settings.titleGenerationModel, wikiAgentEnabled],
+  );
 
   const handleInterrupt = useCallback(() => {
     if (!activeThreadId) return;

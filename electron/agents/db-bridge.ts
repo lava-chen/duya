@@ -13,6 +13,8 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
 import { getPairingStore } from '../gateway/pairing';
 import { getPluginManager } from '../plugins/PluginManager';
+import { resolvePermissionProfile } from '../db/permission-resolver';
+import type { PermissionProfile } from '../lib/permission-profile';
 
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 
@@ -99,17 +101,23 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       }
 
       const model = (p.model as string) || defaultModel || getDefaultModelForProvider(providerType);
+      // 派生关系字段统一: IPC DTO 用 parent_session_id, DB 列是 parent_id
+      const parentSessionId = (p.parent_session_id as string | undefined) ?? (p.parent_id as string | undefined) ?? null;
+      // agent 子系统属于 trusted internal caller, 允许派生 session 显式 override.
+      const isTrusted = p.is_trusted_permission_override === true;
+      const explicitProfile = typeof p.permission_profile === 'string' ? p.permission_profile : undefined;
+      const permissionProfile: PermissionProfile = resolvePermissionProfile(explicitProfile, parentSessionId, { isTrustedOverride: isTrusted });
 
       db.prepare(`
         INSERT INTO chat_sessions (
           id, title, model, system_prompt, working_directory,
           project_name, status, mode, provider_id, generation,
-          parent_id, agent_type, agent_name,
+          parent_id, permission_profile, agent_type, agent_name,
           created_at, updated_at, is_deleted
         ) VALUES (
           @id, @title, @model, @system_prompt, @working_directory,
           @project_name, @status, @mode, @provider_id, @generation,
-          @parent_id, @agent_type, @agent_name,
+          @parent_id, @permission_profile, @agent_type, @agent_name,
           @created_at, @updated_at, 0
         )
       `).run({
@@ -123,7 +131,8 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         mode: p.mode ?? 'code',
         provider_id: p.provider_id ?? 'env',
         generation: p.generation ?? 0,
-        parent_id: p.parent_session_id ?? null,
+        parent_id: parentSessionId,
+        permission_profile: permissionProfile,
         agent_type: p.agent_type ?? 'main',
         agent_name: p.agent_name ?? '',
         created_at: now,
