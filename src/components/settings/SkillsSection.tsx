@@ -42,6 +42,7 @@ interface SkillMetadata {
   description: string;
   category?: string;
   source?: string;
+  enabled?: boolean;
   userInvocable?: boolean;
   whenToUse?: string;
   allowedTools?: string[];
@@ -132,13 +133,25 @@ function SecurityBadge({ security, source }: { security?: SkillSecurity; source?
   );
 }
 
-function SkillCard({ skill, isEnabled, onClick }: { skill: SkillWithContent; isEnabled?: boolean; onClick: () => void }) {
+function SkillCard({
+  skill,
+  isEnabled,
+  isToggling,
+  onClick,
+  onToggleEnabled,
+}: {
+  skill: SkillWithContent;
+  isEnabled?: boolean;
+  isToggling?: boolean;
+  onClick: () => void;
+  onToggleEnabled: (skill: SkillWithContent) => void;
+}) {
   return (
     <div
       className="group p-4 rounded-xl border border-border/50 bg-surface/50 hover:border-accent/30 hover:bg-accent/[0.02] hover:shadow-sm hover:-translate-y-0.5 transition-all duration-200 cursor-pointer"
       onClick={onClick}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3">
         <SkillIcon category={skill.category} size="md" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -146,18 +159,43 @@ function SkillCard({ skill, isEnabled, onClick }: { skill: SkillWithContent; isE
             <SecurityBadge security={skill.security} source={skill.source} />
           </div>
           <p className="text-xs text-muted-foreground leading-[1.4] line-clamp-1 mt-0.5">{skill.description}</p>
-        </div>
-        {isEnabled && (
-          <div className="w-6 h-6 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
-            <CheckIcon size={14} className="text-accent" />
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <span className={`text-[0.72rem] font-medium ${isEnabled ? "text-emerald-500" : "text-amber-500"}`}>
+              {isEnabled ? "Enabled for agent" : "Disabled for agent"}
+            </span>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleEnabled(skill);
+              }}
+              disabled={isToggling}
+              className={`px-3 py-1.5 rounded-full text-[0.72rem] font-medium border transition-colors ${
+                isEnabled
+                  ? "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
+                  : "border-amber-500/30 text-amber-500 hover:bg-amber-500/10"
+              } disabled:opacity-60 disabled:cursor-not-allowed`}
+            >
+              {isToggling ? "Updating..." : isEnabled ? "Disable" : "Enable"}
+            </button>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
 }
 
-function SkillDetailModal({ skill, onClose }: { skill: SkillWithContent; onClose: () => void }) {
+function SkillDetailModal({
+  skill,
+  onClose,
+  onToggleEnabled,
+  isToggling,
+}: {
+  skill: SkillWithContent;
+  onClose: () => void;
+  onToggleEnabled: (skill: SkillWithContent) => void;
+  isToggling: boolean;
+}) {
   const { t } = useTranslation();
   const modalRef = useRef<HTMLDivElement>(null);
   const [bypassedSkills, setBypassedSkills] = useState<string[]>([]);
@@ -223,6 +261,7 @@ function SkillDetailModal({ skill, onClose }: { skill: SkillWithContent; onClose
 
   const categoryColor = getCategoryColor(skill.category);
   const isBypassed = bypassedSkills.includes(skill.name);
+  const isEnabled = skill.enabled !== false;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" ref={modalRef}>
@@ -247,13 +286,39 @@ function SkillDetailModal({ skill, onClose }: { skill: SkillWithContent; onClose
             </div>
             <h2 className="text-lg font-semibold text-foreground mt-1">{skill.name}</h2>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted transition-colors">
-            <XIcon size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleEnabled(skill);
+              }}
+              disabled={isToggling}
+              className={`px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                isEnabled
+                  ? "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
+                  : "border-amber-500/30 text-amber-500 hover:bg-amber-500/10"
+              } disabled:opacity-60 disabled:cursor-not-allowed`}
+            >
+              {isToggling ? "Updating..." : isEnabled ? "Disable Skill" : "Enable Skill"}
+            </button>
+            <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted transition-colors">
+              <XIcon size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+            <span className={`text-xs font-medium ${isEnabled ? "text-emerald-500" : "text-amber-500"}`}>
+              {isEnabled ? "Enabled: available to agent prompt and runtime" : "Disabled: filtered from agent prompt and runtime"}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {isEnabled ? "New sessions will include it" : "New sessions will not see it"}
+            </span>
+          </div>
+
           <p className="text-sm text-muted-foreground leading-relaxed">{skill.description}</p>
 
           {metadataFields.length > 0 && (
@@ -416,6 +481,7 @@ export function SkillsSection() {
   const [skills, setSkills] = useState<SkillWithContent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [togglingSkillName, setTogglingSkillName] = useState<string | null>(null);
 
   useEffect(() => {
     const loadSkillPath = async () => {
@@ -437,7 +503,10 @@ export function SkillsSection() {
 
       const win = window as unknown as {
         electronAPI?: {
-          skills?: { list: () => Promise<{ success: boolean; skills: SkillWithContent[]; error?: string }> };
+          skills?: {
+            list: () => Promise<{ success: boolean; skills: SkillWithContent[]; error?: string }>;
+            setEnabled: (skillName: string, enabled: boolean) => Promise<{ success: boolean; overrides?: Record<string, boolean>; error?: string }>;
+          };
         };
       };
 
@@ -479,6 +548,30 @@ export function SkillsSection() {
   const groupedSkills = useMemo(() => {
     return groupSkillsByCategory(filteredSkills);
   }, [filteredSkills]);
+
+  const handleToggleEnabled = useCallback(async (skill: SkillWithContent) => {
+    const win = window as unknown as {
+      electronAPI?: {
+        skills?: {
+          setEnabled: (skillName: string, enabled: boolean) => Promise<{ success: boolean; overrides?: Record<string, boolean>; error?: string }>;
+        };
+      };
+    };
+    if (!win.electronAPI?.skills?.setEnabled) return;
+
+    const nextEnabled = skill.enabled === false;
+    setTogglingSkillName(skill.name);
+    const result = await win.electronAPI.skills.setEnabled(skill.name, nextEnabled);
+    setTogglingSkillName(null);
+
+    if (!result.success) {
+      setError(result.error || "Failed to update skill state");
+      return;
+    }
+
+    setSkills((prev) => prev.map((item) => item.name === skill.name ? { ...item, enabled: nextEnabled } : item));
+    setSelectedSkill((prev) => prev && prev.name === skill.name ? { ...prev, enabled: nextEnabled } : prev);
+  }, []);
 
   const handleSelectSkillPath = async () => {
     const win = window as unknown as {
@@ -565,8 +658,10 @@ export function SkillsSection() {
                     <SkillCard
                       key={skill.name}
                       skill={skill}
-                      isEnabled={true}
+                      isEnabled={skill.enabled !== false}
+                      isToggling={togglingSkillName === skill.name}
                       onClick={() => setSelectedSkill(skill)}
+                      onToggleEnabled={handleToggleEnabled}
                     />
                   ))}
                 </div>
@@ -577,7 +672,14 @@ export function SkillsSection() {
       </SettingsSection>
 
       {/* Skill Detail Modal */}
-      {selectedSkill && <SkillDetailModal skill={selectedSkill} onClose={() => setSelectedSkill(null)} />}
+      {selectedSkill && (
+        <SkillDetailModal
+          skill={selectedSkill}
+          onClose={() => setSelectedSkill(null)}
+          onToggleEnabled={handleToggleEnabled}
+          isToggling={togglingSkillName === selectedSkill.name}
+        />
+      )}
     </div>
   );
 }
