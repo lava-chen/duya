@@ -243,6 +243,66 @@ export class MCPManager {
   }
 
   /**
+   * Phase 2A worker closure: same as getAllTools but with
+   * Tool.internalKey / providerName / mcpInfo pre-computed for
+   * direct registration. The providerName allocator is supplied
+   * by the caller (applyMCPConfiguration) so lifecycle and
+   * uniqueness policy stay in one place. Tools from disconnected
+   * clients are skipped, matching the previous getAllTools
+   * behavior.
+   *
+   * Tools are sorted by (scopedServerName asc, toolName asc)
+   * before allocation; the allocator maintains its own usedNames
+   * set, so identical input + identical ordering yields identical
+   * providerNames across reloads.
+   */
+  getAllToolsWithIdentity(
+    allocateProviderName: (internalKey: string) => string,
+  ): Array<Tool & { serverName: string }> {
+    type Pending = {
+      scopedServerName: string;
+      toolName: string;
+      description: string;
+      input_schema: Record<string, unknown>;
+    };
+    const pending: Pending[] = [];
+    for (const client of this.clients.values()) {
+      if (!client.isConnected()) continue;
+      const scopedServerName = client.getName();
+      for (const tool of client.getTools()) {
+        pending.push({
+          scopedServerName,
+          toolName: tool.name,
+          description: tool.description,
+          input_schema: tool.input_schema,
+        });
+      }
+    }
+    pending.sort((a, b) => {
+      if (a.scopedServerName < b.scopedServerName) return -1;
+      if (a.scopedServerName > b.scopedServerName) return 1;
+      if (a.toolName < b.toolName) return -1;
+      if (a.toolName > b.toolName) return 1;
+      return 0;
+    });
+    const tools: Array<Tool & { serverName: string }> = [];
+    for (const p of pending) {
+      const internalKey = `mcp__${p.scopedServerName}__${p.toolName}`;
+      const providerName = allocateProviderName(internalKey);
+      tools.push({
+        name: providerName,
+        description: p.description,
+        input_schema: p.input_schema,
+        internalKey,
+        providerName,
+        mcpInfo: { serverName: p.scopedServerName, toolName: p.toolName },
+        serverName: p.scopedServerName,
+      });
+    }
+    return tools;
+  }
+
+  /**
    * Call a tool on a specific server
    */
   async callTool(serverName: string, toolName: string, args: Record<string, unknown>): Promise<ToolResult> {

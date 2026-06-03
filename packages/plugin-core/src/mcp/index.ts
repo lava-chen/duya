@@ -51,6 +51,8 @@ export {
   shortStableHash,
   sanitizeProviderToolName,
   allocateUniqueProviderToolName,
+  computeProviderName,
+  MCP_PROVIDER_PREFIX,
 } from './provider-tool-name';
 export type { ProviderToolNamePolicy } from './provider-tool-name';
 

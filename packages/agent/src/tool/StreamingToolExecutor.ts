@@ -379,6 +379,7 @@ export class StreamingToolExecutor {
   // Tool stream buffer for high-frequency output
   private streamBuffer: ToolStreamBuffer
   private transferableBuffer: TransferableBuffer
+  private resolveToolKey: (name: string) => string;
 
   constructor(
     toolRegistry: ToolRegistry,
@@ -414,6 +415,17 @@ export class StreamingToolExecutor {
     if (this.workerTools.size > 0) {
       this.workerPool = getWorkerPool()
     }
+
+    // Phase 2A worker closure: resolve a model-returned tool name
+    // (which is a providerName for MCP tools, or a builtin tool
+    // name) into the ToolRegistry's internalKey via the alias map
+    // installed by `applyMCPConfiguration`. Falls back to the
+    // identity function when no resolver is set (legacy / test
+    // mode where MCP tools register under their own names).
+    this.resolveToolKey = (name: string): string => {
+      const resolver = this.toolUseContext.options.resolveMCPProviderToolName;
+      return resolver ? resolver(name) : name;
+    };
 
     // Initialize stream buffer for high-frequency output buffering
     this.streamBuffer = new ToolStreamBuffer({
@@ -934,7 +946,8 @@ export class StreamingToolExecutor {
 
       // Check if tool requires user confirmation via checkPermissions
       // Skip confirmation if canUseTool already granted permission (behavior === 'allow')
-      const executor = this.toolRegistry.getExecutor(tool.block.name);
+      const resolvedKey = this.resolveToolKey(tool.block.name);
+      const executor = this.toolRegistry.getExecutor(resolvedKey);
       if (executor && 'checkPermissions' in executor && canUseBehavior !== 'allow') {
         // Build proper ToolContext for permission check
         const toolContext = {
@@ -1050,7 +1063,7 @@ export class StreamingToolExecutor {
       // Execute with timeout AND abort support
       const result = await Promise.race([
         this.toolRegistry.execute(
-          tool.block.name,
+          this.resolveToolKey(tool.block.name),
           tool.block.input as Record<string, unknown>,
           this.toolUseContext.options.workingDirectory,
           toolContext
@@ -1147,7 +1160,7 @@ export class StreamingToolExecutor {
             }));
 
             const retryResult = await this.toolRegistry.execute(
-              tool.block.name,
+              this.resolveToolKey(tool.block.name),
               tool.block.input as Record<string, unknown>,
               this.toolUseContext.options.workingDirectory,
               this.toolUseContext
@@ -1244,7 +1257,7 @@ export class StreamingToolExecutor {
           async (toolName, toolInput) => {
             try {
               const execResult = await this.toolRegistry.execute(
-                toolName,
+                this.resolveToolKey(toolName),
                 toolInput,
                 this.toolUseContext.options.workingDirectory,
                 this.toolUseContext
