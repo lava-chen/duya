@@ -309,14 +309,27 @@ export async function syncBundledSkills(): Promise<SyncResult> {
 
         // Marker present: the directory is bundled-derived. Now check
         // whether the user has modified the content.
+        //
+        // Phase 3B-0.3 fix: the comparison must be against the
+        // CURRENT bundled source hash, not the manifest-stored hash.
+        // The manifest hash is updated to reflect the user's state
+        // after customization, so re-comparing against it would
+        // always report "unmodified" once the user has edited.
         const userHash = await computeDirHash(skillDest);
+        const newBundledHash = await computeDirHash(skillSrc);
         const bundledHash = manifestEntry.hash;
 
-        if (userHash === bundledHash) {
-          // User hasn't modified the skill
-          const newBundledHash = await computeDirHash(skillSrc);
+        if (userHash === newBundledHash) {
+          // User content matches the current bundled source.
+          // (Either never modified, or user happened to revert to bundled.)
+          // No-op for this entry; reaffirm marker.
+          await writeSkillProvenance(skillDest, entry.name);
+          result.skipped.push(entry.name);
+        } else if (userHash === bundledHash) {
+          // User content matches the previously-recorded bundled hash.
+          // User has not modified since last sync.
           if (newBundledHash !== bundledHash) {
-            // Bundled skill has been updated
+            // Bundled upgraded
             await removeDir(skillDest);
             await copyDir(skillSrc, skillDest);
             await writeSkillProvenance(skillDest, entry.name);
@@ -326,20 +339,16 @@ export async function syncBundledSkills(): Promise<SyncResult> {
             };
             result.updated.push(entry.name);
           } else {
-            // Bundled content unchanged. Reaffirm provenance in case
-            // a prior run wrote the marker but later got removed.
+            // Bundled content unchanged
             await writeSkillProvenance(skillDest, entry.name);
             result.skipped.push(entry.name);
           }
         } else {
           // User has customized the bundled-derived skill.
           // DO NOT overwrite. Keep the user's content and the marker.
-          // Update the manifest's hash to reflect the user's current
-          // state so future sync runs don't repeatedly re-check.
-          manifest.skills[entry.name] = {
-            hash: userHash,
-            syncedAt: new Date().toISOString(),
-          };
+          // Do NOT update the manifest hash — the manifest must
+          // continue to record the bundled source hash so future
+          // sync runs can correctly detect the customized state.
           result.skipped.push(entry.name);
         }
       } else {
