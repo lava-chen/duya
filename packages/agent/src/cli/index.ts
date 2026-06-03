@@ -889,6 +889,7 @@ function parseCLIArgs(args: string[]): CLIParsedArgs {
 import { runStatusCommand } from './commands/status.js';
 import { runPluginCommand } from './commands/plugin.js';
 import { runSessionCommand } from './commands/session.js';
+import { runDoctorCommand } from './commands/doctor.js';
 import { parseFormat } from './api/format.js';
 
 program
@@ -976,6 +977,16 @@ program
         console.log(color('  (Session storage not yet implemented)', Colors.DIM))
       })
   )
+
+// Phase 2B: duya doctor — read-only diagnostic
+program
+  .command('doctor')
+  .description('Run read-only diagnostic checks on DUYA runtime and data stores')
+  .option('--format <format>', 'Output format: text|json', 'text')
+  .action(async (opts: { format?: string }) => {
+    const code = await runDoctorCommand(parseFormat(opts.format));
+    process.exit(code);
+  })
 
 // Provider subcommands
 program
