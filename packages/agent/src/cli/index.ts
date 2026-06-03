@@ -890,8 +890,14 @@ import { runStatusCommand } from './commands/status.js';
 import { runPluginCommand } from './commands/plugin.js';
 import { runSessionCommand } from './commands/session.js';
 import { runDoctorCommand } from './commands/doctor.js';
-import { runSkillListCommand, runSkillInfoCommand } from './commands/skill.js';
+import {
+  runSkillListCommand,
+  runSkillInfoCommand,
+  runSkillEnableCommand,
+  runSkillDisableCommand,
+} from './commands/skill.js';
 import { runMCPListCommand, runMCPInfoCommand } from './commands/mcp.js';
+import { runInstallCliCommand, runUninstallCliCommand } from './commands/install.js';
 import { parseFormat } from './api/format.js';
 
 program
@@ -1016,6 +1022,28 @@ program
         process.exit(code);
       }),
   )
+  .addCommand(
+    new Command('enable')
+      .argument('<id>', 'Skill id (e.g. bundled:code-review, plugin:<id>:<name>, user:<name>)')
+      .description('Enable a skill (removes the disabled override). Phase 7 write op.')
+      .option('--yes', 'Skip confirmation prompt (required in non-interactive mode)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (id: string, opts: { yes?: boolean; format?: string }) => {
+        const code = await runSkillEnableCommand(id, !!opts.yes, parseFormat(opts.format));
+        process.exit(code);
+      }),
+  )
+  .addCommand(
+    new Command('disable')
+      .argument('<id>', 'Skill id (e.g. bundled:code-review, plugin:<id>:<name>, user:<name>)')
+      .description('Disable a skill (writes the disabled override). Phase 7 write op.')
+      .option('--yes', 'Skip confirmation prompt (required in non-interactive mode)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (id: string, opts: { yes?: boolean; format?: string }) => {
+        const code = await runSkillDisableCommand(id, !!opts.yes, parseFormat(opts.format));
+        process.exit(code);
+      }),
+  )
 
 // Phase 6: duya mcp — read-only MCP control plane
 //
@@ -1118,6 +1146,29 @@ program
 // displaying "(MCP storage not yet implemented)". The new
 // `duya mcp list` / `duya mcp info` go through the unified
 // collector and CLI API server.
+
+// duya install-cli / uninstall-cli — install or remove the
+// `duya` shell wrapper that invokes the bundled cli.cjs.
+// The wrapper is created by the main process via the
+// /v1/install-cli endpoint and is a no-op when the user
+// already has the wrapper installed.
+program
+  .command('install-cli')
+  .description('Install the `duya` wrapper script to invoke the bundled CLI from any shell')
+  .option('--format <format>', 'Output format: text|json', 'text')
+  .action(async (opts: { format?: string }) => {
+    const code = await runInstallCliCommand(parseFormat(opts.format));
+    process.exit(code);
+  });
+
+program
+  .command('uninstall-cli')
+  .description('Remove the `duya` wrapper script installed by `duya install-cli`')
+  .option('--format <format>', 'Output format: text|json', 'text')
+  .action(async (opts: { format?: string }) => {
+    const code = await runUninstallCliCommand(parseFormat(opts.format));
+    process.exit(code);
+  });
 
 // Setup command - interactive configuration wizard
 program
