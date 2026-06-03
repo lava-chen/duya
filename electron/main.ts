@@ -84,6 +84,24 @@ if (gotTheLock) {
     logEnvironmentDiagnostic();
 
     // ============================================================
+    // Step 0.5: Cross-platform CLI install (best-effort, non-blocking)
+    // ============================================================
+    // After the app's userData path is known (via resolveDatabasePath
+    // above), attempt to install the `duya` shell wrapper. This runs
+    // once per app launch; on subsequent launches, the install is
+    // idempotent and quick. We do NOT block startup on failure.
+    try {
+      const { installCliBestEffort } = await import('./services/cliInstallAuto.js');
+      void installCliBestEffort(app.getPath('userData'));
+    } catch (err) {
+      logger.warn(
+        'CLI install hook failed to load; skipping auto-install',
+        { error: err instanceof Error ? err.message : String(err) },
+        'Main',
+      );
+    }
+
+    // ============================================================
     // Step 1: Read boot.json - resolve database path
     // ============================================================
     const { dbPath } = resolveDatabasePath();
