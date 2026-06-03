@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { resolveMCPDiscovery } from '../../src/mcp/resolve.js';
 import type { MCPCandidate, ResolutionContext } from '../../src/mcp/discovery.js';
 
@@ -337,5 +340,200 @@ describe('resolveMCPDiscovery — issue context has all required fields', () => 
       expect(i.humanMessage.length).toBeGreaterThan(0);
       expect(['critical', 'warning', 'info']).toContain(i.severity);
     }
+  });
+});
+
+// ============================================================================
+// Phase 1C: builtin fallback replacement is gated on the official
+// plugin entry's discoveryStatus. An invalid (env_missing /
+// script_missing / manifest_invalid) official literature plugin
+// must NOT shadow the bundled fallback — the bundled candidate
+// remains connectable and is the user's only working fallback.
+// ============================================================================
+
+describe('resolveMCPDiscovery — builtin fallback replacement is gated on plugin discoveryStatus', () => {
+  let tmpDir: string;
+  let bundledScriptPath: string;
+
+  beforeAll(() => {
+    // Create a real bundled script so the bundled candidate is
+    // truly connectable. We then deliberately break the official
+    // plugin candidate (env_missing / script_missing / manifest_invalid)
+    // and assert that the bundled fallback still reaches resolvedConfigs.
+    tmpDir = mkdtempSync(join(tmpdir(), 'duya-resolve-lit-'));
+    bundledScriptPath = join(tmpDir, 'literature-mcp-server.js');
+    writeFileSync(bundledScriptPath, '// real script stub');
+  });
+
+  afterAll(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('configured official literature plugin DOES shadow a working bundled fallback', async () => {
+    const result = await resolveMCPDiscovery(
+      [
+        {
+          source: 'bundled',
+          rawConfig: {
+            name: 'literature',
+            command: 'node',
+            args: [bundledScriptPath, '--db-path', ''],
+            env: { DUYA_BETTER_SQLITE3_PATH: '' },
+          },
+        },
+        {
+          source: 'plugin',
+          pluginId: 'com.duya.literature',
+          pluginName: 'Literature Plugin',
+          pluginRoot: '/p',
+          rawConfig: { name: 'literature', command: 'node', args: [] },
+        },
+      ],
+      { environment: {}, userConfigByPlugin: {} },
+    );
+    const bundled = result.inventory.find(
+      (e) => e.source === 'bundled' && e.serverName === 'literature',
+    );
+    const plugin = result.inventory.find(
+      (e) => e.source === 'plugin' && e.serverName === 'literature',
+    );
+    expect(bundled).toBeDefined();
+    expect(bundled!.discoveryStatus).toBe('configured');
+    expect(plugin).toBeDefined();
+    expect(plugin!.discoveryStatus).toBe('configured');
+    expect(bundled!.shadowedBy).toBe(plugin!.inventoryId);
+    // Only the plugin entry reaches resolvedConfigs; the bundled
+    // fallback is shadowed out.
+    expect(result.resolvedConfigs.map((c) => c.source).sort()).toEqual(['plugin']);
+  });
+
+  it('env_missing official literature plugin does NOT shadow a working bundled fallback', async () => {
+    const result = await resolveMCPDiscovery(
+      [
+        {
+          source: 'bundled',
+          rawConfig: {
+            name: 'literature',
+            command: 'node',
+            args: [bundledScriptPath, '--db-path', ''],
+            env: { DUYA_BETTER_SQLITE3_PATH: '' },
+          },
+        },
+        {
+          source: 'plugin',
+          pluginId: 'com.duya.literature',
+          pluginName: 'Literature Plugin',
+          pluginRoot: '/p',
+          rawConfig: {
+            name: 'literature',
+            command: 'node',
+            args: ['./${MISSING}/x.js'],   // unresolved → env_missing
+          },
+        },
+      ],
+      { environment: {}, userConfigByPlugin: {} },
+    );
+    const bundled = result.inventory.find(
+      (e) => e.source === 'bundled' && e.serverName === 'literature',
+    );
+    const plugin = result.inventory.find(
+      (e) => e.source === 'plugin' && e.serverName === 'literature',
+    );
+    expect(bundled).toBeDefined();
+    expect(bundled!.discoveryStatus).toBe('configured');
+    expect(plugin).toBeDefined();
+    expect(plugin!.discoveryStatus).toBe('env_missing');
+    // Plugin does NOT shadow bundled because it failed resolution.
+    expect(bundled!.shadowedBy).toBeUndefined();
+    // The bundled fallback stays in resolvedConfigs as the only
+    // working option. The plugin entry is also surfaced in
+    // inventory (so the user can see the env_missing diagnostic)
+    // but is NOT in resolvedConfigs — `resolvedConfigs` is the
+    // connectable subset only, by definition.
+    expect(result.resolvedConfigs.map((c) => c.source).sort()).toEqual(['bundled']);
+    expect(result.inventory.some((e) => e.source === 'plugin' && e.serverName === 'literature')).toBe(true);
+    // Issues surface the env_missing on plugin and the shadow
+    // policy NOT having been applied.
+    const envMissing = result.issues.find((i) => i.error.type === 'mcp-env-var-missing');
+    expect(envMissing).toBeDefined();
+  });
+
+  it('script_missing official literature plugin does NOT shadow a working bundled fallback', async () => {
+    // We point the plugin's first arg at a path that does not exist
+    // (relative to the worker's cwd). The plugin candidate is fully
+    // formed; staticPathCheck will fail with script_missing. The
+    // bundled candidate uses the real tmp script and stays connected.
+    const result = await resolveMCPDiscovery(
+      [
+        {
+          source: 'bundled',
+          rawConfig: {
+            name: 'literature',
+            command: 'node',
+            args: [bundledScriptPath, '--db-path', ''],
+            env: { DUYA_BETTER_SQLITE3_PATH: '' },
+          },
+        },
+        {
+          source: 'plugin',
+          pluginId: 'com.duya.literature',
+          pluginName: 'Literature Plugin',
+          pluginRoot: '/p',
+          rawConfig: {
+            name: 'literature',
+            command: 'node',
+            args: ['./definitely-missing-plugin-script.js'],
+          },
+        },
+      ],
+      { environment: {}, userConfigByPlugin: {} },
+    );
+    const bundled = result.inventory.find(
+      (e) => e.source === 'bundled' && e.serverName === 'literature',
+    );
+    const plugin = result.inventory.find(
+      (e) => e.source === 'plugin' && e.serverName === 'literature',
+    );
+    expect(bundled!.discoveryStatus).toBe('configured');
+    expect(plugin!.discoveryStatus).toBe('script_missing');
+    expect(bundled!.shadowedBy).toBeUndefined();
+    // Bundled fallback stays in resolvedConfigs as the only
+    // working option. The broken plugin is in inventory (for
+    // diagnostic purposes) but not in resolvedConfigs.
+    expect(result.resolvedConfigs.map((c) => c.source).sort()).toEqual(['bundled']);
+    expect(result.inventory.some((e) => e.source === 'plugin' && e.serverName === 'literature')).toBe(true);
+  });
+
+  it('manifest_invalid official literature plugin is filtered upstream and bundled fallback is unaffected', async () => {
+    // The collector decides what becomes a plugin candidate. When
+    // the manifest cannot be parsed, the collector emits no plugin
+    // candidate at all (it is not the resolution engine's job to
+    // synthesize one). We simulate that by passing ONLY the bundled
+    // candidate and asserting the engine's shadow policy is a no-op.
+    //
+    // This test belongs at the collector/loader layer, NOT the
+    // resolution engine layer, because the engine never sees the
+    // invalid plugin entry. We assert here ONLY that the engine's
+    // shadow logic does NOT mis-fire when the plugin side is empty.
+    const result = await resolveMCPDiscovery(
+      [
+        {
+          source: 'bundled',
+          rawConfig: {
+            name: 'literature',
+            command: 'node',
+            args: [bundledScriptPath, '--db-path', ''],
+            env: { DUYA_BETTER_SQLITE3_PATH: '' },
+          },
+        },
+      ],
+      { environment: {}, userConfigByPlugin: {} },
+    );
+    const bundled = result.inventory.find(
+      (e) => e.source === 'bundled' && e.serverName === 'literature',
+    );
+    expect(bundled!.shadowedBy).toBeUndefined();
+    expect(bundled!.discoveryStatus).toBe('configured');
+    expect(result.resolvedConfigs.map((c) => c.source)).toEqual(['bundled']);
   });
 });
