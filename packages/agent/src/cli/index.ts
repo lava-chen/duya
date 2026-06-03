@@ -1044,18 +1044,34 @@ program
       }),
   )
 
-// Provider subcommands
+// Phase 4: duya provider — read-only provider control plane
+//
+// list / info. Reads the configured LLM provider list from the
+// main process via /v1/providers. The main process owns the
+// config manager and applies redacted DTO (no API keys).
+import { runProviderListCommand, runProviderInfoCommand } from './commands/provider.js';
+
 program
   .command('provider')
   .description('Provider configuration')
   .addCommand(
     new Command('list')
-      .description('List configured providers')
-      .action(async () => {
-        // Placeholder - will integrate with actual provider config
-        printHeader('Configured Providers')
-        console.log(color('  (Provider storage not yet implemented)', Colors.DIM))
-      })
+      .description('List configured providers (id / type / hasKey / isActive / model)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (opts: { format?: string }) => {
+        const code = await runProviderListCommand(parseFormat(opts.format));
+        process.exit(code);
+      }),
+  )
+  .addCommand(
+    new Command('info')
+      .argument('<id>', 'Provider id (e.g. anthropic, openai, ollama)')
+      .description('Show details for one provider (adds headers / extraEnv keys)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (id: string, opts: { format?: string }) => {
+        const code = await runProviderInfoCommand(id, parseFormat(opts.format));
+        process.exit(code);
+      }),
   )
   .addCommand(
     new Command('add')
