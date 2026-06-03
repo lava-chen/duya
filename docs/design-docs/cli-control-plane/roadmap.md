@@ -1,6 +1,6 @@
 # DUYA CLI — Product Responsibility & Roadmap
 
-> **Status**: Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 Complete
+> **Status**: Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7 Complete
 > **Created**: 2026-05-31
 > **Updated**: 2026-06-03
 > **Scope**: CLI product positioning, formal decisions, command roadmap, and Phase 2 design.
@@ -267,10 +267,20 @@ report; `duya doctor` is the live source of truth for runtime health.
 | `duya mcp list` | After Phase 5 complete |
 | `duya mcp status <id>` | Connection status, tool count |
 
-### Phase 7 — Write Operations (Future, Post Permission Model)
-- `enable` / `disable` for plugin, skill, mcp
-- `session delete` (soft-delete)
-- Never via CLI: `provider set-key`, `plugin install`, `mcp add`
+### Phase 7 — Write Operations ✅ COMPLETE (minimal v0)
+| Command | Notes |
+|---------|-------|
+| `duya skill enable <id>` | `--yes` required in non-interactive mode; audit logged |
+| `duya skill disable <id>` | `--yes` required in non-interactive mode; audit logged |
+
+DTO returns the new effective state. Audit log at
+`<userData>/control-plane-audit.log.jsonl` (JSONL, no secrets).
+
+**Not exposed** (high-risk; GUI only):
+- `duya provider set-key`
+- `duya plugin install / remove`
+- `duya mcp add / remove`
+- `duya session delete`
 
 ---
 
