@@ -25,7 +25,7 @@ import { buildAttachmentContext } from '../llm/attachment-context.js';
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
 import type { Message, MessageContent, MCPServerConfig } from '../types.js';
-import { configDb, messageDb, pluginDb, settingDb, sessionDb } from '../ipc/db-client.js';
+import { messageDb, pluginDb, settingDb, sessionDb } from '../ipc/db-client.js';
 import { IncrementalSaveQueue } from './incremental-save-queue.js';
 import {
   enqueue,
@@ -45,8 +45,7 @@ import { setConductorCanvasState } from '../prompts/sections/dynamic/conductorCa
 import { duyaAgent } from '../index.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
-import { loadMCPConfigs } from '../mcp/config.js';
-import { applyMCPConfiguration } from '../mcp/apply.js';
+import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
@@ -54,7 +53,6 @@ import { isModelLikelyMultimodal } from '../llm/multimodal-detection.js';
 import { detectModelCapability } from '../llm/model-capability-cache.js';
 import type { ProbeConfig } from '../llm/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
-import { buildPluginMCPServerConfigs, resolveBundledMCPServerConfigs } from './plugin-mcp-runtime.js';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -1915,103 +1913,8 @@ const log = (...args: unknown[]): void => { console.error('[Agent-Process]', ...
 const warn = (...args: unknown[]): void => { console.warn('[Agent-Process]', ...args); };
 
 // ============================================================================
-// Plugin Skill & MCP Discovery
+// Plugin Skill Discovery
 // ============================================================================
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function parseMcpServerConfigs(raw: unknown): MCPServerConfig[] {
-  const toConfig = (name: string, value: Record<string, unknown>): MCPServerConfig | null => {
-    const command = typeof value.command === 'string' ? value.command : '';
-    if (!name || !command) return null;
-    if (value.enabled === false) return null;
-    const args = Array.isArray(value.args)
-      ? value.args.filter((arg): arg is string => typeof arg === 'string')
-      : [];
-    const env = isObject(value.env)
-      ? Object.fromEntries(
-          Object.entries(value.env).filter(([, envValue]) => typeof envValue === 'string') as Array<[string, string]>,
-        )
-      : undefined;
-    return { name, command, args, env };
-  };
-
-  if (Array.isArray(raw)) {
-    return raw
-      .filter((item): item is Record<string, unknown> => isObject(item))
-      .map((item) => {
-        const itemName = typeof item.name === 'string' ? item.name : '';
-        return toConfig(itemName, item);
-      })
-      .filter((item): item is MCPServerConfig => item !== null);
-  }
-
-  if (isObject(raw)) {
-    const fromObject: MCPServerConfig[] = [];
-    for (const [name, value] of Object.entries(raw)) {
-      if (!isObject(value)) continue;
-      const config = toConfig(name, value);
-      if (config) {
-        fromObject.push(config);
-      }
-    }
-    return fromObject;
-  }
-
-  return [];
-}
-
-// @deprecated Phase 1C: superseded by loadAndResolveMCPServers() in
-// packages/agent/src/mcp/loader.js. The init path now uses the new
-// helper. This function is still called from reloadMCP() because
-// reload typed-loader wiring is gated on lifecycle cleanup (the
-// current ToolRegistry cannot unregister tools from a previous
-// init; the typed reload path will be wired in a follow-up commit
-// after unregisterMCPTools() lands). Will be removed in that
-// follow-up commit.
-async function discoverSettingsMCPServerConfigs(): Promise<{
-  configs: MCPServerConfig[];
-  counts: { legacyFile: number; settingsKv: number; agentSettings: number };
-}> {
-  let legacyFile: MCPServerConfig[] = [];
-  let settingsKv: MCPServerConfig[] = [];
-  let agentSettings: MCPServerConfig[] = [];
-
-  try {
-    const legacyResult = await loadMCPConfigs();
-    legacyFile = legacyResult.configs;
-  } catch (err) {
-    warn('[Agent-Process] Failed to load MCP from legacy settings file:', err);
-  }
-
-  try {
-    const kvRaw = await settingDb.getJson<unknown>('mcpServers', []);
-    settingsKv = parseMcpServerConfigs(kvRaw);
-  } catch (err) {
-    warn('[Agent-Process] Failed to load MCP from settings KV:', err);
-  }
-
-  try {
-    const agentSettingsRaw = await configDb.agentGetSettings();
-    const rawServers = isObject(agentSettingsRaw) ? agentSettingsRaw.mcpServers : undefined;
-    agentSettings = parseMcpServerConfigs(rawServers);
-  } catch (err) {
-    warn('[Agent-Process] Failed to load MCP from config:agent:getSettings:', err);
-  }
-
-  return {
-    // Priority order: legacy file < settings KV < ConfigManager agentSettings
-    // (later entries win when deduped by name in initMCPServers()).
-    configs: [...legacyFile, ...settingsKv, ...agentSettings],
-    counts: {
-      legacyFile: legacyFile.length,
-      settingsKv: settingsKv.length,
-      agentSettings: agentSettings.length,
-    },
-  };
-}
 
 async function discoverPluginSkillPaths(): Promise<string[]> {
   const paths: string[] = [];
@@ -2036,38 +1939,6 @@ async function discoverPluginSkillPaths(): Promise<string[]> {
   return paths;
 }
 
-// @deprecated Phase 1C: superseded by loadAndResolveMCPServers() in
-// packages/agent/src/mcp/loader.js. The init path now uses the new
-// helper. This function is still called from reloadMCP() because
-// reload typed-loader wiring is gated on lifecycle cleanup. Will be
-// removed in the follow-up commit that also wires reload to the
-// typed loader.
-async function discoverPluginMCPServerConfigs(): Promise<MCPServerConfig[]> {
-  try {
-    const installed = await pluginDb.registryList() as Array<{
-      id?: unknown;
-      enabled?: unknown;
-      installPath?: unknown;
-      manifest?: unknown;
-    }>;
-    const configs = await buildPluginMCPServerConfigs({
-      installedPlugins: installed,
-      cwd: process.cwd(),
-      resourcesPath: process.resourcesPath,
-      defaultApp: process.defaultApp,
-      execPath: process.execPath,
-      onWarn: (message) => warn(message),
-    });
-    if (configs.length > 0) {
-      log(`[Agent-Process] Discovered ${configs.length} plugin MCP server configs`);
-    }
-    return configs;
-  } catch (err) {
-    warn('[Agent-Process] Failed to discover plugin MCP server configs:', err);
-    return [];
-  }
-}
-
 async function reloadSkills(): Promise<void> {
   try {
     const getSkillRegistry = (await import('../index.js')).getSkillRegistry;
@@ -2086,6 +1957,101 @@ async function reloadSkills(): Promise<void> {
     warn('[Agent-Process] Failed to reload skills:', err);
     sendToMain({ type: 'skills:reload:error', error: err instanceof Error ? err.message : String(err) });
   }
+}
+
+// ============================================================================
+// Phase 2A diagnostic chain helpers
+// ============================================================================
+//
+// The worker owns the post-apply snapshot (apply.ts PHASE C). Main /
+// settings UI consumes the diagnostic chain through two events:
+//   - `mcp:reloaded`      — emitted after every successful apply
+//                           (init or reload). Carries the post-apply
+//                           action summary + active server/tool
+//                           keys + issue counts. Lightweight; safe
+//                           to fire on every apply.
+//   - `mcp:status:snapshot` — emitted only in response to a
+//                           `mcp:status:get` command from main. The
+//                           full inventory + issues + alias map
+//                           summary, so the UI can render the
+//                           settings page without a separate
+//                           worker round-trip.
+// Failure events:
+//   - `mcp:reload:error`  — apply threw; old runtime preserved.
+// Both are routed through `sendToMain`, which fans out to
+// `process.send` (consumed by router's `child.on('message')`) and
+// `sendEvent` (consumed by the SSE parser).
+
+/**
+ * Build the lightweight post-apply diagnostic event. The shape
+ * is intentionally flat (no nested arrays of long strings) so the
+ * router can serialize it without size concerns on every reload.
+ */
+function buildMcpReloadedEvent(result: MCPApplyResult): Record<string, unknown> {
+  // The action summary comes from MCPApplyResult. The active
+  // server keys are the same `scopedServerName`s in the
+  // post-filter `resolvedConfigs`. The active tool keys are
+  // the internalKeys installed by the apply. We surface them
+  // so the UI can render the post-reload state without
+  // needing a follow-up `mcp:status:get`.
+  return {
+    type: 'mcp:reloaded',
+    reason: result.reason,
+    committedAt: result.committedAt,
+    clientsConnected: result.action.clientsConnected,
+    toolsAdded: result.action.toolsAdded,
+    toolsRemoved: result.action.toolsRemoved,
+    inventoryRows: result.loadResult.inventory.length,
+    issueCount: result.loadResult.issues.length,
+    activeServerKeys: result.loadResult.resolvedConfigs.map((c) => c.scopedServerName),
+  };
+}
+
+/**
+ * Build the full diagnostic snapshot. The output mirrors the
+ * shape consumed by the settings page: every inventory row, the
+ * active server / tool keys, the full issues list, and the
+ * apply reason + committedAt. Heavier than `mcp:reloaded`; only
+ * emitted on explicit `mcp:status:get` requests.
+ */
+function buildMcpStatusSnapshot(): Record<string, unknown> {
+  if (!agent) {
+    return {
+      type: 'mcp:status:snapshot',
+      hasAgent: false,
+      inventory: [],
+      activeServerKeys: [],
+      activeToolKeys: [],
+      issues: [],
+      reason: null,
+      committedAt: null,
+    };
+  }
+  const snapshot = agent.activeMCPRuntimeSnapshot;
+  if (!snapshot) {
+    return {
+      type: 'mcp:status:snapshot',
+      hasAgent: true,
+      inventory: [],
+      activeServerKeys: [],
+      activeToolKeys: [],
+      issues: [],
+      reason: null,
+      committedAt: null,
+    };
+  }
+  return {
+    type: 'mcp:status:snapshot',
+    hasAgent: true,
+    reason: snapshot.reason,
+    committedAt: snapshot.committedAt,
+    inventory: snapshot.loadResult.inventory,
+    activeServerKeys: snapshot.activeServerKeys,
+    activeToolKeys: snapshot.activeToolKeys,
+    issues: snapshot.loadResult.issues,
+    connectionIssues: snapshot.connectionIssues,
+    registrationIssues: snapshot.registrationIssues,
+  };
 }
 
 async function reloadMCP(): Promise<void> {
@@ -2110,10 +2076,13 @@ async function reloadMCP(): Promise<void> {
       `${result.action.toolsAdded} tools added, ${result.action.toolsRemoved} removed ` +
       `(${result.loadResult.inventory.length} inventory rows, ${result.loadResult.issues.length} issues)`,
     );
-    sendToMain({
-      type: 'mcp:reloaded',
-      count: result.action.clientsConnected,
-    });
+    // Phase 2A diagnostic chain: emit a richer `mcp:reloaded`
+    // event so main / settings UI can surface the active server
+    // keys + tool keys + issue counts without polling. The full
+    // `MCPHealthReport`-shaped payload arrives on demand via
+    // `mcp:status:get` (handled in the worker protocol switch
+    // below).
+    sendToMain(buildMcpReloadedEvent(result));
   } catch (err) {
     warn('[Agent-Process] Failed to reload MCP:', err);
     sendToMain({ type: 'mcp:reload:error', error: err instanceof Error ? err.message : String(err) });
@@ -2344,6 +2313,15 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         case 'reload:mcp': {
           log('[Agent-Process] Received reload:mcp');
           void reloadMCP();
+          break;
+        }
+
+        case 'mcp:status:get': {
+          // Diagnostic chain command: main / settings UI queries
+          // the active MCP runtime on demand. The full snapshot
+          // (inventory + issues + active keys) goes out as a
+          // single `mcp:status:snapshot` event.
+          sendToMain(buildMcpStatusSnapshot());
           break;
         }
 

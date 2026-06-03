@@ -135,11 +135,19 @@ export interface Tool {
   /**
    * MCP dispatch metadata. Only MCP tools set this. Used by the
    * `executor` closure to call
-   * `mcpManager.callTool(mcpInfo.serverName, mcpInfo.toolName, input)`.
+   * `mcpManager.callTool(mcpInfo.serverName, mcpInfo.toolName, input)`
+   * and by the runtime permission gate (permission-gate.ts) to
+   * classify the tool's provenance.
    *
-   * Phase 2A Batch A: field declared but not yet consumed.
+   * `source` is the gate's `McpToolSource` bucket:
+   *   - 'bundled'  : first-party / bootstrap fallback
+   *   - 'plugin'   : installed from marketplace
+   *   - 'settings' : user-configured in settings / agentSettings / kv
+   *   - 'local'    : reserved for manually-installed-from-path
+   *                  (not emitted by the current resolution engine)
+   *   - 'unknown'  : defensive default for any tool missing the field
    */
-  mcpInfo?: { serverName: string; toolName: string };
+  mcpInfo?: { serverName: string; toolName: string; source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' };
 }
 
 // 工具调用
@@ -351,6 +359,15 @@ export interface MCPServerConfig {
   args?: string[];
   env?: Record<string, string>;
   allowedAgentIds?: string[];
+  /**
+   * Source bucket for the runtime permission gate. Set by
+   * `applyMCPConfiguration` from the `ResolvedMCPServerConfig.source`
+   * (`'bundled'` | `'plugin'` | `'settings'`). `'local'` is reserved
+   * for manually-installed-from-path servers (not emitted by the
+   * current resolution engine). When absent, the gate treats the
+   * tool as `unknown` and prompts.
+   */
+  source?: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
 }
 
 // MCP 连接状态

@@ -29,6 +29,8 @@
 // state converges to the last committed snapshot.
 
 import { logger } from '../utils/logger.js';
+import { evaluateMcpToolPermission, type McpToolSource } from './permission-gate.js';
+import type { PermissionMode } from '../permissions/types.js';
 import { computeProviderName, AnthropicToolNamePolicy } from '@duya/plugin-core';
 import type {
   MCPCandidate,
@@ -279,6 +281,15 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
       args: resolved.rawConfig.args,
       env: resolved.rawConfig.env,
       allowedAgentIds: resolved.allowedAgentIds,
+      // Stamp the source bucket for the runtime permission gate.
+      // The engine resolves every `ResolvedMCPServerConfig.source`
+      // to one of the three MCPSource literals; we only need to
+      // exclude the gate's 'local' (manually-installed-from-path,
+      // not emitted by the current engine) and fall back to
+      // 'unknown' for any unexpected value.
+      source: resolved.source === 'bundled' || resolved.source === 'plugin' || resolved.source === 'settings'
+        ? resolved.source
+        : 'unknown',
     };
     try {
       await nextManager.addServer(cfg);
@@ -358,9 +369,40 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     const capturedMcpInfo = t.mcpInfo;
     const executor: ToolExecutor = {
       execute: async (input: Record<string, unknown>) => {
+        // BLOCKER B (audit 2026-06-03): runtime permission gate.
+        // Pure predicate, runs BEFORE the underlying client call so
+        // third-party MCP tools can never execute silently.
+        const source: McpToolSource = (capturedMcpInfo.source
+          ?? 'unknown') as McpToolSource;
+        // `activePermissionMode` is provided by the host (the long-lived
+        // Agent instance) when available. When it is absent (e.g. unit
+        // tests, or callers that have not yet wired the property) we
+        // fall through with `undefined`, which causes the gate to treat
+        // every third-party tool as needing user approval — the safest
+        // default for v0.1.3.
+        const activeMode = (agent as unknown as { activePermissionMode?: PermissionMode }).activePermissionMode;
+        const decision = evaluateMcpToolPermission(
+          source,
+          activeMode,
+          capturedMcpInfo.toolName,
+        );
+        if (decision.kind === 'deny' || decision.kind === 'prompt') {
+          logger.warn(
+            '[MCP] tool call blocked by permission gate',
+            { toolName: capturedMcpInfo.toolName, source, kind: decision.kind, reason: decision.reason },
+          );
+          return {
+            id: capturedMcpInfo.toolName + '-gate',
+            name: capturedMcpInfo.toolName,
+            result: '[MCP permission gate] ' + decision.reason +
+              '. Switch the session to bypassPermissions or dontAsk to allow this tool.',
+            error: true,
+            metadata: { source, gateKind: decision.kind },
+          };
+        }
         // Capture-bound dispatch. After PHASE B2 swaps the
-        // active manager, the old executor's capturedClient is
-        // the previous-generation client; calls against it fail
+        // active manager, the old executor's capturedClient is the
+        // previous-generation client; calls against it fail
         // deterministically (closed circuit / disconnected)
         // instead of silently routing to the new runtime.
         return capturedClient.callTool(capturedMcpInfo.toolName, input);
