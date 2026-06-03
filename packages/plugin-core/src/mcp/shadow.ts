@@ -96,10 +96,17 @@ export function applySourceShadowing(
   }
 
   // ---- Step 2: builtin-fallback replacement ------------------------------
-  // Collect plugin inventory ids for the lookup.
+  // Collect plugin inventory ids for the lookup. A plugin entry
+  // only counts as a viable replacement if its discovery status
+  // is 'configured' (i.e. it actually connected). An env_missing /
+  // script_missing / manifest_invalid plugin must NOT be allowed to
+  // shadow an otherwise-usable bundled fallback, because doing so
+  // would silently destroy a working bundled capability.
   const pluginInventoryIds = new Set<string>();
   for (const e of withShadow) {
-    if (e.source === 'plugin') pluginInventoryIds.add(e.inventoryId);
+    if (e.source === 'plugin' && e.discoveryStatus === 'configured') {
+      pluginInventoryIds.add(e.inventoryId);
+    }
   }
   for (let i = 0; i < withShadow.length; i++) {
     const e = withShadow[i];

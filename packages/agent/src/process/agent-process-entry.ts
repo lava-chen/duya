@@ -46,6 +46,7 @@ import { duyaAgent } from '../index.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { loadMCPConfigs } from '../mcp/config.js';
+import { loadAndResolveMCPServers } from '../mcp/loader.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
@@ -53,6 +54,7 @@ import { isModelLikelyMultimodal } from '../llm/multimodal-detection.js';
 import { detectModelCapability } from '../llm/model-capability-cache.js';
 import type { ProbeConfig } from '../llm/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
+import { buildPluginMCPServerConfigs, resolveBundledMCPServerConfigs } from './plugin-mcp-runtime.js';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -1913,140 +1915,8 @@ const log = (...args: unknown[]): void => { console.error('[Agent-Process]', ...
 const warn = (...args: unknown[]): void => { console.warn('[Agent-Process]', ...args); };
 
 // ============================================================================
-// Bundled MCP Server Config Resolution
-// ============================================================================
-
-function resolveBundledMCPServerConfigs(): MCPServerConfig[] {
-  const configs: MCPServerConfig[] = [];
-
-  const isPackaged = !!process.resourcesPath && !process.defaultApp;
-
-  const literatureBundlePath = isPackaged
-    ? path.join(process.resourcesPath, 'agent-bundle', 'literature-mcp-server.js')
-    : path.join(process.cwd(), 'packages', 'agent', 'bundle', 'literature-mcp-server.js');
-
-  if (existsSync(literatureBundlePath)) {
-    configs.push({
-      name: 'literature',
-      // Use the current runtime executable to avoid hard dependency on system `node`
-      // in packaged desktop environments.
-      command: process.execPath,
-      args: [literatureBundlePath, '--db-path', process.env.DUYA_CUSTOM_DB_PATH || ''],
-      env: {
-        DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || '',
-      },
-    });
-  } else {
-    warn('[Agent-Process] Literature MCP server bundle not found:', literatureBundlePath);
-  }
-
-  return configs;
-}
-
-function resolveBundledAgentBundleScript(scriptPath: string): string | null {
-  const scriptName = path.basename(scriptPath);
-  const isPackaged = !!process.resourcesPath && !process.defaultApp;
-  const candidates = isPackaged
-    ? [
-        path.join(process.resourcesPath, 'agent-bundle', scriptName),
-      ]
-    : [
-        path.join(process.cwd(), 'packages', 'agent', 'bundle', scriptName),
-        path.join(process.cwd(), 'agent-bundle', scriptName),
-      ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-function resolvePluginMCPPath(installPath: string, rawPath: string): string {
-  if (!rawPath.startsWith('./') && !rawPath.startsWith('../')) {
-    return rawPath;
-  }
-
-  const installRelativePath = path.resolve(installPath, rawPath);
-  if (existsSync(installRelativePath)) {
-    return installRelativePath;
-  }
-
-  if (rawPath.includes('agent-bundle')) {
-    const bundledPath = resolveBundledAgentBundleScript(rawPath);
-    if (bundledPath) {
-      return bundledPath;
-    }
-  }
-
-  return installRelativePath;
-}
-
-function normalizePluginMCPServerConfig(
-  pluginId: string,
-  installPath: string,
-  server: PluginMCPServerManifest,
-): MCPServerConfig | null {
-  const rawCommand = server.command?.trim();
-  if (!rawCommand) {
-    warn(`[Agent-Process] Skipping MCP server with empty command from plugin ${pluginId}`);
-    return null;
-  }
-
-  const command = rawCommand === 'node'
-    ? process.execPath
-    : resolvePluginMCPPath(installPath, rawCommand);
-
-  const args = (server.args || []).map((arg: string) => resolvePluginMCPPath(installPath, arg));
-
-  const scriptArg = args[0];
-  const runsNodeScript = command === process.execPath || command.endsWith('node') || command.endsWith('node.exe');
-  if (runsNodeScript && scriptArg && !existsSync(scriptArg)) {
-    warn(
-      `[Agent-Process] Skipping MCP server "${server.name}" from plugin ${pluginId}: script not found at ${scriptArg}`,
-    );
-    return null;
-  }
-
-  if (command !== process.execPath && (command.startsWith('./') || command.startsWith('../')) && !existsSync(command)) {
-    warn(
-      `[Agent-Process] Skipping MCP server "${server.name}" from plugin ${pluginId}: command not found at ${command}`,
-    );
-    return null;
-  }
-
-  return {
-    name: server.name,
-    command,
-    args,
-    env: server.env,
-  };
-}
-
-// ============================================================================
 // Plugin Skill & MCP Discovery
 // ============================================================================
-
-interface PluginManifestData {
-  capabilities?: {
-    skills?: string[];
-    mcpServers?: Array<{
-      name: string;
-      command: string;
-      args?: string[];
-      env?: Record<string, string>;
-    }>;
-  };
-}
-
-type PluginMCPServerManifest = {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-};
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -2093,6 +1963,14 @@ function parseMcpServerConfigs(raw: unknown): MCPServerConfig[] {
   return [];
 }
 
+// @deprecated Phase 1C: superseded by loadAndResolveMCPServers() in
+// packages/agent/src/mcp/loader.js. The init path now uses the new
+// helper. This function is still called from reloadMCP() because
+// reload typed-loader wiring is gated on lifecycle cleanup (the
+// current ToolRegistry cannot unregister tools from a previous
+// init; the typed reload path will be wired in a follow-up commit
+// after unregisterMCPTools() lands). Will be removed in that
+// follow-up commit.
 async function discoverSettingsMCPServerConfigs(): Promise<{
   configs: MCPServerConfig[];
   counts: { legacyFile: number; settingsKv: number; agentSettings: number };
@@ -2158,8 +2036,13 @@ async function discoverPluginSkillPaths(): Promise<string[]> {
   return paths;
 }
 
+// @deprecated Phase 1C: superseded by loadAndResolveMCPServers() in
+// packages/agent/src/mcp/loader.js. The init path now uses the new
+// helper. This function is still called from reloadMCP() because
+// reload typed-loader wiring is gated on lifecycle cleanup. Will be
+// removed in the follow-up commit that also wires reload to the
+// typed loader.
 async function discoverPluginMCPServerConfigs(): Promise<MCPServerConfig[]> {
-  const configs: MCPServerConfig[] = [];
   try {
     const installed = await pluginDb.registryList() as Array<{
       id?: unknown;
@@ -2167,47 +2050,22 @@ async function discoverPluginMCPServerConfigs(): Promise<MCPServerConfig[]> {
       installPath?: unknown;
       manifest?: unknown;
     }>;
-    const enabledPlugins = installed.filter(
-      (item) => item.enabled === true && typeof item.id === 'string' && typeof item.installPath === 'string'
-    );
-    for (const plugin of enabledPlugins) {
-      const installPath = plugin.installPath as string;
-      let manifest: PluginManifestData | null = null;
-      if (plugin.manifest && typeof plugin.manifest === 'object') {
-        manifest = plugin.manifest as PluginManifestData;
-      } else {
-        const manifestPath = existsSync(path.join(installPath, 'plugin.json'))
-          ? path.join(installPath, 'plugin.json')
-          : path.join(installPath, 'duya-plugin.json');
-        if (existsSync(manifestPath)) {
-          try {
-            const raw = await readFile(manifestPath, 'utf-8');
-            manifest = JSON.parse(raw) as PluginManifestData;
-          } catch {
-            // manifest not found or invalid, skip
-          }
-        }
-      }
-      if (manifest?.capabilities?.mcpServers) {
-        for (const server of manifest.capabilities.mcpServers) {
-          const normalized = normalizePluginMCPServerConfig(
-            plugin.id as string,
-            installPath,
-            server,
-          );
-          if (normalized) {
-            configs.push(normalized);
-          }
-        }
-      }
-    }
+    const configs = await buildPluginMCPServerConfigs({
+      installedPlugins: installed,
+      cwd: process.cwd(),
+      resourcesPath: process.resourcesPath,
+      defaultApp: process.defaultApp,
+      execPath: process.execPath,
+      onWarn: (message) => warn(message),
+    });
     if (configs.length > 0) {
       log(`[Agent-Process] Discovered ${configs.length} plugin MCP server configs`);
     }
+    return configs;
   } catch (err) {
     warn('[Agent-Process] Failed to discover plugin MCP server configs:', err);
+    return [];
   }
-  return configs;
 }
 
 async function reloadSkills(): Promise<void> {
@@ -2231,10 +2089,24 @@ async function reloadSkills(): Promise<void> {
 }
 
 async function reloadMCP(): Promise<void> {
+  // Phase 1C: this function is NOT YET wired through the typed
+  // loader. The init path has been switched to
+  // loadAndResolveMCPServers(); reload cannot be switched without
+  // solving the ToolRegistry lifecycle gap: a reload that empties
+  // the config set must call unregisterMCPTools() to remove the
+  // tools previously registered for the now-removed servers, or
+  // the tool registry will retain stale entries that point at a
+  // null mcpManager and fail at call time. The current ToolRegistry
+  // has no unregisterByMcpServer() — that lands in Phase 2.
+  //
+  // Until then, reloadMCP continues to use the legacy discover*
+  // functions (marked @deprecated at their definitions). The
+  // legacy `if (allConfigs.length > 0)` guard is preserved so the
+  // runtime path matches the audit baseline.
   if (!agent) return;
   try {
-    const pluginConfigs = await discoverPluginMCPServerConfigs();
     const bundledConfigs = resolveBundledMCPServerConfigs();
+    const pluginConfigs = await discoverPluginMCPServerConfigs();
     const settingsResult = await discoverSettingsMCPServerConfigs();
     const allConfigs = [...bundledConfigs, ...pluginConfigs, ...settingsResult.configs];
     if (allConfigs.length > 0) {
@@ -2355,45 +2227,21 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
 
           // Initialize MCP servers asynchronously after sending ready so that slow or hung
           // MCP servers do not block the worker from becoming ready.
+          //
+          // Phase 1C: the init path is wired to the typed loader. The
+          // reload:mcp path is NOT yet wired — that requires
+          // unregisterMCPTools() lifecycle cleanup which the current
+          // ToolRegistry cannot provide (see reloadMCP() comment).
           (async () => {
             try {
-              const bundledConfigs = (() => {
-                try {
-                  return resolveBundledMCPServerConfigs();
-                } catch (mcpErr) {
-                  warn('[Agent-Process] Failed to resolve bundled MCP servers:', mcpErr);
-                  return [] as MCPServerConfig[];
-                }
-              })();
-
-              const pluginConfigs = await (async () => {
-                try {
-                  return await discoverPluginMCPServerConfigs();
-                } catch (pluginMcpErr) {
-                  warn('[Agent-Process] Failed to discover plugin MCP servers:', pluginMcpErr);
-                  return [] as MCPServerConfig[];
-                }
-              })();
-
-              const settingsMcpPayload = await (async () => {
-                try {
-                  return await discoverSettingsMCPServerConfigs();
-                } catch (settingsMcpErr) {
-                  warn('[Agent-Process] Failed to discover settings MCP servers:', settingsMcpErr);
-                  return {
-                    configs: [] as MCPServerConfig[],
-                    counts: { legacyFile: 0, settingsKv: 0, agentSettings: 0 },
-                  };
-                }
-              })();
-              const settingsConfigs = settingsMcpPayload.configs;
-
-              const allMcpConfigs = [...bundledConfigs, ...pluginConfigs, ...settingsConfigs];
-              if (allMcpConfigs.length > 0) {
-                await agent.initMCPServers(allMcpConfigs);
-                log(`[Agent-Process] Initialized MCP servers: ${allMcpConfigs.length} total (${bundledConfigs.length} bundled, ${pluginConfigs.length} plugin, ${settingsConfigs.length} settings)` +
-                  ` [legacyFile=${settingsMcpPayload.counts.legacyFile}, settingsKv=${settingsMcpPayload.counts.settingsKv}, agentSettings=${settingsMcpPayload.counts.agentSettings}]`);
-              }
+              const result = await loadAndResolveMCPServers();
+              // Unconditional call: initMCPServers([]) is safe; the
+              // runtime's disconnectAll() runs even with an empty
+              // legacy slice, which is the correct invariant for the
+              // first-ever init (no prior manager to disconnect).
+              await agent.initMCPServers(result.legacyConfigs);
+              log(`[Agent-Process] Initialized MCP servers: ${result.legacyConfigs.length} total` +
+                  ` (${result.inventory.length} inventory rows, ${result.issues.length} issues)`);
             } catch (mcpErr) {
               warn('[Agent-Process] Failed to initialize MCP servers after ready:', mcpErr);
             }
