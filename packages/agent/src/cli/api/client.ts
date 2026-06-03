@@ -9,6 +9,7 @@
  *   (which would rotate the bearer token).
  * - Built-in 3s per-attempt timeout via AbortController.
  * - Throws CliApiError; never logs the bearer token.
+ * - Provides a non-fail-fast `probe()` method for `duya doctor`.
  */
 
 import { CliApiError, APP_NOT_RUNNING_HINT, AUTH_FAILED_HINT } from './errors.js';
@@ -22,6 +23,21 @@ interface RequestOptions {
    *  runtime-discovered one. Reserved for future phases; NOT exposed
    *  via --api/--token in Phase 0. */
   baseUrlOverride?: string;
+}
+
+/**
+ * Result of a non-fail-fast probe used by `duya doctor`.
+ * Distinguishes connection failures from auth failures from server errors.
+ */
+export interface ProbeResult {
+  /** Whether the server responded (with any status). */
+  reachable: boolean;
+  /** HTTP status code if reachable; 0 if connection failed. */
+  statusCode: number;
+  /** Error category if not reachable. */
+  error?: 'connection_refused' | 'timeout' | 'auth_failed' | 'server_error' | 'malformed_response' | 'runtime_not_found' | 'runtime_malformed';
+  /** Human-readable message for user display. Never includes token. */
+  message: string;
 }
 
 export class CliApiClient {
@@ -70,6 +86,87 @@ export class CliApiClient {
     }
 
     return this.parse<T>(res);
+  }
+
+  /**
+   * Non-fail-fast probe for `duya doctor`.
+   *
+   * Unlike `connect()` which throws, this method always returns a
+   * structured ProbeResult. It never throws.
+   */
+  async probe(path: string, timeoutMs?: number): Promise<ProbeResult> {
+    try {
+      // First check if runtime is available
+      const lookup = await readCliApiRuntime();
+      if (lookup.kind === 'not_running') {
+        return {
+          reachable: false,
+          statusCode: 0,
+          error: 'runtime_not_found',
+          message: 'DUYA is not running. Open the DUYA app and retry.',
+        };
+      }
+      if (lookup.kind === 'malformed') {
+        return {
+          reachable: false,
+          statusCode: 0,
+          error: 'runtime_malformed',
+          message: `Runtime file is invalid: ${lookup.reason}`,
+        };
+      }
+
+      const url = `http://127.0.0.1:${lookup.runtime.port}${path}`;
+      const timeout = timeoutMs ?? REQUEST_TIMEOUT_MS;
+      const res = await this.send(url, lookup.runtime.token, timeout);
+
+      if (res.rawError === 'timeout') {
+        return {
+          reachable: true,
+          statusCode: 0,
+          error: 'timeout',
+          message: 'Request timed out. The DUYA app did not respond in time.',
+        };
+      }
+      if (res.rawError === 'connection_refused') {
+        return {
+          reachable: false,
+          statusCode: 0,
+          error: 'connection_refused',
+          message: 'Cannot connect to DUYA. Is the app running?',
+        };
+      }
+
+      if (res.status === 401) {
+        return {
+          reachable: true,
+          statusCode: 401,
+          error: 'auth_failed',
+          message: 'Authentication failed. The DUYA app may have restarted.',
+        };
+      }
+
+      if (res.status >= 500) {
+        return {
+          reachable: true,
+          statusCode: res.status,
+          error: 'server_error',
+          message: `DUYA app returned an error (HTTP ${res.status}).`,
+        };
+      }
+
+      // Success or client error — doctor handles these
+      return {
+        reachable: true,
+        statusCode: res.status,
+      };
+    } catch (err) {
+      return {
+        reachable: false,
+        statusCode: 0,
+        error: 'server_error',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   private async send(
