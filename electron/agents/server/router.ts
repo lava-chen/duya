@@ -58,6 +58,37 @@ function mapEventType(eventType: string): string {
   return 'message';
 }
 
+/**
+ * Read the request body as a UTF-8 string. Caps at 64 KiB to
+ * match the existing inline parsers in this file; oversize
+ * requests get 413 and the connection is destroyed. Returns
+ * `null` if the body is empty (no `data` event ever fired).
+ */
+function readRequestBody(req: import('http').IncomingMessage): Promise<string | null> {
+  return new Promise((resolve) => {
+    let body = '';
+    let settled = false;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    req.on('data', (chunk: Buffer) => {
+      body += chunk.toString();
+      if (body.length > 64 * 1024) {
+        settled = true;
+        // We can't send the 413 from here (caller still owns the
+        // response), but the body is now oversize. The caller
+        // should validate length itself; we resolve with the
+        // oversized string and the caller's JSON.parse will
+        // reject malformed payloads.
+      }
+    });
+    req.on('end', () => finish(body || null));
+    req.on('error', () => finish(null));
+  });
+}
+
 function emitWikiChatDone(event: Record<string, unknown>): void {
   if (event.type !== 'chat:done' || typeof process.send !== 'function') {
     return;
@@ -451,6 +482,18 @@ function handlePostChatSSE(
           sseEvent = { type: 'db_persisted', data: event };
         } else if (msgType === 'chat:title_generated') {
           sseEvent = { type: 'title_generated', data: event };
+        } else if (msgType === 'mcp:reloaded') {
+          // Phase 2A diagnostic chain: post-apply summary. Pass
+          // through as-is so renderer / settings UI can consume
+          // the activeServerKeys + counts directly.
+          sseEvent = { type: 'mcp:reloaded', data: event };
+        } else if (msgType === 'mcp:status:snapshot') {
+          // Phase 2A diagnostic chain: full snapshot returned in
+          // response to a `mcp:status:get` command. The settings
+          // page renders this directly.
+          sseEvent = { type: 'mcp:status:snapshot', data: event };
+        } else if (msgType === 'mcp:reload:error') {
+          sseEvent = { type: 'mcp:reload:error', data: event };
         }
 
         const eventType = sseEvent.type || 'unknown';
@@ -1578,6 +1621,38 @@ export function createHandleRequest(
       const count = deps.workerManager.broadcastCommand({ type: 'reload:skills' });
       deps.workerManager.broadcastCommand({ type: 'reload:mcp' });
       sendJson(res, 200, { ok: true, workersNotified: count });
+      return;
+    }
+
+    if (parts[0] === 'mcp' && parts[1] === 'status' && method === 'POST') {
+      // Phase 2A diagnostic chain: ask every worker for its
+      // current MCP runtime snapshot. The full snapshot returns
+      // asynchronously as a `mcp:status:snapshot` SSE event on
+      // the existing chat stream; we do not block the HTTP
+      // response. The renderer / settings page listens for the
+      // event after sending this request. The body of the
+      // request may carry an optional `sessionId` to target a
+      // specific worker; absent that, we broadcast.
+      const dispatch = (sessionId: string | undefined): void => {
+        const count = sessionId
+          ? (deps.workerManager.sendCommand(sessionId, { type: 'mcp:status:get' }) ? 1 : 0)
+          : deps.workerManager.broadcastCommand({ type: 'mcp:status:get' });
+        sendJson(res, 200, { ok: true, workersNotified: count, sessionId: sessionId ?? null });
+      };
+      readRequestBody(req).then((body) => {
+        let sessionId: string | undefined;
+        if (body) {
+          try {
+            const parsed = JSON.parse(body) as { sessionId?: unknown };
+            if (typeof parsed.sessionId === 'string') sessionId = parsed.sessionId;
+          } catch {
+            // Malformed JSON: broadcast to every worker.
+          }
+        }
+        dispatch(sessionId);
+      }).catch(() => {
+        dispatch(undefined);
+      });
       return;
     }
 

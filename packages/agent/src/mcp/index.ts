@@ -28,6 +28,15 @@ export class MCPClient {
   }
 
   /**
+   * Get the source bucket for the runtime permission gate. Set
+   * by `applyMCPConfiguration` from the resolved config; defaults
+   * to `'unknown'` when the caller did not stamp the field.
+   */
+  getSource(): 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' {
+    return this.config.source ?? 'unknown';
+  }
+
+  /**
    * Get server name
    */
   getName(): string {
@@ -264,17 +273,20 @@ export class MCPManager {
       toolName: string;
       description: string;
       input_schema: Record<string, unknown>;
+      source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
     };
     const pending: Pending[] = [];
     for (const client of this.clients.values()) {
       if (!client.isConnected()) continue;
       const scopedServerName = client.getName();
+      const source = client.getSource();
       for (const tool of client.getTools()) {
         pending.push({
           scopedServerName,
           toolName: tool.name,
           description: tool.description,
           input_schema: tool.input_schema,
+          source,
         });
       }
     }
@@ -295,7 +307,11 @@ export class MCPManager {
         input_schema: p.input_schema,
         internalKey,
         providerName,
-        mcpInfo: { serverName: p.scopedServerName, toolName: p.toolName },
+        mcpInfo: {
+          serverName: p.scopedServerName,
+          toolName: p.toolName,
+          source: p.source,
+        },
         serverName: p.scopedServerName,
       });
     }
