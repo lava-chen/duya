@@ -3,60 +3,82 @@
  *
  * Single source of truth for skill winner resolution.
  *
- * Phase 3B-0.2: GUI `skills:list` and Agent runtime `SkillRegistry` MUST
- * use the same winner rule. This module is the shared resolver.
+ * Phase 3B-0.3: distinguishes `origin` (provenance) from
+ * `effectivePrecedence` (winner decision weight). A customized
+ * bundled skill competes at the user level so it cannot be
+ * shadowed by a later-installed plugin.
  *
- * Precedence (v0): user > plugin > bundled
+ * Precedence (v0): user (4) > customized-bundled (4) > plugin (3)
+ *                  > plain bundled (2) > unmarked (1)
  *
- * Inputs are skill candidates from each source layer; output is the
- * available set (one winner per logical name) and the name-scoped
- * `enabled` effective state.
- *
- * This module is pure: no filesystem, no I/O, no electron. It takes
- * pre-classified candidates and returns a deterministic result.
+ * Pure: no filesystem, no I/O, no electron. Takes pre-classified
+ * candidates and returns a deterministic result.
  */
 
-export type SkillSourceV0 = 'bundled' | 'user' | 'plugin';
+export type SkillOrigin = 'bundled' | 'user' | 'plugin';
 
 export interface SkillCandidate {
+  /** Logical name (directory name). */
   name: string;
-  source: SkillSourceV0;
-  /** Plugin id, required for source=plugin candidates. */
+  /** Original source / provenance. */
+  origin: SkillOrigin;
+  /** Plugin id, required for origin=plugin candidates. */
   pluginId?: string;
-  /** Whether the candidate's on-disk marker was present (provenance). */
+  /**
+   * True iff this is a bundled-derived skill whose current content
+   * hash differs from the canonical bundled hash. Unused for
+   * non-bundled origins.
+   */
+  customized?: boolean;
+  /**
+   * True iff this candidate has a .duya-origin.json marker on disk.
+   * Used as a defensive fallback for unmarked entries.
+   */
   hasMarker?: boolean;
 }
 
 export interface AvailableSkill {
-  /** Logical name (directory name). */
   name: string;
-  /** Resolved source. */
-  source: SkillSourceV0;
-  /** Plugin id if source=plugin. */
+  origin: SkillOrigin;
+  customized: boolean;
   pluginId?: string;
+  /** Internal: the precedence used in winner resolution. */
+  effectivePrecedence: number;
 }
 
-/** Precedence: higher number wins. Locked for v0. */
-export const PRECEDENCE: Record<SkillSourceV0, number> = {
-  user: 3,
-  plugin: 2,
-  bundled: 1,
-};
+/** Compute the effective precedence from origin and customized. */
+export function effectivePrecedenceOf(c: SkillCandidate): number {
+  if (c.origin === 'user') return 4;
+  if (c.origin === 'plugin') return 3;
+  // origin === 'bundled'
+  if (c.customized === true) return 4;
+  // plain bundled
+  if (c.hasMarker === false) return 1; // unmarked defensive fallback
+  return 2;
+}
 
 /**
  * Choose the winner for a single logical name. Returns null if no
- * candidates. Ties broken by input order (caller's responsibility to
- * pass candidates in a stable order).
+ * candidates. Ties broken by input order (caller's responsibility).
  */
-export function pickWinner(candidates: SkillCandidate[]): SkillCandidate | null {
+export function pickWinner(candidates: SkillCandidate[]): AvailableSkill | null {
   if (candidates.length === 0) return null;
   let best = candidates[0];
+  let bestScore = effectivePrecedenceOf(best);
   for (const c of candidates) {
-    if (PRECEDENCE[c.source] > PRECEDENCE[best.source]) {
+    const score = effectivePrecedenceOf(c);
+    if (score > bestScore) {
       best = c;
+      bestScore = score;
     }
   }
-  return best;
+  return {
+    name: best.name,
+    origin: best.origin,
+    customized: best.origin === 'bundled' && best.customized === true,
+    pluginId: best.pluginId,
+    effectivePrecedence: bestScore,
+  };
 }
 
 /**
@@ -64,21 +86,20 @@ export function pickWinner(candidates: SkillCandidate[]): SkillCandidate | null 
  * logical name. Shadowed candidates are NOT in the result.
  */
 export function resolveAvailable(candidates: SkillCandidate[]): AvailableSkill[] {
-  const byName = new Map<string, SkillCandidate>();
+  const byName = new Map<string, { candidate: SkillCandidate; score: number }>();
   for (const c of candidates) {
+    const score = effectivePrecedenceOf(c);
     const existing = byName.get(c.name);
-    if (!existing) {
-      byName.set(c.name, c);
-      continue;
-    }
-    if (PRECEDENCE[c.source] > PRECEDENCE[existing.source]) {
-      byName.set(c.name, c);
+    if (!existing || score > existing.score) {
+      byName.set(c.name, { candidate: c, score });
     }
   }
-  return Array.from(byName.values()).map((c) => ({
-    name: c.name,
-    source: c.source,
-    pluginId: c.pluginId,
+  return Array.from(byName.values()).map(({ candidate, score }) => ({
+    name: candidate.name,
+    origin: candidate.origin,
+    customized: candidate.origin === 'bundled' && candidate.customized === true,
+    pluginId: candidate.pluginId,
+    effectivePrecedence: score,
   }));
 }
 
