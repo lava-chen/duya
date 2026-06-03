@@ -35,6 +35,24 @@ import { getBundledSkillsDir } from './loader.js';
 const MANIFEST_FILENAME = '.bundled_manifest.json';
 const MANIFEST_VERSION = 2;
 
+/**
+ * Hidden marker file written inside each bundled-origin skill directory
+ * to record its provenance. The IPC handler uses this marker (and only
+ * this marker, plus the safe-migration path below) to classify a
+ * user-dir entry as `source: 'bundled'`.
+ *
+ * Schema v1: bare minimum needed for classification. Future fields
+ * (e.g. originalSyncHash) can be appended without breaking v1.
+ */
+const PROVENANCE_MARKER_FILENAME = '.duya-origin.json';
+const PROVENANCE_SCHEMA_VERSION = 1;
+
+interface SkillProvenance {
+  schemaVersion: number;
+  origin: 'bundled';
+  skillName: string;
+}
+
 function getUserSkillsDir(): string {
   return path.join(os.homedir(), '.duya', 'skills');
 }
@@ -45,6 +63,49 @@ function getManifestPath(): string {
 
 function getBundledDir(): string {
   return getBundledSkillsDir();
+}
+
+/**
+ * Read the provenance marker from a skill directory. Returns null if
+ * the file is missing, unreadable, or has an unrecognized schema.
+ *
+ * The marker is the ONLY authoritative source of bundled classification
+ * read from disk. Inference from directory names or manifest entries
+ * is forbidden.
+ */
+export async function readSkillProvenance(skillDir: string): Promise<SkillProvenance | null> {
+  const markerPath = path.join(skillDir, PROVENANCE_MARKER_FILENAME);
+  try {
+    const raw = await fs.readFile(markerPath, 'utf-8');
+    const parsed = JSON.parse(raw) as SkillProvenance;
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      parsed.schemaVersion === PROVENANCE_SCHEMA_VERSION &&
+      parsed.origin === 'bundled' &&
+      typeof parsed.skillName === 'string' &&
+      parsed.skillName.length > 0
+    ) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write the provenance marker for a freshly synced bundled skill.
+ * The marker records origin='bundled' and the skill's directory name.
+ */
+async function writeSkillProvenance(skillDir: string, skillName: string): Promise<void> {
+  const markerPath = path.join(skillDir, PROVENANCE_MARKER_FILENAME);
+  const payload: SkillProvenance = {
+    schemaVersion: PROVENANCE_SCHEMA_VERSION,
+    origin: 'bundled',
+    skillName,
+  };
+  await fs.writeFile(markerPath, JSON.stringify(payload, null, 2) + '\n', 'utf-8');
 }
 
 async function computeFileHash(filePath: string): Promise<string> {
@@ -221,6 +282,7 @@ export async function syncBundledSkills(): Promise<SyncResult> {
     if (!manifestEntry) {
       // NEW skill: not in manifest
       await copyDir(skillSrc, skillDest);
+      await writeSkillProvenance(skillDest, entry.name);
       const hash = await computeDirHash(skillSrc);
       manifest.skills[entry.name] = {
         hash,
@@ -241,12 +303,16 @@ export async function syncBundledSkills(): Promise<SyncResult> {
             // Bundled skill has been updated
             await removeDir(skillDest);
             await copyDir(skillSrc, skillDest);
+            await writeSkillProvenance(skillDest, entry.name);
             manifest.skills[entry.name] = {
               hash: newBundledHash,
               syncedAt: new Date().toISOString(),
             };
             result.updated.push(entry.name);
           } else {
+            // Bundled content unchanged. Reaffirm provenance in case
+            // a prior run wrote the marker but later got removed.
+            await writeSkillProvenance(skillDest, entry.name);
             result.skipped.push(entry.name);
           }
         } else {
@@ -256,6 +322,7 @@ export async function syncBundledSkills(): Promise<SyncResult> {
       } else {
         // Skill was deleted by user but is in manifest, re-add it
         await copyDir(skillSrc, skillDest);
+        await writeSkillProvenance(skillDest, entry.name);
         const hash = await computeDirHash(skillSrc);
         manifest.skills[entry.name] = {
           hash,
