@@ -17,9 +17,13 @@ import { parseSkillFrontmatter, parseAllowedTools } from '../utils/skill-parser'
 import { scanSkillFile, type SkillFinding } from '../../packages/agent/src/security/skillScanner.js';
 import { getJsonSetting, setJsonSetting } from '../db/index';
 import { getPluginManager } from '../plugins/PluginManager';
+import * as crypto from 'crypto';
 
 const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
 type SkillEnabledOverrides = Record<string, boolean>;
+
+const PROVENANCE_MARKER_FILENAME = '.duya-origin.json';
+const MANIFEST_FILENAME = '.bundled_manifest.json';
 
 let cachedAgentServerUrl: string | null = null;
 
@@ -105,7 +109,138 @@ export function registerSkillsHandlers(): void {
       const loadedNames = new Set<string>();
       const logger = getLogger();
 
-      const loadSkillsFromDir = (baseDir: string, source: string, sourceId?: string) => {
+      // Provenance classification: read the manifest once. For each
+      // top-level user-dir entry that lacks a .duya-origin.json marker,
+      // we attempt a safe migration by comparing the directory's
+      // content hash against the recorded bundled hash. A match means
+      // the directory is the unmodified historical bundled copy;
+      // we then write the marker so future runs are marker-based.
+      //
+      // This is the ONLY path that may classify a user-dir entry as
+      // 'bundled' without a marker. Inference by directory name from
+      // manifest is forbidden (Phase 3B-0.1 lock).
+      let bundledManifest: Record<string, { hash: string; syncedAt: string }> = {};
+      const manifestPath = path.join(userSkillsDir, MANIFEST_FILENAME);
+      try {
+        if (fs.existsSync(manifestPath)) {
+          const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+          if (raw && typeof raw === 'object' && raw.skills && typeof raw.skills === 'object') {
+            bundledManifest = raw.skills as typeof bundledManifest;
+          }
+        }
+      } catch {
+        // Manifest unreadable; proceed with empty map (no migration)
+      }
+
+      /**
+       * Compute a stable content hash for a skill directory. Hidden
+       * files (including .duya-origin.json) are excluded so that
+       * adding the marker does not change the hash. This is required
+       * for the safe-migration path to recognise pre-existing bundled
+       * copies.
+       */
+      const hashSkillDir = (dir: string): string => {
+        const hashes: string[] = [];
+        const walk = (current: string) => {
+          const entries = fs.readdirSync(current, { withFileTypes: true });
+          for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+            if (e.name.startsWith('.')) continue;
+            const p = path.join(current, e.name);
+            if (e.isFile()) {
+              const buf = fs.readFileSync(p);
+              hashes.push(`${e.name}:${crypto.createHash('md5').update(buf).digest('hex')}`);
+            } else if (e.isDirectory()) {
+              const subHashes: string[] = [];
+              const w = (cc: string) => {
+                for (const ee of fs.readdirSync(cc, { withFileTypes: true })) {
+                  if (ee.name.startsWith('.')) continue;
+                  const pp = path.join(cc, ee.name);
+                  if (ee.isFile()) {
+                    subHashes.push(`${ee.name}:${crypto.createHash('md5').update(fs.readFileSync(pp)).digest('hex')}`);
+                  } else if (ee.isDirectory()) {
+                    w(pp);
+                  }
+                }
+              };
+              w(p);
+              hashes.push(`${e.name}/:${crypto.createHash('md5').update(subHashes.join('|')).digest('hex')}`);
+            }
+          }
+        };
+        walk(dir);
+        return crypto.createHash('md5').update(hashes.join('|')).digest('hex');
+      };
+
+      /**
+       * Read the provenance marker synchronously. Returns the parsed
+       * marker object if valid, otherwise null.
+       */
+      const readSkillProvenanceSync = (skillDir: string): { schemaVersion: number; origin: 'bundled'; skillName: string } | null => {
+        const markerPath = path.join(skillDir, PROVENANCE_MARKER_FILENAME);
+        try {
+          if (!fs.existsSync(markerPath)) return null;
+          const raw = fs.readFileSync(markerPath, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            parsed.schemaVersion === 1 &&
+            parsed.origin === 'bundled' &&
+            typeof parsed.skillName === 'string' &&
+            parsed.skillName.length > 0
+          ) {
+            return parsed;
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      };
+
+      /**
+       * Resolve the effective source for a top-level user-dir entry.
+       * Returns 'bundled' ONLY when:
+       *   (a) the entry has a valid .duya-origin.json marker, OR
+       *   (b) safe migration: no marker, but directory content hash
+       *       exactly matches the bundled hash recorded in the manifest
+       *       (and we then write the marker so future runs are fast).
+       * Otherwise returns 'user' — this is the safe default.
+       */
+      const resolveUserDirSource = (skillName: string, skillDir: string): 'bundled' | 'user' => {
+        // (a) marker-based classification
+        const marker = readSkillProvenanceSync(skillDir);
+        if (marker) return 'bundled';
+
+        // (b) safe migration from manifest hash
+        const manifestEntry = bundledManifest[skillName];
+        if (manifestEntry && typeof manifestEntry.hash === 'string') {
+          const currentHash = hashSkillDir(skillDir);
+          if (currentHash === manifestEntry.hash) {
+            // Safe migration: directory is the unmodified historical
+            // bundled copy. Write the marker for future runs.
+            const markerPath = path.join(skillDir, PROVENANCE_MARKER_FILENAME);
+            try {
+              fs.writeFileSync(
+                markerPath,
+                JSON.stringify(
+                  { schemaVersion: 1, origin: 'bundled', skillName },
+                  null,
+                  2,
+                ) + '\n',
+                'utf-8',
+              );
+              logger.info(`Wrote provenance marker for historical bundled skill '${skillName}'`, undefined, LogComponent.Skills);
+            } catch (e) {
+              logger.warn(`Failed to write provenance marker for '${skillName}'`, { error: String(e) }, LogComponent.Skills);
+            }
+            return 'bundled';
+          }
+        }
+        // No marker, hash mismatch (or no manifest entry) → user-sourced
+        return 'user';
+      };
+
+      const loadSkillsFromDir = (baseDir: string, source: string, sourceId?: string, classify?: (name: string, dir: string) => string) => {
         if (!fs.existsSync(baseDir)) return;
 
         const entries = fs.readdirSync(baseDir);
@@ -117,6 +252,13 @@ export function registerSkillsHandlers(): void {
           const stat = fs.statSync(entryPath);
 
           if (!stat.isDirectory()) continue;
+
+          // Top-level entries under the user dir with a classifier get
+          // their effective source re-evaluated (marker or migration).
+          // Subcategory layout and non-user sources keep the caller's
+          // source as-is.
+          const isTopLevel = baseDir === userSkillsDir;
+          const effectiveSource = isTopLevel && classify ? classify(entry, entryPath) : source;
 
           const descriptionPath = path.join(entryPath, 'DESCRIPTION.md');
           const isCategoryDir = fs.existsSync(descriptionPath);
@@ -157,7 +299,7 @@ export function registerSkillsHandlers(): void {
                   skillId: skillEntry,
                   description: (frontmatter.description as string) || skillEntry,
                   category: entry,
-                  source,
+                  source: effectiveSource,
                   sourceId,
                   userInvocable: frontmatter['user-invocable'] !== false,
                   whenToUse: frontmatter['when-to-use'] as string | undefined,
@@ -200,7 +342,7 @@ export function registerSkillsHandlers(): void {
                 skillId: entry,
                 description: (frontmatter.description as string) || entry,
                 category: (frontmatter.category as string) || 'other',
-                source,
+                source: effectiveSource,
                 sourceId,
                 userInvocable: frontmatter['user-invocable'] !== false,
                 whenToUse: frontmatter['when-to-use'] as string | undefined,
@@ -252,7 +394,7 @@ export function registerSkillsHandlers(): void {
       // Load user skills
       if (fs.existsSync(userSkillsDir)) {
         logger.info('Loading user skills', { dir: userSkillsDir }, LogComponent.Skills);
-        loadSkillsFromDir(userSkillsDir, 'user');
+        loadSkillsFromDir(userSkillsDir, 'user', undefined, resolveUserDirSource);
       }
 
       // Load project skills
