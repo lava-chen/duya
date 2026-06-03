@@ -107,6 +107,39 @@ export interface Tool {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
+  /**
+   * ToolRegistry internal index key. Optional. Only MCP tools set
+   * this; builtin tools have `key === name` and leave the field
+   * undefined. Format: `mcp__<scopedServerName>__<toolName>`.
+   *
+   * Phase 2A Batch A: field declared but not yet consumed. Batch B
+   * will wire `MCPClient.getAllTools` and `ToolRegistry.register`
+   * to use it.
+   */
+  internalKey?: string;
+  /**
+   * Explicit provider-visible name. Optional. Only MCP tools set
+   * this; equals `name` in practice. Kept as a separate field to
+   * express intent. The provider payload sends `tool.name`, which
+   * for MCP equals this `providerName`.
+   *
+   * Phase 2A Batch A: field declared but not yet consumed.
+   */
+  providerName?: string;
+  /**
+   * Future UI display name. Phase 2A does NOT consume it; the
+   * field is declared so Phase 4 (renderer) can rely on it
+   * without re-shaping the type.
+   */
+  displayName?: string;
+  /**
+   * MCP dispatch metadata. Only MCP tools set this. Used by the
+   * `executor` closure to call
+   * `mcpManager.callTool(mcpInfo.serverName, mcpInfo.toolName, input)`.
+   *
+   * Phase 2A Batch A: field declared but not yet consumed.
+   */
+  mcpInfo?: { serverName: string; toolName: string };
 }
 
 // 工具调用
