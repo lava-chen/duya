@@ -8,6 +8,9 @@
  * winner selection (resolver) and provenance classification.
  */
 
+import { createHash, randomUUID } from 'node:crypto';
+import { createInterface } from 'node:readline';
+import { stdin, stdout } from 'node:process';
 import { CliApiClient } from '../api/client.js';
 import { CliApiError } from '../api/errors.js';
 import { renderJson, type OutputFormat } from '../api/format.js';
@@ -109,4 +112,76 @@ export async function runSkillInfoCommand(id: string, format: OutputFormat): Pro
     }
     throw err;
   }
+}
+
+// ============================================================================
+// Phase 7: write operations
+// ============================================================================
+
+function isInteractive(): boolean {
+  return Boolean(stdin.isTTY);
+}
+
+async function promptConfirm(message: string): Promise<boolean> {
+  if (!isInteractive()) return false;
+  const rl = createInterface({ input: stdin, output: stdout, terminal: false });
+  return new Promise<boolean>((resolve) => {
+    rl.question(`${message} [y/N] `, (answer) => {
+      rl.close();
+      const v = answer.trim().toLowerCase();
+      resolve(v === 'y' || v === 'yes');
+    });
+  });
+}
+
+async function runSkillWrite(
+  id: string,
+  action: 'enable' | 'disable',
+  yes: boolean,
+  format: OutputFormat,
+): Promise<number> {
+  if (!yes && !isInteractive()) {
+    process.stderr.write(
+      'interactive_required: write operation requires --yes in non-interactive mode\n',
+    );
+    return 3;
+  }
+  if (!yes) {
+    const confirmed = await promptConfirm(`Confirm ${action} skill '${id}'?`);
+    if (!confirmed) {
+      process.stderr.write(`aborted: ${action} of '${id}' cancelled\n`);
+      return 1;
+    }
+  }
+
+  const correlationId = randomUUID();
+  const client = await CliApiClient.connect();
+  try {
+    const body = await client.post<{ skill: { id: string; name: string; enabled: boolean } }>(
+      `/v1/skills/${encodeURIComponent(id)}/${action}`,
+      {},
+      { correlationId },
+    );
+    if (format === 'json') {
+      process.stdout.write(renderJson({ skill: body.skill, correlationId }) + '\n');
+    } else {
+      const state = body.skill.enabled ? 'enabled' : 'disabled';
+      process.stdout.write(`${state} skill '${id}' (correlationId=${correlationId})\n`);
+    }
+    return 0;
+  } catch (err) {
+    if (err instanceof CliApiError) {
+      process.stderr.write(err.hint + '\n');
+      return err.isAppUnavailable() ? 2 : 1;
+    }
+    throw err;
+  }
+}
+
+export async function runSkillEnableCommand(id: string, yes: boolean, format: OutputFormat): Promise<number> {
+  return runSkillWrite(id, 'enable', yes, format);
+}
+
+export async function runSkillDisableCommand(id: string, yes: boolean, format: OutputFormat): Promise<number> {
+  return runSkillWrite(id, 'disable', yes, format);
 }

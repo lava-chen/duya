@@ -31,6 +31,7 @@ import {
 import { handleListSkills, handleGetSkill } from './handlers/skills.js';
 import { handleListMCPs, handleGetMCP } from './handlers/mcps.js';
 import { handleListProviders, handleGetProvider, handleGetActiveProvider } from './handlers/providers.js';
+import { handleEnableSkill, handleDisableSkill } from './handlers/skillWrite.js';
 import { InvalidPaginationParam } from '../db/queries/sessions';
 import { getLogger } from '../logging/logger';
 
@@ -111,6 +112,20 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // /v1/skills/:id
   if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'skills') {
     handleGetSkill(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // POST /v1/skills/:id/enable
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'skills' && parts[3] === 'enable') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    handleEnableSkill(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // POST /v1/skills/:id/disable
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'skills' && parts[3] === 'disable') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    handleDisableSkill(req, res, decodeURIComponent(parts[2]), correlationId);
     return;
   }
 

@@ -89,6 +89,45 @@ export class CliApiClient {
   }
 
   /**
+   * POST request for write operations. Adds `X-Correlation-Id`
+   * header from `opts.correlationId`. On 401, re-reads runtime
+   * file once and retries.
+   */
+  async post<T = unknown>(
+    path: string,
+    body: unknown,
+    opts: RequestOptions & { correlationId?: string } = {},
+  ): Promise<T> {
+    const url = (opts.baseUrlOverride ?? this.baseUrl ?? '') + path;
+    const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (opts.correlationId) headers['X-Correlation-Id'] = opts.correlationId;
+
+    let res = await this.sendWithBody(
+      url,
+      this.token ?? '',
+      timeoutMs,
+      JSON.stringify(body),
+      headers,
+    );
+    if (res.status === 401) {
+      const lookup = await readCliApiRuntime();
+      if (lookup.kind === 'ok') {
+        this.token = lookup.runtime.token;
+        this.baseUrl = `http://127.0.0.1:${lookup.runtime.port}`;
+        res = await this.sendWithBody(
+          this.baseUrl + path,
+          this.token,
+          timeoutMs,
+          JSON.stringify(body),
+          headers,
+        );
+      }
+    }
+    return this.parse<T>(res);
+  }
+
+  /**
    * Non-fail-fast probe for `duya doctor`.
    *
    * Unlike `connect()` which throws, this method always returns a
@@ -183,6 +222,43 @@ export class CliApiClient {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
         },
+        signal: controller.signal,
+      });
+      const body = await res.text();
+      return { status: res.status, body };
+    } catch (err) {
+      const name = (err as { name?: string }).name;
+      if (name === 'AbortError') {
+        return { status: 0, body: '', rawError: 'timeout' };
+      }
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EHOSTUNREACH') {
+        return { status: 0, body: '', rawError: 'connection_refused' };
+      }
+      return { status: 0, body: '', rawError: err instanceof Error ? err.message : String(err) };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async sendWithBody(
+    url: string,
+    token: string,
+    timeoutMs: number,
+    bodyText: string,
+    extraHeaders: Record<string, string>,
+  ): Promise<{ status: number; body: string; rawError?: string }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+          ...extraHeaders,
+        },
+        body: bodyText,
         signal: controller.signal,
       });
       const body = await res.text();
