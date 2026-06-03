@@ -30,6 +30,7 @@ import {
 } from './handlers/sessions.js';
 import { handleListSkills, handleGetSkill } from './handlers/skills.js';
 import { handleListMCPs, handleGetMCP } from './handlers/mcps.js';
+import { handleListProviders, handleGetProvider, handleGetActiveProvider } from './handlers/providers.js';
 import { InvalidPaginationParam } from '../db/queries/sessions';
 import { getLogger } from '../logging/logger';
 
@@ -122,6 +123,24 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // /v1/mcps/:id
   if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'mcps') {
     handleGetMCP(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // /v1/providers
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'providers') {
+    handleListProviders(req, res);
+    return;
+  }
+
+  // /v1/providers/active
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'providers' && parts[2] === 'active') {
+    handleGetActiveProvider(req, res);
+    return;
+  }
+
+  // /v1/providers/:id
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'providers') {
+    handleGetProvider(req, res, decodeURIComponent(parts[2]));
     return;
   }
 
