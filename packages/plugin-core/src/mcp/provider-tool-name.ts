@@ -162,3 +162,135 @@ export function allocateUniqueProviderToolName(
   // Pathological case: fall back to a hash-suffixed form of the original.
   return truncateWithHash(`${baseName}__${MAX_TRIES + 1}`, policy);
 }
+
+// ============================================================================
+// Phase 2A Batch A: high-level MCP tool-name allocator
+// ============================================================================
+//
+// `computeProviderName` is the single entry point the runtime uses to
+// turn an internal MCP key into a model-visible name. It:
+//   1) strips only the `mcp__` internal prefix (keeping the
+//      scoped server name AND the tool name — `stripInternalKey`
+//      used by `sanitizeProviderToolName` is too aggressive: it
+//      also drops the tool name, which is the very thing that
+//      distinguishes two tools from different servers exposing
+//      the same tool name),
+//   2) sanitizes disallowed characters via `sanitizeProviderToolName`
+//      (with the private `stripInternalKey` short-circuited, since
+//      we already stripped the prefix),
+//   3) prepends a `mcp_` provider-visible prefix (MCP sources are
+//      guaranteed to be prefixed so they cannot collide with builtin
+//      tool names like `Bash` or `Read`),
+//   4) ensures global uniqueness via `allocateUniqueProviderToolName`,
+//      honoring `policy.maxLength` and falling back to a stable
+//      hash-suffixed form when plain suffixing would overflow.
+//
+// The function is pure: it does not mutate `usedNames`. Callers are
+// expected to add the returned name to `usedNames` after accepting
+// it, so subsequent calls in a batch see the just-allocated name.
+//
+// `usedNames` is intentionally NOT pre-populated with currently
+// active MCP provider names — full-replace (Batch C) removes them
+// before computing next-state names, and including them would cause
+// drift to `__2` on every repeated reload.
+
+/**
+ * The provider-visible prefix that every MCP-derived tool name carries.
+ * Distinct from the internal `mcp__` prefix (double underscore,
+ * internal-only) so model-facing strings stay readable and so MCP
+ * names can never accidentally collide with builtin names like
+ * `Bash` that share no leading characters.
+ */
+export const MCP_PROVIDER_PREFIX = 'mcp_';
+
+/**
+ * Compute a model-visible, globally-unique provider name for an MCP
+ * tool given its internal key. Pure: does not mutate `usedNames`.
+ *
+ * @param internalKey MCP internal key, shape
+ *   `mcp__<scopedServerName>__<toolName>`. The `mcp__` prefix is
+ *   stripped before sanitization; both the scoped server name AND
+ *   the tool name are retained so two servers exposing the same
+ *   tool name produce distinct provider names.
+ * @param usedNames Names already allocated in this apply pass
+ *   (typically: builtin tool names + mode-specific non-MCP names).
+ *   The returned name is guaranteed not to be in this set.
+ * @param policy Provider policy (Anthropic / OpenAI / etc.).
+ * @returns A provider-visible name starting with `mcp_`, fitting
+ *   `policy.maxLength`, matching `policy.allowedCharRegex` on every
+ *   char, and unique within `usedNames`.
+ */
+export function computeProviderName(
+  internalKey: string,
+  usedNames: ReadonlySet<string>,
+  policy: ProviderToolNamePolicy,
+): string {
+  // 1) Strip only the internal `mcp__` prefix. If the input does
+  //    not have the prefix, we still treat it as a raw internal key
+  //    (defensive — this should not happen for MCP-sourced keys).
+  const stripped = internalKey.startsWith(MCP_INTERNAL_PREFIX)
+    ? internalKey.slice(MCP_INTERNAL_PREFIX.length)
+    : internalKey;
+
+  // 2) Sanitize disallowed characters. We invoke the inner loop
+  //    directly (not the public `sanitizeProviderToolName`) because
+  //    that function calls `stripInternalKey` which would also drop
+  //    the tool-name suffix — losing the per-tool granularity we
+  //    need here.
+  const sanitized = sanitizeRawSegment(stripped, policy);
+
+  // 3) Prepend the provider-visible `mcp_` prefix. This guarantees
+  //    the result is distinct from any builtin tool name that does
+  //    not start with `mcp_`.
+  const base = `${MCP_PROVIDER_PREFIX}${sanitized}`;
+
+  // 4) Ensure global uniqueness within the apply pass. Length
+  //    handling and hash fallback are owned by
+  //    `allocateUniqueProviderToolName`.
+  return allocateUniqueProviderToolName(base, usedNames, policy);
+}
+
+/**
+ * Sanitize a raw string segment (already with `mcp__` prefix
+ * stripped) into a provider-conformant base. Mirrors the character
+ * handling of `sanitizeProviderToolName` but:
+ *   1) skips the second `stripInternalKey` call so the tool-name
+ *      suffix survives,
+ *   2) collapses ANY run of two or more consecutive underscores
+ *      down to a single underscore (the public helper only
+ *      collapses runs introduced by character substitution, not
+ *      underscores that were already in the input).
+ *
+ * The latter is important: an internal key like
+ * `mcp__plugin:com.duya.literature:literature__add_source` contains
+ * both `:` (replaced to `_`) and a literal `__` separator. Without
+ * aggressive collapsing the sanitized form would carry
+ * `...literature__add_source` (two underscores between the
+ * scoped server name and the tool name) instead of the cleaner
+ * `...literature_add_source`.
+ *
+ * Phase 2A Batch A: private helper, exported for unit tests but
+ * not part of the public surface.
+ */
+export function sanitizeRawSegment(
+  segment: string,
+  policy: ProviderToolNamePolicy,
+): string {
+  let out = '';
+  let lastWasUnderscore = false;
+  for (const ch of segment) {
+    if (policy.allowedCharRegex.test(ch)) {
+      out += ch;
+      lastWasUnderscore = false;
+    } else if (!lastWasUnderscore) {
+      out += '_';
+      lastWasUnderscore = true;
+    }
+    // else: the previous char was already a substituted underscore;
+    // skip this disallowed char.
+  }
+  // Aggressively collapse ANY remaining run of `__` (including
+  // literal-underscore runs that were in the input) down to a
+  // single underscore.
+  return out.replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+}
