@@ -45,6 +45,11 @@ jobs:
         run: npm ci
 
       - name: Build application
+        env:
+          # Vite on macOS arm64 runners OOMs at the default ~2 GB V8 heap
+          # while transforming 25k+ modules. Raise the limit for all
+          # platforms so the same value works across the matrix.
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npm run electron:build
 
       - name: Build and Release
