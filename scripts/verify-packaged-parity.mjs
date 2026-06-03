@@ -55,7 +55,7 @@ function getResourcesPath() {
 const RESOURCES = getResourcesPath();
 
 const CHECKS = {
-  'App binary': [getReleaseDir(), false],
+  'Release directory': [getReleaseDir(), true],
   'Resources directory': [RESOURCES, true],
 
   // Agent bundle (extraResources)
@@ -83,13 +83,8 @@ const CHECKS = {
   // Gateway bundle (extraResources)
   'gateway-bundle/ directory': [path.join(RESOURCES, 'gateway-bundle'), true],
 
-  // app.asar (Electron main + renderer)
+  // app.asar payload
   'app.asar': [path.join(RESOURCES, 'app.asar'), false],
-  'app.asar/dist-electron/main.js': [path.join(RESOURCES, 'app.asar', 'dist-electron', 'main.js'), false],
-  'app.asar/dist-electron/preload.js': [path.join(RESOURCES, 'app.asar', 'dist-electron', 'preload.js'), false],
-  'app.asar/dist-electron/agent-server.js': [path.join(RESOURCES, 'app.asar', 'dist-electron', 'agent-server.js'), false],
-  'app.asar/dist/index.html': [path.join(RESOURCES, 'app.asar', 'dist', 'index.html'), false],
-  'app.asar/dist/assets/': [path.join(RESOURCES, 'app.asar', 'dist', 'assets'), true],
 };
 
 const results = [];

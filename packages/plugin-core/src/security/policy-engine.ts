@@ -1,4 +1,4 @@
-import type { PluginTrustLevel } from './trust-engine';
+import { PluginTrustLevel } from './trust-engine';
 
 export interface EnterprisePolicy {
   strictKnownMarketplaces: boolean;
@@ -26,7 +26,7 @@ export interface EnterprisePolicy {
 
 export const DEFAULT_POLICY: EnterprisePolicy = {
   strictKnownMarketplaces: false,
-  minimumTrustLevel: 'untrusted',
+  minimumTrustLevel: PluginTrustLevel.Untrusted,
   requireVerifiedForHooks: false,
   requirePermissionReview: true,
   autoRevokeTemporaryPermissions: true,
@@ -116,8 +116,13 @@ export class PolicyEngine {
     return !!this.policy.managedPlugins[pluginId];
   }
 
-  meetsMinimumTrustLevel(level: string): boolean {
-    const levels: string[] = ['untrusted', 'local', 'verified', 'official'];
+  meetsMinimumTrustLevel(level: PluginTrustLevel): boolean {
+    const levels: PluginTrustLevel[] = [
+      PluginTrustLevel.Untrusted,
+      PluginTrustLevel.Local,
+      PluginTrustLevel.Verified,
+      PluginTrustLevel.Official,
+    ];
     return (
       levels.indexOf(level) >= levels.indexOf(this.policy.minimumTrustLevel)
     );

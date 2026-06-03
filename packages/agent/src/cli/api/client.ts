@@ -64,7 +64,7 @@ export class CliApiClient {
     return new CliApiClient(`http://127.0.0.1:${lookup.runtime.port}`, lookup.runtime.token);
   }
 
-  private constructor(baseUrl: string, token: string) {
+  constructor(baseUrl = '', token = '') {
     this.baseUrl = baseUrl;
     this.token = token;
   }
@@ -197,6 +197,9 @@ export class CliApiClient {
       return {
         reachable: true,
         statusCode: res.status,
+        message: res.status === 200
+          ? 'DUYA app is reachable.'
+          : `DUYA app responded with HTTP ${res.status}.`,
       };
     } catch (err) {
       return {

@@ -5,7 +5,7 @@
 import React, { useState, useRef, useCallback, KeyboardEvent, FormEvent, useEffect } from 'react';
 import {
   ArrowUpIcon,
-  TelescopeIcon,
+  SearchIcon,
   XIcon,
   StopIcon,
   FileIcon,
@@ -429,8 +429,8 @@ export function MessageInput({
           if (mcpResult.success && Array.isArray(mcpResult.data)) {
             setMcpServers(
               mcpResult.data
-                .filter((item) => typeof item?.name === 'string' && item.name.length > 0)
-                .map((item) => ({
+                .filter((item: { name?: string }) => typeof item?.name === 'string' && item.name.length > 0)
+                .map((item: { name: string; command?: string; enabled?: boolean }) => ({
                   name: item.name,
                   description: item.command,
                   enabled: item.enabled !== false,
@@ -1028,7 +1028,7 @@ export function MessageInput({
                     size={14}
                     className="hidden group-hover:block"
                   />
-                  <TelescopeIcon
+                  <SearchIcon
                     size={14}
                     className="block group-hover:hidden"
                   />
