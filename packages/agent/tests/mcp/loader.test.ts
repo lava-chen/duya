@@ -58,21 +58,12 @@ describe('loadAndResolveMCPServers — module-scope cache lifecycle', () => {
     mockedCollect.mockReset();
   });
 
-  it('before any call, getLastMCPLoadResult returns null', () => {
-    expect(getLastMCPLoadResult()).toBeNull();
-  });
-
-  it('after a call, getLastMCPLoadResult returns the last result', async () => {
-    setNextCandidates([]);
-    const r = await loadAndResolveMCPServers();
-    expect(getLastMCPLoadResult()).toEqual(r);
-  });
-
-  it('clearLastMCPLoadResult resets the cache', async () => {
-    setNextCandidates([]);
-    await loadAndResolveMCPServers();
-    expect(getLastMCPLoadResult()).not.toBeNull();
-    clearLastMCPLoadResult();
+  it('before any apply, getLastMCPLoadResult returns null', () => {
+    // Phase 2A: the canonical `lastMCPLoadResult` is written by
+    // `applyMCPConfiguration` (PHASE C commit), not by
+    // `loadAndResolveMCPServers` (which is now a pure compute
+    // step). `loader` re-exports the apply accessors for
+    // backward compatibility.
     expect(getLastMCPLoadResult()).toBeNull();
   });
 });
@@ -166,7 +157,7 @@ describe('loadAndResolveMCPServers — legacy slice + scoped keys', () => {
     ]);
   });
 
-  it('within-settings newest-wins: three settings sources for same name collapse to one legacyConfig', async () => {
+  it('within-settings newest-wins: three settings sources for same name collapse to one legacyConfig (settings runtime key strips sub-origin)', async () => {
     const items = { name: 'literature', command: 'node', args: [] };
     setNextCandidates([
       { source: 'settings', sourceSubOrigin: 'legacyFile', rawConfig: items },
@@ -175,10 +166,15 @@ describe('loadAndResolveMCPServers — legacy slice + scoped keys', () => {
     ]);
     const r = await loadAndResolveMCPServers();
     const settingsLegacy = r.legacyConfigs.filter(
-      (c) => c.command === 'node' && !c.name.startsWith('plugin:'),
+      (c) => c.command === 'node' && !c.name.startsWith('plugin:') && !c.name.startsWith('bundled:'),
     );
     expect(settingsLegacy).toHaveLength(1);
-    expect(settingsLegacy[0].name).toBe('literature');
+    // Phase 2A: settings runtime key strips the sub-origin so
+    // user migration (legacyFile -> agentSettings) does not
+    // change the internalKey. The sub-origin survives in the
+    // inventory entry (sourceSubOrigin) but not in the runtime
+    // key.
+    expect(settingsLegacy[0].name).toBe('settings:literature');
   });
 
   it('bundled missing is surfaced as a typed issue, not silently dropped', async () => {

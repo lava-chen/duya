@@ -46,7 +46,7 @@ import { duyaAgent } from '../index.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { loadMCPConfigs } from '../mcp/config.js';
-import { loadAndResolveMCPServers } from '../mcp/loader.js';
+import { applyMCPConfiguration } from '../mcp/apply.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
@@ -2089,32 +2089,31 @@ async function reloadSkills(): Promise<void> {
 }
 
 async function reloadMCP(): Promise<void> {
-  // Phase 1C: this function is NOT YET wired through the typed
-  // loader. The init path has been switched to
-  // loadAndResolveMCPServers(); reload cannot be switched without
-  // solving the ToolRegistry lifecycle gap: a reload that empties
-  // the config set must call unregisterMCPTools() to remove the
-  // tools previously registered for the now-removed servers, or
-  // the tool registry will retain stale entries that point at a
-  // null mcpManager and fail at call time. The current ToolRegistry
-  // has no unregisterByMcpServer() — that lands in Phase 2.
-  //
-  // Until then, reloadMCP continues to use the legacy discover*
-  // functions (marked @deprecated at their definitions). The
-  // legacy `if (allConfigs.length > 0)` guard is preserved so the
-  // runtime path matches the audit baseline.
+  // Phase 2A worker closure: reload now goes through the same
+  // applyMCPConfiguration state machine as init. PHASE A computes
+  // the next typed state without touching the active runtime;
+  // PHASE B1 prepares the new manager + tool registration plan;
+  // PHASE B2 atomically swaps the registry entries and the
+  // active manager; PHASE C commits the snapshot. In-flight
+  // calls against the old client fail deterministically after
+  // PHASE B2 (this is the documented known limit; a future
+  // tool-call drain is out of scope for this round).
   if (!agent) return;
   try {
-    const bundledConfigs = resolveBundledMCPServerConfigs();
-    const pluginConfigs = await discoverPluginMCPServerConfigs();
-    const settingsResult = await discoverSettingsMCPServerConfigs();
-    const allConfigs = [...bundledConfigs, ...pluginConfigs, ...settingsResult.configs];
-    if (allConfigs.length > 0) {
-      await agent.initMCPServers(allConfigs);
-      log(`[Agent-Process] Reloaded MCP servers: ${allConfigs.length} total (${bundledConfigs.length} bundled, ${pluginConfigs.length} plugin, ${settingsResult.configs.length} settings)` +
-        ` [legacyFile=${settingsResult.counts.legacyFile}, settingsKv=${settingsResult.counts.settingsKv}, agentSettings=${settingsResult.counts.agentSettings}]`);
-    }
-    sendToMain({ type: 'mcp:reloaded', count: allConfigs.length });
+    const result = await applyMCPConfiguration({
+      agent,
+      reason: 'manual',
+      agentProfileId: agent.getActiveAgentProfileId(),
+    });
+    log(
+      `[Agent-Process] Reloaded MCP: ${result.action.clientsConnected} connected, ` +
+      `${result.action.toolsAdded} tools added, ${result.action.toolsRemoved} removed ` +
+      `(${result.loadResult.inventory.length} inventory rows, ${result.loadResult.issues.length} issues)`,
+    );
+    sendToMain({
+      type: 'mcp:reloaded',
+      count: result.action.clientsConnected,
+    });
   } catch (err) {
     warn('[Agent-Process] Failed to reload MCP:', err);
     sendToMain({ type: 'mcp:reload:error', error: err instanceof Error ? err.message : String(err) });
@@ -2228,20 +2227,23 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           // Initialize MCP servers asynchronously after sending ready so that slow or hung
           // MCP servers do not block the worker from becoming ready.
           //
-          // Phase 1C: the init path is wired to the typed loader. The
-          // reload:mcp path is NOT yet wired — that requires
-          // unregisterMCPTools() lifecycle cleanup which the current
-          // ToolRegistry cannot provide (see reloadMCP() comment).
+          // Phase 2A worker closure: both init and reload go
+          // through `applyMCPConfiguration` (Phase 2A apply state
+          // machine). Old Phase 1C "init typed, reload legacy"
+          // transitional state is removed.
           (async () => {
+            if (!agent) return;
             try {
-              const result = await loadAndResolveMCPServers();
-              // Unconditional call: initMCPServers([]) is safe; the
-              // runtime's disconnectAll() runs even with an empty
-              // legacy slice, which is the correct invariant for the
-              // first-ever init (no prior manager to disconnect).
-              await agent.initMCPServers(result.legacyConfigs);
-              log(`[Agent-Process] Initialized MCP servers: ${result.legacyConfigs.length} total` +
-                  ` (${result.inventory.length} inventory rows, ${result.issues.length} issues)`);
+              agent.setActiveAgentProfileId(undefined);
+              const result = await applyMCPConfiguration({
+                agent,
+                reason: 'initialization',
+              });
+              log(
+                `[Agent-Process] Initialized MCP servers: ${result.action.clientsConnected} connected, ` +
+                `${result.action.toolsAdded} tools, ${result.action.toolsRemoved} removed ` +
+                `(${result.loadResult.inventory.length} inventory rows, ${result.loadResult.issues.length} issues)`,
+              );
             } catch (mcpErr) {
               warn('[Agent-Process] Failed to initialize MCP servers after ready:', mcpErr);
             }

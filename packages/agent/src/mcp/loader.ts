@@ -74,8 +74,18 @@ export interface MCPLoadResult {
 // ============================================================================
 // Module-scope cache
 // ============================================================================
+//
+// Phase 2A worker closure: the canonical `lastMCPLoadResult`
+// lives in `apply.ts` and is written only when the apply state
+// machine successfully commits a swap. The two functions below
+// re-export apply's snapshot accessors so existing test imports
+// `from './loader.js'` keep working without a code change at
+// the call site.
 
-let lastMCPLoadResult: MCPLoadResult | null = null;
+export {
+  getLastMCPLoadResult,
+  clearLastMCPLoadResult,
+} from './apply.js';
 
 /**
  * Module-scope snapshot of the last successful (or attempted) MCP
@@ -93,11 +103,18 @@ let lastMCPLoadResult: MCPLoadResult | null = null;
  * `agent.destroy?.()` path in agent-process-entry.ts is the
  * natural hook — wired in `clearLastMCPLoadResult`).
  */
-export function getLastMCPLoadResult(): MCPLoadResult | null {
+// The actual snapshot lives in apply.ts (see top of file).
+// The legacy implementations below are kept as dead code paths
+// in case a future refactor needs the loader's local cache
+// restored; they are not exported.
+
+let lastMCPLoadResult: MCPLoadResult | null = null;
+
+function _legacyGet(): MCPLoadResult | null {
   return lastMCPLoadResult;
 }
 
-export function clearLastMCPLoadResult(): void {
+function _legacyClear(): void {
   lastMCPLoadResult = null;
 }
 
@@ -144,6 +161,23 @@ export function filterDefinedEnv(env: NodeJS.ProcessEnv): Record<string, string>
   return out;
 }
 
+/**
+ * Apply connect-time `allowedAgentIds` filtering. Returns
+ * `configs` unchanged if `agentProfileId` is undefined (no
+ * enforcement). An entry whose `allowedAgentIds` is empty or
+ * absent is treated as available to all profiles.
+ */
+export function filterResolvedMCPServersForAgent(
+  configs: ReadonlyArray<ResolvedMCPServerConfig>,
+  agentProfileId: string | undefined,
+): ResolvedMCPServerConfig[] {
+  if (!agentProfileId) return configs.slice();
+  return configs.filter((c) => {
+    if (!c.allowedAgentIds || c.allowedAgentIds.length === 0) return true;
+    return c.allowedAgentIds.includes(agentProfileId);
+  });
+}
+
 // ============================================================================
 // Public entry
 // ============================================================================
@@ -151,27 +185,41 @@ export function filterDefinedEnv(env: NodeJS.ProcessEnv): Record<string, string>
 /**
  * The single wiring helper. Calls the worker collector, runs the
  * resolution engine, and produces the `MCPLoadResult` consumed by
- * the agent-process-entry call sites. Sets the module-scope
- * `lastMCPLoadResult` for downstream Phase 1D consumers.
+ * the agent-process-entry call sites.
+ *
+ * Phase 2A worker closure: this function is now a pure
+ * computation. It does NOT write `lastMCPLoadResult`; that
+ * commit step is the responsibility of `applyMCPConfiguration`
+ * (PHASE C), which only writes the snapshot when the runtime
+ * swap has actually succeeded. See packages/agent/src/mcp/apply.ts.
  */
-export async function loadAndResolveMCPServers(): Promise<MCPLoadResult> {
+export interface LoadAndResolveOpts {
+  agentProfileId?: string;
+}
+
+export async function loadAndResolveMCPServers(
+  opts: LoadAndResolveOpts = {},
+): Promise<MCPLoadResult> {
   const collection = await collectWorkerMCPCandidates();
 
-  // Phase 1C: `userConfigByPlugin: {}` is the documented placeholder.
-  // See file header.
+  // `userConfigByPlugin: {}` is the documented placeholder. duya
+  // has NO real `${user_config.X}` storage yet.
   const resolution = await resolveMCPDiscovery(collection.candidates, {
     environment: filterDefinedEnv(process.env),
     userConfigByPlugin: {},
   });
 
-  const legacyConfigs = resolution.resolvedConfigs.map(resolvedToLegacyConfig);
+  const filtered = filterResolvedMCPServersForAgent(
+    resolution.resolvedConfigs,
+    opts.agentProfileId,
+  );
 
-  const result: MCPLoadResult = {
+  const legacyConfigs = filtered.map(resolvedToLegacyConfig);
+
+  return {
     inventory: resolution.inventory,
-    resolvedConfigs: resolution.resolvedConfigs,
+    resolvedConfigs: filtered,
     legacyConfigs,
     issues: [...collection.issues, ...resolution.issues],
   };
-  lastMCPLoadResult = result;
-  return result;
 }

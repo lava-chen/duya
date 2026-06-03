@@ -548,6 +548,11 @@ export async function resolveMCPDiscovery(
   }
 
   // Build `resolvedConfigs` from non-shadowed, configured entries.
+  // For settings sources, the runtime-scoped server name strips the
+  // sub-origin (legacyFile / settingsKv / agentSettings) so user
+  // migrations between storage backends do not change the
+  // dispatch key. The sub-origin is retained in `sourceSubOrigin`
+  // for inventory and issue display.
   const shadowedSet = new Set(
     shadowedEntries.map((s) => s.loser.inventoryId),
   );
@@ -557,13 +562,17 @@ export async function resolveMCPDiscovery(
     if (!entry) continue;
     if (shadowedSet.has(entry.inventoryId)) continue;
     if (entry.discoveryStatus !== 'configured') continue;
+    const runtimeScopedServerName =
+      entry.source === 'settings'
+        ? `settings:${entry.serverName}`
+        : entry.scopedServerName;
     resolvedConfigs.push({
       inventoryId: entry.inventoryId,
       source: entry.source,
       sourceSubOrigin: entry.sourceSubOrigin,
       pluginId: entry.pluginId,
       pluginName: entry.pluginName,
-      scopedServerName: entry.scopedServerName,
+      scopedServerName: runtimeScopedServerName,
       rawConfig: p.proc.expanded,
       allowedAgentIds: entry.allowedAgentIds,
     });

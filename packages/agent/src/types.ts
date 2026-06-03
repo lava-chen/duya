@@ -465,6 +465,14 @@ export interface ToolUseContextOptions {
   provider?: 'anthropic' | 'openai' | 'ollama';
   // Vision model callback for image analysis
   analyzeImage?: (base64Data: string, mimeType: string, prompt?: string) => Promise<string>;
+  /**
+   * Phase 2A worker closure: providerName -> internalKey
+   * resolver used by StreamingToolExecutor dispatch. When set,
+   * every model-returned providerName is first looked up here
+   * before the ToolRegistry lookup. When unset, StreamingToolExecutor
+   * falls back to the direct tool.name lookup (legacy behavior).
+   */
+  resolveMCPProviderToolName?: (providerName: string) => string;
 }
 
 export interface AppState {

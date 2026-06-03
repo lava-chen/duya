@@ -309,6 +309,7 @@ export type {
 } from './modes/research-mode/index.js';
 
 import { ToolRegistry } from './tool/registry.js';
+import type { ToolExecutor } from './tool/registry.js';
 import { CompactionManager, createCompactionManager } from './compact/CompactionManager.js';
 import type { CompactOptions } from './compact/types.js';
 
@@ -371,6 +372,23 @@ export class duyaAgent {
   private researchMemoryRuntime: ResearchMemory;
   private mcpManager: MCPManager | null = null;
   private _activeMode: any = null;
+
+  // Phase 2A worker closure: the agent owns the long-lived MCP
+  // runtime. `activeMCPRegistry` is the ToolRegistry slot that
+  // holds `owner === 'mcp'` entries between streamChat
+  // invocations; `activeMCPRuntimeSnapshot` is the post-commit
+  // snapshot that UI/diagnostic consumers read; the alias map
+  // converts model-returned providerNames to internalKeys;
+  // `toolEntries` is a stash of the current entries for ad-hoc
+  // dispatch. `activeAgentProfileId` is used by
+  // `filterResolvedMCPServersForAgent` to apply allowedAgentIds
+  // filtering consistently across init and reload.
+  readonly activeMCPRegistry: ToolRegistry = new ToolRegistry();
+  activeMCPRuntimeSnapshot: import('./mcp/apply.js').ActiveMCPRuntimeSnapshot | null = null;
+  private providerNameToInternalKey: Map<string, string> = new Map();
+  private registeredMCPToolKeys: Set<string> = new Set();
+  private activeMCPToolEntries: Map<string, { definition: Tool; executor: ToolExecutor }> = new Map();
+  private activeAgentProfileId: string | undefined;
 
   constructor(options: AgentOptions) {
     const provider = options.provider || inferProvider(options.baseURL || '');
@@ -1256,6 +1274,15 @@ export class duyaAgent {
             allAgents: agentDefinitions,
           },
           analyzeImage: this.analyzeImage.bind(this),
+          // Phase 2A worker closure: providerName -> internalKey
+          // resolver. StreamingToolExecutor consults this for
+          // every model-returned tool name. The closure is
+          // stable for the lifetime of the executor (per turn),
+          // but the underlying map is mutated in place by
+          // setActiveMCPRuntime so reload takes effect for the
+          // next turn without re-creating the executor.
+          resolveMCPProviderToolName: (name: string) =>
+            this.resolveMCPToolNameToInternalKey(name),
         },
         // Permission callback - passed from ChatOptions by API route
         requestPermission: options?.requestPermission,
@@ -1830,6 +1857,130 @@ export class duyaAgent {
       );
     }
     logger.info(`[Agent] Registered ${tools.length} MCP tools from connected servers`);
+  }
+
+  // ==========================================================================
+  // Phase 2A worker closure: agent-owned MCP runtime
+  // ==========================================================================
+
+  /**
+   * Get the active agent profile id used for `allowedAgentIds`
+   * filtering during MCP apply. `undefined` disables enforcement
+   * (every resolved server is allowed). Persisted on the agent so
+   * init and reload both see the same value.
+   */
+  getActiveAgentProfileId(): string | undefined {
+    return this.activeAgentProfileId;
+  }
+
+  setActiveAgentProfileId(id: string | undefined): void {
+    this.activeAgentProfileId = id;
+  }
+
+  /**
+   * The set of model-visible tool names that are NOT MCP-owned.
+   * This is the seed usedNames set for the providerName
+   * allocator in PHASE B1: the next apply must never collide
+   * with builtin / mode-specific non-MCP tool names. It
+   * intentionally does NOT include currently active MCP
+   * provider names — full-replace removes them before computing
+   * the next state, and including them would cause
+   * collision-suffix drift on every repeated reload.
+   *
+   * Builtin names never start with `mcp_`, so this seed is a
+   * clean lower bound for the allocator. The actual
+   * mode-specific non-MCP tools are dynamic per mode; we seed
+   * with the canonical builtin set and rely on the allocator's
+   * `usedNames` parameter to absorb whatever the caller wants.
+   */
+  getNonMCPModelVisibleToolNames(): Set<string> {
+    const builtin = new Set<string>([
+      'bash', 'read', 'write', 'edit', 'glob', 'grep',
+      'agent', 'team_create', 'team_delete',
+      'task', 'enter_worktree', 'exit_worktree',
+      'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
+      'list_mcp_resources', 'read_mcp_resource',
+      'browser', 'skill', 'brief', 'session_search',
+      'vision', 'cron', 'duya_info', 'duya_config',
+      'duya_health', 'memory', 'ask_user_question',
+      'module', 'skill_manage',
+    ]);
+    return builtin;
+  }
+
+  /**
+   * Atomic install of a new MCP runtime. Called exclusively by
+   * `applyMCPConfiguration` (PHASE B2). The agent owns the
+   * long-lived MCP registry slot; the new entry set is committed
+   * via `replaceByOwner('mcp', ...)` so non-MCP tools in the
+   * same registry are untouched. After the commit the previous
+   * manager (if any) is disconnected in the background.
+   *
+   * Returns the `replaceByOwner` bookkeeping
+   * (removedKeys/addedKeys/keptKeys) so apply.ts can populate
+   * `MCPApplyResult.action.toolsAdded` / `toolsRemoved` for the
+   * reload log.
+   */
+  async setActiveMCPRuntime(install: {
+    manager: MCPManager;
+    providerNameToInternalKey: Map<string, string>;
+    registeredMCPToolKeys: Set<string>;
+    toolEntries: Map<string, { definition: Tool; executor: ToolExecutor }>;
+    preparedRegistryEntries: Array<{
+      key: string;
+      definition: Tool;
+      executor: ToolExecutor;
+    }>;
+    snapshot: import('./mcp/apply.js').ActiveMCPRuntimeSnapshot;
+  }): Promise<{ removedKeys: string[]; addedKeys: string[]; keptKeys: string[] }> {
+    const previousManager = this.mcpManager;
+    const previousProviderMap = this.providerNameToInternalKey;
+    const previousRegisteredKeys = this.registeredMCPToolKeys;
+    const previousToolEntries = this.activeMCPToolEntries;
+    const previousSnapshot = this.activeMCPRuntimeSnapshot;
+
+    let replaceResult: { removedKeys: string[]; addedKeys: string[]; keptKeys: string[] };
+    try {
+      replaceResult = this.activeMCPRegistry.replaceByOwner(
+        'mcp',
+        install.preparedRegistryEntries,
+      );
+      this.providerNameToInternalKey = new Map(install.providerNameToInternalKey);
+      this.registeredMCPToolKeys = new Set(install.registeredMCPToolKeys);
+      this.activeMCPToolEntries = new Map(install.toolEntries);
+      this.mcpManager = install.manager;
+      this.activeMCPRuntimeSnapshot = install.snapshot;
+    } catch (err) {
+      // Roll back the partial install. `replaceByOwner` is
+      // atomic — it never leaves the registry in a partial
+      // state. The catch only covers failures during our
+      // post-replace field updates, which require no further
+      // rollback of the registry itself.
+      this.providerNameToInternalKey = previousProviderMap;
+      this.registeredMCPToolKeys = previousRegisteredKeys;
+      this.activeMCPToolEntries = previousToolEntries;
+      this.activeMCPRuntimeSnapshot = previousSnapshot;
+      this.mcpManager = previousManager;
+      throw err;
+    }
+
+    if (previousManager && previousManager !== install.manager) {
+      void previousManager.disconnectAll().catch(() => undefined);
+    }
+    return replaceResult;
+  }
+
+  /**
+   * Resolve a model-returned tool name to the internalKey the
+   * `ToolRegistry` looks up. For MCP tools, the model returns the
+   * `providerName`; this method consults the alias map installed
+   * by the most recent successful apply and returns the matching
+   * internalKey. For builtin tools, the model returns the
+   * tool's `name` (which equals the internalKey), so the alias
+   * lookup falls through and the original name is returned.
+   */
+  resolveMCPToolNameToInternalKey(name: string): string {
+    return this.providerNameToInternalKey.get(name) ?? name;
   }
 
   /**
