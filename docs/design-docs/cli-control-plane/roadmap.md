@@ -1,6 +1,6 @@
 # DUYA CLI — Product Responsibility & Roadmap
 
-> **Status**: Phase 0 + Phase 1 + Phase 2 + Phase 3 Complete
+> **Status**: Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 Complete
 > **Created**: 2026-05-31
 > **Updated**: 2026-06-03
 > **Scope**: CLI product positioning, formal decisions, command roadmap, and Phase 2 design.
@@ -229,16 +229,39 @@ These will not receive new features, refactoring, or architectural investment.
 - HTTP endpoints `GET /v1/skills` and `GET /v1/skills/:id`
 - Frozen JSON DTOs: list `id / name / description / source / enabled`; info adds `category / customized / userInvocable / allowedTools / platforms`
 
-### Phase 4 — Provider Read-Only (Future)
+### Phase 4 — Provider Read-Only ✅ COMPLETE
 | Command | Notes |
 |---------|-------|
 | `duya provider list` | `hasKey: true/false`, no key value |
-| `duya provider status <id>` | `active: true/false`, model name |
+| `duya provider info <id>` | `active: true/false`, model name |
 
-### Phase 5 — MCP Source-of-Truth Unification (Future)
-> Not a CLI command. Infrastructure prerequisite for Phase 6.
+DTO (frozen v1.0.0):
+- list: `id / name / providerType / isActive / hasKey` (+ optional `model / baseUrl / notes / sortOrder`)
+- info: `+ headers / extraEnvKeys` (no env values)
 
-### Phase 6 — MCP Read-Only (Future)
+`apiKey` is **never** in the DTO; `hasKey` is the only key-related field.
+
+### Phase 5 — MCP Source-of-Truth Unification ✅ COMPLETE
+> Audit + design. Actual unification code already exists in
+> `electron/agents/mcp/collect-main.ts`; this phase formalized
+> the precedence (see `phase-5-mcp-source-of-truth.md`).
+
+- Precedence: `settings > plugin > bundled`
+- Public IDs: `bundled:<n>` / `plugin:<id>:<n>` / `settings:<n>`
+- Conflict resolution: higher precedence wins; shadowed candidates hidden
+
+### Phase 6 — MCP Read-Only ✅ COMPLETE
+| Command | Notes |
+|---------|-------|
+| `duya mcp list` | Unified MCP list, after Phase 5 |
+| `duya mcp info <id>` | Adds `command` and `args` |
+
+DTO (frozen v1.0.0):
+- list: `id / name / source / sourceId? / enabled / connected`
+- info: `+ command / args` (no env values)
+
+`connected` is a static snapshot from the most recent agent-runtime
+report; `duya doctor` is the live source of truth for runtime health.
 | Command | Notes |
 |---------|-------|
 | `duya mcp list` | After Phase 5 complete |
