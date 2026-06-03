@@ -891,6 +891,7 @@ import { runPluginCommand } from './commands/plugin.js';
 import { runSessionCommand } from './commands/session.js';
 import { runDoctorCommand } from './commands/doctor.js';
 import { runSkillListCommand, runSkillInfoCommand } from './commands/skill.js';
+import { runMCPListCommand, runMCPInfoCommand } from './commands/mcp.js';
 import { parseFormat } from './api/format.js';
 
 program
@@ -1016,6 +1017,33 @@ program
       }),
   )
 
+// Phase 6: duya mcp — read-only MCP control plane
+//
+// list / info. Reads unified MCP candidates (bundled + plugin +
+// settings + kv + legacy) from the main process via /v1/mcps.
+program
+  .command('mcp')
+  .description('Inspect available MCP servers (id / name / source / enabled / connected)')
+  .addCommand(
+    new Command('list')
+      .description('List available MCP servers (id / name / source / enabled / connected)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (opts: { format?: string }) => {
+        const code = await runMCPListCommand(parseFormat(opts.format));
+        process.exit(code);
+      }),
+  )
+  .addCommand(
+    new Command('info')
+      .argument('<id>', 'MCP id (e.g. bundled:literature, plugin:<pluginId>:<name>)')
+      .description('Show details for one available MCP server (adds command / args)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (id: string, opts: { format?: string }) => {
+        const code = await runMCPInfoCommand(id, parseFormat(opts.format));
+        process.exit(code);
+      }),
+  )
+
 // Provider subcommands
 program
   .command('provider')
@@ -1069,26 +1097,11 @@ program
       })
   )
 
-// MCP subcommands
-program
-  .command('mcp')
-  .description('MCP server management')
-  .addCommand(
-    new Command('list')
-      .description('List MCP servers')
-      .action(async () => {
-        printHeader('MCP Servers')
-        console.log(color('  (MCP storage not yet implemented)', Colors.DIM))
-      })
-  )
-  .addCommand(
-    new Command('check')
-      .description('Check MCP server status')
-      .action(async () => {
-        printHeader('MCP Check')
-        console.log(color('  Usage: duya mcp check <name>', Colors.DIM))
-      })
-  )
+// MCP legacy placeholders REMOVED — replaced by Phase 6 control plane above.
+// Old `duya mcp list` / `duya mcp check` placeholders were
+// displaying "(MCP storage not yet implemented)". The new
+// `duya mcp list` / `duya mcp info` go through the unified
+// collector and CLI API server.
 
 // Setup command - interactive configuration wizard
 program

@@ -29,6 +29,7 @@ import {
   parseQuery as parseSessionsQuery,
 } from './handlers/sessions.js';
 import { handleListSkills, handleGetSkill } from './handlers/skills.js';
+import { handleListMCPs, handleGetMCP } from './handlers/mcps.js';
 import { InvalidPaginationParam } from '../db/queries/sessions';
 import { getLogger } from '../logging/logger';
 
@@ -109,6 +110,18 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // /v1/skills/:id
   if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'skills') {
     handleGetSkill(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // /v1/mcps
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'mcps') {
+    handleListMCPs(req, res);
+    return;
+  }
+
+  // /v1/mcps/:id
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'mcps') {
+    handleGetMCP(req, res, decodeURIComponent(parts[2]));
     return;
   }
 
