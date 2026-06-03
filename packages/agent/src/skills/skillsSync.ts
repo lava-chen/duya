@@ -293,6 +293,22 @@ export async function syncBundledSkills(): Promise<SyncResult> {
       const existingInUser = await dirExists(skillDest);
 
       if (existingInUser) {
+        // Phase 3B-0.2: protect user-owned skills.
+        // If the user dir entry has NO provenance marker, it is
+        // user-owned by definition — even if its name happens to
+        // match a bundled skill. We MUST NOT overwrite user content
+        // and MUST NOT write a marker.
+        const existingMarker = await readSkillProvenance(skillDest);
+        if (!existingMarker) {
+          // User-owned, no marker, no migration path applies.
+          // Leave the directory untouched, do not write marker.
+          result.skipped.push(entry.name);
+          // Continue to the next bundled entry without modifying manifest.
+          continue;
+        }
+
+        // Marker present: the directory is bundled-derived. Now check
+        // whether the user has modified the content.
         const userHash = await computeDirHash(skillDest);
         const bundledHash = manifestEntry.hash;
 
@@ -316,7 +332,14 @@ export async function syncBundledSkills(): Promise<SyncResult> {
             result.skipped.push(entry.name);
           }
         } else {
-          // User has customized the skill, skip update
+          // User has customized the bundled-derived skill.
+          // DO NOT overwrite. Keep the user's content and the marker.
+          // Update the manifest's hash to reflect the user's current
+          // state so future sync runs don't repeatedly re-check.
+          manifest.skills[entry.name] = {
+            hash: userHash,
+            syncedAt: new Date().toISOString(),
+          };
           result.skipped.push(entry.name);
         }
       } else {
