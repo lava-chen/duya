@@ -1,1 +1,0 @@
-export const DUYA_INFO_TOOL_NAME = 'duya_info';

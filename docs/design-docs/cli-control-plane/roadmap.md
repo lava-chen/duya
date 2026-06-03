@@ -1,6 +1,6 @@
 # DUYA CLI — Product Responsibility & Roadmap
 
-> **Status**: Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7 + Install-CLI Complete
+> **Status**: Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7 + Install-CLI + Phase 8 Complete
 > **Created**: 2026-05-31
 > **Updated**: 2026-06-03
 > **Scope**: CLI product positioning, formal decisions, command roadmap, and Phase 2 design.
@@ -300,6 +300,18 @@ PATH:
 Auto-install at app startup (idempotent, non-blocking) records a
 stamp file at `<bindir>/.duya-cli-wrapper-stamp` so subsequent
 launches short-circuit unless the bundle path changed (app upgrade).
+
+### Phase 8 — Agent ↔ CLI Integration ✅ COMPLETE
+- New agent tool `duya_cli` invokes the CLI control plane in-process.
+- Dispatches to the same `run*` functions the external `duya` CLI
+  bundle uses; output is captured and returned as a structured
+  envelope (`{ exitCode, ok, stdout, stderr, data }`).
+- Replaces the legacy `duya_info`, `duya_health` tools and the read
+  actions of `duya_config` (`providers_list`, `mcp_server_list`).
+  `duya_config` is retained for GUI-only write actions that have
+  no CLI equivalent.
+- CLI awareness prompt section added to the agent system prompt.
+- 16/16 unit tests PASS; 77/77 CLI control plane tests still PASS.
 
 ---
 
