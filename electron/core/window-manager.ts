@@ -9,6 +9,7 @@ import { getConfigManager } from '../config/manager';
 import { initUpdater } from '../services/updater';
 import { wasLaunchedAsHidden } from '../services/auto-start';
 import { getNodeExecutable } from '../services/dev-detector';
+import { isHttpUrl } from '../ipc/system-handlers';
 
 const logger = getLogger();
 
@@ -156,18 +157,34 @@ export async function createWindow(
   mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    if (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')) {
+    if (isHttpUrl(targetUrl)) {
       shell.openExternal(targetUrl);
-      return { action: 'deny' };
     }
+    // Always deny opening inside the BrowserWindow, regardless of protocol.
     return { action: 'deny' };
   });
 
   mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
-    const appOrigin = new URL(mainWindow!.webContents.getURL()).origin;
-    if (new URL(targetUrl).origin !== appOrigin) {
+    let appOrigin: string;
+    try {
+      appOrigin = new URL(mainWindow!.webContents.getURL()).origin;
+    } catch {
       event.preventDefault();
-      shell.openExternal(targetUrl);
+      return;
+    }
+    let targetOrigin: string;
+    try {
+      targetOrigin = new URL(targetUrl).origin;
+    } catch {
+      event.preventDefault();
+      return;
+    }
+    if (targetOrigin !== appOrigin) {
+      event.preventDefault();
+      // Only forward http(s) URLs to the OS; everything else is blocked.
+      if (isHttpUrl(targetUrl)) {
+        shell.openExternal(targetUrl);
+      }
     }
   });
 

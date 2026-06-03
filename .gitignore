@@ -83,3 +83,16 @@ packages/gateway/bundle/
 
 
 .cache/
+
+# Temporary validation / probe scratch directories
+.tmp-validation/
+.tmp-test/
+.tmp-electron-dev*.log
+.tmp-electron-dev2*.log
+.tmp-electron-dev3*.log
+.tmp-electron-dev4*.log
+.tmp-electron-dev5*.log
+.tmp-electron-dev6*.log
+
+# Local codegraph index
+.codegraph/

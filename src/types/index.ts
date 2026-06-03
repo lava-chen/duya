@@ -87,6 +87,8 @@ export interface AppSettings {
   // Appearance settings
   font?: string;
   compactMode?: boolean;
+  showTimestamps?: boolean;
+  showAvatars?: boolean;
   // Browser security settings
   blockedDomains: string[];
   // Favorite agent profiles for quick access (max 3)

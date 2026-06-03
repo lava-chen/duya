@@ -108,6 +108,7 @@ export function registerSkillsHandlers(): void {
 
       const loadedNames = new Set<string>();
       const logger = getLogger();
+      const userSkillsDir = path.join(homedir(), '.duya', 'skills');
 
       // Provenance classification: read the manifest once. For each
       // top-level user-dir entry that lacks a .duya-origin.json marker,
@@ -360,7 +361,6 @@ export function registerSkillsHandlers(): void {
         }
       };
 
-      const userSkillsDir = path.join(homedir(), '.duya', 'skills');
       let syncStatus: {
         synced: boolean;
         added: string[];

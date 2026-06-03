@@ -390,6 +390,102 @@ export interface DocumentParserAPI {
   isReady: () => Promise<boolean>
 }
 
+export type LiteratureCitationStyle = 'bibtex' | 'apa' | 'gbt7714'
+
+export interface LiteratureSourceSummary {
+  id: string
+  kind: string
+  title: string
+  authors: string[]
+  year?: number
+  venue?: string
+  doi?: string
+  arxivId?: string
+  url?: string
+  filePath?: string
+  fileHash?: string
+  citationKey?: string
+  bibtex?: string
+  projectIds: string[]
+  tags: string[]
+  parseStatus: string
+  parseError?: string
+  parseMetadata: Record<string, unknown>
+  chunkCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface LiteratureDocumentChunk {
+  id: string
+  sourceId: string
+  chunkIndex: number
+  pageNumber: number | null
+  sectionLabel: string | null
+  text: string
+  charCount: number
+  createdAt: number
+}
+
+export interface LiteratureEvidenceSummary {
+  id: string
+  sourceId: string
+  chunkId?: string
+  chunkIndex?: number
+  pageNumber: number | null
+  sectionLabel: string | null
+  text: string
+  quote?: string
+  createdAt: number
+}
+
+export interface LiteraturePaperCardSummary {
+  id: string
+  sourceId: string
+  card: {
+    researchProblem: string
+    methodSummary: string
+    datasets: string[]
+    metrics: string[]
+    keyFindings: string[]
+    limitations: string[]
+    reusableIdeas: string[]
+    analysisMeta?: {
+      scope: 'partial_context' | 'full_context'
+      truncated: boolean
+      generatedBy: 'agent'
+      verificationStatus: 'unverified' | 'user_verified'
+      analyzedChunkCount: number
+      totalChunkCount: number
+    }
+  }
+  evidenceSpanIds: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface LiteratureAPI {
+  ingestParsedDocument: (input: {
+    filePath: string
+    parseResult: Awaited<ReturnType<DocumentParserAPI['parse']>>
+  }) => Promise<{ action: 'created' | 'updated'; source: LiteratureSourceSummary }>
+  listSources: () => Promise<LiteratureSourceSummary[]>
+  getSource: (sourceId: string) => Promise<LiteratureSourceSummary | null>
+  listChunks: (sourceId: string, limit?: number) => Promise<LiteratureDocumentChunk[]>
+  getPaperCard: (sourceId: string) => Promise<LiteraturePaperCardSummary | null>
+  listEvidence: (sourceId: string) => Promise<LiteratureEvidenceSummary[]>
+  saveEvidence: (input: {
+    sourceId: string
+    chunkId?: string
+    chunkIndex?: number
+    pageNumber?: number | null
+    sectionLabel?: string | null
+    text: string
+    quote: string
+  }) => Promise<{ action: 'created' | 'existing'; evidence: LiteratureEvidenceSummary }>
+  getCitation: (sourceId: string, style: LiteratureCitationStyle) => Promise<string>
+}
+
 export interface WikiAPI {
   listAllNodes: () => Promise<unknown[]>
   getNode: (nodePath: string) => Promise<unknown | null>
@@ -587,6 +683,8 @@ export interface ElectronAPI {
   settings: {
     setAutoStart: (enabled: boolean) => Promise<{ success: boolean; supported: boolean; error?: string }>
     getAutoStartStatus: () => Promise<{ enabled: boolean; canChange: boolean; supported: boolean; platform: string; error?: string }>
+    getMcpServers: () => Promise<{ success: boolean; data: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>; error?: string }>
+    setMcpServers: (servers: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>) => Promise<{ success: boolean; error?: string }>
   }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
@@ -632,6 +730,7 @@ export interface ElectronAPI {
   weixin: WeixinAccountAPI
   browserExtension: BrowserExtensionAPI
   parser: DocumentParserAPI
+  literature: LiteratureAPI
   agentProfile: AgentProfileAPI
   plugin: PluginAPI
   marketplace: MarketplaceAPI
@@ -1146,6 +1245,32 @@ const electronAPI: ElectronAPI = {
   settings: {
     setAutoStart: (enabled) => ipcRenderer.invoke('settings:set-auto-start', enabled),
     getAutoStartStatus: () => ipcRenderer.invoke('settings:get-auto-start-status'),
+    getMcpServers: async () => {
+      try {
+        const data = await ipcRenderer.invoke('db:setting:getJson', 'mcpServers', []);
+        return {
+          success: true,
+          data: Array.isArray(data) ? data : [],
+        };
+      } catch (error) {
+        return {
+          success: false,
+          data: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+    setMcpServers: async (servers) => {
+      try {
+        await ipcRenderer.invoke('db:setting:setJson', 'mcpServers', servers);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
   },
   // Functions to get port APIs (called dynamically)
   getConfigPort: getConfigPortAPI,
@@ -1343,6 +1468,16 @@ const electronAPI: ElectronAPI = {
     parse: (filePath, options) => ipcRenderer.invoke('parser:parse', filePath, options),
     getCapabilities: () => ipcRenderer.invoke('parser:getCapabilities'),
     isReady: () => ipcRenderer.invoke('parser:isReady'),
+  },
+  literature: {
+    ingestParsedDocument: (input) => ipcRenderer.invoke('literature:ingestParsedDocument', input),
+    listSources: () => ipcRenderer.invoke('literature:listSources'),
+    getSource: (sourceId: string) => ipcRenderer.invoke('literature:getSource', sourceId),
+    listChunks: (sourceId: string, limit?: number) => ipcRenderer.invoke('literature:listChunks', sourceId, limit),
+    getPaperCard: (sourceId: string) => ipcRenderer.invoke('literature:getPaperCard', sourceId),
+    listEvidence: (sourceId: string) => ipcRenderer.invoke('literature:listEvidence', sourceId),
+    saveEvidence: (input) => ipcRenderer.invoke('literature:saveEvidence', input),
+    getCitation: (sourceId: string, style: LiteratureCitationStyle) => ipcRenderer.invoke('literature:getCitation', sourceId, style),
   },
   agentProfile: {
     list: () => ipcRenderer.invoke('db:agentProfile:list'),

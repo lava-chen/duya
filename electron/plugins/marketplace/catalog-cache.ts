@@ -49,6 +49,7 @@ export class CatalogCache {
       fetchedAt: new Date().toISOString(),
     };
     const filePath = this.filePath(name);
+    ensureDir(path.dirname(filePath));
     fs.writeFileSync(filePath, JSON.stringify(cached, null, 2), 'utf8');
     this.logger.debug('Marketplace catalog cached', { name }, COMPONENT);
   }

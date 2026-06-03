@@ -22,8 +22,16 @@ import { getMainWindow } from '../core/window-manager';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getConfigManager } from '../config/manager';
+import { isHttpUrl } from './url-safety';
+export { isHttpUrl } from './url-safety';
 
 export function registerSystemHandlers(): void {
+  // Public predicate — kept exported for unit tests.
+  // Duya's open-external policy is intentionally strict: only standard
+  // http(s) URLs are forwarded to the OS. file://, javascript:, smb://, and
+  // custom schemes are blocked to prevent external content from coercing the
+  // OS into launching unintended handlers or exposing local files.
+  // (See audit BLOCKER A: external URL safety, 2026-06-03.)
   // Dialog handlers
   ipcMain.handle('dialog:open-folder', async (_event, options?: { defaultPath?: string; title?: string }) => {
     const mainWindow = getMainWindow();
@@ -51,6 +59,15 @@ export function registerSystemHandlers(): void {
     if (typeof url !== 'string' || url.length === 0 || url.length > 4096) {
       return 'Invalid URL';
     }
+    const allowed = isHttpUrl(url);
+    if (!allowed) {
+      logger.warn(
+        'Rejected shell:open-external request for non-http(s) URL',
+        { urlPreview: url.slice(0, 80) },
+        LogComponent.Main,
+      );
+      return 'Blocked: only http(s) URLs are allowed';
+    }
     try {
       await shell.openExternal(url);
       return '';
@@ -58,6 +75,9 @@ export function registerSystemHandlers(): void {
       return String(err);
     }
   });
+
+  // Public export for tests
+  ;(registerSystemHandlers as unknown as { __isHttpUrl?: typeof isHttpUrl }).__isHttpUrl = isHttpUrl;
 
   // Browser extension path
   ipcMain.handle('browser-extension:get-path', () => {

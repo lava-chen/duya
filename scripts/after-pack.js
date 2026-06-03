@@ -175,5 +175,20 @@ module.exports = async function afterPack(context) {
     console.warn('[afterPack] playwright-core not found in project node_modules, skipping...');
   }
 
+  // Step 5: Ensure document parser payload is present in resources.
+  // electron-builder should copy extraResources automatically, but we keep
+  // this fallback so packaged builds stay complete even if that copy step is skipped.
+  console.log('[afterPack] Step 5: Verifying document-parser resources...');
+  const documentParserSource = path.join(projectDir, 'build', 'document-parser');
+  const documentParserTarget = path.join(appOutDir, 'resources', 'document-parser');
+  if (!fs.existsSync(documentParserTarget) && fs.existsSync(documentParserSource)) {
+    copyDirRecursive(documentParserSource, documentParserTarget);
+    console.log('[afterPack] Copied document-parser resources into packaged app');
+  } else if (fs.existsSync(documentParserTarget)) {
+    console.log('[afterPack] document-parser resources already present');
+  } else {
+    console.warn('[afterPack] document-parser build output not found, skipping fallback copy');
+  }
+
   console.log('[afterPack] Done');
 };

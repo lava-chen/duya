@@ -33,6 +33,7 @@ import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerWikiAgentHandlers } from './ipc/wiki-agent-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
+import { registerLiteratureHandlers } from './ipc/literature-handlers';
 import { registerImportHandlers } from './import/import-handlers';
 import { getMarketplaceSyncManager } from './plugins/marketplace';
 import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
@@ -504,6 +505,7 @@ registerUpdaterHandlers();
 registerAgentServerHandlers();
 registerWikiAgentHandlers();
 registerPluginHandlers();
+registerLiteratureHandlers();
 registerImportHandlers();
 
 // =============================================================================
