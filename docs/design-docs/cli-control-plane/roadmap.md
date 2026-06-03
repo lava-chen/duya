@@ -1,6 +1,6 @@
 # DUYA CLI — Product Responsibility & Roadmap
 
-> **Status**: Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7 Complete
+> **Status**: Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7 + Install-CLI Complete
 > **Created**: 2026-05-31
 > **Updated**: 2026-06-03
 > **Scope**: CLI product positioning, formal decisions, command roadmap, and Phase 2 design.
@@ -281,6 +281,25 @@ DTO returns the new effective state. Audit log at
 - `duya plugin install / remove`
 - `duya mcp add / remove`
 - `duya session delete`
+
+### Install-CLI (Cross-Platform Wrapper) ✅ COMPLETE
+| Command | Notes |
+|---------|-------|
+| `duya install-cli` | Cross-platform wrapper script install; auto-runs at app startup |
+| `duya uninstall-cli` | Removes the wrapper; PATH entry left untouched |
+
+Wrapper locations:
+- Windows: `%LOCALAPPDATA%\duya\bin\duya.cmd` (+ `duya.ps1`)
+- macOS / Linux: `$HOME/.local/bin/duya` (POSIX bash)
+
+PATH:
+- Windows: `setx Path "%Path%;...duya\bin"` (no admin)
+- POSIX: wrapper placed in `~/.local/bin`; user is instructed to
+  add to `~/.zshrc` / `~/.bashrc` if not already on PATH
+
+Auto-install at app startup (idempotent, non-blocking) records a
+stamp file at `<bindir>/.duya-cli-wrapper-stamp` so subsequent
+launches short-circuit unless the bundle path changed (app upgrade).
 
 ---
 
