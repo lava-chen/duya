@@ -890,6 +890,7 @@ import { runStatusCommand } from './commands/status.js';
 import { runPluginCommand } from './commands/plugin.js';
 import { runSessionCommand } from './commands/session.js';
 import { runDoctorCommand } from './commands/doctor.js';
+import { runSkillListCommand, runSkillInfoCommand } from './commands/skill.js';
 import { parseFormat } from './api/format.js';
 
 program
@@ -987,6 +988,33 @@ program
     const code = await runDoctorCommand(parseFormat(opts.format));
     process.exit(code);
   })
+
+// Phase 3: duya skill — read-only skill control plane
+//
+// list / info. Read the available-skill set from the main process
+// via /v1/skills. The main process owns the resolver and DTO.
+program
+  .command('skill')
+  .description('Inspect available skills (id / name / description / source / enabled)')
+  .addCommand(
+    new Command('list')
+      .description('List available skills (id / name / description / source / enabled)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (opts: { format?: string }) => {
+        const code = await runSkillListCommand(parseFormat(opts.format));
+        process.exit(code);
+      }),
+  )
+  .addCommand(
+    new Command('info')
+      .argument('<id>', 'Skill id (e.g. bundled:code-review, plugin:<id>:<name>, user:<name>)')
+      .description('Show details for one available skill (adds category / customized / userInvocable / allowedTools / platforms)')
+      .option('--format <format>', 'Output format: text|json', 'text')
+      .action(async (id: string, opts: { format?: string }) => {
+        const code = await runSkillInfoCommand(id, parseFormat(opts.format));
+        process.exit(code);
+      }),
+  )
 
 // Provider subcommands
 program

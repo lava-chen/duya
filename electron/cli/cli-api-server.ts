@@ -28,6 +28,8 @@ import {
   handleGetSession,
   parseQuery as parseSessionsQuery,
 } from './handlers/sessions.js';
+import { handleListSkills, handleGetSkill } from './handlers/skills.js';
+import { InvalidPaginationParam } from '../db/queries/sessions';
 import { getLogger } from '../logging/logger';
 
 const COMPONENT = 'CliApiServer' as const;
@@ -74,7 +76,15 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
 
   // /v1/sessions
   if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'sessions') {
-    handleListSessions(req, res, parseSessionsQuery(req.url));
+    try {
+      handleListSessions(req, res, parseSessionsQuery(req.url));
+    } catch (err) {
+      if (err instanceof InvalidPaginationParam) {
+        sendJsonError(res, 400, `invalid_${err.param}`, err.reason);
+        return;
+      }
+      throw err;
+    }
     return;
   }
 
@@ -87,6 +97,18 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // /v1/plugins/:name
   if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'plugins') {
     handleGetPlugin(req, res, parts[2]);
+    return;
+  }
+
+  // /v1/skills
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'skills') {
+    handleListSkills(req, res);
+    return;
+  }
+
+  // /v1/skills/:id
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'skills') {
+    handleGetSkill(req, res, decodeURIComponent(parts[2]));
     return;
   }
 
