@@ -347,53 +347,24 @@ describe('Phase 3B-0.2: Available winner precedence', () => {
     ];
     const winner = pickWinner(candidates)!;
     const overrides: Record<string, boolean> = { foo: false };
-    const enabled = winner.name in overrides ? overrides[winner.name] !== false : true;
+    const enabled = isWinnerEnabled(winner, overrides);
     expect(enabled).toBe(false);
 
     // Different name: no override
     const other = { name: 'bar', source: 'user' as const };
-    const otherEnabled = other.name in overrides ? overrides[other.name] !== false : true;
+    const otherEnabled = isWinnerEnabled(other, overrides);
     expect(otherEnabled).toBe(true);
   });
 });
 
-// ── Reference implementation of the resolver (will be moved to source) ─
+// ── Import the actual resolver from source for cross-verification ─────
+import {
+  pickWinner as srcPickWinner,
+  resolveAvailable as srcResolveAvailable,
+  isWinnerEnabled as srcIsWinnerEnabled,
+  PRECEDENCE,
+} from '../../src/skills/resolver.js';
 
-interface SkillCandidate {
-  name: string;
-  source: 'bundled' | 'user' | 'plugin';
-  pluginId?: string;
-}
-
-const PRECEDENCE: Record<SkillCandidate['source'], number> = {
-  user: 3,
-  plugin: 2,
-  bundled: 1,
-};
-
-function pickWinner(candidates: SkillCandidate[]): SkillCandidate | null {
-  if (candidates.length === 0) return null;
-  // Highest precedence wins; ties broken by stable order (input order)
-  let best = candidates[0];
-  for (const c of candidates) {
-    if (PRECEDENCE[c.source] > PRECEDENCE[best.source]) {
-      best = c;
-    }
-  }
-  return best;
-}
-
-function resolveAvailable(candidates: SkillCandidate[]): SkillCandidate[] {
-  const byName = new Map<string, SkillCandidate>();
-  for (const c of candidates) {
-    const existing = byName.get(c.name);
-    if (!existing) {
-      byName.set(c.name, c);
-      continue;
-    }
-    if (PRECEDENCE[c.source] > PRECEDENCE[existing.source]) {
-      byName.set(c.name, c);
-    }
-  }
-  return Array.from(byName.values());
-}
+const pickWinner = srcPickWinner;
+const resolveAvailable = srcResolveAvailable;
+const isWinnerEnabled = srcIsWinnerEnabled;
