@@ -37,9 +37,8 @@ import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
 import { cronTool } from './CronTool/index.js';
 import { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from '../conductor/CanvasOrchestratorProfile.js';
-import { duyaInfoTool } from './DuyaInfoTool/index.js';
 import { duyaConfigTool } from './DuyaConfigTool/index.js';
-import { duyaHealthTool } from './DuyaHealthTool/index.js';
+import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
@@ -133,9 +132,18 @@ export function createBuiltinRegistry(
   registry.register(cronTool.toTool(), cronTool);
 
   // Self-management tools
-  registry.register(duyaInfoTool.toTool(), duyaInfoTool);
+  //
+  // `duya_cli` is the agent's single entry point to the CLI control
+  // plane. It runs the same `run*` functions the external `duya`
+  // CLI bundle runs, in-process. The legacy `duya_info`,
+  // `duya_health` tools were removed in Phase 8 of plan 96 — their
+  // capabilities are now reachable via `duya_cli`. `duya_config` is
+  // retained but slimmed: it covers only GUI-only write actions
+  // (provider add/remove/activate, mcp add/remove/assign, settings,
+  // vision, output style, pairing). Read-only queries go through
+  // `duya_cli`.
+  registry.register(duyaCliTool.toTool(), duyaCliTool);
   registry.register(duyaConfigTool.toTool(), duyaConfigTool);
-  registry.register(duyaHealthTool.toTool(), duyaHealthTool);
 
   // Memory tool
   const memoryTool = getMemoryTool();
@@ -268,9 +276,8 @@ export { skillManageTool } from './SkillManageTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { VisionTool } from './VisionTool/VisionTool.js';
 export { cronTool } from './CronTool/index.js';
-export { duyaInfoTool } from './DuyaInfoTool/index.js';
 export { duyaConfigTool } from './DuyaConfigTool/index.js';
-export { duyaHealthTool } from './DuyaHealthTool/index.js';
+export { duyaCliTool } from './DuyaCliTool/index.js';
 
 // Wiki tools exports
 export { wikiSearchTool, wikiReadTool, WikiSearchTool, WikiReadTool } from './wiki/index.js';

@@ -55,7 +55,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [90-marketplace-system-implementation](./active/90-marketplace-system-implementation.md) | 插件市场系统 — catalog + 企业策略 + 防冒名 + 同步管理 | P1 | Planning |
 | [91-structured-error-handling](./active/91-structured-error-handling.md) | 结构化错误处理 — 28 种可区分联合类型 PluginError | P1 | Planning |
 | [92-plugin-security-enterprise-policy](./active/92-plugin-security-enterprise-policy.md) | 安全与企业策略 — Trust Level + 路径防护 + 权限执行 + Enterprise Policy | P0 | Planning |
-| [96-duya-cli-tool](./active/96-duya-cli-tool.md) | DUYA CLI — 统一命令行工具 (plugin / session / doctor / skill / provider / mcp / install-cli) | P0 | All Phases Complete |
+| [96-duya-cli-tool](./active/96-duya-cli-tool.md) | DUYA CLI — 统一命令行工具 (plugin / session / doctor / skill / provider / mcp / install-cli / agent integration) | P0 | Phases 0–8 Complete |
 
 ### Infrastructure & Architecture Plans
 

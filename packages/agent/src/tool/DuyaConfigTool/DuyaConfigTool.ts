@@ -3,10 +3,12 @@ import { DUYA_CONFIG_TOOL_NAME } from './constants.js';
 import { DESCRIPTION } from './prompt.js';
 import type { Tool, ToolResult } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
-import { configDb, pluginDb } from '../../ipc/db-client.js';
+import { configDb } from '../../ipc/db-client.js';
 
+// v0: only GUI-only actions. Reads that overlap with the CLI
+// control plane (providers_list, mcp_server_list) were removed in
+// Phase 8 of plan 96; use `duya_cli` for those.
 const actionSchema = z.enum([
-  'providers_list',
   'provider_add',
   'provider_remove',
   'provider_activate',
@@ -20,7 +22,6 @@ const actionSchema = z.enum([
   'pairing_approve',
   'pairing_revoke',
   'pairing_is_approved',
-  'mcp_server_list',
   'mcp_server_add',
   'mcp_server_remove',
   'mcp_server_assign',
@@ -52,7 +53,6 @@ const inputSchema = z.object({
   mcpEnv: z.record(z.string(), z.string()).optional(),
   agentIds: z.array(z.string()).optional(),
 });
-
 function toolSuccess(result: unknown): ToolResult {
   return {
     id: crypto.randomUUID(),
@@ -79,13 +79,13 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
       action: {
         type: 'string',
         enum: [
-          'providers_list', 'provider_add', 'provider_remove', 'provider_activate',
+          'provider_add', 'provider_remove', 'provider_activate',
           'settings_get', 'settings_set', 'vision_get', 'vision_set',
           'style_get', 'style_set',
           'pairing_list', 'pairing_approve', 'pairing_revoke', 'pairing_is_approved',
-          'mcp_server_list', 'mcp_server_add', 'mcp_server_remove', 'mcp_server_assign',
+          'mcp_server_add', 'mcp_server_remove', 'mcp_server_assign',
         ],
-        description: 'Config action to perform',
+        description: 'Config action to perform (write / GUI-only — read-only queries go through `duya_cli`)',
       },
       id: { type: 'string', description: 'Provider ID' },
       name: { type: 'string', description: 'Provider display name' },
@@ -132,19 +132,6 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
 
     try {
       switch (data.action) {
-        case 'providers_list': {
-          const providers = await configDb.providerGetAll();
-          const all = providers as Record<string, Record<string, unknown>> | undefined;
-          const list = all ? Object.values(all).map((p) => ({
-            id: p.id,
-            name: p.name,
-            providerType: p.providerType,
-            isActive: p.isActive,
-            baseUrl: p.baseUrl,
-          })) : [];
-          return toolSuccess({ providers: list, count: list.length });
-        }
-
         case 'provider_add': {
           if (!data.id || !data.name || !data.providerType) {
             return toolError('id, name, and providerType are required for provider_add');
@@ -258,41 +245,6 @@ export class DuyaConfigTool implements Tool, ToolExecutor {
           }
           const result = await configDb.pairingIsApproved(data.platform, data.platformUserId);
           return toolSuccess(result);
-        }
-
-        case 'mcp_server_list': {
-          const settings = await configDb.agentGetSettings();
-          const mcpServers = (settings as Record<string, unknown>)?.mcpServers ?? {};
-
-          const pluginServers: Array<{ name: string; pluginId: string; pluginName: string }> = [];
-          try {
-            const installed = await pluginDb.registryList() as Array<{
-              id?: unknown;
-              enabled?: unknown;
-              installPath?: unknown;
-              name?: unknown;
-              manifest?: unknown;
-            }>;
-            for (const plugin of installed) {
-              if (plugin.enabled !== true) continue;
-              const manifest = plugin.manifest as Record<string, unknown> | undefined;
-              const servers = manifest?.capabilities
-                ? (manifest.capabilities as Record<string, unknown>)?.mcpServers as Array<Record<string, unknown>> | undefined
-                : undefined;
-              if (!Array.isArray(servers)) continue;
-              for (const server of servers) {
-                pluginServers.push({
-                  name: server.name as string,
-                  pluginId: plugin.id as string,
-                  pluginName: (plugin.name || plugin.id) as string,
-                });
-              }
-            }
-          } catch {
-            // plugin registry not available — that's OK
-          }
-
-          return toolSuccess({ mcpServers, pluginMcpServers: pluginServers });
         }
 
         case 'mcp_server_add': {
