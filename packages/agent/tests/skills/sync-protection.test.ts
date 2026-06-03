@@ -274,95 +274,117 @@ describe('Phase 3B-0.2: Bundled sync protection', () => {
 });
 
 describe('Phase 3B-0.2: Available winner precedence', () => {
-  // The unified resolver is documented in phase-3b0-2 but not yet
-  // implemented. These tests document the contract.
+  // Phase 3B-0.3: candidates now carry `origin` and `customized`
+  // rather than the legacy `source` field. The resolver decides
+  // effective precedence from those.
 
-  it('W1: user > bundled — user winner when same name in both', () => {
+  it('W1: user > plain bundled — user winner when same name in both', () => {
     const candidates = [
-      { name: 'foo', source: 'bundled' as const },
-      { name: 'foo', source: 'user' as const },
+      { name: 'foo', origin: 'bundled' as const, customized: false, hasMarker: true },
+      { name: 'foo', origin: 'user' as const },
     ];
     const winner = pickWinner(candidates);
     expect(winner).not.toBeNull();
-    expect(winner!.source).toBe('user');
+    expect(winner!.origin).toBe('user');
   });
 
-  it('W2: plugin > bundled — plugin winner when same name in both', () => {
+  it('W2: plugin > plain bundled — plugin winner when same name in both', () => {
     const candidates = [
-      { name: 'foo', source: 'bundled' as const },
-      { name: 'foo', source: 'plugin' as const, pluginId: 'com.example.x' },
+      { name: 'foo', origin: 'bundled' as const, customized: false, hasMarker: true },
+      { name: 'foo', origin: 'plugin' as const, pluginId: 'com.example.x' },
     ];
     const winner = pickWinner(candidates);
     expect(winner).not.toBeNull();
-    expect(winner!.source).toBe('plugin');
+    expect(winner!.origin).toBe('plugin');
   });
 
   it('W3: user > plugin — user wins over plugin', () => {
     const candidates = [
-      { name: 'foo', source: 'plugin' as const, pluginId: 'com.example.x' },
-      { name: 'foo', source: 'user' as const },
+      { name: 'foo', origin: 'plugin' as const, pluginId: 'com.example.x' },
+      { name: 'foo', origin: 'user' as const },
     ];
     const winner = pickWinner(candidates);
     expect(winner).not.toBeNull();
-    expect(winner!.source).toBe('user');
+    expect(winner!.origin).toBe('user');
   });
 
   it('W4: three-way — user wins over both plugin and bundled', () => {
     const candidates = [
-      { name: 'foo', source: 'bundled' as const },
-      { name: 'foo', source: 'plugin' as const, pluginId: 'com.example.x' },
-      { name: 'foo', source: 'user' as const },
+      { name: 'foo', origin: 'bundled' as const, customized: false, hasMarker: true },
+      { name: 'foo', origin: 'plugin' as const, pluginId: 'com.example.x' },
+      { name: 'foo', origin: 'user' as const },
     ];
     const winner = pickWinner(candidates);
     expect(winner).not.toBeNull();
-    expect(winner!.source).toBe('user');
+    expect(winner!.origin).toBe('user');
   });
 
-  it('W5: only bundled present → bundled wins', () => {
-    const candidates = [{ name: 'foo', source: 'bundled' as const }];
+  it('W5: only plain bundled present → bundled wins', () => {
+    const candidates = [
+      { name: 'foo', origin: 'bundled' as const, customized: false, hasMarker: true },
+    ];
     const winner = pickWinner(candidates);
     expect(winner).not.toBeNull();
-    expect(winner!.source).toBe('bundled');
+    expect(winner!.origin).toBe('bundled');
   });
 
   it('W6: shadowed candidates do not appear in the available set', () => {
     const candidates = [
-      { name: 'foo', source: 'bundled' as const },
-      { name: 'foo', source: 'user' as const },
-      { name: 'bar', source: 'user' as const },
+      { name: 'foo', origin: 'bundled' as const, customized: false, hasMarker: true },
+      { name: 'foo', origin: 'user' as const },
+      { name: 'bar', origin: 'user' as const },
     ];
     const available = resolveAvailable(candidates);
     expect(available.map(s => s.name).sort()).toEqual(['bar', 'foo']);
     const foo = available.find(s => s.name === 'foo')!;
-    expect(foo.source).toBe('user');
+    expect(foo.origin).toBe('user');
     // Shadowed bundled 'foo' is not in the available set
-    expect(available.filter(s => s.name === 'foo' && s.source === 'bundled')).toEqual([]);
+    expect(available.filter(s => s.name === 'foo' && s.origin === 'bundled')).toEqual([]);
   });
 
   it('W7: name-scoped override applies to the resolved winner', () => {
-    // user:foo is the winner; override key 'foo' = false → disabled
     const candidates = [
-      { name: 'foo', source: 'user' as const },
-      { name: 'foo', source: 'bundled' as const },
+      { name: 'foo', origin: 'user' as const },
+      { name: 'foo', origin: 'bundled' as const, customized: false, hasMarker: true },
     ];
     const winner = pickWinner(candidates)!;
     const overrides: Record<string, boolean> = { foo: false };
     const enabled = isWinnerEnabled(winner, overrides);
     expect(enabled).toBe(false);
 
-    // Different name: no override
-    const other = { name: 'bar', source: 'user' as const };
+    const other = pickWinner([{ name: 'bar', origin: 'user' as const }])!;
     const otherEnabled = isWinnerEnabled(other, overrides);
     expect(otherEnabled).toBe(true);
   });
+
+  // ── Phase 3B-0.3: customized-bundled beats plugin ──────────────────────
+  it('W8: customized bundled beats plugin (Phase 3B-0.3)', () => {
+    const candidates = [
+      { name: 'foo', origin: 'bundled' as const, customized: true, hasMarker: true },
+      { name: 'foo', origin: 'plugin' as const, pluginId: 'com.example.x' },
+    ];
+    const winner = pickWinner(candidates);
+    expect(winner).not.toBeNull();
+    expect(winner!.origin).toBe('bundled');
+    expect(winner!.customized).toBe(true);
+  });
+
+  it('W9: customized bundled beats plain bundled (Phase 3B-0.3)', () => {
+    const candidates = [
+      { name: 'foo', origin: 'bundled' as const, customized: false, hasMarker: true },
+      { name: 'foo', origin: 'bundled' as const, customized: true, hasMarker: true },
+    ];
+    // Same origin, different customized. Higher effective precedence wins.
+    const winner = pickWinner(candidates);
+    expect(winner).not.toBeNull();
+    expect(winner!.customized).toBe(true);
+  });
 });
 
-// ── Import the actual resolver from source for cross-verification ─────
 import {
   pickWinner as srcPickWinner,
   resolveAvailable as srcResolveAvailable,
   isWinnerEnabled as srcIsWinnerEnabled,
-  PRECEDENCE,
 } from '../../src/skills/resolver.js';
 
 const pickWinner = srcPickWinner;
