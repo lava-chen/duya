@@ -215,12 +215,28 @@ function debugLog(...args: unknown[]): void {
   }
 }
 
-// Pending permission requests registry (id -> resolve function)
-// Architecture: permission requests are sent to Main -> Renderer, resolved async
-const pendingPermissions = new Map<string, {
+// Pending permission requests registry.
+// Architecture: permission requests are sent to Main -> Renderer, resolved async.
+//
+// Keyed by `${sessionId}::${id}` to keep sessions isolated: a sub-agent or
+// fork session can never accidentally resolve a top-level session's pending
+// prompt (or vice versa) just because they happen to share an id namespace
+// at the LLM layer. Each entry also holds a per-request timeout handle so
+// we can clear it on resolve/duplicate — otherwise the 5min timer leaks
+// and can fire a stray 'deny' after the prompt is already gone.
+//
+// IMPORTANT: keep the key format in sync with `pendingPermissionKey` below.
+type PendingPermissionEntry = {
   resolve: (decision: 'allow' | 'deny') => void;
   reject: (error: Error) => void;
-}>();
+  timeoutHandle: ReturnType<typeof setTimeout>;
+};
+
+const pendingPermissions = new Map<string, PendingPermissionEntry>();
+
+function pendingPermissionKey(sessionId: string, id: string): string {
+  return `${sessionId}::${id}`;
+}
 
 // Pending IPC requests registry for conductor executor RPC
 const pendingIpcRequests = new Map<string, {
@@ -800,7 +816,10 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     case 'research_complete':
       return { type: 'chat:research_complete', ...(event.data as object) };
     case 'research_error':
-      return { type: 'chat:error', message: (event.data as { message: string }).message };
+      // Surface as chat:research_error so the stream-session-manager routes
+      // it to handleResearchErrorEvent instead of terminating the entire
+      // chat session. The orchestrator's own error event is research-scoped.
+      return { type: 'chat:research_error', ...(event.data as object) };
     case 'report_complete': {
       const { type: _t, ...rest } = event as Record<string, unknown>;
       return { type: 'chat:research_report', ...rest };
@@ -843,7 +862,33 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
 function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number }) => Promise<'allow' | 'deny'> {
   return (request) => {
     return new Promise<'allow' | 'deny'>((resolve, reject) => {
-      pendingPermissions.set(request.id, { resolve, reject });
+      const key = pendingPermissionKey(sessId, request.id);
+
+      // Duplicate request: the renderer (or main) is replaying the same id
+      // (SSE reconnect, sub-agent fork, race with the 5min timer, etc.).
+      // We must NOT overwrite the existing pending entry — doing so would
+      // orphan the first promise and create a stuck prompt. The 5min
+      // timeout is still armed on the original entry; leave it alone.
+      if (pendingPermissions.has(key)) {
+        warn('[Agent-Process] Duplicate permission request, ignoring:', { sessionId: sessId, id: request.id });
+        return;
+      }
+
+      const timeoutHandle = setTimeout(() => {
+        const entry = pendingPermissions.get(key);
+        if (entry) {
+          pendingPermissions.delete(key);
+          entry.resolve('deny');
+        }
+      }, 300000);
+      // Don't keep the agent process alive solely for this timer — if the
+      // process is otherwise idle (e.g. permission prompt is the only thing
+      // outstanding), let it exit gracefully.
+      if (typeof (timeoutHandle as { unref?: () => void }).unref === 'function') {
+        (timeoutHandle as { unref: () => void }).unref();
+      }
+
+      pendingPermissions.set(key, { resolve, reject, timeoutHandle });
 
       sendToMain({
         type: 'chat:permission',
@@ -856,13 +901,6 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
           expiresAt: request.expiresAt,
         },
       });
-
-      setTimeout(() => {
-        if (pendingPermissions.has(request.id)) {
-          pendingPermissions.delete(request.id);
-          resolve('deny');
-        }
-      }, 300000);
     });
   };
 }
@@ -2394,25 +2432,48 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         }
 
         case 'permission:resolve': {
-          // Handle permission resolution from main — resolve the pending permission promise
-          const { id, decision, updatedInput } = msg as { id: string; decision: string; updatedInput?: Record<string, unknown> };
-          log('[Agent-Process] Permission resolved:', id, decision, updatedInput ? 'with updatedInput' : '');
+          // Handle permission resolution from main — resolve the pending permission promise.
+          // sessionId is required to keep sessions isolated (B4): a stray resolve
+          // from a sub-agent/fork must not unlock a top-level session's prompt.
+          const { id, decision, updatedInput, sessionId: resolveSessionId } = msg as {
+            id: string;
+            decision: string;
+            updatedInput?: Record<string, unknown>;
+            message?: string;
+            sessionId?: string;
+          };
+
+          if (!resolveSessionId) {
+            warn('[Agent-Process] permission:resolve missing sessionId, ignoring:', id);
+            break;
+          }
+
+          log('[Agent-Process] Permission resolved:', resolveSessionId, id, decision, updatedInput ? 'with updatedInput' : '');
 
           // Store answers for AskUserQuestion tool retry
           if (updatedInput?.answers) {
             storePendingAnswer(id, updatedInput.answers as Record<string, string>);
           }
 
-          const pending = pendingPermissions.get(id);
+          const key = pendingPermissionKey(resolveSessionId, id);
+          const pending = pendingPermissions.get(key);
           if (pending) {
-            pendingPermissions.delete(id);
+            // Clear the 5min timer FIRST so a late expiry can never race
+            // with this resolve and emit a stray 'deny'.
+            clearTimeout(pending.timeoutHandle);
+            pendingPermissions.delete(key);
             if (decision === 'allow' || decision === 'allow_once' || decision === 'allow_for_session') {
               pending.resolve('allow');
             } else {
               pending.resolve('deny');
             }
           } else {
-            warn('[Agent-Process] No pending permission found for id:', id);
+            // Common during SSE reconnect: a fresh permission event was
+            // emitted after the original had already been resolved. The
+            // renderer's `waitingRef` guard prevents double-send, and the
+            // missing entry is the expected state — log at info, not warn,
+            // to avoid noise.
+            log('[Agent-Process] No pending permission for resolved id (likely already resolved or expired):', resolveSessionId, id);
           }
           break;
         }

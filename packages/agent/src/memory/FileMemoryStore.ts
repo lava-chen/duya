@@ -5,8 +5,11 @@
  * Implements the frozen snapshot pattern for prompt caching.
  *
  * Entry format:
- * ## summary § YYYY-MM-DD
+ * ## [type] summary § YYYY-MM-DD <!--id:m-xxxxxxxx-->
  * content (optional)
+ *
+ * The id marker is stable across edits and is the preferred key for
+ * replace/remove; substring match on summary/content is also supported.
  */
 
 import * as fs from 'fs'
@@ -17,6 +20,7 @@ import {
   serializeEntries,
   serializeEntry,
   findEntryIndex,
+  generateMemoryId,
   calculateTotalChars,
   formatUsage,
   type MemoryEntry,
@@ -105,12 +109,14 @@ export class FileMemoryStore {
 
     const trimmedSummary = summary.trim()
 
-    // Duplicate detection: check if a similar entry already exists
-    const duplicate = this._entries.find(e =>
-      e.summary === trimmedSummary ||
-      e.summary.toLowerCase().includes(trimmedSummary.toLowerCase()) ||
-      trimmedSummary.toLowerCase().includes(e.summary.toLowerCase())
-    )
+    // Duplicate detection: check if a similar entry already exists.
+    // Compare on trimmed, lowercased summaries to avoid false negatives from
+    // surrounding whitespace or trivial case differences.
+    const normalized = trimmedSummary.toLowerCase()
+    const duplicate = this._entries.find(e => {
+      const existing = e.summary.trim().toLowerCase()
+      return existing === normalized || existing.includes(normalized) || normalized.includes(existing)
+    })
     if (duplicate) {
       return {
         success: false,
@@ -121,6 +127,7 @@ export class FileMemoryStore {
     }
 
     const entry: MemoryEntry = {
+      id: generateMemoryId(),
       summary: trimmedSummary,
       content: content?.trim() || undefined,
       timestamp: new Date().toISOString().split('T')[0],
@@ -171,22 +178,43 @@ export class FileMemoryStore {
   }
 
   /**
-   * Replace an entry by matching text.
+   * Resolve the index of the entry that `text` refers to.
+   *
+   * Lookup order:
+   *   1. Exact match against any entry's `id` (preferred — stable across edits)
+   *   2. Substring match against summary / content (with decoration stripped —
+   *      see `findEntryIndex`)
+   *
+   * Returns -1 if nothing matched.
+   */
+  private _resolveEntryIndex(text: string): number {
+    const trimmed = text.trim()
+    if (!trimmed) return -1
+
+    const exactId = this._entries.findIndex(e => e.id === trimmed)
+    if (exactId !== -1) return exactId
+
+    return findEntryIndex(this._entries, trimmed)
+  }
+
+  /**
+   * Replace an entry by matching text or id.
    */
   async replace(oldText: string, newSummary?: string, newContent?: string): Promise<MemoryResult> {
     if (!oldText.trim()) {
       return { success: false, error: 'oldText is required for replace' }
     }
 
-    const idx = findEntryIndex(this._entries, oldText)
+    const idx = this._resolveEntryIndex(oldText)
 
     if (idx === -1) {
       return { success: false, error: `No entry found matching '${oldText}'` }
     }
 
-    // Build updated entry
+    // Build updated entry — preserve the original id so the entry stays stable
     const oldEntry = this._entries[idx]
     const updatedEntry: MemoryEntry = {
+      id: oldEntry.id,
       summary: newSummary?.trim() || oldEntry.summary,
       content: newContent !== undefined ? (newContent.trim() || undefined) : oldEntry.content,
       timestamp: new Date().toISOString().split('T')[0],
@@ -237,14 +265,14 @@ export class FileMemoryStore {
   }
 
   /**
-   * Remove an entry by matching text.
+   * Remove an entry by matching text or id.
    */
   async remove(text: string): Promise<MemoryResult> {
     if (!text.trim()) {
       return { success: false, error: 'text is required for remove' }
     }
 
-    const idx = findEntryIndex(this._entries, text)
+    const idx = this._resolveEntryIndex(text)
 
     if (idx === -1) {
       return { success: false, error: `No entry found matching '${text}'` }

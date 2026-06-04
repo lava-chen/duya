@@ -457,25 +457,24 @@ function handlePostChatSSE(
             data: event,
           };
         } else if (msgType.startsWith('chat:research_')) {
+          // Worker emits `chat:research_*` events where convertSSEToAgentMessage
+          // spreads the inner `data` object onto the top level (no nested `data`
+          // key). Re-wrap so the renderer sees `{ type, data: { from, to, ... } }`
+          // matching the contract used by every other chat:* path.
+          const { type: _t, ...rest } = event as Record<string, unknown>;
           sseEvent = {
             type: msgType.replace('chat:', ''),
-            data: event,
+            data: rest,
           };
         } else if (msgType === 'chat:research_continue') {
-          sseEvent = {
-            type: 'research_continue',
-            data: event,
-          };
+          const { type: _t, ...rest } = event as Record<string, unknown>;
+          sseEvent = { type: 'research_continue', data: rest };
         } else if (msgType === 'chat:research_evidence') {
-          sseEvent = {
-            type: 'research_evidence',
-            data: event,
-          };
+          const { type: _t, ...rest } = event as Record<string, unknown>;
+          sseEvent = { type: 'research_evidence', data: rest };
         } else if (msgType === 'chat:research_report') {
-          sseEvent = {
-            type: 'research_report',
-            data: event,
-          };
+          const { type: _t, ...rest } = event as Record<string, unknown>;
+          sseEvent = { type: 'research_report', data: rest };
         } else if (msgType === 'chat:done') {
           sseEvent = { type: 'done', data: event };
         } else if (msgType === 'chat:db_persisted') {
@@ -757,6 +756,10 @@ function handlePostPermission(
 
     const cmd: Record<string, unknown> = {
       type: 'permission:resolve',
+      // sessionId is required by the agent process to keep its pendingPermissions
+      // map isolated per session (B4). Without it, a sub-agent/fork could
+      // accidentally unlock a top-level session's prompt.
+      sessionId,
       id,
       decision,
     };

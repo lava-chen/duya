@@ -9,6 +9,12 @@ describe('scoreMemoryEntries', () => {
     timestamp?: string,
     type?: 'user' | 'feedback' | 'project' | 'reference',
   ): MemoryEntry => ({
+    id: `m-test${Math.abs(
+      summary.split('').reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7),
+    )
+      .toString(36)
+      .slice(0, 8)
+      .padStart(8, '0')}`,
     summary,
     content,
     timestamp: timestamp ?? new Date().toISOString().split('T')[0],
@@ -156,6 +162,7 @@ describe('formatScoredEntries', () => {
     const today = new Date().toISOString().split('T')[0]
     const entry: ScoredEntry = {
       entry: {
+        id: 'm-test0001',
         summary: 'Test memory',
         timestamp: today,
         type: 'user',
@@ -174,6 +181,7 @@ describe('formatScoredEntries', () => {
   it('should include content when present', () => {
     const entry: ScoredEntry = {
       entry: {
+        id: 'm-test0002',
         summary: 'Test',
         content: 'Detailed content here',
         timestamp: new Date().toISOString().split('T')[0],
@@ -192,6 +200,7 @@ describe('formatScoredEntries', () => {
     const oldDate = new Date(Date.now() - 5 * 86400000).toISOString().split('T')[0]
     const entry: ScoredEntry = {
       entry: {
+        id: 'm-test0003',
         summary: 'Old entry',
         timestamp: oldDate,
       },
