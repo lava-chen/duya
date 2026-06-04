@@ -376,11 +376,15 @@ const StreamingTools = React.memo(function StreamingTools({
   isStreaming,
   streamingToolOutput,
   agentProgressEvents,
+  totalDurationMs,
 }: {
   actions: import('./ToolActionsGroup').ActionItem[];
   isStreaming: boolean;
   streamingToolOutput: string;
   agentProgressEvents?: import('@/hooks/useStreamingAgentProgress').AgentProgressEventWithMeta[];
+  /** Live elapsed ms from stream start; lets the summary show the real
+   *  response time ticking up instead of summed tool durations. */
+  totalDurationMs?: number | null;
 }) {
   if (actions.length === 0) return null;
   return (
@@ -389,10 +393,11 @@ const StreamingTools = React.memo(function StreamingTools({
       isStreaming={isStreaming}
       streamingToolOutput={streamingToolOutput}
       agentProgressEvents={agentProgressEvents}
+      totalDurationMs={totalDurationMs}
     />
   );
 });
- 
+
 const StreamingVizWidgets = React.memo(function StreamingVizWidgets({
   actions,
   sourceMessageId,
@@ -492,6 +497,21 @@ export const StreamingMessage = React.memo(function StreamingMessage({
   const retryInfo          = useStreamingRetry(sessionId);
   const startedAt          = useStreamStartedAt(sessionId);
   const agentProgressEvents = useStreamingAgentProgress(sessionId);
+
+  // Live response time: ticks every second while streaming so the actions
+  // summary reflects the full question-to-now duration, not just summed tool
+  // times. Captures gaps between tool calls and pure model thinking.
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isStreaming || !startedAt) {
+      setElapsedMs(null);
+      return;
+    }
+    const tick = () => setElapsedMs(Date.now() - startedAt);
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [isStreaming, startedAt]);
  
   const hasWidgetActions = actions.some(a => a.kind === 'widget');
  
@@ -503,6 +523,7 @@ export const StreamingMessage = React.memo(function StreamingMessage({
           isStreaming={isStreaming}
           streamingToolOutput={toolOutput}
           agentProgressEvents={agentProgressEvents}
+          totalDurationMs={elapsedMs}
         />
  
         {/* Text content — paced by adaptive typewriter */}

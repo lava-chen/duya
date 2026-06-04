@@ -93,7 +93,7 @@ if (gotTheLock) {
     // idempotent and quick. We do NOT block startup on failure.
     try {
       const { installCliBestEffort } = await import('./services/cliInstallAuto.js');
-      void installCliBestEffort(app.getPath('userData'));
+      void installCliBestEffort();
     } catch (err) {
       logger.warn(
         'CLI install hook failed to load; skipping auto-install',

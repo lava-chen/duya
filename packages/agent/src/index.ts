@@ -3,6 +3,9 @@
  * 提供流式对话、工具调用、会话管理能力
  */
 
+import {
+  DEFAULT_MAX_OUTPUT_TOKENS,
+} from './types.js';
 import type {
   AgentOptions,
   ChatOptions,
@@ -1341,7 +1344,7 @@ export class duyaAgent {
         const streamGenerator = this.llmClient.streamChat(llmMessages, {
           systemPrompt: systemPromptContent,
           tools,
-          maxTokens: options?.maxTokens ?? 4096,
+          maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
           temperature: options?.temperature ?? 1,
           signal: this.abortController.signal,
         });

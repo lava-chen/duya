@@ -25,6 +25,7 @@ import type { ToolUseInfo, ToolResultInfo } from '@/types';
 import { renderToolResult } from './ToolResultRenderer';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import { SimpleDiffViewer, calculateDiff } from '@/components/diff/SimpleDiffViewer';
+import { useTranslation } from '@/hooks/useTranslation';
 
 export interface ToolAction {
   id?: string;
@@ -49,6 +50,10 @@ interface ToolActionsGroupProps {
   flat?: boolean;
   thinkingContent?: string;
   agentProgressEvents?: AgentProgressEventWithMeta[];
+  /** Full wall-clock duration from user question to final response.
+   *  When provided, used in the summary in place of summed tool durations
+   *  so the user sees the true response time (including model thinking). */
+  totalDurationMs?: number | null;
 }
 
 interface ToolRendererDef {
@@ -927,14 +932,18 @@ function renderActionItem(
   }
 }
 
-function computeSummaryFromActions(actions: ActionItem[], isStreaming?: boolean): string[] {
+function computeSummaryFromActions(
+  actions: ActionItem[],
+  isStreaming: boolean,
+  t: (key: import('@/i18n').TranslationKey, params?: Record<string, string | number>) => string,
+): string[] {
   const toolActions = actions.filter((a): a is ActionItem & { kind: 'tool' } => a.kind === 'tool');
   const runningCount = toolActions.filter((a) => a.tool.result === undefined).length;
   const doneCount = toolActions.length - runningCount;
   const summaryParts: string[] = [];
-  if (runningCount > 0) summaryParts.push(`${runningCount} running`);
-  if (doneCount > 0) summaryParts.push(`${doneCount} completed`);
-  if (runningCount === 0 && isStreaming) summaryParts.push('generating response');
+  if (runningCount > 0) summaryParts.push(t('streaming.actions.running', { count: runningCount }));
+  if (doneCount > 0) summaryParts.push(t('streaming.actions.completed', { count: doneCount }));
+  if (runningCount === 0 && isStreaming) summaryParts.push(t('streaming.actions.generating'));
   if (summaryParts.length === 0) summaryParts.push(`${actions.length} actions`);
   return summaryParts;
 }
@@ -967,7 +976,9 @@ export function ToolActionsGroup({
   flat = false,
   thinkingContent,
   agentProgressEvents,
+  totalDurationMs: totalDurationMsProp,
 }: ToolActionsGroupProps) {
+  const { t } = useTranslation();
   // Build actions array from either new `actions` prop or legacy `tools` + `thinkingContent`
   const actions: ActionItem[] = React.useMemo(() => {
     if (actionsProp) return actionsProp;
@@ -1013,13 +1024,18 @@ export function ToolActionsGroup({
     );
   }
 
-  const summaryParts = computeSummaryFromActions(actions, isStreaming);
+  const summaryParts = computeSummaryFromActions(actions, isStreaming, t);
   const lastRunningTool = getLastRunningToolAction(actions);
   const runningDesc = lastRunningTool
     ? getRenderer(lastRunningTool.name).getSummary(lastRunningTool.input, lastRunningTool.name)
     : '';
 
   const totalDurationMs = React.useMemo(() => {
+    // Prefer the explicit total duration (full response time) when provided.
+    if (totalDurationMsProp != null && totalDurationMsProp > 0) {
+      return totalDurationMsProp;
+    }
+    // Fall back to the sum of individual tool durations.
     let total = 0;
     for (const action of actions) {
       if (action.kind === 'tool' && action.tool.durationMs != null && action.tool.durationMs > 0) {
@@ -1027,7 +1043,7 @@ export function ToolActionsGroup({
       }
     }
     return total;
-  }, [actions]);
+  }, [actions, totalDurationMsProp]);
 
   const handleToggle = () => {
     setUserExpandedState((prev) => prev !== null ? !prev : !expanded);
@@ -1042,7 +1058,7 @@ export function ToolActionsGroup({
       >
         <span className="text-muted-foreground/60 truncate">
           {summaryParts.join(' · ')}
-          {totalDurationMs > 0 && `, Worked for ${formatDuration(totalDurationMs)}`}
+          {totalDurationMs > 0 && `, ${t('streaming.actions.workedFor', { duration: formatDuration(totalDurationMs) })}`}
         </span>
 
         {runningDesc && (

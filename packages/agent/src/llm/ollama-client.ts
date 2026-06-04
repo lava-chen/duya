@@ -10,6 +10,7 @@
  * Reference: https://github.com/ollama/ollama/blob/main/docs/api.md
  */
 
+import { DEFAULT_MAX_OUTPUT_TOKENS } from '../types.js';
 import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseContent, ToolResultContent, ImageContent, TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
@@ -262,7 +263,7 @@ export class OllamaClient implements LLMClient {
       ...(modelSupportsThinking ? { think: true } : {}),
       options: {
         temperature: options?.temperature ?? 0.7,
-        num_predict: options?.maxTokens ?? 4096,
+        num_predict: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       },
     };
 
