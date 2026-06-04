@@ -9,7 +9,6 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   vision_analyze: ToolBatch.READ,
   duya_sessions: ToolBatch.READ,
   duya_info: ToolBatch.READ,
-  duya_config: ToolBatch.READ,
   duya_restart: ToolBatch.READ,
   duya_health: ToolBatch.READ,
   duya_logs: ToolBatch.READ,

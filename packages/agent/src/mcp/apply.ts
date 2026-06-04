@@ -54,7 +54,11 @@ import {
 export type ApplyReason =
   | 'initialization'
   | 'settings:change'
-  | 'duya_config:action'
+  // Plan 102: `duya_config:action` retired. Config mutations
+  // now flow through `duya_cli` and reach the apply pipeline via
+  // `settings:change` (the agent-settings write) or via the
+  // legacy configDb IPC bridge.
+  | 'duya_cli:action'
   | 'plugin:install'
   | 'plugin:enable'
   | 'plugin:disable'

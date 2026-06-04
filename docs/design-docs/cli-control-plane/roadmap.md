@@ -383,6 +383,34 @@ DTOs freeze **redacts** internal columns (`viz_spec`, `sub_agent_id`,
 - `duya channel enable/disable` (gateway-managed)
 - `duya message search` (semantic search needs embeddings)
 
+### Phase 13 — `duya config …` + `duya mcp` write surface (Plan 102) ✅ COMPLETE
+Plan: [`docs/exec-plans/completed/102-duya-config-into-cli.md`](../../exec-plans/completed/102-duya-config-into-cli.md)
+
+- **Merge**: the legacy agent tool `duya_config` is **removed**; every
+  action it covered is now reachable via `duya_cli` → `duya config …`
+  or `duya_cli` → `duya mcp add/remove/assign`. Single agent-side
+  entry point to the desktop config surface.
+- **Tree shape**: subcommands are flat (`config-provider-add`,
+  `config-settings-show`, …) to match the existing 2-level resolver.
+  Original 3-level proposal (`config provider add`) is preserved
+  semantically via dash-joined names; the agent argv parser passes
+  the third token as `subcommand` and the descriptor carries the
+  remaining flags via `ctx.options`.
+- **Audit**: 8 new `config.*` audit event kinds
+  (`config.provider.add`, …, `config.pairing.revoke`) and 3 new
+  `mcp.*` kinds (`mcp.add`, `mcp.remove`, `mcp.assign`). All routed
+  through `controlPlaneAudit.ts` with `X-Duya-Invoked-By` header.
+- **Routes**: 14 new `electron/cli/handlers/config.ts` endpoints
+  + 3 new MCP write endpoints in `mcps.ts`. The existing
+  `cli-api-server.ts` route table grows by 17 entries.
+- **Field rename**: vision `isActive` is renamed to `enabled` at the
+  wire boundary (the legacy `duya_config` field has no compat to
+  preserve). The handler still accepts `isActive` for forward-compat
+  with old callers.
+- **Tests**: 27/27 `registry.test.ts` PASS (5 new), 34/34
+  `DuyaCliTool.test.ts` PASS (6 new). The "duya_config is not in the
+  tool enum" regression test is the contract gate.
+
 ---
 
 ## 7. Summary: Permanent Scope Exclusions

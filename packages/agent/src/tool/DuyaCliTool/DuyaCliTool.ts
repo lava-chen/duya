@@ -39,9 +39,9 @@ import { z } from 'zod/v4';
 import { DUYA_CLI_TOOL_NAME } from './constants.js';
 import { DESCRIPTION } from './prompt.js';
 import { runCliCommand, type CliInvocation } from './runner.js';
-import type { OutputFormat } from '../../cli/api/format.js';
-import { CLI_DESCRIPTORS } from '../../cli/program/descriptors.js';
-import type { CliCommandPath } from '../../cli/program/registry.js';
+import type { OutputFormat } from '@duya/cli/contract';
+import { CLI_DESCRIPTORS } from '@duya/cli/contract';
+import type { CliCommandPath } from '@duya/cli/contract';
 import type { Tool, ToolResult } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 
@@ -207,6 +207,49 @@ function parseArgv(argv: string[]): CliInvocation {
       out.prompt = tok.slice('--prompt='.length);
       continue;
     }
+    // Plan 102 (config command) — provider / settings / vision / style / pairing flags
+    if (tok === '--id' && i + 1 < argv.length) { out.configId = argv[++i]; continue; }
+    if (tok.startsWith('--id=')) { out.configId = tok.slice('--id='.length); continue; }
+    if (tok === '--name' && i + 1 < argv.length) { out.configName = argv[++i]; continue; }
+    if (tok.startsWith('--name=')) { out.configName = tok.slice('--name='.length); continue; }
+    if (tok === '--type' && i + 1 < argv.length) { out.configType = argv[++i]; continue; }
+    if (tok.startsWith('--type=')) { out.configType = tok.slice('--type='.length); continue; }
+    if (tok === '--base-url' && i + 1 < argv.length) { out.configBaseUrl = argv[++i]; continue; }
+    if (tok.startsWith('--base-url=')) { out.configBaseUrl = tok.slice('--base-url='.length); continue; }
+    if (tok === '--api-key' && i + 1 < argv.length) { out.configApiKey = argv[++i]; continue; }
+    if (tok.startsWith('--api-key=')) { out.configApiKey = tok.slice('--api-key='.length); continue; }
+    if (tok === '--active') { out.configActive = true; continue; }
+    if (tok === '--enabled') { out.configEnabled = true; continue; }
+    if (tok === '--model' && i + 1 < argv.length) { out.configModel = argv[++i]; continue; }
+    if (tok.startsWith('--model=')) { out.configModel = tok.slice('--model='.length); continue; }
+    if (tok === '--provider' && i + 1 < argv.length) { out.configProvider = argv[++i]; continue; }
+    if (tok.startsWith('--provider=')) { out.configProvider = tok.slice('--provider='.length); continue; }
+    if (tok === '--max-tokens' && i + 1 < argv.length) { out.configMaxTokens = argv[++i]; continue; }
+    if (tok.startsWith('--max-tokens=')) { out.configMaxTokens = tok.slice('--max-tokens='.length); continue; }
+    if (tok === '--temperature' && i + 1 < argv.length) { out.configTemperature = argv[++i]; continue; }
+    if (tok.startsWith('--temperature=')) { out.configTemperature = tok.slice('--temperature='.length); continue; }
+    if (tok === '--top-p' && i + 1 < argv.length) { out.configTopP = argv[++i]; continue; }
+    if (tok.startsWith('--top-p=')) { out.configTopP = tok.slice('--top-p='.length); continue; }
+    if (tok === '--top-k' && i + 1 < argv.length) { out.configTopK = argv[++i]; continue; }
+    if (tok.startsWith('--top-k=')) { out.configTopK = tok.slice('--top-k='.length); continue; }
+    if (tok === '--enable-thinking') { out.configEnableThinking = true; continue; }
+    if (tok === '--thinking-budget' && i + 1 < argv.length) { out.configThinkingBudget = argv[++i]; continue; }
+    if (tok.startsWith('--thinking-budget=')) { out.configThinkingBudget = tok.slice('--thinking-budget='.length); continue; }
+    if (tok === '--code' && i + 1 < argv.length) { out.configCode = argv[++i]; continue; }
+    if (tok.startsWith('--code=')) { out.configCode = tok.slice('--code='.length); continue; }
+    if (tok === '--user' && i + 1 < argv.length) { out.configUser = argv[++i]; continue; }
+    if (tok.startsWith('--user=')) { out.configUser = tok.slice('--user='.length); continue; }
+    if (tok === '--style-id' && i + 1 < argv.length) { out.configStyleId = argv[++i]; continue; }
+    if (tok.startsWith('--style-id=')) { out.configStyleId = tok.slice('--style-id='.length); continue; }
+    if (tok === '--include' && i + 1 < argv.length) { out.configInclude = argv[++i]; continue; }
+    if (tok.startsWith('--include=')) { out.configInclude = tok.slice('--include='.length); continue; }
+    // Plan 102 (mcp add) — repeatable flags
+    if (tok === '--arg' && i + 1 < argv.length) { (out.configArgs ??= []).push(argv[++i]); continue; }
+    if (tok.startsWith('--arg=')) { (out.configArgs ??= []).push(tok.slice('--arg='.length)); continue; }
+    if (tok === '--env' && i + 1 < argv.length) { (out.configEnv ??= []).push(argv[++i]); continue; }
+    if (tok.startsWith('--env=')) { (out.configEnv ??= []).push(tok.slice('--env='.length)); continue; }
+    if (tok === '--agent' && i + 1 < argv.length) { (out.configAgents ??= []).push(argv[++i]); continue; }
+    if (tok.startsWith('--agent=')) { (out.configAgents ??= []).push(tok.slice('--agent='.length)); continue; }
     if (tok.startsWith('--')) {
       // Unknown long flag — skip value if next token is not a flag
       if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) i++;

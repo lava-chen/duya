@@ -292,4 +292,75 @@ describe('DuyaCliTool (unit)', () => {
       expect(enum_).toContain('message');
     });
   });
+
+  describe('Plan 102 — `duya config` argv surface (replace `duya_config`)', () => {
+    it('config command appears in the enum (replaces the removed `duya_config` tool)', () => {
+      const enum_ = ((tool.input_schema as Record<string, unknown>).properties as Record<string, Record<string, unknown>>).command.enum as string[];
+      expect(enum_).toContain('config');
+    });
+
+    it('dispatches config provider-add argv to the matching subcommand', async () => {
+      // Will fail with a connection error (no desktop app), but the
+      // dispatch path must reach the descriptor. If argv was
+      // unparsed the error would be exit 64.
+      const result = await tool.execute({
+        argv: ['config', 'provider-add', '--id', 'x', '--name', 'X', '--type', 'openai', '--yes'],
+      });
+      const payload = JSON.parse(result.result);
+      expect(payload.command).toBe('config');
+      expect(payload.subcommand).toBe('provider-add');
+    });
+
+    it('dispatches config settings-set with all PATCH fields (--max-tokens, --temperature, --top-p, --top-k, --enable-thinking, --thinking-budget)', async () => {
+      const result = await tool.execute({
+        argv: [
+          'config', 'settings-set',
+          '--model', 'claude-sonnet-4',
+          '--max-tokens', '8192',
+          '--temperature', '0.7',
+          '--top-p', '0.9',
+          '--top-k', '40',
+          '--enable-thinking',
+          '--thinking-budget', '16000',
+          '--yes',
+        ],
+      });
+      const payload = JSON.parse(result.result);
+      expect(payload.command).toBe('config');
+      expect(payload.subcommand).toBe('settings-set');
+    });
+
+    it('dispatches mcp add with repeatable --arg / --env / --agent flags', async () => {
+      const result = await tool.execute({
+        argv: [
+          'mcp', 'add',
+          '--server', 'test-mcp',
+          '--command', 'npx',
+          '--arg', '-y', '--arg', '@foo/bar',
+          '--env', 'K=V', '--env', 'K2=V2',
+          '--agent', 'a', '--agent', 'b',
+          '--yes',
+        ],
+      });
+      const payload = JSON.parse(result.result);
+      expect(payload.command).toBe('mcp');
+      expect(payload.subcommand).toBe('add');
+    });
+
+    it('supports --key=value form for the new flags', async () => {
+      const result = await tool.execute({
+        argv: ['config', 'provider-info', '--id=openai'],
+      });
+      const payload = JSON.parse(result.result);
+      expect(payload.command).toBe('config');
+      expect(payload.subcommand).toBe('provider-info');
+    });
+  });
+
+  describe('Plan 102 — regression: duya_config tool is no longer registered', () => {
+    it('the agent tool enum does not include the removed "duya_config" command path', () => {
+      const enum_ = ((tool.input_schema as Record<string, unknown>).properties as Record<string, Record<string, unknown>>).command.enum as string[];
+      expect(enum_).not.toContain('duya_config');
+    });
+  });
 });

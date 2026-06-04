@@ -35,7 +35,6 @@ import { briefTool } from './BriefTool/BriefTool.js';
 import { sessionSearchTool } from './SessionSearchTool/index.js';
 import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
-import { duyaConfigTool } from './DuyaConfigTool/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from '../conductor/CanvasOrchestratorProfile.js';
@@ -136,14 +135,13 @@ export function createBuiltinRegistry(
   // `duya_cli` is the agent's single entry point to the CLI control
   // plane. It runs the same `run*` functions the external `duya`
   // CLI bundle runs, in-process. The legacy `duya_info`,
-  // `duya_health` tools were removed in Phase 8 of plan 96 — their
-  // capabilities are now reachable via `duya_cli`. `duya_config` is
-  // retained but slimmed: it covers only GUI-only write actions
-  // (provider add/remove/activate, mcp add/remove/assign, settings,
-  // vision, output style, pairing). Read-only queries go through
-  // `duya_cli`.
+  // `duya_health`, AND `duya_config` tools were removed in
+  // Plan 102 — their capabilities (provider add/remove/activate,
+  // mcp add/remove/assign, settings, vision, output style,
+  // pairing, plus the legacy read actions) are all reachable
+  // through `duya_cli { argv: ["config", …] }` /
+  // `duya_cli { argv: ["mcp", …] }`.
   registry.register(duyaCliTool.toTool(), duyaCliTool);
-  registry.register(duyaConfigTool.toTool(), duyaConfigTool);
 
   // Memory tool
   const memoryTool = getMemoryTool();
@@ -276,7 +274,7 @@ export { skillManageTool } from './SkillManageTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { VisionTool } from './VisionTool/VisionTool.js';
 // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
-export { duyaConfigTool } from './DuyaConfigTool/index.js';
+// duyaConfigTool removed in plan 102 — use `duya_cli` (argv: 'config …' / 'mcp …') instead.
 export { duyaCliTool } from './DuyaCliTool/index.js';
 
 // Wiki tools exports
