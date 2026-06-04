@@ -420,18 +420,7 @@ const en = {
   'settings.appearance.fontGeist': 'Geist',
   'settings.appearance.fontInter': 'Inter',
   'settings.appearance.fontJetbrains': 'JetBrains Mono',
-  'settings.appearance.chatDisplayTitle': 'Chat Display',
-  'settings.appearance.chatDisplayDesc': 'Configure how messages are displayed',
-  'settings.appearance.showTimestamps': 'Show timestamps',
-  'settings.appearance.showTimestampsDesc': 'Display timestamps on each message',
-  'settings.appearance.showAvatars': 'Show avatars',
-  'settings.appearance.showAvatarsDesc': 'Display user and assistant avatars in chat',
-  'settings.appearance.previewTitle': 'Preview',
-  'settings.appearance.previewDesc': 'See how your settings look',
-  'settings.appearance.previewAssistant': 'Assistant',
-  'settings.appearance.previewYou': 'You',
-  'settings.appearance.previewMessageAi': 'This is how messages will appear with your current settings.',
-  'settings.appearance.previewMessageUser': 'Can you help me with a coding task?',
+
 
   'settings.security.title': 'Security',
   'settings.security.description': 'Security and permission settings',
@@ -605,6 +594,7 @@ const en = {
   'onboarding.shortcutCommands': 'Open command menu',
   'onboarding.shortcutMention': 'Mention files',
   'onboarding.shortcutClear': 'Clear conversation',
+  'onboarding.importFromClaudeCode': 'Import from Claude Code / Codex',
 
   // Boot Welcome Message
   'bootWelcome.greeting': 'Hello! I\'m DUYA, your AI coding assistant.',

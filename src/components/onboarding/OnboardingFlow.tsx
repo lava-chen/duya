@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
-import { listProvidersIPC, upsertProviderIPC } from "@/lib/ipc-client";
+import { listProvidersIPC, upsertProviderIPC, activateProviderIPC } from "@/lib/ipc-client";
 import { XIcon } from "@/components/icons";
 import { WelcomeStep } from "./steps/WelcomeStep";
 import { FeatureCarousel } from "./steps/FeatureCarousel";
 import { ConfigStep } from "./steps/ConfigStep";
 import { CompleteStep } from "./steps/CompleteStep";
 import type { QuickPreset } from "@/lib/provider-presets";
+import type { ProviderFormData } from "@/components/settings/ProviderConnectDialog";
 import type { Locale } from "@/i18n";
 import { getLocaleFromAcceptLanguage } from "@/i18n";
 
@@ -22,6 +23,7 @@ export interface OnboardingState {
 
 interface OnboardingFlowProps {
   onComplete?: () => void;
+  forceShow?: boolean;
 }
 
 const STEPS = [
@@ -31,7 +33,7 @@ const STEPS = [
   { key: "complete", titleKey: "onboarding.stepComplete" as const },
 ];
 
-export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
+export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
   const { t, locale, setLocale } = useTranslation();
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
@@ -158,7 +160,60 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
     }
   };
 
-  if (hasProviders === true) {
+  const handleProviderSaved = async (preset: QuickPreset, data: ProviderFormData) => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const isOllama = preset.key === 'ollama' || preset.provider_type === 'ollama';
+      let enabledModels: string[] = data.enabled_models ?? [];
+      let defaultModel = "";
+
+      // Parse role_models_json for default model
+      if (data.role_models_json) {
+        try {
+          const roleModels = JSON.parse(data.role_models_json);
+          if (roleModels.default) defaultModel = roleModels.default;
+        } catch { /* ignore */ }
+      }
+
+      if (isOllama && defaultModel) {
+        enabledModels = [defaultModel];
+      } else if (enabledModels.length > 0 && !defaultModel) {
+        defaultModel = enabledModels[0];
+      } else if (preset.defaultModels && preset.defaultModels.length > 0) {
+        enabledModels = preset.defaultModels.map((m) => m.modelId);
+        if (!defaultModel) defaultModel = enabledModels[0];
+      }
+
+      const options: Record<string, unknown> = {};
+      if (defaultModel) options.defaultModel = defaultModel;
+      if (enabledModels.length > 0) options.enabled_models = enabledModels;
+
+      const provider = await upsertProviderIPC({
+        id: preset.key || `preset-${Date.now()}`,
+        name: data.name || preset.name,
+        providerType: data.provider_type || preset.provider_type,
+        baseUrl: data.base_url || preset.baseUrl,
+        apiKey: isOllama ? 'ollama' : data.api_key.trim(),
+        isActive: true,
+        options: Object.keys(options).length > 0 ? options : undefined,
+      });
+
+      if (provider) {
+        await activateProviderIPC(provider.id);
+        setCurrentStepIndex(3);
+      } else {
+        setError(t("onboarding.connectionFailed"));
+      }
+    } catch {
+      setError(t("onboarding.connectionFailed"));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (!forceShow && hasProviders === true) {
     return null;
   }
 
@@ -224,6 +279,7 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                 isLoading={isLoading}
                 onConnect={handleConnect}
                 onBack={handleBack}
+                onConfigured={handleProviderSaved}
               />
             )}
             {currentStepIndex === 3 && <CompleteStep onEnter={markComplete} />}

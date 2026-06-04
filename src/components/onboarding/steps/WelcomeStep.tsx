@@ -58,7 +58,7 @@ export function WelcomeStep({ onStart, locale, onSetLocale }: WelcomeStepProps) 
       <div className="space-y-4">
         <div className="inline-flex items-center justify-center w-24 h-24 rounded-2xl overflow-hidden">
           <img
-            src="/icon.png"
+            src="./icon.png"
             alt="DUYA"
             className="w-full h-full object-cover"
           />
@@ -104,7 +104,7 @@ export function WelcomeStep({ onStart, locale, onSetLocale }: WelcomeStepProps) 
           onClick={() => setShowImport(true)}
           className="w-full inline-flex items-center justify-center gap-2 px-8 py-3 border border-[var(--border)] text-[var(--text)] rounded-xl text-sm font-medium hover:bg-[var(--bg-canvas)] transition-all"
         >
-          Import from Claude Code / Codex
+          {t("onboarding.importFromClaudeCode")}
         </button>
       </div>
     </div>
