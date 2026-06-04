@@ -80,6 +80,7 @@ node packages/agent/dist/cli/index.js [options]
 - UI changes: verify with Playwright MCP after implementation. Do not skip.
 - No commit of secrets, API keys, credentials.
 - Build gate: `npm run electron:build` before push if build output, packaging, or lazy/module boundaries can change.
+- Release tag: `package.json:version` MUST match the tag being pushed (see Git → Release Tag).
 
 ## Git
 
@@ -97,6 +98,16 @@ node packages/agent/dist/cli/index.js [options]
   - `docs: update AGENTS.md commit message format`
 - Atomic: one logical change per commit. Do not mix unrelated fixes.
 - No merge commits on `main`: rebase on latest `origin/main` before push.
+
+### Release Tag
+
+- **MUST bump `package.json` `version` in the same commit as the release tag** — `electron-builder` reads the version from `package.json`, not from the git tag. If `package.json:version` still points to a previously-released version, `electron-builder --publish always` will skip creating the new release and exit 0 (silent no-op).
+- Pre-tag checklist:
+  1. Update `package.json` `version` (e.g. `0.1.3-beta.2` → `0.1.3-beta.3`).
+  2. Commit the bump before tagging (`chore(release): bump version to <X>`).
+  3. Tag the bump commit, not an earlier one.
+  4. Push the tag. The CI release workflow is the only thing that should ever create a GitHub Release.
+- If a tag is pushed without the corresponding `package.json` bump, the release will fail silently (workflow job shows `success`, but no Release is created on GitHub). Always verify the Release exists with `gh release view <tag>` after a release run.
 
 ## Code
 
