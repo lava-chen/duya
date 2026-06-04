@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslation } from "@/hooks/useTranslation";
 import { ArrowRightIcon } from "@/components/icons";
 import { detectImportIPC } from "@/lib/import-ipc";
 import type { ImportSource } from "@/types/import";
@@ -11,6 +12,7 @@ interface SelectSourceStepProps {
 }
 
 export function SelectSourceStep({ onSelect, onNext }: SelectSourceStepProps) {
+  const { t } = useTranslation();
   const [detected, setDetected] = useState<{ claude: boolean; codex: boolean }>({
     claude: false,
     codex: false,
@@ -33,7 +35,7 @@ export function SelectSourceStep({ onSelect, onNext }: SelectSourceStepProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="animate-pulse text-muted-foreground">Detecting tools...</div>
+        <div className="animate-pulse text-muted-foreground">{t("importFlow.detecting")}</div>
       </div>
     );
   }
@@ -41,9 +43,9 @@ export function SelectSourceStep({ onSelect, onNext }: SelectSourceStepProps) {
   return (
     <div className="space-y-6">
       <div className="text-center">
-        <h2 className="text-xl font-semibold mb-2">Import from AI Workspace</h2>
+        <h2 className="text-xl font-semibold mb-2">{t("importFlow.importFromAIWorkspace")}</h2>
         <p className="text-sm text-muted-foreground">
-          Bring your existing AI agent configurations into DUYA
+          {t("importFlow.bringExisting")}
         </p>
       </div>
 
@@ -57,10 +59,10 @@ export function SelectSourceStep({ onSelect, onNext }: SelectSourceStepProps) {
               <div>
                 <div className="font-medium">Claude Code</div>
                 <div className="text-sm text-muted-foreground mt-1">
-                  Detected on this machine
+                  {t("importFlow.detectedOnMachine")}
                 </div>
                 <div className="text-xs text-muted-foreground mt-0.5">
-                  Rules, memory, skills, tools
+                  {t("importFlow.claudeCodeFeatures")}
                 </div>
               </div>
               <ArrowRightIcon size={18} className="text-muted-foreground" />
@@ -77,10 +79,10 @@ export function SelectSourceStep({ onSelect, onNext }: SelectSourceStepProps) {
               <div>
                 <div className="font-medium">Codex</div>
                 <div className="text-sm text-muted-foreground mt-1">
-                  Detected on this machine
+                  {t("importFlow.detectedOnMachine")}
                 </div>
                 <div className="text-xs text-muted-foreground mt-0.5">
-                  AGENTS.md, skills, connectors
+                  {t("importFlow.codexFeatures")}
                 </div>
               </div>
               <ArrowRightIcon size={18} className="text-muted-foreground" />
@@ -90,9 +92,9 @@ export function SelectSourceStep({ onSelect, onNext }: SelectSourceStepProps) {
 
         {!detected.claude && !detected.codex && (
           <div className="text-center py-8 text-muted-foreground">
-            <p>No supported AI tools detected on this machine.</p>
+            <p>{t("importFlow.noToolsDetected")}</p>
             <p className="text-sm mt-2">
-              Supported: Claude Code (~/.claude), Codex (~/.codex)
+              {t("importFlow.supportedTools")}
             </p>
           </div>
         )}
@@ -107,7 +109,7 @@ export function SelectSourceStep({ onSelect, onNext }: SelectSourceStepProps) {
             onChange={() => setScope("user")}
             className="accent-[var(--accent)]"
           />
-          <span className="text-sm">Import my global preferences only</span>
+          <span className="text-sm">{t("importFlow.importGlobalOnly")}</span>
         </label>
         <label className="flex items-center gap-2 cursor-pointer">
           <input
@@ -117,7 +119,7 @@ export function SelectSourceStep({ onSelect, onNext }: SelectSourceStepProps) {
             onChange={() => setScope("project")}
             className="accent-[var(--accent)]"
           />
-          <span className="text-sm">Select a local project folder</span>
+          <span className="text-sm">{t("importFlow.selectProjectFolder")}</span>
         </label>
       </div>
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "@/hooks/useTranslation";
 import { SelectSourceStep } from "./steps/SelectSourceStep";
 import { ScanResultStep } from "./steps/ScanResultStep";
 import { PreviewStep } from "./steps/PreviewStep";
@@ -14,6 +15,7 @@ interface ImportFlowProps {
 }
 
 export function ImportFlow({ onComplete, onClose }: ImportFlowProps) {
+  const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedSource, setSelectedSource] = useState<ImportSource | null>(null);
   const [projectPath, setProjectPath] = useState<string | undefined>();
@@ -88,7 +90,7 @@ export function ImportFlow({ onComplete, onClose }: ImportFlowProps) {
               onClick={handleSkip}
               className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
-              Skip
+              {t("importFlow.skip")}
             </button>
           )}
         </div>
@@ -161,7 +163,7 @@ export function ImportFlow({ onComplete, onClose }: ImportFlowProps) {
 
         <div className="text-center mt-4">
           <span className="text-xs text-muted-foreground">
-            Step {currentStep + 1} of 5
+            {t("importFlow.stepOf", { step: currentStep + 1, total: 5 })} 
           </span>
         </div>
       </div>
