@@ -18,6 +18,8 @@ export {
   removeEntry,
   replaceEntry,
   findEntryIndex,
+  stripEntryDecorations,
+  generateMemoryId,
   formatUsage,
 } from './memoryParser.js'
 

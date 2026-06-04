@@ -47,6 +47,14 @@ ACTIONS:
 - remove: Delete an entry (requires oldText to match)
 - list: List all entries (optionally filter by type)
 
+MATCHING oldText (for replace/remove):
+Each entry has a stable, file-persisted id (e.g. "m-abc12345") returned by the list
+action in the entry object. PREFER passing that exact id as oldText — it is
+unambiguous and survives edits to summary/content.
+A substring of the entry's summary or content also matches (case-insensitive).
+You may also paste the full header line as shown in list output
+(## [type] summary § YYYY-MM-DD); decoration is stripped before matching.
+
 CHAR LIMITS: global memory ${MEMORY_CHAR_LIMITS.memory.toLocaleString()} chars, global user ${MEMORY_CHAR_LIMITS.user.toLocaleString()} chars, project memory ${MEMORY_CHAR_LIMITS.project.toLocaleString()} chars.
 When at limit, replace or remove existing entries before adding new ones.`
 
