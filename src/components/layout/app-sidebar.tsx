@@ -115,6 +115,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       currentView,
       setCurrentView,
       setSettingsTab,
+      enterSettings,
+      exitSettings,
     } = useConversationStore();
     const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
@@ -284,7 +286,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // Handle settings tab change
     const handleSettingsTabChange = (tabId: SettingsTab) => {
       setSettingsTab(tabId);
-      setCurrentView('settings');
+      enterSettings();
     };
 
     // Settings mode sidebar
@@ -293,7 +295,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         <aside className="app-sidebar" ref={ref} style={style}>
           <button
             className="sidebar-back-link"
-            onClick={() => setCurrentView('home')}
+            onClick={exitSettings}
           >
             <span className="nav-icon">
               <ArrowLeftIcon size={16} />
@@ -490,7 +492,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           <button
             type="button"
             className="sidebar-settings"
-            onClick={() => setCurrentView('settings')}
+            onClick={enterSettings}
           >
             <span className="nav-icon">
               <GearSixIcon size={16} weight="regular" />
