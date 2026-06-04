@@ -24,6 +24,7 @@ const zh: Record<TranslationKey, string> = {
   'chat.toggleFileTree': '切换文件树',
   'chat.whatToBuild': '你想构建什么',
   'chat.whatToBuildIn': '你想在',
+  'chat.whatToBuildInSuffix': '里做什么',
   'chat.selectProject': '选择项目',
   'chat.openNewProject': '打开新项目...',
   'chat.recentThreads': '最近对话',
