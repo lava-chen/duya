@@ -481,3 +481,174 @@ export function handlePluginDoctor(
 
   sendJson(res, 200, { checks });
 }
+
+// ============================================================================
+// Phase 4: install / uninstall / update (Plan 200 P4)
+// ============================================================================
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const MAX = 1024 * 1024;
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > MAX) {
+        reject(new Error('request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (chunks.length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8')));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function asString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+function asBool(v: unknown): boolean {
+  return v === true || v === 'true' || v === 1 || v === '1';
+}
+
+function pluginErrorToResponse(err: unknown): { status: number; body: unknown } {
+  const e = err as { type?: string; message?: string };
+  const message = e?.message ?? (err instanceof Error ? err.message : String(err));
+  const code = typeof e?.type === 'string' ? e.type : 'plugin_error';
+  // Map common plugin error types to HTTP status codes.
+  const status =
+    code === 'plugin-not-found' || code === 'path-not-found'
+      ? 404
+      : code === 'marketplace-blocked-by-policy' || code === 'managed-plugin-locked'
+        ? 403
+        : 500;
+  return { status, body: { error: { code, message } } };
+}
+
+export async function handleInstallPlugin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId?: string,
+): Promise<void> {
+  try {
+    const raw = (await readJsonBody(req)) as {
+      pluginId?: unknown;
+      fromPath?: unknown;
+      scope?: unknown;
+    };
+    const pluginId = asString(raw.pluginId);
+    const fromPath = asString(raw.fromPath);
+    const scope = (asString(raw.scope) ?? 'user') as 'user' | 'system';
+    if (!pluginId && !fromPath) {
+      sendJson(res, 400, { error: { code: 'missing_arg', message: 'pluginId or fromPath required' } });
+      return;
+    }
+    const manager = getPluginManager();
+    const result = fromPath
+      ? await manager.installFromPath(fromPath, scope)
+      : await manager.installFromCatalog(pluginId!, scope);
+    if (!result.ok) {
+      const mapped = pluginErrorToResponse(result.error);
+      sendJson(res, mapped.status, mapped.body);
+      return;
+    }
+    const event: AuditEvent = {
+      kind: 'plugin.install',
+      id: result.value.id,
+      ts: Date.now(),
+      invokedBy: 'cli',
+      ...(correlationId ? { correlationId } : {}),
+    };
+    await appendAuditEvent(getUserDataDir(), event);
+    sendJson(res, 200, { plugin: result.value });
+  } catch (err) {
+    const mapped = pluginErrorToResponse(err);
+    sendJson(res, mapped.status, mapped.body);
+  }
+}
+
+export async function handleUninstallPlugin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  id: string,
+  correlationId?: string,
+): Promise<void> {
+  try {
+    const raw = (await readJsonBody(req)) as { deleteData?: unknown };
+    const manager = getPluginManager();
+    const result = await manager.remove(id, asBool(raw.deleteData));
+    if (!result.ok) {
+      const mapped = pluginErrorToResponse(result.error);
+      sendJson(res, mapped.status, mapped.body);
+      return;
+    }
+    const event: AuditEvent = {
+      kind: 'plugin.uninstall',
+      id,
+      ts: Date.now(),
+      invokedBy: 'cli',
+      ...(correlationId ? { correlationId } : {}),
+      ...(asBool(raw.deleteData) ? { note: 'deleteData=true' } : {}),
+    };
+    await appendAuditEvent(getUserDataDir(), event);
+    sendJson(res, 200, { id, removed: result.value.removed });
+  } catch (err) {
+    const mapped = pluginErrorToResponse(err);
+    sendJson(res, mapped.status, mapped.body);
+  }
+}
+
+export async function handleUpdatePlugin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  id: string,
+  correlationId?: string,
+): Promise<void> {
+  try {
+    const manager = getPluginManager();
+    const detail = manager.getDetail(id);
+    if (!detail.entry) {
+      sendJson(res, 404, { error: { code: 'plugin-not-found', message: id } });
+      return;
+    }
+    if (!detail.catalog) {
+      sendJson(res, 400, {
+        error: { code: 'not_in_catalog', message: `${id} is not in the catalog; cannot auto-update` },
+      });
+      return;
+    }
+    // `installFromCatalog` is idempotent — re-running it picks up the
+    // newest cached version of the same catalog entry. The same audit
+    // trail distinguishes install vs update via the `note` field.
+    const result = await manager.installFromCatalog(id);
+    if (!result.ok) {
+      const mapped = pluginErrorToResponse(result.error);
+      sendJson(res, mapped.status, mapped.body);
+      return;
+    }
+    const event: AuditEvent = {
+      kind: 'plugin.update',
+      id,
+      ts: Date.now(),
+      invokedBy: 'cli',
+      ...(correlationId ? { correlationId } : {}),
+    };
+    await appendAuditEvent(getUserDataDir(), event);
+    sendJson(res, 200, { plugin: result.value });
+  } catch (err) {
+    const mapped = pluginErrorToResponse(err);
+    sendJson(res, mapped.status, mapped.body);
+  }
+}

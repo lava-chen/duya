@@ -59,6 +59,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [98-cli-channel-cron-message](./active/98-cli-channel-cron-message.md) | CLI Channel / Cron / Message + Command-Registration Refactor — 3 new domains (channel/cron/message) + descriptor-driven registry | P0 | Phase A 🟡, B–F 📋 |
 | [99-cli-split-and-control-plane](./active/99-cli-split-and-control-plane.md) | CLI Split — `packages/cli` workspace, Electron routes (channels/crons/messages), cron HTTP PATCH/DELETE contract, agent tool structured dispatcher, audit `invokedBy` tagging | P0 | Phases 0–9 ✅, canUseTool deferred to Plan 97 |
 | [102-duya-config-into-cli](./active/102-duya-config-into-cli.md) | Merge `duya_config` into `duya_cli` — single agent config entry, `duya config {provider,settings,vision,style,pairing}` + `duya mcp add/remove/assign`, retire `DuyaConfigTool` | P1 | Planning |
+| [200-cli-surface-expansion](./active/200-cli-surface-expansion.md) | CLI Surface Expansion — `duya update / backup / security` (openclaw-comparison) + polish existing (status / plugin / config / session / message / mcp / skill / channel / cron / gateway) | P1 | All phases ✅ |
 | [101-plugin-system-cleanup](./completed/101-plugin-system-cleanup.md) | Plugin System Cleanup & Runtime Wiring — 死代码清理 (`runtimeFactories` / `plugins/literature` / `PermissionService` override) + 接入路径修正 + capabilityCounts 派生 | P1 | Complete |
 
 ### Infrastructure & Architecture Plans

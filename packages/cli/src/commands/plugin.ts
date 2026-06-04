@@ -258,5 +258,96 @@ export const runPluginCommand = {
   enable: enablePlugin,
   disable: disablePlugin,
   doctor: doctorPlugins,
+  install: installPlugin,
+  uninstall: uninstallPlugin,
+  update: updatePlugin,
 };
+
+interface PluginWriteOk {
+  plugin?: PluginInfoItem;
+  id?: string;
+  removed?: boolean;
+}
+
+async function installPlugin(ctx: { options: { yes?: boolean; fromPath?: string; scope?: string }; format: OutputFormat }): Promise<number> {
+  if (ctx.options.yes !== true && !isInteractive()) {
+    process.stderr.write('interactive_required: plugin install requires --yes in non-interactive mode\n');
+    return 3;
+  }
+  const pluginId = (ctx as unknown as { args: string[] }).args[0];
+  const fromPath = typeof ctx.options.fromPath === 'string' ? ctx.options.fromPath : undefined;
+  if (!pluginId && !fromPath) {
+    process.stderr.write('usage: duya plugin install <id> [--from-path <dir>] [--scope user|system]\n');
+    return 64;
+  }
+  const correlationId = randomUUID();
+  try {
+    const client = await CliApiClient.connect();
+    const body = await client.post<PluginWriteOk>('/v1/plugins/install', {
+      pluginId,
+      fromPath,
+      scope: ctx.options.scope,
+    }, { correlationId });
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson(body) + '\n');
+    } else if (body.plugin) {
+      process.stdout.write(`Installed ${body.plugin.id} (${body.plugin.name}) v${body.plugin.version}\n`);
+    } else {
+      process.stdout.write('Installed.\n');
+    }
+    return 0;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
+async function uninstallPlugin(ctx: { options: { yes?: boolean; deleteData?: boolean }; args: string[]; format: OutputFormat }): Promise<number> {
+  if (ctx.options.yes !== true && !isInteractive()) {
+    process.stderr.write('interactive_required: plugin uninstall requires --yes in non-interactive mode\n');
+    return 3;
+  }
+  const id = ctx.args[0];
+  if (!id) {
+    process.stderr.write('usage: duya plugin uninstall <id> [--delete-data]\n');
+    return 64;
+  }
+  const correlationId = randomUUID();
+  try {
+    const client = await CliApiClient.connect();
+    const body = await client.post<PluginWriteOk>(`/v1/plugins/${encodeURIComponent(id)}/uninstall`, {
+      deleteData: ctx.options.deleteData === true,
+    }, { correlationId });
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson(body) + '\n');
+    } else {
+      process.stdout.write(`Uninstalled ${id}.\n`);
+    }
+    return 0;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
+async function updatePlugin(ctx: { args: string[]; format: OutputFormat }): Promise<number> {
+  const id = ctx.args[0];
+  if (!id) {
+    process.stderr.write('usage: duya plugin update <id>\n');
+    return 64;
+  }
+  const correlationId = randomUUID();
+  try {
+    const client = await CliApiClient.connect();
+    const body = await client.post<PluginWriteOk>(`/v1/plugins/${encodeURIComponent(id)}/update`, {}, { correlationId });
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson(body) + '\n');
+    } else if (body.plugin) {
+      process.stdout.write(`Updated ${body.plugin.id} → v${body.plugin.version}\n`);
+    } else {
+      process.stdout.write('Updated.\n');
+    }
+    return 0;
+  } catch (err) {
+    return reportError(err);
+  }
+}
 

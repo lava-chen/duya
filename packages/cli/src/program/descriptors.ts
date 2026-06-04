@@ -29,7 +29,26 @@ import {
   runSkillInfoCommand,
   runSkillListCommand,
 } from '../commands/skill.js';
-import { runStatusCommand } from '../commands/status.js';
+import { runStatusCommand, runStatusCommandCtx } from '../commands/status.js';
+import { runUpdateStatus, runUpdateCheck, runUpdateDownload, runUpdateInstall } from '../commands/update.js';
+import { runBackupPlan, runBackupCreate, runBackupVerify, runBackupRestore } from '../commands/backup.js';
+import { runSecurityAudit, runSecurityFix } from '../commands/security.js';
+import {
+  runMessageSend,
+  runMCPTest,
+  runSkillInstall,
+  runSkillUninstall,
+  runSkillSync,
+  runChannelTest,
+  runChannelSendTest,
+} from '../commands/extra.js';
+import {
+  runCronEnable,
+  runCronDisable,
+  runCronLogs,
+  runGatewayReloadSecrets,
+  runGatewayRpc,
+} from '../commands/extra2.js';
 import { runChannelCommand } from '../commands/channel.js';
 import { runCronCommand } from '../commands/cron.js';
 import { runMessageCommand } from '../commands/message.js';
@@ -50,6 +69,10 @@ import {
   runConfigStyleSet,
   runConfigVisionSet,
   runConfigVisionShow,
+  runConfigKvSet,
+  runConfigKvGet,
+  runConfigKvUnset,
+  runConfigValidate,
 } from '../commands/config.js';
 
 import {
@@ -128,7 +151,42 @@ function adaptPaginated(
 
 const subStatus: CliSubcommand = {
   description: 'Show the running DUYA desktop app status',
-  run: (ctx) => adaptLegacy(runStatusCommand as LegacyFn, [])(ctx),
+  options: [
+    { flags: '--watch', description: 'Poll every 2s; Ctrl+C to stop' },
+    { flags: '--interval <ms>', description: 'Watch interval in ms (default 2000; minimum 250)' },
+  ],
+  run: (ctx) => runStatusCommandCtx(ctx),
+};
+
+const subPluginInstall: CliSubcommand = {
+  description: 'Install a plugin from the catalog (or from a local path). Phase 7 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'id', required: false, description: 'Catalog plugin id (omit when --from-path is set)' }],
+  options: [
+    { flags: '--from-path <dir>', description: 'Install a plugin from a local directory' },
+    { flags: '--scope <scope>', description: 'Install scope: user | system (default user)' },
+    { flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' },
+  ],
+  run: async (ctx) => ok(await runPluginCommand.install(ctx as never)),
+};
+
+const subPluginUninstall: CliSubcommand = {
+  description: 'Uninstall a plugin. Phase 7 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Plugin id' }],
+  options: [
+    { flags: '--delete-data', description: 'Also delete the plugin data directory' },
+    { flags: '--yes', description: 'Skip confirmation prompt' },
+  ],
+  run: async (ctx) => ok(await runPluginCommand.uninstall(ctx as never)),
+};
+
+const subPluginUpdate: CliSubcommand = {
+  description: 'Update a plugin to the latest catalog version. Phase 7 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Plugin id' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
+  run: async (ctx) => ok(await runPluginCommand.update(ctx as never)),
 };
 
 const subPluginList: CliSubcommand = {
@@ -222,6 +280,30 @@ const subSkillDisable: CliSubcommand = {
   run: adaptWrite(runSkillDisableCommand as LegacyFn),
 };
 
+const subSkillInstall: CliSubcommand = {
+  description: 'Install a skill from a local directory. Plan 200 P4.3 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'id', required: false, description: 'Skill id (default: directory name)' }],
+  options: [
+    { flags: '--from-path <dir>', description: 'Path to a local skill directory' },
+    { flags: '--yes', description: 'Skip confirmation prompt' },
+  ],
+  run: (ctx) => runSkillInstall(ctx),
+};
+
+const subSkillUninstall: CliSubcommand = {
+  description: 'Uninstall a user-installed skill. Plan 200 P4.3 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Skill id' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
+  run: (ctx) => runSkillUninstall(ctx),
+};
+
+const subSkillSync: CliSubcommand = {
+  description: 'Re-sync bundled skills (matches what the auto-updater does). Plan 200 P4.3.',
+  run: (ctx) => runSkillSync(ctx),
+};
+
 const subMCPList: CliSubcommand = {
   description: 'List available MCP servers (id / name / source / enabled / connected)',
   run: (ctx) => adaptLegacy(runMCPListCommand as LegacyFn, [])(ctx),
@@ -271,6 +353,12 @@ const subMCPAssign: CliSubcommand = {
   run: (ctx) => runMCPAssignCommand(ctx),
 };
 
+const subMCPTest: CliSubcommand = {
+  description: 'Smoke-spawn an MCP server to verify it starts. Plan 200 P4.3.',
+  args: [{ name: 'name', required: true, description: 'MCP server name' }],
+  run: (ctx) => runMCPTest(ctx),
+};
+
 const subProviderList: CliSubcommand = {
   description: 'List configured providers (id / type / hasKey / isActive / model)',
   run: (ctx) => adaptLegacy(runProviderListCommand as LegacyFn, [])(ctx),
@@ -303,6 +391,19 @@ const subChannelStatus: CliSubcommand = {
   description: 'Show ChannelStatus snapshot (connected / lastError / streaming / toolProgress)',
   options: [{ flags: '--platform <platform>', description: 'Filter to a single platform' }],
   run: (ctx) => runChannelCommand.status(ctx),
+};
+
+const subChannelTest: CliSubcommand = {
+  description: 'Verify a channel id is well-formed. Plan 200 P4.3.',
+  args: [{ name: 'channelId', required: true, description: 'Channel id (platform:guild:channel form)' }],
+  run: (ctx) => runChannelTest(ctx),
+};
+
+const subChannelSendTest: CliSubcommand = {
+  description: 'Record a test-send against a channel (live send ships in Plan 200 R3). Plan 200 P4.3.',
+  args: [{ name: 'channelId', required: true, description: 'Channel id' }],
+  options: [{ flags: '--text <text>', description: 'Test message text (default "ping from duya cli")' }],
+  run: (ctx) => runChannelSendTest(ctx),
 };
 
 const subCronList: CliSubcommand = {
@@ -363,6 +464,41 @@ const subCronRuns: CliSubcommand = {
   run: (ctx) => runCronCommand.runs(ctx),
 };
 
+const subCronEnable: CliSubcommand = {
+  description: 'Enable a cron job. Plan 200 P4.4 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Cron job id' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
+  run: (ctx) => runCronEnable(ctx),
+};
+
+const subCronDisable: CliSubcommand = {
+  description: 'Disable a cron job. Plan 200 P4.4 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Cron job id' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
+  run: (ctx) => runCronDisable(ctx),
+};
+
+const subCronLogs: CliSubcommand = {
+  description: 'Show recent run logs for a cron job (Plan 200 P4.4).',
+  args: [{ name: 'id', required: true, description: 'Cron job id' }],
+  options: [{ flags: '--limit <n>', description: 'Page size (1–200, default 20)' }],
+  run: (ctx) => runCronLogs(ctx),
+};
+
+const subGatewayReloadSecrets: CliSubcommand = {
+  description: 'Reload the gateway secrets snapshot. Plan 200 P4.4 (full impl ships in R4).',
+  run: (ctx) => runGatewayReloadSecrets(ctx),
+};
+
+const subGatewayRpc: CliSubcommand = {
+  description: 'Generic JSON-RPC proxy to the gateway process. Plan 200 P4.4 (full impl ships in R4).',
+  args: [{ name: 'method', required: true, description: 'Method name' }],
+  options: [{ flags: '--params <json>', description: 'JSON params payload' }],
+  run: (ctx) => runGatewayRpc(ctx),
+};
+
 const subMessageList: CliSubcommand = {
   description: 'List messages in a session (id / role / msgType / createdAt / tokenUsage)',
   pagination: true,
@@ -383,6 +519,15 @@ const subMessageCount: CliSubcommand = {
   description: 'Get the message count for a session',
   args: [{ name: 'sessionId', required: true, description: 'Session id' }],
   run: (ctx) => runMessageCommand.count(ctx),
+};
+
+const subMessageSend: CliSubcommand = {
+  description: 'Append a user message to a session. Plan 200 P4.3.',
+  args: [
+    { name: 'sessionId', required: true, description: 'Session id' },
+    { name: 'content', required: true, description: 'Message text' },
+  ],
+  run: (ctx) => runMessageSend(ctx),
 };
 
 const subGatewayStatus: CliSubcommand = {
@@ -425,6 +570,79 @@ const subInstallCli: CliSubcommand = {
 const subUninstallCli: CliSubcommand = {
   description: 'Remove the `duya` wrapper script installed by `duya install-cli`',
   run: (ctx) => adaptLegacy(runUninstallCliCommand as LegacyFn, [])(ctx),
+};
+
+const subUpdateStatus: CliSubcommand = {
+  description: 'Show the current updater state (version / checking / downloading / available / progress / error)',
+  run: (ctx) => runUpdateStatus(ctx),
+};
+
+const subUpdateCheck: CliSubcommand = {
+  description: 'Kick off an update check; reports the latest available version',
+  run: (ctx) => runUpdateCheck(ctx),
+};
+
+const subUpdateDownload: CliSubcommand = {
+  description: 'Start downloading the latest update. Phase 7 write op; --yes required in non-TTY.',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => runUpdateDownload(ctx),
+};
+
+const subUpdateInstall: CliSubcommand = {
+  description: 'Quit the desktop app and install the downloaded update (app will restart). Phase 7 write op; --yes required in non-TTY.',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => runUpdateInstall(ctx),
+};
+
+const subBackupPlan: CliSubcommand = {
+  description: 'Preview which paths a backup would include (no writes)',
+  run: (ctx) => runBackupPlan(ctx),
+};
+
+const subBackupCreate: CliSubcommand = {
+  description: 'Create a new local backup archive. Phase 7 write op; --yes required in non-TTY.',
+  write: true,
+  options: [
+    { flags: '--output-dir <dir>', description: 'Directory to write the archive into (default: cwd)' },
+    { flags: '--include-workspace', description: 'Also include the configured workspace directory' },
+    { flags: '--only-config', description: 'Back up just the active config file (no DB, no sessions)' },
+    { flags: '--dry-run', description: 'Preview the plan without writing' },
+    { flags: '--verify', description: 'Verify the archive immediately after writing' },
+    { flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' },
+  ],
+  run: (ctx) => runBackupCreate(ctx),
+};
+
+const subBackupVerify: CliSubcommand = {
+  description: 'Verify an existing backup archive',
+  args: [{ name: 'archive', required: true, description: 'Path to the .tar.gz archive' }],
+  run: (ctx) => runBackupVerify(ctx),
+};
+
+const subBackupRestore: CliSubcommand = {
+  description: 'Restore from a backup archive. Phase 2 ships dry-run only; the live swap ships in Plan 200 R2.',
+  write: true,
+  args: [{ name: 'archive', required: true, description: 'Path to the .tar.gz archive' }],
+  options: [
+    { flags: '--dry-run', description: 'Plan only; do not touch userData' },
+    { flags: '--yes', description: 'Skip confirmation prompt' },
+  ],
+  run: (ctx) => runBackupRestore(ctx),
+};
+
+const subSecurityAudit: CliSubcommand = {
+  description: 'Run a read-only security audit on DUYA config + state. Exits 1 on high-severity findings for CI gates.',
+  options: [{ flags: '--deep', description: 'Run the deeper checks (filesystem perms, etc.)' }],
+  run: (ctx) => runSecurityAudit(ctx),
+};
+
+const subSecurityFix: CliSubcommand = {
+  description: 'Apply auto-fixes for security findings that support it. Phase 7 write op; --yes required in non-TTY.',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => runSecurityFix(ctx),
 };
 
 // ============================================================================
@@ -575,6 +793,73 @@ const subConfigPairingCheck: CliSubcommand = {
   run: (ctx) => runConfigPairingCheck(ctx),
 };
 
+const subConfigKvSet: CliSubcommand = {
+  description: 'Generic config KV set. Plan 200 P4 write op; merges --value into the top-level key.',
+  write: true,
+  args: [{ name: 'key', required: false, description: 'agentSettings | uiPreferences | visionSettings | outputStyles | apiProviders' }],
+  options: [
+    { flags: '--key <key>', description: 'Top-level config key (alternative to positional arg)' },
+    { flags: '--value <json>', description: 'JSON object to merge into the key' },
+    { flags: '--yes', description: 'Skip confirmation prompt' },
+  ],
+  run: (ctx) => runConfigKvSet(ctx),
+};
+
+const subConfigKvGet: CliSubcommand = {
+  description: 'Get the value at a top-level config key (returns JSON).',
+  args: [{ name: 'key', required: false, description: 'agentSettings | uiPreferences | visionSettings | outputStyles | apiProviders' }],
+  options: [{ flags: '--key <key>', description: 'Top-level config key (alternative to positional arg)' }],
+  run: (ctx) => runConfigKvGet(ctx),
+};
+
+const subConfigKvUnset: CliSubcommand = {
+  description: 'Unset a top-level config key (or a sub-path). Plan 200 P4 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'key', required: false, description: 'agentSettings | uiPreferences | visionSettings | outputStyles | apiProviders' }],
+  options: [
+    { flags: '--key <key>', description: 'Top-level config key (alternative to positional arg)' },
+    { flags: '--path <dot.path>', description: 'Sub-path under the key (e.g. visionSettings.model); omit to clear the whole key' },
+    { flags: '--yes', description: 'Skip confirmation prompt' },
+  ],
+  run: (ctx) => runConfigKvUnset(ctx),
+};
+
+const subConfigValidate: CliSubcommand = {
+  description: 'Validate a candidate config value without writing. Exits 1 on invalid.',
+  args: [{ name: 'key', required: false, description: 'agentSettings | uiPreferences | visionSettings | outputStyles | apiProviders' }],
+  options: [
+    { flags: '--key <key>', description: 'Top-level config key' },
+    { flags: '--value <json>', description: 'JSON object to validate' },
+  ],
+  run: (ctx) => runConfigValidate(ctx),
+};
+
+const subSessionSearch: CliSubcommand = {
+  description: 'Search top-level user-visible sessions by title (substring match)',
+  options: [
+    { flags: '--q <query>', description: 'Search query (alternative to positional arg)' },
+    { flags: '--limit <n>', description: 'Page size (1–100, default 20)' },
+    { flags: '--offset <n>', description: 'Page offset (≥ 0, default 0)' },
+  ],
+  run: async (ctx) => ok(await runSessionCommand.search(ctx as never)),
+};
+
+const subSessionExport: CliSubcommand = {
+  description: 'Export a session to JSON (default) or Markdown',
+  args: [{ name: 'id', required: true, description: 'Session id' }],
+  options: [
+    { flags: '--format <json|md>', description: 'Output format (default json)' },
+    { flags: '--output <path>', description: 'Write to this file instead of stdout' },
+  ],
+  run: async (ctx) => ok(await runSessionCommand.export(ctx as never)),
+};
+
+const subSessionImport: CliSubcommand = {
+  description: 'Import a previously exported session from a JSON file',
+  args: [{ name: 'file', required: true, description: 'Path to a JSON export' }],
+  run: async (ctx) => ok(await runSessionCommand.import(ctx as never)),
+};
+
 // ============================================================================
 // Top-level descriptors (frozen order — drives help output)
 // ============================================================================
@@ -587,10 +872,13 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'plugin',
-    description: 'Inspect and toggle installed plugins via the DUYA desktop app',
+    description: 'Inspect, install, update, and toggle installed plugins via the DUYA desktop app',
     subcommands: {
       list: subPluginList,
       info: subPluginInfo,
+      install: subPluginInstall,
+      uninstall: subPluginUninstall,
+      update: subPluginUpdate,
       enable: subPluginEnable,
       disable: subPluginDisable,
       doctor: subPluginDoctor,
@@ -598,8 +886,14 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'session',
-    description: 'Session management',
-    subcommands: { list: subSessionList, show: subSessionShow },
+    description: 'Session management (list / show / search / export / import)',
+    subcommands: {
+      list: subSessionList,
+      show: subSessionShow,
+      search: subSessionSearch,
+      export: subSessionExport,
+      import: subSessionImport,
+    },
   },
   {
     name: 'doctor',
@@ -608,23 +902,27 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'skill',
-    description: 'Inspect and toggle available skills',
+    description: 'Inspect, install, sync, and toggle available skills',
     subcommands: {
       list: subSkillList,
       info: subSkillInfo,
+      install: subSkillInstall,
+      uninstall: subSkillUninstall,
+      sync: subSkillSync,
       enable: subSkillEnable,
       disable: subSkillDisable,
     },
   },
   {
     name: 'mcp',
-    description: 'Inspect and manage MCP servers (Plan 102: add/remove/assign replaces `duya_config mcp_server_*`)',
+    description: 'Inspect and manage MCP servers (Plan 102: add/remove/assign + Plan 200 P4.3: test)',
     subcommands: {
       list: subMCPList,
       info: subMCPInfo,
       add: subMCPAdd,
       remove: subMCPRemove,
       assign: subMCPAssign,
+      test: subMCPTest,
     },
   },
   {
@@ -634,17 +932,19 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'channel',
-    description: 'Inspect gateway IM channels and platforms (telegram / qq / feishu)',
+    description: 'Inspect, test, and trigger gateway IM channels (telegram / qq / feishu)',
     subcommands: {
       list: subChannelList,
       info: subChannelInfo,
       platforms: subChannelPlatforms,
       status: subChannelStatus,
+      test: subChannelTest,
+      'send-test': subChannelSendTest,
     },
   },
   {
     name: 'cron',
-    description: 'Manage scheduled jobs (Phase 7 write surface for create/update/delete/run)',
+    description: 'Manage scheduled jobs (list / info / create / update / delete / run / enable / disable / runs / logs)',
     subcommands: {
       list: subCronList,
       info: subCronInfo,
@@ -652,22 +952,60 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       update: subCronUpdate,
       delete: subCronDelete,
       run: subCronRun,
+      enable: subCronEnable,
+      disable: subCronDisable,
       runs: subCronRuns,
+      logs: subCronLogs,
     },
   },
   {
     name: 'message',
-    description: 'Inspect messages within a session (read-only)',
-    subcommands: { list: subMessageList, show: subMessageShow, count: subMessageCount },
+    description: 'Inspect or append messages within a session',
+    subcommands: {
+      list: subMessageList,
+      show: subMessageShow,
+      count: subMessageCount,
+      send: subMessageSend,
+    },
   },
   {
     name: 'gateway',
-    description: 'Inspect and control the IM gateway subprocess (status / start / stop / restart)',
+    description: 'Inspect and control the IM gateway subprocess (status / start / stop / restart / reload-secrets / rpc)',
     subcommands: {
       status: subGatewayStatus,
       start: subGatewayStart,
       stop: subGatewayStop,
       restart: subGatewayRestart,
+      'reload-secrets': subGatewayReloadSecrets,
+      rpc: subGatewayRpc,
+    },
+  },
+  {
+    name: 'update',
+    description: 'Inspect and trigger the desktop app auto-updater (status / check / download / install)',
+    subcommands: {
+      status: subUpdateStatus,
+      check: subUpdateCheck,
+      download: subUpdateDownload,
+      install: subUpdateInstall,
+    },
+  },
+  {
+    name: 'backup',
+    description: 'Inspect and manage local backup archives (plan / create / verify / restore)',
+    subcommands: {
+      plan: subBackupPlan,
+      create: subBackupCreate,
+      verify: subBackupVerify,
+      restore: subBackupRestore,
+    },
+  },
+  {
+    name: 'security',
+    description: 'Read-only security audit + optional auto-fix (Plan 200 Phase 3)',
+    subcommands: {
+      audit: subSecurityAudit,
+      fix: subSecurityFix,
     },
   },
   {
@@ -705,6 +1043,11 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       'pairing-approve': subConfigPairingApprove,
       'pairing-revoke': subConfigPairingRevoke,
       'pairing-check': subConfigPairingCheck,
+      // Phase 4.2 — generic KV.
+      'kv-set': subConfigKvSet,
+      'kv-get': subConfigKvGet,
+      'kv-unset': subConfigKvUnset,
+      'validate': subConfigValidate,
     },
   },
   {
