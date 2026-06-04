@@ -1839,14 +1839,17 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
           });
           break;
 
-        case 'tool_result':
+        case 'tool_result': {
+          const trData = (event as { type: 'tool_result'; data: { id: string; result: string; duration_ms?: number } }).data;
           sendToMain({
             type: 'conductor:tool_result',
             sessionId: msg.sessionId,
-            id: (event as { type: 'tool_result'; data: { id: string } }).data.id,
-            result: (event as { type: 'tool_result'; data: { result: string } }).data.result,
+            id: trData.id,
+            result: trData.result,
+            duration_ms: trData.duration_ms,
           });
           break;
+        }
 
         case 'done':
           sendToMain({

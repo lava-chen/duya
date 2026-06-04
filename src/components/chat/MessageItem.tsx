@@ -672,13 +672,6 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
         {uniqueModified.length > 0 && <DiffSummary files={uniqueModified} />}
 
         <div className="flex items-center gap-2 mt-3 opacity-0 hover:opacity-100 transition-opacity">
-          {message.durationMs != null && message.durationMs > 0 && (
-            <span className="text-[11px] text-muted-foreground/60 tabular-nums">
-              {message.durationMs < 1000
-                ? `${message.durationMs}ms`
-                : `${(message.durationMs / 1000).toFixed(1)}s`}
-            </span>
-          )}
           <button
             onClick={copyToClipboard}
             className="p-1.5 rounded hover:bg-muted/50 transition-colors text-muted-foreground hover:text-foreground"

@@ -1484,6 +1484,7 @@ export class duyaAgent {
                       name: '',
                       result: toolResultContent,
                       error: toolResultError,
+                      duration_ms: result.message.duration_ms,
                     },
                   };
                 }

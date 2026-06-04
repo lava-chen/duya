@@ -343,6 +343,7 @@ export class AgentSSEClient {
           id: eventObj.id as string,
           result: eventObj.result,
           error: eventObj.error as string | undefined,
+          duration_ms: (eventObj as { duration_ms?: number }).duration_ms,
         });
         break;
       case 'tool_progress':
