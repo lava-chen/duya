@@ -115,13 +115,45 @@ const subStatus: CliSubcommand = {
 
 const subPluginList: CliSubcommand = {
   description: 'List installed plugins (id / name / version / enabled / capabilities / source)',
-  run: (ctx) => adaptLegacy(runPluginCommand.list as LegacyFn, [])(ctx),
+  options: [
+    { flags: '--enabled', description: 'Only show enabled plugins' },
+    { flags: '--verbose', description: 'Show detailed per-plugin blocks instead of a table' },
+  ],
+  run: async (ctx) => {
+    const code = await runPluginCommand.list({
+      enabled: ctx.options.enabled === true,
+      verbose: ctx.options.verbose === true,
+      format: ctx.format,
+    });
+    return ok(code);
+  },
 };
 
 const subPluginInfo: CliSubcommand = {
   description: 'Show details for one installed plugin (adds description + permissions)',
   args: [{ name: 'id', required: true, description: 'Plugin id (e.g. com.duya.literature)' }],
   run: (ctx) => adaptLegacy(runPluginCommand.info as LegacyFn, [0])(ctx),
+};
+
+const subPluginEnable: CliSubcommand = {
+  description: 'Enable a plugin (Phase 7 write op; restart desktop app to apply). GUI-only: install/remove/update are NOT exposed via CLI.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Plugin id' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation (required in non-interactive mode)' }],
+  run: adaptWrite(runPluginCommand.enable as LegacyFn),
+};
+
+const subPluginDisable: CliSubcommand = {
+  description: 'Disable a plugin (Phase 7 write op; restart desktop app to apply). GUI-only: install/remove/update are NOT exposed via CLI.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Plugin id' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation (required in non-interactive mode)' }],
+  run: adaptWrite(runPluginCommand.disable as LegacyFn),
+};
+
+const subPluginDoctor: CliSubcommand = {
+  description: 'Report plugin load / manifest / registry issues (subset of duya doctor)',
+  run: (ctx) => adaptLegacy(runPluginCommand.doctor as LegacyFn, [])(ctx),
 };
 
 const subSessionList: CliSubcommand = {
@@ -319,8 +351,14 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'plugin',
-    description: 'Inspect installed plugins via the DUYA desktop app',
-    subcommands: { list: subPluginList, info: subPluginInfo },
+    description: 'Inspect and toggle installed plugins via the DUYA desktop app',
+    subcommands: {
+      list: subPluginList,
+      info: subPluginInfo,
+      enable: subPluginEnable,
+      disable: subPluginDisable,
+      doctor: subPluginDoctor,
+    },
   },
   {
     name: 'session',

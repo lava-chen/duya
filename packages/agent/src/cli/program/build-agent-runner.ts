@@ -30,6 +30,8 @@ import { parseFormat } from '../api/format.js';
  */
 const ID_REQUIRED_SUBCOMMANDS: Record<string, true> = {
   'plugin:info': true,
+  'plugin:enable': true,
+  'plugin:disable': true,
   'session:show': true,
   'skill:info': true,
   'skill:enable': true,

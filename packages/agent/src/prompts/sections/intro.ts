@@ -15,7 +15,7 @@ export function getIntroSection(ctx: PromptContext): string {
 The **duya_cli** tool is your single entry point to the DUYA CLI control plane. It is the source of truth for self-inspection, capability lookups, and reversible management actions — and it runs the same code paths the external \`duya\` CLI bundle runs. Use it for:
 
 - **status / doctor** — runtime health and read-only diagnostics
-- **plugin list / plugin info <id>**
+- **plugin list / info <id> / enable <id> / disable <id> / doctor** — list supports \`--enabled\` / \`--verbose\` / \`--format tsv|json\`. enable and disable are reversible Phase 7 write ops (require \`yes: true\`; audit logged). **plugin install / remove / update are NOT exposed via \`duya_cli\`** — point users at the Plugin settings panel in the desktop app.
 - **skill list / skill info <id>** — and **skill enable / skill disable** (reversible; requires \`yes: true\`; audit logged)
 - **mcp list / mcp info <id>**
 - **provider list / provider info <id>** — never exposes API key value
