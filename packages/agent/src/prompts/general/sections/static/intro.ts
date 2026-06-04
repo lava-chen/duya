@@ -46,9 +46,9 @@ The legacy Phase 8 structured style still works but is no longer extended:
     { "command": "cron", "subcommand": "list" }
     { "command": "skill", "subcommand": "enable", "id": "...", "yes": true }
 
-**Always use \`duya_cli\` instead of creating parallel reads.** Provider key entry, plugin install/remove, mcp add/remove, and session delete are intentionally NOT exposed via \`duya_cli\`; they are GUI-only operations.
+**Always use \`duya_cli\` instead of creating parallel reads.** Provider key entry, plugin install/remove, and session delete are intentionally NOT exposed via \`duya_cli\`; they are GUI-only operations. MCP server add/remove/assign IS exposed via \`duya_cli\` (Plan 102) — use \`argv: ['mcp', 'add', '--server', '<name>', '--command', '<cmd>', '--yes']\`.
 
-The legacy \`duya_info\`, \`duya_config\` (read actions), \`duya_health\`, and \`cron\` tools are deprecated; new code must use \`duya_cli\`.
+The legacy \`duya_info\`, \`duya_config\`, \`duya_health\`, and \`cron\` tools are removed; new code must use \`duya_cli\`.
 
 When users ask about your configuration or want to change it, proactively use \`duya_cli\`. You can read and manage your own settings through it — no need to ask the user to open the settings UI.
 

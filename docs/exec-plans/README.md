@@ -56,6 +56,10 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [91-structured-error-handling](./active/91-structured-error-handling.md) | 结构化错误处理 — 28 种可区分联合类型 PluginError | P1 | Planning |
 | [92-plugin-security-enterprise-policy](./active/92-plugin-security-enterprise-policy.md) | 安全与企业策略 — Trust Level + 路径防护 + 权限执行 + Enterprise Policy | P0 | Planning |
 | [96-duya-cli-tool](./active/96-duya-cli-tool.md) | DUYA CLI — 统一命令行工具 (plugin / session / doctor / skill / provider / mcp / install-cli / agent integration) | P0 | Phases 0–8 Complete |
+| [98-cli-channel-cron-message](./active/98-cli-channel-cron-message.md) | CLI Channel / Cron / Message + Command-Registration Refactor — 3 new domains (channel/cron/message) + descriptor-driven registry | P0 | Phase A 🟡, B–F 📋 |
+| [99-cli-split-and-control-plane](./active/99-cli-split-and-control-plane.md) | CLI Split — `packages/cli` workspace, Electron routes (channels/crons/messages), cron HTTP PATCH/DELETE contract, agent tool structured dispatcher, audit `invokedBy` tagging | P0 | Phases 0–9 ✅, canUseTool deferred to Plan 97 |
+| [102-duya-config-into-cli](./active/102-duya-config-into-cli.md) | Merge `duya_config` into `duya_cli` — single agent config entry, `duya config {provider,settings,vision,style,pairing}` + `duya mcp add/remove/assign`, retire `DuyaConfigTool` | P1 | Planning |
+| [101-plugin-system-cleanup](./completed/101-plugin-system-cleanup.md) | Plugin System Cleanup & Runtime Wiring — 死代码清理 (`runtimeFactories` / `plugins/literature` / `PermissionService` override) + 接入路径修正 + capabilityCounts 派生 | P1 | Complete |
 
 ### Infrastructure & Architecture Plans
 
@@ -172,6 +176,10 @@ Moved here when finished. Each includes:
 | [52-deepseek-tui-feature-parity](./completed/52-deepseek-tui-feature-parity.md) | DeepSeek-TUI 功能对齐 | 2026-05-12 |
 | [53-agent-communication-architecture-v2](./completed/53-agent-communication-architecture-v2.md) | Agent 通信架构 V2 | 2026-05-16 |
 | [55-agent-directory-restructuring](./completed/55-agent-directory-restructuring.md) | Agent 目录结构重组 | 2026-05-16 |
+| [96-duya-cli-tool](./completed/96-duya-cli-tool.md) | DUYA CLI 工具 | 2026-06-04 |
+| [98-cli-channel-cron-message](./completed/98-cli-channel-cron-message.md) | CLI Channel / Cron / Message | 2026-06-04 |
+| [99-cli-split-and-control-plane](./completed/99-cli-split-and-control-plane.md) | CLI Split & Control Plane | 2026-06-04 |
+| [102-duya-config-into-cli](./completed/102-duya-config-into-cli.md) | Merge `duya_config` into `duya_cli` — single control-plane entry | 2026-06-04 |
 
 ## Tech Debt
 

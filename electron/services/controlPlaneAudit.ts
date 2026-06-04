@@ -21,13 +21,42 @@ export type AuditEventKind =
   | 'skill.enable'
   | 'skill.disable'
   | 'plugin.enable'
-  | 'plugin.disable';
+  | 'plugin.disable'
+  | 'cron.create'
+  | 'cron.update'
+  | 'cron.delete'
+  | 'cron.run'
+  | 'gateway.start'
+  | 'gateway.stop'
+  | 'gateway.restart'
+  // Plan 102 — `duya config` write ops. All reads (`config.*.show/list`)
+  // are intentionally NOT audited (matches the `duya plugin list` rule
+  // in Plan 99 §6.2).
+  | 'config.provider.add'
+  | 'config.provider.remove'
+  | 'config.provider.activate'
+  | 'config.settings.set'
+  | 'config.vision.set'
+  | 'config.style.set'
+  | 'config.pairing.approve'
+  | 'config.pairing.revoke'
+  // Plan 99 §3.3 Phase 7 + Plan 102 — `duya mcp` write ops.
+  | 'mcp.add'
+  | 'mcp.remove'
+  | 'mcp.assign';
 
 export interface AuditEvent {
   kind: AuditEventKind;
   id: string;
   ts: number;
-  invokedBy: 'cli';
+  /**
+   * Origin of the write op.
+   *   - 'cli' — external script invocation (`duya cron create ...`)
+   *   - 'agent-tool' — agent's `duya_cli` tool (no session context)
+   *   - 'agent-tool:{sessionId}' — agent's `duya_cli` tool, scoped
+   *     to a chat session. The session id is appended for traceability.
+   */
+  invokedBy: 'cli' | 'agent-tool' | `agent-tool:${string}`;
   correlationId?: string;
   /** Optional human-readable note; no secrets. */
   note?: string;

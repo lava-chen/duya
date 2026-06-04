@@ -29,10 +29,54 @@ import {
   parseQuery as parseSessionsQuery,
 } from './handlers/sessions.js';
 import { handleListSkills, handleGetSkill } from './handlers/skills.js';
-import { handleListMCPs, handleGetMCP } from './handlers/mcps.js';
+import { handleListMCPs, handleGetMCP, handleAddMCP, handleRemoveMCP, handleAssignMCP } from './handlers/mcps.js';
 import { handleListProviders, handleGetProvider, handleGetActiveProvider } from './handlers/providers.js';
 import { handleEnableSkill, handleDisableSkill } from './handlers/skillWrite.js';
 import { handleInstallCli, handleUninstallCli } from './handlers/install.js';
+import {
+  handleListConfigProviders,
+  handleGetConfigProvider,
+  handleAddConfigProvider,
+  handleRemoveConfigProvider,
+  handleActivateConfigProvider,
+  handleGetAgentSettings,
+  handleSetAgentSettings,
+  handleGetVisionSettings,
+  handleSetVisionSettings,
+  handleListOutputStyles,
+  handleSetOutputStyle,
+  handleListPairing,
+  handleApprovePairing,
+  handleRevokePairing,
+  handleCheckPairing,
+} from './handlers/config.js';
+import {
+  handleListChannels,
+  handleGetChannel,
+  handleListPlatforms,
+  handlePlatformStatus,
+} from './handlers/channels.js';
+import {
+  handleListCrons,
+  handleGetCron,
+  handleListCronRuns,
+  handleCreateCron,
+  handleUpdateCron,
+  handleDeleteCron,
+  handleRunCron,
+} from './handlers/crons.js';
+import {
+  handleListMessages,
+  handleGetMessage,
+  handleMessageCount,
+  parseListMessagesQuery,
+} from './handlers/messages.js';
+import {
+  handleGetGateway,
+  handleStartGateway,
+  handleStopGateway,
+  handleRestartGateway,
+} from './handlers/gateway.js';
 import { InvalidPaginationParam } from '../db/queries/sessions';
 import { getLogger } from '../logging/logger';
 
@@ -189,6 +233,260 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // POST /v1/uninstall-cli
   if (req.method === 'POST' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'uninstall-cli') {
     handleUninstallCli(req, res);
+    return;
+  }
+
+  // ============================================================================
+  // Plan 99 P3: channels / crons / messages handlers
+  // ============================================================================
+
+  // GET /v1/channels?platform=…
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'channels') {
+    const url = req.url ?? '/';
+    const qIdx = url.indexOf('?');
+    let platform: string | undefined;
+    if (qIdx >= 0) {
+      for (const part of url.slice(qIdx + 1).split('&')) {
+        const eq = part.indexOf('=');
+        const key = eq >= 0 ? part.slice(0, eq) : part;
+        const val = eq >= 0 ? part.slice(eq + 1) : '';
+        if (key === 'platform' && val) platform = decodeURIComponent(val);
+      }
+    }
+    handleListChannels(req, res, platform);
+    return;
+  }
+
+  // GET /v1/channels/:id
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'channels') {
+    handleGetChannel(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // GET /v1/platforms
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'platforms') {
+    handleListPlatforms(req, res);
+    return;
+  }
+
+  // GET /v1/platforms/:p/status
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'platforms' && parts[3] === 'status') {
+    handlePlatformStatus(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // GET /v1/platforms/status  (all platforms)
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'platforms' && parts[2] === 'status') {
+    handlePlatformStatus(req, res, undefined);
+    return;
+  }
+
+  // GET /v1/crons
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'crons') {
+    handleListCrons(req, res);
+    return;
+  }
+
+  // POST /v1/crons
+  if (req.method === 'POST' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'crons') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleCreateCron(req, res, correlationId);
+    return;
+  }
+
+  // GET /v1/crons/:id
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'crons') {
+    handleGetCron(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // PATCH /v1/crons/:id
+  if (req.method === 'PATCH' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'crons') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleUpdateCron(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // DELETE /v1/crons/:id
+  if (req.method === 'DELETE' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'crons') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleDeleteCron(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // POST /v1/crons/:id/run
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'crons' && parts[3] === 'run') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleRunCron(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // GET /v1/crons/:id/runs
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'crons' && parts[3] === 'runs') {
+    const query = parseSessionsQuery(req.url); // reuse generic {limit, offset} parser
+    handleListCronRuns(req, res, decodeURIComponent(parts[2]), query);
+    return;
+  }
+
+  // GET /v1/sessions/:id/messages
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'sessions' && parts[3] === 'messages') {
+    const query = parseListMessagesQuery(req.url);
+    handleListMessages(req, res, decodeURIComponent(parts[2]), query);
+    return;
+  }
+
+  // GET /v1/sessions/:id/messages/count
+  if (req.method === 'GET' && parts.length === 5 && parts[0] === 'v1' && parts[1] === 'sessions' && parts[3] === 'messages' && parts[4] === 'count') {
+    handleMessageCount(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // GET /v1/sessions/:id/messages/:msgId
+  if (req.method === 'GET' && parts.length === 5 && parts[0] === 'v1' && parts[1] === 'sessions' && parts[3] === 'messages') {
+    handleGetMessage(req, res, decodeURIComponent(parts[2]), decodeURIComponent(parts[4]));
+    return;
+  }
+
+  // ============================================================================
+  // Plan 99 G2: gateway lifecycle (status / start / stop / restart)
+  // ============================================================================
+
+  // GET /v1/gateway
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'gateway') {
+    handleGetGateway(req, res, startedAt);
+    return;
+  }
+
+  // POST /v1/gateway/start
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'gateway' && parts[2] === 'start') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleStartGateway(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/gateway/stop
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'gateway' && parts[2] === 'stop') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleStopGateway(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/gateway/restart
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'gateway' && parts[2] === 'restart') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleRestartGateway(req, res, correlationId);
+    return;
+  }
+
+  // ============================================================================
+  // Plan 102 — `duya config …` + `mcp add/remove/assign` routes
+  // ============================================================================
+
+  // GET /v1/config/providers
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'providers') {
+    handleListConfigProviders(req, res);
+    return;
+  }
+
+  // POST /v1/config/providers
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'providers') {
+    void handleAddConfigProvider(req, res);
+    return;
+  }
+
+  // GET /v1/config/providers/:id
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'providers') {
+    handleGetConfigProvider(req, res, decodeURIComponent(parts[3]));
+    return;
+  }
+
+  // DELETE /v1/config/providers/:id
+  if (req.method === 'DELETE' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'providers') {
+    void handleRemoveConfigProvider(req, res, decodeURIComponent(parts[3]));
+    return;
+  }
+
+  // POST /v1/config/providers/:id/activate
+  if (req.method === 'POST' && parts.length === 5 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'providers' && parts[4] === 'activate') {
+    void handleActivateConfigProvider(req, res, decodeURIComponent(parts[3]));
+    return;
+  }
+
+  // GET /v1/config/settings/agent
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'settings' && parts[3] === 'agent') {
+    handleGetAgentSettings(req, res);
+    return;
+  }
+
+  // PATCH /v1/config/settings/agent
+  if (req.method === 'PATCH' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'settings' && parts[3] === 'agent') {
+    void handleSetAgentSettings(req, res);
+    return;
+  }
+
+  // GET /v1/config/settings/vision
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'settings' && parts[3] === 'vision') {
+    handleGetVisionSettings(req, res);
+    return;
+  }
+
+  // PATCH /v1/config/settings/vision
+  if (req.method === 'PATCH' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'settings' && parts[3] === 'vision') {
+    void handleSetVisionSettings(req, res);
+    return;
+  }
+
+  // GET /v1/config/output-styles
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'output-styles') {
+    handleListOutputStyles(req, res);
+    return;
+  }
+
+  // POST /v1/config/output-styles
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'output-styles') {
+    void handleSetOutputStyle(req, res);
+    return;
+  }
+
+  // GET /v1/config/pairing
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing') {
+    handleListPairing(req, res);
+    return;
+  }
+
+  // POST /v1/config/pairing/approve
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing' && parts[3] === 'approve') {
+    void handleApprovePairing(req, res);
+    return;
+  }
+
+  // POST /v1/config/pairing/revoke
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing' && parts[3] === 'revoke') {
+    void handleRevokePairing(req, res);
+    return;
+  }
+
+  // GET /v1/config/pairing/check
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing' && parts[3] === 'check') {
+    handleCheckPairing(req, res);
+    return;
+  }
+
+  // POST /v1/mcps (Plan 99 §3.3 Phase 7 + Plan 102 — `mcp add`)
+  if (req.method === 'POST' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'mcps') {
+    void handleAddMCP(req, res);
+    return;
+  }
+
+  // DELETE /v1/mcps/:name (`mcp remove`)
+  if (req.method === 'DELETE' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'mcps') {
+    void handleRemoveMCP(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // PATCH /v1/mcps/:name (`mcp assign`)
+  if (req.method === 'PATCH' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'mcps') {
+    void handleAssignMCP(req, res, decodeURIComponent(parts[2]));
     return;
   }
 
