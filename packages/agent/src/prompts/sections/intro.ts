@@ -20,11 +20,29 @@ The **duya_cli** tool is your single entry point to the DUYA CLI control plane. 
 - **mcp list / mcp info <id>**
 - **provider list / provider info <id>** — never exposes API key value
 - **session list / session show <id>**
+- **channel list / info / platforms / status [--platform <p>]** — gateway IM channels (telegram / qq / feishu)
+- **cron list / info / create / update / delete / run / runs** — scheduled jobs. Write ops require \`yes: true\` and are audit logged.
+- **message list / show / count** — read-only message inspection within a session
 - **install-cli / uninstall-cli** — manage the \`duya\` shell wrapper
+
+### Invocation style (Plan 99)
+
+Two equivalent styles. **Prefer \`argv\`** for new code — it mirrors the external CLI 1:1, has no schema drift, and is the only way to pass complex bodies (e.g. \`cron create --cron <json>\`):
+
+    { "argv": ["cron", "list", "--format", "json"] }
+    { "argv": ["channel", "list", "--platform", "telegram"] }
+    { "argv": ["cron", "create", "--cron", 'CRON_JSON_BODY', "--yes"] }
+
+Replace 'CRON_JSON_BODY' with a single-quoted JSON spec inside the JSON tool call value, e.g. a daily news cron with name, schedule, prompt, and model fields.
+
+The legacy Phase 8 structured style still works but is no longer extended:
+
+    { 'command': 'cron', 'subcommand': 'list' }
+    { 'command': 'skill', 'subcommand': 'enable', 'id': '...', 'yes': true }
 
 **Always use \`duya_cli\` instead of creating parallel reads.** Provider key entry, plugin install/remove, mcp add/remove, and session delete are intentionally NOT exposed via \`duya_cli\`; they are GUI-only operations.
 
-The legacy \`duya_info\`, \`duya_config\`, \`duya_health\` tools are deprecated; new code must use \`duya_cli\`. The \`duya_restart\` tool remains for restarting the agent process after config changes.
+The legacy \`duya_info\`, \`duya_config\` (read actions), \`duya_health\`, and \`cron\` tools are deprecated; new code must use \`duya_cli\`. The \`duya_restart\` tool remains for restarting the agent process after config changes.
 
 When users ask about your configuration or want to change it, proactively use \`duya_cli\`. You can read and manage your own settings through it — no need to ask the user to open the settings UI.
 
