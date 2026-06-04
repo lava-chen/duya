@@ -15,8 +15,9 @@ import { CompactBoundary } from './CompactBoundary';
 import { CompactSummary } from './CompactSummary';
 import { useConversationStore } from '@/stores/conversation-store';
 import type { FileAttachment } from '@/types/message';
+import { useTranslation } from '@/hooks/useTranslation';
 
-function formatMessageTime(timestamp: number): string {
+function formatMessageTime(timestamp: number, t: (key: import('@/i18n').TranslationKey, params?: Record<string, string | number>) => string, locale: 'en' | 'zh' = 'en'): string {
   const date = new Date(timestamp);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -25,26 +26,36 @@ function formatMessageTime(timestamp: number): string {
   const oneWeekAgo = new Date(today);
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
-  const timeStr = date.toLocaleTimeString('en-US', {
+  // Locale-aware time formatting: zh uses 24-hour with 上午/下午, en uses 12-hour AM/PM.
+  const timeStr = date.toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', {
     hour: 'numeric',
     minute: '2-digit',
-    hour12: true,
+    hour12: locale !== 'zh',
   });
 
   if (date >= today) {
     return timeStr;
   } else if (date >= yesterday) {
-    return `Yesterday ${timeStr}`;
+    return t('time.formatWithYesterday', { label: t('time.yesterday'), time: timeStr });
   } else if (date >= oneWeekAgo) {
-    const weekday = date.toLocaleDateString('en-US', { weekday: 'long' });
-    return `${weekday} ${timeStr}`;
+    const weekdayIndex = date.getDay();
+    const weekdayKey = [
+      'time.weekdaySunday',
+      'time.weekdayMonday',
+      'time.weekdayTuesday',
+      'time.weekdayWednesday',
+      'time.weekdayThursday',
+      'time.weekdayFriday',
+      'time.weekdaySaturday',
+    ][weekdayIndex] as import('@/i18n').TranslationKey;
+    return t('time.formatWithYesterday', { label: t(weekdayKey), time: timeStr });
   } else {
-    const dateStr = date.toLocaleDateString('en-US', {
+    const dateStr = date.toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en-US', {
       year: 'numeric',
       month: 'numeric',
       day: 'numeric',
     });
-    return `${dateStr} ${timeStr}`;
+    return t('time.formatWithDate', { date: dateStr, time: timeStr });
   }
 }
 
@@ -122,6 +133,25 @@ function parseMessageContent(content: string | unknown[], msgType?: string): {
   }
 
   return { text, toolUses };
+}
+
+/**
+ * Extract plain Markdown text from a message's content (string or Anthropic-style
+ * content blocks). For arrays, joins all `text` blocks — used for clipboard copy
+ * so we never leak raw block JSON to the user.
+ */
+function extractMarkdownFromBlocks(content: string | unknown[]): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === 'text' && typeof b.text === 'string') {
+      parts.push(b.text);
+    }
+  }
+  return parts.join('');
 }
 
 function AssistantContent({
@@ -340,6 +370,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
   const [previewAttachment, setPreviewAttachment] = useState<FileAttachment | null>(null);
   const [previewPastedContent, setPreviewPastedContent] = useState<{ id: string; content: string; preview: string } | null>(null);
 
+  const { t, locale } = useTranslation();
   const isSubAgentSession = !!useConversationStore(s => s.parentSessionId);
 
   // Build tool result map for quick lookup
@@ -454,10 +485,21 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
 
   const copyToClipboard = async () => {
     try {
-      const copyContent = message.role === 'user' && message.displayContent !== undefined
-        ? message.displayContent
-        : message.content;
-      await navigator.clipboard.writeText(typeof copyContent === 'string' ? copyContent : JSON.stringify(copyContent, null, 2));
+      let copyContent: string;
+      if (message.role === 'user') {
+        const source = message.displayContent !== undefined ? message.displayContent : message.content;
+        copyContent = typeof source === 'string' ? source : extractMarkdownFromBlocks(source);
+      } else {
+        // Assistant: prefer the visible final text. If a round is still in
+        // progress (no finalText yet), fall back to joining the text blocks
+        // in content so we never leak raw JSON like [{"type":"text",...},...].
+        if (finalText && finalText.trim()) {
+          copyContent = finalText;
+        } else {
+          copyContent = extractMarkdownFromBlocks(message.content);
+        }
+      }
+      await navigator.clipboard.writeText(copyContent || '');
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* ignore */ }
@@ -596,7 +638,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
           )}
           <div className="flex justify-end items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <span className="text-[11px] text-muted-foreground/60 tabular-nums">
-              {formatMessageTime(message.timestamp)}
+              {formatMessageTime(message.timestamp, t, locale)}
             </span>
             <button
               onClick={copyToClipboard}
@@ -689,10 +731,13 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
 
         {uniqueModified.length > 0 && <DiffSummary files={uniqueModified} />}
 
-        <div className="flex items-center gap-2 mt-3 opacity-0 hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-2 mt-3">
+          <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+            {formatMessageTime(message.timestamp, t, locale)}
+          </span>
           <button
             onClick={copyToClipboard}
-            className="p-1.5 rounded hover:bg-muted/50 transition-colors text-muted-foreground hover:text-foreground"
+            className="p-1.5 rounded hover:bg-muted/50 transition-colors text-muted-foreground/60 hover:text-foreground"
             title="Copy message"
           >
             {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
