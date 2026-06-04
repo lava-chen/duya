@@ -14,6 +14,7 @@ import type {
   ResearchPersistedEvent,
   ResearchPersistedSource,
   ResearchReportArtifact,
+  ResearchEvidenceNodeSnapshot,
 } from '@/types/research';
 import type { PermissionRequestEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
@@ -463,6 +464,7 @@ function createInitialResearchState(sessionId: string): Omit<ResearchSessionStat
     persistedSources: [],
     persistedCitations: [],
     reportArtifact: null,
+    lastEvidenceChain: null,
   };
 }
 
@@ -1340,6 +1342,39 @@ class StreamSessionManager {
           this.handleResearchPlanStepsEvent(sessionId, event.data as { steps: Array<{ id: string; order: number; label: string }>; timestamp: number } | undefined);
           break;
 
+        case 'research_source_found':
+        case 'research_source_rejected':
+        case 'research_gap_detected':
+        case 'research_next_action':
+        case 'research_conflict_detected':
+        case 'research_stop_decision':
+        case 'plan_delta':
+          // These events are emitted by the orchestrator for transparency
+          // (debug panel / future UI surfaces) but currently have no
+          // dedicated snapshot field. Record them as activities so the
+          // research log is not silently empty when they fire.
+          this.handleResearchActivityEvent(sessionId, {
+            activityId: `${event.type}_${Date.now()}`,
+            kind: event.type,
+            title: this.formatResearchAuxEventTitle(event.type, event.data),
+            detail: typeof event.data === 'object' ? JSON.stringify(event.data).slice(0, 240) : undefined,
+            sequence: 0,
+            timestamp: Date.now(),
+          });
+          break;
+
+        case 'research_continue':
+          this.handleResearchContinueEvent(sessionId, event.data as { addedQuestions: ResearchPanelQuestion[]; coverageBefore: number; timestamp: number } | undefined);
+          break;
+
+        case 'research_evidence':
+          this.handleResearchEvidenceEvent(sessionId, event.data as { requestId: string; conclusion: string; chain: { evidenceNodes: Array<{ id: string; type: string; content: string; source?: string; supports: boolean; depth: number }>; confidence: number; reasoning: string }; timestamp: number } | undefined);
+          break;
+
+        case 'research_report':
+          this.handleResearchReportEvent(sessionId, event.data as { reportId: string; content: string; contextSnapshot: { questionCount: number; findingCount: number; coverage: number; entities: string[] }; availableActions?: string[]; timestamp: number } | undefined);
+          break;
+
         case 'agent_progress':
           this.handleAgentProgressEvent(sessionId, streamId, event.data as AgentProgressEvent | undefined);
           break;
@@ -1454,9 +1489,20 @@ class StreamSessionManager {
       s.phase = 'streaming';
       this.notifyPhaseListeners(sessionId, s.phase);
     } else if (s.phase === 'awaiting_permission') {
-      s.phase = 'streaming';
-      s.pendingPermissionRequest = null;
-      this.notifyPhaseListeners(sessionId, s.phase);
+      // B8: do NOT clear pendingPermissionRequest or change phase here.
+      // While we wait for the user to click allow/deny, the agent is
+      // blocked and should not be emitting text — but it sometimes does
+      // (status text, the LLM continuing to "think out loud" between
+      // tool calls, agent metadata messages). Touching `pendingPermissionRequest`
+      // here would silently drop the user's in-flight prompt and produce
+      // the "Permission denied by user" symptom (user clicks allow, but
+      // the local prompt is already gone, the click becomes a no-op or
+      // hits the phase-guard and the agent times out at 5min).
+      //
+      // The pending state should only be cleared by either:
+      //   1. a fresh chat:permission event (handled by handlePermissionEvent),
+      //   2. an explicit user resolve (respondedToPermission),
+      //   3. stream finalization (handleDoneEvent / handleErrorEvent).
     }
     s.streamingText += text;
     s.finalMessageContent = s.streamingText;
@@ -1510,10 +1556,15 @@ class StreamSessionManager {
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     // Skip if this tool_use was already loaded from DB on page refresh
     if (s.loadedToolUseIds.has(toolUse.id)) return;
+    // B8: do not clear pendingPermissionRequest or flip the phase on
+    // tool_use events while we are awaiting a user decision. The agent
+    // is blocked; any tool_use it emits before resolve is a stale
+    // streaming artifact and must not evict the in-flight prompt.
+    // (See handleTextEvent for the full rationale.)
     if (s.phase === 'awaiting_permission') {
-      s.phase = 'streaming';
-      s.pendingPermissionRequest = null;
-      this.notifyPhaseListeners(sessionId, s.phase);
+      // No-op: the next chat:permission event for the new tool will
+      // either replace the prompt (different id) or be deduplicated
+      // by usePermissions' lastSeenIdRef.
     }
     const info: ToolUseInfo = {
       id: toolUse.id,
@@ -1543,10 +1594,10 @@ class StreamSessionManager {
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     // Skip if this tool_result was already loaded from DB on page refresh
     if (s.loadedToolResultIds.has(result.tool_use_id)) return;
+    // B8: same rationale as handleToolUseEvent — do not touch
+    // pendingPermissionRequest or phase during the user's decision window.
     if (s.phase === 'awaiting_permission') {
-      s.phase = 'streaming';
-      s.pendingPermissionRequest = null;
-      this.notifyPhaseListeners(sessionId, s.phase);
+      // No-op.
     }
     const info: ToolResultInfo = {
       tool_use_id: result.tool_use_id,
@@ -1973,6 +2024,112 @@ class StreamSessionManager {
       completedAt: null,
     }));
     this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchContinueEvent(
+    sessionId: string,
+    data: { addedQuestions: ResearchPanelQuestion[]; coverageBefore: number; timestamp: number } | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    const existingIds = new Set(state.planQuestions.map((q) => q.id));
+    const fresh = data.addedQuestions.filter((q) => !existingIds.has(q.id));
+    if (fresh.length > 0) {
+      state.planQuestions = [...state.planQuestions, ...fresh];
+      state.questionCount = state.planQuestions.length;
+    }
+    this.pushResearchActivity(sessionId, {
+      kind: 'milestone',
+      title: 'Continuing research',
+      detail: `${fresh.length} new question${fresh.length === 1 ? '' : 's'} added.`,
+      timestamp: data.timestamp,
+    });
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchEvidenceEvent(
+    sessionId: string,
+    data: { requestId: string; conclusion: string; chain: { evidenceNodes: Array<{ id: string; type: string; content: string; source?: string; supports: boolean; depth: number }>; confidence: number; reasoning: string }; timestamp: number } | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    const allowedNodeTypes: ReadonlyArray<ResearchEvidenceNodeSnapshot['type']> = ['finding', 'question', 'inference'];
+    const evidenceNodes: ResearchEvidenceNodeSnapshot[] = data.chain.evidenceNodes.map((n) => ({
+      id: n.id,
+      type: (allowedNodeTypes as readonly string[]).includes(n.type)
+        ? (n.type as ResearchEvidenceNodeSnapshot['type'])
+        : 'finding',
+      content: n.content,
+      source: n.source,
+      supports: n.supports,
+      depth: n.depth,
+    }));
+    state.lastEvidenceChain = {
+      requestId: data.requestId,
+      conclusion: data.conclusion,
+      chain: {
+        evidenceNodes,
+        confidence: data.chain.confidence,
+        reasoning: data.chain.reasoning,
+      },
+      timestamp: data.timestamp,
+    };
+    this.pushResearchActivity(sessionId, {
+      kind: 'milestone',
+      title: 'Evidence chain computed',
+      detail: data.conclusion.slice(0, 140),
+      timestamp: data.timestamp,
+    });
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private handleResearchReportEvent(
+    sessionId: string,
+    data: { reportId: string; content: string; contextSnapshot: { questionCount: number; findingCount: number; coverage: number; entities: string[] }; availableActions?: string[]; timestamp: number } | undefined,
+  ): void {
+    if (!data) return;
+    const state = this.getOrCreateResearchState(sessionId);
+    state.reportArtifact = {
+      id: data.reportId,
+      title: state.originalQuery || 'Research report',
+      markdown: data.content,
+      outline_json: null,
+      source_ids_json: '[]',
+      citation_ids_json: '[]',
+      export_metadata_json: null,
+      updated_at: data.timestamp,
+    };
+    state.reportText = data.content;
+    state.summary = `Report ${data.reportId} ready (${data.contextSnapshot?.questionCount ?? 0} questions, ${data.contextSnapshot?.findingCount ?? 0} findings, ${Math.round((data.contextSnapshot?.coverage ?? 0) * 100)}% coverage)`;
+    state.stage = 'complete';
+    state.active = false;
+    state.completedAt = data.timestamp;
+    this.notifyResearchListeners(sessionId);
+  }
+
+  private formatResearchAuxEventTitle(type: string, data: unknown): string {
+    if (data && typeof data === 'object') {
+      const d = data as Record<string, unknown>;
+      switch (type) {
+        case 'research_source_found':
+          return `Source: ${typeof d.title === 'string' ? d.title : (d.url as string | undefined) || 'unknown'}`;
+        case 'research_source_rejected':
+          return `Source rejected: ${typeof d.reason === 'string' ? d.reason : 'unspecified'}`;
+        case 'research_gap_detected':
+          return 'Coverage gap detected';
+        case 'research_next_action':
+          return typeof d.action === 'string' ? `Next: ${d.action}` : 'Next action';
+        case 'research_conflict_detected':
+          return typeof d.description === 'string' ? `Conflict: ${d.description.slice(0, 80)}` : 'Conflict detected';
+        case 'research_stop_decision':
+          return 'Stop decision evaluated';
+        case 'plan_delta':
+          return 'Plan delta applied';
+        default:
+          return type;
+      }
+    }
+    return type;
   }
 
   private handlePermissionEvent(sessionId: string, streamId: string, data: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } | undefined): void {
@@ -2680,6 +2837,39 @@ class StreamSessionManager {
           break;
         case 'research_plan_steps':
           this.handleResearchPlanStepsEvent(sessionId, event.data as { steps: Array<{ id: string; order: number; label: string }>; timestamp: number } | undefined);
+          break;
+
+        case 'research_source_found':
+        case 'research_source_rejected':
+        case 'research_gap_detected':
+        case 'research_next_action':
+        case 'research_conflict_detected':
+        case 'research_stop_decision':
+        case 'plan_delta':
+          // These events are emitted by the orchestrator for transparency
+          // (debug panel / future UI surfaces) but currently have no
+          // dedicated snapshot field. Record them as activities so the
+          // research log is not silently empty when they fire.
+          this.handleResearchActivityEvent(sessionId, {
+            activityId: `${event.type}_${Date.now()}`,
+            kind: event.type,
+            title: this.formatResearchAuxEventTitle(event.type, event.data),
+            detail: typeof event.data === 'object' ? JSON.stringify(event.data).slice(0, 240) : undefined,
+            sequence: 0,
+            timestamp: Date.now(),
+          });
+          break;
+
+        case 'research_continue':
+          this.handleResearchContinueEvent(sessionId, event.data as { addedQuestions: ResearchPanelQuestion[]; coverageBefore: number; timestamp: number } | undefined);
+          break;
+
+        case 'research_evidence':
+          this.handleResearchEvidenceEvent(sessionId, event.data as { requestId: string; conclusion: string; chain: { evidenceNodes: Array<{ id: string; type: string; content: string; source?: string; supports: boolean; depth: number }>; confidence: number; reasoning: string }; timestamp: number } | undefined);
+          break;
+
+        case 'research_report':
+          this.handleResearchReportEvent(sessionId, event.data as { reportId: string; content: string; contextSnapshot: { questionCount: number; findingCount: number; coverage: number; entities: string[] }; availableActions?: string[]; timestamp: number } | undefined);
           break;
         case 'report_complete':
           state.stage = 'complete';

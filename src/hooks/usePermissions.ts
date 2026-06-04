@@ -130,10 +130,28 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
     [pendingPermission, onPermissionResolved, clearPermission, sessionId]
   );
 
+  // Track the last permission id we accepted. SSE reconnect and agent
+  // replay can deliver the same id twice; we must not reset the user's
+  // in-flight decision (waitingRef, permissionResolved) on a duplicate.
+  // When the active session changes, reset the ref so a new session's
+  // permission id is treated as a fresh prompt even if it happens to
+  // collide with a previous session's id.
+  const lastSeenIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    lastSeenIdRef.current = null;
+  }, [sessionId]);
+
   // Handle permission request events from SSE
   // This should be called by the stream subscription when a permission_request event arrives
   const handlePermissionRequest = useCallback((request: PermissionRequestEvent) => {
-    // Clear any existing permission state
+    if (lastSeenIdRef.current === request.id) {
+      // B5: same permission id replayed. Leave UI state alone so the
+      // user's in-progress decision is not clobbered. (The first POST in
+      // flight will reach the agent; the agent's B4 fix will idempotently
+      // resolve the entry.)
+      return;
+    }
+    lastSeenIdRef.current = request.id;
     setPendingPermission(request);
     setPermissionResolved(null);
     waitingRef.current = false;
@@ -164,14 +182,22 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
     }
   }, [permissionProfile, pendingPermission, permissionResolved, respondToPermission]);
 
-  // Dismiss stale permission prompt when session phase changes away from awaiting_permission
-  // (e.g. session completed while permission was still pending in UI)
+  // Dismiss stale permission prompt when session phase changes to a terminal
+  // state (e.g. session completed while permission was still pending in UI).
+  //
+  // CRITICAL: only clear when phase is *terminal* (completed/error/idle).
+  // During `starting`/`streaming`/`persisting` we leave the prompt alone —
+  // those transitions can be transient (the model resumed emitting text
+  // after we sent the decision, B8's fix prevents the manager itself
+  // from clearing state, but the phase subscriber can still see the
+  // notify and must not race against an in-flight user click).
   useEffect(() => {
     if (!sessionId) return;
 
+    const TERMINAL_PHASES = new Set(['completed', 'error', 'idle']);
     const unsub = subscribeToPhase(sessionId, (phase: string) => {
-      if (phase !== 'awaiting_permission' && pendingPermission && !waitingRef.current) {
-        console.log('[usePermissions] Phase changed to', phase, '- clearing stale permission');
+      if (TERMINAL_PHASES.has(phase) && pendingPermission && !waitingRef.current) {
+        console.log('[usePermissions] Phase terminal', phase, '- clearing stale permission');
         setPendingPermission(null);
         setPermissionResolved(null);
       }
