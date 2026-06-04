@@ -1,0 +1,32 @@
+/**
+ * AskUserQuestionTool — prompt / description
+ *
+ * LLM-facing description for the AskUserQuestion tool. Mirrors the
+ * structure used in claude-code-haha: a short DESCRIPTION (one-line
+ * summary for tool listings / auto-classifiers) and a longer
+ * ASK_USER_QUESTION_TOOL_PROMPT (usage rules appended to the system
+ * prompt so the model knows when and how to call the tool).
+ *
+ * Adapted from claude-code-haha's AskUserQuestionTool/prompt.ts.
+ */
+
+import { EXIT_PLAN_MODE_TOOL_NAME } from '../ExitPlanModeTool/constants.js';
+
+export { ASK_USER_QUESTION_TOOL_NAME, ASK_USER_QUESTION_TOOL_CHIP_WIDTH } from './constants.js';
+
+export const DESCRIPTION =
+  'Asks the user multiple choice questions to gather information, clarify ambiguity, understand preferences, make decisions or offer them choices.';
+
+export const ASK_USER_QUESTION_TOOL_PROMPT = `Use this tool when you need to ask the user questions during execution. This allows you to:
+1. Gather user preferences or requirements
+2. Clarify ambiguous instructions
+3. Get decisions on implementation choices as you work
+4. Offer choices to the user about what direction to take.
+
+Usage notes:
+- Users will always be able to select "Other" to provide custom text input
+- Use multiSelect: true to allow multiple answers to be selected for a question
+- If you recommend a specific option, place it first and add "(Recommended)" at the end of the label
+
+Plan mode note: In plan mode, use this tool to clarify requirements or choose between approaches BEFORE finalizing your plan. Do NOT use this tool to ask "Is my plan ready?" or "Should I proceed?" — use ${EXIT_PLAN_MODE_TOOL_NAME} for plan approval. IMPORTANT: Do not reference "the plan" in your questions (e.g., "Do you have feedback about the plan?", "Does the plan look good?") because the user cannot see the plan in the UI until you call ${EXIT_PLAN_MODE_TOOL_NAME}. If you need plan approval, use ${EXIT_PLAN_MODE_TOOL_NAME} instead.
+`;
