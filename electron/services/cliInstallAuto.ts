@@ -93,14 +93,17 @@ export async function installCliBestEffort(): Promise<InstallResult | null> {
 }
 
 function resolveBundledCli(): string | null {
+  // Plan 99: the CLI is a separate package. Production bundle lives
+  // at resources/cli-bundle/cli.cjs; dev fallback is
+  // packages/cli/bundle/cli.cjs.
   const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
   if (resourcesPath) {
-    const candidate = path.join(resourcesPath, 'agent-bundle', 'cli.cjs');
+    const candidate = path.join(resourcesPath, 'cli-bundle', 'cli.cjs');
     if (existsSync(candidate)) return candidate;
   }
   // Dev fallback
   const cwd = process.cwd();
-  const dev = path.join(cwd, 'packages', 'agent', 'bundle', 'cli.cjs');
+  const dev = path.join(cwd, 'packages', 'cli', 'bundle', 'cli.cjs');
   if (existsSync(dev)) return dev;
   return null;
 }

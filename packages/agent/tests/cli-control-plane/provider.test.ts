@@ -45,7 +45,7 @@ interface ProviderResult {
 }
 
 function runProvider(args: string[], env: string): ProviderResult {
-  const cliBundle = join(projectRoot, 'packages', 'agent', 'bundle', 'cli.cjs');
+  const cliBundle = join(projectRoot, 'packages', 'cli', 'bundle', 'cli.cjs');
   const result = spawnSync(NODE_BIN, [cliBundle, 'provider', ...args], {
     cwd: projectRoot,
     env: { ...process.env, ...parseEnv(env) },

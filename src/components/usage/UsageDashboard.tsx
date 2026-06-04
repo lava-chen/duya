@@ -8,7 +8,9 @@ import { DailyTokenChart } from './DailyTokenChart';
 import { CostBreakdownBar } from './CostBreakdownBar';
 import { UsageHeatmap } from './UsageHeatmap';
 import { SessionList } from './SessionList';
-import { BarChart3, RefreshCw, Download } from 'lucide-react';
+import { ProviderQuotaView } from './ProviderQuotaView';
+import { ChartBarIcon, ArrowUpRightIcon } from '@/components/icons';
+import { BarChart3, Download } from 'lucide-react';
 
 export const UsageDashboard: React.FC = () => {
   const { t } = useTranslation();
@@ -16,6 +18,7 @@ export const UsageDashboard: React.FC = () => {
   const messages = useConversationStore((s) => s.messages);
   const [filters, setFilters] = useState<UsageFilters>({});
   const [isExporting, setIsExporting] = useState(false);
+  const [view, setView] = useState<'stats' | 'quota'>('stats');
 
   const metrics = useUsageData({ messages, threads, filters });
 
@@ -56,6 +59,10 @@ export const UsageDashboard: React.FC = () => {
 
   const hasData = metrics.aggregates.messages.total > 0;
 
+  if (view === 'quota') {
+    return <ProviderQuotaView onBack={() => setView('stats')} />;
+  }
+
   return (
     <div className="w-full max-w-6xl mx-auto space-y-6">
       {/* Header */}
@@ -92,6 +99,24 @@ export const UsageDashboard: React.FC = () => {
         <>
           {/* Summary Stats */}
           <UsageSummaryGrid metrics={metrics} />
+
+          {/* Provider Quota Entry */}
+          <button
+            type="button"
+            onClick={() => setView('quota')}
+            className="w-full group flex items-center gap-4 p-4 rounded-xl border border-dashed border-[var(--border)] bg-gradient-to-r from-[var(--surface)] to-[var(--bg-canvas)] hover:border-[var(--accent-soft)] hover:from-[var(--accent)]/5 transition-all duration-200 text-left"
+          >
+            <div className="shrink-0 w-10 h-10 rounded-lg bg-[var(--accent)]/10 text-[var(--accent)] flex items-center justify-center group-hover:scale-105 transition-transform">
+              <ChartBarIcon size={20} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-[var(--text)]">服务商限额</div>
+              <div className="text-xs text-[var(--muted)] mt-0.5">
+                查看已连接服务商的配额用量与重置时间
+              </div>
+            </div>
+            <ArrowUpRightIcon size={16} className="text-[var(--muted)] group-hover:text-[var(--accent)] transition-colors" />
+          </button>
 
           {/* Charts Row */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

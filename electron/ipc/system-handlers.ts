@@ -88,22 +88,96 @@ export function registerSystemHandlers(): void {
   });
 
   // Notification handler
-  ipcMain.handle('notification:show', async (_event, options: { title: string; body: string; sessionId?: string }) => {
-    if (!options || typeof options.title !== 'string' || options.title.length === 0 || options.title.length > 500) {
-      return false;
-    }
-    try {
-      const notification = new Notification({
-        title: options.title,
-        body: typeof options.body === 'string' ? options.body.slice(0, 2000) : '',
-      });
+  //
+  // payload: { title, body, sessionId?, type?, actions?, replyPlaceholder?,
+  //            permissionId?, toolName? }
+  // - type 'message' (default): generic notification (e.g. message completed).
+  // - type 'permission': permission request — renderer forwards the user's
+  //   allow/deny decision via notification:action.
+  // - actions: at most 2 entries (Electron / OS limits). Each triggers a
+  //   'action' event that is forwarded to the renderer as
+  //   'notification:action'. On macOS, the special reply action id
+  //   '__reply' surfaces the user's text via payload.reply when the
+  //   'reply' event fires.
+  ipcMain.handle(
+    'notification:show',
+    async (
+      _event,
+      options: {
+        title: string;
+        body: string;
+        sessionId?: string;
+        type?: 'message' | 'permission';
+        actions?: { id: string; label: string }[];
+        replyPlaceholder?: string;
+        permissionId?: string;
+        toolName?: string;
+      },
+    ) => {
+      if (!options || typeof options.title !== 'string' || options.title.length === 0 || options.title.length > 500) {
+        return false;
+      }
+      try {
+        const actionList = Array.isArray(options.actions)
+          ? options.actions
+              .filter(
+                (a): a is { id: string; label: string } =>
+                  !!a &&
+                  typeof a.id === 'string' &&
+                  a.id.length > 0 &&
+                  a.id.length <= 64 &&
+                  typeof a.label === 'string' &&
+                  a.label.length > 0 &&
+                  a.label.length <= 64,
+              )
+              .slice(0, 2)
+          : undefined;
 
-      // Handle click to navigate to session
-      if (options.sessionId) {
-        notification.onclick = () => {
+        // Build the Electron Notification. hasReply enables the inline
+        // reply text field on macOS — the text is delivered via the
+        // 'reply' event rather than 'action'.
+        const notification = new Notification({
+          title: options.title,
+          body: typeof options.body === 'string' ? options.body.slice(0, 2000) : '',
+          ...(actionList && actionList.length > 0 ? { actions: actionList } : {}),
+          ...(options.replyPlaceholder
+            ? { hasReply: true, replyPlaceholder: options.replyPlaceholder.slice(0, 200) }
+            : {}),
+        });
+
+        const broadcastAction = (action: {
+          actionId: string;
+          reply?: string;
+        }) => {
+          const mainWindow = getMainWindow();
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          mainWindow.webContents.send('notification:action', {
+            sessionId: options.sessionId,
+            type: options.type ?? 'message',
+            permissionId: options.permissionId,
+            toolName: options.toolName,
+            ...action,
+          });
+        };
+
+        notification.on('action', (_event, index) => {
+          const action = actionList?.[index];
+          if (action) {
+            broadcastAction({ actionId: action.id });
+            notification.close();
+          }
+        });
+
+        notification.on('reply', (_event, reply) => {
+          // macOS only. Treat the typed reply as the synthetic '__reply' action.
+          broadcastAction({ actionId: '__reply', reply: String(reply ?? '').slice(0, 4000) });
+          notification.close();
+        });
+
+        // Handle click to navigate to session (existing behavior).
+        notification.on('click', () => {
           const mainWindow = getMainWindow();
           if (mainWindow && !mainWindow.isDestroyed()) {
-            // Show and focus the window
             if (!mainWindow.isVisible()) {
               mainWindow.show();
             }
@@ -111,20 +185,19 @@ export function registerSystemHandlers(): void {
               mainWindow.restore();
             }
             mainWindow.focus();
-            // Send session ID to renderer for navigation
             mainWindow.webContents.send('notification:clicked', { sessionId: options.sessionId });
           }
-        };
-      }
+        });
 
-      notification.show();
-      return true;
-    } catch (err) {
-      const logger = getLogger();
-      logger.error('Failed to show notification', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Notification);
-      return false;
-    }
-  });
+        notification.show();
+        return true;
+      } catch (err) {
+        const logger = getLogger();
+        logger.error('Failed to show notification', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Notification);
+        return false;
+      }
+    },
+  );
 
   // App info handlers
   ipcMain.handle('app:get-version', () => app.getVersion());

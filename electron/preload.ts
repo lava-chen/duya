@@ -223,6 +223,27 @@ export interface NetAPI {
       suggestion?: string
     }
   }>
+  getProviderUsage: (body: {
+    provider_type?: string
+    base_url?: string
+    api_key?: string
+  }) => Promise<{
+    success: boolean
+    plan?: string
+    quotas?: Record<string, {
+      used: number
+      total: number
+      remaining: number
+      remainingPercentage: number
+      resetAt: string | null
+      unlimited: boolean
+    }>
+    message?: string
+    error?: {
+      code: string
+      message: string
+    }
+  }>
   getOllamaModels: (baseUrl: string) => Promise<{
     success: boolean
     models?: Array<{ id: string; name: string; size?: number; modified_at?: string }>
@@ -665,9 +686,26 @@ export interface ElectronAPI {
     openExternal: (url: string) => Promise<string>
   }
   notification: {
-    show: (options: { title: string; body: string; sessionId?: string }) => Promise<boolean>
+    show: (options: {
+      title: string
+      body: string
+      sessionId?: string
+      type?: 'message' | 'permission'
+      actions?: { id: string; label: string }[]
+      replyPlaceholder?: string
+      permissionId?: string
+      toolName?: string
+    }) => Promise<boolean>
   }
-  onNotificationClicked: (callback: (data: { sessionId: string }) => void) => () => void
+  onNotificationClicked: (callback: (data: { sessionId?: string }) => void) => () => void
+  onNotificationAction: (callback: (data: {
+    sessionId?: string
+    type: 'message' | 'permission'
+    permissionId?: string
+    toolName?: string
+    actionId: string
+    reply?: string
+  }) => void) => () => void
   app: {
     getVersion: () => Promise<string>
     quit: () => Promise<void>
@@ -1209,11 +1247,35 @@ const electronAPI: ElectronAPI = {
   notification: {
     show: (options) => ipcRenderer.invoke('notification:show', options),
   },
-  onNotificationClicked: (callback: (data: { sessionId: string }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string }) => callback(data);
+  onNotificationClicked: (callback: (data: { sessionId?: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { sessionId?: string }) => callback(data);
     ipcRenderer.on('notification:clicked', handler);
     return () => {
       ipcRenderer.removeListener('notification:clicked', handler);
+    };
+  },
+  onNotificationAction: (callback: (data: {
+    sessionId?: string
+    type: 'message' | 'permission'
+    permissionId?: string
+    toolName?: string
+    actionId: string
+    reply?: string
+  }) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: {
+        sessionId?: string
+        type: 'message' | 'permission'
+        permissionId?: string
+        toolName?: string
+        actionId: string
+        reply?: string
+      },
+    ) => callback(data);
+    ipcRenderer.on('notification:action', handler);
+    return () => {
+      ipcRenderer.removeListener('notification:action', handler);
     };
   },
   app: {
@@ -1398,6 +1460,7 @@ const electronAPI: ElectronAPI = {
   },
   net: {
     testProvider: (body) => ipcRenderer.invoke('net:provider:test', body),
+    getProviderUsage: (body) => ipcRenderer.invoke('net:provider:usage', body),
     getOllamaModels: (baseUrl: string) => ipcRenderer.invoke('net:ollama:models', baseUrl),
     testBridgeChannel: (channel) => ipcRenderer.invoke('net:bridge:test', channel),
     weixinQrStart: () => ipcRenderer.invoke('net:weixin:qr:start'),

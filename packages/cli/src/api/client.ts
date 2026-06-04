@@ -89,6 +89,30 @@ export class CliApiClient {
   }
 
   /**
+   * PATCH request for partial updates (e.g. Plan 99 P2: cron update).
+   * Adds `X-Correlation-Id` header from `opts.correlationId`. On 401,
+   * re-reads runtime file once and retries.
+   */
+  async patch<T = unknown>(
+    path: string,
+    body: unknown,
+    opts: RequestOptions & { correlationId?: string } = {},
+  ): Promise<T> {
+    return this.requestWithBody<T>('PATCH', path, body, opts);
+  }
+
+  /**
+   * DELETE request (e.g. Plan 99 P2: cron delete). On 401, re-reads
+   * runtime file once and retries.
+   */
+  async delete<T = unknown>(
+    path: string,
+    opts: RequestOptions & { correlationId?: string } = {},
+  ): Promise<T> {
+    return this.requestWithBody<T>('DELETE', path, undefined, opts);
+  }
+
+  /**
    * POST request for write operations. Adds `X-Correlation-Id`
    * header from `opts.correlationId`. On 401, re-reads runtime
    * file once and retries.
@@ -98,16 +122,34 @@ export class CliApiClient {
     body: unknown,
     opts: RequestOptions & { correlationId?: string } = {},
   ): Promise<T> {
+    return this.requestWithBody<T>('POST', path, body, opts);
+  }
+
+  private async requestWithBody<T = unknown>(
+    method: 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    body: unknown,
+    opts: RequestOptions & { correlationId?: string; invokedBy?: 'cli' | 'agent-tool' | `agent-tool:${string}` } = {},
+  ): Promise<T> {
     const url = (opts.baseUrlOverride ?? this.baseUrl ?? '') + path;
     const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (opts.correlationId) headers['X-Correlation-Id'] = opts.correlationId;
+    // Plan 99 G2: signal the audit log's invokedBy. The desktop
+    // handler reads this header and stamps the audit event
+    // accordingly. Omitted when not provided (the handler defaults
+    // to 'cli').
+    if (opts.invokedBy) headers['X-Duya-Invoked-By'] = opts.invokedBy;
 
-    let res = await this.sendWithBody(
+    const bodyText = body !== undefined ? JSON.stringify(body) : undefined;
+
+    let res = await this.sendMethod(
+      method,
       url,
       this.token ?? '',
       timeoutMs,
-      JSON.stringify(body),
+      bodyText,
       headers,
     );
     if (res.status === 401) {
@@ -115,11 +157,12 @@ export class CliApiClient {
       if (lookup.kind === 'ok') {
         this.token = lookup.runtime.token;
         this.baseUrl = `http://127.0.0.1:${lookup.runtime.port}`;
-        res = await this.sendWithBody(
+        res = await this.sendMethod(
+          method,
           this.baseUrl + path,
           this.token,
           timeoutMs,
-          JSON.stringify(body),
+          bodyText,
           headers,
         );
       }
@@ -216,54 +259,31 @@ export class CliApiClient {
     token: string,
     timeoutMs: number,
   ): Promise<{ status: number; body: string; rawError?: string }> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-        },
-        signal: controller.signal,
-      });
-      const body = await res.text();
-      return { status: res.status, body };
-    } catch (err) {
-      const name = (err as { name?: string }).name;
-      if (name === 'AbortError') {
-        return { status: 0, body: '', rawError: 'timeout' };
-      }
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EHOSTUNREACH') {
-        return { status: 0, body: '', rawError: 'connection_refused' };
-      }
-      return { status: 0, body: '', rawError: err instanceof Error ? err.message : String(err) };
-    } finally {
-      clearTimeout(timer);
-    }
+    return this.sendMethod('GET', url, token, timeoutMs);
   }
 
-  private async sendWithBody(
+  private async sendMethod(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     url: string,
     token: string,
     timeoutMs: number,
-    bodyText: string,
-    extraHeaders: Record<string, string>,
+    bodyText?: string,
+    extraHeaders?: Record<string, string>,
   ): Promise<{ status: number; body: string; rawError?: string }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, {
-        method: 'POST',
+      const init: RequestInit = {
+        method,
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
-          ...extraHeaders,
+          ...(extraHeaders ?? {}),
         },
-        body: bodyText,
         signal: controller.signal,
-      });
+      };
+      if (bodyText !== undefined) init.body = bodyText;
+      const res = await fetch(url, init);
       const body = await res.text();
       return { status: res.status, body };
     } catch (err) {

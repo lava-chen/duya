@@ -28,6 +28,7 @@ import {
   getJsonSetting,
   setJsonSetting,
 } from '../db/queries/settings';
+import { emitGatewayConfigChanged } from '../gateway/config-events';
 
 const BROWSER_EXTENSION_ALLOWED_IDS_KEY = 'browserExtensionAllowedIds';
 let allowedExtensionIdsLoaded = false;
@@ -244,6 +245,7 @@ export function registerSettingsHandlers(): void {
   ipcMain.handle('settings:set-gateway-proxy-config', async (_event, config: GatewayProxyConfig) => {
     try {
       setGatewayProxyConfig(config);
+      emitGatewayConfigChanged('settings:set-gateway-proxy-config');
       return { success: true };
     } catch (error) {
       const logger = getLogger();

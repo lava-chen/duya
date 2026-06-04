@@ -5,6 +5,8 @@ import { buildReceiverSrcdoc, sanitizeForStreaming } from '@/lib/widget-sanitize
 import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from '@/lib/widget-css-bridge';
 import { CopyIcon, CheckIcon, DownloadSimpleIcon, SquaresFourIcon } from '@/components/icons';
 import { addChatWidgetToCanvas } from '@/lib/chat-widget-to-canvas';
+import { usePanel } from '@/hooks/usePanel';
+import { useConductorStore } from '@/stores/conductor-store';
 import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
 
 interface WidgetRendererProps {
@@ -75,6 +77,7 @@ function WidgetActions({
   const [addError, setAddError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const { setActiveTab } = usePanel();
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -113,13 +116,21 @@ function WidgetActions({
     try {
       setAdding(true);
       setAddError(null);
-      await addChatWidgetToCanvas({
+      const result = await addChatWidgetToCanvas({
         widgetCode: code,
         sourceMessageId,
         sourceLabel,
       });
       setAdded(true);
       setTimeout(() => setAdded(false), 2000);
+
+      // Open sidebar panel and switch to canvas tab
+      setActiveTab('canvas');
+
+      // Center on the newly added element after the panel opens
+      requestAnimationFrame(() => {
+        useConductorStore.getState().centerOnElement(result.elementId);
+      });
     } catch (error) {
       setAddError(error instanceof Error ? error.message : 'Add to canvas failed');
     } finally {

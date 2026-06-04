@@ -1986,9 +1986,17 @@ export class Orchestrator {
           ], requestId);
 
           if (answers.goal_confirm === 'cancel') {
-            // Revert additions on cancel
+            // Revert additions on cancel. Emit questions_obsoleted FIRST so
+            // the renderer's handleResearchQuestionsEvent removes the
+            // newly-added planQuestions — only emitting plan_delta leaves
+            // the orphaned entries visible in the UI.
+            const obsoletedQs: ResearchQuestion[] = [];
             for (const q of newQuestions) {
               this.context.markQuestionObsolete(q.id);
+              obsoletedQs.push(q);
+            }
+            if (obsoletedQs.length > 0) {
+              this.emit({ type: 'questions_obsoleted', questions: obsoletedQs });
             }
             // Emit cancellation delta
             const revertDelta: PlanDelta = {
@@ -2001,9 +2009,14 @@ export class Orchestrator {
             return;
           }
         } catch {
-          // Timeout: treat as cancel
+          // Timeout: treat as cancel. Same rollback path as explicit cancel.
+          const obsoletedQs: ResearchQuestion[] = [];
           for (const q of newQuestions) {
             this.context.markQuestionObsolete(q.id);
+            obsoletedQs.push(q);
+          }
+          if (obsoletedQs.length > 0) {
+            this.emit({ type: 'questions_obsoleted', questions: obsoletedQs });
           }
           return;
         }

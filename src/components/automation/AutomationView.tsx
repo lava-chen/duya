@@ -40,6 +40,7 @@ import { AutomationEmptyState } from './AutomationEmptyState';
 import { QuickCronChatModal } from './QuickCronChatModal';
 import { TemplateMarketModal } from './TemplateMarketModal';
 import { useConversationStore } from '@/stores/conversation-store';
+import { useTranslation } from '@/hooks/useTranslation';
 
 function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): string {
   const sections = [
@@ -91,7 +92,7 @@ function formatTime(value: number | null): string {
   return new Date(value).toLocaleString();
 }
 
-function formatRelativeTime(value: number | null): string {
+function formatRelativeTime(value: number | null, t: (key: 'automation.timeLaterShort' | 'automation.timeLaterMinutes' | 'automation.timeAgoShort' | 'automation.timeAgoMinutes', params?: Record<string, string | number>) => string): string {
   if (!value) return '-';
   const now = Date.now();
   const diff = value - now;
@@ -100,11 +101,11 @@ function formatRelativeTime(value: number | null): string {
   const minutes = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
 
   if (diff > 0) {
-    if (hours > 0) return `${hours}h ${minutes}m later`;
-    return `${minutes}m later`;
+    if (hours > 0) return t('automation.timeLaterShort', { hours, minutes });
+    return t('automation.timeLaterMinutes', { minutes });
   } else {
-    if (hours > 0) return `${hours}h ${minutes}m ago`;
-    return `${minutes}m ago`;
+    if (hours > 0) return t('automation.timeAgoShort', { hours, minutes });
+    return t('automation.timeAgoMinutes', { minutes });
   }
 }
 
@@ -127,21 +128,22 @@ function getScheduleDisplay(cron: AutomationCron): string {
   }
 }
 
-function getScheduleLabel(cron: AutomationCron): string {
+function getScheduleLabel(cron: AutomationCron, t: (key: 'automation.scheduleEvery' | 'automation.scheduleAt' | 'automation.scheduleUnknown') => string): string {
+  const everyPrefix = t('automation.scheduleEvery');
   switch (cron.schedule_kind) {
     case 'every': {
       const ms = cron.schedule_every_ms ?? 0;
-      if (ms >= 86400000) return `Every ${ms / 86400000}d`;
-      if (ms >= 3600000) return `Every ${ms / 3600000}h`;
-      if (ms >= 60000) return `Every ${ms / 60000}m`;
-      return `Every ${ms / 1000}s`;
+      if (ms >= 86400000) return `${everyPrefix} ${ms / 86400000}d`;
+      if (ms >= 3600000) return `${everyPrefix} ${ms / 3600000}h`;
+      if (ms >= 60000) return `${everyPrefix} ${ms / 60000}m`;
+      return `${everyPrefix} ${ms / 1000}s`;
     }
     case 'at':
-      return `Once at ${cron.schedule_at || '?'}`;
+      return `${t('automation.scheduleAt')} ${cron.schedule_at || '?'}`;
     case 'cron':
       return cron.schedule_cron_expr || '?';
     default:
-      return 'Unknown';
+      return t('automation.scheduleUnknown');
   }
 }
 
@@ -184,41 +186,42 @@ function parsePromptSteps(prompt: string): string[] {
 }
 
 // Mock capabilities based on prompt content
-function inferCapabilities(prompt: string): { name: string; available: boolean }[] {
+function inferCapabilities(prompt: string): { key: 'automation.capGit' | 'automation.capPRReview' | 'automation.capBrowser' | 'automation.capSearch'; available: boolean }[] {
   const p = prompt.toLowerCase();
   return [
-    { name: 'Git', available: p.includes('git') || p.includes('commit') || p.includes('pr') || p.includes('branch') },
-    { name: 'PR Review', available: p.includes('pr') || p.includes('pull request') || p.includes('review') },
-    { name: 'Browser', available: p.includes('browser') || p.includes('web') || p.includes('url') || p.includes('site') },
-    { name: 'Search', available: p.includes('search') || p.includes('find') || p.includes('lookup') },
+    { key: 'automation.capGit', available: p.includes('git') || p.includes('commit') || p.includes('pr') || p.includes('branch') },
+    { key: 'automation.capPRReview', available: p.includes('pr') || p.includes('pull request') || p.includes('review') },
+    { key: 'automation.capBrowser', available: p.includes('browser') || p.includes('web') || p.includes('url') || p.includes('site') },
+    { key: 'automation.capSearch', available: p.includes('search') || p.includes('find') || p.includes('lookup') },
   ];
 }
 
 // Mock execution graph based on prompt
-function buildExecutionGraph(prompt: string): { name: string; status: 'success' | 'failed' | 'pending' | 'running' }[] {
+function buildExecutionGraph(prompt: string): { key: 'automation.graphTrigger' | 'automation.graphGitCommit' | 'automation.capPRReview' | 'automation.graphSummarize' | 'automation.graphTodo' | 'automation.graphOutput'; status: 'success' | 'failed' | 'pending' | 'running' }[] {
   const p = prompt.toLowerCase();
-  const graph: { name: string; status: 'success' | 'failed' | 'pending' | 'running' }[] = [
-    { name: 'Trigger', status: 'success' },
+  const graph: { key: 'automation.graphTrigger' | 'automation.graphGitCommit' | 'automation.capPRReview' | 'automation.graphSummarize' | 'automation.graphTodo' | 'automation.graphOutput'; status: 'success' | 'failed' | 'pending' | 'running' }[] = [
+    { key: 'automation.graphTrigger', status: 'success' },
   ];
 
   if (p.includes('git') || p.includes('commit')) {
-    graph.push({ name: 'Git Commit Scan', status: 'success' });
+    graph.push({ key: 'automation.graphGitCommit', status: 'success' });
   }
   if (p.includes('pr') || p.includes('pull request')) {
-    graph.push({ name: 'PR Review', status: Math.random() > 0.5 ? 'success' : 'failed' });
+    graph.push({ key: 'automation.capPRReview', status: Math.random() > 0.5 ? 'success' : 'failed' });
   }
   if (p.includes('summarize') || p.includes('summary')) {
-    graph.push({ name: 'Summarize', status: 'success' });
+    graph.push({ key: 'automation.graphSummarize', status: 'success' });
   }
   if (p.includes('todo') || p.includes('task')) {
-    graph.push({ name: 'Todo Generation', status: 'pending' });
+    graph.push({ key: 'automation.graphTodo', status: 'pending' });
   }
-  graph.push({ name: 'Output', status: 'pending' });
+  graph.push({ key: 'automation.graphOutput', status: 'pending' });
 
   return graph;
 }
 
 export function AutomationView() {
+  const { t } = useTranslation();
   const hasElectronApi = typeof window !== 'undefined' && !!window.electronAPI?.automation;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -368,7 +371,7 @@ export function AutomationView() {
   useEffect(() => {
     if (!hasElectronApi) {
       setLoading(false);
-      setError('Automation is only available in Electron runtime.');
+      setError(t('automation.electronOnlyError'));
       return;
     }
     void (async () => {
@@ -428,7 +431,7 @@ export function AutomationView() {
     });
 
     if (!thread) {
-      setError('Unable to create chat session. Please open a workspace first from the Chat page.');
+      setError(t('automation.workspaceRequiredError'));
       return;
     }
 
@@ -511,7 +514,7 @@ export function AutomationView() {
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4">
-        <h2 className="automation-title-copernicus" style={{ color: 'var(--text)' }}>Automation</h2>
+        <h2 className="automation-title-copernicus" style={{ color: 'var(--text)' }}>{t('automation.title')}</h2>
         {!showEmptyState && (
         <div className="flex items-center gap-2">
           <button
@@ -534,7 +537,7 @@ export function AutomationView() {
             type="button"
           >
             <Plus size={16} weight="bold" />
-            New Automation
+            {t('automation.newAutomation')}
           </button>
 
           <button
@@ -550,7 +553,7 @@ export function AutomationView() {
             type="button"
           >
             <SquaresFour size={16} />
-            Templates
+            {t('automation.templates')}
           </button>
         </div>
         )}
@@ -581,12 +584,12 @@ export function AutomationView() {
               {loading ? (
                 <div className="flex items-center justify-center h-32" style={{ color: 'var(--muted)' }}>
                   <SpinnerGap size={20} className="animate-spin mr-2" />
-                  Loading...
+                  {t('automation.loading')}
                 </div>
               ) : crons.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-center p-4">
                   <Clock size={32} className="mb-2 opacity-30" style={{ color: 'var(--muted)' }} />
-                  <p className="text-sm" style={{ color: 'var(--muted)' }}>No automations yet</p>
+                  <p className="text-sm" style={{ color: 'var(--muted)' }}>{t('automation.noAutomations')}</p>
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -615,7 +618,7 @@ export function AutomationView() {
                       <div className="flex items-center gap-3 text-xs ml-5" style={{ color: 'var(--muted)' }}>
                         <span className="flex items-center gap-1">
                           <Timer size={11} />
-                          {getScheduleLabel(cron)}
+                          {getScheduleLabel(cron, t)}
                         </span>
                         <span className="flex items-center gap-1">
                           <Calendar size={11} />
@@ -680,8 +683,8 @@ export function AutomationView() {
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <p className="text-base font-medium mb-1" style={{ color: 'var(--text)' }}>Select an automation</p>
-                <p className="text-sm" style={{ color: 'var(--muted)' }}>Choose an automation from the list to view details and runs</p>
+                <p className="text-base font-medium mb-1" style={{ color: 'var(--text)' }}>{t('automation.selectAutomation')}</p>
+                <p className="text-sm" style={{ color: 'var(--muted)' }}>{t('automation.selectAutomationDesc')}</p>
               </div>
             )}
           </section>
@@ -734,6 +737,7 @@ interface CronEditorProps {
 }
 
 function CronEditor({ onSave, onCancel, saving, initialData, availableModels, modelsLoading }: CronEditorProps) {
+  const { t } = useTranslation();
   const [editor, setEditor] = useState<EditorState>(initialData || DEFAULT_EDITOR);
   const [modelError, setModelError] = useState<string | null>(null);
 
@@ -741,7 +745,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
     setModelError(null);
 
     if (!editor.model || !editor.model.trim()) {
-      setModelError('Please select a model');
+      setModelError(t('automation.modelRequired'));
       return;
     }
 
@@ -771,7 +775,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
     <>
       <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between" style={{ background: 'var(--surface)' }}>
         <h3 className="font-medium text-sm" style={{ color: 'var(--text)' }}>
-          {initialData?.id ? 'Edit Automation' : 'New Automation'}
+          {initialData?.id ? t('automation.editAutomation') : t('automation.newAutomation')}
         </h3>
         <button
           className="p-1.5 rounded-md transition-all duration-150"
@@ -788,7 +792,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           {/* Name & Description */}
           <div className="space-y-3">
             <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Name</label>
+              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.name')}</label>
               <input
                 className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
                 style={{
@@ -796,7 +800,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                   border: '1px solid var(--border)',
                   color: 'var(--text)',
                 }}
-                placeholder="Enter automation name"
+                placeholder={t('automation.namePlaceholder')}
                 value={editor.name}
                 onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
                 onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
@@ -804,7 +808,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
               />
             </div>
             <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Description</label>
+              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.description')}</label>
               <input
                 className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
                 style={{
@@ -812,7 +816,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                   border: '1px solid var(--border)',
                   color: 'var(--text)',
                 }}
-                placeholder="Optional description"
+                placeholder={t('automation.descriptionPlaceholder')}
                 value={editor.description}
                 onChange={(event) => setEditor((prev) => ({ ...prev, description: event.target.value }))}
                 onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
@@ -825,7 +829,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
             <div className="flex items-center gap-2 mb-3">
               <Robot size={14} style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>Model</span>
+              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.model')}</span>
               <span className="text-xs" style={{ color: 'var(--error)' }}>*</span>
             </div>
             <ModelSelector
@@ -842,7 +846,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
             )}
             {availableModels.length === 0 && !modelsLoading && (
               <div className="text-xs mt-2" style={{ color: 'var(--warning)' }}>
-                No models available. Please configure a provider with models first.
+                {t('automation.noModelsAvailable')}
               </div>
             )}
           </div>
@@ -851,7 +855,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
             <div className="flex items-center gap-2 mb-3">
               <Clock size={14} style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>Schedule</span>
+              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.schedule')}</span>
             </div>
             <div className="flex gap-2 mb-3">
               {(['every', 'at', 'cron'] as CronScheduleKind[]).map((kind) => (
@@ -883,7 +887,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
 
             {editor.scheduleKind === 'every' && (
               <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>Interval (milliseconds)</label>
+                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.intervalMs')}</label>
                 <input
                   className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
                   style={{
@@ -899,13 +903,13 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                   onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
                 />
                 <p className="text-xs mt-1.5" style={{ color: 'var(--muted)', opacity: 0.7 }}>
-                  Example: 60000 = 1 minute, 3600000 = 1 hour
+                  {t('automation.intervalMsHint')}
                 </p>
               </div>
             )}
             {editor.scheduleKind === 'at' && (
               <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>Date & Time (ISO format)</label>
+                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.dateTime')}</label>
                 <input
                   className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
                   style={{
@@ -924,7 +928,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
             {editor.scheduleKind === 'cron' && (
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>Cron Expression</label>
+                  <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.cronExpression')}</label>
                   <input
                     className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none font-mono"
                     style={{
@@ -939,11 +943,11 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                     onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
                   />
                   <p className="text-xs mt-1.5" style={{ color: 'var(--muted)', opacity: 0.7 }}>
-                    Format: minute hour day month weekday
+                    {t('automation.cronFormatHint')}
                   </p>
                 </div>
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>Timezone (optional)</label>
+                  <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.timezone')}</label>
                   <input
                     className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
                     style={{
@@ -951,7 +955,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                       border: '1px solid var(--border)',
                       color: 'var(--text)',
                     }}
-                    placeholder="e.g. Asia/Shanghai"
+                    placeholder={t('automation.timezonePlaceholder')}
                     value={editor.cronTz}
                     onChange={(event) => setEditor((prev) => ({ ...prev, cronTz: event.target.value }))}
                     onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
@@ -964,7 +968,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
 
           {/* Prompt Section */}
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Prompt</label>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.prompt')}</label>
             <textarea
               className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none resize-none"
               style={{
@@ -973,7 +977,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                 color: 'var(--text)',
                 minHeight: '80px',
               }}
-              placeholder="Enter the prompt to execute..."
+              placeholder={t('automation.promptPlaceholder')}
               value={editor.prompt}
               onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
@@ -983,7 +987,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
 
           {/* Input Params */}
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Input Parameters (JSON)</label>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.inputParams')}</label>
             <textarea
               className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none resize-none font-mono"
               style={{
@@ -1004,11 +1008,11 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
             <div className="flex items-center gap-2 mb-3">
               <SlidersHorizontal size={14} style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>Advanced Settings</span>
+              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.advancedSettings')}</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>Concurrency Policy</label>
+                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.concurrencyPolicy')}</label>
                 <select
                   className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none cursor-pointer"
                   style={{
@@ -1023,14 +1027,14 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                   onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
                   onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
                 >
-                  <option value="skip">Skip</option>
-                  <option value="parallel">Parallel</option>
-                  <option value="queue">Queue</option>
-                  <option value="replace">Replace</option>
+                  <option value="skip">{t('automation.concurrencySkip')}</option>
+                  <option value="parallel">{t('automation.concurrencyParallel')}</option>
+                  <option value="queue">{t('automation.concurrencyQueue')}</option>
+                  <option value="replace">{t('automation.concurrencyReplace')}</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>Max Retries</label>
+                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.maxRetries')}</label>
                 <input
                   className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
                   style={{
@@ -1071,7 +1075,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                   />
                 </div>
               </div>
-              <span className="text-xs">Enabled</span>
+              <span className="text-xs">{t('automation.enabled')}</span>
             </label>
           </div>
 
@@ -1103,10 +1107,10 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
               {saving ? (
                 <>
                   <SpinnerGap size={16} className="animate-spin" />
-                  Saving...
+                  {t('automation.saving')}
                 </>
               ) : (
-                <>{initialData?.id ? 'Save Changes' : 'Create Automation'}</>
+                <>{initialData?.id ? t('automation.saveChanges') : t('automation.createAutomation')}</>
               )}
             </button>
             <button
@@ -1121,7 +1125,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
             >
-              Cancel
+              {t('automation.cancel')}
             </button>
           </div>
         </div>
@@ -1146,6 +1150,7 @@ interface CronDetailProps {
 }
 
 function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelete, onUpdate, saving, onViewSession, successRate, last7Days }: CronDetailProps) {
+  const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [showAllRuns, setShowAllRuns] = useState(false);
 
@@ -1222,7 +1227,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
           >
             <Play size={12} weight="fill" />
-            Run Now
+            {t('automation.runNow')}
           </button>
           <button
             className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
@@ -1232,7 +1237,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
           >
             <PencilSimple size={12} />
-            Edit
+            {t('automation.edit')}
           </button>
           <button
             className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
@@ -1250,61 +1255,61 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {/* Daily Brief Section */}
         <div className="p-4 border-b border-[var(--border)]">
-          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Daily Brief</span>
+          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.dailyBrief')}</span>
 
           <div className="grid grid-cols-2 gap-3 mt-3">
             {/* Status Card */}
             <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Status</span>
+              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.status')}</span>
               <p className="text-sm font-medium capitalize mt-1" style={{ color: 'var(--text)' }}>
-                {cron.status === 'error' ? 'Error' : lastResult?.status || 'No runs yet'}
+                {cron.status === 'error' ? t('automation.statusError') : lastResult?.status || t('automation.statusNoRuns')}
               </p>
             </div>
 
             {/* Next Run Card */}
             <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Next Run</span>
+              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.nextRun')}</span>
               <p className="text-sm font-medium mt-1" style={{ color: 'var(--text)' }}>
                 {formatDateShort(cron.next_run_at)}
               </p>
               <p className="text-xs" style={{ color: 'var(--muted)' }}>
-                {formatRelativeTime(cron.next_run_at)}
+                {formatRelativeTime(cron.next_run_at, t)}
               </p>
             </div>
 
             {/* Last Result Card */}
             <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Last Result</span>
+              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.lastResult')}</span>
               {lastResult ? (
                 <>
                   <p className="text-sm font-medium capitalize mt-1" style={{
                     color: lastResult.status === 'success' ? 'var(--success)' : lastResult.status === 'failed' ? 'var(--error)' : 'var(--text)'
                   }}>
-                    {lastResult.status === 'success' ? 'Success' : lastResult.status === 'failed' ? `Failed: ${lastResult.error || 'Unknown'}` : lastResult.status}
+                    {lastResult.status === 'success' ? t('automation.statusSuccess') : lastResult.status === 'failed' ? t('automation.statusFailed', { error: lastResult.error || t('automation.statusUnknown') }) : lastResult.status}
                   </p>
                   {lastResult.duration && (
-                    <p className="text-xs" style={{ color: 'var(--muted)' }}>Duration: {lastResult.duration}</p>
+                    <p className="text-xs" style={{ color: 'var(--muted)' }}>{t('automation.duration', { duration: lastResult.duration })}</p>
                   )}
                 </>
               ) : (
-                <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>No runs yet</p>
+                <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>{t('automation.statusNoRuns')}</p>
               )}
             </div>
 
             {/* Capabilities Card */}
             <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Capabilities</span>
+              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.capabilities')}</span>
               <div className="flex flex-wrap gap-1.5 mt-2">
                 {capabilities.map((cap) => (
                   <span
-                    key={cap.name}
+                    key={cap.key}
                     className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium"
                     style={{
                       background: cap.available ? 'var(--success-soft)' : 'var(--chip)',
                       color: cap.available ? 'var(--success)' : 'var(--muted)',
                     }}
                   >
-                    {cap.name}
+                    {t(cap.key)}
                   </span>
                 ))}
               </div>
@@ -1314,7 +1319,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
         {/* Task Spec Section */}
         <div className="p-4 border-b border-[var(--border)]">
-          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Task</span>
+          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.task')}</span>
           <div className="rounded-lg p-3 mt-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
             <p className="text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
               {promptSteps[0] || cron.prompt}
@@ -1334,7 +1339,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
         {/* Execution Graph Section */}
         <div className="p-4 border-b border-[var(--border)]">
-          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Execution Graph</span>
+          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.executionGraph')}</span>
           <div className="flex items-center gap-1 overflow-x-auto pb-2 mt-3">
             {executionGraph.map((node, i) => (
               <div key={i} className="flex items-center gap-1 flex-shrink-0">
@@ -1346,7 +1351,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                     border: `1px solid ${node.status === 'failed' ? 'rgba(239, 68, 68, 0.3)' : node.status === 'success' ? 'rgba(34, 197, 94, 0.3)' : 'var(--border)'}`,
                   }}
                 >
-                  {node.name}
+                  {t(node.key)}
                 </div>
                 {i < executionGraph.length - 1 && (
                   <ArrowRight size={12} style={{ color: 'var(--muted)' }} />
@@ -1359,10 +1364,10 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
         {/* Runs Timeline Section */}
         <div className="p-4">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Recent Runs</span>
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.recentRuns')}</span>
             {successRate !== null && (
               <div className="flex items-center gap-2">
-                <span className="text-xs" style={{ color: 'var(--muted)' }}>Success rate</span>
+                <span className="text-xs" style={{ color: 'var(--muted)' }}>{t('automation.successRate')}</span>
                 <div className="flex items-center gap-1">
                   <div className="w-16 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
                     <div
@@ -1382,7 +1387,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
           {/* Last 7 days */}
           {last7Days.length > 0 && (
             <div className="flex items-center gap-2 mb-3 px-1">
-              <span className="text-[10px]" style={{ color: 'var(--muted)' }}>Last 7 days</span>
+              <span className="text-[10px]" style={{ color: 'var(--muted)' }}>{t('automation.last7Days')}</span>
               <div className="flex items-center gap-1">
                 {last7Days.map((day, i) => (
                   <div key={i} className="flex flex-col items-center gap-0.5">
@@ -1404,8 +1409,8 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
           {runs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
-              <p className="text-sm" style={{ color: 'var(--muted)' }}>No runs yet</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--muted)', opacity: 0.7 }}>Click "Run Now" to execute manually</p>
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>{t('automation.statusNoRuns')}</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--muted)', opacity: 0.7 }}>{t('automation.clickRunNowHint')}</p>
             </div>
           ) : (
             <div className="space-y-0">
@@ -1449,7 +1454,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                           className="px-2 py-0.5 rounded text-[10px] font-medium transition-all duration-150"
                           style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
                         >
-                          View logs
+                          {t('automation.viewLogs')}
                         </button>
                       )}
                       {run.error_message && (
@@ -1468,7 +1473,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                   className="w-full text-center py-2 text-xs font-medium transition-colors"
                   style={{ color: 'var(--accent)' }}
                 >
-                  {showAllRuns ? 'Show less' : `Show ${runs.length - 5} more`}
+                  {showAllRuns ? t('automation.showLess') : t('automation.showMore', { count: runs.length - 5 })}
                 </button>
               )}
             </div>

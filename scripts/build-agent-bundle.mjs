@@ -79,35 +79,12 @@ const mcpServerStats = fs.statSync(path.join(outdir, 'literature-mcp-server.js')
 console.log(`[build-agent-bundle] Built literature-mcp-server.js (${(mcpServerStats.size / 1024 / 1024).toFixed(2)} MB)`);
 
 // Build standalone CLI bundle (duya shell wrapper target).
-// dev fallback path (electron/services/cliInstallAuto.ts:98) and
-// the electron-builder extraResources copy both look for
-// packages/agent/bundle/cli.cjs, so this single artifact covers
-// both dev auto-install and production packaging.
-await build({
-  entryPoints: ['packages/agent/src/cli/index.ts'],
-  outfile: path.join(outdir, 'cli.cjs'),
-  bundle: true,
-  platform: 'node',
-  target: 'node18',
-  format: 'cjs',
-  sourcemap: false,
-  minify: false,
-  external: [
-    'node:*',
-    'date-format',
-    'better-sqlite3',
-    'playwright',
-  ],
-  banner: {
-    js: importMetaUrlPolyfill,
-  },
-  define: {
-    'import.meta.url': 'import_meta_url',
-  },
-});
-
-const cliStats = fs.statSync(path.join(outdir, 'cli.cjs'));
-console.log(`[build-agent-bundle] Built cli.cjs (${(cliStats.size / 1024 / 1024).toFixed(2)} MB)`);
+// Plan 99: the CLI bundle is now built separately by
+// `scripts/build-cli-bundle.mjs` into `packages/cli/bundle/cli.cjs`.
+// The dev fallback path (`electron/services/cliInstallAuto.ts:98`)
+// and the electron-builder extraResources copy both look for
+// `packages/cli/bundle/cli.cjs` (production: `resources/cli-bundle/cli.cjs`).
+// See `scripts/build-cli-bundle.mjs`.
 
 // Build BashWorker.js as CommonJS bundle (separate from main bundle)
 // WorkerPool looks for workers relative to its location

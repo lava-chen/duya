@@ -424,6 +424,7 @@ export const KNOWLEDGE_CUTOFFS: Record<string, string> = {
 
   // MiniMax models
   'minimax': 'March 2025',
+  'MiniMax-M3': 'June 2026',
 
   // Kimi models
   'moonshot': 'March 2025',

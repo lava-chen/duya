@@ -53,6 +53,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     // Security settings
     securityScanEnabled: true,
     cronPermissionMode: "default",
+    gatewayPermissionMode: "default",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
   };
@@ -167,6 +168,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       // Security settings
       securityScanEnabled: raw.securityScanEnabled !== "false",
       cronPermissionMode: (raw.cronPermissionMode as AppSettings["cronPermissionMode"]) ?? defaults.cronPermissionMode,
+      gatewayPermissionMode: (raw.gatewayPermissionMode as AppSettings["gatewayPermissionMode"]) ?? defaults.gatewayPermissionMode,
       // Default workspace directory for creating new projects
       workspaceDir: raw.workspaceDir || undefined,
     };
@@ -235,6 +237,7 @@ export function useSettings(): {
     // Security settings
     securityScanEnabled: true,
     cronPermissionMode: "default",
+    gatewayPermissionMode: "default",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
   });
@@ -322,6 +325,8 @@ export function useSettings(): {
         } else if (key === 'permissionMode' && typeof value === 'string') {
           await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
         } else if (key === 'cronPermissionMode' && typeof value === 'string') {
+          await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
+        } else if (key === 'gatewayPermissionMode' && typeof value === 'string') {
           await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
         } else if (typeof value === 'string') {
           await window.electronAPI.settingsDb.set(key, value);

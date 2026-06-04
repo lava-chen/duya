@@ -58,8 +58,6 @@ export const TRUST_LEVEL_CAPABILITIES: Record<PluginTrustLevel, TrustLevelCapabi
 };
 
 export class TrustEngine {
-  private userOverrides: Map<string, PluginTrustLevel> = new Map();
-
   determineTrustLevel(
     source: string,
     marketplaceName?: string,
@@ -102,17 +100,5 @@ export class TrustEngine {
       PluginTrustLevel.Official,
     ];
     return levels.indexOf(trust.level) >= levels.indexOf(minimum);
-  }
-
-  setUserOverride(pluginId: string, level: PluginTrustLevel): void {
-    this.userOverrides.set(pluginId, level);
-  }
-
-  getUserOverride(pluginId: string): PluginTrustLevel | undefined {
-    return this.userOverrides.get(pluginId);
-  }
-
-  clearUserOverride(pluginId: string): void {
-    this.userOverrides.delete(pluginId);
   }
 }

@@ -1,5 +1,6 @@
 import { X } from '@phosphor-icons/react';
 import type { AutomationTemplate } from '@/types/automation';
+import { useTranslation } from '@/hooks/useTranslation';
 
 interface TemplateMarketModalProps {
   isOpen: boolean;
@@ -16,6 +17,7 @@ export function TemplateMarketModal({
   onManualSetup,
   templates,
 }: TemplateMarketModalProps) {
+  const { t } = useTranslation();
   if (!isOpen) return null;
 
   return (
@@ -42,7 +44,7 @@ export function TemplateMarketModal({
           style={{ borderColor: 'var(--border)' }}
         >
           <h3 className="font-medium text-sm" style={{ color: 'var(--text)' }}>
-            Automation Templates
+            {t('automation.templateMarketTitle')}
           </h3>
           <div className="flex items-center gap-2">
             <button
@@ -57,7 +59,7 @@ export function TemplateMarketModal({
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
             >
-              Manual Setup
+              {t('automation.manualSetup')}
             </button>
             <button
               type="button"
@@ -77,7 +79,7 @@ export function TemplateMarketModal({
           {templates.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-sm" style={{ color: 'var(--muted)' }}>
-                No templates available. You can create an automation manually.
+                {t('automation.templatesEmpty')}
               </p>
             </div>
           ) : (

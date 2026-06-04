@@ -50,9 +50,25 @@ function playNotificationSound(): void {
 }
 
 /**
+ * Options accepted by showNotification. `actions` is forwarded to the
+ * platform notification so the user can reply / allow / deny without
+ * switching back to the DUYA window.
+ */
+export interface ShowNotificationOptions {
+  title: string;
+  body: string;
+  sessionId?: string;
+  type?: 'message' | 'permission';
+  actions?: { id: string; label: string }[];
+  replyPlaceholder?: string;
+  permissionId?: string;
+  toolName?: string;
+}
+
+/**
  * Show a system notification if enabled
  */
-export async function showNotification(options: { title: string; body: string; sessionId?: string }): Promise<boolean> {
+export async function showNotification(options: ShowNotificationOptions): Promise<boolean> {
   const enabled = await areNotificationsEnabled();
   if (!enabled) {
     return false;
@@ -74,7 +90,8 @@ export async function showNotification(options: { title: string; body: string; s
     }
   }
 
-  // Fallback to Web Notification API
+  // Fallback to Web Notification API — actions / replyPlaceholder are
+  // silently dropped, the basic click-to-focus behavior still works.
   if (typeof window !== 'undefined' && 'Notification' in window) {
     try {
       const permission = await Notification.requestPermission();
@@ -98,14 +115,51 @@ export async function showNotification(options: { title: string; body: string; s
 }
 
 /**
- * Show a message completion notification
+ * Show a message completion notification. Provides a "Reply" action so
+ * the user can answer from the system tray without refocusing the
+ * window (the typed text is delivered via `onNotificationAction` with
+ * `actionId === '__reply'`).
  */
-export async function showMessageCompletionNotification(sessionId?: string, sessionTitle?: string): Promise<boolean> {
+export async function showMessageCompletionNotification(
+  sessionId?: string,
+  sessionTitle?: string,
+): Promise<boolean> {
   const title = sessionTitle || 'DUYA';
   return showNotification({
     title,
     body: 'Message completed',
     sessionId,
+    type: 'message',
+    actions: [{ id: 'open', label: 'Open' }, { id: 'reply', label: 'Reply' }],
+    replyPlaceholder: 'Type a reply…',
+  });
+}
+
+/**
+ * Show a permission-request notification. Renders the request as a
+ * system notification with Allow / Deny actions so the user can decide
+ * from the tray. The decision is delivered through `onNotificationAction`
+ * keyed by `actionId`; the caller is responsible for routing it to
+ * `usePermissions.respondToPermission`.
+ */
+export async function showPermissionNotification(args: {
+  sessionId: string;
+  permissionId: string;
+  toolName: string;
+  title?: string;
+  body?: string;
+}): Promise<boolean> {
+  return showNotification({
+    title: args.title ?? 'Permission required',
+    body: args.body ?? `Allow ${args.toolName} to run?`,
+    sessionId: args.sessionId,
+    type: 'permission',
+    permissionId: args.permissionId,
+    toolName: args.toolName,
+    actions: [
+      { id: 'allow', label: 'Allow' },
+      { id: 'deny', label: 'Deny' },
+    ],
   });
 }
 

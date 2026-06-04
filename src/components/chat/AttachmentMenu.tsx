@@ -9,6 +9,7 @@ import {
   PlugIcon,
   FeatherIcon,
   BrainIcon,
+  TelescopeIcon,
   CaretRightIcon,
   PlusIcon,
   CheckIcon,
@@ -347,7 +348,7 @@ export function AttachmentMenu({
                 className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
               >
                 <span style={{ color: 'var(--muted)' }}>
-                  <BrainIcon size={16} />
+                  <TelescopeIcon size={16} />
                 </span>
                 <span style={{ color: 'var(--foreground)' }}>
                   Research Mode

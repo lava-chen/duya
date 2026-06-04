@@ -33,6 +33,7 @@ import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
+import { usePanel } from "@/hooks/usePanel";
 import { InputDialog } from "@/components/ui/InputDialog";
 
 type ThemeMode = "light" | "dark";
@@ -118,6 +119,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       enterSettings,
       exitSettings,
     } = useConversationStore();
+    const { setActiveTab } = usePanel();
     const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
     useEffect(() => {
@@ -348,11 +350,18 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             const Icon = item.icon;
             const isActive = currentView === item.view;
 
+            const handleNavClick = () => {
+              setCurrentView(item.view);
+              if (item.view === 'conductor') {
+                setActiveTab('canvas');
+              }
+            };
+
             return (
               <button
                 key={item.view}
                 type="button"
-                onClick={() => setCurrentView(item.view)}
+                onClick={handleNavClick}
                 className={`sidebar-primary-link${isActive ? " active" : ""}`}
               >
                 <span className="nav-icon">

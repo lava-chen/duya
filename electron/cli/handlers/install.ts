@@ -29,21 +29,25 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
  * Resolve the path of the bundled `cli.cjs` shipped with the
  * running app. In dev (no extraResources), this falls back to
  * the repo's build output so the install still works.
+ *
+ * Plan 99: the CLI is a separate package. The bundle lives at
+ * `resources/cli-bundle/cli.cjs` in production and at
+ * `packages/cli/bundle/cli.cjs` in dev.
  */
 function resolveBundledCli(): string {
-  // Production: process.resourcesPath/agent-bundle/cli.cjs
+  // Production: process.resourcesPath/cli-bundle/cli.cjs
   const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
   if (resourcesPath) {
-    const candidate = path.join(resourcesPath, 'agent-bundle', 'cli.cjs');
+    const candidate = path.join(resourcesPath, 'cli-bundle', 'cli.cjs');
     if (require('node:fs').existsSync(candidate)) return candidate;
   }
-  // Dev: <repo>/packages/agent/bundle/cli.cjs
+  // Dev: <repo>/packages/cli/bundle/cli.cjs
   const cwd = process.cwd();
-  const dev = path.join(cwd, 'packages', 'agent', 'bundle', 'cli.cjs');
+  const dev = path.join(cwd, 'packages', 'cli', 'bundle', 'cli.cjs');
   if (require('node:fs').existsSync(dev)) return dev;
 
   // Fallback: best-effort guess from the running app dir.
-  return path.join(cwd, 'packages', 'agent', 'bundle', 'cli.cjs');
+  return path.join(cwd, 'packages', 'cli', 'bundle', 'cli.cjs');
 }
 
 export async function handleInstallCli(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

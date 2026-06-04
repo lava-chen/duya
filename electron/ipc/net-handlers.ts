@@ -3,6 +3,7 @@ import { testProviderConnection, TestProviderBody } from '../services/network/pr
 import { fetchOllamaModels } from '../services/network/model-detector';
 import { testBridgeChannel } from '../services/network/bridge-tester';
 import { startWeixinQrLogin, pollWeixinQrStatus, cancelWeixinQrSession } from '../services/network/wechat-qr';
+import { getProviderUsage, ProviderUsageBody } from '../services/network/provider-usage';
 import { getLogger, LogComponent } from '../logging/logger';
 
 export { testBridgeChannel } from '../services/network/bridge-tester';
@@ -20,6 +21,21 @@ export function registerNetHandlers(): void {
           code: 'TEST_FAILED',
           message: error instanceof Error ? error.message : '测试连接失败',
           suggestion: '请稍后重试',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle('net:provider:usage', async (_event, body: ProviderUsageBody) => {
+    try {
+      return await getProviderUsage(body);
+    } catch (error) {
+      getLogger().error('Provider usage error', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.NetHandlers);
+      return {
+        success: false,
+        error: {
+          code: 'USAGE_FETCH_FAILED',
+          message: error instanceof Error ? error.message : '获取配额失败',
         },
       };
     }

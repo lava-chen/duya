@@ -4,6 +4,8 @@ import { app } from 'electron';
 import type { PluginCatalogEntry, PluginCategory } from './types';
 import { readPluginManifest } from './manifest';
 import { getLogger, LogComponent } from '../logging/logger';
+import { getBuiltinPluginDir } from '../../packages/agent/src/plugins/builtin/_registry.js';
+import { deriveCapabilityCounts } from './capability-counts.js';
 
 const COMPONENT = 'PluginCatalog' as LogComponent;
 
@@ -54,21 +56,22 @@ function normalizeCategory(cat: string | undefined): PluginCategory {
   return 'other';
 }
 
-function countCapabilities(manifest: Record<string, unknown>): {
+function countCapabilities(manifest: Record<string, unknown>, pluginDir?: string): {
   skills: number;
   mcpServers: number;
   cli: number;
   ui: number;
   hooks: number;
 } {
-  const caps = (manifest.capabilities || {}) as Record<string, unknown>;
-  return {
-    skills: Array.isArray(caps.skills) ? caps.skills.length : 0,
-    mcpServers: Array.isArray(caps.mcpServers) ? caps.mcpServers.length : 0,
-    cli: Array.isArray(caps.cli) ? caps.cli.length : 0,
-    ui: Array.isArray(caps.ui) ? caps.ui.length : 0,
-    hooks: Array.isArray(caps.hooks) ? caps.hooks.length : 0,
-  };
+  // `deriveCapabilityCounts` handles the on-disk derivation; the wrapper
+  // exists so we can keep the call sites in this file talking in terms
+  // of a `Record<string, unknown>` (matching `readPluginManifest`'s
+  // return type) without exposing the strongly-typed `PluginManifest`
+  // shape to the rest of this module.
+  return deriveCapabilityCounts(
+    manifest as unknown as Parameters<typeof deriveCapabilityCounts>[0],
+    pluginDir,
+  );
 }
 
 function buildLocalCatalogEntry(
@@ -131,23 +134,37 @@ function getLocalCatalogEntries(): PluginCatalogEntry[] {
   return entries;
 }
 
-export const BUNDLED_PLUGIN_CATALOG: PluginCatalogEntry[] = [
-  {
-    id: 'com.duya.literature',
-    name: 'Literature Plugin',
-    version: '0.1.0',
-    description: 'Literature asset and evidence management for research workflows.',
+function bundledCatalogEntry(
+  id: string,
+  name: string,
+  description: string,
+  category: PluginCategory,
+  builtinDirName: string,
+  manifest: PluginCatalogEntry['manifest'],
+): PluginCatalogEntry {
+  const dir = getBuiltinPluginDir(builtinDirName);
+  return {
+    id,
+    name,
+    version: manifest.version,
+    description,
     source: 'bundled',
-    category: 'research',
+    category,
     trustLevel: 'official',
-    capabilityCounts: {
-      skills: 2,
-      mcpServers: 1,
-      cli: 0,
-      ui: 0,
-      hooks: 0,
-    },
-    manifest: {
+    capabilityCounts: deriveCapabilityCounts(manifest, dir),
+    manifest,
+    author: manifest.author,
+  };
+}
+
+export const BUNDLED_PLUGIN_CATALOG: PluginCatalogEntry[] = [
+  bundledCatalogEntry(
+    'com.duya.literature',
+    'Literature Plugin',
+    'Literature asset and evidence management for research workflows.',
+    'research',
+    'literature',
+    {
       schemaVersion: 'duya.plugin.v1',
       id: 'com.duya.literature',
       name: 'Literature Plugin',
@@ -171,23 +188,14 @@ export const BUNDLED_PLUGIN_CATALOG: PluginCatalogEntry[] = [
       ],
       engines: { duya: '>=0.1.0', node: '>=20' },
     },
-  },
-  {
-    id: 'com.duya.devtools',
-    name: 'DevTools Plus',
-    version: '0.1.0',
-    description: 'Developer helpers with MCP server and CLI tools.',
-    source: 'bundled',
-    category: 'development',
-    trustLevel: 'official',
-    capabilityCounts: {
-      skills: 0,
-      mcpServers: 1,
-      cli: 1,
-      ui: 0,
-      hooks: 0,
-    },
-    manifest: {
+  ),
+  bundledCatalogEntry(
+    'com.duya.devtools',
+    'DevTools Plus',
+    'Developer helpers with MCP server and CLI tools.',
+    'development',
+    'devtools',
+    {
       schemaVersion: 'duya.plugin.v1',
       id: 'com.duya.devtools',
       name: 'DevTools Plus',
@@ -215,7 +223,7 @@ export const BUNDLED_PLUGIN_CATALOG: PluginCatalogEntry[] = [
       ],
       engines: { duya: '>=0.1.0' },
     },
-  },
+  ),
 ];
 
 let cachedCatalog: PluginCatalogEntry[] | null = null;

@@ -1,0 +1,35 @@
+{
+  "name": "@duya/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DUYA desktop control plane CLI — bundled `duya` wrapper that talks to the desktop's localhost HTTP API",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "bundle"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./contract": {
+      "types": "./dist/contract/index.d.ts",
+      "default": "./dist/contract/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@commander-js/extra-typings": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3"
+  }
+}

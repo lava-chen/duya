@@ -21,7 +21,7 @@ export function registerUpdaterHandlers(): void {
 
   ipcMain.handle('updater:install', async () => {
     logger.info('updater:install IPC invoked', undefined, LogComponent.Main);
-    installUpdate();
+    await installUpdate();
     return { success: true };
   });
 
@@ -31,6 +31,6 @@ export function registerUpdaterHandlers(): void {
 
   ipcMain.on('update:install', () => {
     logger.info('update:install (send) invoked', undefined, LogComponent.Main);
-    installUpdate();
+    void installUpdate();
   });
 }

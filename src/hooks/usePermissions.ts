@@ -5,12 +5,16 @@
  * - Tracking pending permission requests from SSE events
  * - Sending permission decisions to the API
  * - Auto-approving for full_access permission profile
+ * - Surfacing permission requests as system notifications with Allow/Deny
+ *   actions so the user can decide from the OS tray (see
+ *   notification:action IPC + showPermissionNotification).
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { PermissionRequestEvent } from '@/types/stream';
 import { resolvePermission } from '@/lib/agent-sse-client';
 import { subscribeToPhase, getSnapshot } from '@/lib/stream-session-manager';
+import { showPermissionNotification } from '@/lib/notification';
 
 export interface UsePermissionsOptions {
   /** Session ID for permission resolution forwarding */
@@ -19,6 +23,12 @@ export interface UsePermissionsOptions {
   permissionProfile?: 'default' | 'auto' | 'full_access';
   /** Callback when permission is resolved */
   onPermissionResolved?: (decision: 'allow' | 'deny', request: PermissionRequestEvent) => void;
+  /**
+   * When true (default) and the document is hidden, the hook will surface
+   * pending permission requests as OS notifications with Allow/Deny
+   * actions. Set to false in tests or when running purely in-renderer.
+   */
+  systemNotify?: boolean;
 }
 
 export interface UsePermissionsReturn {
@@ -42,7 +52,7 @@ export interface UsePermissionsReturn {
  * Hook for handling permission requests from the agent
  */
 export function usePermissions(options: UsePermissionsOptions = {}): UsePermissionsReturn {
-  const { sessionId, permissionProfile = 'default', onPermissionResolved } = options;
+  const { sessionId, permissionProfile = 'default', onPermissionResolved, systemNotify = true } = options;
 
   // Track pending permission request
   const [pendingPermission, setPendingPermission] = useState<PermissionRequestEvent | null>(null);
@@ -155,7 +165,22 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
     setPendingPermission(request);
     setPermissionResolved(null);
     waitingRef.current = false;
-  }, []);
+
+    // Surface as a system notification with Allow / Deny actions so the
+    // user can decide from the OS tray when the window is hidden.
+    // Guarded by document.visibilityState to avoid double-prompting when
+    // the in-app modal is already on screen.
+    if (systemNotify && typeof document !== 'undefined' && document.visibilityState === 'hidden' && sessionId) {
+      void showPermissionNotification({
+        sessionId,
+        permissionId: request.id,
+        toolName: request.toolName ?? 'tool',
+        body: typeof request.toolInput === 'string'
+          ? `Allow ${request.toolName}? ${request.toolInput}`.slice(0, 200)
+          : `Allow ${request.toolName ?? 'tool'} to run?`,
+      });
+    }
+  }, [systemNotify, sessionId]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -181,6 +206,38 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
       return () => clearTimeout(timer);
     }
   }, [permissionProfile, pendingPermission, permissionResolved, respondToPermission]);
+
+  // Bridge OS notification actions back to the in-app permission flow.
+  //
+  // The main process sends `notification:action` with type 'permission'
+  // and an actionId of 'allow' / 'deny' (or '__reply' for the inline
+  // reply text field on macOS). We resolve it against the currently
+  // pending permission — if a decision is already in flight or the
+  // session has moved on, the IPC payload is dropped.
+  useEffect(() => {
+    if (!systemNotify) return;
+    const api = typeof window !== 'undefined' ? window.electronAPI : undefined;
+    if (!api?.onNotificationAction) return;
+
+    const unsubscribe = api.onNotificationAction((data) => {
+      if (data.type !== 'permission') return;
+      if (!data.permissionId || data.permissionId !== lastSeenIdRef.current) return;
+      if (data.sessionId && sessionId && data.sessionId !== sessionId) return;
+      if (waitingRef.current || !pendingPermission) return;
+
+      if (data.actionId === 'allow') {
+        void respondToPermission('allow');
+      } else if (data.actionId === 'deny') {
+        void respondToPermission('deny', undefined, data.reply || 'Denied from notification');
+      } else if (data.actionId === '__reply' && data.reply) {
+        // Treat a typed reply in the permission notification as a deny
+        // with explanatory message — there is no in-place "edit input"
+        // we could re-submit to the tool from the tray.
+        void respondToPermission('deny', undefined, data.reply);
+      }
+    });
+    return unsubscribe;
+  }, [systemNotify, sessionId, pendingPermission, respondToPermission]);
 
   // Dismiss stale permission prompt when session phase changes to a terminal
   // state (e.g. session completed while permission was still pending in UI).

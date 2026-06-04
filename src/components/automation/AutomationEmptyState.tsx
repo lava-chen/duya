@@ -3,6 +3,7 @@ import {
   Plus,
   SquaresFour,
 } from '@phosphor-icons/react';
+import { useTranslation } from '@/hooks/useTranslation';
 
 interface AutomationEmptyStateProps {
   onChatCreate: () => void;
@@ -13,15 +14,16 @@ export function AutomationEmptyState({
   onChatCreate,
   onViewTemplates,
 }: AutomationEmptyStateProps) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center h-full text-center p-8">
       <Clock size={48} className="mb-4 opacity-20" style={{ color: 'var(--muted)' }} />
 
       <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text)' }}>
-        Create First Automation
+        {t('automation.emptyTitle')}
       </h2>
       <p className="text-xs mb-6" style={{ color: 'var(--muted)' }}>
-        Describe what you want Duya to run on a schedule
+        {t('automation.emptyDesc')}
       </p>
 
       <div className="flex items-center gap-2">
@@ -45,7 +47,7 @@ export function AutomationEmptyState({
           }}
         >
           <Plus size={16} weight="bold" />
-          New Automation
+          {t('automation.newAutomation')}
         </button>
 
         <button
@@ -61,7 +63,7 @@ export function AutomationEmptyState({
           onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
         >
           <SquaresFour size={16} />
-          Templates
+          {t('automation.templates')}
         </button>
       </div>
     </div>

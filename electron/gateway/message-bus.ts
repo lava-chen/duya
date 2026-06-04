@@ -3,21 +3,54 @@ import * as http from 'http';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getDatabase } from '../ipc/db-handlers';
 import { GatewayInitConfig, GatewayProxyConfig } from './types';
-import { startGatewayProcess, stopGatewayProcess, waitForGatewayReady, isGatewayRunning, getGatewayProcess } from './lifecycle';
+import { startGatewayProcess, stopGatewayProcess, waitForGatewayReady, isGatewayRunning, getGatewayProcess, reloadGatewayProcess } from './lifecycle';
 import { GatewaySessionState } from './types';
 import { dispatchGatewayDbAction } from './db-bridge';
-
-/**
- * Gateway (IM 通道: 飞书/微信/Telegram 等) 创建的 session 固定 permission_profile='default'.
- * 不读 desktop settings.permissionMode, 避免桌面端用户切 bypass 污染 IM 通道权限.
- * Gateway 自身的权限控制走 IM 平台白名单/配对机制.
- */
-const GATEWAY_PERMISSION_PROFILE = 'default';
+import { gatewayConfigEvents } from './config-events';
+import { settingsModeToProfile, type PermissionProfile } from '../lib/permission-profile';
 import { execSync } from 'child_process';
 import { testBridgeChannel } from '../services/network/bridge-tester';
 import { getPairingStore } from './pairing';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getGatewayProxyConfig } from '../db/queries/settings';
+
+/**
+ * Resolve the permission profile used for sessions created through the
+ * IM gateway (Feishu / WeChat / Telegram / QQ).
+ *
+ * Resolution order:
+ *   1. `settings.gatewayPermissionMode` (explicit, IM-specific)
+ *   2. `settings.permissionMode` (desktop fallback — matches pre-settings
+ *      behavior where the desktop mode was the only knob)
+ *   3. `'default'` (safe hard fallback)
+ *
+ * The default fall-through to `permissionMode` preserves the historical
+ * "no separate IM knob" semantics for existing installs, while the
+ * Security → Gateway Agent Permissions UI lets users override.
+ */
+function resolveGatewayPermissionProfile(): PermissionProfile {
+  try {
+    const db = getDatabase();
+    if (!db) return 'default';
+    const get = (key: string): string | undefined => {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+      if (!row) return undefined;
+      try { return JSON.parse(row.value); } catch { return row.value; }
+      return undefined;
+    };
+    const gatewayMode = get('gatewayPermissionMode');
+    if (gatewayMode !== undefined && gatewayMode !== null && gatewayMode !== '') {
+      return settingsModeToProfile(gatewayMode);
+    }
+    const desktopMode = get('permissionMode');
+    if (desktopMode !== undefined && desktopMode !== null && desktopMode !== '') {
+      return settingsModeToProfile(desktopMode);
+    }
+    return 'default';
+  } catch {
+    return 'default';
+  }
+}
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
@@ -492,11 +525,12 @@ export function handleGatewayMessage(
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
           `).run(sessionId, title, 'gateway', '', now, now);
+          const gatewayProfile = resolveGatewayPermissionProfile();
           db.prepare(`
             INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-          `).run(sessionId, title, '', '', '', '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
+          `).run(sessionId, title, '', '', '', '', 'active', 'chat', gatewayProfile, 'env', 0, now, now);
 
           // Create user mapping atomically (saves one IPC round-trip from Gateway)
           db.prepare(`
@@ -558,11 +592,12 @@ export function handleGatewayMessage(
             ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
           `).run(sessionId, title, 'gateway', '', now, now);
           // Also insert into chat_sessions so messages can be persisted via replaceMessages
+          const gatewayProfile = resolveGatewayPermissionProfile();
           db.prepare(`
             INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-          `).run(sessionId, title, '', '', '', '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
+          `).run(sessionId, title, '', '', '', '', 'active', 'chat', gatewayProfile, 'env', 0, now, now);
         } catch (err) {
           getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
         }
@@ -695,10 +730,15 @@ export function isGatewaySession(sessionId: string): boolean {
 // IPC handlers
 const _gatewayStatusRequests = new Map<string, { resolve: (value: any) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
 
-let _initConfig: GatewayInitConfig | undefined;
-
-function getOrBuildInitConfig(): GatewayInitConfig {
-  if (_initConfig) return _initConfig;
+/**
+ * Plan 99 G2: exported for the CLI control plane so the
+ * `electron/cli/handlers/gateway.ts` handlers can build a fresh
+ * init config without going through the IPC bus. Identical to the
+ * private function below; we just expose a copy.
+ */
+export function getOrBuildInitConfig(): GatewayInitConfig {
+  // 注意：不再缓存。每次调用都从 DB 重读，确保 UI 保存新凭据后下一次 start 拿到最新值。
+  // 缓存导致过 "配置完 channel 后必须重启 dev 才能生效" 的 bug。
 
   const db = getDatabase();
   const platforms: Array<{ platform: string; enabled: boolean; credentials: Record<string, string>; options?: Record<string, unknown> }> = [];
@@ -802,17 +842,35 @@ function getOrBuildInitConfig(): GatewayInitConfig {
   // Load per-channel proxy configuration
   const proxyConfig = getGatewayProxyConfig();
 
-  _initConfig = {
+  const config: GatewayInitConfig = {
     platforms,
     autoStart,
     proxyConfig,
   };
 
   console.log('[STARTUP] getOrBuildInitConfig:', JSON.stringify({ platforms: platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!Object.keys(p.credentials).length })), autoStart }));
-  return _initConfig;
+  return config;
 }
 
 export function registerGatewayIpcHandlers(): void {
+  // 订阅主进程内的 config-changed 事件：DB 写入完成后触发 gateway 热重启
+  // debounce 500ms 以合并快速连续保存（如 BridgeSection 一次保存触发 3 个 updateSetting）
+  let reloadDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  gatewayConfigEvents.onConfigChanged((payload) => {
+    if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
+    reloadDebounceTimer = setTimeout(() => {
+      reloadDebounceTimer = null;
+      if (!isGatewayRunning()) {
+        // gateway 未在跑，不需要 reload（autoStart 由下次启动时读最新值）
+        return;
+      }
+      const config = getOrBuildInitConfig();
+      reloadGatewayProcess(config, `config-changed:${payload.source}`).catch(() => {
+        // error already logged
+      });
+    }, 500);
+  });
+
   ipcMain.handle('gateway:start', async () => {
     try {
       const config = getOrBuildInitConfig();
@@ -821,9 +879,9 @@ export function registerGatewayIpcHandlers(): void {
 
       child.on('message', (msg: Record<string, unknown>) => {
         handleGatewayMessage(msg, () => {
-          if (_initConfig) {
-            startGatewayProcess(_initConfig);
-          }
+          // auth-failure 回调：热重启时用最新 config
+          const fresh = getOrBuildInitConfig();
+          reloadGatewayProcess(fresh, 'auth-failure').catch(() => { /* error already logged */ });
         });
       });
 
@@ -843,29 +901,27 @@ export function registerGatewayIpcHandlers(): void {
   });
 
   ipcMain.handle('gateway:stop', async () => {
-    stopGatewayProcess();
+    await stopGatewayProcess();
     const states = getSessionStates();
     states.clear();
-    _initConfig = undefined;
     return { success: true };
   });
 
   ipcMain.handle('gateway:reload', async () => {
     try {
-      stopGatewayProcess();
       const states = getSessionStates();
       states.clear();
-      _initConfig = undefined;
       const config = getOrBuildInitConfig();
-      const child = startGatewayProcess(config);
-      child.on('message', (msg: Record<string, unknown>) => {
-        handleGatewayMessage(msg, () => {
-          if (_initConfig) {
-            startGatewayProcess(_initConfig);
-          }
+      // reloadGatewayProcess 内部已经 stop → start，调用方不用自己做
+      await reloadGatewayProcess(config, 'ipc:gateway:reload');
+      // 注意：reloadGatewayProcess 不等待 child 真正 init 完成（它只保证 stop→start）
+      // 等待 ready 是 IPC 调用方的语义，所以这里再 wait
+      const child = getGatewayProcess();
+      if (child) {
+        await waitForGatewayReady(config, child, 30_000).catch((err) => {
+          getLogger().error('Gateway reload wait-for-ready failed', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
         });
-      });
-      await waitForGatewayReady(config, child, 30_000);
+      }
       return { success: true };
     } catch (err) {
       getLogger().error('Gateway reload failed', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
@@ -1308,9 +1364,9 @@ export async function startGateway(): Promise<void> {
 
   child.on('message', (msg: Record<string, unknown>) => {
     handleGatewayMessage(msg, () => {
-      if (_initConfig) {
-        startGatewayProcess(_initConfig);
-      }
+      // auth-failure 回调：热重启时用最新 config
+      const fresh = getOrBuildInitConfig();
+      reloadGatewayProcess(fresh, 'auth-failure:auto-start').catch(() => { /* error already logged */ });
     });
   });
 

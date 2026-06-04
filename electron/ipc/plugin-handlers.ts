@@ -398,7 +398,12 @@ export function registerPluginHandlers(): void {
   });
 
   // --- plugin:security:policy ---
-  ipcMain.handle('plugin:security:policy', async (_event, _payload?: { action: 'get' | 'update'; policy?: Record<string, unknown> }) => {
+  // Plan 101 Phase 5: schema simplified to read-only. The historical
+  // `action: 'update'` variant was advertised in the parameter type but
+  // never implemented — the handler always returned `getPolicy()`.
+  // Dropped for honesty; policy updates are out of scope for v0.1.3 and
+  // will be reintroduced in a follow-up plan if needed.
+  ipcMain.handle('plugin:security:policy', async () => {
     try {
       const policyEngine = manager.getPolicyEngine();
       return { success: true, data: policyEngine.getPolicy() };

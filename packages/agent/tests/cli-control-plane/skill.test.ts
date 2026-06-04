@@ -68,7 +68,7 @@ function runSkill(args: string[], env: string): SkillResult {
   // then +1 more to get to repo root
   // So: __dirname/.. -> tests/, __dirname/../.. -> agent/, __dirname/../../.. -> packages/, __dirname/../../../.. -> repo
   const projectRootFromFile = join(__dirname, '..', '..', '..', '..');
-  const cliBundle = join(projectRootFromFile, 'packages', 'agent', 'bundle', 'cli.cjs');
+  const cliBundle = join(projectRootFromFile, 'packages', 'cli', 'bundle', 'cli.cjs');
   const result = spawnSync(NODE_BIN, [cliBundle, 'skill', ...args], {
     cwd: projectRoot,
     env: { ...process.env, ...parseEnv(env) },

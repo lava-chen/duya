@@ -142,11 +142,22 @@ export class ResearchMode extends BaseMode {
     }
   >();
 
+  /**
+   * Most recent clarification requestId registered for this mode instance.
+   * Used so a fresh `clarification_questions` event auto-rejects the prior
+   * pending one — without this, the orchestrator can deadlock on a request
+   * the renderer has already stopped tracking.
+   */
+  private latestClarificationRequestId: string | undefined;
+
   resolveClarification(requestId: string, answers: Record<string, string>): boolean {
     const entry = this.pendingClarifications.get(requestId);
     if (!entry) return false;
     entry.resolve(answers);
     this.pendingClarifications.delete(requestId);
+    if (this.latestClarificationRequestId === requestId) {
+      this.latestClarificationRequestId = undefined;
+    }
     return true;
   }
 
@@ -155,7 +166,39 @@ export class ResearchMode extends BaseMode {
     if (!entry) return false;
     entry.reject(error);
     this.pendingClarifications.delete(requestId);
+    if (this.latestClarificationRequestId === requestId) {
+      this.latestClarificationRequestId = undefined;
+    }
     return true;
+  }
+
+  /**
+   * Register a new clarification request and supersede any prior
+   * still-pending one. Returns true if a prior request was superseded,
+   * false otherwise.
+   *
+   * The research orchestrator may emit a fresh `clarification_questions`
+   * event after a plan approval round-trip or a replan. The renderer can
+   * drop the previous prompt on the floor, leaving the orchestrator's
+   * `await` hanging on a requestId the user no longer sees. Resolving the
+   * prior request with an empty answer map (rather than rejecting) keeps
+   * the orchestrator moving; subsequent `setUserAnswers({})` is a no-op
+   * because no user input was collected.
+   */
+  registerClarificationRequest(requestId: string): boolean {
+    const previous = this.latestClarificationRequestId;
+    this.latestClarificationRequestId = requestId;
+    if (previous && previous !== requestId) {
+      const prior = this.pendingClarifications.get(previous);
+      if (prior) {
+        this.pendingClarifications.delete(previous);
+        // Empty answers = "user opted not to answer" — orchestrator continues
+        // with whatever defaults were already in context.
+        prior.resolve({});
+      }
+      return true;
+    }
+    return false;
   }
 
   async *execute(
@@ -371,14 +414,35 @@ export class ResearchMode extends BaseMode {
       questions: ClarificationQuestion[],
       requestId: string
     ): Promise<Record<string, string>> => {
+      // Register with the ResearchMode so a subsequent clarification request
+      // (e.g. after plan approval) auto-rejects this one. Without this the
+      // orchestrator can deadlock on a requestId the renderer no longer
+      // surfaces.
+      this.registerClarificationRequest(requestId);
       return new Promise((resolve, reject) => {
-        this.pendingClarifications.set(requestId, { resolve, reject });
+        const entry: {
+          resolve: (answers: Record<string, string>) => void;
+          reject: (err: Error) => void;
+        } = { resolve, reject };
+        this.pendingClarifications.set(requestId, entry);
         const timeout = setTimeout(() => {
-          if (this.pendingClarifications.has(requestId)) {
+          if (this.pendingClarifications.get(requestId) === entry) {
             this.pendingClarifications.delete(requestId);
             reject(new Error('Clarification timeout after 5 minutes'));
           }
         }, 300_000);
+        // Always clear the timer once the promise settles, otherwise the
+        // un-fired timer keeps a reference to `entry` and Node emits
+        // UnhandledPromiseRejection whenever the user beats the timeout.
+        const settle = (fn: () => void): void => {
+          clearTimeout(timeout);
+          if (this.pendingClarifications.get(requestId) === entry) {
+            this.pendingClarifications.delete(requestId);
+          }
+          fn();
+        };
+        entry.resolve = (answers) => settle(() => resolve(answers));
+        entry.reject = (err) => settle(() => reject(err));
       });
     };
 

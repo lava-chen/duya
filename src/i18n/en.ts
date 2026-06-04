@@ -466,6 +466,11 @@ const en = {
   'settings.security.domainAlreadyExists': 'Domain already in the list',
   'settings.security.skillSecurityScan': 'Skill Security Scan',
   'settings.security.skillSecurityScanDesc': 'Scan skills for security threats during installation. When disabled, all skills will be loaded without security checks, increasing security risk.',
+  'settings.security.gatewayAgentTitle': 'Gateway Agent Permissions',
+  'settings.security.gatewayAgentDescription': 'Permission mode applied to agents triggered through the IM gateway (Feishu / WeChat / Telegram / QQ). Independent from the desktop chat permission so you can keep the desktop strict while loosening (or tightening) IM-channel access. Falls back to the desktop mode when unset.',
+  'settings.security.gatewayAgentFallback': 'Inherits from desktop permission mode',
+  'settings.security.gatewayAgentWarningTitle': 'Gateway agents in Bypass / Auto mode',
+  'settings.security.gatewayAgentWarningDesc': 'IM-channel users can drive the agent to run shell commands, edit files, or reach the network without per-action confirmation. Only enable Bypass or Auto for trusted, paired users.',
 
   'provider.addProvider': 'Add Provider',
   'provider.editProvider': 'Edit Provider',

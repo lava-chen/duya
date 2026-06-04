@@ -16,6 +16,7 @@ import {
   subscribeToText,
 } from "@/lib/stream-session-manager";
 import type { StreamPhase } from "@/types";
+import { useTranslation } from "@/hooks/useTranslation";
 
 interface CronChatModalProps {
   sessionId: string;
@@ -37,6 +38,7 @@ export function CronChatModal({
   runStatus,
   onClose,
 }: CronChatModalProps) {
+  const { t } = useTranslation();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [inputValue, setInputValue] = useState("");
@@ -192,19 +194,19 @@ export function CronChatModal({
         return (
           <span className="cron-streaming-badge">
             <span className="cron-streaming-dot" />
-            Running
+            {t('automation.statusRunning')}
           </span>
         );
       case "success":
         return (
           <span className="cron-status-badge success">
-            Success
+            {t('automation.statusSuccess')}
           </span>
         );
       case "failed":
         return (
           <span className="cron-status-badge error">
-            Failed
+            {t('automation.statusFailed', { error: '' })}
           </span>
         );
       default:
@@ -227,10 +229,10 @@ export function CronChatModal({
             <Clock size={18} className="text-accent" />
             <div className="flex flex-col">
               <span id="cron-chat-modal-title" className="text-sm font-medium">
-                {sessionTitle || "Cron Session"}
+                {sessionTitle || t('automation.cronSession')}
               </span>
               <span className="text-[10px] text-muted-foreground">
-                {cronName} · Session {sessionId.slice(0, 12)}...
+                {t('automation.cronSessionSubtitle', { name: cronName, id: sessionId.slice(0, 12) })}
               </span>
             </div>
           </div>
@@ -251,14 +253,14 @@ export function CronChatModal({
           {loading ? (
             <div className="flex items-center justify-center h-full gap-2">
               <SpinnerGapIcon size={18} className="animate-spin" />
-              <span className="text-sm text-muted-foreground">Loading messages...</span>
+              <span className="text-sm text-muted-foreground">{t('automation.loadingMessages')}</span>
             </div>
           ) : displayMessages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-2">
               <Clock size={32} className="text-muted-foreground/30" />
-              <p className="text-sm text-muted-foreground">No messages yet</p>
+              <p className="text-sm text-muted-foreground">{t('automation.noMessages')}</p>
               <p className="text-[10px] text-muted-foreground/60">
-                This cron job session has no messages
+                {t('automation.noMessagesDesc')}
               </p>
             </div>
           ) : (
@@ -280,7 +282,7 @@ export function CronChatModal({
               value={inputValue}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
+              placeholder={t('automation.messagePlaceholder')}
               disabled={isStreaming}
               rows={1}
             />

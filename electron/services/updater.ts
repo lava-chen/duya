@@ -237,10 +237,20 @@ export async function downloadUpdate(): Promise<{
 }
 
 // Install update and restart
-export function installUpdate(): void {
+export async function installUpdate(): Promise<void> {
   if (!app.isPackaged) {
     return
   }
+  // Mark as quitting so window 'close' event does not hide the window
+  const { setIsQuitting } = await import('../core/window-manager')
+  setIsQuitting(true)
+
+  // Perform graceful shutdown to release file locks and stop child processes
+  // before the installer runs. Without this, before-quit handlers may delay
+  // or prevent app exit, causing the installer to fail with "file in use".
+  const { performGracefulShutdown } = await import('../core/graceful-shutdown')
+  await performGracefulShutdown()
+
   autoUpdater.quitAndInstall(false, true)
 }
 

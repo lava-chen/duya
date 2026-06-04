@@ -224,6 +224,26 @@ export interface ResearchPlanDetail {
   synthesisPlan: ResearchPlanSynthesisPlan;
 }
 
+export interface ResearchEvidenceNodeSnapshot {
+  id: string;
+  type: 'finding' | 'question' | 'inference';
+  content: string;
+  source?: string;
+  supports: boolean;
+  depth: number;
+}
+
+export interface ResearchEvidenceChainSnapshot {
+  requestId: string;
+  conclusion: string;
+  chain: {
+    evidenceNodes: ResearchEvidenceNodeSnapshot[];
+    confidence: number;
+    reasoning: string;
+  };
+  timestamp: number;
+}
+
 export interface ResearchSessionSnapshot {
   sessionId: string;
   mode: 'research' | null;
@@ -258,4 +278,7 @@ export interface ResearchSessionSnapshot {
   persistedSources: ResearchPersistedSource[];
   persistedCitations: ResearchPersistedCitation[];
   reportArtifact: ResearchReportArtifact | null;
+  // Latest evidence chain returned by a follow-up request.
+  // Null until the user invokes "show evidence" on a conclusion.
+  lastEvidenceChain: ResearchEvidenceChainSnapshot | null;
 }

@@ -1,146 +1,88 @@
-﻿/**
+/**
  * Feishu Text Batcher
  *
- * Debounces rapidly sent text messages from the same user/chat.
- * Feishu clients often split messages at ~4000 character boundaries.
- * This batcher aggregates them into a single message event.
+ * 把同一 chatId 短时间内连续到达的文本消息合并为单次发送。
+ * 飞书客户端常在 ~4000 字符边界拆条发送,本 batcher 把它们拼成一条。
+ *
+ * 内部基于 ScopedQueue 实现,获得 block / unblock 语义——
+ * Agent run 期间禁用防抖 flush(避免 run 还没回用户就被新消息抢答),
+ * run 结束后重新 arm quiet window。
+ *
+ * 对外保持向后兼容的 API:`enqueue / clear / stop / pendingCount`。
  */
 
 import type { FeishuBatchText } from './types.js';
+import { ScopedQueue, type QueuedMessage } from './scoped-queue.js';
 
-interface BatchedMessage {
-  batch: FeishuBatchText;
-  lastChunkLen: number;
-}
+const DEFAULT_DELAY_MS = 600;
 
-interface TextBatchOptions {
-  /** Delay after last message before flushing (default: 600ms) */
+interface TextBatcherOptions {
+  /** Last-message 后到 flush 的延迟(默认 600ms)。 */
   delayMs?: number;
-  /** Delay when chunk is near split threshold (default: 2000ms) */
-  splitDelayMs?: number;
-  /** Maximum messages per batch (default: 8) */
-  maxMessages?: number;
-  /** Maximum characters per batch (default: 4000) */
-  maxChars?: number;
-  /** Character threshold for split detection (Feishu splits at ~4096) */
-  splitThreshold?: number;
 }
-
-/** Default Feishu split threshold */
-const SPLIT_THRESHOLD = 4000;
 
 export class TextBatcher {
-  private pendingBatches = new Map<string, BatchedMessage>();
-  private flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private options: Required<TextBatchOptions>;
+  private readonly queue: ScopedQueue<FeishuBatchText>;
 
-  private onFlush: (batches: FeishuBatchText[]) => Promise<void>;
-
-  constructor(onFlush: (batches: FeishuBatchText[]) => Promise<void>, options: TextBatchOptions = {}) {
-    this.onFlush = onFlush;
-    this.options = {
-      delayMs: options.delayMs ?? 600,
-      splitDelayMs: options.splitDelayMs ?? 2000,
-      maxMessages: options.maxMessages ?? 8,
-      maxChars: options.maxChars ?? 4000,
-      splitThreshold: options.splitThreshold ?? SPLIT_THRESHOLD,
-    };
+  constructor(
+    private readonly onFlush: (batches: FeishuBatchText[]) => Promise<void>,
+    options: TextBatcherOptions = {},
+  ) {
+    this.queue = new ScopedQueue<FeishuBatchText>(
+      options.delayMs ?? DEFAULT_DELAY_MS,
+      (scope, batch) => {
+        void this.onFlush(batch);
+      },
+    );
   }
 
+  /**
+   * 累积一条消息到 chatId 队列。若该 chatId 处于 block 状态,
+   * 消息只入队不触发 flush。
+   */
   enqueue(batch: FeishuBatchText): void {
-    const key = this.batchKey(batch);
-
-    const newOrExisting = this.pendingBatches.get(key);
-
-    if (!newOrExisting) {
-      const batched: BatchedMessage = {
-        batch: { ...batch },
-        lastChunkLen: batch.content?.length ?? 0,
-      };
-      this.pendingBatches.set(key, batched);
-      this.scheduleFlush(key);
-      return;
-    }
-
-    // Merge with existing batch
-    const existing = newOrExisting;
-    if (batch.content && existing.batch.content) {
-      existing.batch.content = `${existing.batch.content}\n${batch.content}`;
-    }
-
-    // Merge replyTo (use first one)
-    if (!existing.batch.replyTo && batch.replyTo) {
-      existing.batch.replyTo = batch.replyTo;
-    }
-
-    existing.lastChunkLen = batch.content?.length ?? 0;
-
-    // Check if we should flush immediately
-    const textLen = existing.batch.content?.length ?? 0;
-    if (textLen >= this.options.maxChars || this.getMessageCount(key) >= this.options.maxMessages) {
-      this.flushNow(key);
-      return;
-    }
-
-    this.scheduleFlush(key);
+    this.queue.push(batch.chatId, batch);
   }
 
-  private batchKey(batch: FeishuBatchText): string {
-    return batch.chatId;
+  /**
+   * 命令直通场景:丢弃该 chatId 此前累积的待 flush 消息。
+   * 返回被丢弃的原始消息列表(便于日志/统计)。
+   */
+  cancel(chatId: string): FeishuBatchText[] {
+    return this.queue.cancel(chatId);
   }
 
-  private getMessageCount(key: string): number {
-    const existing = this.pendingBatches.get(key);
-    if (!existing) return 0;
-    return Math.ceil((existing.batch.content?.length ?? 0) / this.options.splitThreshold);
+  /** Agent run 开始:暂停该 chatId 的防抖 flush,新消息继续累积。 */
+  block(chatId: string): void {
+    this.queue.block(chatId);
   }
 
-  private scheduleFlush(key: string): void {
-    const existingTimer = this.flushTimers.get(key);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
-
-    const batch = this.pendingBatches.get(key);
-    const delay =
-      batch && batch.lastChunkLen >= this.options.splitThreshold
-        ? this.options.splitDelayMs
-        : this.options.delayMs;
-
-    const timer = setTimeout(() => {
-      this.flushNow(key);
-    }, delay);
-
-    this.flushTimers.set(key, timer);
+  /**
+   * Agent run 结束:恢复该 chatId 的防抖 flush。
+   * 若期间累积了消息,arm 一个全新的 quiet window。
+   */
+  unblock(chatId: string): void {
+    this.queue.unblock(chatId);
   }
 
-  private flushNow(key: string): void {
-    const timer = this.flushTimers.get(key);
-    if (timer) {
-      clearTimeout(timer);
-      this.flushTimers.delete(key);
-    }
-
-    const batch = this.pendingBatches.get(key);
-    if (!batch) return;
-
-    this.pendingBatches.delete(key);
-    this.onFlush([batch.batch]);
+  /** 该 chatId 是否还有待 flush 的消息。 */
+  hasPending(chatId: string): boolean {
+    return this.queue.hasPending(chatId);
   }
 
+  /** 清空所有 chatId 的队列与 block 标记。 */
   clear(): void {
-    for (const timer of this.flushTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.flushTimers.clear();
-    this.pendingBatches.clear();
+    this.queue.cancelAll();
   }
 
   get pendingCount(): number {
-    return this.pendingBatches.size;
+    return this.queue.totalPending();
   }
 
   stop(): void {
     this.clear();
   }
 }
+
+// re-export for direct access if needed
+export type { QueuedMessage };

@@ -55,7 +55,11 @@ import {
   isSlashCommand,
   getSlashCommands,
 } from './slash-commands.js';
-import { buildControlPlane } from './program/build-control-plane.js';
+// (Plan 99: the desktop control plane — status / plugin / session /
+// skill / mcp / provider / channel / cron / message / install-cli —
+// now lives in @duya/cli. See packages/cli/src/. The agent runtime
+// only owns the REPL/print/headless modes, the legacy `config show`,
+// and the legacy `setup` wizard.)
 
 /**
  * Load .env file into process.env
@@ -870,22 +874,15 @@ function parseCLIArgs(args: string[]): CLIParsedArgs {
 }
 
 // ============================================================================
-// CLI control plane — descriptor-driven
-// ============================================================================
+// Agent runtime CLI: `duya` (REPL), `duya -t` (task), `duya --print`,
+// `duya --headless --script ...`, `duya config show`, `duya setup`.
 //
-// Plan 98 replaced the ~300-line inline `.command(...).action(...)` block
-// (Phase 0-7 wiring) with a data-driven builder. `descriptors.ts` is
-// the single source of truth for top-level command paths, subcommand
-// names, args, options, and the run() adapter. Both this CLI bundle
-// and the `duya_cli` agent tool consume `descriptors.ts` via
-// `build-agent-runner.ts` — adding a new subcommand is one edit in
-// `descriptors.ts`, not a two-place switch.
-//
-// Legacy commands below this block (`config show`, `setup`) are
-// preserved as-is per roadmap §5.1.
+// The desktop control plane (status / plugin / session / skill / mcp /
+// provider / channel / cron / message / install-cli) is in
+// `@duya/cli` and bundled into the wrapper separately. Adding a
+// new control-plane command is an edit to `packages/cli/src/...`,
+// NOT to this file.
 // ============================================================================
-
-buildControlPlane(program);
 
 // `duya config show` (legacy, preserved as-is per roadmap §5.1)
 program
