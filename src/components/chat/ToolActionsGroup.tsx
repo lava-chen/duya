@@ -949,6 +949,16 @@ function getLastRunningToolAction(actions: ActionItem[]): ToolAction | undefined
   return undefined;
 }
 
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
 export function ToolActionsGroup({
   tools,
   actions: actionsProp,
@@ -1009,6 +1019,16 @@ export function ToolActionsGroup({
     ? getRenderer(lastRunningTool.name).getSummary(lastRunningTool.input, lastRunningTool.name)
     : '';
 
+  const totalDurationMs = React.useMemo(() => {
+    let total = 0;
+    for (const action of actions) {
+      if (action.kind === 'tool' && action.tool.durationMs != null && action.tool.durationMs > 0) {
+        total += action.tool.durationMs;
+      }
+    }
+    return total;
+  }, [actions]);
+
   const handleToggle = () => {
     setUserExpandedState((prev) => prev !== null ? !prev : !expanded);
   };
@@ -1022,6 +1042,7 @@ export function ToolActionsGroup({
       >
         <span className="text-muted-foreground/60 truncate">
           {summaryParts.join(' · ')}
+          {totalDurationMs > 0 && `, Worked for ${formatDuration(totalDurationMs)}`}
         </span>
 
         {runningDesc && (

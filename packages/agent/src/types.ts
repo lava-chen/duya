@@ -163,6 +163,7 @@ export interface ToolResult {
   name: string;
   result: string;
   error?: boolean;
+  duration_ms?: number;
   metadata?: ToolResultMetadata;
 }
 
