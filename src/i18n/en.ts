@@ -22,6 +22,7 @@ const en = {
   'chat.toggleFileTree': 'Toggle File Tree',
   'chat.whatToBuild': 'What do you want to build',
   'chat.whatToBuildIn': 'What do you want to build in',
+  'chat.whatToBuildInSuffix': '',
   'chat.selectProject': 'Select project',
   'chat.openNewProject': 'Open New Project...',
   'chat.recentThreads': 'Recent Threads',
