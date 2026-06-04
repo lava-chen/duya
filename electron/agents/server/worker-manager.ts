@@ -221,12 +221,21 @@ export class WorkerManager {
       }
     }
 
+    // Prefer the esbuild bundle over tsc-compiled dist.
+    // The dist output is ESM with runtime imports that resolve to
+    // @duya/plugin-core's "main": "src/index.ts", which Node.js
+    // cannot load natively (ERR_UNKNOWN_FILE_EXTENSION).
+    const devBundle = path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
+    if (fs.existsSync(devBundle)) {
+      return devBundle;
+    }
+
     const devDist = path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
     if (fs.existsSync(devDist)) {
       return devDist;
     }
 
-    return path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
+    return devBundle;
   }
 
   private resolveBetterSqlite3Path(): string {
