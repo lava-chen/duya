@@ -427,7 +427,7 @@ function handlePostChatSSE(
         } else if (msgType === 'chat:tool_result') {
           sseEvent = {
             type: 'tool_result',
-            data: { id: event.id, result: event.result, error: event.error },
+            data: { id: event.id, result: event.result, error: event.error, duration_ms: event.duration_ms },
           };
         } else if (msgType === 'chat:tool_progress') {
           sseEvent = {

@@ -516,3 +516,6 @@ export interface MCPResource {
   description?: string;
   mimeType?: string;
 }
+
+// Default max output tokens for LLM responses
+export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;

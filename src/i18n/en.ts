@@ -81,6 +81,10 @@ const en = {
   'streaming.visionAnalyzingProgress': 'Analyzing image {current}/{total}...',
   'streaming.visionFallback': 'Primary vision failed, trying fallback...',
   'streaming.visionPreprocessDone': 'Image preprocessing complete, generating response...',
+  'streaming.actions.running': '{count} running',
+  'streaming.actions.completed': '{count} completed',
+  'streaming.actions.generating': 'generating response',
+  'streaming.actions.workedFor': 'Worked for {duration}',
 
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',

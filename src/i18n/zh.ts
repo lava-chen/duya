@@ -83,6 +83,10 @@ const zh: Record<TranslationKey, string> = {
   'streaming.visionAnalyzingProgress': '正在分析图片 {current}/{total}...',
   'streaming.visionFallback': '主视觉分析失败，正在尝试备用方案...',
   'streaming.visionPreprocessDone': '图片预处理完成，正在生成回复...',
+  'streaming.actions.running': '{count} 个运行中',
+  'streaming.actions.completed': '{count} 个已完成',
+  'streaming.actions.generating': '正在生成回复',
+  'streaming.actions.workedFor': '耗时 {duration}',
 
   'permission.allow': '允许',
   'permission.deny': '拒绝',

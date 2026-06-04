@@ -57,6 +57,7 @@ export interface ToolResultPayload {
   id: string;
   result: unknown;
   error?: string;
+  duration_ms?: number;
 }
 
 /**

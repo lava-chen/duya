@@ -436,6 +436,22 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
     };
   }, [message, mergedMessages, toolResultMap, pastedContents]);
 
+  // Full wall-clock duration for the entire assistant round.
+  // The agent records the end-to-end time (stream start -> final text) on the
+  // final assistant message; intermediate deltas don't carry it. Take the max
+  // non-null value across the round so the user sees the real response time
+  // (including model thinking and gaps between tool calls).
+  const totalRoundDurationMs = useMemo(() => {
+    const allMessages = sortMessagesByOrder([message, ...mergedMessages]);
+    let max = 0;
+    for (const msg of allMessages) {
+      if (msg.durationMs != null && msg.durationMs > max) {
+        max = msg.durationMs;
+      }
+    }
+    return max > 0 ? max : null;
+  }, [message, mergedMessages]);
+
   const copyToClipboard = async () => {
     try {
       const copyContent = message.role === 'user' && message.displayContent !== undefined
@@ -648,6 +664,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
               <ToolActionsGroup
                 actions={toolOnlyActions}
                 flat={isSubAgentSession}
+                totalDurationMs={totalRoundDurationMs}
               />
             )}
             <InterleavedContent actions={actions} sourceMessageId={message.id} />
@@ -661,6 +678,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
               <ToolActionsGroup
                 actions={actions}
                 flat={isSubAgentSession}
+                totalDurationMs={totalRoundDurationMs}
               />
             )}
             {finalText && (

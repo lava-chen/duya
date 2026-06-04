@@ -789,11 +789,12 @@ class StreamSessionManager {
         break;
       }
       case 'tool_result': {
-        const resultData = data as { id: string; result: unknown; error?: boolean };
+        const resultData = data as { id: string; result: unknown; error?: boolean; duration_ms?: number };
         const result: ToolResultInfo = {
           tool_use_id: resultData.id,
           content: typeof resultData.result === 'string' ? resultData.result : JSON.stringify(resultData.result),
           is_error: resultData.error || false,
+          duration_ms: resultData.duration_ms,
         };
         this.appendConductorEvent(canvasId, { type: 'tool_result', toolResult: result, timestamp: ts });
         if (state.phase === 'tool_use') {
@@ -1233,6 +1234,7 @@ class StreamSessionManager {
               tool_use_id: event.id,
               content: String(event.result),
               is_error: !!event.error,
+              duration_ms: (event as { duration_ms?: number }).duration_ms,
             });
           }
           break;
