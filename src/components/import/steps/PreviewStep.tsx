@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "@/hooks/useTranslation";
 import { ArrowRightIcon, ArrowLeftIcon } from "@/components/icons";
 import type { ImportItem, ScanResult, SessionImportItem } from "@/types/import";
 
@@ -12,13 +13,14 @@ interface PreviewStepProps {
   onBack: () => void;
 }
 
-const RISK_LABELS: Record<string, { label: string; color: string }> = {
-  safe: { label: "Recommended", color: "text-green-600" },
-  review: { label: "Needs Review", color: "text-yellow-600" },
-  restricted: { label: "Requires Authorization", color: "text-red-500" },
+const RISK_LABELS: Record<string, { key: string; color: string }> = {
+  safe: { key: "importFlow.recommended", color: "text-green-600" },
+  review: { key: "importFlow.needsReview", color: "text-yellow-600" },
+  restricted: { key: "importFlow.requiresAuthorization", color: "text-red-500" },
 };
 
 export function PreviewStep({ scanResult, selectedItems, selectedSessions, onConfirm, onBack }: PreviewStepProps) {
+  const { t } = useTranslation();
   const [showAdvanced, setShowAdvanced] = useState(false);
   const allItems = [...scanResult.userScopeItems, ...scanResult.projectScopeItems];
   const sessions = scanResult.sessions ?? [];
@@ -47,9 +49,9 @@ export function PreviewStep({ scanResult, selectedItems, selectedSessions, onCon
   return (
     <div className="space-y-4">
       <div className="text-center">
-        <h2 className="text-xl font-semibold mb-2">Review & Select</h2>
+        <h2 className="text-xl font-semibold mb-2">{t("importFlow.reviewAndSelect")}</h2>
         <p className="text-sm text-muted-foreground">
-          Pick what you want to import into DUYA
+          {t("importFlow.pickWhatToImport")}
         </p>
       </div>
 
@@ -69,7 +71,7 @@ export function PreviewStep({ scanResult, selectedItems, selectedSessions, onCon
       {sessions.length > 0 && (
         <div>
           <div className="text-sm font-medium text-foreground mb-2">
-            Chat Sessions ({sessions.length})
+            {t("importFlow.chatSessionsCount", { count: sessions.length })} 
           </div>
           <div className="space-y-2 max-h-[25vh] overflow-y-auto pr-1">
             {sessions.map((session) => (
@@ -90,7 +92,7 @@ export function PreviewStep({ scanResult, selectedItems, selectedSessions, onCon
             onClick={() => setShowAdvanced(!showAdvanced)}
             className="text-sm text-[var(--accent)] hover:underline"
           >
-            {showAdvanced ? "Hide" : "Show"} Advanced Settings ({advancedItems.length} items)
+            {showAdvanced ? t("importFlow.hideAdvanced", { count: advancedItems.length }) : t("importFlow.showAdvanced", { count: advancedItems.length })} 
           </button>
           {showAdvanced && (
             <div className="space-y-3 mt-3 max-h-[30vh] overflow-y-auto pr-1">
@@ -113,13 +115,13 @@ export function PreviewStep({ scanResult, selectedItems, selectedSessions, onCon
           className="inline-flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeftIcon size={16} />
-          Back
+          {t("importFlow.back")}
         </button>
         <button
           onClick={() => onConfirm(selectedItems, selectedSessions)}
           className="inline-flex items-center gap-2 px-6 py-2 bg-[var(--accent)] text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity"
         >
-          Confirm Selection
+          {t("importFlow.confirmSelection")}
           <ArrowRightIcon size={16} />
         </button>
       </div>
@@ -136,6 +138,7 @@ function ItemCard({
   selected: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation();
   const risk = RISK_LABELS[item.riskLevel] ?? RISK_LABELS.safe;
   const [expanded, setExpanded] = useState(false);
 
@@ -155,10 +158,10 @@ function ItemCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium truncate">{item.title}</span>
-            <span className={`text-xs shrink-0 ${risk.color}`}>{risk.label}</span>
+            <span className={`text-xs shrink-0 ${risk.color}`}>{t(risk.key as any)}</span>
           </div>
           <div className="text-xs text-muted-foreground mt-1">
-            From: {item.sourcePath} · Scope: {item.scope}
+            {t("importFlow.fromScope", { path: item.sourcePath, scope: item.scope })} 
           </div>
           <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{item.summary}</p>
           {expanded && (
@@ -170,7 +173,7 @@ function ItemCard({
             onClick={() => setExpanded(!expanded)}
             className="text-xs text-[var(--accent)] hover:underline mt-1"
           >
-            {expanded ? "Hide" : "View Full Content"}
+            {expanded ? t("importFlow.hide") : t("importFlow.viewFullContent")}
           </button>
         </div>
       </div>
@@ -187,6 +190,7 @@ function SessionCard({
   selected: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation();
   const sourceLabel = session.source === 'claude-code' ? 'Claude Code' : 'Codex';
   const sizeMB = (session.sizeBytes / (1024 * 1024)).toFixed(1);
 
@@ -209,10 +213,10 @@ function SessionCard({
             <span className="text-xs text-[var(--accent)] shrink-0">{sourceLabel}</span>
           </div>
           <div className="text-xs text-muted-foreground mt-1">
-            {session.messageCount} messages · {sizeMB} MB · {session.projectName || 'Unknown project'}
+            {t("importFlow.sessionMeta", { count: session.messageCount, size: sizeMB, project: session.projectName || t("importFlow.unknownProject") })} 
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
-            {new Date(session.createdAt).toLocaleDateString()} · {session.workingDirectory || 'No working directory'}
+            {new Date(session.createdAt).toLocaleDateString()} · {session.workingDirectory || t("importFlow.noWorkingDirectory")}
           </div>
         </div>
       </div>
