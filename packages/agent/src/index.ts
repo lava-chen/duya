@@ -1120,9 +1120,20 @@ export class duyaAgent {
           allowed: decision.behavior !== 'deny',
           behavior: decision.behavior,
         };
-      } catch {
-        // On error, default to allowing (fail open for better UX)
-        return true;
+      } catch (err) {
+        // Fail-open: a permission check that throws (e.g. abort, classifier
+        // glitch) must NOT silently downgrade to a permission prompt. Return
+        // an explicit `allow` decision so StreamingToolExecutor's
+        // `canUseBehavior !== 'allow'` guard stays false and we skip the
+        // in-band user prompt. Without behavior: 'allow', the executor
+        // sees `canUseBehavior === undefined`, treats it as a non-allow,
+        // and asks the user — which is the wrong default when the
+        // permission system itself is the thing that failed.
+        logger.warn(`[Agent] canUseTool check threw for ${toolName}, fail-open with allow: ${err instanceof Error ? err.message : String(err)}`);
+        return {
+          allowed: true,
+          behavior: 'allow',
+        };
       }
     };
 
@@ -1905,7 +1916,7 @@ export class duyaAgent {
       'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
       'list_mcp_resources', 'read_mcp_resource',
       'browser', 'skill', 'brief', 'session_search',
-      'vision', 'cron', 'duya_info', 'duya_config',
+      'vision', 'cron', 'duya_info',
       'duya_health', 'memory', 'ask_user_question',
       'module', 'skill_manage',
     ]);
