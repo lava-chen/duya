@@ -43,7 +43,31 @@ export type AuditEventKind =
   // Plan 99 §3.3 Phase 7 + Plan 102 — `duya mcp` write ops.
   | 'mcp.add'
   | 'mcp.remove'
-  | 'mcp.assign';
+  | 'mcp.assign'
+  // `duya update` write ops (Phase: adding update / backup / security).
+  | 'update.check'
+  | 'update.download'
+  | 'update.install'
+  // `duya backup` write ops.
+  | 'backup.create'
+  | 'backup.restore'
+  // `duya security` write ops.
+  | 'security.audit.fix'
+  // Plugin lifecycle write ops (Plan 200 P4).
+  | 'plugin.install'
+  | 'plugin.uninstall'
+  | 'plugin.update'
+  // `duya config` generic KV (Plan 200 P4).
+  | 'config.kv.set'
+  | 'config.kv.unset'
+  // `duya cron` enable/disable (Plan 200 P4).
+  | 'cron.enable'
+  | 'cron.disable'
+  // `duya channel` test send (Plan 200 P4).
+  | 'channel.test_send'
+  // `duya gateway` secret reload + generic rpc (Plan 200 P4).
+  | 'gateway.reload_secrets'
+  | 'gateway.rpc';
 
 export interface AuditEvent {
   kind: AuditEventKind;

@@ -22,10 +22,13 @@ import * as http from 'http';
 import { generateToken, checkBearer } from './auth';
 import { writeCliApiRuntime, removeCliApiRuntime } from './runtime-config';
 import { handleStatus } from './handlers/status.js';
-import { handleListPlugins, handleGetPlugin, handleEnablePlugin, handleDisablePlugin, handlePluginDoctor } from './handlers/plugins.js';
+import { handleListPlugins, handleGetPlugin, handleEnablePlugin, handleDisablePlugin, handlePluginDoctor, handleInstallPlugin, handleUninstallPlugin, handleUpdatePlugin } from './handlers/plugins.js';
 import {
   handleListSessions,
   handleGetSession,
+  handleSearchSessions,
+  handleExportSession,
+  handleImportSession,
   parseQuery as parseSessionsQuery,
 } from './handlers/sessions.js';
 import { handleListSkills, handleGetSkill } from './handlers/skills.js';
@@ -49,6 +52,10 @@ import {
   handleApprovePairing,
   handleRevokePairing,
   handleCheckPairing,
+  handleConfigKvSet,
+  handleConfigKvGet,
+  handleConfigKvUnset,
+  handleConfigValidate,
 } from './handlers/config.js';
 import {
   handleListChannels,
@@ -77,6 +84,35 @@ import {
   handleStopGateway,
   handleRestartGateway,
 } from './handlers/gateway.js';
+import {
+  handleGetUpdateStatus,
+  handleUpdateCheck,
+  handleUpdateDownload,
+  handleUpdateInstall,
+} from './handlers/update.js';
+import {
+  handleBackupPlan,
+  handleBackupCreate,
+  handleBackupVerify,
+  handleBackupRestore,
+} from './handlers/backup.js';
+import { handleSecurityAudit, handleSecurityFix } from './handlers/security.js';
+import {
+  handleSendMessage,
+  handleMCPTest,
+  handleSkillInstall,
+  handleSkillUninstall,
+  handleSkillSync,
+  handleChannelTest,
+  handleChannelSendTest,
+} from './handlers/extra.js';
+import {
+  handleCronEnable,
+  handleCronDisable,
+  handleCronLogs,
+  handleGatewayReloadSecrets,
+  handleGatewayRpc,
+} from './handlers/extra2.js';
 import { InvalidPaginationParam } from '../db/queries/sessions';
 import { getLogger } from '../logging/logger';
 
@@ -142,6 +178,24 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
+  // GET /v1/sessions/search?q=...
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'sessions' && parts[2] === 'search') {
+    handleSearchSessions(req, res);
+    return;
+  }
+
+  // POST /v1/sessions/export
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'sessions' && parts[2] === 'export') {
+    void handleExportSession(req, res);
+    return;
+  }
+
+  // POST /v1/sessions/import
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'sessions' && parts[2] === 'import') {
+    void handleImportSession(req, res);
+    return;
+  }
+
   // /v1/plugins/:name
   if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'plugins') {
     handleGetPlugin(req, res, parts[2]);
@@ -165,6 +219,27 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /v1/plugins/doctor
   if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'plugins' && parts[2] === 'doctor') {
     handlePluginDoctor(req, res);
+    return;
+  }
+
+  // POST /v1/plugins/install (Plan 200 P4)
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'plugins' && parts[2] === 'install') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleInstallPlugin(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/plugins/:id/uninstall
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'plugins' && parts[3] === 'uninstall') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleUninstallPlugin(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // POST /v1/plugins/:id/update
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'plugins' && parts[3] === 'update') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleUpdatePlugin(req, res, decodeURIComponent(parts[2]), correlationId);
     return;
   }
 
@@ -379,6 +454,173 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   }
 
   // ============================================================================
+  // `duya update` — auto-updater control plane
+  // ============================================================================
+
+  // GET /v1/update/status
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'update' && parts[2] === 'status') {
+    handleGetUpdateStatus(req, res);
+    return;
+  }
+
+  // POST /v1/update/check
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'update' && parts[2] === 'check') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleUpdateCheck(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/update/download
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'update' && parts[2] === 'download') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleUpdateDownload(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/update/install
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'update' && parts[2] === 'install') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleUpdateInstall(req, res, correlationId);
+    return;
+  }
+
+  // ============================================================================
+  // `duya backup` — local state archive control plane
+  // ============================================================================
+
+  // POST /v1/backup/plan
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'backup' && parts[2] === 'plan') {
+    handleBackupPlan(req, res);
+    return;
+  }
+
+  // POST /v1/backup/create
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'backup' && parts[2] === 'create') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleBackupCreate(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/backup/verify
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'backup' && parts[2] === 'verify') {
+    void handleBackupVerify(req, res);
+    return;
+  }
+
+  // POST /v1/backup/restore
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'backup' && parts[2] === 'restore') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleBackupRestore(req, res, correlationId);
+    return;
+  }
+
+  // ============================================================================
+  // `duya security` — read-only audit + auto-fix
+  // ============================================================================
+
+  // POST /v1/security/audit
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'security' && parts[2] === 'audit') {
+    void handleSecurityAudit(req, res);
+    return;
+  }
+
+  // POST /v1/security/fix
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'security' && parts[2] === 'fix') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleSecurityFix(req, res, correlationId);
+    return;
+  }
+
+  // ============================================================================
+  // Plan 200 P4.3 — message / mcp / skill / channel extras
+  // ============================================================================
+
+  // POST /v1/messages/send
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'messages' && parts[2] === 'send') {
+    void handleSendMessage(req, res);
+    return;
+  }
+
+  // POST /v1/mcps/:name/test
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'mcps' && parts[3] === 'test') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleMCPTest(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // POST /v1/skills/install
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'skills' && parts[2] === 'install') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleSkillInstall(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/skills/:id/uninstall
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'skills' && parts[3] === 'uninstall') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleSkillUninstall(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // POST /v1/skills/sync
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'skills' && parts[2] === 'sync') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleSkillSync(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/channels/test
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'channels' && parts[2] === 'test') {
+    void handleChannelTest(req, res);
+    return;
+  }
+
+  // POST /v1/channels/send-test
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'channels' && parts[2] === 'send-test') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleChannelSendTest(req, res, correlationId);
+    return;
+  }
+
+  // ============================================================================
+  // Plan 200 P4.4 — cron enable/disable/logs + gateway reload-secrets/rpc
+  // ============================================================================
+
+  // POST /v1/crons/:id/enable
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'crons' && parts[3] === 'enable') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleCronEnable(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // POST /v1/crons/:id/disable
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'crons' && parts[3] === 'disable') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleCronDisable(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // GET /v1/crons/:id/logs?limit=20
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'crons' && parts[3] === 'logs') {
+    handleCronLogs(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // POST /v1/gateway/reload-secrets
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'gateway' && parts[2] === 'reload-secrets') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleGatewayReloadSecrets(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/gateway/rpc
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'gateway' && parts[2] === 'rpc') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleGatewayRpc(req, res, correlationId);
+    return;
+  }
+
+  // ============================================================================
   // Plan 102 — `duya config …` + `mcp add/remove/assign` routes
   // ============================================================================
 
@@ -469,6 +711,34 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /v1/config/pairing/check
   if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing' && parts[3] === 'check') {
     handleCheckPairing(req, res);
+    return;
+  }
+
+  // ============================================================================
+  // Plan 200 P4 — generic config KV (set / get / unset / validate)
+  // ============================================================================
+
+  // POST /v1/config/kv/set
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'kv' && parts[3] === 'set') {
+    void handleConfigKvSet(req, res);
+    return;
+  }
+
+  // GET /v1/config/kv/get?key=...
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'kv' && parts[3] === 'get') {
+    handleConfigKvGet(req, res);
+    return;
+  }
+
+  // POST /v1/config/kv/unset
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'kv' && parts[3] === 'unset') {
+    void handleConfigKvUnset(req, res);
+    return;
+  }
+
+  // POST /v1/config/validate
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'validate') {
+    void handleConfigValidate(req, res);
     return;
   }
 

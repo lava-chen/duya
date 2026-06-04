@@ -541,3 +541,135 @@ export async function runConfigPairingCheck(ctx: CliSubcommandContext): Promise<
     return writeErrorAndExit(err), 0;
   }
 }
+
+// ============================================================================
+// Phase 4.2: generic KV — set / get / unset / validate (Plan 200 P4)
+// ============================================================================
+
+function asString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+const KV_KEYS = ['agentSettings', 'uiPreferences', 'visionSettings', 'outputStyles', 'apiProviders'] as const;
+type KvKey = (typeof KV_KEYS)[number];
+
+function isKvKey(v: unknown): v is KvKey {
+  return typeof v === 'string' && (KV_KEYS as readonly string[]).includes(v);
+}
+
+function readKvInput(
+  ctx: CliSubcommandContext,
+): { key: KvKey; value?: Record<string, unknown> } | null {
+  const key = (asString(ctx.options.key) ?? ctx.args[0]) as string | undefined;
+  if (!isKvKey(key)) return null;
+  const valueRaw = asString(ctx.options.value);
+  let value: Record<string, unknown> | undefined;
+  if (valueRaw) {
+    try {
+      const parsed = JSON.parse(valueRaw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        value = parsed as Record<string, unknown>;
+      }
+    } catch (err) {
+      process.stderr.write(`config: --value is not valid JSON: ${err instanceof Error ? err.message : String(err)}\n`);
+      return null;
+    }
+  }
+  return { key, value };
+}
+
+export async function runConfigKvSet(ctx: CliSubcommandContext): Promise<ExitCode> {
+  const input = readKvInput(ctx);
+  if (!input || !input.value) {
+    process.stderr.write(
+      `config set — key (${KV_KEYS.join('|')}) and --value <json> are required\n`,
+    );
+    return 64;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const body = await client.post<{ ok: boolean; key: string; value: unknown }>(
+      '/v1/config/kv/set',
+      { key: input.key, value: input.value },
+    );
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson(body) + '\n');
+    } else {
+      process.stdout.write(`Updated ${body.key}.\n`);
+    }
+    return 0;
+  } catch (err) {
+    return writeErrorAndExit(err), 0;
+  }
+}
+
+export async function runConfigKvGet(ctx: CliSubcommandContext): Promise<ExitCode> {
+  const key = asString(ctx.options.key) ?? ctx.args[0];
+  if (!isKvKey(key)) {
+    process.stderr.write(`config get — key (${KV_KEYS.join('|')}) required\n`);
+    return 64;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const body = await client.get<{ key: string; value: unknown }>(
+      `/v1/config/kv/get?key=${encodeURIComponent(key)}`,
+    );
+    process.stdout.write(renderJson(body) + '\n');
+    return 0;
+  } catch (err) {
+    return writeErrorAndExit(err), 0;
+  }
+}
+
+export async function runConfigKvUnset(ctx: CliSubcommandContext): Promise<ExitCode> {
+  if (ctx.options.yes !== true && !process.stdin.isTTY) {
+    process.stderr.write('interactive_required: config unset requires --yes in non-interactive mode\n');
+    return 3;
+  }
+  const key = asString(ctx.options.key) ?? ctx.args[0];
+  if (!isKvKey(key)) {
+    process.stderr.write(`config unset — key (${KV_KEYS.join('|')}) required\n`);
+    return 64;
+  }
+  const path = asString(ctx.options.path);
+  try {
+    const client = await CliApiClient.connect();
+    const body = await client.post<{ ok: boolean; key: string; value: unknown }>(
+      '/v1/config/kv/unset',
+      { key, path },
+    );
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson(body) + '\n');
+    } else {
+      process.stdout.write(`Unset ${key}${path ? `.${path}` : ''}.\n`);
+    }
+    return 0;
+  } catch (err) {
+    return writeErrorAndExit(err), 0;
+  }
+}
+
+export async function runConfigValidate(ctx: CliSubcommandContext): Promise<ExitCode> {
+  const input = readKvInput(ctx);
+  if (!input || !input.value) {
+    process.stderr.write(
+      `config validate — key (${KV_KEYS.join('|')}) and --value <json> required\n`,
+    );
+    return 64;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const body = await client.post<{ valid: boolean; error?: string }>(
+      '/v1/config/validate',
+      { key: input.key, value: input.value },
+    );
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson(body) + '\n');
+    } else {
+      process.stdout.write(body.valid ? 'valid\n' : `invalid: ${body.error ?? 'unknown'}\n`);
+    }
+    return body.valid ? 0 : 1;
+  } catch (err) {
+    return writeErrorAndExit(err), 0;
+  }
+}

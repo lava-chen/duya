@@ -37,13 +37,16 @@ describe('CLI_DESCRIPTORS — frozen v1.0.0', () => {
     'cron',
     'message',
     'gateway',
+    'update',
+    'backup',
+    'security',
     'install-cli',
     'uninstall-cli',
     'config',
     'setup',
   ];
 
-  it('has all 15 expected top-level command paths', () => {
+  it('has all 18 expected top-level command paths', () => {
     const actual = CLI_DESCRIPTORS.map((d) => d.name);
     expect(actual).toEqual(EXPECTED_PATHS);
   });
@@ -92,7 +95,7 @@ describe('resolveSubcommand', () => {
   });
 
   it('returns null for unknown subcommand', () => {
-    expect(resolveSubcommand(CLI_DESCRIPTORS, 'plugin', 'install')).toBeNull();
+    expect(resolveSubcommand(CLI_DESCRIPTORS, 'plugin', 'reindex')).toBeNull();
   });
 
   it('returns null for unknown command', () => {
@@ -157,14 +160,14 @@ describe('error message helpers', () => {
     const list = listCommandNames(CLI_DESCRIPTORS);
     expect(list).toContain('status | plugin');
     expect(list).toContain('message | gateway');
-    expect(list).toContain('gateway | install-cli');
+    expect(list).toContain('security | install-cli');
   });
 
   it('listSubcommandNames joins a command\'s subcommands', () => {
     const cron = CLI_DESCRIPTORS.find((d) => d.name === 'cron');
     expect(cron).toBeDefined();
     expect(listSubcommandNames(cron!)).toBe(
-      'list | info | create | update | delete | run | runs',
+      'list | info | create | update | delete | run | enable | disable | runs | logs',
     );
   });
 });
@@ -184,9 +187,10 @@ describe('buildAgentRunner — agent tool bridge', () => {
   });
 
   it('unknown subcommand returns exit code 64 with expected list', async () => {
-    const r = await resolve({ command: 'plugin', subcommand: 'install' });
+    // pick a subcommand that is NOT in the plugin tree after Plan 200
+    const r = await resolve({ command: 'plugin', subcommand: 'reinstall' });
     expect(r.exitCode).toBe(64);
-    expect(r.stderr).toMatch(/unknown plugin subcommand: install/);
+    expect(r.stderr).toMatch(/unknown plugin subcommand: reinstall/);
     expect(r.stderr).toContain('expected:');
   });
 

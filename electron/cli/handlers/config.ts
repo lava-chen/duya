@@ -645,3 +645,231 @@ export function handleCheckPairing(req: IncomingMessage, res: ServerResponse): v
     sendError(res, c.status, c.code, c.message);
   }
 }
+
+// ============================================================================
+// Phase 4.2: generic KV set / get / unset / validate (Plan 200 P4)
+// ============================================================================
+
+type GenericConfigKey =
+  | 'agentSettings'
+  | 'uiPreferences'
+  | 'visionSettings'
+  | 'outputStyles'
+  | 'apiProviders';
+
+const ALLOWED_GENERIC_KEYS: readonly GenericConfigKey[] = [
+  'agentSettings',
+  'uiPreferences',
+  'visionSettings',
+  'outputStyles',
+  'apiProviders',
+];
+
+function isGenericKey(v: unknown): v is GenericConfigKey {
+  return typeof v === 'string' && (ALLOWED_GENERIC_KEYS as readonly string[]).includes(v);
+}
+
+function deepClone<T>(v: T): T {
+  if (typeof structuredClone === 'function') return structuredClone(v);
+  return JSON.parse(JSON.stringify(v)) as T;
+}
+
+/**
+ * POST /v1/config/kv/set
+ * body: { key, value } — merges `value` into the top-level key.
+ * Records an audit event of kind `config.kv.set`.
+ */
+export async function handleConfigKvSet(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  if (!isGenericKey(body.key)) {
+    sendError(res, 400, 'invalid_key', `key must be one of: ${ALLOWED_GENERIC_KEYS.join(', ')}`);
+    return;
+  }
+  if (typeof body.value !== 'object' || body.value === null || Array.isArray(body.value)) {
+    sendError(res, 400, 'invalid_value', 'value must be a JSON object');
+    return;
+  }
+  try {
+    const cm = getConfigManager();
+    const current = cm.getConfig();
+    const merged = {
+      ...(current[body.key] as Record<string, unknown>),
+      ...(body.value as Record<string, unknown>),
+    };
+    const ok = cm.setConfig(body.key, merged, 'agent');
+    if (!ok) {
+      sendError(res, 400, 'validation_failed', 'config validation failed for the merged value');
+      return;
+    }
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.kv.set', body.key, Object.keys(body.value as object).join(','));
+    sendJson(res, 200, { ok: true, key: body.key, value: merged });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+/**
+ * GET /v1/config/kv/get?key=...
+ * Returns the value at the top-level key (the whole record).
+ */
+export function handleConfigKvGet(req: IncomingMessage, res: ServerResponse): void {
+  const url = req.url ?? '/';
+  const qIdx = url.indexOf('?');
+  let key: string | undefined;
+  if (qIdx >= 0) {
+    for (const part of url.slice(qIdx + 1).split('&')) {
+      const eq = part.indexOf('=');
+      if (eq < 0) continue;
+      const k = part.slice(0, eq);
+      const v = part.slice(eq + 1);
+      if (k === 'key') key = decodeURIComponent(v);
+    }
+  }
+  if (!isGenericKey(key)) {
+    sendError(res, 400, 'invalid_key', `key must be one of: ${ALLOWED_GENERIC_KEYS.join(', ')}`);
+    return;
+  }
+  try {
+    const cm = getConfigManager();
+    const value = (cm.getConfig() as Record<string, unknown>)[key];
+    sendJson(res, 200, { key, value });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+/**
+ * POST /v1/config/kv/unset
+ * body: { key, path? } — drops the key (or the path under it) back
+ * to its default. Without `path` this is destructive: it restores
+ * the entire key to the empty default. The CLI gates this behind
+ * --yes (Phase 7).
+ */
+export async function handleConfigKvUnset(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  if (!isGenericKey(body.key)) {
+    sendError(res, 400, 'invalid_key', `key must be one of: ${ALLOWED_GENERIC_KEYS.join(', ')}`);
+    return;
+  }
+  const pathRaw = body.path;
+  const path =
+    typeof pathRaw === 'string' && pathRaw.length > 0
+      ? pathRaw.split('.').filter((s) => s.length > 0)
+      : [];
+  try {
+    const cm = getConfigManager();
+    const cfg = cm.getConfig();
+    const current = deepClone(cfg[body.key] as Record<string, unknown>);
+    if (path.length === 0) {
+      const defaults: Record<GenericConfigKey, unknown> = {
+        agentSettings: {},
+        uiPreferences: {},
+        visionSettings: { provider: '', model: '', baseUrl: '', apiKey: '', enabled: false },
+        outputStyles: {},
+        apiProviders: {},
+      };
+      const ok = cm.setConfig(body.key, defaults[body.key], 'agent');
+      if (!ok) {
+        sendError(res, 400, 'validation_failed', 'config validation failed for the default value');
+        return;
+      }
+      const ctx = readAuditContext(req);
+      await audit(ctx, 'config.kv.unset', body.key, 'whole-key');
+      sendJson(res, 200, { ok: true, key: body.key, value: defaults[body.key] });
+      return;
+    }
+    let cursor: Record<string, unknown> = current;
+    for (let i = 0; i < path.length - 1; i++) {
+      const seg = path[i];
+      const next = cursor[seg];
+      if (typeof next !== 'object' || next === null) {
+        sendError(res, 404, 'path_not_found', `path not found: ${path.join('.')}`);
+        return;
+      }
+      cursor = next as Record<string, unknown>;
+    }
+    const last = path[path.length - 1];
+    if (!(last in cursor)) {
+      sendError(res, 404, 'path_not_found', `path not found: ${path.join('.')}`);
+      return;
+    }
+    delete cursor[last];
+    const ok = cm.setConfig(body.key, current, 'agent');
+    if (!ok) {
+      sendError(res, 400, 'validation_failed', 'config validation failed after unset');
+      return;
+    }
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.kv.unset', body.key, path.join('.'));
+    sendJson(res, 200, { ok: true, key: body.key, path: path.join('.'), value: current });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+/**
+ * POST /v1/config/validate
+ * body: { key, value } — runs the same validator the manager uses
+ * for `setConfig`, but does NOT write. Returns { valid, error? }.
+ *
+ * Note: the manager's setConfig writes when valid, so we restore the
+ * prior value after the validation probe. This keeps the call
+ * effectively read-only from the caller's perspective.
+ */
+export async function handleConfigValidate(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  if (!isGenericKey(body.key)) {
+    sendError(res, 400, 'invalid_key', `key must be one of: ${ALLOWED_GENERIC_KEYS.join(', ')}`);
+    return;
+  }
+  try {
+    const cm = getConfigManager();
+    const cfg = cm.getConfig();
+    const before = deepClone((cfg as Record<string, unknown>)[body.key]);
+    const merged =
+      typeof body.value === 'object' && body.value !== null && !Array.isArray(body.value)
+        ? { ...(before as Record<string, unknown>), ...(body.value as Record<string, unknown>) }
+        : body.value;
+    const ok = cm.setConfig(body.key, merged, 'agent');
+    // Restore the original value so validate is effectively read-only.
+    cm.setConfig(body.key, before, 'agent');
+    sendJson(res, 200, {
+      valid: ok,
+      ...(ok ? {} : { error: 'validation failed; check field types and required keys' }),
+    });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
