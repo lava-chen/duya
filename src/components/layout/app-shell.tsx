@@ -3,10 +3,11 @@
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { UpdateBadge } from "@/components/update/UpdateBadge";
-import { lazy, Suspense, useState, useCallback, useRef, useEffect } from "react";
+import { lazy, Suspense, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
+import { FolderIcon, SquaresFourIcon } from "@/components/icons";
 
 // Custom event for triggering onboarding reset
 const RESET_ONBOARDING_EVENT = "duya:reset-onboarding";
@@ -24,8 +25,9 @@ const DEFAULT_SIDEBAR_WIDTH = 260;
 
 function AppShellInner({ children }: AppShellProps) {
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const { currentView, isHydrated } = useConversationStore();
-  const { panelOpen, activeTab } = usePanel();
+  const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
+  const { currentView, isHydrated, threads, activeThreadId } = useConversationStore();
+  const { panelOpen, activeTab, setPanelOpen, setActiveTab } = usePanel();
 
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
@@ -91,6 +93,7 @@ function AppShellInner({ children }: AppShellProps) {
   useEffect(() => {
     const handleResetOnboarding = () => {
       localStorage.removeItem("duya-onboarding-completed");
+      setForceShowOnboarding(true);
       setShowOnboarding(true);
     };
 
@@ -100,11 +103,35 @@ function AppShellInner({ children }: AppShellProps) {
 
   const isConductorOpen = panelOpen && activeTab === 'canvas';
 
+  const selectedProject = useMemo(() => {
+    const thread = threads.find((t) => t.id === activeThreadId);
+    if (thread?.workingDirectory) {
+      return { workingDirectory: thread.workingDirectory, projectName: thread.projectName || thread.workingDirectory };
+    }
+    return null;
+  }, [threads, activeThreadId]);
+  const showPanelToggle = currentView === 'chat' && !!selectedProject;
+
+  const handlePanelButtonClick = useCallback((tab: 'files' | 'canvas') => {
+    if (panelOpen && activeTab === tab) {
+      setPanelOpen(false);
+      return;
+    }
+    setActiveTab(tab);
+    setPanelOpen(true);
+  }, [panelOpen, activeTab, setPanelOpen, setActiveTab]);
+
   return (
     <div className="app-shell-root" data-conductor-open={isConductorOpen ? "true" : undefined}>
       {showOnboarding && (
         <Suspense fallback={null}>
-          <OnboardingFlow onComplete={() => setShowOnboarding(false)} />
+          <OnboardingFlow
+            forceShow={forceShowOnboarding}
+            onComplete={() => {
+              setShowOnboarding(false);
+              setForceShowOnboarding(false);
+            }}
+          />
         </Suspense>
       )}
       <div className="app-shell">
@@ -125,6 +152,28 @@ function AppShellInner({ children }: AppShellProps) {
             </div>
           </div>
           <PanelZone />
+          {showPanelToggle && (
+            <div className="chat-panel-floating-actions">
+              <button
+                type="button"
+                className={`chat-panel-floating-btn${panelOpen && activeTab === 'files' ? ' active' : ''}`}
+                onClick={() => handlePanelButtonClick('files')}
+                title="Files"
+                aria-label="Files"
+              >
+                <FolderIcon size={16} />
+              </button>
+              <button
+                type="button"
+                className={`chat-panel-floating-btn${panelOpen && activeTab === 'canvas' ? ' active' : ''}`}
+                onClick={() => handlePanelButtonClick('canvas')}
+                title="Canvas"
+                aria-label="Canvas"
+              >
+                <SquaresFourIcon size={16} />
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

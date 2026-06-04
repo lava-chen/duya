@@ -18,7 +18,7 @@ export const PanelContext = createContext<PanelContextValue | null>(null);
 
 const MIN_PANEL_WIDTH = 220;
 const MAX_PANEL_WIDTH = 720;
-const DEFAULT_PANEL_WIDTH = 380;
+const DEFAULT_PANEL_WIDTH = 340;
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
   const [panelOpen, setPanelOpen] = useState(false);

@@ -1,12 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  IconLayoutSidebarLeftCollapse,
-  IconLayoutSidebarLeftExpand,
-} from "@tabler/icons-react";
+
 import { useConversationStore } from "@/stores/conversation-store";
-import { usePanel } from "@/hooks/usePanel";
 import { useSettings } from "@/hooks/useSettings";
 import { getWikiRuntimeStatusIPC, subscribeWikiActivityIPC } from "@/lib/memory-ipc";
 import type { WikiRuntimeState } from "@/types/memory";
@@ -17,7 +13,6 @@ interface TitleBarProps {
 
 export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
   const { threads, activeThreadId, currentView } = useConversationStore();
-  const { panelOpen, togglePanel } = usePanel();
   const { settings } = useSettings();
   const brandIconSrc = `${import.meta.env.BASE_URL}icon.png`;
   const [wikiState, setWikiState] = useState<WikiRuntimeState>("idle");
@@ -29,8 +24,6 @@ export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
 
-  // Only show panel toggle when in a project
-  const showPanelToggle = !!activeThread?.workingDirectory;
   const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
   const threadTitle = activeThread?.title || "New Thread";
@@ -138,23 +131,6 @@ export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
               </span>
             )}
           </>
-        )}
-      </div>
-      <div className="titlebar-actions">
-        {showPanelToggle && (
-          <button
-            type="button"
-            className={`titlebar-action-btn${panelOpen ? " active" : ""}`}
-            onClick={togglePanel}
-            title="Toggle Panel"
-            aria-label="Toggle Panel"
-          >
-            {panelOpen ? (
-              <IconLayoutSidebarLeftCollapse size={16} />
-            ) : (
-              <IconLayoutSidebarLeftExpand size={16} />
-            )}
-          </button>
         )}
       </div>
     </div>
