@@ -163,6 +163,7 @@ export interface ToolResult {
   name: string;
   result: string;
   error?: boolean;
+  duration_ms?: number;
   metadata?: ToolResultMetadata;
 }
 
@@ -515,3 +516,6 @@ export interface MCPResource {
   description?: string;
   mimeType?: string;
 }
+
+// Default max output tokens for LLM responses
+export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;

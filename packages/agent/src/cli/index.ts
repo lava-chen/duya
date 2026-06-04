@@ -55,6 +55,7 @@ import {
   isSlashCommand,
   getSlashCommands,
 } from './slash-commands.js';
+import { buildControlPlane } from './program/build-control-plane.js';
 
 /**
  * Load .env file into process.env
@@ -869,254 +870,27 @@ function parseCLIArgs(args: string[]): CLIParsedArgs {
 }
 
 // ============================================================================
-// Subcommands
+// CLI control plane — descriptor-driven
+// ============================================================================
+//
+// Plan 98 replaced the ~300-line inline `.command(...).action(...)` block
+// (Phase 0-7 wiring) with a data-driven builder. `descriptors.ts` is
+// the single source of truth for top-level command paths, subcommand
+// names, args, options, and the run() adapter. Both this CLI bundle
+// and the `duya_cli` agent tool consume `descriptors.ts` via
+// `build-agent-runner.ts` — adding a new subcommand is one edit in
+// `descriptors.ts`, not a two-place switch.
+//
+// Legacy commands below this block (`config show`, `setup`) are
+// preserved as-is per roadmap §5.1.
 // ============================================================================
 
-// ----------------------------------------------------------------------------
-// Phase 0: CLI control plane (duya status / duya plugin ...).
-//
-// These subcommands connect to the local HTTP API exposed by the running
-// DUYA desktop app. They do NOT spawn a separate agent runtime. The legacy
-// execution-type commands (--print / -t / --headless / REPL / setup) are
-// untouched below.
-//
-// Phase 0 only ships read-only commands; no --api / --token flags are
-// accepted, and the bearer token is read solely from
-// <userData>/runtime/cli-api.json. Dev/test userData override goes through
-// the DUYA_CLI_USER_DATA_DIR environment variable.
-// ----------------------------------------------------------------------------
+buildControlPlane(program);
 
-import { runStatusCommand } from './commands/status.js';
-import { runPluginCommand } from './commands/plugin.js';
-import { runSessionCommand } from './commands/session.js';
-import { runDoctorCommand } from './commands/doctor.js';
-import {
-  runSkillListCommand,
-  runSkillInfoCommand,
-  runSkillEnableCommand,
-  runSkillDisableCommand,
-} from './commands/skill.js';
-import { runMCPListCommand, runMCPInfoCommand } from './commands/mcp.js';
-import { runInstallCliCommand, runUninstallCliCommand } from './commands/install.js';
-import { parseFormat } from './api/format.js';
-
-program
-  .command('status')
-  .description('Show the running DUYA desktop app status')
-  // Note: we use only --format (no -f) here to avoid colliding with the
-  // global program -f / --format flag, which is owned by the legacy
-  // --print / --headless path.
-  .option('--format <format>', 'Output format: text|json', 'text')
-  .action(async (opts: { format?: string }) => {
-    const code = await runStatusCommand(parseFormat(opts.format));
-    process.exit(code);
-  });
-
-program
-  .command('plugin')
-  .description('Inspect installed plugins via the DUYA desktop app')
-  .addCommand(
-    new Command('list')
-      .description('List installed plugins (id / name / version / enabled / capabilities / source)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (opts: { format?: string }) => {
-        const code = await runPluginCommand.list(parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('info')
-      .argument('<id>', 'Plugin id (e.g. com.duya.literature)')
-      .description('Show details for one installed plugin (adds description + permissions)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (id: string, opts: { format?: string }) => {
-        const code = await runPluginCommand.info(id, parseFormat(opts.format));
-        process.exit(code);
-      }),
-  );
-
-// Session subcommands
-//
-// Phase 1 control plane: `list` and `show` connect to the local API
-// exposed by the running DUYA desktop app. The legacy placeholders
-// `continue` and `delete` are intentionally kept untouched (not deleted
-// or re-implemented) per Phase 1.2 scope.
-program
-  .command('session')
-  .description('Session management')
-  .addCommand(
-    new Command('list')
-      .description('List top-level user-visible sessions (id / title / updatedAt / messageCount)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .option('--limit <n>', 'Page size (1–100, default 20)')
-      .option('--offset <n>', 'Page offset (≥ 0, default 0)')
-      .action(async (opts: { format?: string; limit?: string; offset?: string }) => {
-        const code = await runSessionCommand.list(parseFormat(opts.format), {
-          limit: opts.limit,
-          offset: opts.offset,
-        });
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('show')
-      .argument('<id>', 'Session id')
-      .description('Show details for one top-level session (id / title / createdAt / updatedAt / model / messageCount)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (id: string, opts: { format?: string }) => {
-        const code = await runSessionCommand.show(id, parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('continue')
-      .option('-i, --id <sessionId>', 'Session ID to continue')
-      .description('Continue a previous session')
-      .action(async (options) => {
-        printHeader('Continue Session')
-        console.log(color('  (Session storage not yet implemented)', Colors.DIM))
-      })
-  )
-  .addCommand(
-    new Command('delete')
-      .description('Delete a session')
-      .action(async () => {
-        printHeader('Delete Session')
-        console.log(color('  (Session storage not yet implemented)', Colors.DIM))
-      })
-  )
-
-// Phase 2B: duya doctor — read-only diagnostic
-program
-  .command('doctor')
-  .description('Run read-only diagnostic checks on DUYA runtime and data stores')
-  .option('--format <format>', 'Output format: text|json', 'text')
-  .action(async (opts: { format?: string }) => {
-    const code = await runDoctorCommand(parseFormat(opts.format));
-    process.exit(code);
-  })
-
-// Phase 3: duya skill — read-only skill control plane
-//
-// list / info. Read the available-skill set from the main process
-// via /v1/skills. The main process owns the resolver and DTO.
-program
-  .command('skill')
-  .description('Inspect available skills (id / name / description / source / enabled)')
-  .addCommand(
-    new Command('list')
-      .description('List available skills (id / name / description / source / enabled)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (opts: { format?: string }) => {
-        const code = await runSkillListCommand(parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('info')
-      .argument('<id>', 'Skill id (e.g. bundled:code-review, plugin:<id>:<name>, user:<name>)')
-      .description('Show details for one available skill (adds category / customized / userInvocable / allowedTools / platforms)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (id: string, opts: { format?: string }) => {
-        const code = await runSkillInfoCommand(id, parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('enable')
-      .argument('<id>', 'Skill id (e.g. bundled:code-review, plugin:<id>:<name>, user:<name>)')
-      .description('Enable a skill (removes the disabled override). Phase 7 write op.')
-      .option('--yes', 'Skip confirmation prompt (required in non-interactive mode)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (id: string, opts: { yes?: boolean; format?: string }) => {
-        const code = await runSkillEnableCommand(id, !!opts.yes, parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('disable')
-      .argument('<id>', 'Skill id (e.g. bundled:code-review, plugin:<id>:<name>, user:<name>)')
-      .description('Disable a skill (writes the disabled override). Phase 7 write op.')
-      .option('--yes', 'Skip confirmation prompt (required in non-interactive mode)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (id: string, opts: { yes?: boolean; format?: string }) => {
-        const code = await runSkillDisableCommand(id, !!opts.yes, parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-
-// Phase 6: duya mcp — read-only MCP control plane
-//
-// list / info. Reads unified MCP candidates (bundled + plugin +
-// settings + kv + legacy) from the main process via /v1/mcps.
-program
-  .command('mcp')
-  .description('Inspect available MCP servers (id / name / source / enabled / connected)')
-  .addCommand(
-    new Command('list')
-      .description('List available MCP servers (id / name / source / enabled / connected)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (opts: { format?: string }) => {
-        const code = await runMCPListCommand(parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('info')
-      .argument('<id>', 'MCP id (e.g. bundled:literature, plugin:<pluginId>:<name>)')
-      .description('Show details for one available MCP server (adds command / args)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (id: string, opts: { format?: string }) => {
-        const code = await runMCPInfoCommand(id, parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-
-// Phase 4: duya provider — read-only provider control plane
-//
-// list / info. Reads the configured LLM provider list from the
-// main process via /v1/providers. The main process owns the
-// config manager and applies redacted DTO (no API keys).
-import { runProviderListCommand, runProviderInfoCommand } from './commands/provider.js';
-
-program
-  .command('provider')
-  .description('Provider configuration')
-  .addCommand(
-    new Command('list')
-      .description('List configured providers (id / type / hasKey / isActive / model)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (opts: { format?: string }) => {
-        const code = await runProviderListCommand(parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('info')
-      .argument('<id>', 'Provider id (e.g. anthropic, openai, ollama)')
-      .description('Show details for one provider (adds headers / extraEnv keys)')
-      .option('--format <format>', 'Output format: text|json', 'text')
-      .action(async (id: string, opts: { format?: string }) => {
-        const code = await runProviderInfoCommand(id, parseFormat(opts.format));
-        process.exit(code);
-      }),
-  )
-  .addCommand(
-    new Command('add')
-      .description('Add a new provider interactively')
-      .action(async () => {
-        const config = await addProviderInteractive()
-        if (config) {
-          printSuccess('Provider configuration created')
-          printInfo('(Provider storage not yet implemented)')
-        }
-      })
-  )
-
-// Config subcommands
+// `duya config show` (legacy, preserved as-is per roadmap §5.1)
 program
   .command('config')
-  .description('Configuration management')
+  .description('Configuration management (legacy)')
   .addCommand(
     new Command('show')
       .description('Show current configuration')
@@ -1126,13 +900,13 @@ program
         console.log(color('  Model: ', Colors.DIM) + (process.env.ANTHROPIC_MODEL || color('not set', Colors.RED)))
         console.log(color('  Base URL: ', Colors.DIM) + (process.env.ANTHROPIC_BASE_URL || color('not set (using default)', Colors.DIM)))
         console.log(color('  Workspace: ', Colors.DIM) + process.cwd())
-        
+
         // Load settings from database
         const { getCliSetting } = await import('./config/db-config.js');
         const displayMode = getCliSetting('tool_display_mode') || 'verbose';
         const maxTurns = getCliSetting('max_turns') || '90';
         const agentMode = getCliSetting('agent_mode') || 'code';
-        
+
         console.log()
         console.log(color('Agent Settings:', Colors.CYAN))
         console.log(color('  Max turns: ', Colors.DIM) + maxTurns)
@@ -1141,50 +915,21 @@ program
       })
   )
 
-// MCP legacy placeholders REMOVED — replaced by Phase 6 control plane above.
-// Old `duya mcp list` / `duya mcp check` placeholders were
-// displaying "(MCP storage not yet implemented)". The new
-// `duya mcp list` / `duya mcp info` go through the unified
-// collector and CLI API server.
-
-// duya install-cli / uninstall-cli — install or remove the
-// `duya` shell wrapper that invokes the bundled cli.cjs.
-// The wrapper is created by the main process via the
-// /v1/install-cli endpoint and is a no-op when the user
-// already has the wrapper installed.
-program
-  .command('install-cli')
-  .description('Install the `duya` wrapper script to invoke the bundled CLI from any shell')
-  .option('--format <format>', 'Output format: text|json', 'text')
-  .action(async (opts: { format?: string }) => {
-    const code = await runInstallCliCommand(parseFormat(opts.format));
-    process.exit(code);
-  });
-
-program
-  .command('uninstall-cli')
-  .description('Remove the `duya` wrapper script installed by `duya install-cli`')
-  .option('--format <format>', 'Output format: text|json', 'text')
-  .action(async (opts: { format?: string }) => {
-    const code = await runUninstallCliCommand(parseFormat(opts.format));
-    process.exit(code);
-  });
-
-// Setup command - interactive configuration wizard
+// Setup command (legacy interactive wizard)
 program
   .command('setup [section]')
-  .description('Interactive setup wizard for configuration')
+  .description('Interactive setup wizard for configuration (legacy)')
   .option('--reset', 'Reset configuration to defaults')
   .action(async (section, options) => {
     const { runSetupWizard } = await import('./setup/index.js');
-    
+
     if (options.reset) {
       const { resetConfig } = await import('./config/index.js');
       resetConfig();
       console.log(color('Configuration reset to defaults.', Colors.GREEN));
       return;
     }
-    
+
     await runSetupWizard(section);
   })
 

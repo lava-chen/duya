@@ -37,16 +37,12 @@ export function AppearanceSection() {
 
   const fonts = FONT_KEYS.map(f => ({ value: f.value, label: t(f.key as TranslationKey) }));
   const [compactMode, setCompactMode] = useState(false);
-  const [showTimestamps, setShowTimestamps] = useState(true);
-  const [showAvatars, setShowAvatars] = useState(true);
 
   useEffect(() => {
     if (settings) {
       setTheme((settings.theme as "light" | "dark" | "system") || "system");
       setFont(settings.font || "system");
       setCompactMode(settings.compactMode ?? false);
-      setShowTimestamps(settings.showTimestamps ?? true);
-      setShowAvatars(settings.showAvatars ?? true);
     }
   }, [settings]);
 
@@ -86,16 +82,6 @@ export function AppearanceSection() {
       root.classList.remove("compact");
     }
     await save({ compactMode: enabled });
-  };
-
-  const applyShowTimestamps = async (enabled: boolean) => {
-    setShowTimestamps(enabled);
-    await save({ showTimestamps: enabled });
-  };
-
-  const applyShowAvatars = async (enabled: boolean) => {
-    setShowAvatars(enabled);
-    await save({ showAvatars: enabled });
   };
 
   if (loading) {
@@ -146,67 +132,7 @@ export function AppearanceSection() {
         </SettingsCard>
       </SettingsSection>
 
-      {/* Chat Display Section */}
-      <SettingsSection title={t('settings.appearance.chatDisplayTitle')} description={t('settings.appearance.chatDisplayDesc')}>
-        <SettingsCard>
-          <SettingsToggle
-            label={t('settings.appearance.showTimestamps')}
-            description={t('settings.appearance.showTimestampsDesc')}
-            checked={showTimestamps}
-            onCheckedChange={applyShowTimestamps}
-          />
-          <SettingsToggle
-            label={t('settings.appearance.showAvatars')}
-            description={t('settings.appearance.showAvatarsDesc')}
-            checked={showAvatars}
-            onCheckedChange={applyShowAvatars}
-          />
-        </SettingsCard>
-      </SettingsSection>
 
-      {/* Preview Section */}
-      <SettingsSection title={t('settings.appearance.previewTitle')} description={t('settings.appearance.previewDesc')}>
-        <SettingsCard className="p-3">
-          <div className="space-y-2.5" style={{ fontFamily: FONT_FAMILY_MAP[font] || FONT_FAMILY_MAP.system }}>
-            <div className="flex items-start gap-2.5">
-              {showAvatars && (
-                <div className="w-7 h-7 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
-                  <span className="text-[11px] font-medium text-accent">AI</span>
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium">{t('settings.appearance.previewAssistant')}</span>
-                  {showTimestamps && (
-                    <span className="text-[10px] text-muted-foreground">12:34</span>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {t('settings.appearance.previewMessageAi')}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-2.5">
-              {showAvatars && (
-                <div className="w-7 h-7 rounded-full bg-[var(--surface)] flex items-center justify-center shrink-0">
-                  <span className="text-[11px] font-medium">{t('settings.appearance.previewYou')}</span>
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium">{t('settings.appearance.previewYou')}</span>
-                  {showTimestamps && (
-                    <span className="text-[10px] text-muted-foreground">12:35</span>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {t('settings.appearance.previewMessageUser')}
-                </p>
-              </div>
-            </div>
-          </div>
-        </SettingsCard>
-      </SettingsSection>
     </div>
   );
 }

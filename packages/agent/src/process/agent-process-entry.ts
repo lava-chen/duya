@@ -718,7 +718,13 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     case 'tool_use':
       return { type: 'chat:tool_use', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, input: (event.data as { input?: unknown }).input };
     case 'tool_result':
-      return { type: 'chat:tool_result', id: (event.data as { id: string }).id, result: (event.data as { result: string }).result, error: (event.data as { error?: boolean }).error };
+      return {
+        type: 'chat:tool_result',
+        id: (event.data as { id: string }).id,
+        result: (event.data as { result: string }).result,
+        error: (event.data as { error?: boolean }).error,
+        duration_ms: (event.data as { duration_ms?: number }).duration_ms,
+      };
     case 'tool_progress':
       return { type: 'chat:tool_progress', toolUseId: (event.data as { toolName: string }).toolName, percent: 0, stage: `${event.data}` };
     case 'agent_progress': {
@@ -1839,14 +1845,17 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
           });
           break;
 
-        case 'tool_result':
+        case 'tool_result': {
+          const trData = (event as { type: 'tool_result'; data: { id: string; result: string; duration_ms?: number } }).data;
           sendToMain({
             type: 'conductor:tool_result',
             sessionId: msg.sessionId,
-            id: (event as { type: 'tool_result'; data: { id: string } }).data.id,
-            result: (event as { type: 'tool_result'; data: { result: string } }).data.result,
+            id: trData.id,
+            result: trData.result,
+            duration_ms: trData.duration_ms,
           });
           break;
+        }
 
         case 'done':
           sendToMain({

@@ -25,8 +25,13 @@ const STAMP_FILENAME = '.duya-cli-wrapper-stamp';
  * Best-effort install invoked at app startup. Resolves the
  * bundled cli.cjs from the running app's resources and calls
  * the shared install helper. Errors are logged and swallowed.
+ *
+ * The userData path is no longer pinned into the wrapper; the
+ * CLI resolves it from the platform default at runtime. In dev,
+ * the user must export `DUYA_CLI_USER_DATA_DIR` to point at
+ * the dev userData.
  */
-export async function installCliBestEffort(userDataDir: string): Promise<InstallResult | null> {
+export async function installCliBestEffort(): Promise<InstallResult | null> {
   const log = getLogger();
   try {
     const bundle = resolveBundledCli();
@@ -62,7 +67,7 @@ export async function installCliBestEffort(userDataDir: string): Promise<Install
       }
     }
 
-    const result = await installCli(bundle, userDataDir);
+    const result = await installCli(bundle);
     if (result.ok) {
       // Record stamp so subsequent launches can short-circuit
       try {

@@ -63,8 +63,13 @@ export function GatewaySessionList({ selectedChannel, onSessionClick }: GatewayS
 
   useEffect(() => {
     fetchSessions();
+    // Safety timeout: force clear loading if initial fetch hangs
+    const safetyTimeout = setTimeout(() => {
+      setLoading((prev) => (prev ? false : prev));
+    }, 2000);
     const interval = setInterval(fetchSessions, 3000);
     return () => {
+      clearTimeout(safetyTimeout);
       clearInterval(interval);
       unsubscribeRefs.current.forEach((unsubscribe) => unsubscribe());
       unsubscribeRefs.current.clear();

@@ -5,6 +5,7 @@
 
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from '../types.js';
 import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseContent, ToolResultContent, TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
@@ -441,7 +442,7 @@ export class OpenAIClient implements LLMClient {
     const requestParams = {
       model: this.model,
       messages: openAIMessages,
-      max_tokens: options?.maxTokens ?? 4096,
+      max_tokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       temperature: options?.temperature ?? 1,
       tools: options?.tools?.length ? options.tools : undefined,
       stream: true,

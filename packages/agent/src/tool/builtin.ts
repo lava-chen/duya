@@ -35,11 +35,10 @@ import { briefTool } from './BriefTool/BriefTool.js';
 import { sessionSearchTool } from './SessionSearchTool/index.js';
 import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
-import { cronTool } from './CronTool/index.js';
-import { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from '../conductor/CanvasOrchestratorProfile.js';
 import { duyaConfigTool } from './DuyaConfigTool/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
+import { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from '../conductor/CanvasOrchestratorProfile.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
 import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
@@ -129,7 +128,8 @@ export function createBuiltinRegistry(
   registry.register(sessionSearchTool.toTool(), sessionSearchTool);
   const visionTool = new VisionTool();
   registry.register(visionTool, visionTool);
-  registry.register(cronTool.toTool(), cronTool);
+  // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
+  // See `docs/exec-plans/active/99-duya-cli-argv-and-deprecate-cron-tool.md`.
 
   // Self-management tools
   //
@@ -275,7 +275,7 @@ export { skillTool } from './SkillTool/SkillTool.js';
 export { skillManageTool } from './SkillManageTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { VisionTool } from './VisionTool/VisionTool.js';
-export { cronTool } from './CronTool/index.js';
+// cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
 export { duyaConfigTool } from './DuyaConfigTool/index.js';
 export { duyaCliTool } from './DuyaCliTool/index.js';
 

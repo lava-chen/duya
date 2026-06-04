@@ -45,7 +45,7 @@ interface TokenEstimate {
 
 const DEFAULT_STORAGE_DIR = '.duya/sessions';
 const DEFAULT_MAX_MESSAGES = 1000;
-const DEFAULT_MAX_TOKENS_PER_MESSAGE = 4000;
+const DEFAULT_MAX_TOKENS_PER_MESSAGE = 8000;
 
 /**
  * Rough estimation: 1 token ≈ 4 characters for English

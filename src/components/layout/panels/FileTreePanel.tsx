@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   ArrowsClockwise,
   MagnifyingGlass,
@@ -222,6 +222,12 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
   const activeThread = threads.find((t) => t.id === activeThreadId);
   const workingDirectory = activeThread?.workingDirectory;
 
+  const workspaceName = useMemo(() => {
+    if (!workingDirectory) return "";
+    const parts = workingDirectory.split(/[/\\]/);
+    return parts[parts.length - 1] || workingDirectory;
+  }, [workingDirectory]);
+
   const fetchTree = useCallback(async () => {
     console.log("[FileTreePanel] fetchTree called, workingDirectory:", workingDirectory);
     
@@ -387,7 +393,12 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
         >
           <TaskListPanel />
           <div className="file-tree-panel-header">
-            <span className="file-tree-panel-title">{t("panel.files")}</span>
+            <div className="file-tree-panel-header-title">
+              <span className="file-tree-panel-header-label">Workspace</span>
+              {workspaceName && (
+                <span className="file-tree-panel-header-name">{workspaceName}</span>
+              )}
+            </div>
           </div>
           <div className="file-tree-panel-toolbar">
             <div className="file-tree-search">
@@ -434,7 +445,12 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
         >
           <TaskListPanel />
           <div className="file-tree-panel-header">
-            <span className="file-tree-panel-title">{t("panel.files")}</span>
+            <div className="file-tree-panel-header-title">
+              <span className="file-tree-panel-header-label">Workspace</span>
+              {workspaceName && (
+                <span className="file-tree-panel-header-name">{workspaceName}</span>
+              )}
+            </div>
           </div>
           <div className="file-tree-panel-toolbar">
             <div className="file-tree-search">
@@ -480,7 +496,12 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
       >
         <TaskListPanel />
         <div className="file-tree-panel-header">
-          <span className="file-tree-panel-title">{t("panel.files")}</span>
+          <div className="file-tree-panel-header-title">
+            <span className="file-tree-panel-header-label">Workspace</span>
+            {workspaceName && (
+              <span className="file-tree-panel-header-name">{workspaceName}</span>
+            )}
+          </div>
         </div>
         <div className="file-tree-panel-toolbar">
           <div className="file-tree-search">
