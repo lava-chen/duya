@@ -422,18 +422,7 @@ const zh: Record<TranslationKey, string> = {
   'settings.appearance.fontGeist': 'Geist',
   'settings.appearance.fontInter': 'Inter',
   'settings.appearance.fontJetbrains': 'JetBrains Mono',
-  'settings.appearance.chatDisplayTitle': '聊天显示',
-  'settings.appearance.chatDisplayDesc': '配置消息的显示方式',
-  'settings.appearance.showTimestamps': '显示时间戳',
-  'settings.appearance.showTimestampsDesc': '在每条消息上显示时间戳',
-  'settings.appearance.showAvatars': '显示头像',
-  'settings.appearance.showAvatarsDesc': '在聊天中显示用户和助手头像',
-  'settings.appearance.previewTitle': '预览',
-  'settings.appearance.previewDesc': '查看您的设置效果',
-  'settings.appearance.previewAssistant': '助手',
-  'settings.appearance.previewYou': '您',
-  'settings.appearance.previewMessageAi': '这是消息在当前设置下的显示效果。',
-  'settings.appearance.previewMessageUser': '您能帮我完成一个编程任务吗？',
+
 
   'settings.security.title': '安全',
   'settings.security.description': '安全与权限设置',
@@ -607,6 +596,7 @@ const zh: Record<TranslationKey, string> = {
   'onboarding.shortcutCommands': '打开命令菜单',
   'onboarding.shortcutMention': '引用文件',
   'onboarding.shortcutClear': '清空对话',
+  'onboarding.importFromClaudeCode': '从 Claude Code / Codex 导入',
 
   // Boot Welcome Message
   'bootWelcome.greeting': '您好！我是 DUYA，您的 AI 编程助手。',
