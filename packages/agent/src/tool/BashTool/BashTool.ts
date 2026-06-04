@@ -1027,10 +1027,23 @@ export class BashTool extends BaseTool implements ToolExecutor {
     return { success: true, data: result.data };
   }
 
-  checkPermissions(input: unknown, _context: ToolContext): PermissionCheckResult {
+  checkPermissions(input: unknown, context: ToolContext): PermissionCheckResult {
     const validated = validateBashInput(input);
     if (!validated.valid) {
       return { allowed: false, reason: 'Invalid input' };
+    }
+
+    // Bypass-mode short-circuit: when the user has explicitly opted into
+    // bypass (or the session is in a mode that auto-approves), do not
+    // raise a permission prompt from this layer. The mode is the source
+    // of truth — the central hasPermissionsToUseTool already short-circuits
+    // for these modes, but if it didn't (or returned a non-allow decision
+    // for any reason), this fallback keeps the user from being blocked
+    // by their own explicit mode choice. read-only commands are always
+    // allowed; everything else inherits the user's mode-level decision.
+    const permissionMode = context?.getAppState?.()?.toolPermissionContext?.mode;
+    if (permissionMode === 'bypassPermissions' || permissionMode === 'dontAsk') {
+      return { allowed: true };
     }
 
     const { command } = validated.data;
