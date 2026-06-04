@@ -113,8 +113,8 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     providerType: 'anthropic',
     baseUrl: 'https://api.minimaxi.com/anthropic',
     envVar: 'ANTHROPIC_API_KEY',
-    models: ['MiniMax-M2.7'],
-    defaultModel: 'MiniMax-M2.7',
+    models: ['MiniMax-M3', 'MiniMax-M2.7'],
+    defaultModel: 'MiniMax-M3',
     extraEnv: { API_TIMEOUT_MS: '3000000', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
   },
   {
@@ -124,8 +124,8 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     providerType: 'anthropic',
     baseUrl: 'https://api.minimax.io/anthropic',
     envVar: 'ANTHROPIC_API_KEY',
-    models: ['MiniMax-M2.7'],
-    defaultModel: 'MiniMax-M2.7',
+    models: ['MiniMax-M3', 'MiniMax-M2.7'],
+    defaultModel: 'MiniMax-M3',
     extraEnv: { API_TIMEOUT_MS: '3000000', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
   },
   {

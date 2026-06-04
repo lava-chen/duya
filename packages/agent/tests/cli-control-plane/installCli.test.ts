@@ -49,7 +49,7 @@ interface RunResult {
 }
 
 function runCli(args: string[], env: string): RunResult {
-  const cliBundle = join(projectRoot, 'packages', 'agent', 'bundle', 'cli.cjs');
+  const cliBundle = join(projectRoot, 'packages', 'cli', 'bundle', 'cli.cjs');
   const result = spawnSync(NODE_BIN, [cliBundle, ...args], {
     cwd: projectRoot,
     env: { ...process.env, ...parseEnv(env) },

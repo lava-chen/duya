@@ -1,6 +1,5 @@
 import { createCanvas, createElement, getSnapshot, listCanvases } from "@/lib/conductor-ipc";
 import { useConductorStore } from "@/stores/conductor-store";
-import { useConversationStore } from "@/stores/conversation-store";
 import type { CanvasElement, CanvasPosition, ConductorCanvas, VizSpec } from "@/types/conductor";
 
 interface AddChatWidgetToCanvasParams {
@@ -157,8 +156,6 @@ export async function addChatWidgetToCanvas({
   }
   conductor.setSelectedElementId(elementId);
   conductor.connectBridge(canvas.id);
-
-  useConversationStore.getState().setCurrentView("conductor");
 
   return { canvasId: canvas.id, elementId };
 }

@@ -18,6 +18,11 @@ export function SecuritySection() {
   const [permissionMode, setPermissionMode] = useState(settings.permissionMode);
   const [sandboxEnabled, setSandboxEnabled] = useState(settings.sandboxEnabled);
   const [securityScanEnabled, setSecurityScanEnabled] = useState(settings.securityScanEnabled);
+  // Gateway IM-channel (Feishu / WeChat / Telegram / QQ) permission. Falls
+  // back to desktop `permissionMode` when unset, which is the historical
+  // behavior — we surface that explicitly in the UI.
+  const gatewayPermissionMode = settings.gatewayPermissionMode ?? settings.permissionMode;
+  const [gatewayMode, setGatewayMode] = useState<NonNullable<typeof settings.gatewayPermissionMode>>(gatewayPermissionMode);
   const [isDirty, setIsDirty] = useState(false);
 
   const PERMISSION_MODE_OPTIONS = [
@@ -30,6 +35,7 @@ export function SecuritySection() {
     setPermissionMode(settings.permissionMode);
     setSandboxEnabled(settings.sandboxEnabled);
     setSecurityScanEnabled(settings.securityScanEnabled);
+    setGatewayMode(settings.gatewayPermissionMode ?? settings.permissionMode);
     setIsDirty(false);
   }, [settings]);
 
@@ -48,14 +54,20 @@ export function SecuritySection() {
     setIsDirty(true);
   }, []);
 
+  const handleGatewayModeChange = useCallback((value: NonNullable<typeof settings.gatewayPermissionMode>) => {
+    setGatewayMode(value);
+    setIsDirty(true);
+  }, []);
+
   const handleSave = useCallback(async () => {
     await save({
       permissionMode,
       sandboxEnabled,
       securityScanEnabled,
+      gatewayPermissionMode: gatewayMode,
     });
     setIsDirty(false);
-  }, [permissionMode, sandboxEnabled, securityScanEnabled, save]);
+  }, [permissionMode, sandboxEnabled, securityScanEnabled, gatewayMode, save]);
 
   if (loading) {
     return (
@@ -99,6 +111,47 @@ export function SecuritySection() {
             onCheckedChange={handleSecurityScanToggle}
           />
         </SettingsCard>
+
+        <section className="mt-6">
+          <h3
+            className="text-[1.15rem] font-bold tracking-tight"
+            style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}
+          >
+            {t('settings.security.gatewayAgentTitle')}
+          </h3>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {t('settings.security.gatewayAgentDescription')}
+          </p>
+          <SettingsCard className="mt-3">
+            <SettingsSelectRow
+              label={t('settings.security.permissionMode')}
+              description={
+                settings.gatewayPermissionMode === undefined
+                  ? t('settings.security.gatewayAgentFallback')
+                  : undefined
+              }
+              value={gatewayMode}
+              onValueChange={(v) => handleGatewayModeChange(v as NonNullable<typeof settings.gatewayPermissionMode>)}
+              options={PERMISSION_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
+          </SettingsCard>
+
+          {(gatewayMode === "bypass" || gatewayMode === "auto") && (
+            <div className="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">
+              <div className="flex items-start gap-3">
+                <WarningIcon size={18} className="text-yellow-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-yellow-500">
+                    {t('settings.security.gatewayAgentWarningTitle')}
+                  </p>
+                  <p className="text-xs text-yellow-500/80 mt-1">
+                    {t('settings.security.gatewayAgentWarningDesc')}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
 
         {permissionMode === "bypass" && (
           <div className="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">

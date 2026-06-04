@@ -96,6 +96,14 @@ export interface AppSettings {
   // Security settings
   securityScanEnabled: boolean;
   cronPermissionMode?: "default" | "bypass" | "auto";
+  /**
+   * Permission mode applied to sessions created by the IM gateway
+   * (Feishu / WeChat / Telegram / QQ). Independent from `permissionMode`
+   * (desktop chat) so users can keep desktop strict while relaxing (or
+   * tightening) IM-channel access without coupling them. Falls back to
+   * `permissionMode` when unset.
+   */
+  gatewayPermissionMode?: "default" | "bypass" | "auto";
   // Default workspace directory for creating new projects
   workspaceDir?: string;
 }

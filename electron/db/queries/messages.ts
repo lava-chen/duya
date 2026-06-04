@@ -120,6 +120,35 @@ export function getMessagesBySession(sessionId: string): MessageRow[] {
   ).all(sessionId) as MessageRow[];
 }
 
+/**
+ * Paginated variant of `getMessagesBySession` (Plan 99 P3).
+ * Returns rows in ascending `created_at` order with the given
+ * `limit` (1–200, default 50) and `offset` (≥ 0, default 0).
+ * Caller is responsible for SQL-level visibility filtering.
+ */
+export function listMessagesBySession(
+  sessionId: string,
+  opts: { limit?: number; offset?: number } = {},
+): MessageRow[] {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  return db().prepare(
+    'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?'
+  ).all(sessionId, limit, offset) as MessageRow[];
+}
+
+/**
+ * Fetch a single message by id, scoped to a session (Plan 99 P3).
+ * Returns `null` if the message does not exist or belongs to a
+ * different session.
+ */
+export function getMessageById(sessionId: string, messageId: string): MessageRow | null {
+  const row = db().prepare(
+    'SELECT * FROM messages WHERE session_id = ? AND id = ?'
+  ).get(sessionId, messageId) as MessageRow | undefined;
+  return row ?? null;
+}
+
 export function getMessageCount(sessionId: string): number {
   const result = db().prepare(
     'SELECT COUNT(*) as count FROM messages WHERE session_id = ?'

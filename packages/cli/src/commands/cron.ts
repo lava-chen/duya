@@ -91,26 +91,48 @@ export interface CronRunItemDTO {
 /**
  * Body sent to `POST /v1/crons`. Mirrors the shape of
  * `CreateAutomationCronInput` from `electron/automation/types.ts`,
- * minus the `id` (which the server generates).
+ * minus the `id` (which the server generates) and `model` /
+ * `sessionTarget` / `deliveryMode` (which are server-side concerns
+ * derived from the active provider and CLI defaults).
+ *
+ * Plan 99 P2 alignment: `at` is now a string (ISO8601) to match
+ * `CronSchedule.at`; `workflowId` is dropped (cron routes by id
+ * post-create); `enabled` defaults to true when absent.
  */
 export interface CreateCronBody {
   name: string;
   description?: string;
   schedule: {
     kind: ScheduleKind;
-    at?: number;
+    at?: string;
     everyMs?: number;
     cronExpr?: string;
     cronTz?: string;
   };
-  workflowId: string;
   prompt: string;
   model?: string;
   inputParams?: Record<string, unknown>;
-  sessionTarget?: string;
-  deliveryMode?: string;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
+  enabled?: boolean;
+}
+
+/**
+ * Body sent to `PATCH /v1/crons/:id`. Every field is optional.
+ * `status` is the server's `CronStatus` ('enabled' | 'disabled' | 'error')
+ * — distinct from `enabled?: boolean` (which is the create-side
+ * convenience flag that maps to `status: 'enabled' | 'disabled'`).
+ */
+export interface UpdateCronBody {
+  name?: string;
+  description?: string;
+  schedule?: CreateCronBody['schedule'];
+  prompt?: string;
+  model?: string;
+  inputParams?: Record<string, unknown>;
+  concurrencyPolicy?: ConcurrencyPolicy;
+  maxRetries?: number;
+  status?: CronStatus;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,9 +237,9 @@ function readBodyFromFile(path: string): CreateCronBody {
   }
   const text = readFileSync(resolved, 'utf-8');
   const parsed = JSON.parse(text) as CreateCronBody;
-  if (!parsed.name || !parsed.workflowId || !parsed.prompt || !parsed.schedule?.kind) {
+  if (!parsed.name || !parsed.prompt || !parsed.schedule?.kind) {
     throw new Error(
-      'cron spec must include: name, workflowId, prompt, schedule.kind (at/every/cron)',
+      'cron spec must include: name, prompt, schedule.kind (at/every/cron)',
     );
   }
   return parsed;
@@ -351,11 +373,13 @@ async function updateJob(ctx: CliSubcommandContext): Promise<ExitCode> {
     return 64;
   }
 
-  let body: Partial<CreateCronBody>;
+  let body: UpdateCronBody;
   try {
     if (cronJson) {
-      body = JSON.parse(cronJson) as Partial<CreateCronBody>;
+      body = JSON.parse(cronJson) as UpdateCronBody;
     } else {
+      // --from-file may carry a CreateCronBody shape; we accept either
+      // and pass through to PATCH, which ignores unknown server fields.
       body = readBodyFromFile(fromFile!);
     }
   } catch (err) {
@@ -369,7 +393,8 @@ async function updateJob(ctx: CliSubcommandContext): Promise<ExitCode> {
   const correlationId = randomUUID();
   try {
     const client = await CliApiClient.connect();
-    const res = await client.post<{ cron: CronListItemDTO }>(
+    // Plan 99 P2: cron update uses PATCH /v1/crons/:id (was POST).
+    const res = await client.patch<{ cron: CronListItemDTO }>(
       `/v1/crons/${encodeURIComponent(id)}`,
       body,
       { correlationId },
@@ -398,9 +423,9 @@ async function deleteJob(ctx: CliSubcommandContext): Promise<ExitCode> {
   const correlationId = randomUUID();
   try {
     const client = await CliApiClient.connect();
-    await client.post<{ ok: true }>(
-      `/v1/crons/${encodeURIComponent(id)}/delete`,
-      {},
+    // Plan 99 P2: cron delete uses DELETE /v1/crons/:id (was POST /:id/delete).
+    await client.delete<{ ok: true }>(
+      `/v1/crons/${encodeURIComponent(id)}`,
       { correlationId },
     );
     if (ctx.format === 'json') {

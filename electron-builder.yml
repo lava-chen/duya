@@ -53,6 +53,9 @@ extraResources:
   - from: packages/agent/bundle/
     to: agent-bundle/
     filter: ["**/*"]
+  - from: packages/cli/bundle/
+    to: cli-bundle/
+    filter: ["**/*"]
   - from: packages/gateway/bundle/
     to: gateway-bundle/
     filter: ["**/*"]

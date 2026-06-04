@@ -5,6 +5,8 @@ import { TextBatcher } from './text-batcher.js';
 import { MediaBatcher } from './media-batcher.js';
 import { FeishuCommentHandler } from './comment-handler.js';
 import { DedupPersistence } from './dedup-persistence.js';
+import { RunCoordinator } from './run-coordinator.js';
+import { CardStream, type CardStreamClient } from './card-stream.js';
 import {
   createPairingSession,
   verifyPairingApproval,
@@ -69,6 +71,8 @@ const MAX_SINGLE_TEXT_SIZE = 8192;
 const ACCESS_TOKEN_REFRESH_MARGIN_MS = 300000;
 const USER_CACHE_TTL_MS = 600000;
 const CARD_ACTION_DEDUP_WINDOW_MS = 15000;
+/** 飞书桥内 Agent run 的最大并发数(跨 scope 全局上限)。 */
+const DEFAULT_MAX_CONCURRENT_RUNS = 4;
 
 interface CachedUser {
   name: string;
@@ -85,6 +89,7 @@ export class FeishuChannel extends EventEmitter {
   private _mediaBatcher: MediaBatcher;
   private _commentHandler: FeishuCommentHandler;
   private _dedupPersistence: DedupPersistence;
+  private _runCoordinator: RunCoordinator;
   private _tenantToken: string | null = null;
   private _tenantTokenExpiresAt = 0;
   private _appAccessToken: string | null = null;
@@ -120,6 +125,7 @@ export class FeishuChannel extends EventEmitter {
     );
     this._commentHandler = new FeishuCommentHandler();
     this._dedupPersistence = new DedupPersistence();
+    this._runCoordinator = new RunCoordinator(DEFAULT_MAX_CONCURRENT_RUNS);
   }
 
   get config(): FeishuConfig { return this._config; }
@@ -316,6 +322,7 @@ export class FeishuChannel extends EventEmitter {
   async stop(): Promise<void> {
     this._running = false;
     this._connected = false;
+    this._runCoordinator.abortAll();
     if (this._wsClient) { await this._wsClient.disconnect(); this._wsClient = null; }
     if (this._webhookServer) { await this._webhookServer.stop(); this._webhookServer = null; }
     this._textBatcher.stop();
@@ -721,6 +728,58 @@ export class FeishuChannel extends EventEmitter {
     });
   }
 
+  // ===== 流式卡片(cardkit v1)=====
+  //
+  // CardStream 本身不直接 fetch——本类把 tenant token 准备好后
+  // 注入到 FeishuCardClient,后者用 fetch 调飞书 cardkit API。
+  // 这样 CardStream 在测试时可以注入 mock Client。
+
+  /**
+   * 创建一个 CardKit 2.0 流式卡片:
+   * 1) 调 cardkit.v1.card.create 创建卡片实例
+   * 2) 把卡片作为 message 发到 chat
+   * 3) 返回 CardStream 句柄,后续 update/flush 由调用方驱动
+   *
+   * 典型用法见 feishu-stream-card.ts(由 Agent 集成层触发)。
+   */
+  async createCardStream(
+    chatId: string,
+    initialCard: object,
+    opts: { replyToMessageId?: string; replyInThread?: boolean } = {},
+  ): Promise<CardStream> {
+    const cardClient: CardStreamClient = new FeishuCardClient(this);
+    return CardStream.open(cardClient, chatId, initialCard, opts);
+  }
+
+  /**
+   * 获取 RunCoordinator,供上层 Agent 集成层用来串行化 Agent run。
+   * 同一 chatId(或 chatId:threadId)同时只允许一个 active run。
+   */
+  getRunCoordinator(): RunCoordinator {
+    return this._runCoordinator;
+  }
+
+  /**
+   * 通知 FeishuChannel:某个 chatId 的 Agent run 开始了。
+   * 内部 block 该 chatId 的防抖 flush,新消息继续累积但不触发。
+   */
+  blockChat(chatId: string): void {
+    this._textBatcher.block(chatId);
+  }
+
+  /**
+   * 通知 FeishuChannel:某个 chatId 的 Agent run 结束了。
+   * 内部 unblock 该 chatId,若期间累积了消息则重新 arm quiet window。
+   */
+  unblockChat(chatId: string): void {
+    this._textBatcher.unblock(chatId);
+  }
+
+  /** 获取 TextBatcher(诊断/测试用)。 */
+  getTextBatcher(): TextBatcher {
+    return this._textBatcher;
+  }
+
   async sendReaction(messageId: string, emojiType: string): Promise<void> {
     try {
       const token = await this._getTenantAccessToken();
@@ -822,6 +881,91 @@ export class FeishuChannel extends EventEmitter {
 
 export function createFeishuChannel(options: FeishuAdapterOptions): FeishuChannel {
   return new FeishuChannel(options);
+}
+
+// ===== FeishuCardClient =====
+//
+// CardStream 调用的 cardkit API 用 fetch 自己实现。
+// 这样不引入 lark.Client,且 token 复用 FeishuChannel 的 _getTenantAccessToken。
+// 后续如要切到 lark.Client.cardkit.v1,只需替换本类实现,CardStream 不变。
+
+class FeishuCardClient implements CardStreamClient {
+  constructor(private readonly channel: FeishuChannel) {}
+
+  async createCard(cardJson: object): Promise<string> {
+    const token = await this.channel['_getTenantAccessToken']();
+    const base = this.channel['_getApiBase']();
+    const res = await fetch(`${base}/open-apis/cardkit/v1/card/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ type: 'card_json', data: JSON.stringify(cardJson) }),
+    });
+    const data = await res.json() as { code: number; msg: string; data?: { card_id?: string } };
+    if (data.code !== 0 || !data.data?.card_id) {
+      throw new Error(`cardkit.card.create failed: code=${data.code} msg=${data.msg}`);
+    }
+    return data.data.card_id;
+  }
+
+  async updateCard(cardId: string, cardJson: object, sequence: number): Promise<void> {
+    const token = await this.channel['_getTenantAccessToken']();
+    const base = this.channel['_getApiBase']();
+    const res = await fetch(`${base}/open-apis/cardkit/v1/card/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        card: { type: 'card_json', data: JSON.stringify(cardJson) },
+        sequence,
+        path: { card_id: cardId },
+      }),
+    });
+    const data = await res.json() as { code: number; msg: string };
+    if (data.code !== 0) {
+      throw { code: data.code, msg: data.msg, response: data };
+    }
+  }
+
+  async sendCardMessage(
+    cardId: string,
+    chatId: string,
+    opts: { replyToMessageId?: string; replyInThread?: boolean },
+  ): Promise<string> {
+    const token = await this.channel['_getTenantAccessToken']();
+    const base = this.channel['_getApiBase']();
+    const content = JSON.stringify({ type: 'card', data: { card_id: cardId } });
+
+    if (opts.replyToMessageId) {
+      const res = await fetch(`${base}/open-apis/im/v1/messages/${opts.replyToMessageId}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          msg_type: 'interactive',
+          content,
+          ...(opts.replyInThread ? { reply_in_thread: true } : {}),
+        }),
+      });
+      const data = await res.json() as FeishuSendMessageResponse;
+      if (data.code !== 0 || !data.data?.message_id) {
+        throw new Error(`im.message.reply failed: code=${data.code} msg=${data.msg}`);
+      }
+      return data.data.message_id;
+    }
+
+    const res = await fetch(`${base}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        receive_id: chatId,
+        msg_type: 'interactive',
+        content,
+      }),
+    });
+    const data = await res.json() as FeishuSendMessageResponse;
+    if (data.code !== 0 || !data.data?.message_id) {
+      throw new Error(`im.message.create failed: code=${data.code} msg=${data.msg}`);
+    }
+    return data.data.message_id;
+  }
 }
 
 // Wrapper that implements PlatformAdapter interface

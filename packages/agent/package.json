@@ -9,9 +9,6 @@
     "dist",
     "skills"
   ],
-  "bin": {
-    "duya": "./bin/duya.cmd"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -24,10 +21,6 @@
     "./session": {
       "types": "./dist/session/index.d.ts",
       "default": "./dist/session/index.js"
-    },
-    "./cli": {
-      "types": "./dist/cli/index.d.ts",
-      "default": "./dist/cli/index.js"
     },
     "./query-engine": {
       "types": "./dist/query-engine/index.d.ts",
@@ -47,6 +40,9 @@
     "@anthropic-ai/sdk": "^0.80.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1020.0",
     "@commander-js/extra-typings": "^14.0.0",
+    "@duya/cli": "0.1.0",
+    "@duya/gateway": "0.1.0",
+    "@duya/plugin-core": "0.1.0",
     "@growthbook/growthbook": "^1.6.5",
     "@inquirer/prompts": "^7.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -34,7 +34,7 @@ interface WriteResult {
 }
 
 function runSkill(args: string[], env: string): WriteResult {
-  const cliBundle = join(projectRoot, 'packages', 'agent', 'bundle', 'cli.cjs');
+  const cliBundle = join(projectRoot, 'packages', 'cli', 'bundle', 'cli.cjs');
   const result = spawnSync(NODE_BIN, [cliBundle, 'skill', ...args], {
     cwd: projectRoot,
     env: { ...process.env, ...parseEnv(env) },

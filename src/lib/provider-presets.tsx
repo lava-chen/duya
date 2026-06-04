@@ -327,6 +327,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
+      { modelId: 'MiniMax-M3', displayName: 'MiniMax-M3' },
       { modelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7' },
       { modelId: 'MiniMax-M2.5', displayName: 'MiniMax-M2.5' },
       { modelId: 'MiniMax-M2.1', displayName: 'MiniMax-M2.1' },
@@ -357,6 +358,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
+      { modelId: 'MiniMax-M3', displayName: 'MiniMax-M3' },
       { modelId: 'MiniMax-M2.7', displayName: 'MiniMax-M2.7' },
       { modelId: 'MiniMax-M2.5', displayName: 'MiniMax-M2.5' },
       { modelId: 'MiniMax-M2.1', displayName: 'MiniMax-M2.1' },

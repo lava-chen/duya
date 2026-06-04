@@ -176,6 +176,32 @@ export function App() {
     }
   }, [setActiveThread]);
 
+  // Handle OS notification action buttons (Open / Reply for completed
+  // messages; Allow / Deny for permission requests). The hook in
+  // `usePermissions` already routes `type === 'permission'` actions to
+  // the in-app permission flow; here we only act on message-type
+  // notifications so we can navigate the user to the right thread.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.onNotificationAction) return;
+    const unsubscribe = api.onNotificationAction((data) => {
+      if (data.type !== 'message') return;
+      if (data.actionId === 'open' || data.actionId === '__reply') {
+        if (data.sessionId) {
+          setActiveThread(data.sessionId);
+        }
+        // A typed reply is currently not auto-injected into the chat
+        // input — surfacing the session is enough for the user to type
+        // or paste their response. The reply text is dropped with a
+        // debug log so the wiring stays observable.
+        if (data.actionId === '__reply' && data.reply) {
+          console.log('[App] Notification reply received for session', data.sessionId, '— length:', data.reply.length);
+        }
+      }
+    });
+    return unsubscribe;
+  }, [setActiveThread]);
+
   const handleSendMessage = useCallback(
     // 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生默认 mode.
     // uiPermissionMode 参数保留签名兼容 (ChatView 还在传), 但不使用.

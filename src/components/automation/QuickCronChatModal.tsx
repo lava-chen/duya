@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X } from '@phosphor-icons/react';
 import type { AutomationTemplate } from '@/types/automation';
+import { useTranslation } from '@/hooks/useTranslation';
 
 interface QuickCronChatModalProps {
   isOpen: boolean;
@@ -15,6 +16,7 @@ export function QuickCronChatModal({
   onStartChat,
   initialTemplate,
 }: QuickCronChatModalProps) {
+  const { t } = useTranslation();
   const [prompt, setPrompt] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -31,7 +33,7 @@ export function QuickCronChatModal({
 
     const trimmed = prompt.trim();
     if (!trimmed) {
-      setError('Please describe your automation task');
+      setError(t('automation.quickCreateEmptyError'));
       return;
     }
 
@@ -73,7 +75,7 @@ export function QuickCronChatModal({
           style={{ borderColor: 'var(--border)' }}
         >
           <span className="flex-1 text-sm font-medium" style={{ color: 'var(--text)' }}>
-            {initialTemplate ? `Template: ${initialTemplate.label_en}` : 'Create via Chat'}
+            {initialTemplate ? t('automation.quickCreateTemplateTitle', { name: initialTemplate.label_en }) : t('automation.quickCreateTitle')}
           </span>
           <button
             type="button"
@@ -91,7 +93,7 @@ export function QuickCronChatModal({
           <textarea
             className="w-full h-full min-h-[160px] bg-transparent text-sm outline-none resize-none"
             style={{ color: 'var(--text)' }}
-            placeholder="Describe your automation task, e.g.: Every morning at 9am, summarize yesterday's git commits"
+            placeholder={t('automation.quickCreatePlaceholder')}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -123,7 +125,7 @@ export function QuickCronChatModal({
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
           >
-            Cancel
+            {t('automation.cancel')}
           </button>
           <button
             type="button"
@@ -144,7 +146,7 @@ export function QuickCronChatModal({
               e.currentTarget.style.boxShadow = 'none';
             }}
           >
-            Create via Chat
+            {t('automation.quickCreateTitle')}
           </button>
         </div>
       </div>

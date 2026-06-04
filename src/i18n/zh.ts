@@ -468,6 +468,11 @@ const zh: Record<TranslationKey, string> = {
   'settings.security.domainAlreadyExists': '该域名已在列表中',
   'settings.security.skillSecurityScan': '技能安全扫描',
   'settings.security.skillSecurityScanDesc': '安装技能时进行安全扫描。关闭后所有技能将跳过安全检测直接加载，增加安全风险。',
+  'settings.security.gatewayAgentTitle': 'Gateway 通道 Agent 权限',
+  'settings.security.gatewayAgentDescription': '通过 IM Gateway（飞书 / 微信 / Telegram / QQ）触发的 Agent 使用的权限模式。与桌面 Chat 权限相互独立，便于在保持桌面严格的同时单独放宽或收紧 IM 通道。未设置时回退到桌面权限模式。',
+  'settings.security.gatewayAgentFallback': '未设置，回退到桌面权限模式',
+  'settings.security.gatewayAgentWarningTitle': 'Bypass / Auto 模式下的 Gateway Agent',
+  'settings.security.gatewayAgentWarningDesc': 'IM 通道用户将能够在没有逐次确认的情况下驱动 Agent 执行 shell 命令、修改文件或访问网络资源。仅对受信任的、配对成功的用户启用 Bypass 或 Auto。',
 
   'provider.addProvider': '添加服务商',
   'provider.editProvider': '编辑服务商',

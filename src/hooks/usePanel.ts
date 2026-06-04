@@ -17,8 +17,21 @@ export interface PanelContextValue {
 export const PanelContext = createContext<PanelContextValue | null>(null);
 
 const MIN_PANEL_WIDTH = 220;
-const MAX_PANEL_WIDTH = 720;
+const MAX_PANEL_WIDTH = 960;
 const DEFAULT_PANEL_WIDTH = 340;
+const CANVAS_RATIO = 0.58;
+
+function getSidebarWidth(): number {
+  const sidebar = document.querySelector('.app-sidebar') as HTMLElement | null;
+  return sidebar?.offsetWidth ?? 260;
+}
+
+function calculateCanvasPanelWidth(): number {
+  const sidebarWidth = getSidebarWidth();
+  const availableWidth = window.innerWidth - sidebarWidth;
+  const targetWidth = Math.round(availableWidth * CANVAS_RATIO);
+  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, targetWidth));
+}
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
   const [panelOpen, setPanelOpen] = useState(false);
@@ -33,6 +46,18 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setPanelWidth(Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width)));
   }, []);
 
+  const setActiveTabWithPanel = useCallback((tab: PanelTab) => {
+    const isCanvasTab = tab === 'canvas';
+
+    setPanelOpen(true);
+
+    if (isCanvasTab) {
+      setPanelWidth(calculateCanvasPanelWidth());
+    }
+
+    setActiveTab(tab);
+  }, []);
+
   const value = useMemo(
     () => ({
       panelOpen,
@@ -41,9 +66,9 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       panelWidth,
       setPanelWidth: handleSetWidth,
       activeTab,
-      setActiveTab,
+      setActiveTab: setActiveTabWithPanel,
     }),
-    [panelOpen, togglePanel, panelWidth, handleSetWidth, activeTab]
+    [panelOpen, togglePanel, panelWidth, handleSetWidth, activeTab, setActiveTabWithPanel]
   );
 
   return React.createElement(PanelContext.Provider, { value }, children);

@@ -16,6 +16,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { createSession } from '../db/queries/sessions';
 import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
+import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
 import {
   initDatabaseFromBoot,
   initDatabase,
@@ -728,6 +729,9 @@ export function registerDbHandlers(): void {
       INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, value, now);
+    if (isGatewayConfigKey(key)) {
+      emitGatewayConfigChanged(`db:setting:set:${key}`);
+    }
   });
 
   ipcMain.handle('db:setting:getAll', () => {
@@ -753,6 +757,9 @@ export function registerDbHandlers(): void {
       INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, JSON.stringify(value), now);
+    if (isGatewayConfigKey(key)) {
+      emitGatewayConfigChanged(`db:setting:setJson:${key}`);
+    }
   });
 
   // ==================== Permission Handlers ====================
@@ -1063,6 +1070,7 @@ export function registerDbHandlers(): void {
       now,
       now
     );
+    emitGatewayConfigChanged(`db:weixin:upsertAccount:${data.accountId}`);
     return db!.prepare('SELECT * FROM weixin_accounts WHERE account_id = ?').get(data.accountId);
   });
 
@@ -1086,12 +1094,16 @@ export function registerDbHandlers(): void {
 
     values.push(accountId);
     db!.prepare(`UPDATE weixin_accounts SET ${fields.join(', ')} WHERE account_id = ?`).run(...values);
+    emitGatewayConfigChanged(`db:weixin:updateAccount:${accountId}`);
     return db!.prepare('SELECT * FROM weixin_accounts WHERE account_id = ?').get(accountId);
   });
 
   ipcMain.handle('db:weixin:deleteAccount', (_event, accountId: string) => {
     db!.prepare('DELETE FROM weixin_context_tokens WHERE account_id = ?').run(accountId);
     const result = db!.prepare('DELETE FROM weixin_accounts WHERE account_id = ?').run(accountId);
+    if (result.changes > 0) {
+      emitGatewayConfigChanged(`db:weixin:deleteAccount:${accountId}`);
+    }
     return result.changes > 0;
   });
 

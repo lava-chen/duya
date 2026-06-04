@@ -1,3 +1,21 @@
+/**
+ * PermissionService — audit-only ledger of permissions granted to a
+ * plugin at install time.
+ *
+ * Runtime interception lives in
+ * `packages/agent/src/mcp/permission-gate.ts:evaluateMcpToolPermission`.
+ * This service is intentionally NOT consulted on the hot path; it
+ * exists so:
+ *   - The UI can show "you granted this plugin N permissions" surfaces.
+ *   - `PluginManager.remove` has a single point of revocation
+ *     (`revokeAllPermissions`).
+ *
+ * The historical `confirmPluginPermissions` method never confirmed
+ * anything — it was a write-only ledger entry. It has been renamed to
+ * `recordGrantedPermissions` to make the actual semantics explicit.
+ * No deprecation alias is kept; the only known callers (audit on
+ * 2026-06-04) are in `electron/plugins/PluginManager.ts`.
+ */
 import type { PluginTrustInfo, PluginTrustLevel } from './trust-engine';
 
 export interface PermissionRequest {
@@ -26,7 +44,7 @@ export class PermissionService {
     return this.grantedPermissions.get(pluginId) ?? [];
   }
 
-  async confirmPluginPermissions(
+  async recordGrantedPermissions(
     pluginId: string,
     permissions: PermissionRequest[],
   ): Promise<boolean> {

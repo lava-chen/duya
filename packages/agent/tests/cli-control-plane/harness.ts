@@ -219,9 +219,12 @@ export function runCli(
   args: string[],
   cwd = projectRoot,
 ): { status: number; stdout: string; stderr: string } {
-  // Use the pre-built CLI bundle (packages/agent/bundle/cli.cjs)
+  // Use the pre-built CLI bundle (packages/cli/bundle/cli.cjs)
   // instead of tsx, so the test runner doesn't need tsx on PATH.
-  const cliBundle = join(projectRoot, 'packages', 'agent', 'bundle', 'cli.cjs');
+  // Plan 99: the CLI lives in @duya/cli; the bundle is built by
+  // `npm run build:cli-bundle` and tests load it from
+  // packages/cli/bundle/cli.cjs.
+  const cliBundle = join(projectRoot, 'packages', 'cli', 'bundle', 'cli.cjs');
   const result = spawnSync(
     NODE_BIN,
     [cliBundle, ...args],
@@ -276,7 +279,7 @@ export function runDoctor(
   env: string,
   format: 'text' | 'json' = 'text',
 ): { status: number; stdout: string; stderr: string; json?: DoctorResult } {
-  const cliBundle = join(projectRoot, 'packages', 'agent', 'bundle', 'cli.cjs');
+  const cliBundle = join(projectRoot, 'packages', 'cli', 'bundle', 'cli.cjs');
   const args = ['doctor'];
   if (format === 'json') args.push('--format', 'json');
   const result = spawnSync(NODE_BIN, [cliBundle, ...args], {

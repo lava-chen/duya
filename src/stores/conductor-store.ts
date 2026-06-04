@@ -64,6 +64,7 @@ interface ConductorState {
   canvasViewportH: number;
   setCanvasScroll: (x: number, y: number) => void;
   setCanvasViewportSize: (w: number, h: number) => void;
+  centerOnElement: (elementId: string) => void;
 
   // Unified canvas contents getter
   getCanvasContents: () => CanvasElement[];
@@ -700,6 +701,33 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   setCanvasScroll: (x, y) => set({ canvasScrollX: x, canvasScrollY: y }),
 
   setCanvasViewportSize: (w, h) => set({ canvasViewportW: w, canvasViewportH: h }),
+
+  centerOnElement: (elementId) => {
+    const { elements, canvasViewportW, canvasViewportH, canvasZoom } = get();
+    const el = elements.find((e) => e.id === elementId);
+    if (!el || canvasViewportW <= 0 || canvasViewportH <= 0) return;
+
+    const GRID_PX = 80;
+    const elWidthPx = el.position.w * GRID_PX;
+    const elHeightPx = el.position.h * GRID_PX;
+    const elCenterX = el.position.x + elWidthPx / 2;
+    const elCenterY = el.position.y + elHeightPx / 2;
+
+    const zoom = canvasZoom > 0 ? canvasZoom : 1;
+    const panX = Math.round(canvasViewportW / 2 - elCenterX * zoom);
+    const panY = Math.round(canvasViewportH / 2 - elCenterY * zoom);
+
+    set({ canvasScrollX: panX, canvasScrollY: panY });
+
+    if (typeof window !== 'undefined') {
+      requestAnimationFrame(() => {
+        const canvasEls = document.querySelectorAll<HTMLElement>('.canvas-inner');
+        canvasEls.forEach((canvasEl) => {
+          canvasEl.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+        });
+      });
+    }
+  },
 
   getCanvasContents: () => {
     const { elements, widgets } = get();

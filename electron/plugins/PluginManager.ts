@@ -170,7 +170,7 @@ export class PluginManager {
           scope: p.scope as 'plugin' | 'project' | 'system' | undefined,
           domains: p.domains,
         }));
-        await this.permissionService.confirmPluginPermissions(pluginId, perms);
+        await this.permissionService.recordGrantedPermissions(pluginId, perms);
       }
 
       const now = new Date().toISOString();
@@ -260,7 +260,7 @@ export class PluginManager {
           scope: p.scope as 'plugin' | 'project' | 'system' | undefined,
           domains: p.domains,
         }));
-        await this.permissionService.confirmPluginPermissions(pluginId, perms);
+        await this.permissionService.recordGrantedPermissions(pluginId, perms);
       }
 
       const now = new Date().toISOString();

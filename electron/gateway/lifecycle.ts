@@ -15,6 +15,13 @@ let restartWindowStart = 0;
 let backoffMs = RESTART_DELAY_MS;
 let stopRequested = false;
 
+/**
+ * 串行化 reload 请求：多次快速触发会合并成一次。
+ * 值为进行中 / 已排队的 reload Promise。
+ */
+let reloadInFlight: Promise<void> | null = null;
+let reloadPending: { config: GatewayInitConfig; source: string } | null = null;
+
 export function getGatewayProcess(): ChildProcess | null {
   return gatewayProcess;
 }
@@ -39,23 +46,41 @@ function getGatewayProcessPath(): string {
   return path.join(process.cwd(), 'packages', 'gateway', 'dist', 'index.js');
 }
 
-export function stopGatewayProcess(): void {
+export function stopGatewayProcess(): Promise<void> {
   stopRequested = true;
-  if (!gatewayProcess || gatewayProcess.killed) {
-    gatewayProcess = null;
-    return;
-  }
-
-  const pid = gatewayProcess.pid;
-  getLogger().info('Stopping gateway process', { pid }, LogComponent.Gateway);
-  gatewayProcess.kill('SIGTERM');
-
-  setTimeout(() => {
-    if (gatewayProcess && !gatewayProcess.killed) {
-      getLogger().warn('Gateway process did not terminate, sending SIGKILL', { pid }, LogComponent.Gateway);
-      gatewayProcess.kill('SIGKILL');
+  return new Promise((resolve) => {
+    if (!gatewayProcess || gatewayProcess.killed) {
+      gatewayProcess = null;
+      resolve();
+      return;
     }
-  }, 5000).unref();
+
+    const proc = gatewayProcess;
+    const pid = proc.pid;
+    getLogger().info('Stopping gateway process', { pid }, LogComponent.Gateway);
+
+    // 在进程真正 exit 时 resolve；避免调用方在 SIGTERM 还在生效期间就 spawn 新进程
+    proc.once('exit', () => {
+      resolve();
+    });
+
+    try {
+      proc.kill('SIGTERM');
+    } catch (err) {
+      getLogger().warn('SIGTERM failed, resolving stop', { pid, err: String(err) }, LogComponent.Gateway);
+      resolve();
+      return;
+    }
+
+    setTimeout(() => {
+      if (gatewayProcess && !gatewayProcess.killed) {
+        getLogger().warn('Gateway process did not terminate, sending SIGKILL', { pid }, LogComponent.Gateway);
+        try {
+          gatewayProcess.kill('SIGKILL');
+        } catch { /* ignore */ }
+      }
+    }, 5000).unref();
+  });
 }
 
 function onGatewayExit(
@@ -181,6 +206,53 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
   }
 
   return child;
+}
+
+/**
+ * 热重启 gateway：先 stop（等待真正退出），再用新的 init config 重启。
+ *
+ * 串行化语义：调用期间再次触发会把请求合并到 `reloadPending`，本次结束后立即再跑一次。
+ * 这样可以避免快速多次保存设置时出现"stop 还没退出就 start"的竞态。
+ */
+export function reloadGatewayProcess(config: GatewayInitConfig, source: string): Promise<void> {
+  // 如果已有 reload 在跑，把新请求挂到末尾
+  if (reloadInFlight) {
+    reloadPending = { config, source };
+    return reloadInFlight;
+  }
+
+  reloadInFlight = (async () => {
+    try {
+      getLogger().info('Reloading gateway process', { source }, LogComponent.Gateway);
+      await stopGatewayProcess();
+      // startGatewayProcess 内部已经把 stopRequested 重置为 false
+      startGatewayProcess(config);
+    } catch (err) {
+      getLogger().error('Gateway reload failed', err instanceof Error ? err : new Error(String(err)), { source }, LogComponent.Gateway);
+      throw err;
+    } finally {
+      reloadInFlight = null;
+    }
+  })();
+
+  // 排队：本次结束后，如果期间又来了新请求，再跑一次
+  reloadInFlight.finally(() => {
+    const pending = reloadPending;
+    reloadPending = null;
+    if (pending) {
+      // 异步跑，不阻塞 finally 后面的代码
+      reloadGatewayProcess(pending.config, pending.source).catch(() => { /* error already logged */ });
+    }
+  });
+
+  return reloadInFlight;
+}
+
+/**
+ * 测试/调试用：检查当前是否处于 reload 进行中或排队状态。
+ */
+export function isGatewayReloading(): boolean {
+  return reloadInFlight !== null || reloadPending !== null;
 }
 
 export function waitForGatewayReady(

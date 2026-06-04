@@ -35,6 +35,7 @@ const EMPTY_RESEARCH_SNAPSHOT: ResearchSessionSnapshot = {
   persistedSources: [],
   persistedCitations: [],
   reportArtifact: null,
+  lastEvidenceChain: null,
 };
 
 export function useResearchSession(sessionId: string): ResearchSessionSnapshot {
