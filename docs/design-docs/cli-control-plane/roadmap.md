@@ -111,6 +111,22 @@ These decisions are binding for all future CLI development. No implementation ma
   | `GET /v1/sessions/:id` (show) | `id / title / createdAt / updatedAt / model / messageCount` |
   | `GET /v1/skills` (list) | `id / name / description / source / enabled` |
   | `GET /v1/skills/:id` (info) | `id / name / description / category / source / enabled / customized / userInvocable / allowedTools / platforms` |
+  | `GET /v1/channels` (list) | `id / platform / name / guild? / type / bound: bool` |
+  | `GET /v1/channels/:id` (info) | `+ duyaSessionId? / sdkSessionId? / workingDirectory? / model?` |
+  | `GET /v1/platforms` (list) | `platform / enabled / connected / totalMessages / lastConnectedAt? / lastErrorAt? / lastError?` |
+  | `GET /v1/platforms/:p/status` (status) | `+ running / streaming / toolProgress / showReasoning` |
+  | `GET /v1/crons` (list) | `id / name / description? / status / scheduleKind / scheduleExpr / nextRunAt? / lastRunAt? / lastError?` |
+  | `GET /v1/crons/:id` (info) | `+ scheduleAt? / scheduleEveryMs? / scheduleCronExpr? / scheduleCronTz? / workflowId / prompt / model? / concurrencyPolicy / maxRetries / createdAt / updatedAt` |
+  | `GET /v1/crons/:id/runs` (runs) | `id / cronId / runStatus / startedAt? / endedAt? / output? / errorMessage? / sessionId? / createdAt` |
+  | `GET /v1/sessions/:id/messages` (list) | `id / role / content / name? / msgType / createdAt / tokenUsage? / durationMs? / toolName?` |
+  | `GET /v1/sessions/:id/messages/:msgId` (info) | `+ toolCallId? / toolInput? / thinking? / attachments?` |
+  | `GET /v1/sessions/:id/messages/count` (count) | `count: number` |
+
+  **Message DTOs redact internal columns**: `viz_spec`, `sub_agent_id`,
+  `seq_index`, `status` are never exposed.
+
+  **Channel/Platform DTOs redact credentials**: API keys and IM
+  platform tokens are never exposed.
 
 - **No arbitrary internal or sensitive fields** may be added to JSON output.
 
@@ -312,6 +328,60 @@ launches short-circuit unless the bundle path changed (app upgrade).
   no CLI equivalent.
 - CLI awareness prompt section added to the agent system prompt.
 - 16/16 unit tests PASS; 77/77 CLI control plane tests still PASS.
+
+### Phase 9 — `duya channel` (gateway IM channels) ✅ COMPLETE
+Plan: [`docs/exec-plans/active/98-cli-channel-cron-message.md`](../../exec-plans/active/98-cli-channel-cron-message.md)
+
+| Command | Notes |
+|---|---|
+| `duya channel list [--platform <p>]` | Discovered channels (telegram / qq / feishu) |
+| `duya channel info <id>` | Single channel + binding details |
+| `duya channel platforms` | Configured IM platforms (telegram / qq / feishu) |
+| `duya channel status [--platform <p>]` | `ChannelStatus` snapshot |
+
+**No write ops.** Channel management is the gateway's responsibility.
+
+### Phase 10 — `duya cron` (full Phase 7 surface) ✅ COMPLETE
+| Command | Notes |
+|---|---|
+| `duya cron list` | All scheduled jobs |
+| `duya cron info <id>` | Single cron + recent runs |
+| `duya cron create --from-file <path> --yes` | Phase 7 write op; `--yes` required in non-TTY |
+| `duya cron update <id> --from-file <path> --yes` | Phase 7 write op |
+| `duya cron delete <id> --yes` | Phase 7 write op |
+| `duya cron run <id> --yes` | Manual trigger |
+| `duya cron runs <id> [--limit] [--offset]` | Run history |
+
+DTOs frozen v1.0.0 in §3.4.
+
+### Phase 11 — `duya message` (read-only) ✅ COMPLETE
+| Command | Notes |
+|---|---|
+| `duya message list <sessionId> [--limit] [--offset]` | Paginated message list |
+| `duya message show <sessionId> <msgId>` | Full details (adds `toolInput` / `thinking` / `attachments`) |
+| `duya message count <sessionId>` | Replaces `messageCount` field on session show |
+
+DTOs freeze **redacts** internal columns (`viz_spec`, `sub_agent_id`,
+`seq_index`, `status`) — they never appear in the wire format.
+
+### Phase 12 — Command-Registration Refactor ✅ COMPLETE
+- `packages/agent/src/cli/program/registry.ts` + `descriptors.ts` +
+  `build-control-plane.ts` + `build-agent-runner.ts` +
+  `context.ts` provide a data-driven command registry.
+- `index.ts` (CLI bundle) shrunk from 1191 → ~915 lines by replacing
+  the inline `.command(...).action(...)` blocks with a single
+  `buildControlPlane(program)` call.
+- `DuyaCliTool/runner.ts` (~140 lines of `switch (inv.command)` chain)
+  replaced with `buildAgentRunner()` — the agent tool and CLI bundle
+  now resolve through the **same** descriptor registry.
+- 22/22 unit tests in `registry.test.ts` PASS.
+- 16/16 `DuyaCliTool.test.ts` still PASS (no regression).
+
+**Out of scope** (deferred):
+- Lazy command loading (revisit when command count > 30)
+- Plugin CLI dynamic registration (no plugin currently requests it)
+- `duya channel enable/disable` (gateway-managed)
+- `duya message search` (semantic search needs embeddings)
 
 ---
 
