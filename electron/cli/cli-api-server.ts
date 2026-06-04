@@ -22,7 +22,7 @@ import * as http from 'http';
 import { generateToken, checkBearer } from './auth';
 import { writeCliApiRuntime, removeCliApiRuntime } from './runtime-config';
 import { handleStatus } from './handlers/status.js';
-import { handleListPlugins, handleGetPlugin } from './handlers/plugins.js';
+import { handleListPlugins, handleGetPlugin, handleEnablePlugin, handleDisablePlugin, handlePluginDoctor } from './handlers/plugins.js';
 import {
   handleListSessions,
   handleGetSession,
@@ -101,6 +101,26 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // /v1/plugins/:name
   if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'plugins') {
     handleGetPlugin(req, res, parts[2]);
+    return;
+  }
+
+  // POST /v1/plugins/:id/enable
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'plugins' && parts[3] === 'enable') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    handleEnablePlugin(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // POST /v1/plugins/:id/disable
+  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'plugins' && parts[3] === 'disable') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    handleDisablePlugin(req, res, decodeURIComponent(parts[2]), correlationId);
+    return;
+  }
+
+  // GET /v1/plugins/doctor
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'plugins' && parts[2] === 'doctor') {
+    handlePluginDoctor(req, res);
     return;
   }
 
