@@ -135,6 +135,7 @@ export interface AgentToolResultEvent {
   id: string;
   result: string;
   error?: boolean;
+  duration_ms?: number;
 }
 
 export interface AgentToolProgressEvent {

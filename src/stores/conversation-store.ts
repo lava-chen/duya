@@ -56,6 +56,8 @@ interface ConversationState {
   // View state for zero-router UI
   currentView: ViewType;
   settingsTab: SettingsTab;
+  // View to restore when leaving settings; null when no snapshot was taken.
+  previousView: ViewType | null;
 
   // Existing state
   threads: Thread[];
@@ -71,6 +73,8 @@ interface ConversationState {
   // Actions
   setCurrentView: (view: ViewType) => void;
   setSettingsTab: (tab: SettingsTab) => void;
+  enterSettings: () => void;
+  exitSettings: () => void;
   createThread: (options?: { workingDirectory?: string; projectName?: string; providerId?: string; model?: string }) => Promise<Thread | null>;
   deleteThread: (id: string) => void;
   setActiveThread: (id: string) => void;
@@ -137,6 +141,7 @@ export const useConversationStore = create<ConversationState>()(
       // View state
       currentView: 'home',
       settingsTab: 'general',
+      previousView: null,
 
       // Existing state
       threads: [],
@@ -151,6 +156,20 @@ export const useConversationStore = create<ConversationState>()(
 
       setCurrentView: (view) => set({ currentView: view }),
       setSettingsTab: (tab) => set({ settingsTab: tab }),
+      enterSettings: () => {
+        const { currentView } = get();
+        // Don't overwrite a still-valid snapshot if the user re-enters settings
+        // from somewhere else (e.g. a settings link inside another view).
+        if (currentView === 'settings') return;
+        set({ previousView: currentView, currentView: 'settings' });
+      },
+      exitSettings: () => {
+        const { previousView, activeThreadId } = get();
+        // Default fallback: if no snapshot was taken, prefer 'chat' (which will
+        // show WelcomeView when no thread is active) over the bare 'home' shell.
+        const restored = previousView ?? (activeThreadId ? 'chat' : 'home');
+        set({ currentView: restored, previousView: null });
+      },
 
       createThread: async (options) => {
         const { threads, activeThreadId } = get();

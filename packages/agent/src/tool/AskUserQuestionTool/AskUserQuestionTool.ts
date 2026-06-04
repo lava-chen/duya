@@ -7,17 +7,19 @@
  *     StreamingToolExecutor detects this → calls requestPermission() → frontend shows UI
  *  3. User answers → answers stored in module-level map by toolUseId
  *  4. StreamingToolExecutor retries execution → tool reads stored answers
- *  5. Answers returned as tool_result → LLM continues with user input
+ *  5. Answers returned as a structured "User has answered..." ToolResult → LLM continues
  *
- * Adapted from claude-code-haha's AskUserQuestionTool
+ * Adapted from claude-code-haha's AskUserQuestionTool.
  */
 
 import { BaseTool } from '../BaseTool.js';
 import type { ToolResult, PermissionCheckResult, ToolContext } from '../types.js';
 import type { ToolUseContext } from '../../types.js';
 import { z } from 'zod';
-
-export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
+import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  DESCRIPTION,
+} from './prompt.js';
 
 // ============================================================
 // Zod Schema
@@ -35,6 +37,11 @@ const questionSchema = z.object({
   multiSelect: z.boolean().default(false).describe('Set to true to allow multiple answers'),
 });
 
+/**
+ * Model inputs occasionally arrive as a wrapper `{ def: "<json string>" }`
+ * or with `questions`/per-question `options` serialized as JSON strings.
+ * Unwrap that before Zod sees it so we don't reject valid calls.
+ */
 function unwrapDef(val: unknown): unknown {
   if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
     const obj = val as Record<string, unknown>;
@@ -48,6 +55,23 @@ function unwrapDef(val: unknown): unknown {
   }
   return val;
 }
+
+const UNIQUENESS_REFINE = {
+  check: (data: { questions: Array<{ question: string; options: Array<{ label: string }> }> }) => {
+    const questions = data.questions.map((q) => q.question);
+    if (questions.length !== new Set(questions).size) {
+      return false;
+    }
+    for (const question of data.questions) {
+      const labels = question.options.map((opt) => opt.label);
+      if (labels.length !== new Set(labels).size) {
+        return false;
+      }
+    }
+    return true;
+  },
+  message: 'Question texts must be unique, option labels must be unique within each question',
+} as const;
 
 export const askUserQuestionInputSchema = z.preprocess(
   (val) => {
@@ -81,9 +105,16 @@ export const askUserQuestionInputSchema = z.preprocess(
     }
     return obj;
   },
-  z.object({
-    questions: z.array(questionSchema).min(1).max(4).describe('1-4 questions to ask the user'),
-  }),
+  z
+    .object({
+      questions: z
+        .array(questionSchema)
+        .min(1)
+        .max(4)
+        .describe('1-4 questions to ask the user'),
+    })
+    .strict()
+    .refine(UNIQUENESS_REFINE.check, { message: UNIQUENESS_REFINE.message }),
 );
 
 export type AskUserQuestionInput = z.infer<typeof askUserQuestionInputSchema>;
@@ -107,33 +138,17 @@ export function clearPendingAnswer(permissionId: string): void {
 }
 
 // ============================================================
-// Tool Description
+// Legacy JSON Schema (for SDK / wire-format consumers)
 // ============================================================
 
-const DESCRIPTION = `Use this tool when you need to ask the user questions during execution. Useful for:
-- Gathering user preferences or requirements
-- Clarifying ambiguous instructions
-- Getting decisions on implementation choices
-- Offering directional choices to the user
-
-CRITICAL RULES (violating any causes a hard error):
-- 1-4 questions per call (min 1, max 4)
-- Each question MUST include: question, header, options, multiSelect
-- header: max 12 characters, label-like (e.g. "Auth method", "Library")
-- options: EXACTLY 2-4 predefined choices per question, each with label + description
-- label: 1-5 words, concise
-- description: explains what choosing this option means
-- multiSelect: boolean (true if multiple selections allowed)
-- Users can always type "Other" for custom input, so you do NOT need an "Other" option
-- If recommending a specific option, place it first and append " (Recommended)" to its label
-- Keep questions clear, specific, and end with a question mark`;
-
-// ============================================================
-// Tool Implementation
-// ============================================================
-
+/**
+ * Plain JSON Schema mirror of the Zod input — kept for tool definitions
+ * exported to SDK callers that don't consume Zod. Mirrors the same
+ * strictness as the Zod schema (no additionalProperties).
+ */
 const JSON_INPUT_SCHEMA: Record<string, unknown> = {
   type: 'object',
+  additionalProperties: false,
   properties: {
     questions: {
       type: 'array',
@@ -142,6 +157,7 @@ const JSON_INPUT_SCHEMA: Record<string, unknown> = {
       maxItems: 4,
       items: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           question: {
             type: 'string',
@@ -149,6 +165,7 @@ const JSON_INPUT_SCHEMA: Record<string, unknown> = {
           },
           header: {
             type: 'string',
+            maxLength: 12,
             description: 'Very short label (max 12 chars). Examples: "Auth method", "Library", "Approach".',
           },
           options: {
@@ -158,6 +175,7 @@ const JSON_INPUT_SCHEMA: Record<string, unknown> = {
             maxItems: 4,
             items: {
               type: 'object',
+              additionalProperties: false,
               properties: {
                 label: {
                   type: 'string',
@@ -173,15 +191,47 @@ const JSON_INPUT_SCHEMA: Record<string, unknown> = {
           },
           multiSelect: {
             type: 'boolean',
+            default: false,
             description: 'Set to true to allow multiple answers',
           },
         },
-        required: ['question', 'header', 'options'],
+        required: ['question', 'header', 'options', 'multiSelect'],
       },
     },
   },
   required: ['questions'],
 };
+
+// ============================================================
+// LLM-facing Result Formatting
+// ============================================================
+
+/**
+ * Format answers for the LLM, mirroring claude-code-haha's
+ * `mapToolResultToToolResultBlockParam`:
+ *   User has answered your questions: "Q1"="A1", "Q2"="A2". You can now
+ *   continue with the user's answers in mind.
+ */
+function formatAnswersForLLM(
+  questions: Array<{ question: string; header: string }>,
+  answers: Record<string, string>,
+): string {
+  const parts: string[] = [];
+  for (const q of questions) {
+    const answer = answers[q.question];
+    if (answer !== undefined) {
+      parts.push(`"${q.question}"="${answer}"`);
+    }
+  }
+  if (parts.length === 0) {
+    return 'User has answered your questions, but no answers were captured. Ask the user again to clarify.';
+  }
+  return `User has answered your questions: ${parts.join(', ')}. You can now continue with the user's answers in mind.`;
+}
+
+// ============================================================
+// Tool Implementation
+// ============================================================
 
 export class AskUserQuestionTool extends BaseTool {
   readonly name = ASK_USER_QUESTION_TOOL_NAME;
@@ -193,7 +243,9 @@ export class AskUserQuestionTool extends BaseTool {
   }
 
   /**
-   * Always requires user interaction — this tool IS the interaction.
+   * Always allows permission — the tool itself IS the user interaction.
+   * The actual ask/response flow runs through the `ask_user_question`
+   * permission mode surfaced by `checkPermissions` → requestPermission.
    */
   checkPermissions(_input: unknown, _context: ToolContext): PermissionCheckResult {
     return {
@@ -210,7 +262,7 @@ export class AskUserQuestionTool extends BaseTool {
    *   StreamingToolExecutor detects this and triggers the permission_request flow.
    *
    * Phase 2 (answer stored, on retry after user responded):
-   *   Reads stored answers and returns them as tool result to LLM.
+   *   Reads stored answers and returns them as a structured tool result to the LLM.
    */
   async execute(
     input: Record<string, unknown>,
@@ -222,7 +274,7 @@ export class AskUserQuestionTool extends BaseTool {
       return {
         id: context?.toolUseId || crypto.randomUUID(),
         name: this.name,
-        result: JSON.stringify({ error: `Input validation failed: ${parsed.error.message}` }),
+        result: `Input validation failed: ${parsed.error.message}`,
         error: true,
       };
     }
@@ -236,13 +288,7 @@ export class AskUserQuestionTool extends BaseTool {
       return {
         id: toolUseId,
         name: this.name,
-        result: JSON.stringify({
-          questions: parsed.data.questions.map((q) => ({
-            question: q.question,
-            header: q.header,
-          })),
-          answers,
-        }),
+        result: formatAnswersForLLM(parsed.data.questions, answers),
       };
     }
 

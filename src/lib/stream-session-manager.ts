@@ -789,11 +789,12 @@ class StreamSessionManager {
         break;
       }
       case 'tool_result': {
-        const resultData = data as { id: string; result: unknown; error?: boolean };
+        const resultData = data as { id: string; result: unknown; error?: boolean; duration_ms?: number };
         const result: ToolResultInfo = {
           tool_use_id: resultData.id,
           content: typeof resultData.result === 'string' ? resultData.result : JSON.stringify(resultData.result),
           is_error: resultData.error || false,
+          duration_ms: resultData.duration_ms,
         };
         this.appendConductorEvent(canvasId, { type: 'tool_result', toolResult: result, timestamp: ts });
         if (state.phase === 'tool_use') {
@@ -1233,6 +1234,7 @@ class StreamSessionManager {
               tool_use_id: event.id,
               content: String(event.result),
               is_error: !!event.error,
+              duration_ms: (event as { duration_ms?: number }).duration_ms,
             });
           }
           break;
@@ -1425,6 +1427,7 @@ class StreamSessionManager {
           tool_use_id: data.id as string,
           content: String(data.result),
           is_error: !!(data as { error?: string }).error,
+          duration_ms: (data as { duration_ms?: number }).duration_ms,
         });
       } else if (normalizedType === 'db_persisted') {
         this.handleDbPersistedEvent(state.sessionId, streamId, data as { success?: boolean; messageCount?: number; reason?: string });
@@ -1535,7 +1538,7 @@ class StreamSessionManager {
     this.resetIdleTimeout(sessionId);
   }
 
-  private handleToolResultEvent(sessionId: string, streamId: string, result: { tool_use_id: string; content: string; is_error: boolean }): void {
+  private handleToolResultEvent(sessionId: string, streamId: string, result: { tool_use_id: string; content: string; is_error: boolean; duration_ms?: number }): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     // Skip if this tool_result was already loaded from DB on page refresh
@@ -1549,6 +1552,7 @@ class StreamSessionManager {
       tool_use_id: result.tool_use_id,
       content: result.content,
       is_error: result.is_error,
+      duration_ms: result.duration_ms,
     };
     s.toolResults = [...s.toolResults, info];
     s.streamingEvents = [...s.streamingEvents, { type: 'tool_result', toolResult: info, timestamp: Date.now() }];

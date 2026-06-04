@@ -403,6 +403,10 @@ export class PluginManager {
   getSecretStore(): PluginSecretStore {
     return this.secretStore;
   }
+
+  getInstalledV2(): Record<string, InstalledPluginInfoV2> {
+    return this.installedMgr.getAllPlugins();
+  }
 }
 
 let pluginManagerSingleton: PluginManager | null = null;

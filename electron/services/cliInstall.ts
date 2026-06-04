@@ -36,7 +36,6 @@ export interface InstallPaths {
   binDir: string;
   wrapper: string;
   bundle: string;
-  userDataDir: string;
 }
 
 export interface InstallResult {
@@ -53,11 +52,15 @@ export interface InstallResult {
  * `bundle` is the absolute path of the bundled `cli.cjs` inside
  * the running app's resources directory. The wrapper invokes it
  * directly.
+ *
+ * The wrapper does NOT pin `DUYA_CLI_USER_DATA_DIR`. The CLI
+ * resolves its userData via the platform default
+ * (`%APPDATA%\DUYA` on Windows) so the wrapper stays correct
+ * regardless of dev vs. prod userData naming differences.
+ * In dev, the user must export `DUYA_CLI_USER_DATA_DIR` to point
+ * at the dev userData (`%APPDATA%\DUYA\duya-dev`).
  */
-export function computeInstallPaths(
-  bundleCli: string,
-  userDataDir: string,
-): InstallPaths {
+export function computeInstallPaths(bundleCli: string): InstallPaths {
   const platform = process.platform as InstallPlatform;
   const home = os.homedir();
 
@@ -77,25 +80,31 @@ export function computeInstallPaths(
     wrapper = path.join(binDir, 'duya');
   }
 
-  return { binDir, wrapper, bundle: bundleCli, userDataDir };
+  return { binDir, wrapper, bundle: bundleCli };
 }
 
-const WINDOWS_WRAPPER = (bundle: string, userDataDir: string): string => `@echo off
+const WINDOWS_WRAPPER = (bundle: string): string => `@echo off
 rem DUYA CLI wrapper - forwards all arguments to the bundled cli.cjs
-set "DUYA_CLI_USER_DATA_DIR=${userDataDir}"
+rem DUYA_CLI_USER_DATA_DIR is intentionally not pinned here. The CLI
+rem resolves userData from the platform default; in dev, export
+rem DUYA_CLI_USER_DATA_DIR=%APPDATA%\\DUYA\\duya-dev before running.
 node "${bundle}" %*
 `;
 
-const WINDOWS_PWSH_WRAPPER = (bundle: string, userDataDir: string): string =>
+const WINDOWS_PWSH_WRAPPER = (bundle: string): string =>
 `# DUYA CLI wrapper - PowerShell entry
-$env:DUYA_CLI_USER_DATA_DIR = "${userDataDir}"
+# DUYA_CLI_USER_DATA_DIR is intentionally not pinned here. The CLI
+# resolves userData from the platform default; in dev, set
+# $env:DUYA_CLI_USER_DATA_DIR before running.
 & node "${bundle}" @args
 `;
 
-const POSIX_WRAPPER = (bundle: string, userDataDir: string): string => `#!/usr/bin/env bash
+const POSIX_WRAPPER = (bundle: string): string => `#!/usr/bin/env bash
 # DUYA CLI wrapper - forwards all arguments to the bundled cli.cjs
+# DUYA_CLI_USER_DATA_DIR is intentionally not pinned here. The CLI
+# resolves userData from the platform default; in dev, export
+# DUYA_CLI_USER_DATA_DIR before running.
 set -e
-export DUYA_CLI_USER_DATA_DIR="${userDataDir}"
 exec node "${bundle}" "$@"
 `;
 
@@ -112,20 +121,20 @@ export async function writeWrapperScript(
   if (platform === 'win32') {
     await fsp.writeFile(
       paths.wrapper,
-      WINDOWS_WRAPPER(paths.bundle, paths.userDataDir),
+      WINDOWS_WRAPPER(paths.bundle),
       'utf-8',
     );
     // PowerShell entry alongside the .cmd
     const ps1 = paths.wrapper.replace(/\.cmd$/, '.ps1');
     await fsp.writeFile(
       ps1,
-      WINDOWS_PWSH_WRAPPER(paths.bundle, paths.userDataDir),
+      WINDOWS_PWSH_WRAPPER(paths.bundle),
       'utf-8',
     );
   } else {
     await fsp.writeFile(
       paths.wrapper,
-      POSIX_WRAPPER(paths.bundle, paths.userDataDir),
+      POSIX_WRAPPER(paths.bundle),
       { encoding: 'utf-8', mode: 0o755 },
     );
   }
@@ -198,12 +207,9 @@ export function posixPathHint(binDir: string, platform: InstallPlatform): string
 /**
  * Run the full install sequence for the current platform.
  */
-export async function installCli(
-  bundleCli: string,
-  userDataDir: string,
-): Promise<InstallResult> {
+export async function installCli(bundleCli: string): Promise<InstallResult> {
   const platform = process.platform as InstallPlatform;
-  const paths = computeInstallPaths(bundleCli, userDataDir);
+  const paths = computeInstallPaths(bundleCli);
 
   if (platform === 'other') {
     return {
@@ -275,14 +281,14 @@ export async function uninstallCli(): Promise<InstallResult> {
     return {
       ok: true,
       platform,
-      paths: { binDir, wrapper, bundle: '', userDataDir: '' },
+      paths: { binDir, wrapper, bundle: '' },
       message: `Wrapper removed from ${binDir}. PATH entry left untouched; remove manually if needed.`,
     };
   } catch (err) {
     return {
       ok: false,
       platform,
-      paths: { binDir, wrapper, bundle: '', userDataDir: '' },
+      paths: { binDir, wrapper, bundle: '' },
       message: err instanceof Error ? err.message : String(err),
     };
   }

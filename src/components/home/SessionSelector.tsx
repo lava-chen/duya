@@ -116,6 +116,7 @@ export function SessionSelector({
             </div>
           )}
         </div>
+        <span className="welcome-input-label">{t('chat.whatToBuildInSuffix')}</span>
       </div>
 
       {/* Input area */}

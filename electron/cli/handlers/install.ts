@@ -46,23 +46,10 @@ function resolveBundledCli(): string {
   return path.join(cwd, 'packages', 'agent', 'bundle', 'cli.cjs');
 }
 
-function getUserDataDir(): string {
-  // Production: app.getPath('userData')
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { app } = require('electron');
-    if (app && typeof app.getPath === 'function') return app.getPath('userData');
-  } catch {
-    // not in electron context
-  }
-  return process.env.DUYA_CLI_USER_DATA_DIR ?? '';
-}
-
 export async function handleInstallCli(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
     const bundle = resolveBundledCli();
-    const userDataDir = getUserDataDir();
-    const result: InstallResult = await installCli(bundle, userDataDir);
+    const result: InstallResult = await installCli(bundle);
     sendJson(res, result.ok ? 200 : 500, result);
   } catch (err) {
     sendJson(res, 500, {

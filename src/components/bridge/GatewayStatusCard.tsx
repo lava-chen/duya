@@ -73,8 +73,8 @@ export function GatewayStatusCard() {
   }, []);
 
   useEffect(() => {
-    fetchStatus();
-    fetchSessionStats();
+    // Fetch both in parallel for faster initial load
+    Promise.all([fetchStatus(), fetchSessionStats()]);
 
     // Safety timeout: force clear loading if initial fetch hangs
     const safetyTimeout = setTimeout(() => {
@@ -84,7 +84,7 @@ export function GatewayStatusCard() {
         }
         return prev;
       });
-    }, 3000);
+    }, 2000);
 
     const interval = setInterval(() => {
       fetchStatus();

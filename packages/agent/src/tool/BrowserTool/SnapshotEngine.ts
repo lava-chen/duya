@@ -446,7 +446,7 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
 
   function getDirectText(el) {
     let text = '';
-    for (const child = el.firstChild; child; child = child.nextSibling) {
+    for (let child = el.firstChild; child; child = child.nextSibling) {
       if (child.nodeType === 3) {
         const t = child.textContent.trim();
         if (t) text += (text ? ' ' : '') + t;
@@ -852,7 +852,7 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
       const attrs = serializeAttrs(el);
       lines.push(indent + '- |iframe| iframe' + (attrs ? ' ' + attrs : '') + ':');
       let has = false;
-      for (const child = doc.body.firstChild; child; child = child.nextSibling) {
+      for (let child = doc.body.firstChild; child; child = child.nextSibling) {
         if (child.nodeType === 1) {
           if (walk(child, depth + 1, null)) has = true;
         }

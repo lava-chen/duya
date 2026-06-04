@@ -37,7 +37,6 @@ interface InstallResult {
     binDir: string;
     wrapper: string;
     bundle: string;
-    userDataDir: string;
   };
   message: string;
 }
@@ -129,7 +128,10 @@ describe('duya install-cli (cross-platform CLI install)', () => {
     }
     const content = readFileSync(r.json!.paths.wrapper, 'utf-8');
     expect(content).toMatch(/cli\.cjs/);
-    expect(content).toMatch(/DUYA_CLI_USER_DATA_DIR/);
+    // Wrapper does not pin DUYA_CLI_USER_DATA_DIR; the CLI resolves
+    // userData from the platform default at runtime. In dev, the
+    // user must export the env var themselves.
+    expect(content).not.toMatch(/DUYA_CLI_USER_DATA_DIR/);
   });
 
   // ── idempotent: re-install does not fail ──────────────────────────

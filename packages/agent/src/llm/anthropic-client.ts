@@ -4,6 +4,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from '../types.js';
 import type { SSEEvent, Tool, Message, MessageContent, TextContent, ImageContent, ToolUseContent, ToolResultContent, TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
@@ -663,7 +664,7 @@ export class AnthropicClient implements LLMClient {
       stream = await this.client.messages.stream(
         {
           model: this.model,
-          max_tokens: options?.maxTokens ?? 4096,
+          max_tokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
           temperature: options?.temperature ?? 1,
           system: options?.systemPrompt || '',
           messages: anthropicMessages as MessageParam[],
@@ -900,7 +901,7 @@ export class AnthropicClient implements LLMClient {
     const response = await this.client.messages.create(
       {
         model: this.model,
-        max_tokens: options?.maxTokens ?? 4096,
+        max_tokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
         temperature: options?.temperature ?? 0,
         system: options?.systemPrompt || '',
         messages: anthropicMessages as MessageParam[],

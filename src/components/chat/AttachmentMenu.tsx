@@ -219,7 +219,7 @@ export function AttachmentMenu({
         <>
           {/* Main Menu Panel */}
           <div
-            className="absolute bottom-full left-0 mb-2 w-56 rounded-xl shadow-lg border py-1.5 z-[100]"
+            className="absolute bottom-full left-0 mb-2 w-56 rounded-xl shadow-lg border p-1.5 z-[100]"
             style={{
               backgroundColor: 'var(--main-bg)',
               borderColor: 'var(--border)',
@@ -230,7 +230,7 @@ export function AttachmentMenu({
             <button
               type="button"
               onClick={handleAddFiles}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
             >
               <span style={{ color: 'var(--muted)' }}>
                 <PaperclipIcon size={16} />
@@ -248,7 +248,7 @@ export function AttachmentMenu({
             >
               <button
                 type="button"
-                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-3">
                   <span style={{ color: 'var(--muted)' }}>
@@ -270,7 +270,7 @@ export function AttachmentMenu({
             >
               <button
                 type="button"
-                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-3">
                   <span style={{ color: 'var(--muted)' }}>
@@ -293,7 +293,7 @@ export function AttachmentMenu({
               >
                 <button
                   type="button"
-                  className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                  className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
                 >
                   <div className="flex items-center gap-3">
                     <span style={{ color: 'var(--muted)' }}>
@@ -321,7 +321,7 @@ export function AttachmentMenu({
             >
               <button
                 type="button"
-                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                className="w-full flex items-center justify-between px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-3">
                   <span style={{ color: 'var(--muted)' }}>
@@ -344,7 +344,7 @@ export function AttachmentMenu({
                   setIsOpen(false);
                   setHoveredSubmenu(null);
                 }}
-                className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
               >
                 <span style={{ color: 'var(--muted)' }}>
                   <BrainIcon size={16} />
@@ -359,7 +359,7 @@ export function AttachmentMenu({
           {/* Skills Submenu - appears to the right of main menu, bottom aligned */}
           {hoveredSubmenu === 'skills' && (
             <div
-              className="absolute w-56 rounded-xl shadow-lg border py-1.5 z-[101]"
+              className="absolute w-56 rounded-xl shadow-lg border p-1.5 z-[101]"
               style={{
                 backgroundColor: 'var(--main-bg)',
                 borderColor: 'var(--border)',
@@ -382,7 +382,7 @@ export function AttachmentMenu({
                       key={skill.name}
                       type="button"
                       onClick={() => handleSelectSkill(skill.name)}
-                      className="w-full px-3 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
+                      className="w-full px-3 py-2 text-left transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
                     >
                       <div className="text-sm" style={{ color: 'var(--foreground)' }}>
                         {skill.name}
@@ -407,7 +407,7 @@ export function AttachmentMenu({
                       setIsOpen(false);
                       setHoveredSubmenu(null);
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
                   >
                     <WrenchIcon size={14} style={{ color: 'var(--muted)' }} />
                     <span style={{ color: 'var(--foreground)' }}>
@@ -423,7 +423,7 @@ export function AttachmentMenu({
                       setIsOpen(false);
                       setHoveredSubmenu(null);
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
                   >
                     <PlusIcon size={14} style={{ color: 'var(--muted)' }} />
                     <span style={{ color: 'var(--foreground)' }}>
@@ -438,7 +438,7 @@ export function AttachmentMenu({
           {/* MCP Submenu - appears to the right of main menu, bottom aligned */}
           {hoveredSubmenu === 'mcp' && (
             <div
-              className="absolute w-56 rounded-xl shadow-lg border py-1.5 z-[101]"
+              className="absolute w-56 rounded-xl shadow-lg border p-1.5 z-[101]"
               style={{
                 backgroundColor: 'var(--main-bg)',
                 borderColor: 'var(--border)',
@@ -459,7 +459,7 @@ export function AttachmentMenu({
                   mcpServers.map((server) => (
                     <div
                       key={server.name}
-                      className="flex items-center justify-between px-3 py-2 hover:bg-[var(--surface-hover)]"
+                      className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[var(--surface-hover)]"
                     >
                       <div className="flex-1 min-w-0">
                         <div className="text-sm" style={{ color: 'var(--foreground)' }}>
@@ -496,7 +496,7 @@ export function AttachmentMenu({
           {/* Thinking Effort Submenu - appears to the right of main menu, bottom aligned */}
           {hoveredSubmenu === 'thinking' && (
             <div
-              className="absolute w-56 rounded-xl shadow-lg border py-1.5 z-[101]"
+              className="absolute w-56 rounded-xl shadow-lg border p-1.5 z-[101]"
               style={{
                 backgroundColor: 'var(--main-bg)',
                 borderColor: 'var(--border)',
@@ -514,7 +514,7 @@ export function AttachmentMenu({
                     key={option.value || 'auto'}
                     type="button"
                     onClick={() => handleSelectThinkingEffort(option.value)}
-                    className="w-full flex items-center gap-3 px-3 py-2 transition-colors hover:bg-[var(--surface-hover)]"
+                    className="w-full flex items-center gap-3 px-3 py-2 transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
                   >
                     <div className="flex-1 text-left">
                       <div
@@ -544,7 +544,7 @@ export function AttachmentMenu({
           {/* Styles Submenu - appears to the right of main menu, bottom aligned */}
           {hoveredSubmenu === 'styles' && (
             <div
-              className="absolute w-56 rounded-xl shadow-lg border py-1.5 z-[101]"
+              className="absolute w-56 rounded-xl shadow-lg border p-1.5 z-[101]"
               style={{
                 backgroundColor: 'var(--main-bg)',
                 borderColor: 'var(--border)',
@@ -567,7 +567,7 @@ export function AttachmentMenu({
                       key={style.id}
                       type="button"
                       onClick={() => handleSelectStyle(style.id)}
-                      className="w-full flex items-center gap-3 px-3 py-2 transition-colors hover:bg-[var(--surface-hover)]"
+                      className="w-full flex items-center gap-3 px-3 py-2 transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
                     >
                       {style.icon && (
                         <span style={{ color: 'var(--muted)' }}>{style.icon}</span>
@@ -608,7 +608,7 @@ export function AttachmentMenu({
                       setIsOpen(false);
                       setHoveredSubmenu(null);
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors rounded-lg hover:bg-[var(--surface-hover)]"
                   >
                     <PlusIcon size={14} style={{ color: 'var(--muted)' }} />
                     <span style={{ color: 'var(--foreground)' }}>
