@@ -438,6 +438,7 @@ a {
   flex-direction: row;
   overflow: hidden;
   min-height: 0;
+  position: relative;
 }
 
 /* Sidebar resizer */
@@ -510,6 +511,8 @@ a {
   font-size: 0.9rem;
   transition: background-color 0.15s ease, color 0.15s ease;
   line-height: 1.4;
+  width: calc(100% - 1rem);
+  box-sizing: border-box;
 }
 
 .sidebar-primary-link svg {
@@ -1099,6 +1102,8 @@ a {
   font-size: 0.8125rem;
   transition: background-color 0.15s ease, color 0.15s ease;
   text-decoration: none;
+  width: calc(100% - 1rem);
+  box-sizing: border-box;
 }
 
 .sidebar-back-link svg {
@@ -1129,6 +1134,8 @@ a {
   background: transparent;
   color: var(--muted);
   font-size: 0.8125rem;
+  width: calc(100% - 1rem);
+  box-sizing: border-box;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
   text-align: left;
@@ -4613,43 +4620,7 @@ a {
   flex-direction: column;
   overflow: hidden;
   background: var(--sidebar-bg);
-}
-
-.sidebar-panel-tabs {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--sidebar-bg);
-  padding: 2px 4px 0;
-}
-
-.sidebar-panel-tab {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 12px;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  border-radius: 4px 4px 0 0;
-  transition: background-color 0.15s ease, color 0.15s ease;
-  white-space: nowrap;
-}
-
-.sidebar-panel-tab:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.sidebar-panel-tab.active {
-  background: var(--surface);
-  color: var(--text);
-  border-bottom: 2px solid var(--accent);
+  border-left: 1px solid var(--border);
 }
 
 .sidebar-panel-content {
@@ -4695,26 +4666,63 @@ a {
 
 .file-tree-panel-header {
   display: flex;
-  height: 40px;
+  height: 44px;
   flex-shrink: 0;
   align-items: center;
+  justify-content: space-between;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
+  background: var(--sidebar-bg);
 }
 
-.file-tree-panel-title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.file-tree-panel-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.file-tree-panel-header-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.file-tree-panel-header-name {
+  font-size: 12px;
+  font-weight: 400;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-tree-panel-header-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.file-tree-panel-header-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 .file-tree-panel-toolbar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 10px 12px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
 }
@@ -4785,7 +4793,7 @@ a {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 4px 0;
+  padding: 2px 0;
 }
 
 .file-tree-loading {
@@ -4816,17 +4824,14 @@ a {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 12px;
+  padding: 7px 12px;
   cursor: pointer;
-  color: var(--muted);
+  color: var(--text);
   transition: background-color 0.12s ease, color 0.12s ease;
-  border-radius: 4px;
-  margin: 0 4px;
 }
 
 .file-tree-folder-header:hover {
   background: var(--surface-hover);
-  color: var(--text);
 }
 
 .file-tree-caret {
@@ -4872,12 +4877,10 @@ a {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 12px;
+  padding: 7px 12px;
   cursor: pointer;
   color: var(--muted);
   transition: background-color 0.12s ease, color 0.12s ease;
-  border-radius: 4px;
-  margin: 0 4px;
 }
 
 .file-tree-file:hover {
@@ -4886,8 +4889,8 @@ a {
 }
 
 .file-tree-file-selected {
-  background: var(--surface);
-  color: var(--text);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .file-tree-file-icon {
@@ -6014,4 +6017,47 @@ html.compact .panel-zone {
   text-align: center;
   color: rgba(255, 255, 255, 0.6);
   font-size: 12px;
+}
+
+/* ============================================
+   Chat Panel Floating Toggle Buttons
+   ============================================ */
+
+.chat-panel-floating-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: auto;
+  padding: 0 8px;
+  height: 44px;
+  background: transparent;
+}
+
+.chat-panel-floating-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.chat-panel-floating-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.chat-panel-floating-btn.active {
+  background: var(--surface-hover);
+  color: var(--text);
 }
