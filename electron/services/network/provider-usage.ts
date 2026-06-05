@@ -5,6 +5,10 @@
  * Inspired by 9router's open-sse/services/usage.js
  */
 
+import { initLogger, LogComponent } from '../../logging/logger';
+
+const logger = initLogger({ level: 'WARN' });
+
 export interface QuotaItem {
   used: number;
   total: number;
@@ -188,6 +192,14 @@ async function getMiniMaxUsage(apiKey: string, provider: string): Promise<Provid
       const combined = `${apiStatusMessage} ${rawText}`.trim();
       const authLike = /token plan|coding plan|invalid api key|invalid key|unauthorized|inactive/i;
 
+      logger.debug('MiniMax quota response', {
+        url: usageUrl,
+        status: response.status,
+        apiStatusCode,
+        apiStatusMessage,
+        rawLength: rawText.length,
+      }, LogComponent.NetHandlers);
+
       if (response.status === 401 || response.status === 403 || apiStatusCode === 1004 || authLike.test(combined)) {
         return {
           success: false,
@@ -198,19 +210,27 @@ async function getMiniMaxUsage(apiKey: string, provider: string): Promise<Provid
       if (!response.ok) {
         lastErrorMessage = `MiniMax usage endpoint error (${response.status})`;
         if ((response.status === 404 || response.status === 405 || response.status >= 500) && canFallback) continue;
-        return { success: false, message: `MiniMax connected. ${lastErrorMessage}` };
+        return { success: false, message: lastErrorMessage };
       }
 
       if (apiStatusCode !== 0) {
-        return { success: false, message: `MiniMax connected. ${apiStatusMessage || 'Upstream quota API error'}` };
+        return { success: false, message: apiStatusMessage || 'Upstream quota API error' };
       }
 
       const modelRemains = payload?.model_remains ?? payload?.modelRemains;
       const allModels = Array.isArray(modelRemains) ? modelRemains : [];
       const quotaModels = allModels.filter(hasMiniMaxQuota);
 
+      logger.debug('MiniMax quota models', {
+        totalModels: allModels.length,
+        quotaModels: quotaModels.length,
+        modelNames: quotaModels.map((m) => getMiniMaxModelName(m as Record<string, unknown>)),
+      }, LogComponent.NetHandlers);
+
       if (quotaModels.length === 0) {
-        return { success: false, message: 'MiniMax connected. No quota data was returned.' };
+        // API responded successfully but no models with quota were found.
+        // This is normal for accounts without an active plan.
+        return { success: true, quotas: {} };
       }
 
       const capturedAtMs = Date.now();
@@ -248,13 +268,14 @@ async function getMiniMaxUsage(apiKey: string, provider: string): Promise<Provid
       return { success: true, quotas };
     } catch (error) {
       lastErrorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug('MiniMax quota fetch error', { url: usageUrl, error: lastErrorMessage }, LogComponent.NetHandlers);
       if (!canFallback) break;
     }
   }
 
   return {
     success: false,
-    message: lastErrorMessage ? `MiniMax connected. Unable to fetch usage: ${lastErrorMessage}` : 'MiniMax connected. Unable to fetch usage.',
+    message: lastErrorMessage ? `Unable to fetch usage: ${lastErrorMessage}` : 'Unable to fetch usage.',
   };
 }
 
@@ -337,6 +358,8 @@ export async function getProviderUsage(body: ProviderUsageBody): Promise<Provide
   }
 
   const detected = detectProvider(base_url || '');
+
+  logger.debug('Provider usage request', { provider_type, detected }, LogComponent.NetHandlers);
 
   if (!detected) {
     return {
