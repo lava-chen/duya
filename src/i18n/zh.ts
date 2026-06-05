@@ -981,6 +981,31 @@ const zh: Record<TranslationKey, string> = {
   'usage.toolsShort': '个工具',
   'usage.dailyBreakdown': '每日细分',
 
+  // 服务商限额
+  'usage.providerQuota': '服务商限额',
+  'usage.providerQuotaDesc': '查看已连接服务商的配额与重置时间',
+  'usage.providerQuotaTitle': '服务商限额',
+  'usage.providerQuotaSubtitle': '查看已连接服务商的配额与重置时间',
+  'usage.backToUsage': '返回使用统计',
+  'usage.refresh': '刷新',
+  'usage.refreshing': '刷新中…',
+  'usage.loadingProviders': '正在加载服务商配置…',
+  'usage.noQuotaProviders': '暂无可查询的服务商',
+  'usage.noQuotaProvidersDesc':
+    '当前已连接的服务商中没有可查询限额的（支持 MiniMax、GLM/Zhipu）。请在「服务商」中配置后再来查看。',
+  'usage.supportedProvidersList': '支持的服务商：MiniMax（中国/国际区）、GLM / 智谱（中国/国际区）',
+  'usage.quotaLoading': '查询中',
+  'usage.quotaLoadingDesc': '正在获取限额数据…',
+  'usage.quotaUnsupported': '暂不支持',
+  'usage.quotaUnsupportedDesc': '该服务商暂不支持限额查询',
+  'usage.quotaNoData': '未返回限额数据',
+  'usage.quotaError': '获取失败',
+  'usage.quotaRetry': '重试',
+  'usage.quotaSoonReset': '即将重置',
+  'usage.minutesReset': '{minutes} 分钟后重置',
+  'usage.hoursReset': '{hours} 小时后重置',
+  'usage.daysReset': '{days} 天后重置',
+
   // 附件菜单
   'attachmentMenu.addFilesOrPhotos': '添加文件或图片',
   'attachmentMenu.addFolder': '添加文件夹',

@@ -153,10 +153,11 @@ export async function ensureWindowsPath(binDir: string): Promise<boolean> {
   try {
     // Read current user PATH from registry
     const { spawn } = await import('node:child_process');
-    const readResult = spawn(
+    const spawnOpts: import('node:child_process').SpawnOptions = { encoding: 'utf-8' };
+    const readResult: import('node:child_process').ChildProcessWithoutNullStreams = spawn(
       'reg',
       ['query', 'HKCU\\Environment', '/v', 'Path'],
-      { encoding: 'utf-8' },
+      spawnOpts,
     );
     let stdout = '';
     for await (const chunk of readResult.stdout) stdout += chunk;
@@ -171,7 +172,11 @@ export async function ensureWindowsPath(binDir: string): Promise<boolean> {
 
     // Append and setx (limit ~1024 chars; user PATH is usually fine)
     const next = current ? `${current};${binDir}` : binDir;
-    const setResult = spawn('setx', ['Path', next], { encoding: 'utf-8' });
+    const setResult: import('node:child_process').ChildProcessWithoutNullStreams = spawn(
+      'setx',
+      ['Path', next],
+      spawnOpts,
+    );
     await new Promise<void>((resolve, reject) => {
       setResult.on('close', (code) => {
         if (code === 0) resolve();

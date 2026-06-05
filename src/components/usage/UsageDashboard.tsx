@@ -110,9 +110,9 @@ export const UsageDashboard: React.FC = () => {
               <ChartBarIcon size={20} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-[var(--text)]">服务商限额</div>
+              <div className="text-sm font-medium text-[var(--text)]">{t('usage.providerQuota')}</div>
               <div className="text-xs text-[var(--muted)] mt-0.5">
-                查看已连接服务商的配额用量与重置时间
+                {t('usage.providerQuotaDesc')}
               </div>
             </div>
             <ArrowUpRightIcon size={16} className="text-[var(--muted)] group-hover:text-[var(--accent)] transition-colors" />
