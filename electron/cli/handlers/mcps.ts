@@ -30,6 +30,7 @@ import {
 } from '../../../packages/agent/src/mcp/mcpService.js';
 import { getConfigManager } from '../../config/manager';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
+import { notifyMcpConfigChanged } from '../../services/mcp-write-reload';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -233,6 +234,7 @@ export async function handleAddMCP(req: IncomingMessage, res: ServerResponse): P
     const updated = [...current, newServer];
     cm.setConfig('agentSettings', { ...(cm.getAgentSettings() as unknown as Record<string, unknown>), mcpServers: updated }, 'agent');
     await audit(req, 'mcp.add', name, command);
+    void notifyMcpConfigChanged();
     sendJson(res, 200, { ok: true, server: newServer });
   } catch (err) {
     sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
@@ -254,6 +256,7 @@ export async function handleRemoveMCP(req: IncomingMessage, res: ServerResponse,
       'agent',
     );
     await audit(req, 'mcp.remove', name);
+    void notifyMcpConfigChanged();
     sendJson(res, 200, { ok: true, removed: name });
   } catch (err) {
     sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
@@ -293,6 +296,7 @@ export async function handleAssignMCP(req: IncomingMessage, res: ServerResponse,
       'agent',
     );
     await audit(req, 'mcp.assign', name, allowedAgentIds.join(','));
+    void notifyMcpConfigChanged();
     sendJson(res, 200, {
       ok: true,
       server: name,

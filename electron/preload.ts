@@ -811,6 +811,15 @@ export interface ElectronAPI {
     onDownloaded: (callback: (e: unknown, info: unknown) => void) => () => void
     onError: (callback: (e: unknown, msg: string) => void) => () => void
   }
+  capabilityManagement: {
+    snapshot: () => Promise<
+      | { success: true; data: unknown }
+      | { success: false; error: string }
+    >
+  }
+  sse?: {
+    onAgentServerEvent?: (callback: (event: unknown) => void) => () => void;
+  }
   import: ImportAPI
 }
 
@@ -1712,6 +1721,9 @@ const electronAPI: ElectronAPI = {
     apply: (params: unknown) => ipcRenderer.invoke('import:apply', params),
     rollback: (params: { batchId: string }) => ipcRenderer.invoke('import:rollback', params),
     history: () => ipcRenderer.invoke('import:history'),
+  },
+  capabilityManagement: {
+    snapshot: () => ipcRenderer.invoke('capability-management:snapshot'),
   },
 }
 

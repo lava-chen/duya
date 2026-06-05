@@ -13,6 +13,11 @@ import { PluginCard } from "./capabilities/PluginCard";
 import { PluginInstallModal } from "./capabilities/PluginInstallModal";
 import { PluginDetailView } from "./capabilities/PluginDetailView";
 import { PluginManagementView } from "./capabilities/PluginManagementView";
+import { CapabilityBanner } from "./capabilities/CapabilityBanner";
+import { CapabilityByPluginView } from "./capabilities/CapabilityByPluginView";
+import { fetchCapabilityManagementSnapshot, hasCapabilityManagementAPI } from "@/lib/capability-management-ipc";
+import { useCapabilityManagementSnapshot } from "@/lib/useCapabilityManagementSnapshot";
+import type { CapabilityManagementSnapshot } from "@/lib/capability-management-types";
 
 type PageView = "discover" | "detail" | "manage";
 
@@ -33,7 +38,13 @@ export function CapabilitiesSection() {
   const [error, setError] = useState<string | null>(null);
   const [busyPluginId, setBusyPluginId] = useState<string | null>(null);
 
+  const [capabilitySnapshot, setCapabilitySnapshot] =
+    useState<CapabilityManagementSnapshot | null>(null);
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [capabilityLoading, setCapabilityLoading] = useState(false);
+
   const pluginApi = useMemo(() => getPluginAPI(), []);
+  const capabilityApiAvailable = useMemo(() => hasCapabilityManagementAPI(), []);
 
   const reload = useCallback(async () => {
     if (!pluginApi) return;
@@ -56,9 +67,36 @@ export function CapabilitiesSection() {
     }
   }, [pluginApi]);
 
+  const reloadCapabilities = useCallback(async () => {
+    if (!capabilityApiAvailable) return;
+    setCapabilityLoading(true);
+    setCapabilityError(null);
+    try {
+      const snap = await fetchCapabilityManagementSnapshot();
+      setCapabilitySnapshot(snap);
+    } catch (err) {
+      setCapabilityError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCapabilityLoading(false);
+    }
+  }, [capabilityApiAvailable]);
+
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    void reloadCapabilities();
+  }, [reloadCapabilities]);
+
+  // Phase 3: refetch the snapshot whenever the agent server broadcasts
+  // an MCP / skills reload event. The hook owns its own subscription
+  // and a no-op cleanup if the SSE bridge is not available.
+  useCapabilityManagementSnapshot({
+    onSnapshot: (snapshot) => {
+      setCapabilitySnapshot(snapshot);
+    },
+  });
 
   const installedMap = useMemo(
     () => new Map(installed.map((p) => [p.id, p])),
@@ -162,29 +200,44 @@ export function CapabilitiesSection() {
         title={t("settings.plugins.title" as never)}
         description={t("settings.plugins.description" as never)}
       >
-        <PluginManagementView
-          installed={installed}
-          catalog={catalog}
-          updates={updates}
-          issues={issues}
-          onBack={handleBackToDiscover}
-          onPluginClick={(id) => {
-            setSelectedPluginId(id);
-            setView("detail");
-          }}
-          onEnable={(id) =>
-            void runRegistryAction(id, () => pluginApi.registry.enable(id))
-          }
-          onDisable={(id) =>
-            void runRegistryAction(id, () => pluginApi.registry.disable(id))
-          }
-          onRemove={(id) =>
-            void runRegistryAction(id, () =>
-              pluginApi.registry.remove({ pluginId: id, deleteData: false })
-            )
-          }
-          busyPluginId={busyPluginId}
-        />
+        <div className="space-y-6">
+          <PluginManagementView
+            installed={installed}
+            catalog={catalog}
+            updates={updates}
+            issues={issues}
+            onBack={handleBackToDiscover}
+            onPluginClick={(id) => {
+              setSelectedPluginId(id);
+              setView("detail");
+            }}
+            onEnable={(id) =>
+              void runRegistryAction(id, () => pluginApi.registry.enable(id))
+            }
+            onDisable={(id) =>
+              void runRegistryAction(id, () => pluginApi.registry.disable(id))
+            }
+            onRemove={(id) =>
+              void runRegistryAction(id, () =>
+                pluginApi.registry.remove({ pluginId: id, deleteData: false })
+              )
+            }
+            busyPluginId={busyPluginId}
+          />
+          {capabilityApiAvailable ? (
+            capabilityLoading && !capabilitySnapshot ? (
+              <div className="rounded-xl border border-border/50 bg-surface/40 px-4 py-3 text-xs text-muted-foreground">
+                Loading capabilities…
+              </div>
+            ) : capabilityError ? (
+              <div className="rounded-xl border border-red-500/20 bg-red-500/[0.03] px-4 py-3 text-xs text-red-500">
+                Capability snapshot failed: {capabilityError}
+              </div>
+            ) : capabilitySnapshot ? (
+              <CapabilityByPluginView snapshot={capabilitySnapshot} />
+            ) : null
+          ) : null}
+        </div>
       </SettingsSection>
     );
   }
@@ -268,6 +321,23 @@ export function CapabilitiesSection() {
         <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/[0.03] px-4 py-3 text-sm text-red-500">
           {error}
         </div>
+      ) : null}
+
+      {capabilityApiAvailable ? (
+        capabilityLoading && !capabilitySnapshot ? (
+          <div className="mb-3 rounded-xl border border-border/50 bg-surface/40 px-4 py-3 text-xs text-muted-foreground">
+            Loading capabilities…
+          </div>
+        ) : capabilityError ? (
+          <div className="mb-3 rounded-xl border border-red-500/20 bg-red-500/[0.03] px-4 py-3 text-xs text-red-500">
+            Capability snapshot failed: {capabilityError}
+          </div>
+        ) : capabilitySnapshot ? (
+          <CapabilityBanner
+            snapshot={capabilitySnapshot}
+            onOpenManage={() => setView("manage")}
+          />
+        ) : null
       ) : null}
 
       {loading ? (

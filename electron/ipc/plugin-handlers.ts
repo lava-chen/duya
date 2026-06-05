@@ -643,3 +643,10 @@ export function registerPluginHandlers(): void {
     }
   });
 }
+
+/**
+ * Re-exported for shared helpers (e.g. `electron/services/mcp-write-reload.ts`).
+ * The internal callers in this file prefer `notifyAgentServerPluginReload`
+ * which awaits this URL.
+ */
+export { getAgentServerUrl };
