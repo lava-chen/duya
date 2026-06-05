@@ -17,6 +17,7 @@ import { createSession } from '../db/queries/sessions';
 import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
+import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
 import {
   initDatabaseFromBoot,
   initDatabase,
@@ -759,6 +760,14 @@ export function registerDbHandlers(): void {
     `).run(key, JSON.stringify(value), now);
     if (isGatewayConfigKey(key)) {
       emitGatewayConfigChanged(`db:setting:setJson:${key}`);
+    }
+    // Plan 83b Phase 2: when the renderer writes the canonical MCP
+    // server list through `useSettings().save({ mcpServers })`, the
+    // GUI path lands here. Notify the agent server so the new
+    // list propagates to the worker pool. Best-effort: a stopped
+    // agent server is silently ignored by the helper.
+    if (key === 'mcpServers') {
+      void notifyMcpConfigChanged();
     }
   });
 
