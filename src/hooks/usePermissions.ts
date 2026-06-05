@@ -191,21 +191,6 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
     };
   }, []);
 
-  // Auto-approve when full_access is active
-  useEffect(() => {
-    if (
-      permissionProfile === 'full_access' &&
-      pendingPermission &&
-      !permissionResolved &&
-      !waitingRef.current
-    ) {
-      // Auto-approve after a small delay to show the UI briefly
-      const timer = setTimeout(() => {
-        respondToPermission('allow');
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [permissionProfile, pendingPermission, permissionResolved, respondToPermission]);
 
   // Bridge OS notification actions back to the in-app permission flow.
   //
