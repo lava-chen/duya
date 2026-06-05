@@ -2,6 +2,8 @@
 
 import React from "react";
 import { useTranslation } from "@/hooks/useTranslation";
+import type { I18nContextValue } from "@/components/layout/I18nProvider";
+import { ProviderIcon } from "./ProviderIcon";
 
 export interface QuotaItem {
   used: number;
@@ -31,18 +33,21 @@ interface ProviderQuotaCardProps {
   onRetry: () => void;
 }
 
-function formatResetAt(resetAt: string | null): string | null {
+function formatResetAt(
+  resetAt: string | null,
+  t: I18nContextValue["t"],
+): string | null {
   if (!resetAt) return null;
   const ms = Date.parse(resetAt);
   if (Number.isNaN(ms)) return null;
   const diff = ms - Date.now();
-  if (diff <= 0) return "即将重置";
+  if (diff <= 0) return t("usage.quotaSoonReset");
   const minutes = Math.floor(diff / 60000);
-  if (minutes < 60) return `${minutes} 分钟后重置`;
+  if (minutes < 60) return t("usage.minutesReset", { minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时后重置`;
+  if (hours < 24) return t("usage.hoursReset", { hours });
   const days = Math.floor(hours / 24);
-  return `${days} 天后重置`;
+  return t("usage.daysReset", { days });
 }
 
 function getBarColor(percentage: number): string {
@@ -63,18 +68,23 @@ export const ProviderQuotaCard: React.FC<ProviderQuotaCardProps> = ({ state, onR
   if (state.status === "loading") {
     return (
       <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-[var(--text)]">{state.providerName}</span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--muted)]/10 text-[var(--muted)] border border-[var(--border)]">
-              查询中
-            </span>
-          </div>
+        <div className="flex items-center gap-2.5 mb-3">
+          <ProviderIcon
+            providerType={state.providerType}
+            baseUrl={state.baseUrl}
+            size={20}
+          />
+          <span className="text-sm font-medium text-[var(--text)] flex-1 truncate">
+            {state.providerName}
+          </span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--muted)]/10 text-[var(--muted)] border border-[var(--border)]">
+            {t("usage.quotaLoading")}
+          </span>
         </div>
         <div className="h-2 rounded-full bg-[var(--muted)]/10 overflow-hidden">
           <div className="h-full w-1/3 bg-[var(--muted)]/30 animate-pulse" />
         </div>
-        <div className="text-[11px] text-[var(--muted)] mt-2">正在获取限额数据…</div>
+        <div className="text-[11px] text-[var(--muted)] mt-2">{t("usage.quotaLoadingDesc")}</div>
       </div>
     );
   }
@@ -82,13 +92,22 @@ export const ProviderQuotaCard: React.FC<ProviderQuotaCardProps> = ({ state, onR
   if (state.status === "unsupported") {
     return (
       <div className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface)]/40 p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm font-medium text-[var(--text)]">{state.providerName}</div>
-            <div className="text-[11px] text-[var(--muted)] mt-1">该服务商暂不支持限额查询</div>
+        <div className="flex items-center gap-2.5">
+          <ProviderIcon
+            providerType={state.providerType}
+            baseUrl={state.baseUrl}
+            size={20}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-[var(--text)] truncate">
+              {state.providerName}
+            </div>
+            <div className="text-[11px] text-[var(--muted)] mt-0.5">
+              {t("usage.quotaUnsupportedDesc")}
+            </div>
           </div>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--muted)]/10 text-[var(--muted)] border border-[var(--border)]">
-            Not Supported
+          <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-[var(--muted)]/10 text-[var(--muted)] border border-[var(--border)]">
+            {t("usage.quotaUnsupported")}
           </span>
         </div>
       </div>
@@ -98,11 +117,20 @@ export const ProviderQuotaCard: React.FC<ProviderQuotaCardProps> = ({ state, onR
   if (state.status === "error") {
     return (
       <div className="rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/5 p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-start gap-2.5">
+          <div className="shrink-0 mt-0.5">
+            <ProviderIcon
+              providerType={state.providerType}
+              baseUrl={state.baseUrl}
+              size={20}
+            />
+          </div>
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-[var(--text)]">{state.providerName}</div>
-            <div className="text-[11px] text-[var(--error)] mt-1 truncate">
-              {state.message || "获取失败"}
+            <div className="text-sm font-medium text-[var(--text)] truncate">
+              {state.providerName}
+            </div>
+            <div className="text-[11px] text-[var(--error)] mt-1 break-all">
+              {state.message || t("usage.quotaError")}
             </div>
           </div>
           <button
@@ -110,7 +138,7 @@ export const ProviderQuotaCard: React.FC<ProviderQuotaCardProps> = ({ state, onR
             onClick={onRetry}
             className="shrink-0 text-[11px] px-2.5 py-1 rounded-md border border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent-soft)] transition-colors"
           >
-            重试
+            {t("usage.quotaRetry")}
           </button>
         </div>
       </div>
@@ -121,28 +149,44 @@ export const ProviderQuotaCard: React.FC<ProviderQuotaCardProps> = ({ state, onR
   if (entries.length === 0) {
     return (
       <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/40 p-4">
-        <div className="text-sm font-medium text-[var(--text)]">{state.providerName}</div>
-        <div className="text-[11px] text-[var(--muted)] mt-1">未返回限额数据</div>
+        <div className="flex items-center gap-2.5">
+          <ProviderIcon
+            providerType={state.providerType}
+            baseUrl={state.baseUrl}
+            size={20}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-[var(--text)] truncate">
+              {state.providerName}
+            </div>
+            <div className="text-[11px] text-[var(--muted)] mt-0.5">{t("usage.quotaNoData")}</div>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-[var(--text)]">{state.providerName}</span>
-          {state.plan && (
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/20">
-              {state.plan}
-            </span>
-          )}
-        </div>
+      <div className="flex items-center gap-2.5 mb-3">
+        <ProviderIcon
+          providerType={state.providerType}
+          baseUrl={state.baseUrl}
+          size={20}
+        />
+        <span className="text-sm font-medium text-[var(--text)] flex-1 truncate">
+          {state.providerName}
+        </span>
+        {state.plan && (
+          <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/20">
+            {state.plan}
+          </span>
+        )}
       </div>
 
       <div className="space-y-3">
         {entries.map(([key, quota]) => {
-          const resetLabel = formatResetAt(quota.resetAt);
+          const resetLabel = formatResetAt(quota.resetAt, t);
           const isPercent = quota.total > 0 && quota.total <= 100;
           return (
             <div key={key}>

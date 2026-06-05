@@ -5,7 +5,6 @@ import { ArrowLeftIcon, ArrowsClockwiseIcon, ChartBarIcon } from "@/components/i
 import { useTranslation } from "@/hooks/useTranslation";
 import { listProvidersIPC } from "@/lib/ipc-client";
 import type { Provider as IpccProvider } from "@/lib/ipc-client";
-import { ProviderIcon } from "./ProviderIcon";
 import { ProviderQuotaCard, type ProviderQuotaState } from "./ProviderQuotaCard";
 
 interface ProviderQuotaViewProps {
@@ -24,6 +23,35 @@ function isQuotaSupported(baseUrl: string): boolean {
     url.includes("bigmodel.cn") ||
     url.includes("z.ai")
   );
+}
+
+interface UnmaskedConfig {
+  apiKey: string;
+  baseUrl?: string;
+  model: string;
+  provider: string;
+  authStyle: string;
+}
+
+/**
+ * Fetch the unmasked API key for a given provider via the dedicated IPC channel.
+ * The list-providers endpoint returns masked keys; only this channel returns the
+ * real one. Provider model is not used by the quota API — pass empty string.
+ */
+async function fetchUnmaskedApiKey(providerId: string): Promise<string | null> {
+  try {
+    const electronApi = window.electronAPI as unknown as Record<string, unknown> | undefined;
+    const providerApi = electronApi?.provider as
+      | { getConfig: (id: string, model: string) => Promise<UnmaskedConfig | null> }
+      | undefined;
+    if (!providerApi?.getConfig) {
+      return null;
+    }
+    const config = await providerApi.getConfig(providerId, "");
+    return config?.apiKey ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) => {
@@ -69,10 +97,29 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
     }));
 
     try {
+      // Resolve the unmasked API key for this specific provider.
+      // The list endpoint returns masked keys (***), which the quota API rejects.
+      const apiKey = await fetchUnmaskedApiKey(provider.id);
+      if (!apiKey) {
+        setQuotaStates((prev) => ({
+          ...prev,
+          [provider.id]: {
+            providerId: provider.id,
+            providerName: provider.name,
+            providerType: provider.providerType,
+            baseUrl: provider.baseUrl,
+            hasApiKey: provider.hasApiKey,
+            status: "error",
+            message: t("usage.quotaError"),
+          },
+        }));
+        return;
+      }
+
       const result = await window.electronAPI.net.getProviderUsage({
         provider_type: provider.providerType,
         base_url: provider.baseUrl,
-        api_key: provider.apiKey,
+        api_key: apiKey,
       });
 
       if (result.success) {
@@ -100,7 +147,7 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
             baseUrl: provider.baseUrl,
             hasApiKey: provider.hasApiKey,
             status: "error",
-            message: result.error?.message || result.message || "查询失败",
+            message: result.error?.message || result.message || t("usage.quotaError"),
           },
         }));
       }
@@ -118,7 +165,7 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
         },
       }));
     }
-  }, []);
+  }, [t]);
 
   // Auto-fetch on mount once providers are loaded
   useEffect(() => {
@@ -159,13 +206,13 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-xs font-medium text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent-soft)] transition-all"
           >
             <ArrowLeftIcon size={14} />
-            返回使用统计
+            {t("usage.backToUsage")}
           </button>
           <div>
             <h2 className="text-xl font-bold text-[var(--text)] font-[family-name:--font-copernicus]">
-              服务商限额
+              {t("usage.providerQuotaTitle")}
             </h2>
-            <p className="text-sm text-[var(--muted)]">查看已连接服务商的配额与重置时间</p>
+            <p className="text-sm text-[var(--muted)]">{t("usage.providerQuotaSubtitle")}</p>
           </div>
         </div>
         <button
@@ -175,51 +222,44 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--border)] text-xs font-medium text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent-soft)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <ArrowsClockwiseIcon size={14} className={refreshing ? "animate-spin" : ""} />
-          {refreshing ? "刷新中…" : "刷新"}
+          {refreshing ? t("usage.refreshing") : t("usage.refresh")}
         </button>
       </div>
 
       {/* Content */}
       {loading ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/40 p-12 text-center text-sm text-[var(--muted)]">
-          正在加载服务商配置…
+          {t("usage.loadingProviders")}
         </div>
       ) : supportedProviders.length === 0 ? (
         <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-12 text-center">
           <div className="w-16 h-16 rounded-full bg-[var(--surface)] flex items-center justify-center mx-auto mb-4">
             <ChartBarIcon size={28} className="text-[var(--muted)]" />
           </div>
-          <h3 className="text-lg font-semibold text-[var(--text)] mb-2">暂无可查询的服务商</h3>
+          <h3 className="text-lg font-semibold text-[var(--text)] mb-2">
+            {t("usage.noQuotaProviders")}
+          </h3>
           <p className="text-sm text-[var(--muted)] max-w-md mx-auto">
-            当前已连接的服务商中没有可查询限额的（支持 MiniMax、GLM/Zhipu）。请在「服务商」中配置后再来查看。
+            {t("usage.noQuotaProvidersDesc")}
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {/* Provider list with brand icons */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {orderedStates.map((state) => (
-              <div key={state.providerId} className="relative">
-                <div className="absolute top-3 right-3 z-10">
-                  <ProviderIcon
-                    providerType={state.providerType}
-                    baseUrl={state.baseUrl}
-                    size={18}
-                  />
-                </div>
-                <ProviderQuotaCard
-                  state={state}
-                  onRetry={() => {
-                    const p = supportedProviders.find((sp) => sp.id === state.providerId);
-                    if (p) void fetchQuota(p);
-                  }}
-                />
-              </div>
+              <ProviderQuotaCard
+                key={state.providerId}
+                state={state}
+                onRetry={() => {
+                  const p = supportedProviders.find((sp) => sp.id === state.providerId);
+                  if (p) void fetchQuota(p);
+                }}
+              />
             ))}
           </div>
 
           <div className="text-[11px] text-[var(--muted)] text-center pt-2">
-            支持的服务商：MiniMax（中国/国际区）、GLM / 智谱（中国/国际区）
+            {t("usage.supportedProvidersList")}
           </div>
         </div>
       )}
