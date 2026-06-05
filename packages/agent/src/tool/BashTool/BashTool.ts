@@ -5,6 +5,7 @@
 
 import { execa, ExecaError, type Options } from 'execa';
 import type { ToolResult, ToolUseContext } from '../../types.js';
+import type { ToolPermissionContext } from '../../permissions/types.js';
 import type { ToolExecutor } from '../registry.js';
 import { BaseTool } from '../BaseTool.js';
 import type {
@@ -1041,7 +1042,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
     // for any reason), this fallback keeps the user from being blocked
     // by their own explicit mode choice. read-only commands are always
     // allowed; everything else inherits the user's mode-level decision.
-    const permissionMode = context?.getAppState?.()?.toolPermissionContext?.mode;
+    const permissionMode = (context?.getAppState?.()?.toolPermissionContext as ToolPermissionContext | undefined)?.mode;
     if (permissionMode === 'bypassPermissions' || permissionMode === 'dontAsk') {
       return { allowed: true };
     }

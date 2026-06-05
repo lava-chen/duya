@@ -18,6 +18,7 @@ import type {
 import type { ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathWritePermission } from '../../permissions/pathPermission.js';
+import { isBypassMode } from '../../permissions/PermissionMode.js';
 
 // ============================================================
 // Types
@@ -159,6 +160,12 @@ export class EditTool extends BaseTool {
       permissionContext,
     );
     if (!pathResult.allowed) return pathResult;
+
+    // In bypass mode, skip the user confirmation step entirely so the
+    // streaming executor never opens a permission dialog for edit operations.
+    if (isBypassMode(permissionContext?.mode)) {
+      return { allowed: true };
+    }
 
     return {
       allowed: true,

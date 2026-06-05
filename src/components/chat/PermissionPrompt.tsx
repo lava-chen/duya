@@ -2,7 +2,7 @@
 
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import type { PermissionRequestEvent } from '@/types/stream';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
@@ -459,18 +459,6 @@ export function PermissionPrompt({
   autoModeInfo,
 }: PermissionPromptProps) {
   const { t } = useTranslation();
-  const autoApprovedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (
-      permissionProfile === 'full_access' &&
-      pendingPermission &&
-      !permissionResolved &&
-      autoApprovedRef.current !== pendingPermission.id
-    ) {
-      autoApprovedRef.current = pendingPermission.id;
-      onPermissionResponse('allow');
-    }
-  }, [permissionProfile, pendingPermission, permissionResolved, onPermissionResponse]);
 
   // Don't render permission UI when full_access
   if (permissionProfile === 'full_access') return null;

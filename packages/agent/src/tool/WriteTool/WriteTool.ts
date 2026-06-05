@@ -18,6 +18,7 @@ import type {
 import type { ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathWritePermission } from '../../permissions/pathPermission.js';
+import { isBypassMode } from '../../permissions/PermissionMode.js';
 import { expandPath } from '../../utils/path.js';
 
 // ============================================================
@@ -237,6 +238,12 @@ export class WriteTool extends BaseTool {
 
     if (isBlockedPath(expandPath(file_path, context.workingDirectory))) {
       return { allowed: false, reason: 'Writing to system critical directories is not allowed' };
+    }
+
+    // In bypass mode, skip the user confirmation step entirely so the
+    // streaming executor never opens a permission dialog for write operations.
+    if (isBypassMode(permissionContext?.mode)) {
+      return { allowed: true };
     }
 
     return {
