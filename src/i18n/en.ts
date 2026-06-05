@@ -979,6 +979,31 @@ const en = {
   'usage.toolsShort': 'tools',
   'usage.dailyBreakdown': 'Daily breakdown',
 
+  // Provider Quota
+  'usage.providerQuota': 'Provider Quota',
+  'usage.providerQuotaDesc': 'View remaining quota and reset time for connected providers',
+  'usage.providerQuotaTitle': 'Provider Quota',
+  'usage.providerQuotaSubtitle': 'View remaining quota and reset time for connected providers',
+  'usage.backToUsage': 'Back to usage statistics',
+  'usage.refresh': 'Refresh',
+  'usage.refreshing': 'Refreshing…',
+  'usage.loadingProviders': 'Loading provider configuration…',
+  'usage.noQuotaProviders': 'No providers with quota support',
+  'usage.noQuotaProvidersDesc':
+    'No connected providers support quota lookup yet (MiniMax, GLM/Zhipu). Configure one in "Providers" and come back.',
+  'usage.supportedProvidersList': 'Supported providers: MiniMax (CN/Intl), GLM / Zhipu (CN/Intl)',
+  'usage.quotaLoading': 'Loading…',
+  'usage.quotaLoadingDesc': 'Fetching quota data…',
+  'usage.quotaUnsupported': 'Not supported',
+  'usage.quotaUnsupportedDesc': 'Quota lookup is not supported for this provider.',
+  'usage.quotaNoData': 'No quota data returned',
+  'usage.quotaError': 'Failed to fetch',
+  'usage.quotaRetry': 'Retry',
+  'usage.quotaSoonReset': 'Resetting soon',
+  'usage.minutesReset': '{minutes} min until reset',
+  'usage.hoursReset': '{hours} hours until reset',
+  'usage.daysReset': '{days} days until reset',
+
   // Attachment Menu
   'attachmentMenu.addFilesOrPhotos': 'Add files or photos',
   'attachmentMenu.addFolder': 'Add folder',
