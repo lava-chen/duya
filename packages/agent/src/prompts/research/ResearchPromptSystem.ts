@@ -8,7 +8,7 @@ import type {
 import { asSystemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../types.js'
 import { PromptSystem } from '../PromptSystem.js'
 import type { PromptProfile } from '../modes/types.js'
-import { DEFAULT_PROMPT_PROFILE } from '../modes/index.js'
+import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from '../modes/index.js'
 import { cachedPromptSection, volatilePromptSection } from '../constants/promptSections.js'
 import { getShellForPrompt } from '../../utils/shellDetector.js'
 import { resolveResearchIntent } from './intentRouter.js'
@@ -32,14 +32,24 @@ export class ResearchPromptSystem extends PromptSystem {
   }
 
   override getStaticSections(_context: PromptContext): PromptSection[] {
+    const m = (name: string, compute: () => string | null | Promise<string | null>): PromptSection | null => {
+      if (!isSectionEnabled(this.profile, name)) return null
+      return cachedPromptSection(name, compute)
+    }
+
     return [
+      // Research-specific sections are not gated by isSectionEnabled — they
+      // exist outside the generic section registry. Override `getProfile` /
+      // bespoke gating here if you need to disable a research-specific block.
       cachedPromptSection('researchProfile', () => getResearchProfileSection(_context)),
       cachedPromptSection('taskIntent', () => getTaskIntentPromptSection()),
       cachedPromptSection('literaturePluginToolPolicy', () => getLiteraturePluginToolPromptSection()),
       cachedPromptSection('evidencePolicy', () => getEvidencePolicyPromptSection()),
       cachedPromptSection('memoryWriteProposal', () => getMemoryWriteProposalPromptSection()),
-      cachedPromptSection('toneAndStyle', () => getToneAndStylePromptSection(_context)),
-    ]
+      // toneAndStyle IS a generic section name; respect the profile gate so
+      // presets like 'bare' (which disables toneAndStyle) take effect.
+      m('toneAndStyle', () => getToneAndStylePromptSection(_context)),
+    ].filter((s): s is PromptSection => s !== null)
   }
 
   override getDynamicSections(context: PromptContext): PromptSection[] {

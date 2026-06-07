@@ -223,3 +223,61 @@ describe('resolveAllowedTools', () => {
     expect(result.allowed).not.toContain('gateway:http');
   });
 });
+
+describe('ToolFilter diagnostics', () => {
+  it('records matched patterns for allowed and disallowed tools', () => {
+    const profile = makeProfile({
+      allowedTools: ['*'],
+      disallowedTools: ['exec:*', 'duya:*'],
+    });
+    const tools = [...ALL_TOOLS, 'duya:config', 'duya:settings'];
+    const result = filterTools({ agentProfile: profile, allTools: tools });
+
+    const matchedByPattern = new Map(
+      result.diagnostics.matchedPatterns.map(mp => [mp.pattern, mp.matched] as const),
+    );
+    expect(matchedByPattern.get('*')).toEqual(expect.arrayContaining(tools));
+    expect(matchedByPattern.get('exec:*')).toEqual(['exec:bash', 'exec:python']);
+    expect(matchedByPattern.get('duya:*')).toEqual(['duya:config', 'duya:settings']);
+  });
+
+  it('records unmatched patterns when configured families are not loaded', () => {
+    const profile = makeProfile({
+      disallowedTools: ['canvas:*'],
+    });
+    // No canvas tool in ALL_TOOLS — pattern should be reported as unmatched.
+    const result = filterTools({ agentProfile: profile, allTools: ALL_TOOLS });
+    expect(result.diagnostics.unmatchedPatterns).toContain('canvas:*');
+  });
+
+  it('records layer breakdown for cascading filters', () => {
+    const profile = makeProfile({
+      allowedTools: ['*'],
+      disallowedTools: ['exec:bash'],
+    });
+    const result = filterTools({
+      agentProfile: profile,
+      allTools: ALL_TOOLS,
+      globalDisallowedTools: ['browser:*'],
+      sandboxPolicy: { deny: ['search:semantic'] },
+      subagentPolicy: { allow: ['file:*', 'search:*'] },
+    });
+
+    expect(result.diagnostics.layerBreakdown.layer2_agentDenied).toBe(1); // exec:bash
+    expect(result.diagnostics.layerBreakdown.layer3_globalDenied).toBeGreaterThanOrEqual(2); // browser:navigate, browser:click
+    expect(result.diagnostics.layerBreakdown.layer4_sandboxDenied).toBe(1); // search:semantic
+    // subagent policy: allow file:*, search:* — exec:python, brief, sessions:*, gateway:http fall out
+    expect(result.diagnostics.layerBreakdown.layer5_subagentNotInAllowlist).toBeGreaterThan(0);
+  });
+
+  it('deny precedence still holds with diagnostics populated', () => {
+    const profile = makeProfile({
+      allowedTools: ['*'],
+      disallowedTools: ['file:read'],
+    });
+    const result = filterTools({ agentProfile: profile, allTools: ALL_TOOLS });
+    expect(result.allowed).not.toContain('file:read');
+    expect(result.denialReasons.get('file:read')).toBe('agent_denied');
+    expect(result.diagnostics.layerBreakdown.layer2_agentDenied).toBe(1);
+  });
+});
