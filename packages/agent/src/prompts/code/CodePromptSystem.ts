@@ -15,7 +15,7 @@ import { PromptSystem } from '../PromptSystem.js'
 import { PromptCache, createPromptCache } from '../cache.js'
 import { cachedPromptSection, volatilePromptSection } from '../constants/promptSections.js'
 import type { PromptProfile } from '../modes/types.js'
-import { DEFAULT_PROMPT_PROFILE } from '../modes/index.js'
+import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from '../modes/index.js'
 import { getMemoryManager } from '../../memory/index.js'
 import { getShellForPrompt } from '../../utils/shellDetector.js'
 import { initializeAgentsMd } from './sections/dynamic/agentsMd.js'
@@ -32,6 +32,7 @@ import { getOutputEfficiencySection } from './sections/static/outputEfficiency.j
 
 // Dynamic sections
 import { getEnvironmentSection } from './sections/dynamic/environment.js'
+import { getPlatformSection } from '../sections/dynamic/platform.js'
 import { getMcpInstructionsSection } from './sections/dynamic/mcpInstructions.js'
 import { getSessionGuidanceSection } from './sections/dynamic/sessionGuidance.js'
 import { getSkillsMetadataSection } from './sections/dynamic/skillsMetadata.js'
@@ -80,19 +81,24 @@ export class CodePromptSystem extends PromptSystem {
   ): PromptSection[] {
     const keepCodingInstructions = context.outputStyleConfig?.keepCodingInstructions !== false
 
+    const m = (name: string, compute: () => string | null | Promise<string | null>): PromptSection | null => {
+      if (!isSectionEnabled(this.profile, name)) return null
+      return cachedPromptSection(name, compute)
+    }
+
     const sections: PromptSection[] = [
-      cachedPromptSection('intro', () => getIntroSection(context)),
-      cachedPromptSection('system', () => getSystemSection(context)),
-      cachedPromptSection('taskHandling', () => getTaskHandlingSection(context)),
-      cachedPromptSection('actions', () => getActionsSection(context)),
-      cachedPromptSection('toolUsage', () => getToolUsageSection(context, this.getToolContributions())),
-      cachedPromptSection('toneAndStyle', () => getToneAndStyleSection(context)),
+      m('intro', () => getIntroSection(context)),
+      m('system', () => getSystemSection(context)),
+      m('taskHandling', () => getTaskHandlingSection(context)),
+      m('actions', () => getActionsSection(context)),
+      m('toolUsage', () => getToolUsageSection(context, this.getToolContributions())),
+      m('toneAndStyle', () => getToneAndStyleSection(context)),
       keepCodingInstructions
-        ? cachedPromptSection('outputEfficiency', () => getOutputEfficiencySection(context))
+        ? m('outputEfficiency', () => getOutputEfficiencySection(context))
         : null,
-      cachedPromptSection('agentsMd', () => getAgentsMdManager().buildAgentsMdPrompt()),
-      cachedPromptSection('memory', () => getMemorySection(context)),
-      cachedPromptSection('memoryContent', () => getMemoryManager().buildCombinedMemoryPrompt()),
+      m('agentsMd', () => getAgentsMdManager().buildAgentsMdPrompt()),
+      m('memory', () => getMemorySection(context)),
+      m('memoryContent', () => getMemoryManager().buildCombinedMemoryPrompt()),
     ].filter((s): s is PromptSection => s !== null)
 
     return sections
@@ -106,14 +112,20 @@ export class CodePromptSystem extends PromptSystem {
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
   ): PromptSection[] {
+    const m = (name: string, compute: () => string | null | Promise<string | null>, reason?: string): PromptSection | null => {
+      if (!isSectionEnabled(this.profile, name)) return null
+      return volatilePromptSection(name, compute, reason)
+    }
+
     return [
-      volatilePromptSection('environment', () => getEnvironmentSection(context), 'Current directory state'),
-      volatilePromptSection('mcp', () => getMcpInstructionsSection(context), 'MCP servers can change'),
-      volatilePromptSection('sessionGuidance', () => getSessionGuidanceSection(context), 'Session-specific guidance'),
-      volatilePromptSection('skills', () => getSkillsMetadataSection(context), 'Skills can be loaded/unloaded'),
-      volatilePromptSection('language', () => getLanguageSection(context), 'Language preference'),
-      volatilePromptSection('outputStyle', () => getOutputStyleSection(context), 'Custom output style'),
-      volatilePromptSection('scratchpad', () => getScratchpadSection(context), 'Scratchpad directory'),
+      m('platform', () => getPlatformSection(context), 'Communication platform-specific guidance'),
+      m('environment', () => getEnvironmentSection(context), 'Current directory state'),
+      m('mcp', () => getMcpInstructionsSection(context), 'MCP servers can change'),
+      m('sessionGuidance', () => getSessionGuidanceSection(context), 'Session-specific guidance'),
+      m('skills', () => getSkillsMetadataSection(context), 'Skills can be loaded/unloaded'),
+      m('language', () => getLanguageSection(context), 'Language preference'),
+      m('outputStyle', () => getOutputStyleSection(context), 'Custom output style'),
+      m('scratchpad', () => getScratchpadSection(context), 'Scratchpad directory'),
     ].filter((s): s is PromptSection => s !== null)
   }
 

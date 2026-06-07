@@ -8,6 +8,7 @@ import { asSystemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../types.js'
 import type { PromptContext, PromptSection, SystemPrompt, PromptBuildContextOptions } from '../types.js'
 import { PromptSystem } from '../PromptSystem.js'
 import type { PromptProfile } from '../modes/types.js'
+import { isSectionEnabled } from '../modes/index.js'
 import { getShellForPrompt } from '../../utils/shellDetector.js'
 
 // Static sections
@@ -60,29 +61,23 @@ export class ConductorPromptSystem extends PromptSystem {
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
   ): PromptSection[] {
-    const sections: PromptSection[] = [
-      {
-        name: 'intro',
-        compute: () => getIntroSection(context),
-        volatile: false,
-      },
-      {
-        name: 'system',
-        compute: () => getSystemSection(context),
-        volatile: false,
-      },
-      {
-        name: 'toolUsage',
-        compute: () => getToolUsageSection(context),
-        volatile: false,
-      },
-      {
-        name: 'canvasTools',
-        compute: () => getCanvasToolsSection(context),
-        volatile: false,
-      },
-    ]
-    return sections
+    const kept = (
+      name: string,
+      compute: () => string | null | Promise<string | null>,
+    ): PromptSection | null => {
+      // Generic section names are gated by profile; conductor-specific names
+      // (canvasTools) are always kept.
+      const genericNames = new Set(['intro', 'system', 'toolUsage', 'environment'])
+      if (genericNames.has(name) && !isSectionEnabled(this.profile, name)) return null
+      return { name, compute, volatile: false }
+    }
+
+    return [
+      kept('intro', () => getIntroSection(context)),
+      kept('system', () => getSystemSection(context)),
+      kept('toolUsage', () => getToolUsageSection(context)),
+      kept('canvasTools', () => getCanvasToolsSection(context)),
+    ].filter((s): s is PromptSection => s !== null)
   }
 
   /**
@@ -93,27 +88,21 @@ export class ConductorPromptSystem extends PromptSystem {
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
   ): PromptSection[] {
-    const sections: PromptSection[] = [
-      {
-        name: 'conductorCanvas',
-        compute: () => getConductorCanvasSection(context),
-        volatile: true,
-        description: 'Canvas workspace context',
-      },
-      {
-        name: 'vizSpec',
-        compute: () => getVizSpecSection(),
-        volatile: true,
-        description: 'VizSpec format reference',
-      },
-      {
-        name: 'environment',
-        compute: () => getEnvironmentSection(context),
-        volatile: true,
-        description: 'Current environment info',
-      },
-    ]
-    return sections
+    const kept = (
+      name: string,
+      compute: () => string | null | Promise<string | null>,
+      reason?: string,
+    ): PromptSection | null => {
+      const genericNames = new Set(['intro', 'system', 'toolUsage', 'environment'])
+      if (genericNames.has(name) && !isSectionEnabled(this.profile, name)) return null
+      return { name, compute, volatile: true, description: reason }
+    }
+
+    return [
+      kept('conductorCanvas', () => getConductorCanvasSection(context), 'Canvas workspace context'),
+      kept('vizSpec', () => getVizSpecSection(), 'VizSpec format reference'),
+      kept('environment', () => getEnvironmentSection(context), 'Current environment info'),
+    ].filter((s): s is PromptSection => s !== null)
   }
 
   /**

@@ -22,7 +22,7 @@ import type {
   ToolResultContent,
   AgentProgressEvent,
 } from './types.js';
-import { PromptManager, asSystemPrompt, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from './prompts/index.js';
+import { PromptManager, asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from './prompts/index.js';
 import type { PromptSystem } from './prompts/index.js';
 import { getMemoryManager } from './memory/index.js'
 import { createMemoryReviewService } from './memory/index.js';
@@ -724,6 +724,19 @@ export class duyaAgent {
         return;
       }
 
+      // Research mode depends on a chat session for run tracking and report
+      // persistence. Fail fast in contexts without one (CLI / standalone
+      // harness) instead of letting the orchestrator run, produce a report
+      // the user can't retrieve, and silently return an empty `done`.
+      if (requestedMode === 'research' && !this.sessionId) {
+        logger.warn('[Agent] Research mode requested without a sessionId; refusing to start');
+        yield {
+          type: 'error',
+          data: 'Research mode requires an active chat session (sessionId is missing)',
+        } as SSEEvent;
+        return;
+      }
+
       const mode = ModeRegistry.create(requestedMode);
       if (!mode) {
         yield {
@@ -761,13 +774,20 @@ export class duyaAgent {
       let researchRunId = '';
 
       if (requestedMode === 'research') {
-        const { getResearchSessionBySessionId, createResearchSession } = await import('./session/db.js');
+        const { getResearchSessionBySessionId, createResearchSession, updateResearchSession } = await import('./session/db.js');
         const sessionId = this.sessionId;
         if (sessionId) {
-          let row = getResearchSessionBySessionId(sessionId);
+          // NOTE: getResearchSessionBySessionId is documented as synchronous,
+          // but in IPC mode it goes through sendDbRequest which returns a
+          // Promise. The historical code cast that Promise to a row via
+          // `as unknown as`, causing `!row` to be always false and skipping
+          // the create path on first run. We now await to get the real
+          // value and unify both modes (direct better-sqlite3 and IPC)
+          // behind the same async contract.
+          const row = await getResearchSessionBySessionId(sessionId);
           if (!row) {
             const id = crypto.randomUUID();
-            createResearchSession({
+            const created = await createResearchSession({
               id,
               session_id: sessionId,
               original_query: queryText,
@@ -775,11 +795,13 @@ export class duyaAgent {
               status: 'active',
               run_status: 'classifying',
             });
-            researchRunId = id;
+            // Defensive: if IPC returned a row with a different id (the
+            // dispatcher may re-key), prefer what createResearchSession
+            // actually persisted.
+            researchRunId = (created as { id?: string } | null)?.id ?? id;
           } else {
             researchRunId = row.id;
-            const { updateResearchSession } = await import('./session/db.js');
-            updateResearchSession(row.id, {
+            await updateResearchSession(row.id, {
               run_status: 'classifying',
             });
           }
@@ -824,10 +846,10 @@ export class duyaAgent {
           const sessionId = this.sessionId;
           if (sessionId) {
             const { getResearchSessionBySessionId, createResearchSession, updateResearchSession } = await import('./session/db.js');
-            let row = getResearchSessionBySessionId(sessionId);
+            const row = await getResearchSessionBySessionId(sessionId);
             if (!row) {
               const id = crypto.randomUUID();
-              createResearchSession({
+              await createResearchSession({
                 id,
                 session_id: sessionId,
                 original_query: queryText,
@@ -837,7 +859,7 @@ export class duyaAgent {
               researchId = id;
             } else {
               researchId = row.id;
-              updateResearchSession(row.id, {
+              await updateResearchSession(row.id, {
                 context_json: context,
                 status: 'active',
                 current_phase: data.current_phase as string || 'researching',
@@ -851,12 +873,12 @@ export class duyaAgent {
           updateRun: async (runId: string, data: Record<string, unknown>) => {
             if (!runId) return;
             const { updateResearchSession } = await import('./session/db.js');
-            updateResearchSession(runId, data as Record<string, unknown>);
+            await updateResearchSession(runId, data as Record<string, unknown>);
           },
           createPlanSteps: async (runId: string, steps: Array<Record<string, unknown>>) => {
             if (!runId || steps.length === 0) return;
             const { createResearchPlanSteps } = await import('./session/db.js');
-            createResearchPlanSteps(runId, steps as Array<{
+            await createResearchPlanSteps(runId, steps as Array<{
               id: string;
               order_num: number;
               user_facing_label: string;
@@ -867,7 +889,7 @@ export class duyaAgent {
             if (!stepId) return;
             const { updateResearchPlanStep } = await import('./session/db.js');
             const status = data.status as string | undefined;
-            updateResearchPlanStep(stepId, {
+            await updateResearchPlanStep(stepId, {
               status: (status === 'pending' || status === 'active' || status === 'completed' || status === 'skipped' || status === 'failed')
                 ? status as 'pending' | 'active' | 'completed' | 'skipped' | 'failed'
                 : undefined,
@@ -879,7 +901,7 @@ export class duyaAgent {
             const { createResearchActivity } = await import('./session/db.js');
             const runId = data.run_id as string;
             if (!runId) return;
-            createResearchActivity({
+            await createResearchActivity({
               id: crypto.randomUUID(),
               run_id: runId,
               sequence: (data.sequence as number) || 0,
@@ -1023,7 +1045,15 @@ export class duyaAgent {
       if (filterResult.isValid) {
         const allowedToolSet = new Set(filterResult.allowed);
         tools = tools.filter(t => allowedToolSet.has(t.name));
-        logger.info(`[Agent] streamChat: Filtered tools by agent profile, ${tools.length}/${allToolNames.length} enabled`);
+        logger.info(`[Agent] streamChat: Tool filter applied`, {
+          profileId: appliedProfile.id,
+          totalTools: allToolNames.length,
+          allowedCount: filterResult.allowed.length,
+          deniedCount: filterResult.denied.length,
+          matchedPatternCount: filterResult.diagnostics.matchedPatterns.length,
+          unmatchedPatterns: filterResult.diagnostics.unmatchedPatterns,
+          layerBreakdown: filterResult.diagnostics.layerBreakdown,
+        });
 
         if (filterResult.denied.length > 0) {
           logger.info(`[Agent] streamChat: Denied tools: ${filterResult.denied.join(', ')}`);
@@ -1044,8 +1074,14 @@ export class duyaAgent {
     // Determine which prompt system to use based on agent profile
     // Default to 'general' prompt system if no profile is specified
     const sysName = resolvePromptSystemName(appliedProfile?.promptSystem);
-    const promptSystem = PromptsRegistry.get(sysName) ?? PromptsRegistry.get('general')!;
+    const promptProfile = appliedProfile
+      ? getPromptProfileForAgentProfile(appliedProfile)
+      : DEFAULT_PROMPT_PROFILE;
+    const promptSystem: PromptSystem =
+      PromptsRegistry.getOrCreate(sysName, promptProfile)
+      ?? PromptsRegistry.getOrCreate('general', promptProfile)!;
     logger.info(`[Agent] Using prompt system '${sysName}'${appliedProfile ? ` for profile: ${appliedProfile.name}` : ' (default)'}`);
+    logger.info(`[Agent] Resolved prompt profile: base=${promptProfile.base}, overlays=${JSON.stringify(promptProfile.overlays ?? [])}, disabledSections=${JSON.stringify(promptProfile.overrides?.disableSections ?? [])}`);
 
     // Apply output style config if provided
     if (options?.outputStyleConfig) {

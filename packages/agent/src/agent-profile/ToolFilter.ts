@@ -98,6 +98,27 @@ export function expandToolGroups(
 }
 
 // ============================================================
+// Tool Filter Diagnostics
+// ============================================================
+
+export interface ToolFilterDiagnostics {
+  /** Per-pattern, the list of tool names that pattern matched. */
+  matchedPatterns: Array<{ pattern: string; matched: string[]; layer: 1 | 2 | 3 | 4 | 5 }>;
+  /** Configured patterns that matched zero tools (e.g. an MCP tool family that isn't loaded). */
+  unmatchedPatterns: string[];
+  /** Tools that were kept because no rule denied them. */
+  layerBreakdown: {
+    layer1_allowlist: number;
+    layer2_agentDenied: number;
+    layer3_globalDenied: number;
+    layer4_sandboxDenied: number;
+    layer4_sandboxNotInAllowlist: number;
+    layer5_subagentDenied: number;
+    layer5_subagentNotInAllowlist: number;
+  };
+}
+
+// ============================================================
 // Filtering Logic
 // ============================================================
 
@@ -106,6 +127,7 @@ export interface ToolFilterResult {
   denied: string[];
   denialReasons: Map<string, string>;
   isValid: boolean;
+  diagnostics: ToolFilterDiagnostics;
 }
 
 /**
@@ -130,36 +152,74 @@ export function filterTools(context: ToolFilterContext): ToolFilterResult {
     allowed.add(tool);
   }
 
+  const layerBreakdown = {
+    layer1_allowlist: 0,
+    layer2_agentDenied: 0,
+    layer3_globalDenied: 0,
+    layer4_sandboxDenied: 0,
+    layer4_sandboxNotInAllowlist: 0,
+    layer5_subagentDenied: 0,
+    layer5_subagentNotInAllowlist: 0,
+  };
+  const matchedPatterns: Array<{ pattern: string; matched: string[]; layer: 1 | 2 | 3 | 4 | 5 }> = [];
+  const allConfiguredPatterns = new Set<string>();
+
   // Layer 1: Agent allowedTools (whitelist)
   if (agentProfile.allowedTools && agentProfile.allowedTools.length > 0) {
+    for (const pattern of agentProfile.allowedTools) allConfiguredPatterns.add(pattern)
     const expandedAllowed = expandToolGroups(agentProfile.allowedTools, allTools);
     for (const tool of allTools) {
       if (!expandedAllowed.includes(tool) && !denied.has(tool)) {
         allowed.delete(tool);
         denied.add(tool);
         denialReasons.set(tool, 'not_in_agent_allowlist');
+        layerBreakdown.layer1_allowlist++;
+      }
+    }
+    for (const pattern of agentProfile.allowedTools) {
+      const matched = allTools.filter(t => matchToolPattern(t, pattern))
+      if (matched.length > 0) {
+        matchedPatterns.push({ pattern, matched, layer: 1 })
       }
     }
   }
 
   // Layer 2: Agent disallowedTools (blacklist)
   if (agentProfile.disallowedTools && agentProfile.disallowedTools.length > 0) {
+    for (const pattern of agentProfile.disallowedTools) allConfiguredPatterns.add(pattern)
     for (const tool of allTools) {
-      if (anyPatternMatches(tool, agentProfile.disallowedTools) && !denied.has(tool)) {
+      const matched = anyPatternMatches(tool, agentProfile.disallowedTools)
+      if (matched && !denied.has(tool)) {
         allowed.delete(tool);
         denied.add(tool);
         denialReasons.set(tool, 'agent_denied');
+        layerBreakdown.layer2_agentDenied++;
+      }
+    }
+    for (const pattern of agentProfile.disallowedTools) {
+      const matched = allTools.filter(t => matchToolPattern(t, pattern))
+      if (matched.length > 0) {
+        matchedPatterns.push({ pattern, matched, layer: 2 })
       }
     }
   }
 
   // Layer 3: Global deny list
   if (context.globalDisallowedTools && context.globalDisallowedTools.length > 0) {
+    for (const pattern of context.globalDisallowedTools) allConfiguredPatterns.add(pattern)
     for (const tool of allTools) {
       if (anyPatternMatches(tool, context.globalDisallowedTools)) {
+        const wasNew = !denied.has(tool)
         allowed.delete(tool);
         denied.add(tool);
         denialReasons.set(tool, 'globally_denied');
+        if (wasNew) layerBreakdown.layer3_globalDenied++;
+      }
+    }
+    for (const pattern of context.globalDisallowedTools) {
+      const matched = allTools.filter(t => matchToolPattern(t, pattern))
+      if (matched.length > 0) {
+        matchedPatterns.push({ pattern, matched, layer: 3 })
       }
     }
   }
@@ -167,22 +227,38 @@ export function filterTools(context: ToolFilterContext): ToolFilterResult {
   // Layer 4: Sandbox policy
   if (context.sandboxPolicy) {
     if (context.sandboxPolicy.deny && context.sandboxPolicy.deny.length > 0) {
+      for (const pattern of context.sandboxPolicy.deny) allConfiguredPatterns.add(pattern)
       for (const tool of allTools) {
-        if (anyPatternMatches(tool, context.sandboxPolicy.deny) && !denied.has(tool)) {
+        if (anyPatternMatches(tool, context.sandboxPolicy.deny!) && !denied.has(tool)) {
           allowed.delete(tool);
           denied.add(tool);
           denialReasons.set(tool, 'sandbox_denied');
+          layerBreakdown.layer4_sandboxDenied++;
+        }
+      }
+      for (const pattern of context.sandboxPolicy.deny) {
+        const matched = allTools.filter(t => matchToolPattern(t, pattern))
+        if (matched.length > 0) {
+          matchedPatterns.push({ pattern, matched, layer: 4 })
         }
       }
     }
 
     if (context.sandboxPolicy.allow && context.sandboxPolicy.allow.length > 0) {
+      for (const pattern of context.sandboxPolicy.allow) allConfiguredPatterns.add(pattern)
       const expandedAllowed = expandToolGroups(context.sandboxPolicy.allow, allTools);
       for (const tool of allTools) {
         if (!expandedAllowed.includes(tool) && !denied.has(tool)) {
           allowed.delete(tool);
           denied.add(tool);
           denialReasons.set(tool, 'not_in_sandbox_allowlist');
+          layerBreakdown.layer4_sandboxNotInAllowlist++;
+        }
+      }
+      for (const pattern of context.sandboxPolicy.allow) {
+        const matched = allTools.filter(t => matchToolPattern(t, pattern))
+        if (matched.length > 0) {
+          matchedPatterns.push({ pattern, matched, layer: 4 })
         }
       }
     }
@@ -191,22 +267,38 @@ export function filterTools(context: ToolFilterContext): ToolFilterResult {
   // Layer 5: Subagent policy
   if (context.subagentPolicy) {
     if (context.subagentPolicy.deny && context.subagentPolicy.deny.length > 0) {
+      for (const pattern of context.subagentPolicy.deny) allConfiguredPatterns.add(pattern)
       for (const tool of allTools) {
-        if (anyPatternMatches(tool, context.subagentPolicy.deny) && !denied.has(tool)) {
+        if (anyPatternMatches(tool, context.subagentPolicy.deny!) && !denied.has(tool)) {
           allowed.delete(tool);
           denied.add(tool);
           denialReasons.set(tool, 'subagent_denied');
+          layerBreakdown.layer5_subagentDenied++;
+        }
+      }
+      for (const pattern of context.subagentPolicy.deny) {
+        const matched = allTools.filter(t => matchToolPattern(t, pattern))
+        if (matched.length > 0) {
+          matchedPatterns.push({ pattern, matched, layer: 4 })
         }
       }
     }
 
     if (context.subagentPolicy.allow && context.subagentPolicy.allow.length > 0) {
+      for (const pattern of context.subagentPolicy.allow) allConfiguredPatterns.add(pattern)
       const expandedAllowed = expandToolGroups(context.subagentPolicy.allow, allTools);
       for (const tool of allTools) {
         if (!expandedAllowed.includes(tool) && !denied.has(tool)) {
           allowed.delete(tool);
           denied.add(tool);
           denialReasons.set(tool, 'not_in_subagent_allowlist');
+          layerBreakdown.layer5_subagentNotInAllowlist++;
+        }
+      }
+      for (const pattern of context.subagentPolicy.allow) {
+        const matched = allTools.filter(t => matchToolPattern(t, pattern))
+        if (matched.length > 0) {
+          matchedPatterns.push({ pattern, matched, layer: 4 })
         }
       }
     }
@@ -214,11 +306,23 @@ export function filterTools(context: ToolFilterContext): ToolFilterResult {
 
   const allowedArray = Array.from(allowed);
 
+  // Compute unmatched patterns: configured patterns that matched zero tools.
+  const unmatchedPatterns: string[] = []
+  for (const pattern of allConfiguredPatterns) {
+    const isMatched = matchedPatterns.some(mp => mp.pattern === pattern)
+    if (!isMatched) unmatchedPatterns.push(pattern)
+  }
+
   return {
     allowed: allowedArray,
     denied: Array.from(denied),
     denialReasons,
     isValid: allowedArray.length > 0,
+    diagnostics: {
+      matchedPatterns,
+      unmatchedPatterns,
+      layerBreakdown,
+    },
   };
 }
 
