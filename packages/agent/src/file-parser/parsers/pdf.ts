@@ -1,14 +1,27 @@
 /**
  * pdf parser - .pdf text extraction with vision fallback
  *
- * Strategy mirrors the Python sidecar (pdf_parser.py):
- *   1. Use pdf-parse (pdfjs-dist based) to extract text per page
- *   2. Compute avg chars per page
- *   3. If total chars == 0  -> full vision fallback (rasterize every page)
- *   4. If avg < 50 && pages <= 5  -> hybrid (text + rasterized images)
- *   5. Otherwise  -> text only
+ * Three-tier strategy that mirrors the Python sidecar's intent while
+ * fixing three real-world failure modes:
  *
- * Vision fallback delegates to pdfVision.ts which uses poppler-utils.
+ *   1. Hard errors. pdf-parse v1 (pdfjs v1.10.100) crashes on some
+ *      PDFs with "FormatError: Illegal character". We catch the
+ *      failure and fall through to vision.
+ *   2. Garbled text. PDFs using CID fonts without a proper
+ *      ToUnicode CMap (the most common case for CJK + scanned
+ *      forms) extract as the U+FFFD replacement character
+ *      and other Latin-1 noise. Each such char counts as 1 token,
+ *      so a 9000-line PDF can blow the 25K budget with no useful
+ *      content. We detect high replacement-character rates and
+ *      demote the document to vision.
+ *   3. Low confidence. avgCharsPerPage below the threshold
+ *      suggests a scanned document; we rasterize it (if poppler is
+ *      available) and feed images to the model instead.
+ *
+ *   text    -> usable text extracted, no images
+ *   vision  -> empty text, page images only (scanned / garbled / errored)
+ *   hybrid  -> both (small low-confidence docs keep the partial
+ *                text alongside the page images as a fallback)
  */
 
 import { readFile } from 'node:fs/promises';
@@ -20,26 +33,108 @@ import { PDF_CONFIDENCE_THRESHOLD, PDF_HYBRID_MAX_PAGES } from '../types.js';
 import { detectPoppler } from '../poppler.js';
 import { rasterizePages, getPageCount } from './pdf-vision.js';
 
+/**
+ * Replacement characters and unassigned code points that signal a
+ * CMap or font-encoding failure. A high density of these in the
+ * extracted text is a strong indicator that the PDF is unusable as
+ * text and should be demoted to vision.
+ */
+const REPLACEMENT_CHARS = new Set([
+  '�',          // U+FFFD REPLACEMENT CHARACTER
+  '?',          // U+003F (often a stand-in for unmappable chars)
+  '',           // U+0000 NULL
+  '￾',     // BOM / noncharacter
+  '￿',     // noncharacter
+]);
+
+/**
+ * What fraction of the extracted text consists of replacement
+ * characters. The 0.20 threshold is conservative — even a fully
+ * CJK PDF (where no Latin-1 char is meaningful) shouldn't have
+ * 20% of its output be `?` or `�`. This catches CID font and
+ * ToUnicode failures without false-positiving on short, plain-text
+ * documents that happen to contain a few `?`s.
+ */
+const REPLACEMENT_RATIO_THRESHOLD = 0.20;
+
+function replacementRatio(text: string): number {
+  if (text.length === 0) return 0;
+  let count = 0;
+  for (const ch of text) {
+    if (REPLACEMENT_CHARS.has(ch)) count++;
+  }
+  return count / text.length;
+}
+
+interface PdfParseOk {
+  ok: true;
+  numpages: number;
+  text: string;
+}
+
+interface PdfParseErr {
+  ok: false;
+  error: string;
+}
+
+type PdfParseResult = PdfParseOk | PdfParseErr;
+
+/**
+ * Wraps pdf-parse so a hard error (FormatError, etc.) becomes a
+ * typed result instead of an exception. We never let pdf-parse
+ * exceptions propagate — every failure mode is recoverable.
+ */
+async function safeParse(buffer: Buffer): Promise<PdfParseResult> {
+  try {
+    const parsed = await pdfParse(buffer);
+    return {
+      ok: true,
+      numpages: parsed.numpages || 0,
+      text: parsed.text ?? '',
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export class PdfParser {
   async parse(filePath: string): Promise<RawParse> {
     const buffer = await readFile(filePath);
-    const parsed = await pdfParse(buffer);
-    const pageCount = parsed.numpages || 0;
-    const text = parsed.text ?? '';
+    const result = await safeParse(buffer);
+
+    // Hard error from pdf-parse: skip text entirely, try vision
+    if (!result.ok) {
+      const knownCount = await this.getPageCountSafe(filePath);
+      return this.visionFallback(filePath, knownCount ?? 0, 'vision');
+    }
+
+    const pageCount = result.numpages;
+    const text = result.text;
     const totalChars = text.length;
     const avgCharsPerPage = pageCount > 0 ? totalChars / pageCount : 0;
 
+    // No text at all -> scanned document, full vision
     if (totalChars === 0) {
-      // Fully scanned document — try vision fallback
       return this.visionFallback(filePath, pageCount, 'vision');
     }
 
+    // High replacement-char ratio -> CMap/CID failure, demote to vision
+    // Catches the "9000 lines of `?`" failure mode that the original
+    // Python sidecar silently passed through as text.
+    if (replacementRatio(text) >= REPLACEMENT_RATIO_THRESHOLD) {
+      return this.visionFallback(filePath, pageCount, 'vision');
+    }
+
+    // Low confidence on a small doc: keep the partial text, also
+    // add images (the model can reconcile both).
     if (avgCharsPerPage < PDF_CONFIDENCE_THRESHOLD / 2 && pageCount <= PDF_HYBRID_MAX_PAGES) {
-      // Low confidence on a small doc — hybrid
       const images = await this.tryRasterize(filePath, pageCount);
       return {
         text,
-        images,
+        ...(images.length > 0 && { images }),
         extractMethod: images.length > 0 ? 'hybrid' : 'text',
         pageCount,
       };
@@ -71,16 +166,24 @@ export class PdfParser {
     pageCount: number,
   ): Promise<Array<{ base64: string; mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; page: number }>> {
     if (pageCount === 0) {
-      // We don't know the page count from text extraction; ask pdfinfo
-      const poppler = await detectPoppler();
-      if (!poppler.pdfinfo) return [];
-      pageCount = (await getPageCount(filePath, poppler.pdfinfo)) ?? 0;
-      if (pageCount === 0) return [];
+      const knownCount = await this.getPageCountSafe(filePath);
+      if (!knownCount) return [];
+      pageCount = knownCount;
     }
 
     const poppler = await detectPoppler();
     if (!poppler.pdftoppm) return [];
 
     return rasterizePages(filePath, poppler.pdftoppm, pageCount);
+  }
+
+  private async getPageCountSafe(filePath: string): Promise<number | null> {
+    try {
+      const poppler = await detectPoppler();
+      if (!poppler.pdfinfo) return null;
+      return await getPageCount(filePath, poppler.pdfinfo);
+    } catch {
+      return null;
+    }
   }
 }
