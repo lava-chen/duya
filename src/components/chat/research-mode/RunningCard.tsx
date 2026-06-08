@@ -58,8 +58,8 @@ export function RunningCard({ sessionId, snapshot, onForceStop }: RunningCardPro
 
   return (
     <div data-message-id={`research-running-${sessionId}`} className="py-4 px-4">
-      <div className="rounded-2xl border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
-        <div className="px-4 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+      <div className="rounded-2xl border px-4 py-4 space-y-3" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
+        <div>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
@@ -109,7 +109,7 @@ export function RunningCard({ sessionId, snapshot, onForceStop }: RunningCardPro
         </div>
 
         {activeStep && (
-          <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div className="rounded-xl px-3 py-3" style={{ backgroundColor: 'var(--chip)' }}>
             <div className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Current step</div>
             <div className="flex items-center gap-2 mt-1">
               <span
@@ -123,7 +123,7 @@ export function RunningCard({ sessionId, snapshot, onForceStop }: RunningCardPro
           </div>
         )}
 
-        <div className="px-4 py-3">
+        <div>
           <div className="text-xs" style={{ color: 'var(--muted)' }}>
             {completedCount} of {snapshot.planSteps.length || snapshot.planQuestions.length} steps completed
           </div>

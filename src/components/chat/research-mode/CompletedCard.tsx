@@ -23,6 +23,54 @@ function formatDuration(startedAt: number | null, completedAt: number | null): s
   return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
 }
 
+function makeSafeFileName(value: string, extension: string): string {
+  const base = (value || 'research-report')
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .slice(0, 120)
+    .trim();
+  return `${base || 'research-report'}${extension}`;
+}
+
+function downloadBlob(fileName: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function markdownToPortableHtml(markdown: string, title: string): string {
+  const paragraphs = markdown
+    .split(/\n{2,}/)
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, '<br>')}</p>`)
+    .join('\n');
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { font-family: Georgia, serif; line-height: 1.55; color: #111827; padding: 32px; }
+    p { margin: 0 0 14px; }
+  </style>
+</head>
+<body>
+${paragraphs}
+</body>
+</html>`;
+}
+
 export function CompletedCard({ sessionId, snapshot }: CompletedCardProps) {
   const [reportExpanded, setReportExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -58,6 +106,30 @@ export function CompletedCard({ sessionId, snapshot }: CompletedCardProps) {
     return { total, completed, active, skipped, failed };
   }, [steps]);
 
+  const sourceList = useMemo(() => {
+    const sourceMap = new Map<string, { title: string; url: string | null; sourceType?: string }>();
+
+    for (const source of snapshot.persistedSources) {
+      sourceMap.set(source.url || source.id, {
+        title: source.title || source.url || 'Untitled source',
+        url: source.url,
+        sourceType: source.source_type,
+      });
+    }
+
+    for (const finding of snapshot.findings) {
+      const key = finding.url || finding.source;
+      if (!key || sourceMap.has(key)) continue;
+      sourceMap.set(key, {
+        title: finding.title || finding.source || finding.url || 'Untitled source',
+        url: finding.url || null,
+        sourceType: finding.sourceReliability,
+      });
+    }
+
+    return Array.from(sourceMap.values());
+  }, [snapshot.findings, snapshot.persistedSources]);
+
   const handleCopyReport = async () => {
     if (!snapshot.reportText) return;
     await navigator.clipboard.writeText(snapshot.reportText);
@@ -68,20 +140,35 @@ export function CompletedCard({ sessionId, snapshot }: CompletedCardProps) {
   const handleDownloadMarkdown = () => {
     if (!snapshot.reportText) return;
     const blob = new Blob([snapshot.reportText], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${snapshot.originalQuery || 'research-report'}.md`
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .slice(0, 120);
-    anchor.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(makeSafeFileName(snapshot.originalQuery, '.md'), blob);
+  };
+
+  const handleDownloadWord = () => {
+    if (!snapshot.reportText) return;
+    const html = markdownToPortableHtml(snapshot.reportText, snapshot.originalQuery || 'Research report');
+    const blob = new Blob([html], { type: 'application/msword;charset=utf-8' });
+    downloadBlob(makeSafeFileName(snapshot.originalQuery, '.doc'), blob);
+  };
+
+  const handleDownloadEvidence = () => {
+    const evidencePackage = {
+      query: snapshot.originalQuery,
+      generatedAt: new Date().toISOString(),
+      coverage: snapshot.coverage,
+      iterations: snapshot.currentIteration,
+      sources: snapshot.persistedSources,
+      citations: snapshot.persistedCitations,
+      findings: snapshot.findings,
+      activities: snapshot.activities,
+    };
+    const blob = new Blob([JSON.stringify(evidencePackage, null, 2)], { type: 'application/json;charset=utf-8' });
+    downloadBlob(makeSafeFileName(snapshot.originalQuery, '-evidence.json'), blob);
   };
 
   return (
     <div data-message-id={`research-complete-${sessionId}`} className="py-4 px-4">
-      <div className="rounded-2xl border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
-        <div className="px-4 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+      <div className="rounded-2xl border px-4 py-4 space-y-4" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
+        <div>
           <div className="flex items-center gap-2">
             <BrainIcon size={16} />
             <h3 className="text-base font-semibold truncate" style={{ color: 'var(--text)' }}>
@@ -92,9 +179,10 @@ export function CompletedCard({ sessionId, snapshot }: CompletedCardProps) {
             Research completed
           </div>
           <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>
-            {`${formatPercent(snapshot.coverage)} coverage · ${snapshot.findingsCount} findings · ${snapshot.currentIteration} iterations`}
-            {snapshot.questionCount > 0 && ` · ${snapshot.questionCount} questions`}
-            {duration ? ` · ${duration}` : ''}
+            {`${formatPercent(snapshot.coverage)} coverage - ${snapshot.findingsCount} findings - ${snapshot.currentIteration} iterations`}
+            {snapshot.questionCount > 0 && ` - ${snapshot.questionCount} questions`}
+            {sourceList.length > 0 && ` - ${sourceList.length} sources`}
+            {duration ? ` - ${duration}` : ''}
           </div>
           {snapshot.summary && (
             <div className="text-sm mt-2" style={{ color: 'var(--text)' }}>
@@ -104,7 +192,7 @@ export function CompletedCard({ sessionId, snapshot }: CompletedCardProps) {
         </div>
 
         {showReport && (
-          <div className="px-4 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div className="rounded-xl px-3 py-3" style={{ backgroundColor: 'var(--chip)' }}>
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm font-medium" style={{ color: 'var(--text)' }}>
                 Report
@@ -135,6 +223,30 @@ export function CompletedCard({ sessionId, snapshot }: CompletedCardProps) {
                 >
                   Download .md
                 </button>
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded border"
+                  style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
+                  onClick={handleDownloadWord}
+                >
+                  Download .doc
+                </button>
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded border"
+                  style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
+                  onClick={() => window.print()}
+                >
+                  Print/PDF
+                </button>
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded border"
+                  style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
+                  onClick={handleDownloadEvidence}
+                >
+                  Evidence
+                </button>
               </div>
             </div>
             {snapshot.reportText ? (
@@ -149,7 +261,41 @@ export function CompletedCard({ sessionId, snapshot }: CompletedCardProps) {
           </div>
         )}
 
-        <div className="px-4 py-3">
+        {sourceList.length > 0 && (
+          <div className="rounded-xl px-3 py-3" style={{ backgroundColor: 'var(--chip)' }}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-medium" style={{ color: 'var(--text)' }}>
+                Sources used
+              </div>
+              <div className="text-xs" style={{ color: 'var(--muted)' }}>
+                {sourceList.length} collected
+              </div>
+            </div>
+            <div className="space-y-2 max-h-[220px] overflow-y-auto">
+              {sourceList.slice(0, 12).map((source, index) => (
+                <div key={`${source.url || source.title}-${index}`} className="rounded-lg px-3 py-2" style={{ backgroundColor: 'var(--surface)' }}>
+                  <div className="text-xs font-medium truncate" style={{ color: 'var(--text)' }}>
+                    {source.url ? (
+                      <a href={source.url} target="_blank" rel="noreferrer" className="hover:underline">
+                        {source.title}
+                      </a>
+                    ) : source.title}
+                  </div>
+                  <div className="text-[11px] truncate mt-1" style={{ color: 'var(--muted)' }}>
+                    {source.url || source.sourceType || 'source'}
+                  </div>
+                </div>
+              ))}
+              {sourceList.length > 12 && (
+                <div className="text-xs" style={{ color: 'var(--muted)' }}>
+                  {sourceList.length - 12} more sources are included in the evidence export.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div>
           <button
             type="button"
             className="w-full flex items-center justify-between text-xs"
@@ -174,11 +320,11 @@ export function CompletedCard({ sessionId, snapshot }: CompletedCardProps) {
                   failed: '#f87171',
                 };
                 const statusMarkers: Record<string, string> = {
-                  pending: '○',
-                  active: '●',
-                  completed: '✓',
-                  skipped: '—',
-                  failed: '✗',
+                  pending: '-',
+                  active: '>',
+                  completed: 'done',
+                  skipped: 'skip',
+                  failed: '!',
                 };
                 return (
                   <div key={step.id} className="flex items-center gap-2 text-xs px-2 py-1">

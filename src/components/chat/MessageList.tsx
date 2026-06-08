@@ -32,6 +32,42 @@ interface GroupedMessage {
   mergedMessages?: Message[];
 }
 
+function roleOrder(message: Message): number {
+  switch (message.role) {
+    case 'user':
+      return 0;
+    case 'assistant':
+      return 1;
+    case 'tool':
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+function sortMessagesForConversation(messages: Message[]): Message[] {
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => {
+      const aSeq = a.message.seqIndex;
+      const bSeq = b.message.seqIndex;
+
+      if (aSeq != null && bSeq != null) {
+        const seqDelta = aSeq - bSeq;
+        if (seqDelta !== 0) return seqDelta;
+
+        const roleDelta = roleOrder(a.message) - roleOrder(b.message);
+        if (roleDelta !== 0) return roleDelta;
+      } else {
+        const timeDelta = a.message.timestamp - b.message.timestamp;
+        if (timeDelta !== 0) return timeDelta;
+      }
+
+      return a.index - b.index;
+    })
+    .map(({ message }) => message);
+}
+
 export const MessageList = forwardRef<MessageListRef, MessageListProps>(function MessageList({
   messages,
   isStreaming = false,
@@ -123,9 +159,10 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     const result: GroupedMessage[] = [];
     const toolResultMap = new Map<string, import('@/types').ToolResultInfo>();
     const matchedToolResultIds = new Set<string>();
+    const orderedMessages = sortMessagesForConversation(messages);
 
     // First pass: collect all tool results
-    for (const msg of messages) {
+    for (const msg of orderedMessages) {
       if (msg.role === 'tool' && msg.tool_call_id) {
         const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
         toolResultMap.set(msg.tool_call_id, {
@@ -150,7 +187,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     // This handles multi-turn thinking -> tool -> thinking -> tool -> text cycles
     let currentAssistantGroup: GroupedMessage | null = null;
 
-    for (const msg of messages) {
+    for (const msg of orderedMessages) {
       // Skip pure tool results (they'll be attached to their tool_use)
       if (msg.msgType === 'tool_result') continue;
       if (msg.role === 'tool') continue;
@@ -166,6 +203,17 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       } else if (msg.role === 'assistant') {
         if (!currentAssistantGroup) {
           // First assistant message in this round
+          currentAssistantGroup = {
+            message: msg,
+            toolResults: [],
+            mergedMessages: [],
+          };
+        } else if (
+          currentAssistantGroup.message.seqIndex != null
+          && msg.seqIndex != null
+          && currentAssistantGroup.message.seqIndex !== msg.seqIndex
+        ) {
+          result.push(currentAssistantGroup);
           currentAssistantGroup = {
             message: msg,
             toolResults: [],
@@ -272,8 +320,13 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       hasScrolledOnMountRef.current = true;
       // Show content after scroll is done — layout is correct now
       setIsInitialLoading(false);
+    } else if (messages.length === 0 && shouldRenderResearchPanel) {
+      // Restored research sessions can have no chat messages loaded yet, but
+      // still need to show the durable research card rebuilt from DB state.
+      hasScrolledOnMountRef.current = true;
+      setIsInitialLoading(false);
     }
-  }, [messages.length, sessionId]);
+  }, [messages.length, sessionId, shouldRenderResearchPanel]);
 
   // Scroll to bottom (exposed to parent)
   const scrollToBottom = useCallback(() => {
