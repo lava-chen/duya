@@ -36,10 +36,16 @@ export function getNodeExecutable(): string {
 async function detectDevServerPort(): Promise<number | null> {
   const portsToCheck = [3000, 3001, 3002, 3003, 3004, 3005];
 
-  const checkPort = (port: number): Promise<boolean> => {
+  // Vite on Windows often binds to ::1 only, while Node's http.request
+  // defaults to getaddrinfo's first address (typically 127.0.0.1). Probe
+  // both loopback families in parallel so a Vite bound to either stack is
+  // discovered.
+  const loopbackHosts = ['127.0.0.1', '::1'];
+
+  const checkPort = (host: string, port: number): Promise<boolean> => {
     return new Promise((resolve) => {
       const req = http.request({
-        hostname: 'localhost',
+        hostname: host,
         port,
         path: '/',
         method: 'HEAD',
@@ -59,8 +65,10 @@ async function detectDevServerPort(): Promise<number | null> {
   };
 
   for (const port of portsToCheck) {
-    const isReady = await checkPort(port);
-    if (isReady) {
+    const results = await Promise.all(
+      loopbackHosts.map((host) => checkPort(host, port)),
+    );
+    if (results.some(Boolean)) {
       logger.info(`Detected Vite dev server on port ${port}`, undefined, LogComponent.Main);
       return port;
     }

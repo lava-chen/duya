@@ -60,6 +60,22 @@ export function setupDevMode(): void {
 
 export function initGlobalErrorHandlers(): void {
   process.on('uncaughtException', (error) => {
+    // EADDRINUSE can be thrown asynchronously from net.Server.setupListenHandle
+    // (via process.nextTick) when two startup paths race for the same port —
+    // for example, the browser daemon's listen fires before the per-call
+    // .once('error') handler is attached. Log it as a warning and let the
+    // owning subsystem's self-healing path reclaim the port; do NOT
+    // propagate this as a fatal error.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'EADDRINUSE') {
+      logger.warn(
+        'EADDRINUSE caught at process level — subsystem will self-heal',
+        { message: error?.message },
+        LogComponent.Main,
+      );
+      return;
+    }
+
     logger.error('Uncaught Exception', error, undefined, LogComponent.Main);
   });
 

@@ -188,6 +188,41 @@ export async function createWindow(
     }
   });
 
+  // Surface renderer-side failures to the main-process log so white-screen
+  // crashes are diagnosable without manually opening DevTools.
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame) {
+      logger.error(
+        `Renderer did-fail-load: code=${errorCode} desc=${errorDescription} url=${validatedURL}`,
+        undefined,
+        LogComponent.Main,
+      );
+    }
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logger.error(
+      `Renderer process gone: reason=${details.reason} exitCode=${details.exitCode}`,
+      undefined,
+      LogComponent.Main,
+    );
+  });
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      logger.error(
+        `Renderer console: ${message} (${sourceId}:${line})`,
+        undefined,
+        LogComponent.Main,
+      );
+    }
+  });
+  mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+    logger.error(
+      `Preload error at ${preloadPath}: ${error instanceof Error ? error.message : String(error)}`,
+      undefined,
+      LogComponent.Main,
+    );
+  });
+
   let updaterSetup = false;
 
   mainWindow.webContents.on('did-finish-load', () => {

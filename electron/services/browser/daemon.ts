@@ -571,6 +571,12 @@ export function startBrowserDaemon(): Promise<void> {
       return;
     }
 
+    doStartBrowserDaemon().then(resolve).catch(reject);
+  });
+}
+
+function doStartBrowserDaemon(): Promise<void> {
+  return new Promise((resolve, reject) => {
     httpServer = createServer((req, res) => {
       handleRequest(req, res).catch(() => {
         res.writeHead(500);
@@ -580,7 +586,26 @@ export function startBrowserDaemon(): Promise<void> {
 
     setupWebSocket(httpServer);
 
-    httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+
+    // Attach the error handler BEFORE listen() so we can catch the synchronous
+    // EADDRINUSE that net.Server.setupListenHandle can throw (Node 18.x on
+    // Windows, observed in the wild). Without this, the throw escapes through
+    // the uncaughtException path and the self-healing retry never runs.
+    const onError = (err: NodeJS.ErrnoException) => {
+      // Tear down the half-constructed server so the retry path can build a
+      // fresh one. Without this, httpServer stays referenced and a second
+      // startBrowserDaemon() call would short-circuit on the isRunning check.
+      const failedServer = httpServer;
+      httpServer = null;
+      try { failedServer.close(); } catch {}
+      try { failedServer.closeAllConnections?.(); } catch {}
+
       if (err.code === 'EADDRINUSE') {
         // Port is occupied by a previous instance that didn't shut down cleanly.
         // Try to connect to it and shut it down via HTTP, then retry.
@@ -589,33 +614,48 @@ export function startBrowserDaemon(): Promise<void> {
           if (res.statusCode === 200) {
             log('info', 'Previous daemon stopped, retrying startup in 500ms');
             setTimeout(() => {
-              startBrowserDaemon().then(resolve).catch(reject);
+              doStartBrowserDaemon().then(resolve).catch(reject);
             }, 500);
           } else {
             log('error', `Previous daemon returned ${res.statusCode}, cannot reclaim port`);
-            reject(new Error(`Port ${PORT} is in use and cannot be reclaimed. Please close other applications using this port or restart your computer.`));
+            settle(() => reject(new Error(`Port ${PORT} is in use and cannot be reclaimed. Please close other applications using this port or restart your computer.`)));
           }
         });
         req.on('error', () => {
           log('error', `Port ${PORT} is in use but no responsive daemon found`);
-          reject(new Error(`Port ${PORT} is in use by a non-responsive process. Please close other applications using this port or restart your computer.`));
+          settle(() => reject(new Error(`Port ${PORT} is in use by a non-responsive process. Please close other applications using this port or restart your computer.`)));
         });
         req.setTimeout(2000, () => {
           req.destroy();
-          reject(new Error(`Port ${PORT} shutdown request timed out. Please close other applications using this port or restart your computer.`));
+          settle(() => reject(new Error(`Port ${PORT} shutdown request timed out. Please close other applications using this port or restart your computer.`)));
         });
         req.end();
         return;
       }
       log('error', `Server error: ${err.message}`);
-      reject(err);
-    });
+      settle(() => reject(err));
+    };
 
-    httpServer.listen(PORT, '127.0.0.1', () => {
-      isRunning = true;
-      log('info', `Browser Daemon listening on http://127.0.0.1:${PORT}`);
-      resolve();
-    });
+    httpServer.on('error', onError);
+
+    try {
+      httpServer.listen(PORT, '127.0.0.1', () => {
+        isRunning = true;
+        log('info', `Browser Daemon listening on http://127.0.0.1:${PORT}`);
+        resolve();
+      });
+    } catch (err) {
+      // Some Node versions (and Windows in particular) raise EADDRINUSE
+      // synchronously from net.Server.setupListenHandle. The 'error' event
+      // will ALSO be emitted asynchronously after this, but we handle it
+      // inline here so the self-healing path runs without waiting.
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code === 'EADDRINUSE') {
+        onError(e);
+        return;
+      }
+      settle(() => reject(err));
+    }
   });
 }
 
