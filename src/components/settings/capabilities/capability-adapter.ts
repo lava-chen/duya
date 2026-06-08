@@ -175,6 +175,10 @@ export function getUsageExamples(
   const entry = _entry;
   if (!entry) return [];
 
+  if ("usageExamples" in entry && Array.isArray(entry.usageExamples) && entry.usageExamples.length > 0) {
+    return entry.usageExamples;
+  }
+
   const name = entry.name || "plugin";
   const lowered = name.toLowerCase();
 

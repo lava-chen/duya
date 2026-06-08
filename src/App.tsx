@@ -78,6 +78,33 @@ function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
   return messages;
 }
 
+function mergeOptimisticMessagesForCompletedStream(
+  currentMessages: Message[],
+  optimisticMessages: Message[],
+  snapshot: SessionStreamSnapshot,
+): Message[] {
+  if (optimisticMessages.length === 0) return currentMessages;
+
+  const streamStartedAt = snapshot.startedAt;
+  if (!streamStartedAt) {
+    return [...currentMessages, ...optimisticMessages];
+  }
+
+  const nextUserIndex = currentMessages.findIndex(
+    (message) => message.role === 'user' && message.timestamp > streamStartedAt,
+  );
+
+  if (nextUserIndex === -1) {
+    return [...currentMessages, ...optimisticMessages];
+  }
+
+  return [
+    ...currentMessages.slice(0, nextUserIndex),
+    ...optimisticMessages,
+    ...currentMessages.slice(nextUserIndex),
+  ];
+}
+
 export function App() {
   const {
     currentView,
@@ -131,7 +158,11 @@ export function App() {
             useConversationStore.setState({
               messages: {
                 ...store.messages,
-                [activeThreadId]: [...current, ...optimistic],
+                [activeThreadId]: mergeOptimisticMessagesForCompletedStream(
+                  current,
+                  optimistic,
+                  snapshot,
+                ),
               },
             });
           }

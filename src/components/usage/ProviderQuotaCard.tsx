@@ -147,6 +147,11 @@ export const ProviderQuotaCard: React.FC<ProviderQuotaCardProps> = ({ state, onR
 
   const entries = Object.entries(state.quotas || {});
   if (entries.length === 0) {
+    // success with empty quotas is the most common MiniMax failure mode
+    // (account has no active plan, or model_remains is empty). Surface the
+    // server-supplied message so the user sees *why* there's no data,
+    // instead of a generic "No quota data returned".
+    const detail = state.message || t("usage.quotaNoData");
     return (
       <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/40 p-4">
         <div className="flex items-center gap-2.5">
@@ -159,7 +164,9 @@ export const ProviderQuotaCard: React.FC<ProviderQuotaCardProps> = ({ state, onR
             <div className="text-sm font-medium text-[var(--text)] truncate">
               {state.providerName}
             </div>
-            <div className="text-[11px] text-[var(--muted)] mt-0.5">{t("usage.quotaNoData")}</div>
+            <div className="text-[11px] text-[var(--muted)] mt-0.5 break-all">
+              {detail}
+            </div>
           </div>
         </div>
       </div>

@@ -46,6 +46,16 @@ export function SessionSelector({
     setIsProjectDropdownOpen(false);
   };
 
+  const handleNewBlankProject = () => {
+    setIsProjectDropdownOpen(false);
+    onNewBlankProject();
+  };
+
+  const handleUseExistingFolder = () => {
+    setIsProjectDropdownOpen(false);
+    onUseExistingFolder();
+  };
+
   const recentThreads = threads.slice(0, maxRecentThreads);
 
   const formatDate = (timestamp: number): string => {
@@ -97,7 +107,7 @@ export function SessionSelector({
               <div className="welcome-project-dropdown-divider" />
               <button
                 className="welcome-project-dropdown-item new-project"
-                onClick={onNewBlankProject}
+                onClick={handleNewBlankProject}
               >
                 <span style={{ color: 'var(--muted)' }}>
                   <FileIcon size={15} />
@@ -106,7 +116,7 @@ export function SessionSelector({
               </button>
               <button
                 className="welcome-project-dropdown-item new-project"
-                onClick={onUseExistingFolder}
+                onClick={handleUseExistingFolder}
               >
                 <span style={{ color: 'var(--muted)' }}>
                   <FolderOpenIcon size={15} />

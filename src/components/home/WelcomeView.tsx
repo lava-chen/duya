@@ -15,7 +15,7 @@ interface WelcomeViewProps {
 }
 
 export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps) {
-  const { projects, createThread, isHydrated } = useConversationStore();
+  const { projects, createThread, addProjectFolder, isHydrated } = useConversationStore();
   const { t } = useTranslation();
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask');
@@ -43,11 +43,16 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     if (window.electronAPI?.dialog?.openFolder) {
       window.electronAPI.dialog.openFolder({
         title: t('project.selectNewProjectFolder'),
-      }).then((result: { canceled: boolean; filePaths: string[] }) => {
+      }).then(async (result: { canceled: boolean; filePaths: string[] }) => {
         if (!result.canceled && result.filePaths.length > 0) {
           const workingDirectory = result.filePaths[0];
-          const projectName = workingDirectory.split(/[\\/]/).pop() || "Untitled";
-          setSelectedProject({ workingDirectory, projectName });
+          const project = await addProjectFolder(workingDirectory);
+          if (project) {
+            setSelectedProject({
+              workingDirectory: project.workingDirectory,
+              projectName: project.projectName,
+            });
+          }
         }
       });
     }
@@ -65,7 +70,11 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
       if (window.electronAPI?.app?.createProjectFolder) {
         const result = await window.electronAPI.app.createProjectFolder(trimmed);
         if (result.success && result.path) {
-          setSelectedProject({ workingDirectory: result.path, projectName: trimmed });
+          const project = await addProjectFolder(result.path);
+          setSelectedProject({
+            workingDirectory: project?.workingDirectory ?? result.path,
+            projectName: trimmed,
+          });
         }
       }
     } catch (error) {
