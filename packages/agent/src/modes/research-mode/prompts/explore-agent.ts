@@ -116,7 +116,8 @@ export function buildExplorePrompt(input: ExploreAgentInput): string {
 
   const questionsText = questions.map((q, i) => {
     const coverage = researchState.questionCoverage.find(c => c.questionId === q.id);
-    return `${i}. [${q.id}] (pri=${q.priority}, layer=${q.questionLayer || 'analytical'}, purpose=${q.purpose}, status=${coverage?.status || q.status}) ${q.text}`;
+    const sourceHint = q.sources && q.sources.length > 0 ? `, sources=${q.sources.join(', ')}` : '';
+    return `${i}. [${q.id}] (pri=${q.priority}, layer=${q.questionLayer || 'analytical'}, purpose=${q.purpose}, status=${coverage?.status || q.status}${sourceHint}) ${q.text}`;
   }).join('\n');
 
   const existingSummary = existingFindings.length > 0
@@ -145,8 +146,12 @@ ORIGINAL QUERY: ${input.query}
 PLAN:
 ${plan ? `- Task: ${plan.intent.taskType}
 - Goal: ${plan.intent.userGoal}
+- Included scope: ${plan.scope.included.join('; ') || 'not specified'}
+- Excluded scope: ${plan.scope.excluded.join('; ') || 'not specified'}
+- Source domains to prioritize: ${plan.scope.domains.join(', ') || 'not specified'}
 - Must find primary sources: ${plan.evidenceStrategy.mustFindPrimarySources}
 - Must find counter evidence: ${plan.evidenceStrategy.mustFindCounterEvidence}
+- Source priority order: ${plan.searchStrategy.priorityOrder.join(', ') || 'not specified'}
 - Seed queries: ${plan.searchStrategy.seedQueries.join(', ')}
 - Hypotheses: ${(plan.hypotheses || []).map(h => h.statement).join('; ') || 'none'}` : 'No plan'}
 
@@ -170,6 +175,7 @@ SATURATION SIGNALS: ${researchState.saturationSignals.join(', ') || 'none'}
 INSTRUCTIONS:
 1. THINK: Based on your knowledge, list 5-15 specific URLs relevant to these questions.
    Cover: official docs, Wikipedia, academic papers, GitHub, tech blogs, news, forums.
+   If Source domains to prioritize is specified, include those domains early unless they are clearly irrelevant.
 2. parallel_fetch: Open ALL of them at once. This MUST be your first tool call.
 3. REVIEW: Read what came back. Identify the most valuable pages.
 4. navigate: Deep-dive into the 2-5 best pages to extract detailed information.

@@ -3,9 +3,14 @@ import io
 import os
 import sys
 import traceback
+
 import pdfplumber
 
 PDF_CONFIDENCE_THRESHOLD = 100
+MAX_VISION_PAGES = 8
+VISION_DPI = 140
+VISION_MAX_WIDTH = 1400
+VISION_JPEG_QUALITY = 80
 
 
 class PdfParser:
@@ -36,10 +41,6 @@ class PdfParser:
         extracted_text = "\n\n".join(text_parts)
         avg_chars_per_page = total_chars / max(page_count, 1)
 
-        # Determine if we need vision fallback:
-        # - If no text extracted at all, definitely need vision (scanned doc)
-        # - If some text extracted but confidence is low, we still keep the text
-        #   but may add images if extraction seems incomplete (very few chars per page)
         result: dict = {
             "text": extracted_text,
             "extractMethod": "text",
@@ -48,7 +49,6 @@ class PdfParser:
             "pageCount": page_count,
         }
 
-        # Generate thumbnail from first page for UI preview
         try:
             thumbnail = self._render_thumbnail(filepath)
             if thumbnail:
@@ -57,7 +57,6 @@ class PdfParser:
             print(f"[PdfParser] Thumbnail generation failed: {traceback.format_exc()}", file=sys.stderr)
 
         if total_chars == 0:
-            # No text extracted — fully scanned document, render as images
             try:
                 images = self._render_pages_as_images(filepath, page_count)
                 if images:
@@ -65,15 +64,6 @@ class PdfParser:
                     result["extractMethod"] = "vision"
             except Exception:
                 print(f"[PdfParser] Vision fallback failed: {traceback.format_exc()}", file=sys.stderr)
-        elif avg_chars_per_page < PDF_CONFIDENCE_THRESHOLD // 2 and page_count <= 5:
-            # Very low confidence AND few pages — likely mixed content, add images as hybrid
-            try:
-                images = self._render_pages_as_images(filepath, page_count)
-                if images:
-                    result["images"] = images
-                    result["extractMethod"] = "hybrid"
-            except Exception:
-                print(f"[PdfParser] Hybrid fallback failed: {traceback.format_exc()}", file=sys.stderr)
 
         return result
 
@@ -96,12 +86,10 @@ class PdfParser:
             return None
 
         img = images[0]
-        # Resize to thumbnail (max 300px width, maintaining aspect ratio)
         max_width = 300
         if img.width > max_width:
             ratio = max_width / img.width
-            new_height = int(img.height * ratio)
-            img = img.resize((max_width, new_height))
+            img = img.resize((max_width, int(img.height * ratio)))
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -119,25 +107,28 @@ class PdfParser:
         except ImportError:
             return []
 
-        dpi = 200
         images = convert_from_path(
             filepath,
-            dpi=dpi,
+            dpi=VISION_DPI,
             first_page=1,
-            last_page=min(page_count, 50),
-            fmt="png",
+            last_page=min(page_count, MAX_VISION_PAGES),
+            fmt="jpeg",
             poppler_path=self._poppler_path,
         )
 
         result: list[dict] = []
         for i, img in enumerate(images):
+            if img.width > VISION_MAX_WIDTH:
+                ratio = VISION_MAX_WIDTH / img.width
+                img = img.resize((VISION_MAX_WIDTH, int(img.height * ratio)))
+
             buf = io.BytesIO()
-            img.save(buf, format="PNG")
+            img.save(buf, format="JPEG", quality=VISION_JPEG_QUALITY, optimize=True)
             b64 = base64.b64encode(buf.getvalue()).decode("ascii")
             result.append({
                 "page": i,
                 "base64": b64,
-                "mediaType": "image/png",
+                "mediaType": "image/jpeg",
             })
             buf.close()
 
@@ -148,12 +139,10 @@ class PdfParser:
         if env_path and os.path.isdir(env_path):
             return env_path
 
-        runtime_base = None
         if getattr(sys, "frozen", False):
             runtime_base = os.path.dirname(sys.executable)
         else:
-            sidecar_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            runtime_base = sidecar_root
+            runtime_base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
         candidates = [
             os.path.join(runtime_base, "poppler", "Library", "bin"),

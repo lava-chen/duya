@@ -117,7 +117,39 @@ export class ArxivExtractor extends BaseExtractor {
         clearTimeout(timeoutId);
       }
 
-      if (!resp.ok) {
+      if (resp.status === 429) {
+        // Rate-limited. Honor Retry-After when present, else wait 2s, then
+        // try once more before giving up. Two attempts is enough — sustained
+        // 429s usually mean a runaway batch, and we should fall back to DOM
+        // extraction instead of holding the pipeline.
+        const retryAfterHeader = resp.headers.get('retry-after');
+        const retryMs = retryAfterHeader
+          ? Math.max(0, Number(retryAfterHeader) * 1000)
+          : 2000;
+        if (retryAfterHeader && Number.isNaN(retryAfterHeader)) {
+          // Non-numeric Retry-After (HTTP-date) — fall back to a fixed delay.
+          await this.sleep(2000);
+        } else {
+          await this.sleep(retryMs);
+        }
+
+        const retryController = new AbortController();
+        const retryTimeoutId = setTimeout(() => retryController.abort(), 10000);
+        try {
+          resp = await fetch(apiUrl, { signal: retryController.signal });
+        } finally {
+          clearTimeout(retryTimeoutId);
+        }
+
+        if (!resp.ok) {
+          if (resp.status === 429) {
+            console.warn('[ArxivExtractor] API rate-limited (429), giving up after retry');
+          } else {
+            console.warn(`[ArxivExtractor] API HTTP ${resp.status} after retry`);
+          }
+          return null;
+        }
+      } else if (!resp.ok) {
         console.warn(`[ArxivExtractor] API HTTP ${resp.status}`);
         return null;
       }
@@ -135,6 +167,10 @@ export class ArxivExtractor extends BaseExtractor {
       console.warn('[ArxivExtractor] API extraction error:', e);
       return null;
     }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // ─── DOM Fallback Extraction ─────────────────────────────────────────────

@@ -846,6 +846,14 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       return { type: 'chat:research_stop_decision', ...(event.data as object) };
     case 'plan_delta':
       return { type: 'chat:plan_delta', ...(event.data as object) };
+    case 'complexity_classified':
+      return { type: 'chat:research_complexity', ...(event.data as object) };
+    case 'run_status':
+      return { type: 'chat:research_run_status', ...(event.data as object) };
+    case 'activity':
+      return { type: 'chat:research_activity', ...(event.data as object) };
+    case 'plan_steps_created':
+      return { type: 'chat:research_plan_steps', ...(event.data as object) };
     // Internal events: debug panel only, silently skip for now
     case 'research_quality_snapshot':
     case 'query_deduplicated':
@@ -2507,13 +2515,16 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         case 'research:clarification:resolve': {
           const { requestId, answers } = msg as unknown as { requestId: string; answers: Record<string, string> };
           const mode = agent?._activeMode;
+          let resolved = false;
           if (mode && typeof mode.resolveClarification === 'function') {
-            const resolved = mode.resolveClarification(requestId, answers);
-            if (!resolved) {
-              warn('[Agent-Process] Clarification resolution failed: requestId not found', requestId);
-            }
-          } else {
-            warn('[Agent-Process] No active ResearchMode for clarification resolution');
+            resolved = mode.resolveClarification(requestId, answers);
+          }
+          if (!resolved) {
+            const { resolveResearchClarificationRequest } = await import('../modes/research-mode/index.js');
+            resolved = resolveResearchClarificationRequest(requestId, answers);
+          }
+          if (!resolved) {
+            warn('[Agent-Process] Research clarification resolution failed: no pending request found', requestId);
           }
           break;
         }

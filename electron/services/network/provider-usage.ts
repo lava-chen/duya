@@ -7,7 +7,19 @@
 
 import { initLogger, LogComponent } from '../../logging/logger';
 
-const logger = initLogger({ level: 'WARN' });
+// INFO level so the quota path actually logs something. The default
+// `level: 'WARN'` swallowed all debug traces from this module, which made
+// "quota fetcher returns nothing" impossible to diagnose.
+const logger = initLogger({ level: 'INFO' });
+
+// `console.log` mirror: the file logger is async/buffered and only visible
+// after a restart, but the user is staring at "No quota data returned" right
+// now. Always-on console traces make the request/response visible in the
+// DevTools console (main process prints land there via electron's stdio).
+const trace = (...args: unknown[]) => {
+  // eslint-disable-next-line no-console
+  console.log('[provider-usage]', ...args);
+};
 
 export interface QuotaItem {
   used: number;
@@ -31,11 +43,28 @@ export interface ProviderUsageResult {
 
 // ── Provider detection helpers ────────────────────────────────────────────
 
-function detectProvider(baseUrl: string): string | null {
-  const url = baseUrl.toLowerCase();
-  if (url.includes('minimax.io')) return 'minimax';
-  if (url.includes('minimaxi.com')) return 'minimax-cn';
-  if (url.includes('bigmodel.cn') || url.includes('z.ai')) return 'glm';
+/**
+ * Resolve a canonical provider id from caller-supplied provider type and baseUrl.
+ *
+ * Preference order:
+ *   1. provider_type (caller already knows the family — minimax / glm / etc.)
+ *   2. baseUrl (fallback when caller only has the URL)
+ *
+ * Returns one of: 'minimax' | 'minimax-cn' | 'glm' | 'glm-cn' | null.
+ */
+function detectProvider(providerType: string, baseUrl: string): string | null {
+  const t = (providerType || '').toLowerCase().trim();
+  if (t === 'minimax' || t === 'minimax-cn') return t;
+  if (t === 'glm-cn' || t === 'glm_cn') return 'glm-cn';
+  if (t === 'glm') {
+    return baseUrl.toLowerCase().includes('bigmodel.cn') ? 'glm-cn' : 'glm';
+  }
+
+  const u = (baseUrl || '').toLowerCase();
+  if (u.includes('minimax.io')) return 'minimax';
+  if (u.includes('minimaxi.com')) return 'minimax-cn';
+  if (u.includes('bigmodel.cn')) return 'glm-cn';
+  if (u.includes('z.ai')) return 'glm';
   return null;
 }
 
@@ -56,15 +85,62 @@ async function fetchWithTimeout(
   }
 }
 
+// ── Reset-time parsing ───────────────────────────────────────────────────
+
+/**
+ * Normalize provider-supplied reset values to an ISO string.
+ *
+ * Accepts:
+ *   - Date instance
+ *   - finite number — seconds (< 1e12) or milliseconds
+ *   - numeric string — same second/ms heuristic
+ *   - ISO / RFC 2822 string
+ *
+ * Returns null when the value cannot be parsed.
+ */
+function parseResetTime(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value < 1e12 ? value * 1000 : value).toISOString();
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (/^\d+$/.test(trimmed)) {
+      const ts = Number(trimmed);
+      return new Date(ts < 1e12 ? ts * 1000 : ts).toISOString();
+    }
+    const d = new Date(trimmed);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  return null;
+}
+
 // ── MiniMax helpers ───────────────────────────────────────────────────────
 
+/**
+ * MiniMax has two distinct quota endpoints and they live on different
+ * (sometimes overlapping) hosts:
+ *
+ *   - `token_plan/remains`     — older plan, returns *used* counts.
+ *   - `coding_plan/remains`    — newer plan, returns *remaining* counts.
+ *
+ * The international host `minimax.io` historically only served
+ * `token_plan/remains`; the China host `minimaxi.com` only serves
+ * `coding_plan/remains`. Recent rollouts put both paths on both hosts.
+ *
+ * Order: try the more permissive endpoint first, then fall back. We dedupe
+ * so duplicate URLs (minimax-cn fallback) don't waste a request.
+ */
 const MINIMAX_USAGE_URLS: Record<string, string[]> = {
   minimax: [
-    'https://www.minimax.io/v1/token_plan/remains',
     'https://api.minimax.io/v1/api/openplatform/coding_plan/remains',
+    'https://www.minimax.io/v1/token_plan/remains',
   ],
   'minimax-cn': [
-    'https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains',
     'https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains',
   ],
 };
@@ -91,16 +167,44 @@ function formatMiniMaxQuotaName(model: Record<string, unknown>): string {
     .replace(/\bHd\b/g, 'HD');
 }
 
-function getMiniMaxSessionTotal(model: Record<string, unknown>): number {
-  return Math.max(0, Number(getMiniMaxField(model, 'current_interval_total_count', 'currentIntervalTotalCount')) || 0);
+/**
+ * MiniMax /api/openplatform/coding_plan/remains does NOT return a `*_total_count`
+ * for accounts on the rolling-coding-plan product — only `*_remaining_percent`
+ * and `current_*_status` are populated. The earlier code gated on
+ * `total > 0` and silently dropped every row, which is why quota fetches
+ * appeared "empty" even when the user had an active plan.
+ *
+ * A row is "usable" when at least one of the *_remaining_percent fields is
+ * present AND the corresponding *_status is active (status === 1). Status
+ * values observed in the wild: 1 = active, 3 = inactive / not on plan.
+ */
+function getMiniMaxSessionPercent(model: Record<string, unknown>): number | null {
+  const raw = getMiniMaxField(model, 'current_interval_remaining_percent', 'currentIntervalRemainingPercent');
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
-function getMiniMaxWeeklyTotal(model: Record<string, unknown>): number {
-  return Math.max(0, Number(getMiniMaxField(model, 'current_weekly_total_count', 'currentWeeklyTotalCount')) || 0);
+function getMiniMaxWeeklyPercent(model: Record<string, unknown>): number | null {
+  const raw = getMiniMaxField(model, 'current_weekly_remaining_percent', 'currentWeeklyRemainingPercent');
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getMiniMaxSessionStatus(model: Record<string, unknown>): number {
+  return Number(getMiniMaxField(model, 'current_interval_status', 'currentIntervalStatus')) || 0;
+}
+
+function getMiniMaxWeeklyStatus(model: Record<string, unknown>): number {
+  return Number(getMiniMaxField(model, 'current_weekly_status', 'currentWeeklyStatus')) || 0;
 }
 
 function hasMiniMaxQuota(model: Record<string, unknown>): boolean {
-  return getMiniMaxSessionTotal(model) > 0 || getMiniMaxWeeklyTotal(model) > 0;
+  // Active session or weekly window: status === 1 with a percent value.
+  const sessionActive = getMiniMaxSessionStatus(model) === 1 && getMiniMaxSessionPercent(model) != null;
+  const weeklyActive = getMiniMaxWeeklyStatus(model) === 1 && getMiniMaxWeeklyPercent(model) != null;
+  return sessionActive || weeklyActive;
 }
 
 function getMiniMaxResetAt(
@@ -113,45 +217,41 @@ function getMiniMaxResetAt(
 ): string | null {
   const remainsMs = Number(getMiniMaxField(model, remainsSnake, remainsCamel)) || 0;
   if (remainsMs > 0) return new Date(capturedAtMs + remainsMs).toISOString();
-  const endTime = getMiniMaxField(model, endSnake, endCamel);
-  if (endTime) {
-    try {
-      return new Date(String(endTime)).toISOString();
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  return parseResetTime(getMiniMaxField(model, endSnake, endCamel));
 }
 
-function buildMiniMaxQuota(total: number, count: number, resetAt: string | null, countMeansRemaining: boolean): QuotaItem {
-  const safeTotal = Math.max(0, total);
-  const used = countMeansRemaining ? Math.max(safeTotal - count, 0) : Math.min(Math.max(0, count), safeTotal);
-  const remaining = Math.max(safeTotal - used, 0);
+/**
+ * Build a QuotaItem from MiniMax's `*_remaining_percent` field.
+ *
+ * The MiniMax quota API returns remaining quota as a percentage in [0, 100].
+ * We map it to the canonical QuotaItem shape (used/total/remaining/%) using
+ * a fixed 100-unit denominator since the upstream only exposes the percent.
+ */
+function buildMiniMaxPercentQuota(remainingPercent: number, resetAt: string | null): QuotaItem {
+  const remaining = Math.max(0, Math.min(100, remainingPercent));
+  const used = Math.max(0, 100 - remaining);
   return {
     used,
-    total: safeTotal,
+    total: 100,
     remaining,
-    remainingPercentage: safeTotal > 0 ? Math.max(0, Math.min(100, (remaining / safeTotal) * 100)) : 0,
+    remainingPercentage: remaining,
     resetAt,
     unlimited: false,
   };
 }
 
-function addMiniMaxQuota(
+function addMiniMaxPercentQuota(
   quotas: Record<string, QuotaItem>,
   key: string,
   model: Record<string, unknown>,
-  getTotal: (m: Record<string, unknown>) => number,
-  countSnake: string,
-  countCamel: string,
-  resetArgs: [number, string, string, string, string],
-  countMeansRemaining: boolean
+  getPercent: (m: Record<string, unknown>) => number | null,
+  getStatus: (m: Record<string, unknown>) => number,
+  resetArgs: [number, string, string, string, string]
 ): void {
-  const total = getTotal(model);
-  if (total <= 0) return;
-  const count = Math.max(0, Number(getMiniMaxField(model, countSnake, countCamel)) || 0);
-  quotas[key] = buildMiniMaxQuota(total, count, getMiniMaxResetAt(model, ...resetArgs), countMeansRemaining);
+  if (getStatus(model) !== 1) return;
+  const percent = getPercent(model);
+  if (percent == null) return;
+  quotas[key] = buildMiniMaxPercentQuota(percent, getMiniMaxResetAt(model, ...resetArgs));
 }
 
 async function getMiniMaxUsage(apiKey: string, provider: string): Promise<ProviderUsageResult> {
@@ -160,6 +260,11 @@ async function getMiniMaxUsage(apiKey: string, provider: string): Promise<Provid
   }
 
   const usageUrls = MINIMAX_USAGE_URLS[provider] || [];
+  trace('getMiniMaxUsage start', { provider, urlCount: usageUrls.length, urls: usageUrls, keyLen: apiKey.length });
+  if (usageUrls.length === 0) {
+    return { success: false, message: `No MiniMax endpoint configured for ${provider}.` };
+  }
+
   let lastErrorMessage = '';
 
   for (let index = 0; index < usageUrls.length; index += 1) {
@@ -167,6 +272,7 @@ async function getMiniMaxUsage(apiKey: string, provider: string): Promise<Provid
     const canFallback = index < usageUrls.length - 1;
 
     try {
+      trace('fetching', { url: usageUrl, provider });
       const response = await fetchWithTimeout(usageUrl, {
         method: 'GET',
         headers: {
@@ -192,72 +298,100 @@ async function getMiniMaxUsage(apiKey: string, provider: string): Promise<Provid
       const combined = `${apiStatusMessage} ${rawText}`.trim();
       const authLike = /token plan|coding plan|invalid api key|invalid key|unauthorized|inactive/i;
 
-      logger.debug('MiniMax quota response', {
+      logger.info('MiniMax quota response', {
         url: usageUrl,
         status: response.status,
         apiStatusCode,
         apiStatusMessage,
         rawLength: rawText.length,
       }, LogComponent.NetHandlers);
+      trace('response', { url: usageUrl, status: response.status, apiStatusCode, apiStatusMessage, rawLength: rawText.length });
+      if (rawText.length < 2000) {
+        // Dump the full payload for small responses so we can see the actual
+        // field names; large responses get a shape-only summary.
+        trace('payload', payload);
+      } else {
+        trace('payload.keys', Object.keys(payload), 'model_remains.type', typeof payload?.model_remains);
+      }
 
+      // Auth failures usually mean key/cluster mismatch (international key vs
+      // China host, or vice versa). Try the next URL in the chain when there
+      // is one — the second URL is on the *other* host family and may work.
       if (response.status === 401 || response.status === 403 || apiStatusCode === 1004 || authLike.test(combined)) {
+        lastErrorMessage = `MiniMax rejected this key on ${new URL(usageUrl).host} (${response.status}${apiStatusCode ? `/${apiStatusCode}` : ''})`;
+        logger.warn(lastErrorMessage, undefined, LogComponent.NetHandlers);
+        if (canFallback) continue;
         return {
           success: false,
-          error: { code: 'AUTH_FAILED', message: 'MiniMax API key invalid or inactive. Use an active Token/Coding Plan key.' },
+          error: { code: 'AUTH_FAILED', message: 'MiniMax API key invalid or inactive. Use an active Token/Coding Plan key matching the configured region.' },
         };
       }
 
       if (!response.ok) {
         lastErrorMessage = `MiniMax usage endpoint error (${response.status})`;
-        if ((response.status === 404 || response.status === 405 || response.status >= 500) && canFallback) continue;
-        return { success: false, message: lastErrorMessage };
+        if ((response.status === 404 || response.status === 405 || response.status >= 500) && canFallback) {
+          logger.warn(`${lastErrorMessage} — trying fallback`, undefined, LogComponent.NetHandlers);
+          continue;
+        }
+        return { success: false, message: `MiniMax connected. ${lastErrorMessage}` };
       }
 
       if (apiStatusCode !== 0) {
-        return { success: false, message: apiStatusMessage || 'Upstream quota API error' };
+        return { success: false, message: `MiniMax connected. ${apiStatusMessage || 'Upstream quota API error'}` };
       }
 
       const modelRemains = payload?.model_remains ?? payload?.modelRemains;
       const allModels = Array.isArray(modelRemains) ? modelRemains : [];
       const quotaModels = allModels.filter(hasMiniMaxQuota);
 
-      logger.debug('MiniMax quota models', {
+      logger.info('MiniMax quota models', {
         totalModels: allModels.length,
         quotaModels: quotaModels.length,
         modelNames: quotaModels.map((m) => getMiniMaxModelName(m as Record<string, unknown>)),
       }, LogComponent.NetHandlers);
+      trace('models', {
+        totalModels: allModels.length,
+        quotaModels: quotaModels.length,
+        allNames: allModels.map((m) => getMiniMaxModelName(m as Record<string, unknown>)),
+        quotaNames: quotaModels.map((m) => getMiniMaxModelName(m as Record<string, unknown>)),
+      });
+      if (allModels.length > 0) {
+        // Dump the first model verbatim so we can confirm the field names
+        // (current_interval_total_count vs currentIntervalTotalCount, etc.).
+        trace('firstModel', allModels[0]);
+      }
 
       if (quotaModels.length === 0) {
         // API responded successfully but no models with quota were found.
-        // This is normal for accounts without an active plan.
-        return { success: true, quotas: {} };
+        // This is normal for accounts without an active plan; surface a
+        // message so the UI doesn't render an empty success state.
+        return {
+          success: true,
+          quotas: {},
+          message: 'MiniMax connected. No active Token/Coding Plan quota was returned.',
+        };
       }
 
       const capturedAtMs = Date.now();
-      const countMeansRemaining = usageUrl.includes('/coding_plan/remains');
       const quotas: Record<string, QuotaItem> = {};
 
       for (const model of quotaModels) {
         const displayName = formatMiniMaxQuotaName(model as Record<string, unknown>);
-        addMiniMaxQuota(
+        addMiniMaxPercentQuota(
           quotas,
           `${displayName} (5h)`,
           model as Record<string, unknown>,
-          getMiniMaxSessionTotal,
-          'current_interval_usage_count',
-          'currentIntervalUsageCount',
-          [capturedAtMs, 'remains_time', 'remainsTime', 'end_time', 'endTime'],
-          countMeansRemaining
+          getMiniMaxSessionPercent,
+          getMiniMaxSessionStatus,
+          [capturedAtMs, 'remains_time', 'remainsTime', 'end_time', 'endTime']
         );
-        addMiniMaxQuota(
+        addMiniMaxPercentQuota(
           quotas,
           `${displayName} (7d)`,
           model as Record<string, unknown>,
-          getMiniMaxWeeklyTotal,
-          'current_weekly_usage_count',
-          'currentWeeklyUsageCount',
-          [capturedAtMs, 'weekly_remains_time', 'weeklyRemainsTime', 'weekly_end_time', 'weeklyEndTime'],
-          countMeansRemaining
+          getMiniMaxWeeklyPercent,
+          getMiniMaxWeeklyStatus,
+          [capturedAtMs, 'weekly_remains_time', 'weeklyRemainsTime', 'weekly_end_time', 'weeklyEndTime']
         );
       }
 
@@ -268,14 +402,15 @@ async function getMiniMaxUsage(apiKey: string, provider: string): Promise<Provid
       return { success: true, quotas };
     } catch (error) {
       lastErrorMessage = error instanceof Error ? error.message : String(error);
-      logger.debug('MiniMax quota fetch error', { url: usageUrl, error: lastErrorMessage }, LogComponent.NetHandlers);
+      trace('fetch threw', { url: usageUrl, error: lastErrorMessage });
+      logger.warn(`MiniMax quota fetch error on ${usageUrl}: ${lastErrorMessage}`, undefined, LogComponent.NetHandlers);
       if (!canFallback) break;
     }
   }
 
   return {
     success: false,
-    message: lastErrorMessage ? `Unable to fetch usage: ${lastErrorMessage}` : 'Unable to fetch usage.',
+    message: lastErrorMessage ? `MiniMax connected. Unable to fetch usage: ${lastErrorMessage}` : 'MiniMax connected. Unable to fetch usage.',
   };
 }
 
@@ -333,6 +468,15 @@ async function getGlmUsage(apiKey: string, baseUrl: string): Promise<ProviderUsa
     const levelRaw = typeof data.level === 'string' ? data.level : '';
     const plan = levelRaw ? levelRaw.charAt(0).toUpperCase() + levelRaw.slice(1).toLowerCase() : 'Unknown';
 
+    if (Object.keys(quotas).length === 0) {
+      return {
+        success: true,
+        plan,
+        quotas: {},
+        message: 'GLM connected. No TOKENS_LIMIT quota was returned.',
+      };
+    }
+
     return { success: true, plan, quotas };
   } catch (error) {
     return { success: false, message: `GLM error: ${error instanceof Error ? error.message : String(error)}` };
@@ -357,14 +501,17 @@ export async function getProviderUsage(body: ProviderUsageBody): Promise<Provide
     };
   }
 
-  const detected = detectProvider(base_url || '');
+  const detected = detectProvider(provider_type || '', base_url || '');
 
-  logger.debug('Provider usage request', { provider_type, detected }, LogComponent.NetHandlers);
+  logger.info('Provider usage request', { provider_type, detected }, LogComponent.NetHandlers);
 
   if (!detected) {
     return {
       success: false,
-      error: { code: 'UNSUPPORTED_PROVIDER', message: `Usage API not implemented for provider ${provider_type || base_url}.` },
+      error: {
+        code: 'UNSUPPORTED_PROVIDER',
+        message: `Usage API not implemented for provider "${provider_type || ''}" at base URL "${base_url || ''}".`,
+      },
     };
   }
 
@@ -373,6 +520,7 @@ export async function getProviderUsage(body: ProviderUsageBody): Promise<Provide
     case 'minimax-cn':
       return getMiniMaxUsage(api_key, detected);
     case 'glm':
+    case 'glm-cn':
       return getGlmUsage(api_key, base_url || '');
     default:
       return {
@@ -381,3 +529,21 @@ export async function getProviderUsage(body: ProviderUsageBody): Promise<Provide
       };
   }
 }
+
+// ── Internals exported for unit tests ────────────────────────────────────
+
+export const __testing = {
+  detectProvider,
+  parseResetTime,
+  buildMiniMaxPercentQuota,
+  hasMiniMaxQuota,
+  formatMiniMaxQuotaName,
+  getMiniMaxField,
+  getMiniMaxSessionPercent,
+  getMiniMaxWeeklyPercent,
+  getMiniMaxSessionStatus,
+  getMiniMaxWeeklyStatus,
+  getMiniMaxResetAt,
+  MINIMAX_USAGE_URLS,
+  GLM_QUOTA_URLS,
+};

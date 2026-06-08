@@ -121,6 +121,16 @@ export function getMessagesBySession(sessionId: string): MessageRow[] {
 }
 
 /**
+ * Unpaginated list of all messages for a session, in ascending order.
+ * Used by the CLI session export handler (Plan 200 P4) where the
+ * full transcript is needed. Prefer `listMessagesBySession` for any
+ * UI / IPC surface that paginates.
+ */
+export function listMessages(sessionId: string): MessageRow[] {
+  return getMessagesBySession(sessionId);
+}
+
+/**
  * Paginated variant of `getMessagesBySession` (Plan 99 P3).
  * Returns rows in ascending `created_at` order with the given
  * `limit` (1–200, default 50) and `offset` (≥ 0, default 0).

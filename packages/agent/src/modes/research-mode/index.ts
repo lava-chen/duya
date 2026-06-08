@@ -4,6 +4,7 @@ import { Orchestrator } from './Orchestrator.js';
 import { convertToSSEEvent } from './SSEProtocol.js';
 import type { ExtendedResearchSSEEvent } from './SSEProtocol.js';
 import type { Message, MessageContent, ToolUseContent, ToolResultContent } from '../../types.js';
+import { logger } from '../../utils/logger.js';
 
 import {
   OrchestratorPhase,
@@ -130,17 +131,35 @@ function collectSSEEvents(
   })();
 }
 
+type PendingClarificationEntry = {
+  resolve: (answers: Record<string, string>) => void;
+  reject: (err: Error) => void;
+};
+
+const pendingResearchClarifications = new Map<string, PendingClarificationEntry>();
+
+export function resolveResearchClarificationRequest(
+  requestId: string,
+  answers: Record<string, string>,
+): boolean {
+  const entry = pendingResearchClarifications.get(requestId);
+  if (!entry) return false;
+  entry.resolve(answers);
+  return true;
+}
+
+export function rejectResearchClarificationRequest(requestId: string, error: Error): boolean {
+  const entry = pendingResearchClarifications.get(requestId);
+  if (!entry) return false;
+  entry.reject(error);
+  return true;
+}
+
 export class ResearchMode extends BaseMode {
   name = 'ResearchMode';
   modeId = 'research';
 
-  private pendingClarifications = new Map<
-    string,
-    {
-      resolve: (answers: Record<string, string>) => void;
-      reject: (err: Error) => void;
-    }
-  >();
+  private pendingClarifications = new Map<string, PendingClarificationEntry>();
 
   /**
    * Most recent clarification requestId registered for this mode instance.
@@ -151,10 +170,9 @@ export class ResearchMode extends BaseMode {
   private latestClarificationRequestId: string | undefined;
 
   resolveClarification(requestId: string, answers: Record<string, string>): boolean {
-    const entry = this.pendingClarifications.get(requestId);
+    const entry = this.pendingClarifications.get(requestId) || pendingResearchClarifications.get(requestId);
     if (!entry) return false;
     entry.resolve(answers);
-    this.pendingClarifications.delete(requestId);
     if (this.latestClarificationRequestId === requestId) {
       this.latestClarificationRequestId = undefined;
     }
@@ -162,10 +180,9 @@ export class ResearchMode extends BaseMode {
   }
 
   rejectClarification(requestId: string, error: Error): boolean {
-    const entry = this.pendingClarifications.get(requestId);
+    const entry = this.pendingClarifications.get(requestId) || pendingResearchClarifications.get(requestId);
     if (!entry) return false;
     entry.reject(error);
-    this.pendingClarifications.delete(requestId);
     if (this.latestClarificationRequestId === requestId) {
       this.latestClarificationRequestId = undefined;
     }
@@ -189,9 +206,8 @@ export class ResearchMode extends BaseMode {
     const previous = this.latestClarificationRequestId;
     this.latestClarificationRequestId = requestId;
     if (previous && previous !== requestId) {
-      const prior = this.pendingClarifications.get(previous);
+      const prior = this.pendingClarifications.get(previous) || pendingResearchClarifications.get(previous);
       if (prior) {
-        this.pendingClarifications.delete(previous);
         // Empty answers = "user opted not to answer" — orchestrator continues
         // with whatever defaults were already in context.
         prior.resolve({});
@@ -223,6 +239,11 @@ export class ResearchMode extends BaseMode {
       }
     };
 
+    // First-failure gate — logs once when run DB persistence is
+    // intentionally unavailable (e.g. CLI / standalone context) so devs
+    // know research is running without the run log, then stays silent.
+    let persistenceUnavailableWarned = false;
+
     const enqueuePersistenceError = (error: unknown): void => {
       if (persistenceFailed) return;
       persistenceFailed = true;
@@ -251,6 +272,21 @@ export class ResearchMode extends BaseMode {
 
     // Bridge: Orchestrator emitSSE -> durable event log -> queue -> AsyncGenerator yield
     const queueEvent = (event: ResearchEvent): void => {
+      // First-event availability check — warns once if persistence is
+      // intentionally unavailable (e.g. CLI / standalone context without
+      // runDB) so devs know research is running without the run log.
+      if (
+        !persistenceUnavailableWarned &&
+        (!ctx._researchRunId || !ctx.runDB?.logEvent)
+      ) {
+        persistenceUnavailableWarned = true;
+        logger.warn(
+          `[ResearchMode] Run DB persistence is unavailable for this run ` +
+          `(_researchRunId=${ctx._researchRunId ? 'set' : 'missing'}, ` +
+          `runDB.logEvent=${ctx.runDB?.logEvent ? 'set' : 'missing'}). ` +
+          `Events will still stream to the UI but won't be persisted to the run log.`
+        );
+      }
       persistTail = persistTail
         .then(async () => {
           if (persistenceFailed) return;
@@ -420,14 +456,13 @@ export class ResearchMode extends BaseMode {
       // surfaces.
       this.registerClarificationRequest(requestId);
       return new Promise((resolve, reject) => {
-        const entry: {
-          resolve: (answers: Record<string, string>) => void;
-          reject: (err: Error) => void;
-        } = { resolve, reject };
+        const entry: PendingClarificationEntry = { resolve, reject };
         this.pendingClarifications.set(requestId, entry);
+        pendingResearchClarifications.set(requestId, entry);
         const timeout = setTimeout(() => {
           if (this.pendingClarifications.get(requestId) === entry) {
             this.pendingClarifications.delete(requestId);
+            pendingResearchClarifications.delete(requestId);
             reject(new Error('Clarification timeout after 5 minutes'));
           }
         }, 300_000);
@@ -438,6 +473,9 @@ export class ResearchMode extends BaseMode {
           clearTimeout(timeout);
           if (this.pendingClarifications.get(requestId) === entry) {
             this.pendingClarifications.delete(requestId);
+          }
+          if (pendingResearchClarifications.get(requestId) === entry) {
+            pendingResearchClarifications.delete(requestId);
           }
           fn();
         };
@@ -584,8 +622,12 @@ async function persistResearchSSEEvent(
   event: ExtendedResearchSSEEvent,
   sequence: number,
 ): Promise<void> {
+  // Graceful degradation: when run tracking is unavailable (no _researchRunId
+  // or no runDB.logEvent injection), skip persistence but keep streaming the
+  // event to the UI. This unblocks research runs in contexts like CLI /
+  // standalone execution where the run DB layer isn't wired in.
   if (!ctx._researchRunId || !ctx.runDB?.logEvent) {
-    throw new Error('research event persistence is unavailable for this run');
+    return;
   }
 
   await ctx.runDB.logEvent({
@@ -611,8 +653,12 @@ async function persistResearchArtifactsForEvent(args: {
   const runId = ctx._researchRunId;
 
   if (event.type === 'finding_added') {
+    // Graceful degradation: when the run DB layer is unavailable we still
+    // collect source / citation IDs in-memory so the in-flight report
+    // metadata stays consistent, but skip the actual DB writes. The event
+    // itself still streams to the UI.
     if (!runId || !ctx.runDB?.upsertSource) {
-      throw new Error('research source persistence is unavailable for finding event');
+      return;
     }
 
     const finding = event.finding;
@@ -658,7 +704,7 @@ async function persistResearchArtifactsForEvent(args: {
 
   if (event.type === 'report_complete') {
     if (!runId || !ctx.runDB?.upsertReport) {
-      throw new Error('research report persistence is unavailable for report event');
+      return;
     }
 
     const markdown = reportMarkdown.trim() || event.content;
