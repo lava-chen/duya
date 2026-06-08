@@ -690,6 +690,12 @@ let loggerInstance: Logger | null = null
 export function initLogger(config?: Partial<LoggerConfig>): Logger {
   if (!loggerInstance) {
     loggerInstance = new Logger(config)
+  } else if (config?.level && config.level !== loggerInstance.getConfig().level) {
+    // Allow later callers (e.g. provider-usage) to raise the verbosity
+    // after bootstrap pinned it to WARN. Without this the per-module
+    // override is silently ignored and "quota returns nothing" is
+    // invisible to operators.
+    loggerInstance.updateConfig({ level: config.level })
   }
   return loggerInstance
 }

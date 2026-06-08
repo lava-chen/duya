@@ -24,6 +24,13 @@ async function buildElectron() {
     ],
     sourcemap: true,
     minify: false,
+    // packages/agent/src/plugins/builtin/_registry.ts reads
+    // `import.meta.url` and falls back to `__dirname` when bundled
+    // as CJS without the `import_meta_url` polyfill (the agent and
+    // CLI bundles do inject that polyfill; this Electron bundle
+    // does not). The fallback is intentional and documented in the
+    // file, so silence the corresponding esbuild notice.
+    logOverride: { 'empty-import-meta': 'silent' },
   };
 
   await build({
