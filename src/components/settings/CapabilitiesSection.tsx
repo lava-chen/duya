@@ -18,6 +18,8 @@ import { CapabilityByPluginView } from "./capabilities/CapabilityByPluginView";
 import { fetchCapabilityManagementSnapshot, hasCapabilityManagementAPI } from "@/lib/capability-management-ipc";
 import { useCapabilityManagementSnapshot } from "@/lib/useCapabilityManagementSnapshot";
 import type { CapabilityManagementSnapshot } from "@/lib/capability-management-types";
+import { fetchMCPInventorySnapshot, hasMCPInventoryAPI } from "@/lib/mcp-inventory-ipc";
+import type { MCPInventorySnapshotDTO } from "@/lib/mcp-inventory-types";
 
 type PageView = "discover" | "detail" | "manage";
 
@@ -42,9 +44,11 @@ export function CapabilitiesSection() {
     useState<CapabilityManagementSnapshot | null>(null);
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
   const [capabilityLoading, setCapabilityLoading] = useState(false);
+  const [mcpInventory, setMcpInventory] = useState<MCPInventorySnapshotDTO | null>(null);
 
   const pluginApi = useMemo(() => getPluginAPI(), []);
   const capabilityApiAvailable = useMemo(() => hasCapabilityManagementAPI(), []);
+  const mcpInventoryApiAvailable = useMemo(() => hasMCPInventoryAPI(), []);
 
   const reload = useCallback(async () => {
     if (!pluginApi) return;
@@ -81,6 +85,16 @@ export function CapabilitiesSection() {
     }
   }, [capabilityApiAvailable]);
 
+  const reloadMcpInventory = useCallback(async () => {
+    if (!mcpInventoryApiAvailable) return;
+    try {
+      const snapshot = await fetchMCPInventorySnapshot();
+      setMcpInventory(snapshot);
+    } catch {
+      setMcpInventory(null);
+    }
+  }, [mcpInventoryApiAvailable]);
+
   useEffect(() => {
     void reload();
   }, [reload]);
@@ -89,12 +103,17 @@ export function CapabilitiesSection() {
     void reloadCapabilities();
   }, [reloadCapabilities]);
 
+  useEffect(() => {
+    void reloadMcpInventory();
+  }, [reloadMcpInventory]);
+
   // Phase 3: refetch the snapshot whenever the agent server broadcasts
   // an MCP / skills reload event. The hook owns its own subscription
   // and a no-op cleanup if the SSE bridge is not available.
   useCapabilityManagementSnapshot({
     onSnapshot: (snapshot) => {
       setCapabilitySnapshot(snapshot);
+      void reloadMcpInventory();
     },
   });
 
@@ -335,6 +354,7 @@ export function CapabilitiesSection() {
         ) : capabilitySnapshot ? (
           <CapabilityBanner
             snapshot={capabilitySnapshot}
+            mcpInventory={mcpInventory}
             onOpenManage={() => setView("manage")}
           />
         ) : null

@@ -12,16 +12,23 @@ interface ProviderQuotaViewProps {
 }
 
 /**
- * Detect whether a provider's baseUrl maps to a service with quota API support.
- * Mirrors the detection logic in electron/services/network/provider-usage.ts.
+ * Detect whether a provider is eligible for the quota API.
+ *
+ * Mirrors `electron/services/network/provider-usage.ts#detectProvider`.
+ * Order: providerType first (the canonical id), baseUrl as fallback so a
+ * custom relay URL still works when the providerType is missing.
  */
-function isQuotaSupported(baseUrl: string): boolean {
-  const url = baseUrl.toLowerCase();
+function isQuotaSupported(providerType: string | undefined, baseUrl: string | undefined): boolean {
+  const t = (providerType || '').toLowerCase();
+  if (t === 'minimax' || t === 'minimax-cn') return true;
+  if (t === 'glm' || t === 'glm-cn' || t === 'glm_cn') return true;
+
+  const u = (baseUrl || '').toLowerCase();
   return (
-    url.includes("minimax.io") ||
-    url.includes("minimaxi.com") ||
-    url.includes("bigmodel.cn") ||
-    url.includes("z.ai")
+    u.includes('minimax.io') ||
+    u.includes('minimaxi.com') ||
+    u.includes('bigmodel.cn') ||
+    u.includes('z.ai')
   );
 }
 
@@ -61,9 +68,9 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
   const [quotaStates, setQuotaStates] = useState<Record<string, ProviderQuotaState>>({});
   const [refreshing, setRefreshing] = useState(false);
 
-  // Filter to providers whose baseUrl maps to a supported quota API
+  // Filter to providers whose providerType/baseUrl maps to a supported quota API
   const supportedProviders = useMemo(
-    () => providers.filter((p) => p.baseUrl && isQuotaSupported(p.baseUrl) && p.hasApiKey),
+    () => providers.filter((p) => isQuotaSupported(p.providerType, p.baseUrl) && p.hasApiKey),
     [providers]
   );
 
@@ -110,7 +117,7 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
             baseUrl: provider.baseUrl,
             hasApiKey: provider.hasApiKey,
             status: "error",
-            message: t("usage.quotaError"),
+            message: t("usage.quotaNoApiKey"),
           },
         }));
         return;

@@ -101,7 +101,16 @@ function AppShellInner({ children }: AppShellProps) {
     return () => window.removeEventListener(RESET_ONBOARDING_EVENT, handleResetOnboarding);
   }, []);
 
+  // Conductor has a dedicated top-level view; close the side panel when
+  // entering it so we don't render a duplicate canvas in the panel zone.
+  useEffect(() => {
+    if (currentView === 'conductor' && panelOpen) {
+      setPanelOpen(false);
+    }
+  }, [currentView, panelOpen, setPanelOpen]);
+
   const isConductorOpen = panelOpen && activeTab === 'canvas';
+  const isResearchOpen = panelOpen && activeTab === 'research';
 
   const selectedProject = useMemo(() => {
     const thread = threads.find((t) => t.id === activeThreadId);
@@ -122,7 +131,7 @@ function AppShellInner({ children }: AppShellProps) {
   }, [panelOpen, activeTab, setPanelOpen, setActiveTab]);
 
   return (
-    <div className="app-shell-root" data-conductor-open={isConductorOpen ? "true" : undefined}>
+    <div className="app-shell-root" data-conductor-open={isConductorOpen ? "true" : undefined} data-research-open={isResearchOpen ? "true" : undefined}>
       {showOnboarding && (
         <Suspense fallback={null}>
           <OnboardingFlow

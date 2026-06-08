@@ -15,10 +15,12 @@ import type {
   CapabilityManagementSnapshot,
   PluginPackageDTO,
 } from "@/lib/capability-management-types";
+import type { MCPInventorySnapshotDTO } from "@/lib/mcp-inventory-types";
 import { CapabilityHealthBadge } from "./CapabilityHealthBadge";
 
 interface CapabilityBannerProps {
   snapshot: CapabilityManagementSnapshot;
+  mcpInventory: MCPInventorySnapshotDTO | null;
   onOpenManage: () => void;
 }
 
@@ -46,7 +48,7 @@ function countEnabledPlugins(plugins: PluginPackageDTO[]): { total: number; enab
   return { total: plugins.length, enabled, disabled };
 }
 
-export function CapabilityBanner({ snapshot, onOpenManage }: CapabilityBannerProps) {
+export function CapabilityBanner({ snapshot, mcpInventory, onOpenManage }: CapabilityBannerProps) {
   const kindCounts = useMemo(() => countByKind(snapshot.capabilities), [snapshot.capabilities]);
   const pluginCounts = useMemo(() => countEnabledPlugins(snapshot.plugins), [snapshot.plugins]);
 
@@ -63,7 +65,13 @@ export function CapabilityBanner({ snapshot, onOpenManage }: CapabilityBannerPro
       <div className="grid grid-cols-5 gap-2 text-xs">
         <Stat label="Plugins" value={pluginCounts.total} hint={`${pluginCounts.enabled} enabled`} />
         <Stat label="Skills" value={kindCounts.skill} hint="plugin-declared" />
-        <Stat label="MCP" value={kindCounts.mcp} hint="plugin-declared" />
+        <Stat
+          label="MCP"
+          value={mcpInventory?.summary.effectiveCount ?? 0}
+          hint={mcpInventory
+            ? `${mcpInventory.summary.configuredCount} configured / ${mcpInventory.summary.pluginDeclaredCount} plugin-declared`
+            : "effective"}
+        />
         <Stat label="CLI" value={kindCounts.cli} hint="plugin-declared" />
         <Stat label="UI / Hook" value={kindCounts.ui + kindCounts.hook} hint="plugin-declared" />
       </div>
