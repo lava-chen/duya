@@ -77,8 +77,14 @@ const CHECKS = {
   // Extension (extraResources)
   'extension/ directory': [path.join(RESOURCES, 'extension'), true],
 
-  // Document parser (extraResources)
+  // Document parser is OPTIONAL as of plan 106.
+  // The main path uses NodeFileParser (in-process) — no sidecar shipped.
+  // These checks tolerate missing artifacts to allow NodeFileParser-only
+  // builds. To ship the legacy .doc fallback, run `npm run build:docparser`
+  // before `electron:pack` and re-run this verifier.
   'document-parser/ directory': [path.join(RESOURCES, 'document-parser'), true],
+  'document-parser/document-parser.exe': [path.join(RESOURCES, 'document-parser', 'document-parser.exe'), false],
+  'document-parser/poppler/Library/bin/pdftoppm.exe': [path.join(RESOURCES, 'document-parser', 'poppler', 'Library', 'bin', 'pdftoppm.exe'), false],
 
   // Gateway bundle (extraResources)
   'gateway-bundle/ directory': [path.join(RESOURCES, 'gateway-bundle'), true],
@@ -86,6 +92,19 @@ const CHECKS = {
   // app.asar payload
   'app.asar': [path.join(RESOURCES, 'app.asar'), false],
 };
+
+/**
+ * Checks whose absence is non-fatal. Document parser artifacts are
+ * optional post-plan 106 — the main path uses NodeFileParser. The
+ * sidecar exists only as a legacy .doc fallback; missing artifacts
+ * mean the operator chose not to ship it. See docs/exec-plans/active/
+ * 106-node-file-parser-and-read-integration.md for rationale.
+ */
+const OPTIONAL_CHECKS = new Set([
+  'document-parser/ directory',
+  'document-parser/document-parser.exe',
+  'document-parser/poppler/Library/bin/pdftoppm.exe',
+]);
 
 const results = [];
 let totalChecks = 0;
@@ -159,8 +178,12 @@ for (const [label, [filePath, isDir]] of Object.entries(CHECKS)) {
   if (result.status === 'OK') {
     passed++;
   } else if (result.status === 'MISSING') {
-    failed++;
-    console.error(`      → Expected at: ${filePath}`);
+    if (OPTIONAL_CHECKS.has(label)) {
+      console.log(`      → (optional, missing — see plan 106)`);
+    } else {
+      failed++;
+      console.error(`      → Expected at: ${filePath}`);
+    }
   } else {
     failed++;
   }

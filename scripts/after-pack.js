@@ -175,19 +175,17 @@ module.exports = async function afterPack(context) {
     console.warn('[afterPack] playwright-core not found in project node_modules, skipping...');
   }
 
-  // Step 5: Ensure document parser payload is present in resources.
-  // electron-builder should copy extraResources automatically, but we keep
-  // this fallback so packaged builds stay complete even if that copy step is skipped.
-  console.log('[afterPack] Step 5: Verifying document-parser resources...');
-  const documentParserSource = path.join(projectDir, 'build', 'document-parser');
+  // Step 5: Document parser payload is OPTIONAL as of plan 106.
+  // The main path uses NodeFileParser (in-process) — no sidecar needed.
+  // The Python sidecar remains available as an opt-in fallback for
+  // legacy .doc parsing, but it is no longer built or shipped by
+  // default. We only verify presence here, never copy.
+  console.log('[afterPack] Step 5: Checking document-parser resources (optional)...');
   const documentParserTarget = path.join(appOutDir, 'resources', 'document-parser');
-  if (!fs.existsSync(documentParserTarget) && fs.existsSync(documentParserSource)) {
-    copyDirRecursive(documentParserSource, documentParserTarget);
-    console.log('[afterPack] Copied document-parser resources into packaged app');
-  } else if (fs.existsSync(documentParserTarget)) {
-    console.log('[afterPack] document-parser resources already present');
+  if (fs.existsSync(documentParserTarget)) {
+    console.log('[afterPack] document-parser resources present (legacy .doc fallback shipped)');
   } else {
-    console.warn('[afterPack] document-parser build output not found, skipping fallback copy');
+    console.log('[afterPack] document-parser resources absent (NodeFileParser-only build)');
   }
 
   console.log('[afterPack] Done');

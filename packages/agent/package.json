@@ -25,6 +25,10 @@
     "./query-engine": {
       "types": "./dist/query-engine/index.d.ts",
       "default": "./dist/query-engine/index.js"
+    },
+    "./file-parser": {
+      "types": "./dist/file-parser/index.d.ts",
+      "default": "./dist/file-parser/index.js"
     }
   },
   "scripts": {
@@ -70,6 +74,7 @@
     "env-paths": "^4.0.0",
     "execa": "^9.6.1",
     "figures": "^6.1.0",
+    "fast-xml-parser": "^4.5.0",
     "fuse.js": "^7.1.0",
     "get-east-asian-width": "^1.5.0",
     "google-auth-library": "^10.6.2",
@@ -78,11 +83,14 @@
     "ignore": "^7.0.5",
     "indent-string": "^5.0.0",
     "jimp": "^1.6.1",
+    "jszip": "^3.10.1",
     "jsonc-parser": "^3.3.1",
     "lodash-es": "^4.17.23",
     "lru-cache": "^11.2.7",
     "marked": "^17.0.5",
+    "mime-types": "^2.1.35",
     "openai": "^6.33.0",
+    "pdf-parse": "^1.1.1",
     "p-map": "^7.0.4",
     "picomatch": "^4.0.4",
     "playwright": "^1.59.1",
