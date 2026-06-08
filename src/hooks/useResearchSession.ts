@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ResearchSessionSnapshot } from '@/types/research';
 import { getResearchSnapshot, subscribeToResearch, restoreResearchStateFromDB } from '@/lib/stream-session-manager';
 
@@ -42,7 +42,7 @@ export function useResearchSession(sessionId: string): ResearchSessionSnapshot {
   const [snapshot, setSnapshot] = useState<ResearchSessionSnapshot>(() => {
     return getResearchSnapshot(sessionId) ?? { ...EMPTY_RESEARCH_SNAPSHOT, sessionId };
   });
-  const [restored, setRestored] = useState(false);
+  const restoredSessionIds = useRef(new Set<string>());
 
   useEffect(() => {
     setSnapshot(getResearchSnapshot(sessionId) ?? { ...EMPTY_RESEARCH_SNAPSHOT, sessionId });
@@ -51,21 +51,25 @@ export function useResearchSession(sessionId: string): ResearchSessionSnapshot {
 
   // Restore research state from DB on mount if not already restored
   useEffect(() => {
-    if (restored) return;
     if (!sessionId) return;
+    if (restoredSessionIds.current.has(sessionId)) return;
 
     const currentSnapshot = getResearchSnapshot(sessionId);
     if (currentSnapshot?.active || currentSnapshot?.planQuestions?.length) {
-      setRestored(true);
+      restoredSessionIds.current.add(sessionId);
       return;
     }
 
+    let cancelled = false;
     restoreResearchStateFromDB(sessionId).then((success) => {
-      if (success) {
-        setRestored(true);
+      if (!cancelled && success) {
+        restoredSessionIds.current.add(sessionId);
       }
     });
-  }, [sessionId, restored]);
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
 
   return snapshot;
 }

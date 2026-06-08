@@ -18,11 +18,14 @@ export function ResearchModePanel({
   snapshot,
   onForceStop,
 }: ResearchModePanelProps) {
-  const { setPanelOpen, setActiveTab } = usePanel();
+  const { panelOpen, activeTab, setPanelOpen, setActiveTab } = usePanel();
 
-  const openResearchPanel = () => {
+  const toggleResearchPanel = () => {
+    if (panelOpen && activeTab === 'research') {
+      setPanelOpen(false);
+      return;
+    }
     setActiveTab('research');
-    setPanelOpen(true);
   };
 
   if (!snapshot.mode || snapshot.mode !== 'research') return null;
@@ -57,7 +60,7 @@ export function ResearchModePanel({
             type="button"
             className="text-xs px-2 py-1 rounded border"
             style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
-            onClick={openResearchPanel}
+            onClick={toggleResearchPanel}
           >
             {snapshot.active ? 'View activity' : 'Research log'} ({snapshot.activities.length})
           </button>
