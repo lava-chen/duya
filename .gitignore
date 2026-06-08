@@ -78,6 +78,7 @@ docs/*.md
 # Bundled output
 packages/agent/bundle/
 packages/gateway/bundle/
+packages/cli/bundle/
 
 # Bundled output
 
@@ -93,6 +94,10 @@ packages/gateway/bundle/
 .tmp-electron-dev4*.log
 .tmp-electron-dev5*.log
 .tmp-electron-dev6*.log
+
+# Local scratch / debug artifacts
+_dbg-out.txt
+.codex-artifacts/
 
 # Local codegraph index
 .codegraph/
