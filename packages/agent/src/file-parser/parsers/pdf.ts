@@ -31,7 +31,7 @@ import pdfParse from 'pdf-parse';
 import type { RawParse } from '../types.js';
 import { PDF_CONFIDENCE_THRESHOLD, PDF_HYBRID_MAX_PAGES } from '../types.js';
 import { detectPoppler } from '../poppler.js';
-import { rasterizePages, getPageCount } from './pdf-vision.js';
+import { rasterizePages, rasterizeThumbnail, getPageCount } from './pdf-vision.js';
 
 /**
  * Replacement characters and unassigned code points that signal a
@@ -105,10 +105,16 @@ export class PdfParser {
     const buffer = await readFile(filePath);
     const result = await safeParse(buffer);
 
+    // Always try to render a first-page thumbnail for the UI preview.
+    // Independent of which branch we end up in below — the user
+    // should see a preview even when text extraction fails. Returns
+    // null if poppler is missing or the file is unreadable.
+    const thumbnail = await this.renderThumbnailSafe(filePath);
+
     // Hard error from pdf-parse: skip text entirely, try vision
     if (!result.ok) {
       const knownCount = await this.getPageCountSafe(filePath);
-      return this.visionFallback(filePath, knownCount ?? 0, 'vision');
+      return this.visionFallback(filePath, knownCount ?? 0, 'vision', thumbnail);
     }
 
     const pageCount = result.numpages;
@@ -118,14 +124,14 @@ export class PdfParser {
 
     // No text at all -> scanned document, full vision
     if (totalChars === 0) {
-      return this.visionFallback(filePath, pageCount, 'vision');
+      return this.visionFallback(filePath, pageCount, 'vision', thumbnail);
     }
 
     // High replacement-char ratio -> CMap/CID failure, demote to vision
     // Catches the "9000 lines of `?`" failure mode that the original
     // Python sidecar silently passed through as text.
     if (replacementRatio(text) >= REPLACEMENT_RATIO_THRESHOLD) {
-      return this.visionFallback(filePath, pageCount, 'vision');
+      return this.visionFallback(filePath, pageCount, 'vision', thumbnail);
     }
 
     // Low confidence on a small doc: keep the partial text, also
@@ -135,6 +141,7 @@ export class PdfParser {
       return {
         text,
         ...(images.length > 0 && { images }),
+        ...(thumbnail && { thumbnail }),
         extractMethod: images.length > 0 ? 'hybrid' : 'text',
         pageCount,
       };
@@ -142,6 +149,7 @@ export class PdfParser {
 
     return {
       text,
+      ...(thumbnail && { thumbnail }),
       extractMethod: 'text',
       pageCount,
     };
@@ -151,14 +159,28 @@ export class PdfParser {
     filePath: string,
     pageCount: number,
     method: 'vision' | 'hybrid',
+    thumbnail?: { base64: string; mediaType: 'image/png' } | null,
   ): Promise<RawParse> {
     const images = await this.tryRasterize(filePath, pageCount);
     return {
       text: '',
       ...(images.length > 0 && { images }),
+      ...(thumbnail && { thumbnail }),
       extractMethod: images.length > 0 ? method : 'text',
       pageCount,
     };
+  }
+
+  private async renderThumbnailSafe(
+    filePath: string,
+  ): Promise<{ base64: string; mediaType: 'image/png' } | null> {
+    try {
+      const poppler = await detectPoppler();
+      if (!poppler.pdftoppm) return null;
+      return await rasterizeThumbnail(filePath, poppler.pdftoppm);
+    } catch {
+      return null;
+    }
   }
 
   private async tryRasterize(

@@ -129,4 +129,27 @@ describe('PdfParser branch logic (mocked)', () => {
     // case above already exercises the empty-text path.
     expect(true).toBe(true);
   });
+
+  it('omits thumbnail field when poppler is unavailable (text path)', async () => {
+    // The text path always calls renderThumbnailSafe, which depends
+    // on poppler. In the test env poppler isn't installed, so
+    // thumbnail is undefined — but the parse still succeeds and
+    // returns the parsed text.
+    const f = join(tmpDir, 'with-thumb.pdf');
+    writeFileSync(f, 'TEXT-PDF');
+    const result = await new PdfParser().parse(f);
+    expect(result.extractMethod).toBe('text');
+    expect(result.thumbnail).toBeUndefined();
+  });
+
+  it('omits thumbnail field on the CJK demotion path', async () => {
+    // Even when we demote to vision, the thumbnail step runs first
+    // and (in test env without poppler) silently produces no
+    // thumbnail. The parse still completes.
+    const f = join(tmpDir, 'cjk-no-thumb.pdf');
+    writeFileSync(f, 'GARBLED-PDF-data');
+    const result = await new PdfParser().parse(f);
+    expect(result.extractMethod).toBe('text');
+    expect(result.thumbnail).toBeUndefined();
+  });
 });
