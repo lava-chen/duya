@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { MCPInventorySnapshotDTO } from '../src/lib/mcp-inventory-types'
 
 // Preload script initialized
 
@@ -724,6 +725,9 @@ export interface ElectronAPI {
     getMcpServers: () => Promise<{ success: boolean; data: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>; error?: string }>
     setMcpServers: (servers: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>) => Promise<{ success: boolean; error?: string }>
   }
+  mcpInventory: {
+    snapshot: () => Promise<{ success: boolean; data?: MCPInventorySnapshotDTO; error?: string }>
+  }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
   getAgentPort: () => AgentControlPortAPI | null
@@ -1342,6 +1346,9 @@ const electronAPI: ElectronAPI = {
         };
       }
     },
+  },
+  mcpInventory: {
+    snapshot: () => ipcRenderer.invoke('mcp:inventory:snapshot'),
   },
   // Functions to get port APIs (called dynamically)
   getConfigPort: getConfigPortAPI,

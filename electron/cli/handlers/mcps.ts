@@ -21,18 +21,13 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { collectMainMCPCandidates } from '../../agents/mcp/collect-main.js';
-import {
-  toMCPListDTO,
-  toMCPInfoDTO,
-  type MCPListItem,
-  type MCPInfoItem,
-} from '../../../packages/agent/src/mcp/mcpService.js';
 import { getConfigManager } from '../../config/manager';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { notifyMcpConfigChanged } from '../../services/mcp-write-reload';
+import { getMCPInventoryService } from '../../services/mcp-inventory-service';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import type { MCPInfoItem, MCPListItem } from '../../../packages/agent/src/mcp/mcpService.js';
 
 // ---------------------------------------------------------------------------
 // Read surface (existing)
@@ -53,9 +48,16 @@ function sendError(res: ServerResponse, status: number, code: string, message: s
 
 export async function handleListMCPs(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    const collected = await collectMainMCPCandidates();
-    const skills: MCPListItem[] = toMCPListDTO(collected);
-    sendJson(res, 200, { mcps: skills });
+    const snapshot = await getMCPInventoryService().buildSnapshot();
+    const mcps: MCPListItem[] = snapshot.effectiveServers.map((server) => ({
+      id: server.id,
+      name: server.name,
+      source: server.source,
+      ...(server.source === 'plugin' && server.sourceId ? { sourceId: server.sourceId } : {}),
+      enabled: server.effectiveEnabled,
+      connected: server.connected,
+    }));
+    sendJson(res, 200, { mcps });
   } catch (err) {
     sendJson(res, 500, {
       error: {
@@ -68,8 +70,20 @@ export async function handleListMCPs(req: IncomingMessage, res: ServerResponse):
 
 export async function handleGetMCP(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
   try {
-    const collected = await collectMainMCPCandidates();
-    const info: MCPInfoItem | null = toMCPInfoDTO(collected, id);
+    const snapshot = await getMCPInventoryService().buildSnapshot();
+    const found = snapshot.effectiveServers.find((server) => server.id === id);
+    const info: MCPInfoItem | null = found
+      ? {
+          id: found.id,
+          name: found.name,
+          source: found.source,
+          ...(found.source === 'plugin' && found.sourceId ? { sourceId: found.sourceId } : {}),
+          enabled: found.effectiveEnabled,
+          connected: found.connected,
+          command: found.command,
+          args: found.args,
+        }
+      : null;
     if (!info) {
       sendJson(res, 404, {
         error: {
