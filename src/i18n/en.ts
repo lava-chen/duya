@@ -998,6 +998,7 @@ const en = {
   'usage.quotaUnsupportedDesc': 'Quota lookup is not supported for this provider.',
   'usage.quotaNoData': 'No quota data returned',
   'usage.quotaError': 'Failed to fetch',
+  'usage.quotaNoApiKey': 'Could not retrieve API key for this provider',
   'usage.quotaRetry': 'Retry',
   'usage.quotaSoonReset': 'Resetting soon',
   'usage.minutesReset': '{minutes} min until reset',

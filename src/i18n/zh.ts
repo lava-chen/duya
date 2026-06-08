@@ -1000,6 +1000,7 @@ const zh: Record<TranslationKey, string> = {
   'usage.quotaUnsupportedDesc': '该服务商暂不支持限额查询',
   'usage.quotaNoData': '未返回限额数据',
   'usage.quotaError': '获取失败',
+  'usage.quotaNoApiKey': '无法获取该服务商的 API Key',
   'usage.quotaRetry': '重试',
   'usage.quotaSoonReset': '即将重置',
   'usage.minutesReset': '{minutes} 分钟后重置',

@@ -54,6 +54,7 @@ interface ToolActionsGroupProps {
    *  When provided, used in the summary in place of summed tool durations
    *  so the user sees the true response time (including model thinking). */
   totalDurationMs?: number | null;
+  liveStartedAt?: number | null;
 }
 
 interface ToolRendererDef {
@@ -968,6 +969,47 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
+const LiveDurationText = React.memo(function LiveDurationText({
+  startedAt,
+}: {
+  startedAt: number;
+}) {
+  const [durationMs, setDurationMs] = useState(() => Math.max(0, Date.now() - startedAt));
+
+  React.useEffect(() => {
+    const tick = () => setDurationMs(Math.max(0, Date.now() - startedAt));
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt]);
+
+  return <>{formatDuration(durationMs)}</>;
+});
+
+const DurationSummaryText = React.memo(function DurationSummaryText({
+  totalDurationMs,
+  liveStartedAt,
+}: {
+  totalDurationMs: number;
+  liveStartedAt?: number | null;
+}) {
+  const { t } = useTranslation();
+
+  if (liveStartedAt) {
+    return (
+      <>
+        {', '}
+        {t('streaming.actions.workedFor', { duration: '' }).trimEnd()}
+        {' '}
+        <LiveDurationText startedAt={liveStartedAt} />
+      </>
+    );
+  }
+
+  if (totalDurationMs <= 0) return null;
+  return <>{`, ${t('streaming.actions.workedFor', { duration: formatDuration(totalDurationMs) })}`}</>;
+});
+
 export function ToolActionsGroup({
   tools,
   actions: actionsProp,
@@ -977,6 +1019,7 @@ export function ToolActionsGroup({
   thinkingContent,
   agentProgressEvents,
   totalDurationMs: totalDurationMsProp,
+  liveStartedAt,
 }: ToolActionsGroupProps) {
   const { t } = useTranslation();
   // Build actions array from either new `actions` prop or legacy `tools` + `thinkingContent`
@@ -1058,7 +1101,10 @@ export function ToolActionsGroup({
       >
         <span className="text-muted-foreground/60 truncate">
           {summaryParts.join(' · ')}
-          {totalDurationMs > 0 && `, ${t('streaming.actions.workedFor', { duration: formatDuration(totalDurationMs) })}`}
+          <DurationSummaryText
+            totalDurationMs={totalDurationMs}
+            liveStartedAt={isStreaming ? liveStartedAt : null}
+          />
         </span>
 
         {runningDesc && (

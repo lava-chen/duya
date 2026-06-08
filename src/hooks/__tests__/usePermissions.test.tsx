@@ -148,4 +148,26 @@ describe('usePermissions — B5 SSE replay deduplication', () => {
 
     expect(result.current.pendingPermission?.id).toBe('perm-2');
   });
+
+  it('auto-approves requests in full_access mode without surfacing a prompt', async () => {
+    mockResolvePermission.mockResolvedValue(undefined);
+    const onPermissionResolved = vi.fn();
+    const { result } = renderHook(() =>
+      usePermissions({
+        sessionId: 's1',
+        permissionProfile: 'full_access',
+        onPermissionResolved,
+      }),
+    );
+
+    await act(async () => {
+      result.current.handlePermissionRequest(makeRequest('perm-1'));
+      await Promise.resolve();
+    });
+
+    expect(mockResolvePermission).toHaveBeenCalledWith('s1', 'perm-1', 'allow');
+    expect(onPermissionResolved).toHaveBeenCalledWith('allow', expect.objectContaining({ id: 'perm-1' }));
+    expect(result.current.pendingPermission).toBeNull();
+    expect(result.current.permissionResolved).toBeNull();
+  });
 });

@@ -129,6 +129,7 @@ export function ChatView({
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);
   const setThreadWorkingDirectory = useConversationStore(s => s.setThreadWorkingDirectory);
+  const addProjectFolder = useConversationStore(s => s.addProjectFolder);
   const setActiveThread = useConversationStore(s => s.setActiveThread);
   const rewindToMessage = useConversationStore(s => s.rewindToMessage);
 
@@ -148,15 +149,16 @@ export function ChatView({
     if (window.electronAPI?.dialog?.openFolder) {
       window.electronAPI.dialog.openFolder({
         title: "Select Project Folder",
-      }).then((result: { canceled: boolean; filePaths: string[] }) => {
+      }).then(async (result: { canceled: boolean; filePaths: string[] }) => {
         if (!result.canceled && result.filePaths.length > 0) {
           const workingDirectory = result.filePaths[0];
-          const projectName = workingDirectory.split(/[\\/]/).pop() || "Untitled";
+          const project = await addProjectFolder(workingDirectory);
+          const projectName = project?.projectName ?? workingDirectory.split(/[\\/]/).pop() ?? "Untitled";
           setThreadWorkingDirectory(sessionId, workingDirectory, projectName);
         }
       });
     }
-  }, [sessionId, setThreadWorkingDirectory]);
+  }, [sessionId, addProjectFolder, setThreadWorkingDirectory]);
 
   const handleNewBlankProject = useCallback(() => {
     setIsNameProjectDialogOpen(true);
@@ -170,13 +172,14 @@ export function ChatView({
       if (window.electronAPI?.app?.createProjectFolder) {
         const result = await window.electronAPI.app.createProjectFolder(trimmed);
         if (result.success && result.path) {
+          await addProjectFolder(result.path);
           setThreadWorkingDirectory(sessionId, result.path, trimmed);
         }
       }
     } catch (error) {
       console.error("[ChatView] Failed to create blank project:", error);
     }
-  }, [sessionId, setThreadWorkingDirectory]);
+  }, [sessionId, addProjectFolder, setThreadWorkingDirectory]);
 
   const handleSelectThread = useCallback((threadId: string) => {
     setActiveThread(threadId);
@@ -190,6 +193,7 @@ export function ChatView({
   const lastUserContentRef = useRef<string>('');
   const lastFilesRef = useRef<FileAttachment[] | undefined>(undefined);
   const lastOutputStyleRef = useRef<{ name: string; prompt: string; keepCodingInstructions?: boolean } | null | undefined>(undefined);
+  const permissionProfile = permissionMode === 'bypass' ? 'full_access' : permissionMode === 'auto' ? 'auto' : 'default';
 
   // Permission system
   const {
@@ -199,7 +203,7 @@ export function ChatView({
     handlePermissionRequest,
   } = usePermissions({
     sessionId,
-    permissionProfile: permissionMode === 'bypass' ? 'full_access' : permissionMode === 'auto' ? 'auto' : 'default',
+    permissionProfile,
   });
 
   // Load session model and permission mode on mount
@@ -684,6 +688,7 @@ export function ChatView({
               permissionResolved={permissionResolved}
               onPermissionResponse={respondToPermission}
               toolUses={uses}
+              permissionProfile={permissionProfile}
             />
 
             <MessageInput

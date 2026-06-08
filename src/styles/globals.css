@@ -1370,6 +1370,13 @@ a {
   max-width: min(800px, 55vw) !important;
 }
 
+/* When research panel is open, keep the composer's right edge clear of the
+   panel so the Bypass / Send buttons don't crash into the sidebar. */
+.app-shell-root[data-research-open="true"] .chat-view .max-w-\[800px\],
+.app-shell-root[data-research-open="true"] .chat-view .max-w-\[750px\] {
+  max-width: min(800px, calc(100% - 24px)) !important;
+}
+
 .app-header {
   height: 3.2rem;
   border-bottom: 1px solid var(--border);
@@ -2910,12 +2917,29 @@ a {
   transform: translateX(-50%);
   min-width: 280px;
   max-width: 400px;
+  max-height: min(420px, calc(100vh - 12rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--sidebar-bg);
   border: 1px solid var(--border);
   border-radius: 0.6rem;
   padding: 0.4rem;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
   z-index: 100;
+}
+
+.welcome-project-dropdown::-webkit-scrollbar {
+  width: 8px;
+}
+
+.welcome-project-dropdown::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+  border: 2px solid var(--sidebar-bg);
+}
+
+.welcome-project-dropdown::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 
 .welcome-project-dropdown-item {
@@ -6035,6 +6059,10 @@ html.compact .panel-zone {
   padding: 0 8px;
   height: 44px;
   background: transparent;
+}
+
+.app-shell-root[data-research-open="true"] .chat-panel-floating-actions {
+  display: none;
 }
 
 .chat-panel-floating-btn {
