@@ -68,6 +68,11 @@ extraResources:
   - from: extension/
     to: extension/
     filter: ["**/*"]
+  # Document parser sidecar (OPTIONAL — only present when legacy .doc
+  # fallback is needed). Post plan 106, the main path uses NodeFileParser
+  # in-process. To ship the sidecar, run `npm run build:docparser`
+  # before `electron:pack`. If the source directory is absent, electron-
+  # builder emits a warning and continues.
   - from: build/document-parser/
     to: document-parser/
     filter: ["**/*"]

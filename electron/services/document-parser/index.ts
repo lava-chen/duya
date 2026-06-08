@@ -1,79 +1,135 @@
-import { spawn, ChildProcess } from 'child_process';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as crypto from 'crypto';
+/**
+ * DocumentParserService - Electron main process wrapper around NodeFileParser
+ *
+ * Replaces the legacy Python sidecar. The IPC and frontend contracts
+ * are preserved (parse / getCapabilities / isReady / start / stop),
+ * but the actual parsing now runs in-process via @duya/agent/file-parser.
+ *
+ * Side benefits:
+ *   - No PyInstaller binary, no poppler PATH dependency on the main path
+ *   - No stdio JSON-RPC protocol, no restart-on-crash, no spawn overhead
+ *   - SHA-256 cache deduplication is shared with ReadTool
+ *
+ * Legacy .doc fallback:
+ *   The Python sidecar source in `electron/services/document-parser/sidecar/`
+ *   is retained as an opt-in fallback for users with .doc files that
+ *   cannot be converted to .docx. It is NOT built or shipped by default
+ *   (see package.json `build:docparser`). The electron-builder `extraResources`
+ *   entry for `build/document-parser/` is conditional: missing source
+ *   produces a warning, not a build failure. To enable .doc support,
+ *   run `npm run build:docparser` before `electron:pack`.
+ */
+
 import { app } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger';
-import { createDocumentCache, DocumentCache } from './cache';
-import { createParseRequest, processSidecarData } from './protocol';
-import { RequestQueue, type PendingRequest } from './concurrency';
+import {
+  NodeFileParser,
+  listSupportedExtensions,
+  getFileParserConfig,
+  type ParseResult as NodeParseResult,
+} from '../../../packages/agent/src/file-parser/index.js';
 import type {
   ParseResult,
   Capabilities,
-  SidecarMessage,
-  CapabilityMessage,
-  JsonRpcDoneResponse,
-  JsonRpcErrorResponse,
+  ParseRequest,
 } from './types';
-import { MAX_FILE_SIZE, PARSE_TIMEOUT, MAX_CONCURRENT, SUPPORTED_EXTENSIONS } from './types';
 
+// Re-export the IPC contract so downstream imports keep working
 export type { ParseResult, Capabilities } from './types';
 
 const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
-const RESTART_DELAY_MS = 2000;
-const MAX_RESTART_ATTEMPTS = 3;
 
 export class DocumentParserService {
-  private process: ChildProcess | null = null;
+  private parser: NodeFileParser | null = null;
   private capabilities: Capabilities | null = null;
-  private cache: DocumentCache;
-  private queue: RequestQueue;
-  private buffer = '';
-  private stderrBuffer = '';
-  private isShuttingDown = false;
-  private restartAttempts = 0;
-  private restartTimer: NodeJS.Timeout | null = null;
-  private logger = getLogger();
-  private pendingTimeouts = new Map<number, NodeJS.Timeout>();
   private disabled = false;
+  private logger = getLogger();
+  private activeRequests = new Map<number, ParseRequest>();
+  private nextId = 1;
+  private cache = new Map<string, { result: ParseResult; parsedAt: number }>();
 
-  constructor() {
-    this.cache = createDocumentCache();
-    this.queue = new RequestQueue({
-      execute: (req) => this.dispatchRequest(req),
-    });
+  async start(): Promise<void> {
+    const config = getFileParserConfig();
+    if (config.disabled) {
+      this.disabled = true;
+      this.logger.warn(
+        'DocumentParserService disabled via DUYA_FILE_PARSER_DISABLED',
+        undefined,
+        LogComponent.DocumentParser,
+      );
+      return;
+    }
+
+    try {
+      this.parser = new NodeFileParser({
+        sessionId: 'electron-main',
+        parseTimeoutMs: config.parseTimeoutMs,
+        cacheTtlMs: config.cacheTtlMs,
+        maxConcurrent: config.maxConcurrent,
+      });
+      const caps = await this.parser.getCapabilities();
+      // Translate NodeFileParser capabilities into the legacy shape
+      // (preserves frontend expectations: docx = 'jszip', etc.)
+      this.capabilities = {
+        parsers: {
+          // .doc fallback is opt-in: only present when build:docparser
+          // was run before electron:pack (see electron-builder.yml).
+          // Frontend treats `doc: false` as "show a warning when .doc
+          // is dropped into chat".
+          doc: false,
+          docx: caps.parsers.docx,
+          pdf: caps.parsers.pdf,
+          pptx: caps.parsers.pptx,
+          txt: caps.parsers.txt,
+        },
+        // Kept for backward compatibility; always null on the main path
+        // (libreoffice is only relevant for the deprecated .doc fallback)
+        libreoffice_path: null,
+        version: caps.version,
+      };
+      this.logger.info(
+        'DocumentParserService started (NodeFileParser)',
+        { capabilities: this.capabilities },
+        LogComponent.DocumentParser,
+      );
+    } catch (error) {
+      this.disabled = true;
+      this.logger.error(
+        'DocumentParserService failed to start',
+        error instanceof Error ? error : new Error(String(error)),
+        undefined,
+        LogComponent.DocumentParser,
+      );
+    }
+  }
+
+  async stop(): Promise<void> {
+    // Reject any in-flight requests
+    for (const req of this.activeRequests.values()) {
+      req.reject(new Error('Document parser service shutting down'));
+    }
+    this.activeRequests.clear();
+    this.parser?.dispose();
+    this.parser = null;
+  }
+
+  isReady(): boolean {
+    return !this.disabled && this.parser !== null && this.capabilities !== null;
   }
 
   getCapabilities(): Capabilities | null {
     return this.capabilities;
   }
 
-  isReady(): boolean {
-    return !this.disabled && this.process !== null && this.capabilities !== null;
-  }
-
-  async start(): Promise<void> {
-    await this.spawnSidecar();
-    this.startCacheCleanup();
-  }
-
-  async stop(): Promise<void> {
-    this.isShuttingDown = true;
-    if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
-      this.restartTimer = null;
-    }
-    for (const t of this.pendingTimeouts.values()) {
-      clearTimeout(t);
-    }
-    this.pendingTimeouts.clear();
-    if (this.process) {
-      this.process.kill('SIGTERM');
-      this.process = null;
-    }
-    this.queue.rejectAll(new Error('Document parser service shutting down'));
-  }
-
+  /**
+   * Parse a file.
+   *   - filePath: absolute path
+   *   - sessionId: scope for the result (caller's session, free-form)
+   *   - onProgress: optional progress callback (0..1)
+   *
+   * Result matches the legacy shape consumed by useDocumentParser +
+   * useFileAttachments + the feishu gateway.
+   */
   async parse(
     filePath: string,
     sessionId: string,
@@ -83,35 +139,91 @@ export class DocumentParserService {
 
     const fileHash = this.computeFileHash(filePath);
     const cached = this.cache.get(fileHash);
-    if (cached) return cached;
+    if (cached) return cached.result;
 
-    if (this.disabled) {
-      throw new Error('Document parser is disabled in this build (sidecar not available)');
+    if (this.disabled || !this.parser) {
+      throw new Error('Document parser is disabled in this build');
     }
 
-    if (!this.isReady()) {
-      throw new Error('Document parser not ready');
-    }
+    const id = this.nextId++;
 
     return new Promise<ParseResult>((resolve, reject) => {
-      this.queue.enqueue({
+      const request: ParseRequest = {
+        id,
         filePath,
         sessionId,
         resolve: (result) => {
-          this.cache.set(result.fileHash, result);
+          this.cache.set(fileHash, { result, parsedAt: Date.now() });
+          this.activeRequests.delete(id);
+          // Light GC: keep the cache bounded
+          this.evictStale();
           resolve(result);
         },
-        reject,
+        reject: (err) => {
+          this.activeRequests.delete(id);
+          reject(err);
+        },
         onProgress,
-      });
+      };
+      this.activeRequests.set(id, request);
+      this.dispatch(request);
     });
   }
 
+  private dispatch(request: ParseRequest): void {
+    if (!this.parser) {
+      request.reject(new Error('Document parser not ready'));
+      return;
+    }
+    // Best-effort progress signal (NodeFileParser doesn't emit per-page
+    // progress yet, so we just mark "started")
+    request.onProgress?.(0.1);
+
+    this.parser
+      .parseFile(request.filePath)
+      .then((nodeResult) => {
+        request.onProgress?.(1);
+        request.resolve(this.toLegacyShape(nodeResult, request.sessionId));
+      })
+      .catch((err) => {
+        request.reject(err instanceof Error ? err : new Error(String(err)));
+      });
+  }
+
+  private toLegacyShape(
+    node: NodeParseResult,
+    sessionId: string,
+  ): ParseResult {
+    // Strip the `page` field from image chunks (legacy schema didn't
+    // include it) and add metadata envelope.
+    const chunks = node.chunks.map((c) => {
+      if (c.type === 'image') {
+        return { type: 'image' as const, index: c.index, base64: c.base64, mediaType: c.mediaType };
+      }
+      return { type: 'text' as const, index: c.index, text: c.text };
+    });
+    return {
+      fileHash: node.fileHash,
+      sessionId,
+      filename: node.filename,
+      charCount: node.charCount,
+      chunks,
+      extractMethod: node.extractMethod,
+      thumbnail: node.thumbnail,
+      parsedAt: node.parsedAt,
+    };
+  }
+
+  // --- internals ---
+
   private validateFile(filePath: string): void {
+    const fs = require('node:fs') as typeof import('node:fs');
     if (!fs.existsSync(filePath)) {
       throw new Error(`File not found: ${filePath}`);
     }
     const stat = fs.statSync(filePath);
+    const path = require('node:path') as typeof import('node:path');
+    const { MAX_FILE_SIZE } = require('./types.js') as typeof import('./types.js');
     if (stat.size > MAX_FILE_SIZE) {
       throw new Error('File exceeds size limit (50MB)');
     }
@@ -119,232 +231,41 @@ export class DocumentParserService {
       throw new Error('File is empty');
     }
     const ext = path.extname(filePath).toLowerCase();
-    if (!SUPPORTED_EXTENSIONS.includes(ext)) {
+    if (!listSupportedExtensions().includes(ext)) {
       throw new Error(`Unsupported format: ${ext}`);
     }
   }
 
-  private dispatchRequest(request: PendingRequest): void {
-    const timeout = setTimeout(() => {
-      this.pendingTimeouts.delete(request.id);
-      this.queue.onComplete(request.id);
-      request.reject(new Error(`Parse timeout (${PARSE_TIMEOUT / 1000}s)`));
-    }, PARSE_TIMEOUT);
-
-    this.pendingTimeouts.set(request.id, timeout);
-    const rpcRequest = createParseRequest(request.id, request.filePath);
-    this.sendToSidecar(JSON.stringify(rpcRequest), timeout);
-  }
-
-  private processQueue(): void {
-    // Handled by RequestQueue internally via onComplete -> processQueue
-  }
-
-  private sendToSidecar(line: string, timeout?: NodeJS.Timeout): void {
-    if (!this.process || !this.process.stdin) {
-      if (timeout) clearTimeout(timeout);
-      return;
-    }
-    try {
-      this.process.stdin.write(line + '\n');
-    } catch (err) {
-      this.logger.error('Failed to write to sidecar stdin', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.DocumentParser);
-      if (timeout) clearTimeout(timeout);
-    }
-  }
-
-  private async spawnSidecar(): Promise<void> {
-    const sidecar = await this.getSidecarCommand();
-    if (!sidecar) {
-      if (app.isPackaged) {
-        this.disabled = true;
-        this.logger.warn(
-          'Document parser sidecar unavailable in packaged app (missing executable and no Python fallback)',
-          undefined,
-          LogComponent.DocumentParser,
-        );
-      } else {
-        this.logger.error('Python not found for document parser sidecar', new Error('No Python runtime detected'), undefined, LogComponent.DocumentParser);
-      }
-      return;
-    }
-
-    const { cmd, args } = sidecar;
-
-    this.logger.info(`Starting document parser sidecar: ${cmd} ${args.join(' ')}`, undefined, LogComponent.DocumentParser);
-
-    this.process = spawn(cmd, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    });
-
-    this.buffer = '';
-    this.stderrBuffer = '';
-
-    this.process.stdout?.on('data', (data: Buffer) => {
-      this.buffer = processSidecarData(data.toString('utf-8'), this.buffer, {
-        onCapability: (msg) => this.handleCapability(msg),
-        onResponse: (msg) => this.handleResponse(msg),
-        onParseError: (raw) => this.logger.warn(`Failed to parse sidecar message: ${raw}`, undefined, LogComponent.DocumentParser),
-        onLog: (msg, level) => level === 'warn' ? this.logger.warn(msg, undefined, LogComponent.DocumentParser) : this.logger.error(msg, new Error(msg), undefined, LogComponent.DocumentParser),
-      });
-    });
-
-    this.process.stderr?.on('data', (data: Buffer) => {
-      this.stderrBuffer += data.toString('utf-8');
-      this.logger.warn(`Sidecar stderr: ${data.toString('utf-8').trim()}`, undefined, LogComponent.DocumentParser);
-    });
-
-    this.process.on('exit', (code, signal) => {
-      this.logger.warn(`Sidecar exited (code: ${code}, signal: ${signal})`, undefined, LogComponent.DocumentParser);
-      this.process = null;
-      if (!this.isShuttingDown) {
-        this.handleCrash();
-      }
-    });
-
-    this.process.on('error', (err) => {
-      this.logger.error('Sidecar process error', err, undefined, LogComponent.DocumentParser);
-      this.process = null;
-      if (!this.isShuttingDown) {
-        this.handleCrash();
-      }
-    });
-  }
-
-  private handleCapability(msg: CapabilityMessage): void {
-    this.capabilities = {
-      parsers: msg.parsers,
-      libreoffice_path: msg.libreoffice_path,
-      version: msg.version,
-    };
-    this.restartAttempts = 0;
-    this.logger.info('Sidecar capabilities received', { capabilities: this.capabilities }, LogComponent.DocumentParser);
-  }
-
-  private handleResponse(message: SidecarMessage): void {
-    if (message.type === 'capabilities') {
-      return;
-    }
-
-    const id = message.id;
-    const timeout = this.pendingTimeouts.get(id);
-    if (timeout) {
-      clearTimeout(timeout);
-      this.pendingTimeouts.delete(id);
-    }
-
-    const request = this.queue.getPending().get(id);
-    if (!request) return;
-
-    if ('error' in message) {
-      this.queue.onComplete(id);
-      request.reject(new Error((message as JsonRpcErrorResponse).error.message));
-      return;
-    }
-
-    const result = message.result;
-    if (result.status === 'parsing') {
-      request.onProgress?.(result.progress);
-      return;
-    }
-
-    if (result.status === 'done') {
-      this.queue.onComplete(id);
-      const parseResult: ParseResult = {
-        fileHash: this.computeFileHash(request.filePath),
-        sessionId: request.sessionId,
-        filename: path.basename(request.filePath),
-        charCount: result.charCount,
-        chunks: result.chunks,
-        extractMethod: result.extractMethod as ParseResult['extractMethod'],
-        parsedAt: Date.now(),
-      };
-      if (result.thumbnail) {
-        parseResult.thumbnail = result.thumbnail as { base64: string; mediaType: string };
-      }
-      request.resolve(parseResult);
-    }
-  }
-
-  private handleCrash(): void {
-    if (this.disabled) {
-      return;
-    }
-    const crashedRequests = this.queue.requeueAll();
-
-    if (this.restartAttempts >= MAX_RESTART_ATTEMPTS) {
-      this.logger.error(`Sidecar failed after ${MAX_RESTART_ATTEMPTS} restart attempts`, new Error('Max restart attempts reached'), undefined, LogComponent.DocumentParser);
-      for (const req of crashedRequests) {
-        req.reject(new Error('Document parser unavailable after repeated crashes'));
-      }
-      return;
-    }
-
-    this.restartAttempts++;
-    this.logger.warn(`Restarting sidecar in ${RESTART_DELAY_MS}ms (attempt ${this.restartAttempts}/${MAX_RESTART_ATTEMPTS})`, undefined, LogComponent.DocumentParser);
-
-    this.restartTimer = setTimeout(() => {
-      this.restartTimer = null;
-      this.spawnSidecar();
-    }, RESTART_DELAY_MS);
-  }
-
   private computeFileHash(filePath: string): string {
+    // Reuse NodeFileParser's hash function for consistency
+    const crypto = require('node:crypto') as typeof import('node:crypto');
+    const path = require('node:path') as typeof import('node:path');
+    const fs = require('node:fs') as typeof import('node:fs');
     const hash = crypto.createHash('sha256');
+    const buffer = Buffer.alloc(65536);
     try {
       const fd = fs.openSync(filePath, 'r');
-      const buffer = Buffer.alloc(65536);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      hash.update(buffer.subarray(0, bytesRead));
-      fs.closeSync(fd);
-    } catch { /* fallback */ }
+      try {
+        const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+        hash.update(buffer.subarray(0, bytesRead));
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      // Fallback: hash basename + size only
+    }
     hash.update(path.basename(filePath));
     hash.update(fs.statSync(filePath).size.toString());
     return hash.digest('hex');
   }
 
-  private async getSidecarCommand(): Promise<{ cmd: string; args: string[] } | null> {
-    if (app.isPackaged) {
-      const exePath = path.join(process.resourcesPath, 'document-parser', 'document-parser.exe');
-      if (fs.existsSync(exePath)) {
-        return { cmd: exePath, args: [] };
+  private evictStale(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.cache) {
+      if (now - entry.parsedAt > CACHE_MAX_AGE_MS) {
+        this.cache.delete(key);
       }
-      this.logger.error(
-        'Packaged document parser executable missing',
-        new Error(`Missing executable: ${exePath}`),
-        undefined,
-        LogComponent.DocumentParser,
-      );
-      return null;
     }
-
-    const sidecarScript = path.join(__dirname, '..', 'electron', 'services', 'document-parser', 'sidecar', 'main.py');
-    const pythonCmd = await this.detectPythonCommand();
-    if (!pythonCmd) {
-      return null;
-    }
-    return { cmd: pythonCmd, args: [sidecarScript] };
-  }
-
-  private async detectPythonCommand(): Promise<string | null> {
-    const candidates = ['python', 'python3', 'py'];
-    for (const cmd of candidates) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const proc = spawn(cmd, ['--version'], { stdio: 'pipe' });
-          proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`Exit ${code}`))));
-          proc.on('error', reject);
-        });
-        this.logger.info(`Detected Python: ${cmd}`, undefined, LogComponent.DocumentParser);
-        return cmd;
-      } catch { continue; }
-    }
-    return null;
-  }
-
-  private startCacheCleanup(): void {
-    setInterval(() => this.cache.clearExpired(CACHE_MAX_AGE_MS), 5 * 60 * 1000);
   }
 }
 
@@ -358,3 +279,7 @@ export function initDocumentParser(): DocumentParserService {
 export function getDocumentParser(): DocumentParserService | null {
   return instance;
 }
+
+// Suppress unused-warning for `app` import (kept for parity with the
+// legacy implementation; could be used for app.isPackaged branching later)
+void app;
