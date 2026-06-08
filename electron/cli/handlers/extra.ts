@@ -24,9 +24,29 @@ import { dirname, join, resolve } from 'node:path';
 import { app } from 'electron';
 import { addMessage } from '../../db/queries/messages';
 import { getConfigManager } from '../../config/manager';
-import { getMCPServers, type MCPServerEntry } from '../../agents/mcp/collect-main';
 import { syncBundledSkills } from '../../../packages/agent/src/skills/skillsSync';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
+
+// ---------------------------------------------------------------------------
+// Local MCP config reader (mirrors handlers/mcps.ts; both write/read paths
+// use the same agentSettings.mcpServers slice in ConfigManager).
+// ---------------------------------------------------------------------------
+
+interface MCPServerEntry {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+  allowedAgentIds?: string[];
+}
+
+function getMCPServers(cm: ReturnType<typeof getConfigManager>): MCPServerEntry[] {
+  const settings = cm.getAgentSettings() as unknown as Record<string, unknown>;
+  return Array.isArray(settings.mcpServers)
+    ? (settings.mcpServers as MCPServerEntry[])
+    : [];
+}
 
 // ---------------------------------------------------------------------------
 // Common helpers

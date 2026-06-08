@@ -17,6 +17,8 @@ import type { MCPServerConfig } from "@/types";
 import { cn } from "@/lib/utils";
 import { parseMcpInput, isMultiConfig } from "@/lib/mcp-parser";
 import type { ParsedMCPConfig } from "@/lib/mcp-parser";
+import { fetchMCPInventorySnapshot, hasMCPInventoryAPI } from "@/lib/mcp-inventory-ipc";
+import type { MCPInventorySnapshotDTO, MCPPluginDeclaredServerDTO } from "@/lib/mcp-inventory-types";
 import {
   PRESET_MCP_SERVERS,
   MCP_CATEGORIES,
@@ -25,7 +27,6 @@ import {
 import type { MCPCategory } from "@/data/preset-mcp-servers";
 import { listAgentProfiles } from "@/lib/agent-profile-ipc";
 import type { AgentProfile } from "@/lib/agent-profile-ipc";
-import { getPluginAPI } from "@/lib/plugin-ipc";
 import {
   SettingsSection,
   SettingsCard,
@@ -40,15 +41,6 @@ interface MCPServerFormData {
   env: string;
   enabled: boolean;
   allowedAgentIds: string[];
-}
-
-interface PluginMCPEntry {
-  pluginId: string;
-  pluginName: string;
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
 }
 
 function parseArgs(argsStr: string): string[] {
@@ -135,23 +127,24 @@ export function MCPSection() {
   const [presetSearch, setPresetSearch] = useState("");
 
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
-  const [pluginMCPs, setPluginMCPs] = useState<PluginMCPEntry[]>([]);
+  const [inventory, setInventory] = useState<MCPInventorySnapshotDTO | null>(null);
 
   useEffect(() => {
     listAgentProfiles().then(setAgentProfiles).catch(() => setAgentProfiles([]));
   }, []);
 
   useEffect(() => {
-    const pluginApi = getPluginAPI();
-    if (!pluginApi) return;
-    pluginApi.registry.mcpList().then((res: { success: boolean; data: PluginMCPEntry[]; error?: string }) => {
-      if (res.success && res.data) {
-        setPluginMCPs(res.data);
-      }
-    }).catch(() => setPluginMCPs([]));
-  }, []);
+    if (!hasMCPInventoryAPI()) return;
+    fetchMCPInventorySnapshot().then((snapshot) => {
+      setInventory(snapshot);
+    }).catch(() => setInventory(null));
+  }, [settings.mcpServers]);
 
-  const servers = settings.mcpServers || [];
+  const servers = (inventory?.configuredServers ?? settings.mcpServers ?? []).map((server) => ({
+    ...server,
+    enabled: server.enabled !== false,
+  })) as MCPServerConfig[];
+  const pluginMCPs: MCPPluginDeclaredServerDTO[] = inventory?.pluginDeclaredServers ?? [];
 
   const existingServerIds = new Set(servers.map((s) => s.name));
 
@@ -418,9 +411,15 @@ export function MCPSection() {
           <div className="flex flex-col items-center justify-center py-12 px-4">
             <ServerIcon className="h-12 w-12 text-muted-foreground mb-4" size={48} />
             <p className="text-muted-foreground text-center">
-              No MCP servers configured yet.
+              No manually configured MCP servers yet.
               <br />
               Add a server to extend agent capabilities with external tools.
+              {pluginMCPs.length > 0 ? (
+                <>
+                  <br />
+                  Plugin-provided MCP servers are listed below.
+                </>
+              ) : null}
             </p>
             <div className="flex gap-2 mt-4">
               <button
@@ -556,14 +555,24 @@ export function MCPSection() {
                         <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 font-medium">
                           Plugin
                         </span>
+                        {pmcp.effective ? (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-600 font-medium">
+                            Effective
+                          </span>
+                        ) : (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 font-medium">
+                            Shadowed
+                          </span>
+                        )}
                       </div>
                       <p className="text-sm text-muted-foreground font-mono mt-0.5">
-                        {pmcp.command} {pmcp.args ? pmcp.args.join(' ') : ''}
+                        {pmcp.command} {pmcp.args.join(' ')}
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Provided by: {pmcp.pluginName}
+                        {!pmcp.providerEnabled ? ' (plugin disabled)' : ''}
                       </p>
-                      {pmcp.env && Object.keys(pmcp.env).length > 0 && (
+                      {Object.keys(pmcp.env).length > 0 && (
                         <p className="text-xs text-muted-foreground mt-1">
                           Env: {Object.keys(pmcp.env).join(', ')}
                         </p>
