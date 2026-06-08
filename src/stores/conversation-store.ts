@@ -9,6 +9,7 @@ import {
   createThreadIPC,
   deleteThreadIPC,
   getProjectGroupsIPC,
+  addRecentFolderIPC,
   addMessageIPC,
   getActiveProviderIPC,
   updateThreadIPC,
@@ -84,6 +85,7 @@ interface ConversationState {
   rewindToMessage: (threadId: string, messageId: string) => Promise<void>;
   updateThreadTitle: (id: string, title: string) => void;
   setThreadWorkingDirectory: (id: string, workingDirectory: string, projectName: string) => void;
+  addProjectFolder: (workingDirectory: string) => Promise<ProjectGroup | null>;
   toggleProjectExpanded: (workingDirectory: string) => void;
   toggleThreadExpanded: (threadId: string) => void;
   loadFromDatabase: () => Promise<void>;
@@ -497,6 +499,27 @@ export const useConversationStore = create<ConversationState>()(
         if (thread) {
           get().syncThreadToDatabase(thread);
         }
+      },
+
+      addProjectFolder: async (workingDirectory) => {
+        const trimmed = workingDirectory.trim();
+        if (!trimmed) return null;
+
+        const projectName = trimmed.split(/[\\/]/).pop() || 'Untitled';
+        const projects = (await addRecentFolderIPC(trimmed)).map((p) => ({
+          ...p,
+          isExpanded: true,
+        }));
+        const project = projects.find((p) => p.workingDirectory === trimmed) ?? {
+          workingDirectory: trimmed,
+          projectName,
+          threadCount: 0,
+          lastActivity: Date.now(),
+          isExpanded: true,
+        };
+
+        set({ projects });
+        return project;
       },
 
       toggleProjectExpanded: (workingDirectory) => {

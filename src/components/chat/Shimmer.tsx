@@ -1,10 +1,7 @@
 'use client';
 
 import type { CSSProperties } from 'react';
-import { motion } from 'framer-motion';
-import { memo, useMemo } from 'react';
-
-const MotionP = motion.create('p');
+import { memo } from 'react';
 
 export interface TextShimmerProps {
   children: string;
@@ -16,34 +13,18 @@ export interface TextShimmerProps {
 const ShimmerComponent = ({
   children,
   className,
-  duration = 2,
-  spread = 2,
+  duration = 1.5,
+  spread,
 }: TextShimmerProps) => {
-  const dynamicSpread = useMemo(
-    () => (children?.length ?? 0) * spread,
-    [children, spread]
-  );
+  void spread;
 
   return (
-    <MotionP
-      animate={{ backgroundPosition: '0% center' }}
-      className="relative inline-block bg-[length:250%_100%,auto] bg-clip-text text-transparent [--bg:linear-gradient(90deg,#0000_calc(50%-var(--spread)),var(--muted),#0000_calc(50%+var(--spread)))] [background-repeat:no-repeat,padding-box]"
-      initial={{ backgroundPosition: '100% center' }}
-      style={
-        {
-          '--spread': `${dynamicSpread}px`,
-          backgroundImage:
-            'var(--bg), linear-gradient(var(--muted), var(--muted))',
-        } as CSSProperties
-      }
-      transition={{
-        duration,
-        ease: 'linear',
-        repeat: Number.POSITIVE_INFINITY,
-      }}
+    <span
+      className={['shimmer-text inline-block', className].filter(Boolean).join(' ')}
+      style={{ animationDuration: `${duration}s` } as CSSProperties}
     >
       {children}
-    </MotionP>
+    </span>
   );
 };
 

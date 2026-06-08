@@ -530,7 +530,31 @@ export async function deleteOutputStyleIPC(id: string): Promise<boolean> {
 // Project operations
 export async function getProjectGroupsIPC(): Promise<ProjectGroup[]> {
   const dbProjects = await window.electronAPI!.project.getGroups() as DbProjectGroup[]
-  return dbProjects.map(backendProjectToProject)
+  const projects = dbProjects.map(backendProjectToProject)
+
+  if (!window.electronAPI?.projects?.getRecentFolders) {
+    return projects
+  }
+
+  const existingPaths = new Set(projects.map((project) => project.workingDirectory))
+  const recentFolders = await window.electronAPI.projects.getRecentFolders()
+  const recentProjects = recentFolders
+    .filter((workingDirectory) => workingDirectory && !existingPaths.has(workingDirectory))
+    .map((workingDirectory, index) => ({
+      workingDirectory,
+      projectName: workingDirectory.split(/[\\/]/).pop() || 'Untitled',
+      threadCount: 0,
+      lastActivity: Date.now() - index,
+    }))
+
+  return [...projects, ...recentProjects]
+}
+
+export async function addRecentFolderIPC(workingDirectory: string): Promise<ProjectGroup[]> {
+  if (window.electronAPI?.projects?.addRecentFolder) {
+    await window.electronAPI.projects.addRecentFolder(workingDirectory)
+  }
+  return getProjectGroupsIPC()
 }
 
 // Lock operations

@@ -23,7 +23,7 @@ interface PermissionPromptProps {
   /** Tool uses in the current session */
   toolUses?: ToolUseInfo[];
   /** Permission profile - 'full_access' skips prompts */
-  permissionProfile?: 'default' | 'full_access';
+  permissionProfile?: 'default' | 'auto' | 'full_access';
   /** Auto mode related info from the backend */
   autoModeInfo?: {
     active: boolean;

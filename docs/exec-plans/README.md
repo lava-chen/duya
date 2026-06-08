@@ -87,6 +87,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [94-research-mode-loop-improvement](./active/94-research-mode-loop-improvement.md) | Research Mode Research Loop 核心改进 — 动态排序、StopDecision、SourceEvaluator、去重服务 | P1 | Milestone 1 ✅, M2.1-3 📋 |
 | [62-gateway-ipc-refactor](./active/62-gateway-ipc-refactor.md) | Gateway ↔ IPC 架构重整 | P0 | 进行中 |
 | [64-browser-parallel-isolation](./active/64-browser-parallel-isolation.md) | 浏览器多 Tab 隔离与并行执行 | P0 | 进行中 |
+| [106-node-file-parser-and-read-integration](./active/106-node-file-parser-and-read-integration.md) | Node File Parser & Read 工具集成 — 把 Python sidecar 迁到 Node 内嵌解析,Read 工具升级多模态(PDF/DOCX/PPTX/图片) | P1 | ✅ Complete |
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — 离开回来后自动显示会话摘要 | P1 | Planning |
 | [95-external-agent-import](./active/95-external-agent-import.md) | External Agent Workspace Import — 从 Claude Code / Codex 导入项目上下文、记忆、技能 | P1 | Phase 1 ✅ |
 

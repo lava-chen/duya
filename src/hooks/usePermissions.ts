@@ -162,6 +162,27 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
       return;
     }
     lastSeenIdRef.current = request.id;
+
+    if (permissionProfile === 'full_access' && sessionId) {
+      waitingRef.current = true;
+      setPendingPermission(null);
+      setPermissionResolved(null);
+
+      void resolvePermission(sessionId, request.id, 'allow')
+        .then(() => {
+          onPermissionResolved?.('allow', request);
+        })
+        .catch((error) => {
+          console.error('[usePermissions] Error auto-approving permission:', error);
+          setPendingPermission(request);
+          setPermissionResolved(null);
+        })
+        .finally(() => {
+          waitingRef.current = false;
+        });
+      return;
+    }
+
     setPendingPermission(request);
     setPermissionResolved(null);
     waitingRef.current = false;
@@ -180,7 +201,7 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
           : `Allow ${request.toolName ?? 'tool'} to run?`,
       });
     }
-  }, [systemNotify, sessionId]);
+  }, [systemNotify, sessionId, permissionProfile, onPermissionResolved]);
 
   // Cleanup on unmount
   useEffect(() => {
