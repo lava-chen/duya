@@ -15,6 +15,7 @@ import { formatAgentLine, getPrompt } from './prompt.js';
 import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
 import { backgroundTaskRegistry, type BackgroundTaskResult } from './BackgroundTaskRegistry.js';
 import { sessionDb, messageDb } from '../../ipc/db-client.js';
+import { sendEvent } from '../../process/worker-protocol.js';
 
 export { formatAgentLine }
 
@@ -226,6 +227,34 @@ export class AgentTool extends BaseTool {
         });
 
         (async () => {
+          const parentSessionId = context.options.sessionId
+          if (!parentSessionId) return
+          const emitTerminalProgress = (event: AgentProgressEvent) => {
+            // Forward the sub-agent's terminal progress event directly to the
+            // worker stdout so router.ts can stream it to the parent SSE client.
+            // The reportAgentProgress path buffers into pendingProgress which is
+            // never drained once the parent agent's LLM stream has already
+            // emitted 'done' — so the parent's UI would stay stuck on
+            // "正在运行..." until manual reload.
+            try {
+              sendEvent({
+                type: 'chat:agent_progress',
+                sessionId: parentSessionId,
+                agentEventType: event.type,
+                agentId: event.agentId,
+                agentType: agentDefinition.agentType,
+                agentName: agentInput.name,
+                agentDescription: agentInput.description || agentInput.name,
+                agentSessionId: subAgentSessionId,
+                ...(event.duration !== undefined ? { duration: event.duration } : {}),
+                ...(event.data !== undefined ? { data: event.data } : {}),
+              })
+            } catch (err) {
+              console.warn('[AgentTool] Failed to emit terminal agent_progress:', err)
+            }
+            onProgress?.(event)
+          }
+
           try {
             let lastMessage: Message | undefined
             for await (const message of agentGenerator) {
@@ -266,11 +295,20 @@ export class AgentTool extends BaseTool {
                 totalToolUseCount: 0,
               })
             }
+
+            emitTerminalProgress({
+              type: 'done',
+              duration: Date.now() - startTime,
+              agentId: taskId,
+            })
           } catch (err) {
-            backgroundTaskRegistry.fail(
-              taskId,
-              err instanceof Error ? err.message : 'Unknown error'
-            )
+            const errMsg = err instanceof Error ? err.message : 'Unknown error'
+            backgroundTaskRegistry.fail(taskId, errMsg)
+            emitTerminalProgress({
+              type: 'error',
+              data: errMsg,
+              agentId: taskId,
+            })
           }
         })();
 
