@@ -583,6 +583,26 @@ function parsePersistedResearchEvent(row: ResearchPersistedEvent): Record<string
   }
 }
 
+function inferPendingResearchRequest(state: ResearchSessionState): ResearchPendingRequest | null {
+  if (state.pendingRequest) return state.pendingRequest;
+
+  if (state.stage === 'awaiting_plan_approval' && state.planQuestions.length > 0) {
+    return {
+      kind: 'plan_approval',
+      requestId: `restored_plan_${state.runId || state.sessionId}`,
+      questions: state.planQuestions.map((question) => ({
+        id: question.id,
+        text: question.text,
+        type: 'text',
+        required: false,
+      })),
+      allowSkip: false,
+    };
+  }
+
+  return null;
+}
+
 class StreamSessionManager {
   private sessions: Map<string, SessionState> = new Map();
   private conductorSessions: Map<string, ConductorSessionState> = new Map();
@@ -2641,6 +2661,7 @@ class StreamSessionManager {
 
     const runStatus = dbRow.run_status as string | null;
     const legacyStatus = dbRow.status as string;
+    const workerActive = dbRow.workerActive === true;
     const isActive = runStatus
       ? ['classifying', 'planning', 'awaiting_clarification', 'awaiting_approval', 'running', 'paused', 'synthesizing'].includes(runStatus)
       : legacyStatus === 'active';
@@ -2755,12 +2776,92 @@ class StreamSessionManager {
       }
     }
 
+    const restoredMetadata = {
+      mode: state.mode,
+      active: state.active,
+      originalQuery: state.originalQuery,
+      stage: state.stage,
+      phase: state.phase,
+      startedAt: state.startedAt,
+      completedAt: state.completedAt,
+      runId: state.runId,
+      runStatus: state.runStatus,
+      progressSummary: state.progressSummary,
+      error: state.error,
+      pendingRequest: state.pendingRequest,
+      plan: state.plan,
+      planQuestions: state.planQuestions,
+      planSteps: state.planSteps,
+      findings: state.findings,
+      reportText: state.reportText,
+      summary: state.summary,
+      activities: state.activities,
+      currentIteration: state.currentIteration,
+      coverage: state.coverage,
+      findingsCount: state.findingsCount,
+      questionCount: state.questionCount,
+    };
+
     if (state.persistedEvents.length > 0) {
       this.rebuildResearchProgressFromEvents(sessionId, state.persistedEvents);
       if (state.reportArtifact?.markdown) {
         state.reportText = state.reportArtifact.markdown;
       }
     }
+
+    state.mode = restoredMetadata.mode;
+    state.active = restoredMetadata.active;
+    state.originalQuery = restoredMetadata.originalQuery;
+    state.stage = restoredMetadata.stage;
+    state.phase = restoredMetadata.phase;
+    state.startedAt = restoredMetadata.startedAt;
+    state.completedAt = restoredMetadata.completedAt;
+    state.runId = restoredMetadata.runId;
+    state.runStatus = restoredMetadata.runStatus;
+    state.progressSummary = restoredMetadata.progressSummary;
+    state.error = restoredMetadata.error;
+    state.currentIteration = Math.max(state.currentIteration, restoredMetadata.currentIteration);
+    state.coverage = Math.max(state.coverage, restoredMetadata.coverage);
+
+    if (!state.pendingRequest && restoredMetadata.pendingRequest) {
+      state.pendingRequest = restoredMetadata.pendingRequest;
+    }
+    if (!state.plan && restoredMetadata.plan) {
+      state.plan = restoredMetadata.plan;
+    }
+    if (state.planQuestions.length === 0 && restoredMetadata.planQuestions.length > 0) {
+      state.planQuestions = restoredMetadata.planQuestions;
+      state.questionCount = restoredMetadata.questionCount;
+    }
+    if (state.planSteps.length === 0 && restoredMetadata.planSteps.length > 0) {
+      state.planSteps = restoredMetadata.planSteps;
+    }
+    if (state.findings.length === 0 && restoredMetadata.findings.length > 0) {
+      state.findings = restoredMetadata.findings;
+      state.findingsCount = restoredMetadata.findingsCount;
+    }
+    if (!state.reportText && restoredMetadata.reportText) {
+      state.reportText = restoredMetadata.reportText;
+    }
+    if (!state.summary && restoredMetadata.summary) {
+      state.summary = restoredMetadata.summary;
+    }
+    if (state.activities.length === 0 && restoredMetadata.activities.length > 0) {
+      state.activities = restoredMetadata.activities;
+    }
+    state.pendingRequest = inferPendingResearchRequest(state);
+    if (!workerActive && state.pendingRequest) {
+      state.pendingRequest = {
+        ...state.pendingRequest,
+        requestId: `restored_plan_${state.runId || state.sessionId}`,
+      };
+    }
+    if (!workerActive && state.active && !isCompleted && !isFailed) {
+      state.active = false;
+      state.progressSummary = state.progressSummary || 'Research state restored, but the original worker is no longer running.';
+    }
+    state.questionCount = state.planQuestions.length || state.questionCount;
+    state.findingsCount = state.findings.length || state.findingsCount;
 
     // Restore complexity / max iterations
     if (dbRow.complexity) {

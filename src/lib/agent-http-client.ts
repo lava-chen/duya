@@ -446,6 +446,7 @@ export class AgentServerClient {
 
     try {
       const response = await fetch(`${baseUrl}/research/snapshot/${sessionId}`);
+      if (response.status === 204) return null;
       if (!response.ok) return null;
       return (await response.json()) as Record<string, unknown>;
     } catch {

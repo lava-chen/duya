@@ -316,11 +316,11 @@ export class Orchestrator {
       this.transitionTo(OrchestratorPhase.PLANNING);
 
       await this._updateRunStatus('classifying');
-      await this._logActivity('phase', '正在分析研究任务并制定计划');
+      await this._logActivity('phase', 'Analyzing research task and planning approach');
       await this.classifyQuery();
 
       await this._updateRunStatus('planning');
-      await this._logActivity('phase', '正在生成研究方案与调查问题');
+      await this._logActivity('phase', 'Generating research plan and investigation questions');
       await this.executePlanning();
       await this._persistContext();
       this.throwIfCancelled();
@@ -341,13 +341,13 @@ export class Orchestrator {
 
       this.transitionTo(OrchestratorPhase.RESEARCH_LOOP);
       await this._updateRunStatus('running');
-      await this._logActivity('milestone', '开始执行研究调查，查阅在线来源');
+      await this._logActivity('milestone', 'Starting source investigation');
       await this.executeResearchLoop();
       this.throwIfCancelled();
 
       this.transitionTo(OrchestratorPhase.SYNTHESIS);
       await this._updateRunStatus('synthesizing');
-      await this._logActivity('milestone', '正在组织研究报告与引用');
+      await this._logActivity('milestone', 'Writing research report with citations');
       await this.executeSynthesis();
       this.throwIfCancelled();
 
@@ -588,14 +588,14 @@ export class Orchestrator {
         if (operation === 'navigate' && input.url) {
           const url = String(input.url);
           const domain = extractDomain(url);
-          void this._logActivity('browse', '正在检索页面', `${domain}`);
+          void this._logActivity('browse', 'Opening source page', `${domain}`);
         } else if (operation === 'parallel_fetch' && Array.isArray(input.urls)) {
           const urls = input.urls as string[];
           const domains = [...new Set(urls.map((u) => extractDomain(String(u))))];
           void this._logActivity(
             'browse',
-            '正在检索多个来源',
-            domains.length > 0 ? domains.join(', ') : `${urls.length} 个页面`,
+            'Opening multiple sources',
+            domains.length > 0 ? domains.join(', ') : `${urls.length} pages`,
             'user',
             urls.map((u) => ({ url: String(u), title: extractDomain(String(u)) })),
           );
@@ -958,12 +958,128 @@ export class Orchestrator {
       throw new Error('Research plan cancelled by user.');
     }
 
+    if (action === 'edit_scope') {
+      this.applyScopeEdit(answers.scope || answers.details || '');
+    }
+    if (action === 'add_question') {
+      this.applyAddedQuestion(answers.question || answers.details || '');
+    }
+    if (action === 'remove_question') {
+      this.applyRemovedQuestions(answers.questionIds || answers.details || '');
+    }
+    if (action === 'change_sources') {
+      this.applySourceChanges(answers.sources || answers.details || '');
+    }
     if (action === 'increase_depth') {
       this.config.maxIterations = Math.min(this.config.maxIterations + 5, 20);
     }
     if (action === 'decrease_depth') {
       this.config.maxIterations = Math.max(this.config.maxIterations - 1, 1);
     }
+
+    if (action && action !== 'start') {
+      await this._createPlanSteps();
+      await this._persistContext();
+      await this._logActivity(
+        'milestone',
+        'Research plan updated',
+        `Applied plan action: ${action}`,
+      );
+    }
+  }
+
+  private applyScopeEdit(scopeText: string): void {
+    const plan = this.context.getResearchPlan();
+    if (!plan || !scopeText.trim()) return;
+
+    plan.scope.assumptions = [
+      ...plan.scope.assumptions,
+      `User scope edit: ${scopeText.trim()}`,
+    ];
+    plan.scope.included = [...new Set([...plan.scope.included, scopeText.trim()])];
+    this.context.setResearchPlan(plan);
+  }
+
+  private applyAddedQuestion(questionText: string): void {
+    const text = questionText.trim();
+    if (!text) return;
+
+    const plan = this.context.getResearchPlan();
+    const question: ResearchQuestion = {
+      id: `q_user_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      text,
+      purpose: 'evidence',
+      questionLayer: 'analytical',
+      priority: 1,
+      dependsOn: [],
+      searchQueries: [text],
+      requiredEvidence: {
+        sourceTypes: plan?.evidenceStrategy.sourceTypes || [],
+        minSources: Math.max(2, plan?.evidenceStrategy.minIndependentSources || 2),
+        needsPrimarySource: !!plan?.evidenceStrategy.mustFindPrimarySources,
+        needsRecentSource: plan?.evidenceStrategy.freshnessRequirement === 'recent' || plan?.evidenceStrategy.freshnessRequirement === 'latest',
+        needsCounterEvidence: !!plan?.evidenceStrategy.mustFindCounterEvidence,
+      },
+      status: 'pending',
+      sources: [],
+    };
+
+    this.context.addQuestion(question);
+    if (plan) {
+      plan.researchQuestions = [...plan.researchQuestions, question];
+      plan.searchStrategy.seedQueries = [...new Set([...plan.searchStrategy.seedQueries, text])];
+      this.context.setResearchPlan(plan);
+    }
+  }
+
+  private applyRemovedQuestions(rawIds: string): void {
+    const ids = rawIds
+      .split(/[,\n]/)
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (ids.length === 0) return;
+
+    const idSet = new Set(ids);
+    const plan = this.context.getResearchPlan();
+    for (const question of this.context.getQuestions()) {
+      if (idSet.has(question.id) || idSet.has(question.text)) {
+        this.context.markQuestionObsolete(question.id);
+      }
+    }
+    if (plan) {
+      plan.researchQuestions = plan.researchQuestions.filter((q) => !idSet.has(q.id) && !idSet.has(q.text));
+      this.context.setResearchPlan(plan);
+    }
+  }
+
+  private applySourceChanges(rawSources: string): void {
+    const entries = rawSources
+      .split(/[,\n]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (entries.length === 0) return;
+
+    const domains = entries.map((entry) => {
+      try {
+        return new URL(entry).hostname.replace(/^www\./, '');
+      } catch {
+        return entry.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+      }
+    }).filter(Boolean);
+
+    const plan = this.context.getResearchPlan();
+    if (!plan) return;
+    plan.scope.domains = [...new Set([...plan.scope.domains, ...domains])];
+    plan.searchStrategy.priorityOrder = [
+      ...new Set([
+        ...domains.map((domain) => `prioritize ${domain}`),
+        ...plan.searchStrategy.priorityOrder,
+      ]),
+    ];
+    for (const question of plan.researchQuestions) {
+      question.sources = [...new Set([...(question.sources || []), ...entries])];
+    }
+    this.context.setResearchPlan(plan);
   }
 
   // === Phase: Research Loop ===
@@ -1351,8 +1467,8 @@ export class Orchestrator {
 
       await this._logActivity(
         'finding',
-        allFindings.length > 0 ? `发现 ${allFindings.length} 条关键证据` : '搜索完成，正在整理信息',
-        sources.length > 0 ? `来源：${sources.map((s) => s.title).join('、')}` : undefined,
+        allFindings.length > 0 ? `Found ${allFindings.length} evidence items` : 'Search complete, organizing findings',
+        sources.length > 0 ? `Sources: ${sources.map((s) => s.title).join(', ')}` : undefined,
         'user',
         sources.length > 0 ? sources : undefined,
       );
@@ -1361,7 +1477,7 @@ export class Orchestrator {
       for (const qText of answeredQuestions.slice(0, 3)) {
         await this._logActivity(
           'question_answered',
-          '已回答',
+          'Answered question',
           qText.length > 40 ? qText.slice(0, 40) + '...' : qText,
         );
       }
@@ -2092,6 +2208,7 @@ export class Orchestrator {
     this.emit({ type: 'synthesis_start' });
 
     const prompt = this.buildSynthesisPrompt();
+    let reportContent = '';
 
     if (this.llmStreamFn) {
       let total = 0;
@@ -2101,17 +2218,20 @@ export class Orchestrator {
           'You are the synthesis module of a deep research agent. Write using only the collected findings. Do not introduce unsupported facts.',
         )) {
           this.throwIfCancelled();
+          reportContent += delta;
           this.emit({ type: 'synthesis_chunk', delta, total: total + delta.length });
           total += delta.length;
         }
       } catch {
         this.throwIfCancelled();
         const fallback = await this.llmComplete(prompt);
+        reportContent = fallback;
         this.emit({ type: 'synthesis_chunk', delta: fallback, total: fallback.length });
       }
     } else {
       this.throwIfCancelled();
       const report = await this.llmComplete(prompt);
+      reportContent = report;
       this.emit({ type: 'synthesis_chunk', delta: report, total: report.length });
     }
 
@@ -2120,7 +2240,7 @@ export class Orchestrator {
     this.emit({
       type: 'report_complete',
       reportId,
-      content: 'Report generated via synthesis_chunk events',
+      content: reportContent.trim() || 'Report generated via synthesis_chunk events',
       contextSnapshot: this.context.getStateSummary(),
     });
   }

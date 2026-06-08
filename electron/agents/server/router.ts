@@ -1452,7 +1452,10 @@ async function handleResearchRoute(
         sessionId,
       }) as Record<string, unknown> | null;
       if (!row) {
-        sendJson(res, 404, { error: 'Research session not found' });
+        res.writeHead(204, {
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end();
         return;
       }
 
@@ -1497,7 +1500,16 @@ async function handleResearchRoute(
         }
       }
 
-      sendJson(res, 200, { ...row, planSteps, activities, events, sources, report, citations });
+      sendJson(res, 200, {
+        ...row,
+        workerActive: workerManager.hasWorker(sessionId),
+        planSteps,
+        activities,
+        events,
+        sources,
+        report,
+        citations,
+      });
     } catch (error) {
       logger.error('Failed to fetch research session', error instanceof Error ? error : new Error(String(error)), { sessionId });
       sendJson(res, 500, { error: 'Database error' });
