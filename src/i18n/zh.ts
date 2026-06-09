@@ -45,6 +45,7 @@ const zh: Record<TranslationKey, string> = {
   'chat.describeWhatToBuild': '描述你想构建什么...',
 
   'messageInput.attachFiles': '附加文件',
+  'messageInput.dropFilesHint': '松开以添加为附件',
   'messageInput.slashCommands': '斜杠命令',
   'messageInput.selectModel': '选择模型',
   'messageInput.loadingModels': '加载模型中...',
@@ -505,11 +506,31 @@ const zh: Record<TranslationKey, string> = {
   'context.used': '已用',
   'context.total': '总计',
   'context.percentage': '占用',
+  'context.nextEst': '下轮预估',
+  'context.cacheRead': '缓存读取',
+  'context.cacheCreate': '缓存创建',
+  'context.cacheHitRate': '缓存命中率',
+  'context.output': '输出',
+  'context.tokens': 'tokens',
+  'context.viewDetails': '查看详情',
+  'context.compress': '压缩上下文',
+  'context.compressing': '压缩中...',
+  'context.usage.noData': '暂无用量数据',
+  'context.usage.estimateNote': '基于最近一次响应估算',
+  'context.usage.byCategory': '按类别估算用量',
+  'context.usage.tokenBreakdown': 'Token 明细',
+  'context.usage.warning': '上下文即将占满，建议尽快压缩。',
+  'context.usage.critical': '上下文几乎已满，建议开启新会话。',
+  'context.usage.reserved': '自动压缩缓冲',
 
   'error.title': '出错了',
   'error.description': '发生了意外错误',
   'error.tryAgain': '重试',
   'error.reloadApp': '重新加载',
+  'error.rateLimitTitle': '已达到速率限制',
+  'error.rateLimitMessage': '已触发服务提供商的速率限制,请稍等片刻后再发送消息。',
+  'error.usageLimitTitle': '已达到使用上限',
+  'error.usageLimitMessage': '该模型的 5 小时使用额度已用完,请稍后重试或切换到其他模型。',
 
   'common.cancel': '取消',
   'common.continue': '继续',
@@ -1268,6 +1289,12 @@ const zh: Record<TranslationKey, string> = {
   'automation.templateMarketTitle': '自动化模板',
   'automation.manualSetup': '手动配置',
   'automation.templatesEmpty': '暂无可用模板,你可以手动创建自动化。',
+
+  'skillReview.running': '自我提升中 — 正在检查本轮对话是否值得创建 skill…',
+  'skillReview.completed': '自我提升已保存一条新 skill。',
+  'skillReview.completedNamed': '自我提升已创建 skill “{name}”。',
+  'skillReview.failed': '自我提升跳过:{error}',
+  'skillReview.noImprovement': '自我提升未找到值得保存的 skill。',
 };
 
 export default zh;

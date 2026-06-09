@@ -43,6 +43,7 @@ const en = {
   'chat.describeWhatToBuild': 'Describe what you want to build...',
 
   'messageInput.attachFiles': 'Attach files',
+  'messageInput.dropFilesHint': 'Drop to add as attachment',
   'messageInput.slashCommands': 'Slash commands',
   'messageInput.selectModel': 'Select model',
   'messageInput.loadingModels': 'Loading models...',
@@ -503,11 +504,34 @@ const en = {
   'context.used': 'Used',
   'context.total': 'Total',
   'context.percentage': 'Usage',
+  'context.nextEst': 'Next Est.',
+  'context.cacheRead': 'Cache Read',
+  'context.cacheCreate': 'Cache Create',
+  'context.cacheHitRate': 'Cache hit',
+  'context.output': 'Output',
+  'context.tokens': 'tokens',
+  'context.viewDetails': 'View details',
+  'context.compress': 'Compress Context',
+  'context.compressing': 'Compressing...',
+  'context.usage.noData': 'No usage data available',
+  'context.usage.estimateNote': 'Based on recent response estimation',
+  'context.usage.byCategory': 'Estimated usage by category',
+  'context.usage.tokenBreakdown': 'Token breakdown',
+  'context.usage.warning':
+
+    'Context window filling up. Consider compacting soon.',
+  'context.usage.critical':
+    'Context window nearly full. Consider starting a new session.',
+  'context.usage.reserved': 'Autocompact buffer',
 
   'error.title': 'Something went wrong',
   'error.description': 'An unexpected error occurred',
   'error.tryAgain': 'Try Again',
   'error.reloadApp': 'Reload App',
+  'error.rateLimitTitle': 'Rate limit reached',
+  'error.rateLimitMessage': 'You have hit the provider rate limit. Wait a moment, then send your message again.',
+  'error.usageLimitTitle': 'Usage limit reached',
+  'error.usageLimitMessage': 'You have hit the 5-hour usage limit for this model. Try again later or switch to a different model.',
 
   'common.cancel': 'Cancel',
   'common.continue': 'Continue',
@@ -1266,6 +1290,16 @@ const en = {
   'automation.templateMarketTitle': 'Automation Templates',
   'automation.manualSetup': 'Manual Setup',
   'automation.templatesEmpty': 'No templates available. You can create an automation manually.',
+
+  // Self-improver (background skill-creation review) — see
+  // packages/agent/src/self-improver/SelfImprover.ts for the source
+  // of the events. The keys here are consumed by
+  // SkillReviewIndicator in the chat UI.
+  'skillReview.running': 'Self-improving — reviewing the session for skill candidates…',
+  'skillReview.completed': 'Self-improver saved a new skill.',
+  'skillReview.completedNamed': 'Self-improver created skill "{name}".',
+  'skillReview.failed': 'Self-improver skipped: {error}',
+  'skillReview.noImprovement': 'Self-improver did not find a new skill worth saving.',
 };
 
 export type TranslationKey = keyof typeof en;
