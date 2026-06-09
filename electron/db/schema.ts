@@ -180,6 +180,25 @@ export function initializeSchema(db: BetterSqlite3Db): void {
     )
   `);
 
+  // Plan 62 §3.2 — channel_directory: per-platform channel inventory
+  // pushed by adapters after they connect. Used by the CLI control
+  // plane (`duya channel list / info / platforms / status`). Keep
+  // the schema aligned with the SELECT/INSERT in
+  // `electron/gateway/channel-directory.ts`.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS channel_directory (
+      id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      name TEXT NOT NULL,
+      guild TEXT,
+      type TEXT NOT NULL,
+      extra TEXT NOT NULL DEFAULT '{}',
+      discovered_at INTEGER NOT NULL,
+      PRIMARY KEY (platform, id)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_directory_platform ON channel_directory(platform)`);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS threads (
       id TEXT PRIMARY KEY,
