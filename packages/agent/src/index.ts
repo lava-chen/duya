@@ -379,6 +379,14 @@ export class duyaAgent {
   private researchMemoryRuntime: ResearchMemory;
   private mcpManager: MCPManager | null = null;
   private _activeMode: any = null;
+  /**
+   * Phase 2: optional ProviderRuntimeConfig delivered by the main
+   * process. The agent currently does not consume it directly (the
+   * legacy `apiKey / baseURL / provider` fields stay authoritative
+   * for the LLM client factory). Future agent code can use this to
+   * bypass `inferProvider(baseURL)` heuristics.
+   */
+  readonly runtimeConfig?: AgentOptions['runtimeConfig'];
 
   // Phase 2A worker closure: the agent owns the long-lived MCP
   // runtime. `activeMCPRegistry` is the ToolRegistry slot that
@@ -457,6 +465,7 @@ export class duyaAgent {
     };
 
     this.model = options.model;
+    this.runtimeConfig = options.runtimeConfig;
 
     // Initialize vision model client if configured
     logger.info(`[duyaAgent] Vision config check: enabled=${options.visionConfig?.enabled}, provider=${options.visionConfig?.provider}, model=${options.visionConfig?.model}, baseURL=${options.visionConfig?.baseURL}`);

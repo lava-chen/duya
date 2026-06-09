@@ -14,6 +14,11 @@
  * cross-package import on the electron side (the provider config
  * lives in the electron main process). The shape is verified
  * against `electron/config/manager.ts`.
+ *
+ * Phase 1 also re-exports the new runtime adapter from
+ * `./ProviderRuntimeAdapter.js` and `./runtime-types.js`. New code
+ * SHOULD consume those; this file remains as the legacy CLI DTO
+ * surface.
  */
 
 export type ProviderSource = 'config';
@@ -98,3 +103,26 @@ export function toProviderInfoDTO(p: ApiProvider): ProviderInfoItem {
     extraEnvKeys: Object.keys(p.extraEnv ?? {}),
   };
 }
+
+// ----------------------------------------------------------------------------
+// Phase 1 re-exports: prefer these in new code.
+// ----------------------------------------------------------------------------
+export {
+  toRuntimeConfig,
+  toRuntimeConfigFromDomain,
+  toLegacyLlmProviderDiscriminator,
+  inferApiFormatFromLegacyProviderType,
+  inferAuthStyle,
+  buildHeaders,
+  normalizeBaseUrl,
+  redactSecrets,
+} from './ProviderRuntimeAdapter.js';
+
+export type {
+  ProviderRuntimeConfig,
+  RuntimeApiFormat,
+  RuntimeAuthStyle,
+  RuntimeModelCapability,
+  ProviderHealthStatus,
+  ProviderErrorKind,
+} from './runtime-types.js';

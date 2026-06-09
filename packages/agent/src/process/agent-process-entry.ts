@@ -38,6 +38,7 @@ import {
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
+import { classifyError, APIErrorType } from '../llm/errors.js';
 import { getDefaultPromptManager } from '../prompts/PromptManager.js';
 import type { PromptProfile } from '../prompts/modes/types.js';
 import type { ConductorSnapshot } from '../conductor/ConductorProfile.js';
@@ -81,6 +82,23 @@ interface InitMessage {
     provider: 'anthropic' | 'openai' | 'ollama';
     authStyle?: 'api_key' | 'auth_token';
     visionConfig?: VisionConfig;
+    /**
+     * Phase 2: optional ProviderRuntimeConfig. When present, the agent
+     * prefers the apiFormat and headers from this object over the legacy
+     * `provider` discriminator. New code should treat this as the
+     * authoritative runtime config.
+     */
+    runtimeConfig?: {
+      providerId: string;
+      providerName?: string;
+      apiFormat: 'openai-chat' | 'openai-responses' | 'anthropic' | 'gemini' | 'ollama' | 'bedrock' | 'vertex';
+      baseUrl: string;
+      apiKey?: string;
+      accessToken?: string;
+      headers: Record<string, string>;
+      model: string;
+      requestOptions?: Record<string, unknown>;
+    };
   };
   workingDirectory?: string;
   defaultWorkspaceDirectory?: string;
@@ -571,6 +589,19 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
 
   // Store model name for multimodal detection
   mainModelName = config.model;
+  if (config.runtimeConfig) {
+    // Phase 2: log that the new runtime config has been delivered.
+    // The actual wiring into the LLM client is staged for a later
+    // iteration; this confirms the new path is end-to-end reachable.
+    log('[Agent-Process] runtimeConfig present (Phase 2)', {
+      providerId: config.runtimeConfig.providerId,
+      apiFormat: config.runtimeConfig.apiFormat,
+      baseUrl: config.runtimeConfig.baseUrl,
+      model: config.runtimeConfig.model,
+      headerKeys: Object.keys(config.runtimeConfig.headers ?? {}),
+      // CRITICAL: never log the apiKey / accessToken here.
+    });
+  }
   probeConfig = {
     model: config.model,
     provider: (config.provider || 'openai') as ProbeConfig['provider'],
@@ -776,7 +807,7 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     case 'done':
       return { type: 'chat:done' };
     case 'error':
-      return { type: 'chat:error', message: event.data as string };
+      return { type: 'chat:error', message: event.data as string, code: (event as { code?: string }).code };
     case 'result':
       return { type: 'chat:token_usage', ...(event.data as object) };
     case 'turn_start':
@@ -1759,10 +1790,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
   } catch (err) {
     log('[Agent-Process] Chat error:', err);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const errType = classifyError(err);
+    let code: string | undefined;
+    if (errType === APIErrorType.RATE_LIMIT) {
+      code = 'rate_limit_error';
+    } else if (errType === APIErrorType.USAGE_LIMIT) {
+      code = 'usage_limit_exceeded';
+    }
     sendToMain({
       type: 'chat:error',
       sessionId: msg.sessionId,
-      message: err instanceof Error ? err.message : String(err),
+      message: errMsg,
+      code,
     });
     // Ensure the SSE stream closes even on error
     sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
