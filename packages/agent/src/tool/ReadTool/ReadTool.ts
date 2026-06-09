@@ -247,14 +247,16 @@ export class ReadTool extends BaseTool {
         // No parser for this extension. Magic-byte sniff is the
         // only thing that could tell us what's actually inside;
         // if it's recognizable as a known binary format, surface
-        // a clear error rather than crashing on a UTF-8 decode.
+        // a clear error that points the model at a concrete next
+        // step instead of a generic "use another tool" stub.
         const magicCheck = await sniffBinary(resolved);
         const formatHint = magicCheck.binary
           ? ` (${magicCheck.format ?? 'binary'})`
           : '';
+        const suggestion = suggestHandlerForFormat(ext, magicCheck.format);
         return {
           id, name: 'read', error: true,
-          result: `Error: Cannot read '${input.file_path}' — unsupported binary format (${ext ?? 'no extension'})${formatHint}. Use a tool that handles this format directly.`,
+          result: `Error: Cannot read '${input.file_path}' — unsupported binary format (${ext ?? 'no extension'})${formatHint}. ${suggestion}`,
         };
       }
 
@@ -556,4 +558,75 @@ export async function readFileContent(
  */
 export function createReadTool(): ReadTool {
   return new ReadTool();
+}
+
+/**
+ * Map an unsupported extension / magic-byte format to a concrete next-step
+ * hint for the model. The point is to make the "use a tool that handles
+ * this format directly" message actually point somewhere: the model often
+ * reaches for `bash` + python when it would be cheaper and safer to use a
+ * purpose-built skill.
+ *
+ * The hint text references real skills and skills-likely-to-exist (e.g.
+ * `xlsx`) so the model can match the name to what it sees in its available
+ * skills list. Falls back to a generic pointer when no specific handler is
+ * known.
+ */
+function suggestHandlerForFormat(
+  ext: string | null,
+  magicFormat: string | undefined,
+): string {
+  const lowerExt = ext?.toLowerCase() ?? '';
+
+  // Extension-based hints first — these are the most reliable since the
+  // user named the file deliberately.
+  if (lowerExt === '.xlsx' || lowerExt === '.xls' || lowerExt === '.xlsm' || lowerExt === '.csv') {
+    return 'Use the `xlsx` skill to read this spreadsheet.';
+  }
+  if (lowerExt === '.doc' || lowerExt === '.docx') {
+    return 'Use the `docx` skill to read this Word document.';
+  }
+  if (lowerExt === '.ppt' || lowerExt === '.pptx') {
+    return 'Use the `pptx` skill to read this PowerPoint file.';
+  }
+  if (lowerExt === '.pdf') {
+    return 'Use the `pdf` skill to read this PDF.';
+  }
+  if (lowerExt === '.png' || lowerExt === '.jpg' || lowerExt === '.jpeg' || lowerExt === '.gif' || lowerExt === '.webp') {
+    return 'Use the `mcp__MiniMax__understand_image` tool to view this image.';
+  }
+  if (lowerExt === '.zip' || lowerExt === '.tar' || lowerExt === '.gz' || lowerExt === '.7z' || lowerExt === '.rar') {
+    return 'Extract this archive with `bash` (e.g. `unzip`, `tar -xf`) before reading its contents.';
+  }
+
+  // Magic-byte-based hints — covers cases where the extension is missing,
+  // wrong, or the file was renamed.
+  if (magicFormat) {
+    if (magicFormat.startsWith('ZIP / Office Open XML')) {
+      return 'This looks like a ZIP container (.xlsx, .docx, .pptx are all OOXML). Use the matching skill: `xlsx`, `docx`, or `pptx`.';
+    }
+    if (magicFormat === 'PDF') {
+      return 'Use the `pdf` skill to read this PDF.';
+    }
+    if (magicFormat === 'GZIP' || magicFormat === 'BZIP2' || magicFormat === 'XZ' || magicFormat === '7-Zip' || magicFormat === 'RAR v1.5+') {
+      return 'Extract this archive with `bash` (e.g. `tar -xf`, `unzip`, `7z x`) before reading its contents.';
+    }
+    if (
+      magicFormat === 'PNG' || magicFormat === 'JPEG' || magicFormat === 'GIF87a' ||
+      magicFormat === 'GIF89a' || magicFormat === 'WebP' || magicFormat === 'BMP' ||
+      magicFormat === 'ICO / CUR'
+    ) {
+      return 'Use the `mcp__MiniMax__understand_image` tool to view this image.';
+    }
+    if (
+      magicFormat === 'ELF executable' || magicFormat === 'Mach-O 32-bit' ||
+      magicFormat === 'Mach-O 64-bit' || magicFormat === 'Mach-O reverse' ||
+      magicFormat === 'Mach-O fat' || magicFormat === 'PE / Windows executable' ||
+      magicFormat === 'Java class' || magicFormat === 'WebAssembly'
+    ) {
+      return 'This is a compiled binary. Do not try to decode it as text — examine it with `bash` (e.g. `file`, `strings`, `objdump`) instead.';
+    }
+  }
+
+  return 'Use a tool that handles this format directly.';
 }

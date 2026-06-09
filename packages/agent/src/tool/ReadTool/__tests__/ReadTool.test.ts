@@ -173,6 +173,14 @@ describe('ReadTool document mode (NodeFileParser)', () => {
     expect(result.result).toContain('unsupported binary format');
   });
 
+  it('points .xlsx files at the xlsx skill', async () => {
+    const f = join(tmpDir, 'grades.xlsx');
+    writeFileSync(f, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const result = await tool.execute({ file_path: f });
+    expect(result.error).toBe(true);
+    expect(result.result).toContain('`xlsx` skill');
+  });
+
   it('accepts .md via text mode path', async () => {
     const f = join(tmpDir, 'doc.md');
     writeFileSync(f, '# heading\n\nbody');
