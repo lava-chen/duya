@@ -20,7 +20,13 @@ export function FileAttachmentCard({
   const ext = name.split('.').pop()?.toUpperCase() || 'FILE';
   const isPdf = ext === 'PDF';
   const isImage = ['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'BMP', 'SVG'].includes(ext);
-  const hasThumbnail = !!thumbnail;
+  // Pasting images from the clipboard yields a File with no Electron file path,
+  // so the hook falls back to storing a data URL on `url` rather than `displayUrl`.
+  // Accept any in-memory data URL as a preview source.
+  const previewSrc =
+    thumbnail
+    || (url && url.startsWith('data:image/') ? url : undefined);
+  const hasThumbnail = !!previewSrc;
   const isClickable = !!onClick;
 
   const cardBorderStyle = {
@@ -48,7 +54,7 @@ export function FileAttachmentCard({
           </button>
         )}
         <img
-          src={thumbnail}
+          src={previewSrc}
           alt={name}
           className="w-full h-full object-cover"
           loading="lazy"
@@ -78,7 +84,7 @@ export function FileAttachmentCard({
           </button>
         )}
         <img
-          src={thumbnail}
+          src={previewSrc}
           alt={name}
           className="w-full h-full object-cover"
           loading="lazy"
