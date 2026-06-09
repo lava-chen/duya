@@ -44,6 +44,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build workspace packages
+        # The agent / gateway packages import @duya/cli/contract, which
+        # resolves through packages/cli/package.json exports to
+        # packages/cli/dist/contract/index.d.ts. A clean checkout has no
+        # dist, so tsc and esbuild both fail until the cli is built.
+        run: npm run build:cli && npm run build:agent && npm run build:gateway
+
       - name: Build application
         env:
           # Vite on macOS arm64 runners OOMs at the default ~2 GB V8 heap
