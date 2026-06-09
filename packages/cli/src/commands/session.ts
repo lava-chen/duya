@@ -19,6 +19,16 @@ interface ListSessionItem {
   title: string;
   updatedAt: number;
   messageCount: number;
+  /**
+   * Present only when the session was matched by message content rather
+   * than title. Up to 3 snippet hits, each centered on the search term.
+   */
+  matches?: Array<{
+    messageId: string;
+    role: string;
+    msgType: string;
+    preview: string;
+  }>;
 }
 
 interface ShowSessionItem {
@@ -128,6 +138,15 @@ async function showSession(id: string, format: OutputFormat): Promise<number> {
 import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 
+function renderSearchMatch(s: ListSessionItem): string[] {
+  if (!s.matches || s.matches.length === 0) return [];
+  const lines: string[] = [];
+  for (const m of s.matches) {
+    lines.push(`    → ${m.role}: ${m.preview}`);
+  }
+  return lines;
+}
+
 async function searchSessions(q: string, format: OutputFormat, limit: number, offset: number): Promise<number> {
   try {
     const client = await CliApiClient.connect();
@@ -136,10 +155,16 @@ async function searchSessions(q: string, format: OutputFormat, limit: number, of
     );
     if (format === 'json') {
       process.stdout.write(renderJson(body) + '\n');
-    } else {
-      for (const s of body.sessions) {
-        process.stdout.write(`${s.id}\t${s.title}\t${s.messageCount}\n`);
-      }
+      return 0;
+    }
+    if (body.sessions.length === 0) {
+      process.stdout.write('No matching sessions.\n');
+      return 0;
+    }
+    for (const s of body.sessions) {
+      process.stdout.write(`${s.id}\t${s.title}\t${s.messageCount}\n`);
+      const matchLines = renderSearchMatch(s);
+      for (const line of matchLines) process.stdout.write(line + '\n');
     }
     return 0;
   } catch (err) {
