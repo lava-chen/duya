@@ -28,6 +28,11 @@ import type { StreamChunk, BufferConfig } from './stream-types.js'
 import { classifyTool } from './orchestration/classify.js'
 import { ToolBatch, BATCH_STRATEGY } from './orchestration/types.js'
 import { createChildAbortController } from '../abort/index.js'
+import {
+  analyzeShellFailure,
+  resolveShellExecutionPlan,
+  type ShellExecutionPlan,
+} from '../utils/shell/intelligence.js'
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -289,36 +294,117 @@ function summarizeInputForLog(input: unknown): string {
   }
 }
 
-function normalizeWorkerInput(
+function isShellCommandToolName(toolName: string): boolean {
+  const normalized = toolName.toLowerCase()
+  return normalized === 'bash' || normalized === 'powershell'
+}
+
+export function normalizeWorkerInput(
   toolName: string,
   input: Record<string, unknown>,
 ): {
   input: Record<string, unknown>
   normalizationNote?: string
 } {
-  if (toolName.toLowerCase() !== 'bash') {
+  if (!isShellCommandToolName(toolName)) {
     return { input }
+  }
+
+  const normalizeBackgroundAlias = (nextInput: Record<string, unknown>) => {
+    if (
+      nextInput.run_in_background === true &&
+      nextInput.background === undefined
+    ) {
+      return {
+        input: { ...nextInput, background: true },
+        note: 'normalized run_in_background -> background',
+      }
+    }
+    return { input: nextInput }
   }
 
   if (typeof input.command === 'string' && input.command.trim().length > 0) {
-    return { input }
+    const normalized = normalizeBackgroundAlias(input)
+    return {
+      input: normalized.input,
+      normalizationNote: normalized.note,
+    }
   }
 
   if (typeof input.cmd === 'string' && input.cmd.trim().length > 0) {
+    const normalized = normalizeBackgroundAlias({ ...input, command: input.cmd })
     return {
-      input: { ...input, command: input.cmd },
-      normalizationNote: 'normalized cmd -> command',
+      input: normalized.input,
+      normalizationNote: [
+        'normalized cmd -> command',
+        normalized.note,
+      ].filter(Boolean).join('; '),
     }
   }
 
   if (typeof input.script === 'string' && input.script.trim().length > 0) {
+    const normalized = normalizeBackgroundAlias({ ...input, command: input.script })
     return {
-      input: { ...input, command: input.script },
-      normalizationNote: 'normalized script -> command',
+      input: normalized.input,
+      normalizationNote: [
+        'normalized script -> command',
+        normalized.note,
+      ].filter(Boolean).join('; '),
     }
   }
 
   return { input }
+}
+
+function stringifyWorkerOutput(result: unknown): string {
+  if (typeof result === 'string') return result.trim()
+  if (result === undefined || result === null) return ''
+  try {
+    return JSON.stringify(result, null, 2)
+  } catch {
+    return String(result)
+  }
+}
+
+function escapeToolUseErrorText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+export function formatWorkerFailureContent(result: {
+  error?: string
+  result?: unknown
+  exitCode?: number
+  hints?: string[]
+}): string {
+  const summaryParts = [
+    result.error || 'Worker execution failed',
+    typeof result.exitCode === 'number' ? `exitCode=${result.exitCode}` : undefined,
+  ].filter(Boolean)
+
+  const summary = summaryParts.join(' ')
+  const output = stringifyWorkerOutput(result.result)
+
+  if (!output) {
+    return [
+      `<tool_use_error>${escapeToolUseErrorText(summary)}</tool_use_error>`,
+      result.hints && result.hints.length > 0
+        ? `Hints:\n- ${result.hints.join('\n- ')}`
+        : undefined,
+    ].filter(Boolean).join('\n\n')
+  }
+
+  return [
+    `<tool_use_error>${escapeToolUseErrorText(summary)}</tool_use_error>`,
+    '',
+    'Command output:',
+    output,
+    result.hints && result.hints.length > 0
+      ? `Hints:\n- ${result.hints.join('\n- ')}`
+      : undefined,
+  ].join('\n')
 }
 
 // ============================================================================
@@ -402,7 +488,7 @@ export class StreamingToolExecutor {
       enableRetry: config?.enableRetry ?? true,
       maxOutputSizeBytes: config?.maxOutputSizeBytes ?? 5 * 1024 * 1024, // 5MB default
       memoryWarningThresholdMB: config?.memoryWarningThresholdMB ?? 500,
-      workerTools: config?.workerTools ?? ['bash'],
+      workerTools: config?.workerTools ?? ['bash', 'powershell'],
       workerThresholdMs: config?.workerThresholdMs ?? 5000,
     }
 
@@ -688,7 +774,7 @@ export class StreamingToolExecutor {
       })
     }
 
-    if (tool.block.name.toLowerCase() === 'bash' && !commandPreview) {
+    if (isShellCommandToolName(tool.block.name) && !commandPreview) {
       const inputKeys = Object.keys(normalizedInput)
       console.error('[StreamingToolExecutor] executeInWorker:missing-command', {
         toolId: tool.id,
@@ -699,17 +785,51 @@ export class StreamingToolExecutor {
       messages.push(
         createErrorMessage(
           tool.id,
-          `<tool_use_error>Invalid bash input: missing required field "command". input keys: ${inputKeys.join(', ') || '(none)'}</tool_use_error>`,
+          `<tool_use_error>Invalid ${tool.block.name} input: missing required field "command". input keys: ${inputKeys.join(', ') || '(none)'}</tool_use_error>`,
         ),
       )
       return messages
     }
 
+    const executionPlan = isShellCommandToolName(tool.block.name)
+      ? resolveShellExecutionPlan(
+          tool.block.name.toLowerCase() === 'powershell' ? 'powershell' : 'bash',
+          String(normalizedInput.command ?? ''),
+        )
+      : null
+
+    if (isShellCommandToolName(tool.block.name) && (!executionPlan || !executionPlan.providerKind)) {
+      messages.push(
+        createErrorMessage(
+          tool.id,
+          `<tool_use_error>No compatible shell is available for ${tool.block.name}</tool_use_error>`,
+        ),
+      )
+      return messages
+    }
+
+    const effectiveToolName = executionPlan?.providerKind ?? tool.block.name
+    const effectiveInput = executionPlan
+      ? {
+          ...normalizedInput,
+          command: executionPlan.preparedCommand,
+        }
+      : normalizedInput
+
+    if (executionPlan?.reason) {
+      console.warn('[StreamingToolExecutor] executeInWorker:shell-reroute', {
+        toolId: tool.id,
+        requestedTool: tool.block.name,
+        effectiveTool: effectiveToolName,
+        reason: executionPlan.reason,
+      })
+    }
+
     // Use extended task with onOutput callback for stream buffering
     const task: WorkerTaskExtended = {
       id: tool.id,
-      toolName: tool.block.name,
-      input: normalizedInput,
+      toolName: effectiveToolName,
+      input: effectiveInput,
       workingDirectory: this.toolUseContext.options.workingDirectory,
       abortController: toolAbortController,
       onOutput: (stream, data) => {
@@ -718,7 +838,7 @@ export class StreamingToolExecutor {
           this.streamBuffer.addOutput(tool.id, stream, data)
         }
       },
-      timeoutMs: typeof normalizedInput.timeout === 'number' ? normalizedInput.timeout : undefined,
+      timeoutMs: typeof effectiveInput.timeout === 'number' ? effectiveInput.timeout : undefined,
     }
 
     tool.status = 'streaming'
@@ -732,12 +852,79 @@ export class StreamingToolExecutor {
     try {
       console.log('[StreamingToolExecutor] executeInWorker:start', {
         toolId: tool.id,
-        toolName: tool.block.name,
+        toolName: effectiveToolName,
         hasCommand: !!commandPreview,
-        commandPreview,
-        inputKeys: Object.keys(normalizedInput),
+        commandPreview: String(effectiveInput.command ?? commandPreview),
+        inputKeys: Object.keys(effectiveInput),
       })
-      const result = await this.workerPool!.executeTask(task)
+      let result = await this.workerPool!.executeTask(task)
+
+      if (!result.success && executionPlan?.providerKind) {
+        const failureAnalysis = analyzeShellFailure({
+          providerKind: executionPlan.providerKind,
+          command: String(effectiveInput.command ?? ''),
+          error: result.error,
+          output: stringifyWorkerOutput(result.result),
+          exitCode: result.exitCode,
+        })
+
+        if (failureAnalysis.retry) {
+          console.warn('[StreamingToolExecutor] executeInWorker:shell-retry', {
+            toolId: tool.id,
+            fromTool: effectiveToolName,
+            toTool: failureAnalysis.retry.providerKind,
+            reason: failureAnalysis.retry.reason,
+          })
+
+          this.updateProgress(tool, {
+            status: 'streaming',
+            stage: 'executing_command',
+            currentOperation: failureAnalysis.retry.reason,
+            percentComplete: 35,
+          })
+
+          const retryTask: WorkerTaskExtended = {
+            ...task,
+            toolName: failureAnalysis.retry.providerKind,
+            input: {
+              ...effectiveInput,
+              command: failureAnalysis.retry.command,
+            },
+          }
+
+          result = await this.workerPool!.executeTask(retryTask)
+
+          if (!result.success) {
+            messages.push(
+              createErrorMessage(
+                tool.id,
+                formatWorkerFailureContent({
+                  error: result.error,
+                  result: result.result,
+                  exitCode: result.exitCode,
+                  hints: failureAnalysis.hints,
+                }),
+              ),
+            )
+            tool.stats.duration = Date.now() - startTime
+            return messages
+          }
+        } else if (failureAnalysis.hints.length > 0) {
+          messages.push(
+            createErrorMessage(
+              tool.id,
+              formatWorkerFailureContent({
+                error: result.error,
+                result: result.result,
+                exitCode: result.exitCode,
+                hints: failureAnalysis.hints,
+              }),
+            ),
+          )
+          tool.stats.duration = Date.now() - startTime
+          return messages
+        }
+      }
 
       // Flush remaining buffered output
       this.streamBuffer.flush(tool.id)
@@ -754,9 +941,12 @@ export class StreamingToolExecutor {
       if (result.success) {
         const content = result.backgrounded
           ? `${result.result}\n\nBackground task info:\n- Task ID: ${tool.id}\n- PID: ${result.pid}\n- Output file: ${result.outputFile || 'N/A'}\n- Use task_output("${tool.id}") to check progress later.`
-          : (typeof result.result === 'string'
-            ? result.result
-            : JSON.stringify(result.result));
+          : [
+              executionPlan?.reason ? `[Shell] ${executionPlan.reason}` : undefined,
+              typeof result.result === 'string'
+                ? result.result
+                : JSON.stringify(result.result),
+            ].filter(Boolean).join('\n\n');
 
         messages.push({
           role: 'tool' as const,
@@ -778,7 +968,11 @@ export class StreamingToolExecutor {
         messages.push(
           createErrorMessage(
             tool.id,
-            `<tool_use_error>${result.error || 'Worker execution failed'}</tool_use_error>`,
+            formatWorkerFailureContent({
+              error: result.error,
+              result: result.result,
+              exitCode: result.exitCode,
+            }),
           ),
         )
       }
@@ -1096,7 +1290,7 @@ export class StreamingToolExecutor {
           ),
         )
 
-        if (tool.block.name.toLowerCase() === 'bash') {
+        if (isShellCommandToolName(tool.block.name)) {
           this.hasErrored = true
           this.erroredToolDescription = this.getToolDescription(tool)
           this.siblingAbortController.abort('sibling_error')
@@ -1308,7 +1502,7 @@ export class StreamingToolExecutor {
         ),
       )
 
-      if (tool.block.name.toLowerCase() === 'bash') {
+      if (isShellCommandToolName(tool.block.name)) {
         this.hasErrored = true
         this.erroredToolDescription = this.getToolDescription(tool)
         this.siblingAbortController.abort('sibling_error')

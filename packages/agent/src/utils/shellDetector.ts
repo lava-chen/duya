@@ -19,6 +19,8 @@ export interface ShellInfo {
   execArg: string;
 }
 
+export type ShellFamilyPreference = ShellInfo['family'] | 'auto';
+
 const COMMON_UNIX_SHELLS = [
   'C:\\Program Files\\Git\\bin\\bash.exe',
   'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
@@ -137,6 +139,82 @@ function detectWindowsShell(): ShellInfo {
   };
 }
 
+function detectWindowsShellForFamily(family: Exclude<ShellFamilyPreference, 'auto'>): ShellInfo | null {
+  if (family === 'unix') {
+    for (const shellPath of COMMON_UNIX_SHELLS) {
+      if (tryShell(shellPath)) {
+        return {
+          name: 'bash (Git Bash)',
+          path: shellPath,
+          family: 'unix',
+          supportsUnixCommands: true,
+          execArg: '-c',
+        };
+      }
+    }
+
+    const bashInPath = findInPath('bash');
+    if (bashInPath) {
+      return {
+        name: 'bash',
+        path: bashInPath,
+        family: 'unix',
+        supportsUnixCommands: true,
+        execArg: '-c',
+      };
+    }
+
+    return null;
+  }
+
+  if (family === 'powershell') {
+    for (const pwshPath of COMMON_PWSH_PATHS) {
+      if (tryShell(pwshPath)) {
+        return {
+          name: 'pwsh (PowerShell 7)',
+          path: pwshPath,
+          family: 'powershell',
+          supportsUnixCommands: false,
+          execArg: '-Command',
+        };
+      }
+    }
+
+    const pwshInPath = findInPath('pwsh');
+    if (pwshInPath) {
+      return {
+        name: 'pwsh (PowerShell 7)',
+        path: pwshInPath,
+        family: 'powershell',
+        supportsUnixCommands: false,
+        execArg: '-Command',
+      };
+    }
+
+    const psInPath = findInPath('powershell');
+    if (psInPath) {
+      return {
+        name: 'powershell (Windows PowerShell)',
+        path: psInPath,
+        family: 'powershell',
+        supportsUnixCommands: false,
+        execArg: '-Command',
+      };
+    }
+
+    return null;
+  }
+
+  const cmdPath = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
+  return {
+    name: 'cmd',
+    path: cmdPath,
+    family: 'cmd',
+    supportsUnixCommands: false,
+    execArg: '/c',
+  };
+}
+
 /**
  * Detect the best available shell on Unix-like systems
  */
@@ -178,6 +256,26 @@ function detectUnixShell(): ShellInfo {
   };
 }
 
+function detectUnixShellForFamily(family: Exclude<ShellFamilyPreference, 'auto'>): ShellInfo | null {
+  if (family === 'unix') {
+    return detectUnixShell();
+  }
+
+  if (family === 'powershell') {
+    const pwshInPath = findInPath('pwsh');
+    if (!pwshInPath) return null;
+    return {
+      name: 'pwsh (PowerShell 7)',
+      path: pwshInPath,
+      family: 'powershell',
+      supportsUnixCommands: false,
+      execArg: '-Command',
+    };
+  }
+
+  return null;
+}
+
 let cachedShellInfo: ShellInfo | null = null;
 
 /**
@@ -198,6 +296,20 @@ export function detectShell(): ShellInfo {
   return cachedShellInfo;
 }
 
+export function detectShellForFamily(
+  family: ShellFamilyPreference,
+): ShellInfo | null {
+  if (family === 'auto') {
+    return detectShell();
+  }
+
+  if (process.platform === 'win32') {
+    return detectWindowsShellForFamily(family);
+  }
+
+  return detectUnixShellForFamily(family);
+}
+
 /**
  * Get shell info for prompt display
  */
@@ -212,6 +324,12 @@ export function getShellForPrompt(): string {
  */
 export function hasUnixCompatibleShell(): boolean {
   return detectShell().supportsUnixCommands;
+}
+
+export function hasShellFamily(
+  family: Exclude<ShellFamilyPreference, 'auto'>,
+): boolean {
+  return detectShellForFamily(family) !== null;
 }
 
 /**

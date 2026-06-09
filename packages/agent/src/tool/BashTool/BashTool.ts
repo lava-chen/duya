@@ -18,7 +18,12 @@ import type {
 } from '../types.js';
 import { z } from 'zod';
 import { SandboxManager, getActiveProvider, executeIsolated, wrapCommand } from '../../sandbox/index.js';
-import { getShellExecConfig, detectShell } from '../../utils/shellDetector.js';
+import { resolveShellProvider, type ShellProviderKind } from '../../utils/shell/providers.js';
+import {
+  analyzeShellFailure,
+  normalizeShellCommandForExecution,
+  resolveShellExecutionPlan,
+} from '../../utils/shell/intelligence.js';
 import {
   tryParseShellCommand,
   hasMalformedTokens,
@@ -29,6 +34,7 @@ import {
   extractOutputRedirections,
   analyzeCommandComplexity,
 } from '../../utils/bash/commands.js';
+import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
 
 type Severity = 'low' | 'medium' | 'high' | 'critical';
 
@@ -64,12 +70,6 @@ function getWindowsEncodingEnv(): Record<string, string> {
  *
  * Adapted from claude-code-haha.
  */
-const NUL_REDIRECT_REGEX = /(\d?&?>+\s*)[Nn][Uu][Ll](?=\s|$|[|&;)\n])/g;
-
-function rewriteWindowsNullRedirect(command: string): string {
-  return command.replace(NUL_REDIRECT_REGEX, '$1/dev/null');
-}
-
 interface DangerousPattern {
   pattern: RegExp;
   reason: string;
@@ -479,8 +479,29 @@ export interface BashToolInput {
   command: string;
   timeout?: number;
   description?: string;
+  run_in_background?: boolean;
   background?: boolean;
 }
+
+export interface ShellCommandToolConfig {
+  name: string;
+  description: string;
+  providerKind: ShellProviderKind;
+  commandLabel: string;
+  securityCheck?: (command: string) => SecurityCheckResult;
+  readOnlyCheck?: (command: string) => boolean;
+  normalizeCommandForExecution?: (command: string) => string;
+}
+
+const DEFAULT_BASH_TOOL_CONFIG: ShellCommandToolConfig = {
+  name: 'bash',
+  description: 'Execute a bash command. Returns the stdout and stderr output.',
+  providerKind: 'bash',
+  commandLabel: 'bash command',
+  securityCheck: checkSecurity,
+  readOnlyCheck: isReadOnlyCommand,
+  normalizeCommandForExecution: (command) => normalizeShellCommandForExecution('bash', command),
+};
 
 /**
  * Validates BashTool input
@@ -504,8 +525,8 @@ export function validateBashInput(input: unknown): { valid: true; data: BashTool
     if (typeof obj.timeout !== 'number' || obj.timeout <= 0) {
       return { valid: false, error: 'timeout must be a positive number' };
     }
-    if (obj.timeout > 300000) {
-      return { valid: false, error: 'timeout cannot exceed 300000ms (5 minutes)' };
+    if (obj.timeout > BASH_MAX_TIMEOUT_MS) {
+      return { valid: false, error: `timeout cannot exceed ${BASH_MAX_TIMEOUT_MS}ms (${BASH_MAX_TIMEOUT_MS / 60000} minutes)` };
     }
   }
 
@@ -513,9 +534,16 @@ export function validateBashInput(input: unknown): { valid: true; data: BashTool
     return { valid: false, error: 'description must be a string' };
   }
 
+  if (obj.run_in_background !== undefined && typeof obj.run_in_background !== 'boolean') {
+    return { valid: false, error: 'run_in_background must be a boolean' };
+  }
+
   if (obj.background !== undefined && typeof obj.background !== 'boolean') {
     return { valid: false, error: 'background must be a boolean' };
   }
+
+  const runInBackground = obj.run_in_background as boolean | undefined;
+  const legacyBackground = obj.background as boolean | undefined;
 
   return {
     valid: true,
@@ -523,7 +551,8 @@ export function validateBashInput(input: unknown): { valid: true; data: BashTool
       command: obj.command as string,
       timeout: obj.timeout as number | undefined,
       description: obj.description as string | undefined,
-      background: obj.background as boolean | undefined,
+      run_in_background: runInBackground,
+      background: runInBackground ?? legacyBackground,
     },
   };
 }
@@ -705,7 +734,7 @@ export function isReadOnlyCommand(command: string): boolean {
 export type PermissionDecision = 'allow' | 'deny' | 'ask';
 
 export interface PermissionRequest {
-  tool: 'bash';
+  tool: 'bash' | 'powershell';
   command: string;
   reason: string;
   warnings: SecurityWarning[];
@@ -734,41 +763,71 @@ export class AutoPermissionChecker implements PermissionChecker {
   }
 }
 
+function getShellUnavailableMessage(providerKind: ShellProviderKind): string {
+  if (providerKind === 'bash') {
+    return process.platform === 'win32'
+      ? 'Bash tool requires a Unix-compatible shell such as Git Bash, MSYS2, or Cygwin. No compatible shell was detected.'
+      : 'Bash tool requires a Unix-compatible shell, but none was detected.';
+  }
+
+  return process.platform === 'win32'
+    ? 'PowerShell tool requires PowerShell (pwsh or Windows PowerShell), but none was detected.'
+    : 'PowerShell tool requires pwsh, but it is not installed or not in PATH.';
+}
+
 // ============================================================
 // Tool Implementation
 // ============================================================
 
 export class BashTool extends BaseTool implements ToolExecutor {
-  readonly name = 'bash';
-  readonly description = 'Execute a bash command. Returns the stdout and stderr output.';
-  readonly input_schema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      command: {
-        type: 'string',
-        description: 'The bash command to execute',
+  constructor(
+    private readonly config: ShellCommandToolConfig = DEFAULT_BASH_TOOL_CONFIG,
+  ) {
+    super();
+  }
+
+  get name(): string {
+    return this.config.name;
+  }
+
+  get description(): string {
+    return this.config.description;
+  }
+
+  get input_schema(): Record<string, unknown> {
+    return {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: `The ${this.config.commandLabel} to execute`,
+        },
+        timeout: {
+          type: 'number',
+          description: `Timeout in milliseconds (default: ${BASH_DEFAULT_TIMEOUT_MS}, max: ${BASH_MAX_TIMEOUT_MS})`,
+        },
+        description: {
+          type: 'string',
+          description: 'Optional description for the command',
+        },
+        run_in_background: {
+          type: 'boolean',
+          description: 'Whether to run the command in the background',
+        },
+        background: {
+          type: 'boolean',
+          description: 'Deprecated alias for run_in_background. Prefer run_in_background.',
+        },
       },
-      timeout: {
-        type: 'number',
-        description: 'Timeout in milliseconds (default: 1200000, max: 3600000)',
-      },
-      description: {
-        type: 'string',
-        description: 'Optional description for the command',
-      },
-      background: {
-        type: 'boolean',
-        description: 'Whether to run the command in background',
-      },
-    },
-    required: ['command'],
-  };
+      required: ['command'],
+    };
+  }
 
   get interruptBehavior(): ToolInterruptBehavior {
     return 'cancel';
   }
 
-  private defaultTimeout = 1200000; // 20min default
+  private defaultTimeout = BASH_DEFAULT_TIMEOUT_MS;
   private permissionChecker: PermissionChecker = new AutoPermissionChecker();
   private killed = false;
 
@@ -798,11 +857,11 @@ export class BashTool extends BaseTool implements ToolExecutor {
     const { command, timeout, description } = validation.data;
     const resolvedTimeout = timeout ?? this.defaultTimeout;
 
-    const securityResult = checkSecurity(command);
-    const isReadOnly = isReadOnlyCommand(command);
+    const securityResult = (this.config.securityCheck ?? checkSecurity)(command);
+    const isReadOnly = (this.config.readOnlyCheck ?? isReadOnlyCommand)(command);
 
     const permissionRequest: PermissionRequest = {
-      tool: 'bash',
+      tool: this.config.providerKind,
       command,
       reason: description || 'User requested command execution',
       warnings: securityResult.warnings,
@@ -840,19 +899,31 @@ export class BashTool extends BaseTool implements ToolExecutor {
       };
     }
 
-    // Detect shell before try block so it's available in catch
-    const shellConfig = getShellExecConfig();
-    const shellInfo = detectShell();
+    const executionPlan = resolveShellExecutionPlan(this.config.providerKind, command);
+    if (!executionPlan.provider || !executionPlan.providerKind) {
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        result: getShellUnavailableMessage(this.config.providerKind),
+        error: true,
+      };
+    }
+
+    const shellProvider = executionPlan.provider;
+    const shellInfo = shellProvider.shellInfo;
     const cwd = workingDirectory || process.cwd();
 
-    // Normalize command: rewrite Windows CMD-style `>nul` to `/dev/null`
-    const normalizedCommand = rewriteWindowsNullRedirect(command);
+    const normalizedCommand = executionPlan.reroutedFrom
+      ? normalizeShellCommandForExecution(executionPlan.providerKind, command)
+      : (this.config.normalizeCommandForExecution
+        ? this.config.normalizeCommandForExecution(command)
+        : normalizeShellCommandForExecution(executionPlan.providerKind, command));
 
     try {
       const provider = await getActiveProvider();
 
       // Docker execution path — full isolation
-      if (provider === 'docker') {
+      if (provider === 'docker' && shellInfo.family === 'unix') {
         try {
           const sandboxResult = await executeIsolated(normalizedCommand, cwd, {
             filesystem: {
@@ -900,7 +971,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
       }
 
       // Non-Docker path: wrap command (bubblewrap or none) then execa
-      let finalCommand = await wrapCommand(normalizedCommand, cwd);
+      const finalCommand = await wrapCommand(normalizedCommand, cwd);
 
       const sanitizedEnv = {
         ...process.env,
@@ -913,7 +984,6 @@ export class BashTool extends BaseTool implements ToolExecutor {
 
       const options: Options = {
         timeout: resolvedTimeout,
-        shell: shellConfig.shell,
         env: sanitizedEnv,
         preferLocal: true,
         cwd: workingDirectory,
@@ -924,7 +994,11 @@ export class BashTool extends BaseTool implements ToolExecutor {
         w => w.severity !== 'critical' && w.severity !== 'high'
       );
 
-      const result = await execa(finalCommand, [], options);
+      const result = await execa(
+        shellInfo.path,
+        shellProvider.buildArgs(finalCommand),
+        options,
+      );
 
       let output = [result.stdout, result.stderr]
         .filter(Boolean)
@@ -934,6 +1008,10 @@ export class BashTool extends BaseTool implements ToolExecutor {
       if (nonCriticalWarnings.length > 0) {
         const warningMsg = `[Warning] ${nonCriticalWarnings.map(w => w.message).join('; ')}`;
         output = `${warningMsg}\n\n${output}`;
+      }
+
+      if (executionPlan.reason) {
+        output = `[Shell] ${executionPlan.reason}\n\n${output}`;
       }
 
       return {
@@ -984,6 +1062,13 @@ export class BashTool extends BaseTool implements ToolExecutor {
 
         // Provide helpful error context for Windows users
         let finalOutput = output || error.message;
+        const failureAnalysis = analyzeShellFailure({
+          providerKind: executionPlan.providerKind,
+          command: normalizedCommand,
+          error: error.message,
+          output,
+          exitCode: error.exitCode,
+        });
         if (process.platform === 'win32' && error.exitCode !== 0) {
           const isCommandNotFound = output.includes('is not recognized') ||
             output.includes('not found') ||
@@ -996,6 +1081,10 @@ export class BashTool extends BaseTool implements ToolExecutor {
                 `Consider installing Git Bash for Windows to enable Unix command compatibility.`;
             }
           }
+        }
+
+        if (failureAnalysis.hints.length > 0) {
+          finalOutput = `${finalOutput}\n\nHints:\n- ${failureAnalysis.hints.join('\n- ')}`;
         }
 
         return {
@@ -1048,8 +1137,8 @@ export class BashTool extends BaseTool implements ToolExecutor {
     }
 
     const { command } = validated.data;
-    const securityResult = checkSecurity(command);
-    const isReadOnly = isReadOnlyCommand(command);
+    const securityResult = (this.config.securityCheck ?? checkSecurity)(command);
+    const isReadOnly = (this.config.readOnlyCheck ?? isReadOnlyCommand)(command);
 
     if (!securityResult.safe || securityResult.requiresApproval) {
       return {
@@ -1112,9 +1201,9 @@ export class BashTool extends BaseTool implements ToolExecutor {
       const cmd = obj.command as string | undefined;
       if (cmd) {
         const preview = cmd.length > 50 ? cmd.slice(0, 50) + '...' : cmd;
-        return `bash: ${preview}`;
+        return `${this.name}: ${preview}`;
       }
     }
-    return 'bash';
+    return this.name;
   }
 }
