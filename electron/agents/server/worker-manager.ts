@@ -132,24 +132,60 @@ export class WorkerManager {
     this.killWorkerImpl(sessionId, child);
   }
 
+  interruptWorker(sessionId: string, graceMs = 2000): boolean {
+    const child = this.workers.get(sessionId);
+    if (!child) return false;
+
+    const sent = this.sendCommand(sessionId, { type: 'chat:interrupt', sessionId });
+    workerLogger.info('Worker interrupt requested', {
+      sessionId,
+      pid: child.pid,
+      sent,
+      graceMs,
+    });
+
+    const timeout = setTimeout(() => {
+      if (this.workers.get(sessionId) === child) {
+        workerLogger.warn('Worker still present after interrupt grace period, terminating', {
+          sessionId,
+          pid: child.pid,
+        });
+        this.killWorkerImpl(sessionId, child);
+      }
+    }, graceMs);
+
+    child.once('exit', () => {
+      clearTimeout(timeout);
+    });
+
+    return true;
+  }
+
   // Internal kill that accepts the child directly, used by spawnWorker during replace
   private killWorkerImpl(sessionId: string, child: ChildProcess): void {
     workerLogger.info('Killing worker', { sessionId, pid: child.pid });
+    let exited = false;
+    const forceKillTimeout = setTimeout(() => {
+      if (!exited) {
+        workerLogger.warn('Worker did not exit after termination signal, force killing', {
+          sessionId,
+          pid: child.pid,
+        });
+        child.kill('SIGKILL');
+      }
+    }, 3000);
+
+    child.once('exit', () => {
+      exited = true;
+      clearTimeout(forceKillTimeout);
+    });
 
     if (process.platform === 'win32') {
       child.kill();
     } else {
       child.kill('SIGTERM');
 
-      const timeout = setTimeout(() => {
-        if (!child.killed) {
-          workerLogger.warn('Worker did not exit gracefully, force killing', { sessionId, pid: child.pid });
-          child.kill('SIGKILL');
-        }
-      }, 3000);
-
       child.on('exit', () => {
-        clearTimeout(timeout);
         if (this.workers.get(sessionId) === child) {
           this.workers.delete(sessionId);
           workerLogger.info('Worker terminated', { sessionId });

@@ -500,9 +500,13 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
         if (p) {
           clearTimeout(p.timer);
           pending.delete(msg.id ?? '');
-          // Track session→tabId from navigate responses
+          // Track session→tabId for any successful command that returns a tabId
+          // (navigate, tabs_select, tabs_new). Without this, daemon-side
+          // sessionTabMap would still point at the original tab after the
+          // agent switched tabs, causing validateTabOwnership to reject
+          // subsequent commands with "Tab X does not belong to session Y".
           const cmdSessionId = commandSessionMap.get(msg.id ?? '');
-          if (cmdSessionId && msg.ok && msg.data?.tabId) {
+          if (cmdSessionId && msg.ok && typeof msg.data?.tabId !== 'undefined') {
             sessionTabMap.set(cmdSessionId, msg.data.tabId);
           }
           commandSessionMap.delete(msg.id ?? '');
