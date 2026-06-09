@@ -243,7 +243,11 @@ export {
   resetDefaultSelfImprover,
 } from './self-improver/SelfImprover.js';
 export type { SkillReviewResult } from './self-improver/SelfImprover.js';
-import { SelfImprover } from './self-improver/SelfImprover.js';
+
+// Side-effect import so the class is in scope for the rest of this
+// module (e.g. `new SelfImprover(...)` in the constructor and
+// `getDefaultSelfImprover()` in the integration wiring below).
+import { SelfImprover, getDefaultSelfImprover } from './self-improver/SelfImprover.js';
 
 // Agent Profile exports
 export type {
@@ -568,8 +572,20 @@ export class duyaAgent {
     this.permissionMode = options.permissionMode || 'default';
     this.hasPermissionsToUseTool = createHasPermissionsToUseTool();
 
-    // Initialize self-improvement system
-    this.selfImprover = new SelfImprover(options.skillNudgeInterval);
+    // Initialize self-improvement system.
+    // Use the process-wide singleton when no explicit interval is
+    // given — this is what lets the counter persist across
+    // duyaAgent instances (each user query creates a fresh
+    // instance, so without the singleton the "every N turns"
+    // trigger would never see more than one query's worth of
+    // accumulation).
+    this.selfImprover = options.skillNudgeInterval !== undefined
+      ? new SelfImprover(options.skillNudgeInterval)
+      : getDefaultSelfImprover();
+    // Fire-and-forget: load any persisted counters from disk so
+    // the first turn of a new query sees the accumulated count
+    // from previous queries. Errors are absorbed inside `init`.
+    void this.selfImprover.init();
 
     // Store blocked domains for browser tool
     this.blockedDomains = options.blockedDomains ?? [];
@@ -767,7 +783,15 @@ export class duyaAgent {
       }
       const modeRegistry = createBuiltinRegistry(
         this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
-        { enabledPluginIds, wikiAgentEnabled: options?.wikiAgentEnabled }
+        {
+          enabledPluginIds,
+          wikiAgentEnabled: options?.wikiAgentEnabled,
+          // Pass a closure (not the manager itself) so the resources tool
+          // always sees the latest connection state — `this.mcpManager` can
+          // be replaced at runtime (see `installMCPManager`) and we want
+          // the tool to follow that.
+          mcpManagerProvider: () => this.mcpManager ?? undefined,
+        }
       );
       this.registerMCPTools(modeRegistry);
 
@@ -1023,7 +1047,11 @@ export class duyaAgent {
       }
       registry = createBuiltinRegistry(
         this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
-        { enabledPluginIds, wikiAgentEnabled: options?.wikiAgentEnabled }
+        {
+          enabledPluginIds,
+          wikiAgentEnabled: options?.wikiAgentEnabled,
+          mcpManagerProvider: () => this.mcpManager ?? undefined,
+        }
       );
     }
     const allTools = registry.getAllTools();
@@ -1614,6 +1642,13 @@ export class duyaAgent {
         const validToolNames = new Set(tools.map(t => t.name));
         this.selfImprover.onIterationComplete(validToolNames, toolCallCountThisTurn);
 
+        // Trigger background skill review at the turn boundary
+        // (not just at conversation exit). The check inside is
+        // idempotent: if it doesn't fire, this is a no-op.
+        // We do this BEFORE the max-turns / done checks so the
+        // spawn can race the user-facing done event.
+        yield* this._triggerBackgroundReviewWithEvents(validToolNames);
+
         // Check max turns limit
         if (turnCount >= maxTurns) {
           // Update this.messages BEFORE yielding done event
@@ -1622,7 +1657,7 @@ export class duyaAgent {
           this.sessionInfo.updatedAt = Date.now();
 
           // Trigger background skill review if needed
-          yield* this._triggerBackgroundReviewWithEvents();
+          yield* this._triggerBackgroundReviewWithEvents(validToolNames);
 
           // Trigger background memory review
           const assistantLength = assistantContent
@@ -1644,7 +1679,7 @@ export class duyaAgent {
           this.sessionInfo.updatedAt = Date.now();
 
           // Trigger background skill review if needed
-          yield* this._triggerBackgroundReviewWithEvents();
+          yield* this._triggerBackgroundReviewWithEvents(validToolNames);
 
           // Trigger background memory review
           const assistantLength = assistantContent
@@ -1769,9 +1804,16 @@ export class duyaAgent {
    * Trigger background skill review if the iteration threshold is reached.
    * Fire-and-forget: yields start event immediately, runs review async,
    * and does not block the main conversation's 'done' event.
+   *
+   * `availableToolNames` is forwarded to `shouldReview()` so the
+   * gate can verify `skill_manage` is actually exposed to the LLM
+   * (a hidden-disabled flag at the registry level must NOT spawn
+   * a sub-agent that depends on the tool).
    */
-  private async *_triggerBackgroundReviewWithEvents(): AsyncGenerator<SSEEvent, void, unknown> {
-    if (!this.selfImprover.shouldReview()) {
+  private async *_triggerBackgroundReviewWithEvents(
+    availableToolNames?: Set<string>,
+  ): AsyncGenerator<SSEEvent, void, unknown> {
+    if (!this.selfImprover.shouldReview(availableToolNames)) {
       return;
     }
 
@@ -1946,7 +1988,7 @@ export class duyaAgent {
    */
   getNonMCPModelVisibleToolNames(): Set<string> {
     const builtin = new Set<string>([
-      'bash', 'read', 'write', 'edit', 'glob', 'grep',
+      'bash', 'powershell', 'read', 'write', 'edit', 'glob', 'grep',
       'agent', 'team_create', 'team_delete',
       'task', 'enter_worktree', 'exit_worktree',
       'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
