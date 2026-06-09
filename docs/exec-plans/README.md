@@ -92,6 +92,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [106-node-file-parser-and-read-integration](./active/106-node-file-parser-and-read-integration.md) | Node File Parser & Read 工具集成 — 把 Python sidecar 迁到 Node 内嵌解析,Read 工具升级多模态(PDF/DOCX/PPTX/图片) | P1 | ✅ Complete |
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — 离开回来后自动显示会话摘要 | P1 | Planning |
 | [95-external-agent-import](./active/95-external-agent-import.md) | External Agent Workspace Import — 从 Claude Code / Codex 导入项目上下文、记忆、技能 | P1 | Phase 1 ✅ |
+| [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like 运行时追加指令 (`agent_mailbox` + 9 checkpoint + soft interrupt + claim/lease) — PR1 数据层 / PR2 接入 `before_model_turn` / PR3 final / PR4 permission / PR5 tool guard | P0 | Planning |
 
 ### Canvas V2 Whimsical 风格重设计
 
