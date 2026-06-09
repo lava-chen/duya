@@ -166,6 +166,7 @@ export interface ProviderAPI {
     model: string
     provider: string
     authStyle: string
+    runtimeConfig?: Record<string, unknown>
   } | null>
   // Get unmasked provider config by ID for title generation model resolution
   getConfig: (providerId: string, model: string) => Promise<{
@@ -174,7 +175,52 @@ export interface ProviderAPI {
     model: string
     provider: string
     authStyle: string
+    runtimeConfig?: Record<string, unknown>
   } | null>
+  // Phase 2: new LlmProvider-aware channels. All return masked DTOs
+  // (no apiKey / accessToken). Health/test endpoints return
+  // ProviderHealthStatus; syncModels returns ModelCapability[].
+  listLlm: () => Promise<unknown[]>
+  getLlm: (id: string) => Promise<unknown | null>
+  upsertLlm: (data: Record<string, unknown>) => Promise<{ ok: boolean; provider?: unknown; code?: string; message?: string }>
+  deleteLlm: (id: string) => Promise<boolean>
+  setActiveLlm: (id: string) => Promise<boolean>
+  test: (payload: { providerId: string; presetKey?: string }) => Promise<{
+    providerId: string
+    ok: boolean
+    latencyMs?: number
+    checkedAt: number
+    errorKind?: 'auth' | 'network' | 'rate_limit' | 'invalid_model' | 'invalid_config' | 'unknown'
+    message?: string
+  }>
+  testModel: (payload: { providerId: string; modelId: string }) => Promise<{
+    providerId: string
+    ok: boolean
+    latencyMs?: number
+    checkedAt: number
+    errorKind?: 'auth' | 'network' | 'rate_limit' | 'invalid_model' | 'invalid_config' | 'unknown'
+    message?: string
+  }>
+  syncModels: (payload: { providerId: string; presetKey?: string }) => Promise<{
+    ok: boolean
+    models: Array<{
+      providerId: string
+      modelId: string
+      displayName?: string
+      contextWindow?: number
+      maxOutputTokens?: number
+      supportsToolUse?: boolean
+      supportsVision?: boolean
+      supportsReasoning?: boolean
+      supportsPromptCache?: boolean
+      pricing?: Record<string, unknown>
+      source: 'preset' | 'models-api' | 'user' | 'probe'
+      updatedAt: number
+    }>
+    source: string
+    message?: string
+  }>
+  upsertModelCapability: (capability: Record<string, unknown>) => Promise<{ ok: boolean; capability: Record<string, unknown> }>
 }
 
 export interface OutputStyleAPI {
@@ -523,6 +569,24 @@ export interface LiteratureAPI {
   getCitation: (sourceId: string, style: LiteratureCitationStyle) => Promise<string>
 }
 
+export interface MailboxAPI {
+  send: (params: {
+    sessionId: string;
+    content: string;
+    kind: string;
+    submittedDuringRunId: string;
+    attachments?: unknown[];
+    clientMsgId: string;
+    source?: string;
+    constraintsJson?: string;
+  }) => Promise<unknown>;
+  edit: (id: string, patch: { content?: string; kind?: string }) => Promise<unknown>;
+  cancel: (id: string, reason?: string) => Promise<unknown>;
+  list: (sessionId: string, opts?: { status?: string[]; limit?: number }) => Promise<unknown[]>;
+  listForSession: (sessionId: string) => Promise<unknown[]>;
+  onEvent: (handler: (event: unknown) => void) => () => void;
+}
+
 export interface WikiAPI {
   listAllNodes: () => Promise<unknown[]>
   getNode: (nodePath: string) => Promise<unknown | null>
@@ -793,6 +857,7 @@ export interface ElectronAPI {
   marketplace: MarketplaceAPI
   recap: RecapAPI
   wiki: WikiAPI
+  mailbox: MailboxAPI
   // Agent Server API
   agentServer: {
     getPort: () => Promise<number | null>
@@ -1462,6 +1527,20 @@ const electronAPI: ElectronAPI = {
     getActiveProviderConfig: () => ipcRenderer.invoke('config:provider:getActiveProviderConfig'),
     // Get unmasked provider config by ID for title generation model resolution
     getConfig: (providerId: string, model: string) => ipcRenderer.invoke('config:provider:getConfig', providerId, model),
+    // Phase 2: LlmProvider-aware channels (masked).
+    listLlm: () => ipcRenderer.invoke('provider:listLlm'),
+    getLlm: (id: string) => ipcRenderer.invoke('provider:getLlm', id),
+    upsertLlm: (data: Record<string, unknown>) => ipcRenderer.invoke('provider:upsertLlm', data),
+    deleteLlm: (id: string) => ipcRenderer.invoke('provider:deleteLlm', id),
+    setActiveLlm: (id: string) => ipcRenderer.invoke('provider:setActiveLlm', id),
+    test: (payload: { providerId: string; presetKey?: string }) =>
+      ipcRenderer.invoke('provider:test', payload),
+    testModel: (payload: { providerId: string; modelId: string }) =>
+      ipcRenderer.invoke('provider:testModel', payload),
+    syncModels: (payload: { providerId: string; presetKey?: string }) =>
+      ipcRenderer.invoke('provider:syncModels', payload),
+    upsertModelCapability: (capability: Record<string, unknown>) =>
+      ipcRenderer.invoke('provider:upsertModelCapability', capability),
   },
   outputStyle: {
     list: () => ipcRenderer.invoke('config:style:getAll'),
@@ -1614,6 +1693,24 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('wiki:activity', handler);
       return () => {
         ipcRenderer.removeListener('wiki:activity', handler);
+      };
+    },
+  },
+  // Mailbox API (Plan 202 — PR1)
+  mailbox: {
+    send: (params) => {
+      const id = crypto.randomUUID();
+      return ipcRenderer.invoke('mailbox:send', { id, ...params });
+    },
+    edit: (id, patch) => ipcRenderer.invoke('mailbox:edit', { id, ...patch }),
+    cancel: (id, reason) => ipcRenderer.invoke('mailbox:cancel', { id, reason }),
+    list: (sessionId, opts) => ipcRenderer.invoke('mailbox:list', { sessionId, ...opts }),
+    listForSession: (sessionId) => ipcRenderer.invoke('mailbox:listForSession', { sessionId }),
+    onEvent: (handler: (event: unknown) => void) => {
+      const wrappedHandler = (_event: Electron.IpcRendererEvent, data: unknown) => handler(data);
+      ipcRenderer.on('mailbox:event', wrappedHandler);
+      return () => {
+        ipcRenderer.removeListener('mailbox:event', wrappedHandler);
       };
     },
   },

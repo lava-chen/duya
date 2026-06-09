@@ -188,7 +188,7 @@ export type SSEEvent =
   | { type: 'tool_timeout'; data: { toolName: string; elapsedSeconds: number } }
   | { type: 'thinking'; data: string }
   | { type: 'done'; reason?: 'completed' | 'aborted' | 'max_turns' | 'error' }
-  | { type: 'error'; data: string; metadata?: { errorType?: string; statusCode?: number; isRetryable?: boolean } }
+  | { type: 'error'; data: string; code?: string; metadata?: { errorType?: string; statusCode?: number; isRetryable?: boolean } }
   | { type: 'result'; data: TokenUsage }
   | { type: 'turn_start'; data: { turnCount: number } }
   | { type: 'context_usage'; data: ContextUsageInfo }
@@ -289,6 +289,26 @@ export interface AgentOptions {
   language?: string;
   /** Default workspace directory for permission checking. Defaults to ~/.duya/workspace */
   defaultWorkspaceDirectory?: string;
+  /**
+   * Phase 2: optional ProviderRuntimeConfig. When present, the agent
+   * SHOULD prefer `apiFormat` / `headers` from this object over the
+   * legacy `provider` discriminator. New code paths should treat
+   * this as the authoritative source.
+   *
+   * Field shape mirrors `packages/agent/src/providers/runtime-types.ts`
+   * `ProviderRuntimeConfig` (kept inline to avoid a circular import).
+   */
+  runtimeConfig?: {
+    providerId: string;
+    providerName?: string;
+    apiFormat: 'openai-chat' | 'openai-responses' | 'anthropic' | 'gemini' | 'ollama' | 'bedrock' | 'vertex';
+    baseUrl: string;
+    apiKey?: string;
+    accessToken?: string;
+    headers: Record<string, string>;
+    model: string;
+    requestOptions?: Record<string, unknown>;
+  };
 }
 
 // 对话选项

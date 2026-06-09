@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import { registerDbHandlers, registerConductorHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase } from './db/connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
+import { registerProviderIpcHandlers } from './services/providers/provider-ipc-handlers';
 import { registerNetHandlers } from './ipc/net-handlers';
 import { startGatewayProcess, stopGatewayProcess, registerGatewayIpcHandlers, forwardToGateway, isGatewaySession, waitForGatewayReady } from './gateway/index';
 import { initConfigManager, getConfigManager, toLLMProvider, resolveDatabasePath, updateDatabasePath } from './config/index';
@@ -194,6 +195,7 @@ if (gotTheLock) {
     registerRecapHandlers(recapService);
 
     registerAgentHandlers();
+    registerProviderIpcHandlers();
     registerNetHandlers();
     registerGatewayIpcHandlers();
 

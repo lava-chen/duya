@@ -11,6 +11,13 @@ import { getConfigManager, toLLMProvider, type ApiProvider } from '../config/man
 import { getDatabase } from '../ipc/db-handlers';
 import { getLogger, LogComponent } from '../logging/logger';
 import { dispatchDbAction, handleDbRequest as processDbRequest, type DbRequest, type DbResponse } from './db-bridge';
+import { getProviderStore } from '../services/providers/provider-store-electron';
+import {
+  toRuntimeConfig as buildRuntimeConfig,
+  normalizeBaseUrl,
+  inferApiFormatFromLegacyProviderType,
+  redactSecrets,
+} from '../../src/lib/providers';
 
 // Re-export for backward compatibility
 export { dispatchDbAction, handleDbRequest as handleDbRequest, type DbRequest, type DbResponse } from './db-bridge';
@@ -72,6 +79,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agent:getProviderConfig', (_event, sessionId: string) => {
     const configManager = getConfigManager();
     const db = getDatabase();
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
 
     const session = db?.prepare('SELECT provider_id, model FROM chat_sessions WHERE id = ?').get(sessionId) as { provider_id: string | null; model: string | null } | undefined;
 
@@ -87,11 +96,33 @@ export function registerAgentHandlers(): void {
 
     const defaultModel = getDefaultModelForProvider(provider.providerType, provider.options);
 
+    // Build runtime config via the store for new agent code paths.
+    const llm = store.getLlmProvider(provider.id);
+    let runtimeConfig: Record<string, unknown> | undefined;
+    if (llm) {
+      const cfg = buildRuntimeConfig(llm, {
+        modelId: session?.model || defaultModel,
+      });
+      runtimeConfig = {
+        providerId: cfg.providerId,
+        apiFormat: cfg.apiFormat,
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        accessToken: cfg.accessToken,
+        headers: cfg.headers,
+        model: cfg.model,
+        requestOptions: cfg.requestOptions,
+      };
+    }
+
     return {
       apiKey: provider.apiKey,
       baseURL: provider.baseUrl || undefined,
       model: session?.model || defaultModel,
       provider: toLLMProvider(provider.providerType),
+      // Phase 2: include the runtime config so the agent can adopt
+      // the new path when ready.
+      runtimeConfig,
     };
   });
 
@@ -171,8 +202,17 @@ export function registerAgentHandlers(): void {
   });
 
   // Get active provider with full API key (for agent initialization)
+  //
+  // Phase 2: this handler now derives a ProviderRuntimeConfig via
+  // `ProviderStore` + `ProviderRuntimeAdapter`. The legacy fields
+  // (`provider` / `providerType` / `authStyle`) are still populated so
+  // the existing agent runtime keeps working. New agent code should
+  // prefer the `runtimeConfig` field.
   ipcMain.handle('config:provider:getActiveProviderConfig', () => {
     const configManager = getConfigManager();
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+
     const provider = configManager.getActiveProvider();
     if (!provider) return null;
 
@@ -181,13 +221,35 @@ export function registerAgentHandlers(): void {
       (Array.isArray(provider.options?.enabled_models) && (provider.options?.enabled_models as string[])[0]) ||
       '';
 
+    // Derive the runtime config from the migrated LlmProvider so the
+    // new path is exercised on every Chat call.
+    const llm = store.getActiveLlmProvider();
+    let runtimeConfig: Record<string, unknown> | null = null;
+    if (llm) {
+      const cfg = buildRuntimeConfig(llm, { modelId: model });
+      runtimeConfig = {
+        providerId: cfg.providerId,
+        providerName: cfg.providerName,
+        apiFormat: cfg.apiFormat,
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        accessToken: cfg.accessToken,
+        headers: cfg.headers,
+        model: cfg.model,
+        requestOptions: cfg.requestOptions,
+      };
+    }
+
     return {
+      // Legacy fields (kept for backward compat with existing agent runtime).
       apiKey: provider.apiKey,
       baseUrl: provider.baseUrl || undefined,
       providerType: provider.providerType,
       model,
       provider: toLLMProvider(provider.providerType),
       authStyle: 'api_key' as const,
+      // New (Phase 2) field. Agent runtime can migrate at its own pace.
+      runtimeConfig,
     };
   });
 
@@ -197,12 +259,33 @@ export function registerAgentHandlers(): void {
     const provider = configManager.getAllProviders()[providerId];
     if (!provider) return null;
 
+    // Build the same runtime config shape on this path too.
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    const llm = store.getLlmProvider(providerId);
+    let runtimeConfig: Record<string, unknown> | null = null;
+    if (llm) {
+      const cfg = buildRuntimeConfig(llm, { modelId: model || '' });
+      runtimeConfig = {
+        providerId: cfg.providerId,
+        providerName: cfg.providerName,
+        apiFormat: cfg.apiFormat,
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        accessToken: cfg.accessToken,
+        headers: cfg.headers,
+        model: cfg.model,
+        requestOptions: cfg.requestOptions,
+      };
+    }
+
     return {
       apiKey: provider.apiKey,
       baseUrl: provider.baseUrl || undefined,
       model: model || '',
       provider: toLLMProvider(provider.providerType),
       authStyle: 'api_key' as const,
+      runtimeConfig,
     };
   });
 
