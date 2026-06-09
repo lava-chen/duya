@@ -624,6 +624,11 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
     blockedDomains,
     language,
     defaultWorkspaceDirectory: defaultWorkspaceDir,
+    // Phase 3: thread the runtime config into the agent. The
+    // constructor will prefer `apiFormat` over `provider` when
+    // present. Legacy fields stay authoritative for everything else
+    // (vision, sub-model resolution, etc.).
+    runtimeConfig: config.runtimeConfig,
   });
 
   if (setSandboxEnabled) {
