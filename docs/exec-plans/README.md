@@ -63,6 +63,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [105-code-agent-profile-runtime-wiring](./completed/105-code-agent-profile-runtime-wiring.md) | Code Agent Profile Runtime Wiring & Tool Diagnostics — `promptProfile` 真正生效 (Code/General/Research/Conductor) + `PromptsRegistry` 缓存按 profile 实例化 + Tool filter diagnostic + code prompt 条件注入 | P0 | ✅ Complete |
 | [104-proactive-memory-enhancement](./active/104-proactive-memory-enhancement.md) | Proactive Memory 主动记忆增强 — RealTimeCapture hook + 3D 评分反思 + 双路径 Recall + 时序衰减归档（基于 claude-code-haha / hermes-agent / openclaw / duya 四方对比）| P1 | Planning |
 | [200-cli-surface-expansion](./active/200-cli-surface-expansion.md) | CLI Surface Expansion — `duya update / backup / security` (openclaw-comparison) + polish existing (status / plugin / config / session / message / mcp / skill / channel / cron / gateway) | P1 | All phases ✅ |
+| [201-cli-packaged-smoke-fixes](./active/201-cli-packaged-smoke-fixes.md) | CLI Packaged Smoke-Test Fixes — `adaptIdFirst` for `(id,format)` info commands, auto-inject `--format`, auto-dispatch `default` sub, add missing `channel_directory` table, drop `setup` from control plane | P0 | Phases 1–5 ✅, Phase 6 ⏳ (verify on next packaged build) |
+| [107-cron-cli-bugfix](./active/107-cron-cli-bugfix.md) | Cron CLI Bugfix — `info` / `message show` DTO wrap, `delete` 500 ReferenceError, schedule field-name UX, CI does not typecheck `electron/` | P0 | Phase 1 ✅, Phase 2 📋 |
 | [101-plugin-system-cleanup](./completed/101-plugin-system-cleanup.md) | Plugin System Cleanup & Runtime Wiring — 死代码清理 (`runtimeFactories` / `plugins/literature` / `PermissionService` override) + 接入路径修正 + capabilityCounts 派生 | P1 | Complete |
 
 ### Infrastructure & Architecture Plans
