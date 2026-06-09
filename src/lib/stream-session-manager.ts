@@ -198,6 +198,14 @@ async function getProviderConfigForModel(model: string | undefined): Promise<Pro
 
 const ACTIVE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 
+/** Stream error with optional provider `code` (e.g. `rate_limit_error`,
+ *  `usage_limit_exceeded`). Surfaced through `useStreamingError` so the UI
+ *  can render a tailored banner instead of the generic agent-error fallback. */
+export interface StreamingError {
+  message: string;
+  code: string | null;
+}
+
 interface PersistEvent {
   success: boolean;
   reason?: string;
@@ -263,11 +271,36 @@ type FieldListeners = {
   toolProgress: Set<(info: { toolName: string; elapsedSeconds: number } | null) => void>;
   toolTimeout: Set<(info: { toolName: string; elapsedSeconds: number } | null) => void>;
   agentProgress: Set<(event: AgentProgressEvent) => void>;
-  error: Set<(error: string | null) => void>;
+  error: Set<(error: StreamingError | null) => void>;
   completedAt: Set<(at: number | null) => void>;
   dbPersisted: Set<(event: SessionStreamSnapshot['dbPersisted']) => void>;
   retry: Set<(info: { attempt: number; maxAttempts: number; delayMs: number; message: string }) => void>;
+  skillReview: Set<(event: SkillReviewEvent) => void>;
 };
+
+/**
+ * Skill-review lifecycle event surfaced to the UI.
+ *
+ * `phase: 'started'`  → the SelfImprover has hit the threshold and
+ *                       spawned a background sub-agent. The UI uses
+ *                       this to show a non-blocking toast / inline
+ *                       indicator so the user knows something is
+ *                       happening in the background.
+ * `phase: 'completed'` → the sub-agent finished, with the verdict
+ *                       data. `passed = true` means a new skill was
+ *                       created (or an existing one improved).
+ */
+export interface SkillReviewEvent {
+  phase: 'started' | 'completed';
+  passed?: boolean;
+  score?: number;
+  feedback?: string;
+  skillName?: string;
+  iterations?: number;
+  maxIterations?: number;
+  finalPath?: string;
+  error?: string;
+}
 
 /** Sub-agent progress event */
 export interface AgentProgressEvent {
@@ -389,6 +422,9 @@ interface SessionState {
   startedAt: number;
   completedAt: number | null;
   error: string | null;
+  /** Provider error code (e.g. `rate_limit_error`, `usage_limit_exceeded`).
+   *  Set alongside `error` so the UI can render a tailored banner. */
+  errorCode: string | null;
   finalMessageContent: string | null;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
   toolProgressInfo: { toolName: string; elapsedSeconds: number } | null;
@@ -487,6 +523,7 @@ function createInitialState(sessionId: string): Omit<SessionState, 'listeners' |
     startedAt: Date.now(),
     completedAt: null,
     error: null,
+    errorCode: null,
     finalMessageContent: null,
     toolTimeoutInfo: null,
     toolProgressInfo: null,
@@ -516,6 +553,7 @@ function buildSnapshot(state: SessionState): SessionStreamSnapshot {
     startedAt: state.startedAt,
     completedAt: state.completedAt,
     error: state.error,
+    errorCode: state.errorCode,
     finalMessageContent: state.finalMessageContent,
     toolTimeoutInfo: state.toolTimeoutInfo,
     toolProgressInfo: state.toolProgressInfo,
@@ -635,6 +673,7 @@ class StreamSessionManager {
       completedAt: new Set(),
       dbPersisted: new Set(),
       retry: new Set(),
+      skillReview: new Set(),
     };
   }
 
@@ -1083,6 +1122,7 @@ class StreamSessionManager {
     state.startedAt = Date.now();
     state.completedAt = null;
     state.error = null;
+    state.errorCode = null;
     state.finalMessageContent = null;
     state.toolTimeoutInfo = null;
     state.toolProgressInfo = null;
@@ -1266,7 +1306,12 @@ class StreamSessionManager {
           break;
 
         case 'error':
-          this.handleErrorEvent(sessionId, streamId, event.data as { message?: string } | undefined);
+        case 'chat:error':
+          // `chat:error` is the legacy/worker-emitted namespace; the agent
+          // server normalizes it to `error` today but we keep this branch as
+          // a defensive fallback so rate-limit/usage-limit errors still
+          // surface in the UI if the server ever forwards the raw name.
+          this.handleErrorEvent(sessionId, streamId, event.data as { message?: string; code?: string } | undefined);
           break;
 
         case 'stream:end':
@@ -1397,6 +1442,14 @@ class StreamSessionManager {
 
         case 'agent_progress':
           this.handleAgentProgressEvent(sessionId, streamId, event.data as AgentProgressEvent | undefined);
+          break;
+
+        case 'skill_review_started':
+          this.handleSkillReviewStartedEvent(sessionId);
+          break;
+
+        case 'skill_review_completed':
+          this.handleSkillReviewCompletedEvent(sessionId, event.data);
           break;
 
         default:
@@ -1645,6 +1698,57 @@ class StreamSessionManager {
     s.agentProgressEvents = [...s.agentProgressEvents, event];
     this.notifyAgentProgressListeners(sessionId, event);
     this.resetIdleTimeout(sessionId);
+  }
+
+  /**
+   * The SelfImprover has spawned a background sub-agent to review
+   * the conversation for skill candidates. Notify all UI listeners
+   * so they can show a non-blocking indicator.
+   *
+   * We don't gate on `isCurrentStream` because the sub-agent can
+   * outlive the user's current turn — by the time it returns, the
+   * SSE stream may have already sent the 'done' event for the
+   * user-facing turn. The session is what matters here, not the
+   * specific stream.
+   */
+  private handleSkillReviewStartedEvent(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    const event: SkillReviewEvent = { phase: 'started' };
+    for (const listener of s.fieldListeners.skillReview) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.warn('[stream-session-manager] skillReview listener threw:', err);
+      }
+    }
+  }
+
+  private handleSkillReviewCompletedEvent(
+    sessionId: string,
+    data: unknown,
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    const payload = (data ?? {}) as Partial<SkillReviewEvent>;
+    const event: SkillReviewEvent = {
+      phase: 'completed',
+      passed: payload.passed,
+      score: payload.score,
+      feedback: payload.feedback,
+      skillName: payload.skillName,
+      iterations: payload.iterations,
+      maxIterations: payload.maxIterations,
+      finalPath: payload.finalPath,
+      error: payload.error,
+    };
+    for (const listener of s.fieldListeners.skillReview) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.warn('[stream-session-manager] skillReview listener threw:', err);
+      }
+    }
   }
 
   private handleResearchPhaseEvent(
@@ -2243,12 +2347,13 @@ class StreamSessionManager {
     });
   }
 
-  private handleErrorEvent(sessionId: string, streamId: string, data: { message?: string } | undefined): void {
+  private handleErrorEvent(sessionId: string, streamId: string, data: { message?: string; code?: string } | undefined): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     s.phase = 'error';
     s.statusText = undefined;
     s.error = data?.message || 'Unknown error';
+    s.errorCode = data?.code || null;
     s.completedAt = Date.now();
     this.notifyPhaseListeners(sessionId, s.phase);
     this.notifyStatusTextListeners(sessionId, s.statusText);
@@ -2445,6 +2550,22 @@ class StreamSessionManager {
     return () => { state.fieldListeners.phase.delete(listener); };
   }
 
+  /**
+   * Subscribe to skill-review lifecycle events for this session.
+   * Fires with `phase: 'started'` when the SelfImprover spawns a
+   * background sub-agent, and `phase: 'completed'` when the
+   * sub-agent returns a verdict. The UI uses this to surface
+   * "Self-improving..." indicators without blocking the user.
+   */
+  subscribeToSkillReview(
+    sessionId: string,
+    listener: (event: SkillReviewEvent) => void,
+  ): () => void {
+    const state = this.getOrCreateState(sessionId);
+    state.fieldListeners.skillReview.add(listener);
+    return () => { state.fieldListeners.skillReview.delete(listener); };
+  }
+
   subscribeToStatusText(sessionId: string, listener: (statusText: string | undefined) => void): () => void {
     const state = this.getOrCreateState(sessionId);
     state.fieldListeners.statusText.add(listener);
@@ -2505,11 +2626,15 @@ class StreamSessionManager {
     return [...state.agentProgressEvents];
   }
 
-  subscribeToError(sessionId: string, listener: (error: string | null) => void): () => void {
+  subscribeToError(sessionId: string, listener: (error: StreamingError | null) => void): () => void {
     const state = this.getOrCreateState(sessionId);
     state.fieldListeners.error.add(listener);
-    listener(state.error);
+    listener(state.error ? { message: state.error, code: state.errorCode } : null);
     return () => { state.fieldListeners.error.delete(listener); };
+  }
+
+  subscribeToErrorFull(sessionId: string, listener: (error: StreamingError | null) => void): () => void {
+    return this.subscribeToError(sessionId, listener);
   }
 
   subscribeToCompletedAt(sessionId: string, listener: (at: number | null) => void): () => void {
@@ -3141,8 +3266,9 @@ class StreamSessionManager {
   private notifyErrorListeners(sessionId: string, error: string | null): void {
     const state = this.sessions.get(sessionId);
     if (!state) return;
+    const info: StreamingError | null = error ? { message: error, code: state.errorCode } : null;
     state.fieldListeners.error.forEach((listener) => {
-      try { listener(error); } catch (e) { console.error(e); }
+      try { listener(info); } catch (e) { console.error(e); }
     });
   }
 
@@ -3283,6 +3409,8 @@ export const subscribeToTools = (sessionId: string, listener: (tools: { uses: To
   streamSessionManager.subscribeToTools(sessionId, listener);
 export const subscribeToPhase = (sessionId: string, listener: (phase: StreamPhase) => void) =>
   streamSessionManager.subscribeToPhase(sessionId, listener);
+export const subscribeToSkillReview = (sessionId: string, listener: (event: SkillReviewEvent) => void) =>
+  streamSessionManager.subscribeToSkillReview(sessionId, listener);
 export const subscribeToStatusText = (sessionId: string, listener: (statusText: string | undefined) => void) =>
   streamSessionManager.subscribeToStatusText(sessionId, listener);
 export const subscribeToContextUsage = (sessionId: string, listener: (usage: ContextUsage | null) => void) =>
@@ -3295,7 +3423,7 @@ export const subscribeToToolProgress = (sessionId: string, listener: (info: { to
   streamSessionManager.subscribeToToolProgress(sessionId, listener);
 export const subscribeToToolTimeout = (sessionId: string, listener: (info: { toolName: string; elapsedSeconds: number } | null) => void) =>
   streamSessionManager.subscribeToToolTimeout(sessionId, listener);
-export const subscribeToError = (sessionId: string, listener: (error: string | null) => void) =>
+export const subscribeToError = (sessionId: string, listener: (error: StreamingError | null) => void) =>
   streamSessionManager.subscribeToError(sessionId, listener);
 export const subscribeToRetry = (sessionId: string, listener: (info: { attempt: number; maxAttempts: number; delayMs: number; message: string }) => void) =>
   streamSessionManager.subscribeToRetry(sessionId, listener);

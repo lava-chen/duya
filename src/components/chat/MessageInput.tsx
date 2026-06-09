@@ -10,6 +10,7 @@ import {
   StopIcon,
   FileIcon,
   XCircleIcon,
+  PaperclipIcon,
 } from '@/components/icons';
 import { Select } from 'antd';
 import type { CommandBadge, CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
@@ -186,6 +187,10 @@ export function MessageInput({
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
   const [thinkingEffort, setThinkingEffort] = useState<string | null>(null);
   const [sendMode, setSendMode] = useState<string | undefined>(undefined);
+
+  // Drag-and-drop state — counter ref avoids flicker when crossing child boundaries
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
 
   const closePopover = useCallback(() => {
     setPopoverMode(null);
@@ -625,6 +630,52 @@ export function MessageInput({
     [handlePaste, adjustTextareaHeight, addFile],
   );
 
+  // Drag-and-drop handlers — accept files dropped anywhere on the input box
+  const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    if (disabled) return;
+    dragCounterRef.current += 1;
+    if (dragCounterRef.current === 1) {
+      setIsDraggingOver(true);
+    }
+  }, [disabled]);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = disabled ? 'none' : 'copy';
+  }, [disabled]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (disabled) return;
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) {
+      setIsDraggingOver(false);
+    }
+  }, [disabled]);
+
+  const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+    if (disabled) {
+      e.preventDefault();
+      return;
+    }
+    const files = e.dataTransfer.files;
+    if (files.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDraggingOver(false);
+
+    for (let i = 0; i < files.length; i++) {
+      await addFile(files[i]);
+    }
+    adjustTextareaHeight();
+  }, [addFile, adjustTextareaHeight, disabled]);
+
   const handleSubmit = useCallback(
     (e: FormEvent) => {
       e.preventDefault();
@@ -827,7 +878,23 @@ export function MessageInput({
           onFocusTextarea={() => textareaRef.current?.focus()}
         />
 
-        <div className="rounded-3xl p-2 transition-shadow" style={{ backgroundColor: 'var(--surface)', boxShadow: 'inset 0 0 0 1px var(--border-color), 0 2px 8px rgba(0,0,0,0.08)' }}>
+        <div
+          className={`rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''}`}
+          style={{ backgroundColor: 'var(--surface)', boxShadow: 'inset 0 0 0 1px var(--border-color), 0 2px 8px rgba(0,0,0,0.08)' }}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {/* Drag-and-drop overlay */}
+          {isDraggingOver && (
+            <div className="message-input-drop-overlay" role="status" aria-live="polite">
+              <div className="message-input-drop-card">
+                <PaperclipIcon size={20} />
+                <span>{t('messageInput.dropFilesHint') || '松开以添加为附件'}</span>
+              </div>
+            </div>
+          )}
           {/* File Attachments Square Cards - Inside input box */}
           {attachedFiles.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">
