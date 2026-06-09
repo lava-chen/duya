@@ -1,5 +1,10 @@
 // ProviderModelEditor.tsx - Edit which models a provider can use
 // Fetches available models from provider API, allows user to select/deselect
+// Phase 2: also writes per-model contextWindow into ModelCapabilityService
+// (renderer in-memory) and persists through `provider:upsertModelCapability`
+// IPC. The model capability is intentionally NOT stored in the LlmProvider
+// body — it lives in its own table/record so a single provider can host
+// many models with different context windows (e.g. 200K vs 1M).
 
 'use client';
 
@@ -14,6 +19,7 @@ import {
   CaretUpIcon,
 } from '@/components/icons';
 import type { ModelOption } from './ModelSelector';
+import { upsertModelCapabilityIPC } from '@/lib/ipc-client';
 
 interface ProviderModelEditorProps {
   providerId: string;
@@ -133,6 +139,44 @@ export function ProviderModelEditor({
     setCustomModelInput('');
   }, [customModelInput, selected, allModels, onChange]);
 
+  // Phase 2: per-model contextWindow editor. Writes to the
+  // ModelCapabilityService via the new IPC. The capability record is
+  // intentionally separate from the LlmProvider body.
+  const [editingCapFor, setEditingCapFor] = useState<string | null>(null);
+  const [editingCapValue, setEditingCapValue] = useState<string>('');
+
+  const beginEditCapability = useCallback((modelId: string, current?: number) => {
+    setEditingCapFor(modelId);
+    setEditingCapValue(current ? String(current) : '');
+  }, []);
+
+  const saveCapability = useCallback(async (modelId: string) => {
+    const trimmed = editingCapValue.trim();
+    const parsed = trimmed ? Number(trimmed) : NaN;
+    if (trimmed && (Number.isNaN(parsed) || parsed < 0)) {
+      // ignore — keep editing open
+      return;
+    }
+    setEditingCapFor(null);
+    setEditingCapValue('');
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    try {
+      await upsertModelCapabilityIPC({
+        providerId,
+        modelId,
+        contextWindow: parsed,
+        source: 'user',
+        updatedAt: Date.now(),
+      });
+      // Reflect locally so the UI shows the new context window.
+      setAllModels(prev =>
+        prev.map(m => (m.id === modelId ? { ...m, context_length: parsed } : m)),
+      );
+    } catch {
+      // Capability upsert is best-effort; the model list still works.
+    }
+  }, [editingCapValue, providerId]);
+
   // Filter models
   const filteredModels = filter
     ? allModels.filter(m =>
@@ -226,25 +270,53 @@ export function ProviderModelEditor({
                   ENABLED ({enabledModels.length})
                 </div>
                 {enabledModels.map(model => (
-                  <button
+                  <div
                     key={model.id}
-                    type="button"
-                    onClick={() => toggleModel(model.id)}
                     className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent/5 transition-colors"
                   >
-                    <span className="shrink-0 w-4 h-4 rounded border border-accent bg-accent/10 flex items-center justify-center">
-                      <CheckIcon size={10} className="text-accent" />
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs truncate">{model.display_name}</div>
-                      <div className="text-[10px] text-muted-foreground truncate font-mono">{model.id}</div>
-                    </div>
-                    {model.context_length && (
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
-                        {formatContext(model.context_length)}
+                    <button
+                      type="button"
+                      onClick={() => toggleModel(model.id)}
+                      className="flex-1 flex items-center gap-2 min-w-0"
+                    >
+                      <span className="shrink-0 w-4 h-4 rounded border border-accent bg-accent/10 flex items-center justify-center">
+                        <CheckIcon size={10} className="text-accent" />
                       </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs truncate">{model.display_name}</div>
+                        <div className="text-[10px] text-muted-foreground truncate font-mono">{model.id}</div>
+                      </div>
+                    </button>
+                    {editingCapFor === model.id ? (
+                      <input
+                        autoFocus
+                        type="number"
+                        value={editingCapValue}
+                        onChange={e => setEditingCapValue(e.target.value)}
+                        onBlur={() => saveCapability(model.id)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') saveCapability(model.id);
+                          if (e.key === 'Escape') {
+                            setEditingCapFor(null);
+                            setEditingCapValue('');
+                          }
+                        }}
+                        placeholder="ctx"
+                        className="w-20 px-1.5 py-0.5 rounded border border-border/50 text-[10px] bg-chip text-foreground focus:outline-none focus:ring-1 focus:ring-accent/50"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => beginEditCapability(model.id, model.context_length)}
+                        className="shrink-0 text-[10px] text-muted-foreground hover:text-accent"
+                        title="Set context window"
+                      >
+                        {model.context_length
+                          ? formatContext(model.context_length)
+                          : 'set ctx'}
+                      </button>
                     )}
-                  </button>
+                  </div>
                 ))}
               </>
             )}

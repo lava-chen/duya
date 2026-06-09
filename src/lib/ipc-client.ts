@@ -510,6 +510,123 @@ export async function activateProviderIPC(id: string): Promise<Provider | null> 
   return raw ? backendProviderToProvider(raw) : null
 }
 
+// =============================================================================
+// Phase 2: LlmProvider-aware IPC wrappers
+// =============================================================================
+//
+// These all return masked DTOs (no apiKey / accessToken). `provider:test`,
+// `provider:testModel`, and `provider:syncModels` are used by the
+// ProviderManager / ProviderModelEditor to integrate with the new
+// ProviderHealthService and ModelSyncService. The `provider` field in
+// the active config carries the runtime config so the agent runtime
+// can adopt it incrementally.
+
+export interface ProviderHealthDTO {
+  providerId: string
+  ok: boolean
+  latencyMs?: number
+  checkedAt: number
+  errorKind?: 'auth' | 'network' | 'rate_limit' | 'invalid_model' | 'invalid_config' | 'unknown'
+  message?: string
+}
+
+export interface ModelCapabilityDTO {
+  providerId: string
+  modelId: string
+  displayName?: string
+  contextWindow?: number
+  maxOutputTokens?: number
+  supportsToolUse?: boolean
+  supportsVision?: boolean
+  supportsReasoning?: boolean
+  supportsPromptCache?: boolean
+  pricing?: Record<string, unknown>
+  source: 'preset' | 'models-api' | 'user' | 'probe'
+  updatedAt: number
+}
+
+export async function listLlmProvidersIPC(): Promise<BackendProvider[]> {
+  return (await window.electronAPI!.provider!.listLlm()) as BackendProvider[]
+}
+
+export async function getLlmProviderIPC(id: string): Promise<BackendProvider | null> {
+  return (await window.electronAPI!.provider!.getLlm(id)) as BackendProvider | null
+}
+
+export async function upsertLlmProviderIPC(
+  data: Record<string, unknown>,
+): Promise<{ ok: boolean; provider?: BackendProvider; code?: string; message?: string }> {
+  return (await window.electronAPI!.provider!.upsertLlm(data)) as {
+    ok: boolean
+    provider?: BackendProvider
+    code?: string
+    message?: string
+  }
+}
+
+export async function deleteLlmProviderIPC(id: string): Promise<boolean> {
+  return (await window.electronAPI!.provider!.deleteLlm(id)) as boolean
+}
+
+export async function setActiveLlmProviderIPC(id: string): Promise<boolean> {
+  return (await window.electronAPI!.provider!.setActiveLlm(id)) as boolean
+}
+
+export function testProviderIPC(
+  payload: { providerId: string; presetKey?: string },
+): Promise<ProviderHealthDTO>
+export function testProviderIPC(body: {
+  provider_type?: string
+  base_url?: string
+  api_key?: string
+  model?: string
+  auth_style?: string
+}): Promise<ProviderTestResult>
+export async function testProviderIPC(
+  payload:
+    | { providerId: string; presetKey?: string }
+    | {
+        provider_type?: string
+        base_url?: string
+        api_key?: string
+        model?: string
+        auth_style?: string
+      },
+): Promise<ProviderHealthDTO | ProviderTestResult> {
+  if ('providerId' in payload) {
+    return (await window.electronAPI!.provider!.test(payload)) as ProviderHealthDTO
+  }
+
+  return window.electronAPI!.net.testProvider(payload)
+}
+
+export async function testModelIPC(
+  payload: { providerId: string; modelId: string },
+): Promise<ProviderHealthDTO> {
+  return (await window.electronAPI!.provider!.testModel(payload)) as ProviderHealthDTO
+}
+
+export async function syncProviderModelsIPC(
+  payload: { providerId: string; presetKey?: string },
+): Promise<{ ok: boolean; models: ModelCapabilityDTO[]; source: string; message?: string }> {
+  return (await window.electronAPI!.provider!.syncModels(payload)) as {
+    ok: boolean
+    models: ModelCapabilityDTO[]
+    source: string
+    message?: string
+  }
+}
+
+export async function upsertModelCapabilityIPC(
+  capability: Partial<ModelCapabilityDTO> & { providerId: string; modelId: string },
+): Promise<{ ok: boolean; capability: ModelCapabilityDTO }> {
+  const raw = (await window.electronAPI!.provider!.upsertModelCapability(capability)) as unknown as {
+    ok: boolean
+    capability: ModelCapabilityDTO
+  };
+  return raw;
+}
+
 // Output Style operations
 export async function listOutputStylesIPC(): Promise<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>> {
   return await window.electronAPI!.outputStyle!.list() as Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>
@@ -627,16 +744,6 @@ export interface ProviderTestResult {
     message: string
     suggestion?: string
   }
-}
-
-export async function testProviderIPC(body: {
-  provider_type?: string
-  base_url?: string
-  api_key?: string
-  model?: string
-  auth_style?: string
-}): Promise<ProviderTestResult> {
-  return window.electronAPI!.net.testProvider(body)
 }
 
 export interface OllamaModel {

@@ -29,7 +29,12 @@ import {
   upsertProviderIPC,
   updateProviderIPC,
   deleteProviderIPC,
+  upsertLlmProviderIPC,
+  testProviderIPC,
+  type ProviderHealthDTO,
 } from "@/lib/ipc-client";
+import { findPresetByKey } from "@/lib/providers";
+import type { LlmProvider } from "@/lib/providers";
 import {
   SettingsSection,
   SettingsCard,
@@ -514,31 +519,69 @@ export function ProvidersSection() {
         throw new Error(t("error.description"));
       }
     } else {
-      console.log("[ProvidersSection] Creating new provider");
-      console.log("[ProvidersSection] New provider options:", options);
-
-      // Generate a meaningful provider ID
+      // Phase 2: build an LlmProvider draft from a ProviderPreset, then
+      // upsert via the new IPC. We look up the preset by matching
+      // `provider_type` against the new preset's `legacyProtocol`.
       const existingIds = providers.map(p => p.id);
       const providerId = generateProviderId(data.provider_type, data.name, existingIds);
-      console.log("[ProvidersSection] Generated provider ID:", providerId);
 
-      const created = await upsertProviderIPC({
-        id: providerId,
-        name: data.name,
-        providerType: data.provider_type,
-        baseUrl: data.base_url,
-        apiKey: data.api_key,
-        isActive: true,
-        options: Object.keys(options).length > 0 ? options : undefined,
-      });
+      // Phase 2: try the new preset registry first. If nothing
+      // matches, fall through to the legacy `upsertProviderIPC` path
+      // so the user can still complete onboarding.
+      const newPreset = findPresetByKey(data.provider_type);
+      if (newPreset) {
+        const llmDraft: LlmProvider = {
+          id: providerId,
+          name: data.name,
+          category: newPreset.category,
+          apiFormat: newPreset.apiFormat,
+          auth:
+            newPreset.apiFormat === 'ollama'
+              ? { type: 'none' }
+              : {
+                  type: 'api-key',
+                  apiKey: data.api_key,
+                },
+          endpoints: {
+            baseUrl: data.base_url,
+            isFullUrl: false,
+          },
+          ui: newPreset.ui,
+          meta: {
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            sortIndex: 0,
+            tags: ['active'],
+          },
+          options: Object.keys(options).length > 0 ? options : undefined,
+        };
 
-      console.log("[ProvidersSection] Create result:", created);
-
-      if (created) {
-        setSuccess(t("settings.providers.connect"));
-        fetchProviders();
+        const r = await upsertLlmProviderIPC(llmDraft as unknown as Record<string, unknown>);
+        if (r.ok) {
+          setSuccess(t("settings.providers.connect"));
+          fetchProviders();
+        } else {
+          throw new Error(r.message ?? t("error.description"));
+        }
       } else {
-        throw new Error(t("error.description"));
+        // Hard fallback: legacy upsert. Keeps the path functional even
+        // when the new preset registry hasn't been built out yet.
+        const created = await upsertProviderIPC({
+          id: providerId,
+          name: data.name,
+          providerType: data.provider_type,
+          baseUrl: data.base_url,
+          apiKey: data.api_key,
+          isActive: true,
+          options: Object.keys(options).length > 0 ? options : undefined,
+        });
+
+        if (created) {
+          setSuccess(t("settings.providers.connect"));
+          fetchProviders();
+        } else {
+          throw new Error(t("error.description"));
+        }
       }
     }
   };
@@ -548,6 +591,10 @@ export function ProvidersSection() {
   };
 
   const runDiagnostics = async () => {
+    // Phase 2: route through the new `provider:test` IPC so the
+    // returned `errorKind` shows up in the UI. The legacy local
+    // `net.testProvider` path is preserved for users on the old
+    // contract — see `runHealthDiagnostics` for the new path.
     if (providers.length === 0) return;
 
     setIsRunningDiagnostics(true);
@@ -564,65 +611,39 @@ export function ProvidersSection() {
           message: "Testing connection...",
         },
       ]);
-
       const startTime = Date.now();
-
-      // Parse options to get auth_style
-      let authStyle: string | undefined;
       try {
-        const opts = JSON.parse(provider.options || "{}");
-        authStyle = opts.auth_style;
-      } catch {
-        // Ignore parse errors
-      }
-
-      try {
-        if (window.electronAPI?.net?.testProvider) {
-          const result = await window.electronAPI.net.testProvider({
-            provider_type: provider.providerType,
-            base_url: provider.baseUrl,
-            api_key: provider.apiKey,
-            model: "",
-            auth_style: authStyle,
-          });
-
-          const latency = Date.now() - startTime;
-
-          if (result.success) {
-            setDiagnosticResults((prev) =>
-              prev.map((r) =>
-                r.providerId === provider.id
-                  ? { ...r, status: "success", message: "Connection successful", latency }
-                  : r
-              )
-            );
-          } else {
-            const errorMessage = typeof result.error === "string" ? result.error : "Connection failed";
-            setDiagnosticResults((prev) =>
-              prev.map((r) =>
-                r.providerId === provider.id ? { ...r, status: "error", message: errorMessage, latency } : r
-              )
-            );
-          }
-        } else {
-          setDiagnosticResults((prev) =>
-            prev.map((r) =>
-              r.providerId === provider.id ? { ...r, status: "error", message: "Test not available" } : r
-            )
-          );
-        }
-      } catch (err) {
-        const latency = Date.now() - startTime;
+        const status = await testProviderIPC({ providerId: provider.id });
+        const latency = status.latencyMs ?? Date.now() - startTime;
         setDiagnosticResults((prev) =>
           prev.map((r) =>
             r.providerId === provider.id
-              ? { ...r, status: "error", message: err instanceof Error ? err.message : "Test failed", latency }
-              : r
-          )
+              ? {
+                  ...r,
+                  status: status.ok ? "success" : "error",
+                  message: status.ok
+                    ? "Connection successful"
+                    : `${status.errorKind ?? 'unknown'}: ${status.message ?? ''}`,
+                  latency,
+                }
+              : r,
+          ),
+        );
+      } catch (err) {
+        setDiagnosticResults((prev) =>
+          prev.map((r) =>
+            r.providerId === provider.id
+              ? {
+                  ...r,
+                  status: "error",
+                  message: err instanceof Error ? err.message : "Test failed",
+                  latency: Date.now() - startTime,
+                }
+              : r,
+          ),
         );
       }
     }
-
     setIsRunningDiagnostics(false);
   };
 
