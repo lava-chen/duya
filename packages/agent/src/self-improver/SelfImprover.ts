@@ -16,6 +16,11 @@
 import type { Message, AgentOptions } from '../types.js';
 import { readDraftSkill, backupDraftSkill, getDraftSkillsDir } from '../skills/SkillDraftManager.js';
 import { getSkillRegistry } from '../skills/registry.js';
+import {
+  loadSelfImproverState,
+  saveSelfImproverState,
+  clearSelfImproverState,
+} from './SelfImproverState.js';
 
 // ============================================================================
 // Types
@@ -277,13 +282,54 @@ async function createSubAgent(options: AgentOptions): Promise<InstanceType<typeo
 export class SelfImprover {
   private itersSinceSkill = 0;
   private toolCallsSinceSkill = 0;
+  private lastReviewAt: number | null = null;
+  private lastResetAt = 0;
   private skillNudgeInterval: number;
   private enabled = false;
   private maxIterations = MAX_REVISION_ITERATIONS;
+  /** Set to true once we've loaded the persisted state from disk. */
+  private stateLoaded = false;
+  /** When true, the next counter mutation will skip the disk write
+   *  (used during initial load to avoid a write storm on every
+   *  start). */
+  private suppressPersist = false;
 
   constructor(skillNudgeInterval?: number) {
     this.skillNudgeInterval = skillNudgeInterval ?? DEFAULT_SKILL_NUDGE_INTERVAL;
     this.enabled = this.skillNudgeInterval > 0;
+  }
+
+  /**
+   * Load persisted counter state from disk. Call once after
+   * construction; safe to call multiple times (subsequent calls are
+   * no-ops).
+   *
+   * Returns a Promise that resolves once the load completes. Errors
+   * are absorbed — the worst case is "start from 0", which matches
+   * the pre-persistence behavior.
+   */
+  async init(): Promise<void> {
+    if (this.stateLoaded) return;
+    this.stateLoaded = true;
+
+    const persisted = await loadSelfImproverState();
+    // While populating from disk, suppress the implicit save() that
+    // the setters would fire.
+    this.suppressPersist = true;
+    try {
+      this.itersSinceSkill = persisted.itersSinceSkill;
+      this.toolCallsSinceSkill = persisted.toolCallsSinceSkill;
+      this.lastResetAt = persisted.lastResetAt;
+      this.lastReviewAt = persisted.lastReviewAt;
+    } finally {
+      this.suppressPersist = false;
+    }
+    if (persisted.itersSinceSkill > 0 || persisted.toolCallsSinceSkill > 0) {
+      console.log(
+        `[SelfImprover] Loaded persisted counters: iters=${this.itersSinceSkill}, ` +
+        `toolCalls=${this.toolCallsSinceSkill}, lastReviewAt=${this.lastReviewAt ?? 'never'}`,
+      );
+    }
   }
 
   /**
@@ -302,17 +348,115 @@ export class SelfImprover {
   }
 
   /**
-   * Called after each iteration completes to track turn count
-   * Also tracks tool calls for more accurate triggering
+   * Fire-and-forget disk persistence. Errors are logged inside the
+   * save helper, so we don't need to await or .catch() here — but
+   * we still install a handler to avoid unhandled-rejection noise.
+   *
+   * Each call returns the pending promise so callers (e.g. tests)
+   * that need deterministic ordering can await it. Production code
+   * can ignore the return value.
+   */
+  /**
+   * Fire-and-forget disk persistence. Errors are logged inside the
+   * save helper, so we don't need to await or .catch() here — but
+   * we still install a handler to avoid unhandled-rejection noise.
+   *
+   * Each call returns the pending promise so callers (e.g. tests)
+   * that need deterministic ordering can await it. Production code
+   * can ignore the return value.
+   */
+  private lastPersistPromise: Promise<void> | null = null;
+
+  private schedulePersist(): Promise<void> {
+    if (this.suppressPersist) return Promise.resolve();
+    const p = saveSelfImproverState({
+      itersSinceSkill: this.itersSinceSkill,
+      toolCallsSinceSkill: this.toolCallsSinceSkill,
+      lastResetAt: this.lastResetAt,
+      lastReviewAt: this.lastReviewAt,
+    }).catch((err) => {
+      console.warn(`[SelfImprover] persist failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    this.lastPersistPromise = p;
+    return p;
+  }
+
+  /**
+   * Wait for any in-flight persist to complete. Intended for tests
+   * (to avoid races between test cases that share a state file)
+   * and for shutdown handlers that need to flush state to disk
+   * before the process exits.
+   */
+  async flushPendingPersists(): Promise<void> {
+    if (this.lastPersistPromise) {
+      await this.lastPersistPromise;
+    }
+  }
+
+  /**
+   * Called after each turn completes to track turn + tool-call counts.
+   *
+   * `validToolNames` is the set of tools currently available in the
+   * session. It's accepted (and ignored at the counter level) for
+   * backwards compatibility with the previous call site; the gate for
+   * counter accumulation is purely the `enabled` flag. The spawn
+   * decision in `shouldReview()` consults the tool set to decide
+   * whether `skill_manage` is actually exposed to the LLM.
+   *
+   * Note: `skillNudgeInterval` is the *threshold* (how many turns
+   * between reviews). A value of 0 doesn't mean "disabled" — it
+   * means "never trigger"; the master on/off switch is `enabled`.
+   * (The constructor sets `enabled = interval > 0` as a default
+   * convenience for callers that pass `0` to mean "off", but
+   * `setEnabled(true)` can re-enable a `0`-interval improver for
+   * testing / forcing a review.)
    */
   onIterationComplete(validToolNames: Set<string>, toolCallCountThisTurn: number): void {
     if (!this.enabled) return;
 
-    if (this.skillNudgeInterval > 0 && validToolNames.has('skill_manage')) {
-      this.itersSinceSkill++;
-      this.toolCallsSinceSkill += toolCallCountThisTurn;
-      console.log(`[SelfImprover] Turn completed. itersSinceSkill=${this.itersSinceSkill}, toolCallsSinceSkill=${this.toolCallsSinceSkill}, threshold=${this.skillNudgeInterval}`);
-    }
+    // Always accumulate while enabled; the tool-set check belongs in
+    // shouldReview(). (Previously the tool-set check was here, which
+    // made the counter silently stop accumulating the moment
+    // `skill_manage` was disabled at the registry level — a hidden
+    // failure mode with no log output.)
+    this.itersSinceSkill++;
+    this.toolCallsSinceSkill += toolCallCountThisTurn;
+
+    // Persist (fire-and-forget) so the counter survives across
+    // duyaAgent instances.
+    void this.schedulePersist();
+
+    // Light log so an operator can see the counter moving in dev.
+    const skillManageAvailable = validToolNames.has('skill_manage');
+    console.log(
+      `[SelfImprover] Turn completed. itersSinceSkill=${this.itersSinceSkill}, ` +
+      `toolCallsSinceSkill=${this.toolCallsSinceSkill}, ` +
+      `threshold=${this.skillNudgeInterval}, ` +
+      `skill_manage_available=${skillManageAvailable}`,
+    );
+  }
+
+  /**
+   * Async variant of `onIterationComplete` that returns the persist
+   * promise. Use in tests for deterministic ordering; production
+   * code should keep using the sync version.
+   */
+  onIterationCompleteAsync(
+    validToolNames: Set<string>,
+    toolCallCountThisTurn: number,
+  ): Promise<void> {
+    if (!this.enabled) return Promise.resolve();
+    this.itersSinceSkill++;
+    this.toolCallsSinceSkill += toolCallCountThisTurn;
+
+    const skillManageAvailable = validToolNames.has('skill_manage');
+    console.log(
+      `[SelfImprover] Turn completed. itersSinceSkill=${this.itersSinceSkill}, ` +
+      `toolCallsSinceSkill=${this.toolCallsSinceSkill}, ` +
+      `threshold=${this.skillNudgeInterval}, ` +
+      `skill_manage_available=${skillManageAvailable}`,
+    );
+    return this.schedulePersist();
   }
 
   /**
@@ -322,17 +466,59 @@ export class SelfImprover {
     console.log(`[SelfImprover] skill_manage used, resetting counters`);
     this.itersSinceSkill = 0;
     this.toolCallsSinceSkill = 0;
+    this.lastResetAt = Date.now();
+    void this.schedulePersist();
   }
 
   /**
-   * Check if skill review should be triggered
-   * Triggered when EITHER turns OR tool calls reach the threshold
+   * Async variant of `onSkillManageUsed` that returns the persist
+   * promise. Use in tests for deterministic ordering.
    */
-  shouldReview(): boolean {
+  async onSkillManageUsedAsync(): Promise<void> {
+    console.log(`[SelfImprover] skill_manage used, resetting counters`);
+    this.itersSinceSkill = 0;
+    this.toolCallsSinceSkill = 0;
+    this.lastResetAt = Date.now();
+    await this.schedulePersist();
+  }
+
+  /**
+   * Check if skill review should be triggered.
+   *
+   * Triggered when EITHER turns OR tool calls reach the threshold.
+   *
+   * `availableToolNames` is the set of tools the LLM can see in the
+   * current session. If `skill_manage` is not in the set (filtered
+   * out by an agent profile, by `disabledTools`, or otherwise
+   * hidden), spawning a sub-agent that depends on it would be
+   * pointless. The check here is the only authoritative one for
+   * tool availability — counter accumulation in `onIterationComplete`
+   * does NOT consult it (so a temporary tool-filter change doesn't
+   * silently wipe progress).
+   *
+   * Note on `skillNudgeInterval <= 0`: the original `shouldReview`
+   * allowed the `enabled = true` + `interval = 0` combination to
+   * fire on every turn. We keep that contract for testability but
+   * the practical effect is the same — in production the
+   * constructor maps `interval <= 0` to `enabled = false`, so
+   * `shouldReview` returns false on its first guard.
+   */
+  shouldReview(availableToolNames?: Set<string>): boolean {
     if (!this.enabled) return false;
-    const shouldTrigger = this.itersSinceSkill >= this.skillNudgeInterval || this.toolCallsSinceSkill >= this.skillNudgeInterval * 3;
+    if (availableToolNames && !availableToolNames.has('skill_manage')) {
+      return false;
+    }
+
+    const shouldTrigger =
+      this.skillNudgeInterval <= 0 ||
+      this.itersSinceSkill >= this.skillNudgeInterval ||
+      this.toolCallsSinceSkill >= this.skillNudgeInterval * 3;
+
     if (shouldTrigger) {
-      console.log(`[SelfImprover] Triggering skill review: iters=${this.itersSinceSkill}, toolCalls=${this.toolCallsSinceSkill}, threshold=${this.skillNudgeInterval}`);
+      console.log(
+        `[SelfImprover] Triggering skill review: iters=${this.itersSinceSkill}, ` +
+        `toolCalls=${this.toolCallsSinceSkill}, threshold=${this.skillNudgeInterval}`,
+      );
     }
     return shouldTrigger;
   }
@@ -358,6 +544,17 @@ export class SelfImprover {
     console.log(`[SelfImprover] Resetting counters`);
     this.itersSinceSkill = 0;
     this.toolCallsSinceSkill = 0;
+    this.lastReviewAt = Date.now();
+    this.schedulePersist();
+  }
+
+  /**
+   * Wipe the persisted state file on disk. Used by the CLI for
+   * `duya skill reset-counters` and by tests for cleanup. Does NOT
+   * clear the in-memory counters — call `reset()` for that.
+   */
+  async clearPersistedState(): Promise<void> {
+    await clearSelfImproverState();
   }
 
   /**
@@ -462,16 +659,6 @@ export class SelfImprover {
       existingSkills || 'No existing skills found.'
     );
 
-    const reviewMessages: Message[] = [
-      {
-        role: 'user',
-        content: `Analyze the following conversation and decide if a skill should be created or an existing skill improved:\n\n${SKILL_REVIEW_PROMPT}`,
-        timestamp: Date.now(),
-      },
-      // Include conversation history as context
-      ...messagesSnapshot,
-    ];
-
     // Create a forked agent for skill creation
     const creatorAgent = await createSubAgent({
       apiKey: llmConfig.apiKey,
@@ -482,14 +669,36 @@ export class SelfImprover {
       skillNudgeInterval: 0, // Disable self-improvement in the creator agent
     });
 
+    // Prime the creator agent with the review task + conversation snapshot.
+    // The snapshot gives the creator real context about what the user did;
+    // SKILL_REVIEW_PROMPT is the actual user-role question for this turn.
+    // Previously, this code built `reviewMessages` but never passed it to
+    // the agent — it was silently dropped.
+    const userTurnPrompt = `Analyze the following conversation and decide if a skill should be created or an existing skill improved:\n\n${SKILL_REVIEW_PROMPT}`;
+    creatorAgent.setMessages([
+      ...messagesSnapshot,
+      {
+        role: 'user',
+        content: userTurnPrompt,
+        timestamp: Date.now(),
+      },
+    ]);
+
     let skillName: string | undefined;
     let skillContent: string | undefined;
     let actionType: 'draft' | 'edit' | 'patch' | undefined;
 
     try {
       console.log('[SelfImprover] Creator Phase: Running creator agent stream...');
-      // Run the creator conversation
-      for await (const event of creatorAgent.streamChat(systemPrompt)) {
+      // Run the creator conversation.
+      // The system prompt defines the role + decision framework; the user
+      // message is the actual task prompt that asks for analysis. Passing
+      // the system prompt as the first positional arg (the user prompt)
+      // would be a critical bug — the LLM would treat the role
+      // instructions as the user's question.
+      for await (const event of creatorAgent.streamChat(userTurnPrompt, {
+        systemPrompt,
+      })) {
         if (event.type === 'tool_use' && event.data.name === 'skill_manage') {
           const input = event.data.input as Record<string, unknown>;
           console.log(`[SelfImprover] Creator Phase: skill_manage called with action=${input.action}, name=${input.name}`);
@@ -587,8 +796,10 @@ export class SelfImprover {
       };
     }
 
-    // Build evaluation prompt with skill content
-    const evaluationPrompt = `${SKILL_EVALUATOR_PROMPT}\n\n---\n\n## Draft Skill Content:\n\n${skillContent}`;
+    // Build the user-role task message that contains the draft skill.
+    // SKILL_EVALUATOR_PROMPT stays as the system prompt; the actual task
+    // for this turn is the user message below.
+    const userTurnPrompt = `Evaluate the following draft skill. Read the SKILL.md content and design + execute a real task to score it.\n\n---\n\n## Draft Skill Content:\n\n${skillContent}`;
 
     // Create a forked agent for evaluation
     const evaluatorAgent = await createSubAgent({
@@ -600,12 +811,30 @@ export class SelfImprover {
       skillNudgeInterval: 0, // Disable self-improvement in the evaluator agent
     });
 
+    // Prime evaluator with the evaluation task as the user-role message.
+    // SKILL_EVALUATOR_PROMPT is the role/system instructions; the actual
+    // task for this turn is the user message below.
+    evaluatorAgent.setMessages([
+      {
+        role: 'user',
+        content: userTurnPrompt,
+        timestamp: Date.now(),
+      },
+    ]);
+
     try {
       let evaluationResult: EvaluationResult | null = null;
 
       console.log('[SelfImprover] Evaluator Phase: Running evaluator agent stream...');
-      // Run the evaluator conversation
-      for await (const event of evaluatorAgent.streamChat(evaluationPrompt)) {
+      // Run the evaluator conversation.
+      // The system prompt defines the evaluator role + scoring rubric; the
+      // user message is the actual evaluation task for this turn. Passing
+      // the system prompt as the first positional arg (the user prompt)
+      // would be a critical bug — the LLM would treat the role
+      // instructions as the user's question.
+      for await (const event of evaluatorAgent.streamChat(userTurnPrompt, {
+        systemPrompt: SKILL_EVALUATOR_PROMPT,
+      })) {
         if (event.type === 'tool_use' && event.data.name === 'skill_manage') {
           const input = event.data.input as Record<string, unknown>;
           console.log(`[SelfImprover] Evaluator Phase: skill_manage called with action=${input.action}`);
@@ -691,8 +920,14 @@ export class SelfImprover {
     // Backup current version before revision
     await backupDraftSkill(skillName);
 
-    // Build revision prompt
-    const revisionPrompt = `You are a skill creator. Revise the existing draft skill based on evaluator feedback.
+    // Build revision prompts. SKILL_CREATOR_PROMPT is the role/system
+    // instructions (defines the skill_manage action vocabulary); the user
+    // message is the actual revision task.
+    const systemPrompt = SKILL_CREATOR_PROMPT.replace(
+      '{EXISTING_SKILLS_PLACEHOLDER}',
+      this.getExistingSkillsSummary() || 'No existing skills found.'
+    );
+    const userTurnPrompt = `Revise the existing draft skill below based on the evaluator's feedback. Use skill_manage(action='edit' or 'patch', name='${skillName}', ...) to apply your changes, then provide a brief summary of what you changed.
 
 ---
 ## Current SKILL.md Content:
@@ -702,16 +937,7 @@ ${skillContent}
 ---
 ## Evaluator Feedback (you must address this):
 
-${feedback}
-
----
-## Your Task
-
-Revise the SKILL.md above to address the evaluator's feedback.
-- Use skill_manage(action='edit', name='${skillName}', content=<revised-full-content>) for full rewrites
-- Use skill_manage(action='patch', name='${skillName}', old_string='...', new_string='...') for targeted fixes
-
-Provide a summary of what you changed.`;
+${feedback}`;
 
     // Create a forked agent for revision
     const creatorAgent = await createSubAgent({
@@ -723,9 +949,25 @@ Provide a summary of what you changed.`;
       skillNudgeInterval: 0,
     });
 
+    // Prime the agent with the revision task as the user-role message.
+    creatorAgent.setMessages([
+      {
+        role: 'user',
+        content: userTurnPrompt,
+        timestamp: Date.now(),
+      },
+    ]);
+
     try {
-      // Run the revision conversation
-      for await (const _event of creatorAgent.streamChat(revisionPrompt)) {
+      // Run the revision conversation.
+      // The system prompt defines the role + skill_manage action vocabulary;
+      // the user message is the actual revision task. Passing the system
+      // prompt as the first positional arg (the user prompt) would be a
+      // critical bug — the LLM would treat the role instructions as the
+      // user's question.
+      for await (const _event of creatorAgent.streamChat(userTurnPrompt, {
+        systemPrompt,
+      })) {
         // Just consume the stream - the agent calls skill_manage internally
       }
 
@@ -851,6 +1093,15 @@ Provide a summary of what you changed.`;
 
 let defaultSelfImprover: SelfImprover | null = null;
 
+/**
+ * Get (or lazily create) the process-wide default SelfImprover.
+ *
+ * The default instance is the one that agents SHOULD use when they
+ * want counters to persist across agent instances. Construction is
+ * sync, but state load is async — callers that need the persisted
+ * counters to be visible on the first check should `await
+ * si.init()` after fetching the singleton.
+ */
 export function getDefaultSelfImprover(): SelfImprover {
   if (!defaultSelfImprover) {
     defaultSelfImprover = new SelfImprover();
