@@ -209,10 +209,13 @@ export function AttachmentMenu({
         ref={buttonRef}
         type="button"
         onClick={handleToggle}
-        className="w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-200 bg-transparent hover:bg-muted"
+        className="w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-200 bg-transparent hover:bg-muted group"
         title={t('attachmentMenu.attach') || 'Attach'}
       >
-        <PlusIcon size={14} />
+        <PlusIcon
+          size={14}
+          className="text-[var(--muted)] group-hover:text-[var(--accent)] transition-colors duration-200"
+        />
       </button>
 
       {/* Dropdown Menu */}
