@@ -96,6 +96,10 @@ export interface SessionStreamSnapshot {
   startedAt: number;
   completedAt: number | null;
   error: string | null;
+  /** Provider error code (e.g. `rate_limit_error`, `usage_limit_exceeded`).
+   *  Lets the UI distinguish rate-limit banners from generic errors without
+   *  having to parse the human-readable `error` string. */
+  errorCode?: string | null;
   finalMessageContent: string | null;
   /** Tool timeout info set when a tool times out */
   toolTimeoutInfo?: { toolName: string; elapsedSeconds: number } | null;
