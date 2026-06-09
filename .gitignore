@@ -64,9 +64,10 @@ duyaUI.pen
 .qoder/
 .playwright-mcp/
 
-# Docs (keep only product-specs)
+# Docs (keep only product-specs and release-notes)
 docs/*/
 !docs/product-specs/
+!docs/release-notes/
 docs/*.md
 
 # Tests
