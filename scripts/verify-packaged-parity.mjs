@@ -60,6 +60,7 @@ const CHECKS = {
 
   // Agent bundle (extraResources)
   'agent-bundle/agent-process-entry.js': [path.join(RESOURCES, 'agent-bundle', 'agent-process-entry.js'), false],
+  'agent-bundle/literature-mcp-server.js': [path.join(RESOURCES, 'agent-bundle', 'literature-mcp-server.js'), false],
   'agent-bundle/BashTool/BashWorker.js': [path.join(RESOURCES, 'agent-bundle', 'BashTool', 'BashWorker.js'), false],
 
   // Agent skills (extraResources)

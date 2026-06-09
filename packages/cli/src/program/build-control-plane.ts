@@ -31,6 +31,10 @@ function buildOptions(cmd: Command, sub: CliSubcommand): void {
     declared({ flags: '--limit <n>', description: 'Page size' });
     declared({ flags: '--offset <n>', description: 'Page offset' });
   }
+  // Always expose `--format` so JSON output works on every subcommand,
+  // not just the ones that explicitly opt in. The descriptor runner
+  // reads `ctx.format` regardless of whether the flag was declared.
+  declared({ flags: '--format <text|json>', description: 'Output format (default text)' });
 }
 
 function buildArgs(cmd: Command, sub: CliSubcommand): void {
@@ -54,6 +58,15 @@ export function buildControlPlane(program: Command): void {
     program.addCommand(top);
 
     if (!desc.subcommands) continue;
+
+    // Single-subcommand descriptors (status / doctor / install-cli / …) need
+    // a small auto-dispatch hook so `duya status` runs the default sub
+    // without forcing the user to type `duya status status`. Plan 99
+    // §"Default subcommand" documents the rule — this is the runtime
+    // half of it. Multi-subcommand descriptors are unaffected.
+    const onlySubIsDefault =
+      Object.keys(desc.subcommands).length === 1 &&
+      Object.keys(desc.subcommands)[0] === 'default';
 
     for (const [subName, sub] of Object.entries(desc.subcommands)) {
       // Single-subcommand commands (status, doctor, install-cli, etc.)
@@ -115,6 +128,34 @@ export function buildControlPlane(program: Command): void {
       });
 
       top.addCommand(subCmd);
+    }
+
+    // Auto-dispatch the default subcommand when the user runs the
+    // top-level command with no subcommand (e.g. `duya status` instead
+    // of `duya status status`). Commander 14 does not do this out of
+    // the box when the exposed subcommand name is reused from the
+    // parent. Without this hook, `duya status` would just print help.
+    if (onlySubIsDefault) {
+      const defaultSub = desc.subcommands['default'];
+      top.action(async (...actionArgs: unknown[]) => {
+        const opts = actionArgs[actionArgs.length - 2] as Record<string, unknown>;
+        const userArgs = actionArgs.slice(0, -2) as string[];
+        const ctx: CliSubcommandContext = {
+          args: userArgs,
+          format: opts.format === 'json' ? 'json' : 'text',
+          options: {
+            yes: opts.yes === true,
+            limit: typeof opts.limit === 'string' ? opts.limit : undefined,
+            offset: typeof opts.offset === 'string' ? opts.offset : undefined,
+            fromFile: typeof opts.fromFile === 'string' ? opts.fromFile : undefined,
+            cron: typeof opts.cron === 'string' ? opts.cron : undefined,
+            prompt: typeof opts.prompt === 'string' ? opts.prompt : undefined,
+            platform: typeof opts.platform === 'string' ? opts.platform : undefined,
+          },
+        };
+        const code = await defaultSub.run(ctx);
+        if (code !== 0) process.exit(code);
+      });
     }
   }
 }
