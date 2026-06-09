@@ -148,9 +148,10 @@ export function buildMainBundledLiteratureCandidate(
     source: 'bundled',
     rawConfig: {
       name: 'literature',
-      command: 'node',
+      command: process.execPath,
       args: [literatureBundlePath, '--db-path', environment.DUYA_CUSTOM_DB_PATH || ''],
       env: {
+        ELECTRON_RUN_AS_NODE: '1',
         DUYA_BETTER_SQLITE3_PATH: environment.DUYA_BETTER_SQLITE3_PATH || '',
       },
     },

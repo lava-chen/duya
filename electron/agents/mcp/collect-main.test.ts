@@ -185,7 +185,9 @@ describe('buildMainBundledLiteratureCandidate', () => {
     expect(result).not.toBeNull();
     expect(result!.source).toBe('bundled');
     expect(result!.rawConfig.name).toBe('literature');
+    expect(result!.rawConfig.command).toBe(process.execPath);
     expect(result!.rawConfig.args?.[0]).toContain('literature-mcp-server.js');
+    expect(result!.rawConfig.env?.ELECTRON_RUN_AS_NODE).toBe('1');
   });
 
   it('uses the packaged bundle path when isPackaged is true', () => {

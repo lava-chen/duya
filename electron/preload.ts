@@ -1,6 +1,21 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { MCPInventorySnapshotDTO } from '../src/lib/mcp-inventory-types'
 
+// webUtils.getPathForFile is exposed from Electron 30+. On older versions
+// (e.g. Electron 28 in this project) `File.path` still works for dragged
+// files, so the renderer falls back to that. We require it lazily so the
+// preload keeps loading on versions that don't expose it.
+let webUtilsGetPathForFile: ((file: File) => string) | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { webUtils } = require('electron') as typeof import('electron') & { webUtils?: { getPathForFile: (f: File) => string } };
+  if (webUtils?.getPathForFile) {
+    webUtilsGetPathForFile = (file: File) => webUtils.getPathForFile(file);
+  }
+} catch {
+  // webUtils unavailable — renderer uses File.path fallback
+}
+
 // Preload script initialized
 
 export interface AgentAPI {
@@ -1735,6 +1750,22 @@ const electronAPI: ElectronAPI = {
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+
+// Expose webUtils.getPathForFile so the renderer can resolve real filesystem
+// paths for dropped/pasted files (Electron ≥ 32 removed File.path). On older
+// versions this stays null and the renderer falls back to file.path.
+contextBridge.exposeInMainWorld('electronWebUtils', {
+  getPathForFile: (file: File): string => {
+    if (webUtilsGetPathForFile) {
+      try {
+        return webUtilsGetPathForFile(file);
+      } catch {
+        return '';
+      }
+    }
+    return '';
+  },
+});
 
 // Agent Server port accessor for SSE client
 export function getAgentServerPort(): Promise<number | null> {

@@ -477,6 +477,19 @@ function handlePostChatSSE(
           sseEvent = { type: 'research_report', data: rest };
         } else if (msgType === 'chat:done') {
           sseEvent = { type: 'done', data: event };
+        } else if (msgType === 'chat:error') {
+          // Normalize to { type: 'error', data: { message, code? } } so the
+          // renderer can dispatch through the same `case 'error'` path used
+          // by every other chat:* event. Surface provider `code` (e.g.
+          // `rate_limit_error`, `usage_limit_exceeded`) so the UI can
+          // render a tailored banner when the model provider rate-limits us.
+          sseEvent = {
+            type: 'error',
+            data: {
+              message: (event.message as string) || 'Unknown error',
+              code: event.code,
+            },
+          };
         } else if (msgType === 'chat:db_persisted') {
           sseEvent = { type: 'db_persisted', data: event };
         } else if (msgType === 'chat:title_generated') {
@@ -705,10 +718,26 @@ function handleDeleteChat(
   res: http.ServerResponse,
   deps: RouterDeps,
 ): void {
-  const { workerManager, httpLogger } = deps;
+  const { sessionManager, workerManager, httpLogger } = deps;
   httpLogger.info('Chat interruption requested', { sessionId });
-  workerManager.killWorker(sessionId);
-  sendJson(res, 200, { ok: true });
+
+  const session = sessionManager.getSession(sessionId);
+  if (session) {
+    try {
+      if (session.state === SessionState.STREAMING || session.state === SessionState.COMPLETING) {
+        sessionManager.transitionState(sessionId, SessionState.COMPLETED);
+      }
+    } catch (err) {
+      httpLogger.warn('Failed to mark interrupted chat as completed', {
+        sessionId,
+        state: session.state,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const interrupted = workerManager.interruptWorker(sessionId);
+  sendJson(res, 200, { ok: true, interrupted });
 }
 
 function handlePostPermission(
@@ -993,7 +1022,17 @@ function handleGetChat(
         }
 
         if (eventType === 'chat:error') {
-          res.write(`event: error\nid: ${seqNum}\ndata: ${JSON.stringify(event)}\n\n`);
+          // Normalize to { type: 'error', data: { message, code? } } so the
+          // renderer dispatches through the same `case 'error'` path used
+          // by every other chat:* event, and can show tailored banners for
+          // provider error codes (rate_limit_error, usage_limit_exceeded).
+          res.write(`event: error\nid: ${seqNum}\ndata: ${JSON.stringify({
+            type: 'error',
+            data: {
+              message: event.message || 'Unknown error',
+              code: event.code,
+            },
+          })}\n\n`);
           doneReceived = true;
           res.end();
           child.stdout!.removeListener('data', onData);
