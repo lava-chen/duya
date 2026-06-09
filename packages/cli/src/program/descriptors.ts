@@ -110,6 +110,26 @@ function adaptLegacy(
 }
 
 /**
+ * Adapter for `run*InfoCommand(id, format)` legacy functions where
+ * the resource id comes BEFORE the format. `adaptLegacy` would pass
+ * `format` as the first arg, which routes "text" into the id slot
+ * and produces "Plugin not found: text" / "Skill 'text' not found" /
+ * etc. Use this adapter for the `info` subcommand family.
+ */
+function adaptIdFirst(
+  fn: LegacyFn,
+  argIndices: number[],
+): (ctx: CliSubcommandContext) => Promise<ExitCode> {
+  return async (ctx) => {
+    const args = argIndices
+      .map((i) => ctx.args[i])
+      .filter((a): a is string => a !== undefined) as unknown[];
+    const code = await fn(...args, ctx.format);
+    return ok(code);
+  };
+}
+
+/**
  * Adapter for skill-style write ops that need `yes`.
  */
 function adaptWrite(
@@ -208,7 +228,7 @@ const subPluginList: CliSubcommand = {
 const subPluginInfo: CliSubcommand = {
   description: 'Show details for one installed plugin (adds description + permissions)',
   args: [{ name: 'id', required: true, description: 'Plugin id (e.g. com.duya.literature)' }],
-  run: (ctx) => adaptLegacy(runPluginCommand.info as LegacyFn, [0])(ctx),
+  run: (ctx) => adaptIdFirst(runPluginCommand.info as LegacyFn, [0])(ctx),
 };
 
 const subPluginEnable: CliSubcommand = {
@@ -245,7 +265,7 @@ const subSessionList: CliSubcommand = {
 const subSessionShow: CliSubcommand = {
   description: 'Show details for one top-level session (adds createdAt + model)',
   args: [{ name: 'id', required: true, description: 'Session id' }],
-  run: (ctx) => adaptLegacy(runSessionCommand.show as LegacyFn, [0])(ctx),
+  run: (ctx) => adaptIdFirst(runSessionCommand.show as LegacyFn, [0])(ctx),
 };
 
 const subDoctor: CliSubcommand = {
@@ -261,7 +281,7 @@ const subSkillList: CliSubcommand = {
 const subSkillInfo: CliSubcommand = {
   description: 'Show details for one available skill',
   args: [{ name: 'id', required: true, description: 'Skill id (e.g. bundled:code-review)' }],
-  run: (ctx) => adaptLegacy(runSkillInfoCommand as LegacyFn, [0])(ctx),
+  run: (ctx) => adaptIdFirst(runSkillInfoCommand as LegacyFn, [0])(ctx),
 };
 
 const subSkillEnable: CliSubcommand = {
@@ -312,7 +332,7 @@ const subMCPList: CliSubcommand = {
 const subMCPInfo: CliSubcommand = {
   description: 'Show details for one available MCP server (adds command / args)',
   args: [{ name: 'id', required: true, description: 'MCP id (e.g. bundled:literature)' }],
-  run: (ctx) => adaptLegacy(runMCPInfoCommand as LegacyFn, [0])(ctx),
+  run: (ctx) => adaptIdFirst(runMCPInfoCommand as LegacyFn, [0])(ctx),
 };
 
 // Plan 102 / Plan 99 §3.3 Phase 7 — mcp write ops. The `mcp add`
@@ -367,7 +387,7 @@ const subProviderList: CliSubcommand = {
 const subProviderInfo: CliSubcommand = {
   description: 'Show details for one provider (adds headers / extraEnv keys)',
   args: [{ name: 'id', required: true, description: 'Provider id (e.g. anthropic, openai, ollama)' }],
-  run: (ctx) => adaptLegacy(runProviderInfoCommand as LegacyFn, [0])(ctx),
+  run: (ctx) => adaptIdFirst(runProviderInfoCommand as LegacyFn, [0])(ctx),
 };
 
 const subChannelList: CliSubcommand = {
@@ -1049,9 +1069,5 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       'kv-unset': subConfigKvUnset,
       'validate': subConfigValidate,
     },
-  },
-  {
-    name: 'setup',
-    description: 'Interactive setup wizard for configuration (legacy; preserved as-is)',
   },
 ]);
