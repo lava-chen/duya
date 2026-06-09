@@ -32,6 +32,7 @@ import { estimateContextTokens, needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRE
 import { microCleanupMessages } from './compact/microCompactCleanup.js';
 import { createLLMClient, createRetryableLLMClient, inferProvider, isMiniMaxURL, LLMClientWrapper } from './llm/index.js';
 import type { LLMClient, RetryConfig } from './llm/index.js';
+import { resolveLlmClientDiscriminator } from './providers/ProviderRuntimeAdapter.js';
 import { StreamingToolExecutor } from './tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from './tool/StreamingToolExecutor.js';
 import { backgroundTaskRegistry } from './tool/AgentTool/BackgroundTaskRegistry.js';
@@ -406,7 +407,18 @@ export class duyaAgent {
   private activeAgentProfileId: string | undefined;
 
   constructor(options: AgentOptions) {
-    const provider = options.provider || inferProvider(options.baseURL || '');
+    // Phase 3: prefer the new `runtimeConfig.apiFormat` when present
+    // (authoritative source of truth). Fall back to the legacy
+    // `options.provider` discriminator, then to the URL-sniffing
+    // `inferProvider(baseURL)` heuristic for backward compat.
+    let provider: 'anthropic' | 'openai' | 'ollama';
+    let resolvedFromRuntime = false;
+    if (options.runtimeConfig) {
+      provider = resolveLlmClientDiscriminator(options.runtimeConfig.apiFormat);
+      resolvedFromRuntime = true;
+    } else {
+      provider = options.provider || inferProvider(options.baseURL || '');
+    }
     this.provider = provider;
     this.sessionId = options.sessionId; // Store sessionId
 
@@ -423,6 +435,20 @@ export class duyaAgent {
 
     // Use retryable client if enabled (default: true)
     const enableRetry = options.enableRetry !== false;
+
+    // When the runtimeConfig is present, surface that fact in the
+    // debug log so the new path is observable end-to-end.
+    if (resolvedFromRuntime && options.runtimeConfig) {
+      logger.debug(
+        '[duyaAgent] LLM client selected from runtimeConfig.apiFormat',
+        {
+          apiFormat: options.runtimeConfig.apiFormat,
+          provider,
+          headerKeys: Object.keys(options.runtimeConfig.headers ?? {}),
+          // CRITICAL: never log apiKey / accessToken here.
+        },
+      );
+    }
 
     if (isMiniMaxURL(baseURL)) {
       const wrapper = new LLMClientWrapper({
