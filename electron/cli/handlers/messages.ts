@@ -201,12 +201,12 @@ export function handleListMessages(
 }
 
 export function handleGetMessage(
-  _req: IncomingMessage,
+  req: IncomingMessage,
   res: ServerResponse,
   sessionId: string,
   messageId: string,
 ): void {
-  void _req;
+  void req;
   if (!sessionId || sessionId.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Session id must be a non-empty string');
     return;
@@ -221,7 +221,11 @@ export function handleGetMessage(
       sendError(res, 404, 'message_not_found', `Message not found: ${messageId}`);
       return;
     }
-    sendJson(res, 200, toInfoItem(row));
+    // Wrap in `{ message }` to match the shape consumed by
+    // `duya message show` (it reads `body.message`). Previously the
+    // bare DTO made `body.message` undefined and threw
+    // "Cannot read properties of undefined (reading 'id')".
+    sendJson(res, 200, { message: toInfoItem(row) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     sendError(res, 500, 'internal_error', `Failed to get message: ${msg}`);

@@ -23,20 +23,37 @@ export function normalizeCronStatus(value: string | undefined): CronStatus {
 export function assertValidSchedule(schedule: CronSchedule): void {
   if (!schedule || typeof schedule !== 'object') throw new Error('schedule is required');
   if (schedule.kind === 'at') {
-    if (!schedule.at || Number.isNaN(Date.parse(schedule.at))) throw new Error('schedule.at must be a valid ISO date');
+    if (!schedule.at || Number.isNaN(Date.parse(schedule.at))) {
+      throw new Error(
+        `schedule.at is required for kind="at" (e.g. "2026-12-31T23:59:00Z"); got: ${JSON.stringify(schedule.at)}.\n` +
+          `  Example: { "name": "...", "prompt": "...", "schedule": { "kind": "at", "at": "2026-12-31T23:59:00Z" } }`,
+      );
+    }
     return;
   }
   if (schedule.kind === 'every') {
-    if (!schedule.everyMs || !Number.isFinite(schedule.everyMs) || schedule.everyMs <= 0) throw new Error('schedule.everyMs must be a positive number');
+    if (!schedule.everyMs || !Number.isFinite(schedule.everyMs) || schedule.everyMs <= 0) {
+      throw new Error(
+        `schedule.everyMs is required for kind="every" (positive ms, e.g. 300000 for 5 min); got: ${JSON.stringify(schedule.everyMs)}.\n` +
+          `  Example: { "name": "...", "prompt": "...", "schedule": { "kind": "every", "everyMs": 300000 } }`,
+      );
+    }
     return;
   }
   if (schedule.kind === 'cron') {
-    if (!schedule.cronExpr?.trim()) throw new Error('schedule.cronExpr is required');
+    if (!schedule.cronExpr?.trim()) {
+      throw new Error(
+        `schedule.cronExpr is required for kind="cron" (5-field expression, e.g. "0 9 * * *"); got: ${JSON.stringify(schedule.cronExpr)}.\n` +
+          `  Example: { "name": "...", "prompt": "...", "schedule": { "kind": "cron", "cronExpr": "0 9 * * *" } }`,
+      );
+    }
     try { new Cron(schedule.cronExpr, { timezone: schedule.cronTz || undefined, catch: false }); }
-    catch (error) { throw new Error(`invalid cron expression: ${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { throw new Error(`invalid cron expression "${schedule.cronExpr}": ${error instanceof Error ? error.message : String(error)}`); }
     return;
   }
-  throw new Error(`unsupported schedule kind: ${(schedule as { kind?: string }).kind ?? 'unknown'}`);
+  throw new Error(
+    `unsupported schedule.kind: ${(schedule as { kind?: string }).kind ?? 'unknown'} (expected one of: "at", "every", "cron")`,
+  );
 }
 
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | null {
@@ -93,8 +110,16 @@ export class CronPersistence {
 
   createCron(input: CreateAutomationCronInput): AutomationCron {
     assertValidSchedule(input.schedule);
-    if (!input.prompt?.trim()) throw new Error('prompt is required');
-    if (!input.model?.trim()) throw new Error('model is required');
+    if (!input.prompt?.trim()) {
+      throw new Error(
+        `prompt is required (the natural-language instruction the scheduled run will execute); got: ${JSON.stringify(input.prompt)}`,
+      );
+    }
+    if (!input.model?.trim()) {
+      throw new Error(
+        `model is required (provider model id, e.g. "minimax"); got: ${JSON.stringify(input.model)}`,
+      );
+    }
 
     const { randomUUID } = require('crypto');
     const now = Date.now();

@@ -25,6 +25,12 @@ import type { OutputFormat } from '../api/format.js';
  * Adding a new path is a breaking change for the `duya_cli` agent tool's
  * `command` field, so it must be coordinated with the agent tool's
  * command-path enum (see `packages/agent/src/tool/DuyaCliTool/constants.ts`).
+ *
+ * Note: `setup` was previously in this list but is no longer exposed by
+ * `@duya/cli`. The interactive setup wizard lives in `@duya/agent`'s own
+ * REPL entry (`packages/agent/src/cli/setup/index.ts`); users running
+ * the legacy `duya-agent setup` wizard are routed through the agent
+ * package, not the control plane.
  */
 export type CliCommandPath =
   | 'status'
@@ -43,8 +49,7 @@ export type CliCommandPath =
   | 'security'
   | 'install-cli'
   | 'uninstall-cli'
-  | 'config'
-  | 'setup';
+  | 'config';
 
 /**
  * Normalized invocation that every subcommand `run` function receives.

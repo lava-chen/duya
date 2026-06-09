@@ -347,8 +347,8 @@ export function handleListCrons(_req: IncomingMessage, res: ServerResponse): voi
   }
 }
 
-export function handleGetCron(_req: IncomingMessage, res: ServerResponse, id: string): void {
-  void _req;
+export function handleGetCron(req: IncomingMessage, res: ServerResponse, id: string): void {
+  void req;
   if (!id || id.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Cron id must be a non-empty string');
     return;
@@ -360,7 +360,11 @@ export function handleGetCron(_req: IncomingMessage, res: ServerResponse, id: st
       sendError(res, 404, 'cron_not_found', `Cron not found: ${id}`);
       return;
     }
-    sendJson(res, 200, toInfoItem(match));
+    // Wrap in `{ cron }` so the client can read `body.cron` (mirrors the
+    // shape used by `list` and `create`). Earlier we returned the bare
+    // DTO which made `body.cron` undefined on the client and surfaced
+    // as "Cannot read properties of undefined (reading 'id')".
+    sendJson(res, 200, { cron: toInfoItem(match) });
   } catch (err) {
     sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
   }
@@ -463,12 +467,12 @@ export async function handleUpdateCron(
 }
 
 export async function handleDeleteCron(
-  _req: IncomingMessage,
+  req: IncomingMessage,
   res: ServerResponse,
   id: string,
   correlationId: string | undefined,
 ): Promise<void> {
-  void _req;
+  void req;
   if (!id || id.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Cron id must be a non-empty string');
     return;
@@ -480,6 +484,12 @@ export async function handleDeleteCron(
       sendError(res, 404, 'cron_not_found', `Cron not found: ${id}`);
       return;
     }
+    // appendAuditEvent is best-effort and swallows its own errors,
+    // but await it inside the try so a stray throw still surfaces.
+    // (Bug history: this branch used to reference an undefined `req`
+    // and crashed with ReferenceError, which the outer catch turned
+    // into 500 — so the row was already deleted from the DB but the
+    // client thought the request failed, and a retry returned 404.)
     await appendAuditEvent(
       getUserDataDir(),
       makeAuditEvent(req, 'cron.delete', id, correlationId),
@@ -491,12 +501,12 @@ export async function handleDeleteCron(
 }
 
 export async function handleRunCron(
-  _req: IncomingMessage,
+  req: IncomingMessage,
   res: ServerResponse,
   id: string,
   correlationId: string | undefined,
 ): Promise<void> {
-  void _req;
+  void req;
   if (!id || id.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Cron id must be a non-empty string');
     return;
