@@ -5,6 +5,7 @@
  */
 
 import { prependBullets } from '../../prompts/constants/promptSections.js'
+import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js'
 
 export const BASH_TOOL_NAME = 'Bash'
 
@@ -19,14 +20,14 @@ const FILE_WRITE_TOOL_NAME = 'Write'
  * Default timeout in milliseconds
  */
 export function getDefaultTimeoutMs(): number {
-  return 120000 // 2 minutes
+  return BASH_DEFAULT_TIMEOUT_MS
 }
 
 /**
  * Maximum timeout in milliseconds
  */
 export function getMaxTimeoutMs(): number {
-  return 600000 // 10 minutes
+  return BASH_MAX_TIMEOUT_MS
 }
 
 // ============================================================

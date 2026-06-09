@@ -18,7 +18,8 @@ import { statSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { FileHandle } from 'fs/promises';
-import { getShellExecConfig, detectShell, type ShellInfo } from '../../utils/shellDetector.js';
+import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
+import { resolveShellProvider, type ShellProviderKind } from '../../utils/shell/providers.js';
 
 const execAsync = promisify(exec);
 
@@ -44,9 +45,6 @@ let isShuttingDown = false;
 
 // Track aborted task IDs so close handler knows to include partial output
 const abortedTaskIds = new Set<string>();
-
-// Maximum allowed timeout in milliseconds (1 hour)
-const MAX_TIMEOUT = 3600000;
 
 // Output size safety limit (500MB)
 const MAX_OUTPUT_BYTES = 500 * 1024 * 1024;
@@ -146,14 +144,14 @@ function readOutputTail(maxBytes: number): string {
 // ============================================================================
 
 function handleExecute(task: ExecuteTask): void {
-  const { taskId, input } = task;
+  const { taskId, input, toolName } = task;
   const command = input.command as string;
-  let timeout = (input.timeout as number) ?? 1200000; // 20min default
+  let timeout = (input.timeout as number) ?? BASH_DEFAULT_TIMEOUT_MS;
 
   if (typeof timeout !== 'number' || !Number.isFinite(timeout) || timeout <= 0) {
-    timeout = 1200000;
+    timeout = BASH_DEFAULT_TIMEOUT_MS;
   }
-  timeout = Math.min(timeout, MAX_TIMEOUT);
+  timeout = Math.min(timeout, BASH_MAX_TIMEOUT_MS);
 
   if (typeof command !== 'string' || command.trim().length === 0) {
     const inputKeys = input && typeof input === 'object' ? Object.keys(input) : [];
@@ -169,14 +167,30 @@ function handleExecute(task: ExecuteTask): void {
   }
 
   currentTaskId = taskId;
-  const isBackground = (input.background as boolean) === true;
+  const isBackground =
+    (input.run_in_background as boolean) === true ||
+    (input.background as boolean) === true;
 
   console.log(`[BashWorker] Starting: ${command}${isBackground ? ' [background]' : ''}`);
 
-  const shellConfig = getShellExecConfig();
-  const shellInfo = detectShell();
-  const shell = shellConfig.shell;
-  const shellArg = shellConfig.shellArg;
+  const providerKind: ShellProviderKind = toolName.toLowerCase() === 'powershell'
+    ? 'powershell'
+    : 'bash';
+  const shellProvider = resolveShellProvider(providerKind);
+  if (!shellProvider) {
+    process.send!({
+      type: 'error',
+      taskId,
+      error: providerKind === 'powershell'
+        ? 'PowerShell worker requires pwsh or Windows PowerShell, but none was detected.'
+        : 'Bash worker requires a Unix-compatible shell such as Git Bash, but none was detected.',
+    });
+    return;
+  }
+
+  const shellInfo = shellProvider.shellInfo;
+  const shell = shellInfo.path;
+  const shellArgs = shellProvider.buildArgs(command);
 
   console.log(`[BashWorker] Using shell: ${shellInfo.name} (${shell})`);
 
@@ -196,7 +210,7 @@ function handleExecute(task: ExecuteTask): void {
   open(filePath, 'w', 0o644).then(async (fd) => {
     outputFd = fd;
 
-    const proc = spawn(shell, [shellArg, command], {
+    const proc = spawn(shell, shellArgs, {
       cwd: task.workingDirectory || process.cwd(),
       env: sanitizedEnv,
       stdio: ['pipe', fd.fd, fd.fd],
@@ -355,7 +369,6 @@ function handleExecute(task: ExecuteTask): void {
 
         // Helpful error for Unix commands on Windows
         if (exitCode !== 0) {
-          const shellInfoLocal = detectShell();
           const isCommandNotFound = output.includes('is not recognized') ||
             output.includes('not found') ||
             output.includes('not internal or external command');
@@ -363,8 +376,8 @@ function handleExecute(task: ExecuteTask): void {
           if (isCommandNotFound) {
             const looksUnixSpecific =
               /\b(cat|head|tail|ls|grep|sed|awk|curl|wget|touch|chmod|chown|rm|cp|mv)\b|\/dev\/null|~\//.test(command);
-            if (looksUnixSpecific && !shellInfoLocal.supportsUnixCommands) {
-              errorMessage = `${errorMessage}. The current shell (${shellInfoLocal.name}) does not support Unix commands. ` +
+            if (looksUnixSpecific && !shellInfo.supportsUnixCommands) {
+              errorMessage = `${errorMessage}. The current shell (${shellInfo.name}) does not support Unix commands. ` +
                 `Available alternatives: ` +
                 `Use 'type' or 'Get-Content' instead of 'cat', 'Get-ChildItem' instead of 'ls', ` +
                 `'$null' instead of '/dev/null'. Consider installing Git Bash for full Unix compatibility.`;
@@ -422,12 +435,11 @@ function handleExecute(task: ExecuteTask): void {
         });
       } else if (!killed) {
         killed = true;
-        const shellInfoLocal = detectShell();
         let errorMsg = err.message;
 
         if (err.message.includes('ENOENT')) {
-          errorMsg = `Failed to spawn shell: ${shellInfoLocal.path} not found. ` +
-            `Please ensure ${shellInfoLocal.name} is installed and available.`;
+          errorMsg = `Failed to spawn shell: ${shellInfo.path} not found. ` +
+            `Please ensure ${shellInfo.name} is installed and available.`;
         }
 
         process.send!({
