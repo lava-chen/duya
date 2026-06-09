@@ -221,6 +221,36 @@ export interface ProviderAPI {
     message?: string
   }>
   upsertModelCapability: (capability: Record<string, unknown>) => Promise<{ ok: boolean; capability: Record<string, unknown> }>
+  // Phase 3: persistent model capability reads.
+  listModelCapabilities: (payload: { providerId: string }) => Promise<Array<{
+    providerId: string
+    modelId: string
+    displayName?: string
+    contextWindow?: number
+    maxOutputTokens?: number
+    supportsToolUse?: boolean
+    supportsVision?: boolean
+    supportsReasoning?: boolean
+    supportsPromptCache?: boolean
+    pricing?: Record<string, unknown>
+    source: 'preset' | 'models-api' | 'user' | 'probe'
+    updatedAt: number
+  }>>
+  getModelCapability: (payload: { providerId: string; modelId: string }) => Promise<{
+    providerId: string
+    modelId: string
+    displayName?: string
+    contextWindow?: number
+    maxOutputTokens?: number
+    supportsToolUse?: boolean
+    supportsVision?: boolean
+    supportsReasoning?: boolean
+    supportsPromptCache?: boolean
+    pricing?: Record<string, unknown>
+    source: 'preset' | 'models-api' | 'user' | 'probe'
+    updatedAt: number
+  } | null>
+  deleteModelCapability: (payload: { providerId: string; modelId: string }) => Promise<boolean>
 }
 
 export interface OutputStyleAPI {
@@ -1541,6 +1571,12 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('provider:syncModels', payload),
     upsertModelCapability: (capability: Record<string, unknown>) =>
       ipcRenderer.invoke('provider:upsertModelCapability', capability),
+    listModelCapabilities: (payload: { providerId: string }) =>
+      ipcRenderer.invoke('provider:listModelCapabilities', payload),
+    getModelCapability: (payload: { providerId: string; modelId: string }) =>
+      ipcRenderer.invoke('provider:getModelCapability', payload),
+    deleteModelCapability: (payload: { providerId: string; modelId: string }) =>
+      ipcRenderer.invoke('provider:deleteModelCapability', payload),
   },
   outputStyle: {
     list: () => ipcRenderer.invoke('config:style:getAll'),

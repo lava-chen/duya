@@ -66,9 +66,39 @@ export interface ProviderStoreReader {
   onChange(cb: () => void): () => void;
 }
 
+/**
+ * Minimal capability-store interface. The Electron bridge supplies
+ * a SQLite-backed implementation (`CapabilityDao`); tests can
+ * substitute a no-op fake.
+ */
+export interface CapabilityStore {
+  listByProvider(providerId: string): ModelCapability[];
+  getOne(providerId: string, modelId: string): ModelCapability | undefined;
+  upsert(capability: ModelCapability): ModelCapability;
+  delete(providerId: string, modelId: string): boolean;
+}
+
+/** A `CapabilityStore` that does nothing. Useful as the test default
+ *  when capability persistence is not under test. */
+export class NoopCapabilityStore implements CapabilityStore {
+  listByProvider(): ModelCapability[] {
+    return [];
+  }
+  getOne(): undefined {
+    return undefined;
+  }
+  upsert(c: ModelCapability): ModelCapability {
+    return { ...c, updatedAt: Date.now() };
+  }
+  delete(): boolean {
+    return false;
+  }
+}
+
 /** Default reader backed by the existing ConfigManager. */
 export class ProviderStore {
   private reader: ProviderStoreReader;
+  private capabilityStore: CapabilityStore;
   private cache: Map<string, LlmProvider> = new Map();
   private activeId: string | undefined;
   private initialized = false;
@@ -79,8 +109,11 @@ export class ProviderStore {
    * `provider-store-electron` module. Production code paths should
    * inject the reader explicitly via `provider-store-electron.ts`;
    * tests should pass a fake.
+   * @param capabilityStore Optional capability persistence. Defaults
+   * to a `NoopCapabilityStore` so tests that don't exercise the
+   * capability surface still work.
    */
-  constructor(reader?: ProviderStoreReader) {
+  constructor(reader?: ProviderStoreReader, capabilityStore?: CapabilityStore) {
     if (reader) {
       this.reader = reader;
     } else {
@@ -91,6 +124,21 @@ export class ProviderStore {
         createDefaultReader: () => ProviderStoreReader;
       };
       this.reader = createDefaultReader();
+    }
+    if (capabilityStore) {
+      this.capabilityStore = capabilityStore;
+    } else {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const mod = require('./provider-store-electron.js') as {
+          createDefaultDao?: () => CapabilityStore;
+        };
+        this.capabilityStore = mod.createDefaultDao
+          ? mod.createDefaultDao()
+          : new NoopCapabilityStore();
+      } catch {
+        this.capabilityStore = new NoopCapabilityStore();
+      }
     }
   }
 
@@ -324,23 +372,33 @@ export class ProviderStore {
   // ===========================================================================
 
   /**
-   * Update a single `ModelCapability` record. This is the single
-   * write path for capability changes (e.g., contextWindow set by the
-   * ProviderModelEditor).
+   * Phase 3: persist a `ModelCapability` record. The capability is
+   * stored in the SQLite `provider_model_capabilities` table
+   * (Phase 3 schema migration in `electron/db/schema.ts`).
    *
-   * Currently the capability lives in the renderer's
-   * `ModelCapabilityService` (in-memory). The agent runtime keeps its
-   * own SQLite `model_capabilities` cache (multimodal flag only). The
-   * store exposes this method so IPC callers can upsert without
-   * importing the renderer-side singleton.
-   *
-   * For Phase 2 we simply return the upserted record and rely on the
-   * renderer's service to mirror it locally.
+   * The record is keyed on `(provider_id, model_id)`. The user's
+   * `source = 'user'` always wins over `preset` / `models-api`.
    */
   upsertModelCapability(
     capability: ModelCapability,
   ): { ok: true; capability: ModelCapability } {
-    return { ok: true, capability: { ...capability, updatedAt: Date.now() } };
+    const stored = this.capabilityStore.upsert(capability);
+    return { ok: true, capability: stored };
+  }
+
+  listModelCapabilities(providerId: string): ModelCapability[] {
+    return this.capabilityStore.listByProvider(providerId);
+  }
+
+  getModelCapability(
+    providerId: string,
+    modelId: string,
+  ): ModelCapability | undefined {
+    return this.capabilityStore.getOne(providerId, modelId);
+  }
+
+  deleteModelCapability(providerId: string, modelId: string): boolean {
+    return this.capabilityStore.delete(providerId, modelId);
   }
 
   // ===========================================================================

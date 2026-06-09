@@ -555,6 +555,34 @@ function ensureCriticalSchema(db: BetterSqlite3Db): void {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON message_attachments(message_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_attachments_session_id ON message_attachments(session_id)`);
+
+  // Phase 3: per-model capability records (renderer-edited +
+  // runtime-discovered). Source-of-truth for the user-edited
+  // `contextWindow` etc. kept here so the capability survives
+  // renderer reloads and the agent runtime can read it via
+  // shared DB later.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS provider_model_capabilities (
+      provider_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      display_name TEXT,
+      context_window INTEGER,
+      max_output_tokens INTEGER,
+      supports_tool_use INTEGER,
+      supports_vision INTEGER,
+      supports_reasoning INTEGER,
+      supports_prompt_cache INTEGER,
+      pricing_input_per_million REAL,
+      pricing_output_per_million REAL,
+      pricing_cache_read_per_million REAL,
+      pricing_cache_write_per_million REAL,
+      pricing_currency TEXT,
+      source TEXT NOT NULL CHECK(source IN ('preset', 'models-api', 'user', 'probe')),
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (provider_id, model_id)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_pmc_provider_id ON provider_model_capabilities(provider_id)`);
 }
 
 function ensureMigrationsTable(db: BetterSqlite3Db): void {

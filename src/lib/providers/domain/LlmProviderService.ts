@@ -52,6 +52,8 @@ export class LlmProviderService {
   private activeId: string | undefined;
   private initialized = false;
   private store: LlmProviderStore;
+  private configUnsubscribe: (() => void) | null = null;
+  private resyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(store: LlmProviderStore) {
     this.store = store;
@@ -73,6 +75,46 @@ export class LlmProviderService {
       if (p.isActive) this.activeId = p.id;
     }
     this.initialized = true;
+  }
+
+  /**
+   * Phase 3: subscribe to the store's change events. The store's
+   * `onChange` callback signature is `() => void` (no args), but
+   * we wrap it to support an optional `(config: unknown) => void`
+   * user callback (the renderer-side `onConfigUpdate(config)`
+   * takes the full config payload).
+   */
+  subscribeToConfigUpdates(
+    onConfigUpdate?: (config: unknown) => void,
+  ): () => void {
+    if (this.configUnsubscribe) {
+      return this.configUnsubscribe;
+    }
+    const wrapped = (config: unknown) => {
+      onConfigUpdate?.(config);
+      this.scheduleResync();
+    };
+    const onChange = this.store.onChange;
+    if (onChange) {
+      // The store's onChange is `() => void`; we discard the
+      // wrapped signature by casting through unknown once. The
+      // wrapped fn never reads the parameter on its own.
+      this.configUnsubscribe = onChange(() => wrapped(undefined)) ?? null;
+    } else {
+      this.configUnsubscribe = () => {};
+    }
+    return this.configUnsubscribe;
+  }
+
+  /** Debounced re-initialization. Avoids thrashing on a burst of
+   *  config updates (e.g. user dragging a slider). */
+  private scheduleResync(): void {
+    if (this.resyncTimer) clearTimeout(this.resyncTimer);
+    this.resyncTimer = setTimeout(() => {
+      this.resyncTimer = null;
+      this.initialized = false;
+      void this.initialize();
+    }, 50);
   }
 
   // ===========================================================================

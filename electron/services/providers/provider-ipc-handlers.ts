@@ -176,6 +176,21 @@ export function registerProviderIpcHandlers(opts?: {
     return store.upsertModelCapability(capability);
   });
 
+  // --- list model capabilities by provider (Phase 3) ---
+  ipcMain.handle('provider:listModelCapabilities', (_event, payload: { providerId: string }) => {
+    return store.listModelCapabilities(payload?.providerId);
+  });
+
+  // --- get a single capability record (Phase 3) ---
+  ipcMain.handle('provider:getModelCapability', (_event, payload: { providerId: string; modelId: string }) => {
+    return store.getModelCapability(payload?.providerId, payload?.modelId);
+  });
+
+  // --- delete a capability record (Phase 3) ---
+  ipcMain.handle('provider:deleteModelCapability', (_event, payload: { providerId: string; modelId: string }) => {
+    return store.deleteModelCapability(payload?.providerId, payload?.modelId);
+  });
+
   logger.info('Provider IPC handlers registered', undefined, LogComponent.AgentCommunicator);
 }
 

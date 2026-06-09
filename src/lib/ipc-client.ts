@@ -627,6 +627,25 @@ export async function upsertModelCapabilityIPC(
   return raw;
 }
 
+// Phase 3: persistent model capability reads.
+export async function listModelCapabilitiesIPC(
+  payload: { providerId: string },
+): Promise<ModelCapabilityDTO[]> {
+  return (await window.electronAPI!.provider!.listModelCapabilities(payload)) as ModelCapabilityDTO[];
+}
+
+export async function getModelCapabilityIPC(
+  payload: { providerId: string; modelId: string },
+): Promise<ModelCapabilityDTO | null> {
+  return (await window.electronAPI!.provider!.getModelCapability(payload)) as ModelCapabilityDTO | null;
+}
+
+export async function deleteModelCapabilityIPC(
+  payload: { providerId: string; modelId: string },
+): Promise<boolean> {
+  return (await window.electronAPI!.provider!.deleteModelCapability(payload)) as boolean;
+}
+
 // Output Style operations
 export async function listOutputStylesIPC(): Promise<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>> {
   return await window.electronAPI!.outputStyle!.list() as Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>

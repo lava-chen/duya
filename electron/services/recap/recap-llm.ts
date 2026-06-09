@@ -1,37 +1,53 @@
-import type { ApiProvider } from '../../config/manager';
+/**
+ * electron/services/recap/recap-llm.ts
+ *
+ * Recap (session summary) LLM call. Phase 3: switched from a legacy
+ * `ApiProvider` to a `ProviderRuntimeConfig` so the recap path
+ * uses the same auth / header semantics as Chat.
+ *
+ * The caller (`recap-service.ts`) builds the runtime config via
+ * `provider-store.getProviderRuntimeConfig(providerId, model)`.
+ * This file MUST NOT interpret `providerType` / `baseUrl` strings.
+ */
+
 import { getLogger, LogComponent } from '../../logging/logger';
+import type { ProviderRuntimeConfig } from '../../../src/lib/providers/types';
 
 const logger = getLogger();
 
 const RECAP_TIMEOUT_MS = 15_000;
 
 export async function callLLMForRecap(
-  provider: ApiProvider,
+  runtime: ProviderRuntimeConfig,
   systemPrompt: string,
   userContent: string,
 ): Promise<string | null> {
-  const model =
-    (provider.options?.model as string) ||
-    (provider.options?.defaultModel as string) ||
-    '';
-
   try {
-    switch (provider.providerType) {
+    // Route by apiFormat, not by baseUrl string. This is the
+    // single source of truth — if a new apiFormat is added, the
+    // compiler will flag this switch (via the exhaustive check in
+    // resolveLlmClientDiscriminator).
+    switch (runtime.apiFormat) {
       case 'anthropic':
       case 'bedrock':
       case 'vertex':
-        return await callAnthropic(provider, systemPrompt, userContent, model);
-      case 'openai':
-      case 'openai-compatible':
-      case 'openrouter':
-      case 'google':
-      case 'gemini-image':
-        return await callOpenAI(provider, systemPrompt, userContent, model);
+        return await callAnthropic(runtime, systemPrompt, userContent);
+      case 'openai-chat':
+      case 'openai-responses':
+      case 'gemini':
+        return await callOpenAI(runtime, systemPrompt, userContent);
       case 'ollama':
-        return await callOllama(provider, systemPrompt, userContent, model);
-      default:
-        logger.warn('Unknown provider type for recap', { providerType: provider.providerType }, LogComponent.Main);
+        return await callOllama(runtime, systemPrompt, userContent);
+      default: {
+        // Exhaustiveness — let TS catch new apiFormats at compile time.
+        const _exhaustive: never = runtime.apiFormat;
+        logger.warn(
+          'Recap LLM call: unknown apiFormat',
+          { apiFormat: _exhaustive as string },
+          LogComponent.Main,
+        );
         return null;
+      }
     }
   } catch (error) {
     logger.warn(
@@ -44,15 +60,14 @@ export async function callLLMForRecap(
 }
 
 async function callAnthropic(
-  provider: ApiProvider,
+  runtime: ProviderRuntimeConfig,
   systemPrompt: string,
   userContent: string,
-  model: string,
 ): Promise<string | null> {
-  const baseUrl = provider.baseUrl || 'https://api.anthropic.com';
+  const baseUrl = runtime.baseUrl || 'https://api.anthropic.com';
 
   const body = JSON.stringify({
-    model,
+    model: runtime.model,
     max_tokens: 120,
     temperature: 0.3,
     system: systemPrompt,
@@ -63,13 +78,19 @@ async function callAnthropic(
   const timeoutId = setTimeout(() => controller.abort(), RECAP_TIMEOUT_MS);
 
   try {
+    // Reuse the headers from the runtime config so the recap
+    // follows the same auth style as Chat (Bearer vs x-api-key).
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...runtime.headers,
+    };
+    // Always pin the anthropic-version for the wire protocol.
+    headers['anthropic-version'] =
+      headers['anthropic-version'] ?? '2023-06-01';
+
     const response = await fetch(`${baseUrl}/v1/messages`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': provider.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers,
       body,
       signal: controller.signal,
     });
@@ -91,15 +112,14 @@ async function callAnthropic(
 }
 
 async function callOpenAI(
-  provider: ApiProvider,
+  runtime: ProviderRuntimeConfig,
   systemPrompt: string,
   userContent: string,
-  model: string,
 ): Promise<string | null> {
-  const baseUrl = provider.baseUrl || 'https://api.openai.com';
+  const baseUrl = runtime.baseUrl || 'https://api.openai.com';
 
   const body = JSON.stringify({
-    model,
+    model: runtime.model,
     max_tokens: 120,
     temperature: 0.3,
     messages: [
@@ -112,12 +132,13 @@ async function callOpenAI(
   const timeoutId = setTimeout(() => controller.abort(), RECAP_TIMEOUT_MS);
 
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...runtime.headers,
+    };
     const response = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${provider.apiKey}`,
-      },
+      headers,
       body,
       signal: controller.signal,
     });
@@ -138,15 +159,14 @@ async function callOpenAI(
 }
 
 async function callOllama(
-  provider: ApiProvider,
+  runtime: ProviderRuntimeConfig,
   systemPrompt: string,
   userContent: string,
-  model: string,
 ): Promise<string | null> {
-  const baseUrl = provider.baseUrl || 'http://localhost:11434';
+  const baseUrl = runtime.baseUrl || 'http://localhost:11434';
 
   const body = JSON.stringify({
-    model,
+    model: runtime.model,
     stream: false,
     options: { temperature: 0.3, num_predict: 120 },
     system: systemPrompt,
@@ -157,9 +177,13 @@ async function callOllama(
   const timeoutId = setTimeout(() => controller.abort(), RECAP_TIMEOUT_MS);
 
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...runtime.headers,
+    };
     const response = await fetch(`${baseUrl}/api/generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body,
       signal: controller.signal,
     });

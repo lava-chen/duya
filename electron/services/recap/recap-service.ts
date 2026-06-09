@@ -5,6 +5,7 @@ import type { SessionManager } from '../../agents/session-manager';
 import { getMessagesBySession } from '../../db/queries/messages';
 import { buildRecapPrompt } from './recap-prompt';
 import { callLLMForRecap } from './recap-llm';
+import { getProviderStore } from '../providers/provider-store-electron';
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 3 * 60 * 1000;
 const MIN_TURN_COUNT = 3;
@@ -182,7 +183,23 @@ export class RecapService {
 
     const { systemPrompt, userContent } = buildRecapPrompt(messages);
 
-    return callLLMForRecap(provider, systemPrompt, userContent);
+    // Phase 3: build a ProviderRuntimeConfig via the store so the
+    // recap path uses the same auth / header semantics as Chat. The
+    // store falls back to the active provider's `options.defaultModel`
+    // (or `options.model` / `enabled_models[0]`) when no model is
+    // configured.
+    const store = getProviderStore();
+    const model =
+      (provider.options?.defaultModel as string) ||
+      (provider.options?.model as string) ||
+      (Array.isArray(provider.options?.enabled_models) &&
+        (provider.options?.enabled_models as string[])[0]) ||
+      '';
+    const runtime = store.getProviderRuntimeConfig(provider.id, model);
+    if ('error' in runtime) {
+      return null;
+    }
+    return callLLMForRecap(runtime, systemPrompt, userContent);
   }
 
   private getTurnCount(sessionId: string): number {
