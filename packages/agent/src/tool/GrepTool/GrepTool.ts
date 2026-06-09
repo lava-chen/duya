@@ -14,6 +14,7 @@ import type {
   RenderedToolMessage,
   ToolInterruptBehavior,
 } from '../types.js';
+import { sanitizeWorkingDirectory } from './sanitize.js';
 
 const execAsync = promisify(exec);
 
@@ -145,7 +146,15 @@ export class GrepTool extends BaseTool {
 
   constructor(options: GrepToolOptions = {}) {
     super();
-    this.workingDirectory = options.workingDirectory ?? process.cwd();
+    // Process cwd is unreliable in the packaged Electron main process — it
+    // resolves to the app install dir (e.g. C:\Program Files\duya\resources\app.asar),
+    // not the user's project. Prefer the explicit option; only fall back to
+    // process.cwd() when no better source is available, and detect the asar
+    // case so the caller gets a clear error instead of a silent misscan.
+    // The empty-string default is safe because execute() re-runs the
+    // sanitizer on every call and refuses to scan when the result is
+    // undefined.
+    this.workingDirectory = sanitizeWorkingDirectory(options.workingDirectory) ?? '';
   }
 
   get interruptBehavior(): ToolInterruptBehavior {
@@ -349,7 +358,7 @@ export class GrepTool extends BaseTool {
   /**
    * Execute search
    */
-  async execute(input: Record<string, unknown>): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, workingDirectory?: string): Promise<ToolResult> {
     const id = crypto.randomUUID();
 
     const validation = validateGrepInput(input);
@@ -365,11 +374,29 @@ export class GrepTool extends BaseTool {
     const { pattern, path, case_sensitive = false, max_results, file_pattern } = validation.data;
     const effectiveMaxResults = max_results ?? this.defaultMaxResults;
 
+    // Per-call working directory: prefer the live one passed in from the
+    // tool-use context, fall back to the instance value captured at construct
+    // time. Both are routed through the asar-safe sanitizer so we never end
+    // up running ripgrep inside the install bundle.
+    const baseDir = sanitizeWorkingDirectory(workingDirectory) ?? this.workingDirectory;
+
+    if (!baseDir) {
+      return {
+        id,
+        name: this.name,
+        result: JSON.stringify({
+          success: false,
+          error: 'No working directory available. Pass `path` explicitly or run from a project context.',
+        }),
+        error: true,
+      };
+    }
+
     const searchPath = path
       ? isAbsolute(path)
         ? path
-        : join(this.workingDirectory, path)
-      : this.workingDirectory;
+        : join(baseDir, path)
+      : baseDir;
 
     try {
       const hasRipgrep = await this.isRipgrepAvailable();

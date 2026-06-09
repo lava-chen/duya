@@ -15,6 +15,7 @@ import type {
   ToolInterruptBehavior,
 } from '../types.js';
 import { expandPath } from '../../utils/path.js';
+import { sanitizeWorkingDirectory } from '../GrepTool/sanitize.js';
 
 // ============================================================
 // Tool Definition
@@ -62,9 +63,26 @@ export class GlobTool extends BaseTool {
     }
 
     const { pattern, path: searchPath, maxResults } = validation.data;
-    const cwd = searchPath || workingDirectory || process.cwd();
+    // Prefer the live context cwd, fall back to whatever was captured at
+    // construct time. Both must be asar-safe — process.cwd() in the packaged
+    // Electron main process resolves to the install dir.
+    const safeCwd = sanitizeWorkingDirectory(searchPath)
+      ?? sanitizeWorkingDirectory(workingDirectory)
+      ?? sanitizeWorkingDirectory(process.cwd());
 
-    return executeGlob(pattern, cwd, { maxResults });
+    if (!safeCwd) {
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        result: JSON.stringify({
+          success: false,
+          error: 'No safe working directory available (asar bundle, empty, or non-existent path). Pass `path` explicitly or run from a project context.',
+        }),
+        error: true,
+      };
+    }
+
+    return executeGlob(pattern, safeCwd, { maxResults });
   }
 
   renderToolResultMessage(result: ToolResult): RenderedToolMessage {
