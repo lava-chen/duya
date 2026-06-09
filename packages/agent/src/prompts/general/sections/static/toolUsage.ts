@@ -13,6 +13,10 @@ export function getToolUsageSection(
   const hasTaskTool = ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
   const isReplModeEnabled = ctx.isReplModeEnabled ?? false
+  const hasPowerShellTool = ctx.enabledTools.has('powershell')
+  const shellToolsLabel = hasPowerShellTool
+    ? `${TOOL_NAMES.BASH} or ${TOOL_NAMES.POWERSHELL}`
+    : TOOL_NAMES.BASH
 
   if (isReplModeEnabled) {
     const items = [
@@ -36,11 +40,11 @@ ${items.map(item => ` - ${item}`).join('\n')}`
           `To search for files use ${TOOL_NAMES.GLOB}`,
           `To search content use ${TOOL_NAMES.GREP}`,
         ]),
-    `Reserve using ${TOOL_NAMES.BASH} for system commands that require shell execution.`,
+    `Reserve using ${shellToolsLabel} for system commands that require shell execution. Use ${TOOL_NAMES.BASH} for Unix-style shell commands and ${TOOL_NAMES.POWERSHELL} for Windows-native PowerShell commands when available.`,
   ]
 
   const items = [
-    `Do NOT use ${TOOL_NAMES.BASH} when a relevant dedicated tool is provided. This helps the user understand and review your work:`,
+    `Do NOT use ${shellToolsLabel} when a relevant dedicated tool is provided. This helps the user understand and review your work:`,
     providedToolSubitems,
     hasTaskTool
       ? `Break down and manage your work with the ${TOOL_NAMES.TASK} tool.`

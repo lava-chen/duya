@@ -19,6 +19,7 @@ export interface MCPServerConnection {
 
 export const TOOL_NAMES = {
   BASH: 'Bash',
+  POWERSHELL: 'PowerShell',
   READ: 'Read',
   WRITE: 'Write',
   EDIT: 'Edit',

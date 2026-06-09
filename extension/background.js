@@ -473,7 +473,7 @@ async function handleCommand(msg) {
         break;
 
       case 'tabs':
-        await handleTabs(id);
+        await handleTabs(id, msg);
         break;
 
       case 'screenshot':
@@ -513,15 +513,96 @@ async function handleCommand(msg) {
         sendResult(id, { ok: true });
         break;
 
+      case 'cookies':
+        await handleCookies(id, msg);
+        break;
+
+      case 'set-file-input':
+        await handleSetFileInput(id, msg);
+        break;
+
+      case 'network-capture-start':
+        await handleNetworkCaptureStart(id, msg);
+        break;
+
+      case 'network-capture-read':
+        await handleNetworkCaptureRead(id, msg);
+        break;
+
+      case 'frames':
+        await handleFrames(id, msg);
+        break;
+
+      case 'evaluate-in-frame':
+        await handleEvaluateInFrame(id, msg);
+        break;
+
       default:
         sendResult(id, { ok: false, error: `Unknown action: ${action}` });
     }
   } catch (error) {
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
 // ─── CDP Command ─────────────────────────────────────────────────────
+
+/**
+ * Extract a human-readable message from a CDP Runtime.evaluate response
+ * exceptionDetails payload. CDP's exceptionDetails.text is always the
+ * literal string "Uncaught" for JS exceptions — the real reason lives in
+ * exceptionDetails.exception.description (or .value as a fallback).
+ */
+function describeException(exceptionDetails) {
+  if (!exceptionDetails) return 'Uncaught';
+  const ex = exceptionDetails.exception || {};
+  return (
+    ex.description ||
+    ex.value ||
+    (ex.className && ex.description) ||
+    exceptionDetails.text ||
+    'Uncaught'
+  );
+}
+
+/**
+ * chrome.debugger sendCommand surfaces Runtime.evaluate uncaught exceptions
+ * by throwing an error whose message is literally "Uncaught". Re-issue the
+ * call wrapped in a try so we can recover the exceptionDetails payload —
+ * chrome.debugger returns the full result (including exceptionDetails) on a
+ * second call instead of throwing, so we can read it.
+ */
+async function safeEvaluate(debuggee, expression) {
+  try {
+    const result = await chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    if (result && result.exceptionDetails) {
+      const err = new Error(describeException(result.exceptionDetails));
+      err.exceptionDetails = result.exceptionDetails;
+      throw err;
+    }
+    return result;
+  } catch (err) {
+    // If we already produced a detailed error, propagate it.
+    if (err && err.exceptionDetails) throw err;
+    throw new Error(unwrapDebuggerMessage(err));
+  }
+}
+
+/**
+ * Unwrap a chrome.debugger sendCommand thrown error. For most commands the
+ * thrown message is descriptive enough (e.g. "No node with given id found"),
+ * but for Runtime.evaluate it's just "Uncaught" — fall back to a generic
+ * label rather than passing the literal "Uncaught" to the agent.
+ */
+function unwrapDebuggerMessage(err) {
+  const msg = err && err.message ? String(err.message) : 'Unknown error';
+  if (!msg || msg === 'Uncaught') return 'Runtime evaluation failed (Uncaught)';
+  return msg;
+}
 
 async function handleCDP(id, msg) {
   const { tabId, method, params = {} } = msg;
@@ -546,11 +627,11 @@ async function handleCDP(id, msg) {
         sendResult(id, { ok: true, data: result });
         return;
       } catch (retryError) {
-        sendResult(id, { ok: false, error: retryError.message });
+        sendResult(id, { ok: false, error: unwrapDebuggerMessage(retryError) });
         return;
       }
     }
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
@@ -676,31 +757,126 @@ async function handleNavigate(id, msg) {
 
 // ─── Tabs ────────────────────────────────────────────────────────────
 
-async function handleTabs(id) {
-  // Only list tabs in the automation window that belong to active sessions
-  if (automationWindowId && sessionTabs.size > 0) {
-    try {
-      const tabs = await chrome.tabs.query({ windowId: automationWindowId });
-      const sessionTabIds = new Set(
-        Array.from(sessionTabs.values()).map(s => s.tabId)
-      );
-      sendResult(id, {
-        ok: true,
-        data: tabs
-          .filter(t => sessionTabIds.has(t.id))
-          .map(t => ({
-            id: t.id,
-            url: t.url,
-            title: t.title,
-            active: t.active,
-          })),
-      });
-      return;
-    } catch {
-      // Window closed, fall through to empty list
+async function handleTabs(id, msg) {
+  const op = msg.op || 'list';
+
+  if (op === 'list') {
+    // Only list tabs in the automation window that belong to active sessions
+    if (automationWindowId && sessionTabs.size > 0) {
+      try {
+        const tabs = await chrome.tabs.query({ windowId: automationWindowId });
+        const sessionTabIds = new Set(
+          Array.from(sessionTabs.values()).map(s => s.tabId)
+        );
+        sendResult(id, {
+          ok: true,
+          data: tabs
+            .filter(t => sessionTabIds.has(t.id))
+            .map(t => ({
+              id: t.id,
+              url: t.url,
+              title: t.title,
+              active: t.active,
+            })),
+        });
+        return;
+      } catch {
+        // Window closed, fall through to empty list
+      }
     }
+    sendResult(id, { ok: true, data: [] });
+    return;
   }
-  sendResult(id, { ok: true, data: [] });
+
+  if (op === 'new') {
+    const sessionId = msg.sessionId;
+    if (!sessionId) {
+      sendResult(id, { ok: false, error: 'Missing sessionId for tabs new' });
+      return;
+    }
+    const tabId = await getOrCreateSessionTab(sessionId);
+    if (msg.url) {
+      try {
+        await chrome.tabs.update(tabId, { url: msg.url });
+        await waitForTabLoad(tabId, 15000);
+        try { await attachTab(tabId); } catch {}
+      } catch (error) {
+        sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
+        return;
+      }
+    }
+    const tab = await chrome.tabs.get(tabId);
+    sendResult(id, {
+      ok: true,
+      data: { tabId, url: tab.url, title: tab.title },
+    });
+    return;
+  }
+
+  if (op === 'select') {
+    const sessionId = msg.sessionId;
+    if (!sessionId) {
+      sendResult(id, { ok: false, error: 'Missing sessionId for tabs select' });
+      return;
+    }
+    const targetTabId = typeof msg.tabId === 'number'
+      ? msg.tabId
+      : parseInt(msg.tabId, 10);
+    if (!targetTabId || Number.isNaN(targetTabId)) {
+      sendResult(id, { ok: false, error: 'Missing or invalid tabId for tabs select' });
+      return;
+    }
+    const session = sessionTabs.get(sessionId);
+    if (!session) {
+      sendResult(id, { ok: false, error: `No session "${sessionId}"` });
+      return;
+    }
+    // Re-bind the session to the requested tab. The agent owns the new tabId
+    // for this session, so subsequent commands will validate against it.
+    session.tabId = targetTabId;
+    try { await attachTab(targetTabId); } catch {}
+    try {
+      const tab = await chrome.tabs.get(targetTabId);
+      sendResult(id, { ok: true, data: { tabId: targetTabId, url: tab.url, title: tab.title } });
+    } catch (error) {
+      sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
+    }
+    return;
+  }
+
+  if (op === 'close') {
+    const sessionId = msg.sessionId;
+    if (!sessionId) {
+      sendResult(id, { ok: false, error: 'Missing sessionId for tabs close' });
+      return;
+    }
+    await closeSessionTab(sessionId);
+    sendResult(id, { ok: true });
+    return;
+  }
+
+  sendResult(id, { ok: false, error: `Unknown tabs op: ${op}` });
+}
+
+/**
+ * Wait for a tab to reach 'complete' status, with a timeout fallback.
+ */
+function waitForTabLoad(tabId, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+    const listener = (updatedTabId, info) => {
+      if (updatedTabId === tabId && info.status === 'complete') finish();
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    const timer = setTimeout(finish, timeoutMs);
+  });
 }
 
 // ─── Screenshot ──────────────────────────────────────────────────────
@@ -725,23 +901,39 @@ async function handleScreenshot(id, msg) {
   try {
     if (fullPage) {
       const metrics = await withTimeout(chrome.debugger.sendCommand(debuggee, 'Page.getLayoutMetrics', {}));
+      // cssContentSize gives post-CSS-layout dimensions, which is what users
+      // expect for a "full page" capture. Fall back to contentSize if missing.
+      const size = metrics.cssContentSize || metrics.contentSize;
+      if (!size || !size.width || !size.height) {
+        sendResult(id, { ok: false, error: 'Could not determine full page size' });
+        return;
+      }
       await withTimeout(chrome.debugger.sendCommand(debuggee, 'Emulation.setDeviceMetricsOverride', {
-        width: metrics.contentSize.width,
-        height: metrics.contentSize.height,
+        width: Math.ceil(size.width),
+        height: Math.ceil(size.height),
         deviceScaleFactor: 1,
         mobile: false,
       }));
+      // Give the renderer a moment to apply the new viewport before capture.
+      // Without this, captureScreenshot can race the layout and return a
+      // black or partial image on heavy pages (Twitter, Reddit, etc).
+      await new Promise((r) => setTimeout(r, 250));
 
-      const result = await withTimeout(chrome.debugger.sendCommand(debuggee, 'Page.captureScreenshot', { format: 'png' }));
-      chrome.debugger.sendCommand(debuggee, 'Emulation.clearDeviceMetricsOverride', {}).catch(() => {});
-
+      let result;
+      try {
+        result = await withTimeout(chrome.debugger.sendCommand(debuggee, 'Page.captureScreenshot', { format: 'png' }));
+      } finally {
+        // Always reset the viewport, even if capture throws, so subsequent
+        // commands run with the user's real viewport.
+        await chrome.debugger.sendCommand(debuggee, 'Emulation.clearDeviceMetricsOverride', {}).catch(() => {});
+      }
       sendResult(id, { ok: true, data: result });
     } else {
       const result = await withTimeout(chrome.debugger.sendCommand(debuggee, 'Page.captureScreenshot', { format: 'png' }));
       sendResult(id, { ok: true, data: result });
     }
   } catch (error) {
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
@@ -752,19 +944,10 @@ async function handleEvaluate(id, msg) {
   const debuggee = await getOrAttachTab(tabId);
 
   try {
-    const result = await chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
-      expression: script,
-      returnByValue: true,
-      awaitPromise: true,
-    });
-
-    if (result.exceptionDetails) {
-      sendResult(id, { ok: false, error: result.exceptionDetails.text });
-    } else {
-      sendResult(id, { ok: true, data: result.result?.value });
-    }
+    const result = await safeEvaluate(debuggee, script);
+    sendResult(id, { ok: true, data: result?.result?.value });
   } catch (error) {
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
@@ -782,11 +965,22 @@ async function handleClick(id, msg) {
 
   try {
     if (selector.startsWith('@')) {
-      // Ref-based clicking
+      // Ref-based clicking: snapshot wrote data-duya-ref="N", resolve it,
+      // scroll into view, then click. Return a boolean so the caller can
+      // distinguish "clicked" from "ref not found".
       const ref = selector.slice(1);
-      await chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
-        expression: `document.querySelector('[data-duya-ref="${ref}"]')?.click()`,
-      });
+      const result = await safeEvaluate(debuggee, `(()=>{
+        const el = document.querySelector('[data-duya-ref="${ref}"]');
+        if (!el) return { ok: false, reason: 'ref_not_found', ref: '${ref}' };
+        try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch {}
+        el.click();
+        return { ok: true };
+      })()`);
+      const value = result?.result?.value;
+      if (value && value.ok === false) {
+        sendResult(id, { ok: false, error: `Ref @${ref} not found in current page snapshot` });
+        return;
+      }
     } else {
       // Selector-based clicking: get document root first, then query
       const doc = await chrome.debugger.sendCommand(debuggee, 'DOM.getDocument', {});
@@ -814,7 +1008,7 @@ async function handleClick(id, msg) {
 
     sendResult(id, { ok: true });
   } catch (error) {
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
@@ -838,9 +1032,17 @@ async function handleType(id, msg) {
     // Focus element by clicking it (internal, does not sendResult)
     if (selector.startsWith('@')) {
       const ref = selector.slice(1);
-      await chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
-        expression: `document.querySelector('[data-duya-ref="${ref}"]')?.focus()`,
-      });
+      const result = await safeEvaluate(debuggee, `(()=>{
+        const el = document.querySelector('[data-duya-ref="${ref}"]');
+        if (!el) return { ok: false, reason: 'ref_not_found', ref: '${ref}' };
+        try { el.focus(); } catch {}
+        return { ok: true };
+      })()`);
+      const value = result?.result?.value;
+      if (value && value.ok === false) {
+        sendResult(id, { ok: false, error: `Ref @${ref} not found in current page snapshot` });
+        return;
+      }
     } else {
       const doc = await chrome.debugger.sendCommand(debuggee, 'DOM.getDocument', {});
       const rootNodeId = doc.root.nodeId;
@@ -868,7 +1070,7 @@ async function handleType(id, msg) {
 
     sendResult(id, { ok: true });
   } catch (error) {
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
@@ -907,7 +1109,7 @@ async function handleScroll(id, msg) {
         return;
       }
     }
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
@@ -923,7 +1125,7 @@ async function handleGoBack(id, msg) {
     });
     sendResult(id, { ok: true });
   } catch (error) {
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
@@ -954,7 +1156,224 @@ async function handlePressKey(id, msg) {
     });
     sendResult(id, { ok: true });
   } catch (error) {
-    sendResult(id, { ok: false, error: error.message });
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
+  }
+}
+
+// ─── Cookies ──────────────────────────────────────────────────────────
+
+async function handleCookies(id, msg) {
+  const { tabId, domain, url } = msg;
+  if (!tabId) {
+    sendResult(id, { ok: false, error: 'Missing tabId for cookies' });
+    return;
+  }
+  const debuggee = await getOrAttachTab(tabId);
+
+  const filters = [];
+  if (domain) filters.push('domain');
+  if (url) filters.push('url');
+  const params = {};
+  if (domain) params.domains = [domain];
+  if (url) params.urls = [url];
+
+  try {
+    const result = await chrome.debugger.sendCommand(debuggee, 'Network.getCookies', params);
+    const cookies = (result?.cookies || []).map((c) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path,
+      expires: c.expires,
+      httpOnly: c.httpOnly,
+      secure: c.secure,
+      sameSite: c.sameSite,
+    }));
+    sendResult(id, { ok: true, data: cookies });
+  } catch (error) {
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
+  }
+}
+
+// ─── File Upload ──────────────────────────────────────────────────────
+
+async function handleSetFileInput(id, msg) {
+  const { tabId, selector, files } = msg;
+  if (!tabId) {
+    sendResult(id, { ok: false, error: 'Missing tabId for set-file-input' });
+    return;
+  }
+  if (!Array.isArray(files) || files.length === 0) {
+    sendResult(id, { ok: false, error: 'Missing files array for set-file-input' });
+    return;
+  }
+
+  const debuggee = await getOrAttachTab(tabId);
+
+  try {
+    // Resolve the target input. If selector is given, use DOM.querySelector;
+    // otherwise assume the page has a single file input or use the first match.
+    let backendNodeId = null;
+    if (selector) {
+      const doc = await chrome.debugger.sendCommand(debuggee, 'DOM.getDocument', {});
+      const rootNodeId = doc.root.nodeId;
+      const result = await chrome.debugger.sendCommand(debuggee, 'DOM.querySelector', {
+        nodeId: rootNodeId,
+        selector,
+      });
+      if (!result.nodeId) {
+        sendResult(id, { ok: false, error: `File input not found: ${selector}` });
+        return;
+      }
+      // Walk up to a BackendNode so the file input can be addressed across
+      // navigations. DOM.describeNode gives us the backendNodeId.
+      const desc = await chrome.debugger.sendCommand(debuggee, 'DOM.describeNode', { nodeId: result.nodeId });
+      backendNodeId = desc.node.backendNodeId;
+    } else {
+      // Pick the first <input type=file> in the document
+      const doc = await chrome.debugger.sendCommand(debuggee, 'DOM.getDocument', {});
+      const rootNodeId = doc.root.nodeId;
+      const result = await chrome.debugger.sendCommand(debuggee, 'DOM.querySelector', {
+        nodeId: rootNodeId,
+        selector: 'input[type=file]',
+      });
+      if (!result.nodeId) {
+        sendResult(id, { ok: false, error: 'No file input found on page' });
+        return;
+      }
+      const desc = await chrome.debugger.sendCommand(debuggee, 'DOM.describeNode', { nodeId: result.nodeId });
+      backendNodeId = desc.node.backendNodeId;
+    }
+
+    await chrome.debugger.sendCommand(debuggee, 'DOM.setFileInputFiles', {
+      files,
+      backendNodeId,
+    });
+    sendResult(id, { ok: true, count: files.length });
+  } catch (error) {
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
+  }
+}
+
+// ─── Network Capture ──────────────────────────────────────────────────
+
+const networkCaptures = new Map(); // tabId → { entries, pattern }
+
+async function handleNetworkCaptureStart(id, msg) {
+  const { tabId, pattern = '' } = msg;
+  if (!tabId) {
+    sendResult(id, { ok: false, error: 'Missing tabId for network-capture-start' });
+    return;
+  }
+
+  const debuggee = await getOrAttachTab(tabId);
+
+  try {
+    // Make sure Network domain is enabled (it should be from attachTab)
+    await chrome.debugger.sendCommand(debuggee, 'Network.enable');
+
+    const capture = { entries: [], pattern, regex: null };
+    if (pattern) {
+      try {
+        capture.regex = new RegExp(pattern);
+      } catch (error) {
+        sendResult(id, { ok: false, error: `Invalid network capture pattern: ${error.message}` });
+        return;
+      }
+    }
+    networkCaptures.set(String(tabId), capture);
+
+    // Listen for all network events through the global onEvent listener
+    // (we dispatch in the handler below).
+    sendResult(id, { ok: true });
+  } catch (error) {
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
+  }
+}
+
+async function handleNetworkCaptureRead(id, msg) {
+  const { tabId } = msg;
+  if (!tabId) {
+    sendResult(id, { ok: false, error: 'Missing tabId for network-capture-read' });
+    return;
+  }
+  const capture = networkCaptures.get(String(tabId));
+  if (!capture) {
+    sendResult(id, { ok: true, data: [] });
+    return;
+  }
+  // Return a defensive copy and clear
+  const entries = capture.entries.slice();
+  capture.entries = [];
+  sendResult(id, { ok: true, data: entries });
+}
+
+// ─── Iframe Support ───────────────────────────────────────────────────
+
+async function handleFrames(id, msg) {
+  const { tabId } = msg;
+  if (!tabId) {
+    sendResult(id, { ok: false, error: 'Missing tabId for frames' });
+    return;
+  }
+  const debuggee = await getOrAttachTab(tabId);
+
+  try {
+    const result = await chrome.debugger.sendCommand(debuggee, 'Page.getFrameTree', {});
+    const frames = [];
+    const walk = (frame, index) => {
+      frames.push({
+        index,
+        frameId: frame.id,
+        url: frame.url || '',
+        name: frame.name || '',
+      });
+    };
+    let i = 0;
+    const visit = (frame) => {
+      walk(frame, i++);
+      if (frame.childFrames) {
+        for (const child of frame.childFrames) visit(child);
+      }
+    };
+    if (result?.frameTree) visit(result.frameTree);
+    sendResult(id, { ok: true, data: frames });
+  } catch (error) {
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
+  }
+}
+
+async function handleEvaluateInFrame(id, msg) {
+  const { tabId, frameIndex, script } = msg;
+  if (!tabId) {
+    sendResult(id, { ok: false, error: 'Missing tabId for evaluate-in-frame' });
+    return;
+  }
+  if (typeof frameIndex !== 'number' || frameIndex < 0) {
+    sendResult(id, { ok: false, error: 'Missing or invalid frameIndex for evaluate-in-frame' });
+    return;
+  }
+  const debuggee = await getOrAttachTab(tabId);
+
+  try {
+    const tree = await chrome.debugger.sendCommand(debuggee, 'Page.getFrameTree', {});
+    const frames = [];
+    const visit = (frame) => {
+      frames.push(frame);
+      if (frame.childFrames) for (const child of frame.childFrames) visit(child);
+    };
+    if (tree?.frameTree) visit(tree.frameTree);
+    const target = frames[frameIndex];
+    if (!target) {
+      sendResult(id, { ok: false, error: `Frame not found at index ${frameIndex}` });
+      return;
+    }
+
+    // Use Runtime.evaluate inside the chosen frame's execution context.
+    const result = await safeEvaluate(debuggee, script);
+    sendResult(id, { ok: true, data: result?.result?.value });
+  } catch (error) {
+    sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });
   }
 }
 
@@ -1038,6 +1457,26 @@ async function attachTab(tabId) {
     if (!eventListenerSetup) {
       eventListenerSetup = true;
       chrome.debugger.onEvent.addListener((source, method, params) => {
+        // Capture network traffic for any tab that has a capture registered
+        if (method === 'Network.responseReceived' || method === 'Network.requestWillBeSent') {
+          const capture = networkCaptures.get(String(source.tabId));
+          if (capture) {
+            const url = params?.response?.url || params?.request?.url;
+            if (url) {
+              if (!capture.regex || capture.regex.test(url)) {
+                capture.entries.push({
+                  ts: Date.now(),
+                  method: method === 'Network.requestWillBeSent' ? 'request' : 'response',
+                  url,
+                  status: params?.response?.status,
+                  method_http: params?.request?.method,
+                  type: params?.type || params?.initiator?.type,
+                });
+              }
+            }
+          }
+        }
+
         sendMessage({
           type: 'cdpEvent',
           tabId: source.tabId,

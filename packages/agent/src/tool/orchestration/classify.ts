@@ -49,6 +49,7 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
 
   // SYSTEM batch — 独占执行
   bash: ToolBatch.SYSTEM,
+  powershell: ToolBatch.SYSTEM,
   Agent: ToolBatch.SYSTEM,
   TeamCreate: ToolBatch.SYSTEM,
   TeamDelete: ToolBatch.SYSTEM,

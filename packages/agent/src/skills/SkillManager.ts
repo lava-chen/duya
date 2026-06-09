@@ -64,6 +64,7 @@ export interface SkillResult {
   category?: string;
   hint?: string;
   available_files?: string[];
+  listing?: SkillListResult;
 }
 
 export interface SkillDir {
@@ -203,6 +204,187 @@ function resolveSkillDir(name: string, category?: string): string {
     return path.join(SKILLS_DIR, category, name);
   }
   return path.join(SKILLS_DIR, name);
+}
+
+// ============================================================================
+// Listing
+// ============================================================================
+
+export interface SkillListEntry {
+  name: string;
+  category?: string;
+  path: string;
+  source: 'user' | 'draft';
+  description?: string;
+  hasSkillMd: boolean;
+  sizeBytes?: number;
+  modifiedAt?: number;
+}
+
+export interface SkillListResult {
+  count: number;
+  user: SkillListEntry[];
+  draft: SkillListEntry[];
+  bundled: { name: string; description?: string }[];
+  // Flat combined view (user first, then draft, then bundled) for callers
+  // that just want one list to display.
+  skills: SkillListEntry[];
+}
+
+const BUNDLED_SKILL_NAMES: { name: string; description?: string }[] = [
+  // The bundled (built-in) skills live in packages/agent/src/skills/registry
+  // and ship with the agent. Listing them here gives the model a complete
+  // picture without a separate query. Keep this list in sync with the
+  // SkillSystem registry; a future cleanup should auto-derive it.
+  { name: 'commit', description: 'Create a git commit with a clear message' },
+  { name: 'review-pr', description: 'Review a pull request for correctness and style' },
+];
+
+/**
+ * Read the first N bytes of SKILL.md to extract frontmatter description.
+ * Cheaper than reading the whole file when listing many skills.
+ */
+async function readSkillDescription(skillDir: string): Promise<{ description?: string; hasSkillMd: boolean; sizeBytes?: number; modifiedAt?: number }> {
+  const skillMd = path.join(skillDir, 'SKILL.md');
+  try {
+    const stat = await fs.stat(skillMd);
+    // Read at most 8KB — frontmatter is always at the top and tiny.
+    const fh = await fs.open(skillMd, 'r');
+    let content: string;
+    try {
+      const buf = Buffer.alloc(Math.min(8192, stat.size));
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      content = buf.subarray(0, bytesRead).toString('utf-8');
+    } finally {
+      await fh.close();
+    }
+    // Frontmatter is delimited by --- at the start. We only need the
+    // description field, which sits in the first ~20 lines.
+    let description: string | undefined;
+    if (content.startsWith('---')) {
+      const endIdx = content.indexOf('\n---', 3);
+      if (endIdx !== -1) {
+        const yamlPart = content.slice(3, endIdx);
+        try {
+          const parsed = yaml.parse(yamlPart) as Record<string, unknown> | null;
+          if (parsed && typeof parsed.description === 'string') {
+            description = parsed.description;
+          }
+        } catch {
+          // Malformed frontmatter is not our problem here — list just
+          // omits the description rather than failing the whole listing.
+        }
+      }
+    }
+    return { description, hasSkillMd: true, sizeBytes: stat.size, modifiedAt: stat.mtimeMs };
+  } catch {
+    return { hasSkillMd: false };
+  }
+}
+
+async function listSkillsInDir(dir: string, source: 'user' | 'draft'): Promise<SkillListEntry[]> {
+  const out: SkillListEntry[] = [];
+  let topLevel: string[];
+  try {
+    topLevel = await fs.readdir(dir);
+  } catch {
+    return out;
+  }
+
+  for (const entry of topLevel) {
+    if (entry.startsWith('.')) continue;
+    const entryPath = path.join(dir, entry);
+    let stat;
+    try {
+      stat = await fs.stat(entryPath);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+
+    // Heuristic: the directory itself is a skill (entry === name) OR it's
+    // a category containing skills. We probe both shapes; the inner skill
+    // wins if it exists.
+    const innerSkill = path.join(entryPath, 'SKILL.md');
+    let isSkillHere = false;
+    try {
+      await fs.access(innerSkill);
+      isSkillHere = true;
+    } catch {
+      isSkillHere = false;
+    }
+
+    if (isSkillHere) {
+      // entry is a skill name (no category)
+      const meta = await readSkillDescription(entryPath);
+      out.push({
+        name: entry,
+        path: entryPath,
+        source,
+        hasSkillMd: meta.hasSkillMd,
+        ...(meta.description && { description: meta.description }),
+        ...(meta.sizeBytes !== undefined && { sizeBytes: meta.sizeBytes }),
+        ...(meta.modifiedAt !== undefined && { modifiedAt: meta.modifiedAt }),
+      });
+      continue;
+    }
+
+    // Otherwise, treat entry as a category and recurse one level deep.
+    let children: string[];
+    try {
+      children = await fs.readdir(entryPath);
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      if (child.startsWith('.')) continue;
+      const childPath = path.join(entryPath, child);
+      let childStat;
+      try {
+        childStat = await fs.stat(childPath);
+      } catch {
+        continue;
+      }
+      if (!childStat.isDirectory()) continue;
+      const meta = await readSkillDescription(childPath);
+      out.push({
+        name: child,
+        category: entry,
+        path: childPath,
+        source,
+        hasSkillMd: meta.hasSkillMd,
+        ...(meta.description && { description: meta.description }),
+        ...(meta.sizeBytes !== undefined && { sizeBytes: meta.sizeBytes }),
+        ...(meta.modifiedAt !== undefined && { modifiedAt: meta.modifiedAt }),
+      });
+    }
+  }
+
+  out.sort((a, b) => {
+    if (a.source !== b.source) return a.source === 'user' ? -1 : 1;
+    if (a.category && !b.category) return 1;
+    if (!a.category && b.category) return -1;
+    if (a.category && b.category && a.category !== b.category) {
+      return a.category.localeCompare(b.category);
+    }
+    return a.name.localeCompare(b.name);
+  });
+  return out;
+}
+
+export async function listSkills(): Promise<SkillListResult> {
+  const [user, draft] = await Promise.all([
+    listSkillsInDir(SKILLS_DIR, 'user'),
+    listSkillsInDir(path.join(homedir(), '.duya', 'skills-draft'), 'draft'),
+  ]);
+  const skills: SkillListEntry[] = [...user, ...draft];
+  return {
+    count: skills.length,
+    user,
+    draft,
+    bundled: BUNDLED_SKILL_NAMES,
+    skills,
+  };
 }
 
 async function findSkill(name: string): Promise<SkillDir | null> {
@@ -730,8 +912,10 @@ async function removeFile(name: string, filePath: string): Promise<SkillResult> 
 // ============================================================================
 
 export interface SkillManageParams {
-  action: 'create' | 'patch' | 'edit' | 'delete' | 'write_file' | 'remove_file' | 'draft' | 'promote' | 'reject';
-  name: string;
+  action: 'create' | 'patch' | 'edit' | 'delete' | 'write_file' | 'remove_file' | 'draft' | 'promote' | 'reject' | 'list';
+  // For `list`, name is ignored. For all other actions it is required; the
+  // Zod schema on the tool side enforces that.
+  name?: string;
   content?: string;
   category?: string;
   file_path?: string;
@@ -743,6 +927,28 @@ export interface SkillManageParams {
 
 export async function skillManage(params: SkillManageParams): Promise<SkillResult> {
   const { action, name, content, category, file_path, file_content, old_string, new_string, replace_all } = params;
+
+  // `list` is the only action where `name` is not required. Handle it
+  // first so the rest of the switch can rely on `name` being a string.
+  if (action === 'list') {
+    const listing = await listSkills();
+    return {
+      success: true,
+      message: `Found ${listing.count} skill${listing.count === 1 ? '' : 's'} (${listing.user.length} user, ${listing.draft.length} draft, ${listing.bundled.length} bundled).`,
+      listing,
+    };
+  }
+
+  // From here down, name is required. The Zod schema on the tool side
+  // rejects empty/missing names before we get here, but the function is
+  // also exported as a programmatic API so we re-check defensively.
+  if (!name || !name.trim()) {
+    return {
+      success: false,
+      message: '',
+      error: `Action '${action}' requires a 'name' parameter.`,
+    };
+  }
 
   let result: SkillResult;
 
@@ -829,7 +1035,7 @@ export async function skillManage(params: SkillManageParams): Promise<SkillResul
       break;
 
     default:
-      result = { success: false, message: '', error: `Unknown action '${action}'. Use: create, edit, patch, delete, write_file, remove_file, draft, promote, reject` };
+      result = { success: false, message: '', error: `Unknown action '${action}'. Use: create, edit, patch, delete, write_file, remove_file, draft, promote, reject, list` };
   }
 
   // Note: In hermes-agent, this calls clear_skills_system_prompt_cache().
