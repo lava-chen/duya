@@ -5401,6 +5401,419 @@ html.compact .panel-zone {
 }
 
 /* ============================================
+   Permission Prompt Styles - aligned with sub-agent-panel
+   ============================================ */
+
+/* Wrapper - shares "card-on-input" connection with sub-agent-panel */
+.permission-prompt-wrapper {
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 10;
+}
+
+/* Pending card: rounded top, flat bottom, same chrome as .sub-agent-panel */
+.permission-prompt-panel {
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  overflow: hidden;
+}
+
+/* Resolved card: fully rounded, slightly muted (no input to bond with) */
+.permission-prompt-panel.resolved {
+  border-radius: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.permission-prompt-header {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  min-height: 36px;
+  gap: 0.5rem;
+}
+
+.permission-prompt-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.permission-prompt-header-toggle:hover {
+  color: var(--text);
+}
+
+.permission-prompt-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.permission-prompt-caret {
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.permission-prompt-caret.rotate-90 {
+  transform: rotate(90deg);
+}
+
+.permission-prompt-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.35rem;
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.permission-prompt-summary {
+  font-size: 0.8rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.permission-prompt-reason {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0 0.75rem 0.5rem;
+}
+
+.permission-prompt-body {
+  padding: 0 0.75rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.permission-prompt-tool-input {
+  margin-top: 0.25rem;
+  overflow: hidden;
+  border-radius: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.permission-prompt-tool-input pre {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.75rem;
+  margin: 0;
+  max-height: 10rem;
+}
+
+.permission-prompt-tool-input.expanded pre {
+  max-height: none;
+}
+
+.permission-prompt-expand-btn {
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--border);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.permission-prompt-expand-btn:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.permission-prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.5rem;
+  flex-wrap: wrap;
+}
+
+.permission-prompt-btn {
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.permission-prompt-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+}
+
+.permission-prompt-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.permission-prompt-btn-primary {
+  background: linear-gradient(140deg, #5f71ff, #7286ff);
+  color: #fff;
+  border-color: transparent;
+}
+
+.permission-prompt-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(140deg, #6a7bff, #7d90ff);
+  border-color: transparent;
+  opacity: 0.95;
+}
+
+.permission-prompt-btn-danger {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.permission-prompt-btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #ef4444;
+}
+
+.permission-prompt-status-spinner {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* Auto-mode indicator (small chip above panel body) */
+.permission-prompt-auto-chip {
+  margin: 0.5rem 0.75rem 0;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(94, 109, 255, 0.1);
+  border: 1px solid rgba(94, 109, 255, 0.2);
+  border-radius: 0.35rem;
+}
+
+/* AskUserQuestion options */
+.permission-prompt-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem 0.25rem;
+}
+
+.permission-prompt-question {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.permission-prompt-question-header {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  align-self: flex-start;
+}
+
+.permission-prompt-question-text {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0;
+}
+
+.permission-prompt-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.permission-prompt-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.permission-prompt-option:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+}
+
+.permission-prompt-option.selected {
+  border-color: var(--accent);
+  background: rgba(94, 109, 255, 0.1);
+  color: var(--accent);
+}
+
+.permission-prompt-option-check {
+  font-size: 0.7rem;
+  width: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.permission-prompt-option-star {
+  margin-left: 0.2rem;
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.permission-prompt-other-input {
+  width: 100%;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.permission-prompt-other-input:focus {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+/* ExitPlanMode specific */
+.permission-prompt-plan-card {
+  border: 1px solid rgba(94, 109, 255, 0.3);
+  background: rgba(94, 109, 255, 0.05);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin: 0 0.75rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.permission-prompt-plan-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.permission-prompt-plan-title svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.permission-prompt-plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.permission-prompt-plan-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.permission-prompt-plan-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.permission-prompt-plan-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.permission-prompt-plan-tool {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.permission-prompt-feedback-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.permission-prompt-feedback-input {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  outline: none;
+  min-width: 0;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.permission-prompt-feedback-input:focus {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+/* Resolved status line (after user decides) */
+.permission-prompt-resolved {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--muted);
+}
+
+.permission-prompt-resolved.allowed {
+  color: var(--accent);
+}
+
+.permission-prompt-resolved.denied {
+  color: #ef4444;
+}
+
+/* ============================================
    Sub-Agent Thread Item Styles (Sidebar)
    ============================================ */
 
@@ -6088,4 +6501,44 @@ html.compact .panel-zone {
 .chat-panel-floating-btn.active {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+/* ============================================
+   Message Input Drag-and-Drop Feedback
+   ============================================ */
+
+.message-input-drop-active {
+  position: relative;
+  box-shadow: inset 0 0 0 2px var(--accent), 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  background-color: var(--accent-soft) !important;
+}
+
+.message-input-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  border-radius: 1.5rem;
+}
+
+.message-input-drop-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background-color: var(--accent);
+  color: var(--accent-foreground, #fff);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  animation: message-input-drop-fade 120ms ease-out;
+}
+
+@keyframes message-input-drop-fade {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
 }

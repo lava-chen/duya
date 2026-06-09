@@ -9,6 +9,7 @@ import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { PermissionPrompt } from './PermissionPrompt';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
+import { SkillReviewIndicator } from './SkillReviewIndicator';
 import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase } from '@/lib/stream-session-manager';
 import { Info, CaretDown } from '@phosphor-icons/react';
@@ -188,7 +189,6 @@ export function ChatView({
   // Use fine-grained hooks for streaming state
   const phase = useStreamPhase(sessionId);
   const contextUsage = useStreamingContextUsage(sessionId);
-  const { uses } = useStreamingTools(sessionId);
   const streamingError = useStreamingError(sessionId);
   const lastUserContentRef = useRef<string>('');
   const lastFilesRef = useRef<FileAttachment[] | undefined>(undefined);
@@ -535,7 +535,20 @@ export function ChatView({
       )}
 
       {/* Agent error banner with retry */}
-      {(phase === 'error' || (streamingError && phase !== 'aborted')) && (
+      {(phase === 'error' || (streamingError && phase !== 'aborted')) && (() => {
+        const isRateLimit = streamingError?.code === 'rate_limit_error';
+        const isUsageLimit = streamingError?.code === 'usage_limit_exceeded';
+        const bannerTitle = isRateLimit
+          ? t('error.rateLimitTitle')
+          : isUsageLimit
+            ? t('error.usageLimitTitle')
+            : 'Agent Error';
+        const bannerMessage = isRateLimit
+          ? t('error.rateLimitMessage')
+          : isUsageLimit
+            ? t('error.usageLimitMessage')
+            : streamingError?.message || 'The agent process encountered an error. You can retry with the same session.';
+        return (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
           <div className="flex flex-col gap-2 px-4 py-3 bg-red-500/90 text-white text-sm rounded-lg shadow-lg backdrop-blur-sm max-w-md">
             <div className="flex items-center gap-2">
@@ -543,10 +556,10 @@ export function ChatView({
                 <path d="M8 1a7 7 0 100 14A7 7 0 008 1z" stroke="currentColor" strokeWidth="1.5" />
                 <path d="M8 5v3M8 10.5v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
-              <span className="font-medium">Agent Error</span>
+              <span className="font-medium">{bannerTitle}</span>
             </div>
             <p className="text-white/90 text-xs leading-relaxed">
-              {streamingError || 'The agent process encountered an error. You can retry with the same session.'}
+              {bannerMessage}
             </p>
             <button
               type="button"
@@ -557,7 +570,8 @@ export function ChatView({
             </button>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       <div className="flex-1 min-h-0">
         {messages.length === 0 && !isStreaming ? (
@@ -573,6 +587,7 @@ export function ChatView({
               >
                 {/* Input between selector and recent threads */}
                 <div className="w-full welcome-message-input">
+                  <SkillReviewIndicator sessionId={sessionId} />
                   <MessageInput
                     onSend={handleSend}
                     onCommand={handleRecapCommand}
@@ -687,7 +702,6 @@ export function ChatView({
               pendingPermission={pendingPermission}
               permissionResolved={permissionResolved}
               onPermissionResponse={respondToPermission}
-              toolUses={uses}
               permissionProfile={permissionProfile}
             />
 

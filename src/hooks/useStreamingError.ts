@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { subscribeToError } from '@/lib/stream-session-manager';
+import { subscribeToError, type StreamingError } from '@/lib/stream-session-manager';
 
-export function useStreamingError(sessionId: string): string | null {
-  const [error, setError] = useState<string | null>(null);
+export type { StreamingError } from '@/lib/stream-session-manager';
+
+export function useStreamingError(sessionId: string): StreamingError | null {
+  const [error, setError] = useState<StreamingError | null>(null);
 
   useEffect(() => {
     const unsubscribe = subscribeToError(sessionId, (newError) => {

@@ -103,14 +103,33 @@ export function useFileAttachments() {
   }, []);
 
   /**
+   * Resolve a real filesystem path for a File. Electron < 32 sets `file.path`,
+   * but newer versions require `webUtils.getPathForFile`. This helper covers both.
+   */
+  const resolveFilePath = useCallback((file: File): string => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const legacyPath = (file as any).path;
+    if (legacyPath) return legacyPath as string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const webUtils = (window as any).electronWebUtils;
+    if (webUtils?.getPathForFile) {
+      try {
+        return webUtils.getPathForFile(file) as string;
+      } catch {
+        return '';
+      }
+    }
+    return '';
+  }, []);
+
+  /**
    * Add a file to the attachments list.
    */
   const addFile = useCallback(async (file: File) => {
     if (isDocumentFile(file.name)) {
       // Document files (pdf, docx, etc.) — add a placeholder, then update in place
       // after parsing completes. All parsed data goes into the attachment itself.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filePath = (file as any).path || '';
+      const filePath = resolveFilePath(file);
       const placeholderId = crypto.randomUUID();
       setAttachedFiles((prev) => [...prev, {
         id: placeholderId,
@@ -125,8 +144,6 @@ export function useFileAttachments() {
         parsingRef.current = true;
         setIsParsing(true);
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const filePath = (file as any).path;
           if (!filePath) {
             setParseErrors((prev) => {
               const next = new Map(prev);
@@ -194,8 +211,7 @@ export function useFileAttachments() {
       }
     } else {
       // Image files — generate thumbnail for display, store path for vision tool
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filePath = (file as any).path;
+      const filePath = resolveFilePath(file);
       if (filePath) {
         // Generate thumbnail for display (browsers can't show file:// URLs)
         let thumbnailUrl = '';
@@ -235,7 +251,7 @@ export function useFileAttachments() {
         }
       }
     }
-  }, [convertToFileAttachment]);
+  }, [convertToFileAttachment, resolveFilePath]);
 
   /**
    * Remove a file from the attachments list by ID.
