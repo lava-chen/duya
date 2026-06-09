@@ -159,6 +159,97 @@ export function getMessageById(sessionId: string, messageId: string): MessageRow
   return row ?? null;
 }
 
+/**
+ * Content search across a bounded set of sessions (Plan200 P4 follow-up).
+ *
+ * Returns up to `perSessionLimit` matches per session, oldest first, where
+ * `preview` is a UTF-16 snippet centered on the first needle hit in the
+ * message content (40 chars before,80 chars after — matches hermes-agent's
+ * LIKE-path snippet shape). The needle is treated as a plain substring;
+ * LIKE wildcards in the user-supplied needle are escaped so user input
+ * cannot widen the match.
+ *
+ * Caps the SQL fetch at `sessionIds.length *50` rows (worst case:100
+ * sessions *50 =5000) so a noisy session cannot starve the rest.
+ */
+export interface MessageSearchHit {
+ sessionId: string;
+ messageId: string;
+ role: string;
+ msgType: string;
+ preview: string;
+}
+
+const SNIPPET_BEFORE =40;
+const SNIPPET_AFTER =80;
+const SNIPPET_TOTAL = SNIPPET_BEFORE + SNIPPET_AFTER;
+
+function escapeLikePattern(s: string): string {
+ return s.replace(/[\\%_]/g, (c) => '\\' + c);
+}
+
+function buildSnippet(content: string, needleLower: string): string {
+ const contentLower = content.toLowerCase();
+ const idx = contentLower.indexOf(needleLower);
+ if (idx <0) {
+ return content.slice(0, SNIPPET_TOTAL).replace(/\s+/g, ' ').trim();
+ }
+ const start = Math.max(0, idx - SNIPPET_BEFORE);
+ const end = Math.min(content.length, idx + needleLower.length + SNIPPET_AFTER);
+ let snippet = content.slice(start, end);
+ if (start >0) snippet = '…' + snippet;
+ if (end < content.length) snippet = snippet + '…';
+ return snippet.replace(/\s+/g, ' ').trim();
+}
+
+export function searchMessagesByContent(
+ sessionIds: string[],
+ needle: string,
+ perSessionLimit =3,
+): MessageSearchHit[] {
+ if (sessionIds.length ===0 || !needle) return [];
+ const needleLower = needle.toLowerCase();
+ if (!needleLower) return [];
+ const pattern = '%' + escapeLikePattern(needleLower) + '%';
+ const sqlLimit = sessionIds.length *50;
+ const placeholders = sessionIds.map(() => '?').join(',');
+ const rows = db()
+ .prepare(
+ `SELECT id, session_id, role, msg_type, content
+ FROM messages
+ WHERE session_id IN (${placeholders})
+ AND content LIKE ? ESCAPE '\\'
+ ORDER BY created_at ASC, rowid ASC
+ LIMIT ?`,
+ )
+ .all(...sessionIds, pattern, sqlLimit) as Array<{
+ id: string;
+ session_id: string;
+ role: string;
+ msg_type: string;
+ content: string;
+ }>;
+
+ const perSession = new Map<string, MessageSearchHit[]>();
+ for (const row of rows) {
+ const bucket = perSession.get(row.session_id);
+ if (bucket && bucket.length >= perSessionLimit) continue;
+ const preview = buildSnippet(row.content, needleLower);
+ const hit: MessageSearchHit = {
+ sessionId: row.session_id,
+ messageId: row.id,
+ role: row.role,
+ msgType: row.msg_type,
+ preview,
+ };
+ if (bucket) bucket.push(hit);
+ else perSession.set(row.session_id, [hit]);
+ }
+ const out: MessageSearchHit[] = [];
+ for (const hits of perSession.values()) out.push(...hits);
+ return out;
+}
+
 export function getMessageCount(sessionId: string): number {
   const result = db().prepare(
     'SELECT COUNT(*) as count FROM messages WHERE session_id = ?'

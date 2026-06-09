@@ -46,12 +46,23 @@ function sendError(
   sendJson(res, status, { error: { code, message } });
 }
 
-/** List response includes 4 fields per row. */
+/** List response includes 4 base fields per row plus an optional `matches` array. */
 interface ListSessionItem {
   id: string;
   title: string;
   updatedAt: number;
   messageCount: number;
+  /**
+   * Snippet matches when the session was matched by message content rather
+   * than title. Omitted from JSON when the session matched by title (keeps
+   * the stable contract unchanged for title-only hits).
+   */
+  matches?: Array<{
+    messageId: string;
+    role: string;
+    msgType: string;
+    preview: string;
+  }>;
 }
 
 /** Show response includes 6 fields. */
@@ -186,7 +197,7 @@ export function handleGetSession(
 // Phase 4.2: search / export / import (Plan 200 P4)
 // ============================================================================
 
-import { listMessages } from '../../db/queries/messages';
+import { listMessages, searchMessagesByContent } from '../../db/queries/messages';
 import { getDatabase } from '../../db/connection';
 
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -262,15 +273,48 @@ export function handleSearchSessions(
   try {
     const rows = listSessionSummaries({ limit: 100, offset: 0 });
     const needle = q.toLowerCase();
-    const filtered = rows
-      .filter((r) => r.title.toLowerCase().includes(needle))
-      .slice(offset, offset + limit);
+    if (!needle) {
+      sendJson(res, 200, { sessions: [] });
+      return;
+    }
+    const titleHits = rows.filter((r) => r.title.toLowerCase().includes(needle));
+    const titleHitIds = new Set(titleHits.map((r) => r.id));
+    const remainingIds = rows.filter((r) => !titleHitIds.has(r.id)).map((r) => r.id);
+    const contentHits = searchMessagesByContent(remainingIds, needle, 3);
+    const byId = new Map<string, typeof contentHits>();
+    for (const hit of contentHits) {
+      const bucket = byId.get(hit.sessionId);
+      if (bucket) bucket.push(hit);
+      else byId.set(hit.sessionId, [hit]);
+    }
+    type MatchItem = { messageId: string; role: string; msgType: string; preview: string };
+    const merged: Array<{ row: typeof rows[number]; matches: MatchItem[] | undefined }> = [
+      ...titleHits.map((r) => ({ row: r, matches: undefined })),
+      ...rows
+        .filter((r) => byId.has(r.id))
+        .map((r) => ({ row: r, matches: byId.get(r.id)! })),
+    ];
+    merged.sort((a, b) => {
+      if (b.row.updated_at !== a.row.updated_at) return b.row.updated_at - a.row.updated_at;
+      return b.row.id < a.row.id ? -1 : b.row.id > a.row.id ? 1 : 0;
+    });
+    const page = merged.slice(offset, offset + limit);
     sendJson(res, 200, {
-      sessions: filtered.map((r) => ({
-        id: r.id,
-        title: r.title,
-        updatedAt: r.updated_at,
-        messageCount: r.messageCount,
+      sessions: page.map(({ row, matches }) => ({
+        id: row.id,
+        title: row.title,
+        updatedAt: row.updated_at,
+        messageCount: row.message_count,
+        ...(matches
+          ? {
+              matches: matches.map((m) => ({
+                messageId: m.messageId,
+                role: m.role,
+                msgType: m.msgType,
+                preview: m.preview,
+              })),
+            }
+          : {}),
       })),
     });
   } catch (err) {
@@ -279,9 +323,6 @@ export function handleSearchSessions(
   }
 }
 
-/**
- * POST /v1/sessions/export  body: { id, format?: 'json' | 'md' }
- */
 export async function handleExportSession(
   req: IncomingMessage,
   res: ServerResponse,
@@ -329,7 +370,7 @@ function renderSessionMarkdown(
   out.push(`- model: ${s.model}`);
   out.push(`- createdAt: ${new Date(s.created_at).toISOString()}`);
   out.push(`- updatedAt: ${new Date(s.updated_at).toISOString()}`);
-  out.push(`- messageCount: ${s.messageCount}`);
+  out.push(`- messageCount: ${s.message_count}`);
   out.push('');
   for (const m of messages) {
     out.push(`## ${m.role} (${new Date(m.created_at).toISOString()})`);
