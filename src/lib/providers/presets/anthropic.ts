@@ -365,4 +365,86 @@ export const ANTHROPIC_PRESETS: ProviderPreset[] = [
     },
     legacyProtocol: 'anthropic',
   },
+
+  // ── xAI Grok (Anthropic-compatible) ──
+  {
+    key: 'xai',
+    name: 'xAI Grok',
+    description: 'xAI Grok — Fast reasoning models',
+    descriptionZh: 'xAI Grok — 快速推理模型',
+    category: 'aggregator',
+    apiFormat: 'anthropic',
+    authFields: ANTHROPIC_AUTH_FIELDS,
+    defaultEndpoint: 'https://api.x.ai/v1',
+    modelsSource: { type: 'static' },
+    defaultModels: ['grok-4.20-reasoning', 'grok-4-1-fast-reasoning'],
+    defaultModelLabels: {
+      'grok-4.20-reasoning': 'Grok 4.20 Reasoning',
+      'grok-4-1-fast-reasoning': 'Grok 4-1 Fast Reasoning',
+    },
+    ui: {
+      icon: 'xai',
+      websiteUrl: 'https://console.x.ai/',
+      apiKeyUrl: 'https://console.x.ai/',
+      docsUrl: 'https://docs.x.ai/docs',
+    },
+    legacyProtocol: 'anthropic',
+  },
+
+  // ── Arcee AI (Anthropic-compatible) ──
+  {
+    key: 'arcee',
+    name: 'Arcee',
+    description: 'Arcee AI — Trinity Large Thinking models',
+    descriptionZh: 'Arcee AI — Trinity 大型推理模型',
+    category: 'aggregator',
+    apiFormat: 'anthropic',
+    authFields: ANTHROPIC_AUTH_FIELDS,
+    defaultEndpoint: 'https://api.arcee.ai/api/v1',
+    modelsSource: { type: 'static' },
+    defaultModels: [
+      'trinity-large-thinking',
+      'trinity-large-preview',
+      'trinity-mini',
+    ],
+    defaultModelLabels: {
+      'trinity-large-thinking': 'Trinity Large Thinking',
+      'trinity-large-preview': 'Trinity Large Preview',
+      'trinity-mini': 'Trinity Mini',
+    },
+    ui: {
+      icon: 'arcee',
+      websiteUrl: 'https://www.arcee.ai/',
+      apiKeyUrl: 'https://www.arcee.ai/',
+      docsUrl: 'https://docs.arcee.ai/',
+    },
+    legacyProtocol: 'anthropic',
+  },
+
+  // ── Xiaomi MiMo Token Plan (Anthropic-compatible) ──
+  {
+    key: 'xiaomi-mimo-token-plan',
+    name: 'Xiaomi MiMo Token Plan',
+    description: 'Xiaomi MiMo Token Plan — subscription-based',
+    descriptionZh: '小米 MiMo Token Plan — 订阅制',
+    category: 'aggregator',
+    apiFormat: 'anthropic',
+    authFields: ANTHROPIC_AUTH_FIELDS,
+    defaultEndpoint: 'https://api.xiaomimimo.com/anthropic',
+    modelsSource: { type: 'static' },
+    defaultModels: ['MiMo-V2.5-Pro', 'MiMo-V2.5-Lite'],
+    defaultModelLabels: {
+      'MiMo-V2.5-Pro': 'MiMo V2.5 Pro',
+      'MiMo-V2.5-Lite': 'MiMo V2.5 Lite',
+    },
+    templateValues: {
+      API_TIMEOUT_MS: '3000000',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    },
+    ui: {
+      icon: 'xiaomi',
+      websiteUrl: 'https://api.xiaomimimo.com',
+    },
+    legacyProtocol: 'anthropic',
+  },
 ];

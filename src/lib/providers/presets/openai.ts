@@ -70,4 +70,27 @@ export const OPENAI_PRESETS: ProviderPreset[] = [
     },
     legacyProtocol: 'openai-compatible',
   },
+
+  // ── LiteLLM proxy ──
+  // LiteLLM is a self-hosted OpenAI-compatible proxy that fronts
+  // many providers. Default endpoint assumes the standard local
+  // install (http://localhost:4000). Users should override.
+  {
+    key: 'litellm',
+    name: 'LiteLLM Proxy',
+    description: 'LiteLLM self-hosted OpenAI-compatible proxy',
+    descriptionZh: 'LiteLLM 自托管 OpenAI 兼容代理',
+    category: 'aggregator',
+    apiFormat: 'openai-chat',
+    authFields: BEARER_AUTH_FIELDS,
+    defaultEndpoint: 'http://localhost:4000',
+    modelsSource: { type: 'openai-compatible-models', path: '/v1/models' },
+    defaultModels: [],
+    ui: {
+      icon: 'server',
+      websiteUrl: 'https://github.com/BerriAI/litellm',
+      docsUrl: 'https://docs.litellm.ai/',
+    },
+    legacyProtocol: 'openai-compatible',
+  },
 ];
