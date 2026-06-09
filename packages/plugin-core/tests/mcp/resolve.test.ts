@@ -121,6 +121,29 @@ describe('resolveMCPDiscovery — shape and basic flow', () => {
     expect(issues.length).toBe(1);
   });
 
+  it('treats ELECTRON_RUN_AS_NODE runtimes as node-compatible for script existence checks', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'duya-mcp-electron-runtime-'));
+    try {
+      const scriptPath = join(dir, 'server.js');
+      writeFileSync(scriptPath, 'console.log("ok");');
+      const c: MCPCandidate = {
+        source: 'bundled',
+        rawConfig: {
+          name: 'literature',
+          command: process.execPath,
+          args: [scriptPath],
+          env: { ELECTRON_RUN_AS_NODE: '1' },
+        },
+      };
+      const r = await resolveMCPDiscovery([c], baseCtx);
+      expect(r.inventory[0].discoveryStatus).toBe('configured');
+      expect(r.issues).toEqual([]);
+      expect(r.resolvedConfigs).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('emits command_missing for an empty command', async () => {
     const c: MCPCandidate = {
       source: 'settings',

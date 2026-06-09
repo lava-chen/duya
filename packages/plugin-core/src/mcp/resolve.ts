@@ -333,9 +333,16 @@ function isNodeLikeCommand(command: string): boolean {
     c.endsWith('node.exe') || c.endsWith('/node.exe') || c.endsWith('\\node.exe');
 }
 
+function isNodeCompatibleRuntime(
+  command: string,
+  env: Record<string, string>,
+): boolean {
+  return isNodeLikeCommand(command) || env.ELECTRON_RUN_AS_NODE === '1';
+}
+
 function staticPathCheck(
   c: MCPCandidate,
-  expanded: { command: string; args: string[] },
+  expanded: { command: string; args: string[]; env: Record<string, string> },
   inventoryId: string,
 ): PathCheckResult {
   if (expanded.command.trim().length === 0) {
@@ -343,7 +350,7 @@ function staticPathCheck(
   }
 
   // `node` command: check args[0] existence when resolvable.
-  if (isNodeLikeCommand(expanded.command) && expanded.args.length > 0) {
+  if (isNodeCompatibleRuntime(expanded.command, expanded.env) && expanded.args.length > 0) {
     const scriptArg = expanded.args[0];
     if (scriptArg.startsWith('./') || scriptArg.startsWith('../') || isAbsolute(scriptArg)) {
       const resolved = c.pluginRoot

@@ -179,7 +179,7 @@ export class MCPClient {
       return toolResult;
     } catch (error) {
       this.circuitBreaker.recordFailure();
-      
+
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.error(`[MCP] Tool call failed: ${this.config.name}.${name} - ${errorMsg}`);
       return {
@@ -188,6 +188,47 @@ export class MCPClient {
         result: `Error: ${errorMsg}`,
         error: true,
       };
+    }
+  }
+
+  /**
+   * List resources exposed by this MCP server.
+   *
+   * Returns `[]` when:
+   *  - the client is not connected
+   *  - the server does not implement the resources capability (the SDK
+   *    throws "Method not found")
+   *  - the call times out / errors for any other reason
+   *
+   * Resources are MCP's read-only data plane (files, DB rows, API
+   * snapshots). Some servers expose a handful; most expose none. The
+   * list_mcp_resources tool surfaces this so the model can discover
+   * what's available.
+   */
+  async listResources(): Promise<Array<{ uri: string; name?: string; description?: string; mimeType?: string }>> {
+    if (!this.client || this.connectionStatus !== 'connected') {
+      return [];
+    }
+    try {
+      const result = await this.client.listResources();
+      // The SDK returns `{ resources, nextCursor? }`. We only return the
+      // page at hand — pagination can be added when an MCP server actually
+      // returns more resources than fit in one page in practice.
+      return result.resources.map((r) => ({
+        uri: r.uri,
+        ...(r.name !== undefined && { name: r.name }),
+        ...(r.description !== undefined && { description: r.description }),
+        ...(r.mimeType !== undefined && { mimeType: r.mimeType }),
+      }));
+    } catch (error) {
+      // Method not found = the server simply doesn't expose resources.
+      // That's not an error condition for our caller; surface as empty.
+      const msg = error instanceof Error ? error.message : String(error);
+      if (/Method not found/i.test(msg) || /unknown method/i.test(msg)) {
+        return [];
+      }
+      logger.warn(`[MCP] listResources failed for ${this.config.name}: ${msg}`);
+      return [];
     }
   }
 }

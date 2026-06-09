@@ -11,8 +11,8 @@ import type { ToolExecutor } from './registry.js';
 import { skillManage, type SkillManageParams } from '../skills/SkillManager.js';
 
 const inputSchema = z.object({
-  action: z.enum(['create', 'patch', 'edit', 'delete', 'write_file', 'remove_file', 'draft', 'promote', 'reject']).describe('The action to perform.'),
-  name: z.string().describe('Skill name (lowercase, hyphens/underscores, max 64 chars). Must match an existing skill for patch/edit/delete/write_file/remove_file.'),
+  action: z.enum(['create', 'patch', 'edit', 'delete', 'write_file', 'remove_file', 'draft', 'promote', 'reject', 'list']).describe('The action to perform.'),
+  name: z.string().optional().describe('Skill name (lowercase, hyphens/underscores, max 64 chars). Required for create/patch/edit/delete/write_file/remove_file/draft/promote/reject. Ignored for list.'),
   content: z.string().optional().describe('Full SKILL.md content (YAML frontmatter + markdown body). Required for \'create\' and \'draft\'. Optional for \'edit\' when doing full rewrite.'),
   old_string: z.string().optional().describe('Text to find in the file (required for \'patch\', optional for \'edit\'). When used with \'edit\', performs patch-style edit on SKILL.md.'),
   new_string: z.string().optional().describe('Replacement text (required for \'patch\', optional for \'edit\'). Can be empty string to delete matched text.'),
@@ -29,9 +29,10 @@ export type SkillManageInput = z.infer<typeof inputSchema>;
  */
 export class SkillManageTool implements Tool, ToolExecutor {
   readonly name = 'skill_manage';
-  readonly description = `Manage skills (create, update, delete). Skills are your procedural memory — reusable approaches for recurring task types. New skills go to ~/.duya/skills/; existing skills can be modified wherever they live.
+  readonly description = `Manage skills (create, update, delete, list). Skills are your procedural memory — reusable approaches for recurring task types. New skills go to ~/.duya/skills/; existing skills can be modified wherever they live.
 
 Actions:
+- list: Enumerate all known skills (user skills in ~/.duya/skills/, draft skills in ~/.duya/skills-draft/, and bundled skills that ship with the agent). Returns name, category, path, and the frontmatter description. Use this FIRST when you need to know what skills exist.
 - create: Create new skill with full SKILL.md content (requires 'content' with YAML frontmatter + body, optional 'category')
 - draft: Create skill in draft/ directory for evaluation (requires 'content' with YAML frontmatter + body)
 - patch: Targeted find-and-replace (requires 'old_string' and 'new_string'). Use for small fixes. Can patch SKILL.md or supporting files (use 'file_path').
@@ -59,12 +60,12 @@ Good skills: trigger conditions, numbered steps with exact commands, pitfalls se
     properties: {
       action: {
         type: 'string',
-        enum: ['create', 'patch', 'edit', 'delete', 'write_file', 'remove_file', 'draft', 'promote', 'reject'],
+        enum: ['create', 'patch', 'edit', 'delete', 'write_file', 'remove_file', 'draft', 'promote', 'reject', 'list'],
         description: 'The action to perform.',
       },
       name: {
         type: 'string',
-        description: 'Skill name (lowercase, hyphens/underscores, max 64 chars). Must match an existing skill for patch/edit/delete/write_file/remove_file.',
+        description: 'Skill name (lowercase, hyphens/underscores, max 64 chars). Required for create/patch/edit/delete/write_file/remove_file/draft/promote/reject. Ignored for list.',
       },
       content: {
         type: 'string',
@@ -95,7 +96,7 @@ Good skills: trigger conditions, numbered steps with exact commands, pitfalls se
         description: 'Content for the file. Required for \'write_file\'.',
       },
     },
-    required: ['action', 'name'],
+    required: ['action'],
   };
 
   readonly interruptBehavior = 'block' as const;
@@ -127,7 +128,8 @@ Good skills: trigger conditions, numbered steps with exact commands, pitfalls se
 
     const params: SkillManageParams = {
       action: parseResult.data.action,
-      name: parseResult.data.name,
+      // list doesn't need a name; pass empty string to satisfy the type
+      name: parseResult.data.name ?? '',
       content: parseResult.data.content,
       old_string: parseResult.data.old_string,
       new_string: parseResult.data.new_string,

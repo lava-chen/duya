@@ -7,6 +7,7 @@ import { ToolRegistry } from './registry.js';
 
 // Import all tools
 import { BashTool } from './BashTool/BashTool.js';
+import { PowerShellTool } from './PowerShellTool/PowerShellTool.js';
 import { ReadTool, createReadTool, readFileContent } from './ReadTool/ReadTool.js';
 import { WriteTool } from './WriteTool/WriteTool.js';
 import { GrepTool } from './GrepTool/GrepTool.js';
@@ -23,7 +24,7 @@ import { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 import { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 import { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 import { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
-import { listMcpResourcesTool } from './ListMcpResourcesTool/ListMcpResourcesTool.js';
+import { listMcpResourcesTool, setMcpManagerProvider } from './ListMcpResourcesTool/ListMcpResourcesTool.js';
 import { readMcpResourceTool } from './ReadMcpResourceTool/ReadMcpResourceTool.js';
 import { webSearchTool } from './WebSearchTool/WebSearchTool.js';
 import { webFetchTool } from './WebFetchTool/WebFetchTool.js';
@@ -42,11 +43,13 @@ import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
 import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
 import { ResearchMemory } from '../research-memory/index.js';
+import { hasShellFamily } from '../utils/shellDetector.js';
 
 /**
  * BashTool instance
  */
 const bashTool = new BashTool();
+const powerShellTool = new PowerShellTool();
 
 /**
  * WriteTool instance
@@ -63,7 +66,17 @@ const grepTool = new GrepTool();
  */
 export function createBuiltinRegistry(
   domainBlockerConfig?: DomainBlockerConfig,
-  options?: { enabledPluginIds?: Set<string>; wikiAgentEnabled?: boolean }
+  options?: {
+    enabledPluginIds?: Set<string>;
+    wikiAgentEnabled?: boolean;
+    // Optional accessor that returns the live MCPManager. Wired into
+    // ListMcpResourcesTool so it can list real resources from connected
+    // servers (the previous version was a stub that always returned
+    // "no resources"). Pass a closure that returns the current manager
+    // (not the manager itself) so the tool always sees the latest
+    // connection state without re-registration.
+    mcpManagerProvider?: () => import('../mcp/index.js').MCPManager | undefined;
+  }
 ): ToolRegistry {
   const registry = new ToolRegistry();
 
@@ -71,8 +84,18 @@ export function createBuiltinRegistry(
     browserTool.setDomainBlockerConfig(domainBlockerConfig);
   }
 
+  // Wire the MCP resources tool to the live manager. If no provider was
+  // passed (e.g. tests, ad-hoc CLI), the tool falls back to a snapshot
+  // pushed via setMcpResources() — same behavior as before, just explicit.
+  if (options?.mcpManagerProvider) {
+    setMcpManagerProvider(options.mcpManagerProvider);
+  }
+
   // Bash tool - class implements both Tool and ToolExecutor
   registry.register(bashTool.toTool(), bashTool);
+  if (hasShellFamily('powershell')) {
+    registry.register(powerShellTool.toTool(), powerShellTool);
+  }
 
   // Read tool
   const readTool = new ReadTool();
@@ -247,6 +270,7 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
 // Export tool definitions for advanced users
 export { ToolRegistry } from './registry.js';
 export { BashTool } from './BashTool/BashTool.js';
+export { PowerShellTool } from './PowerShellTool/PowerShellTool.js';
 export { ReadTool, createReadTool, readFileContent } from './ReadTool/ReadTool.js';
 export { WriteTool } from './WriteTool/WriteTool.js';
 export { GrepTool } from './GrepTool/GrepTool.js';

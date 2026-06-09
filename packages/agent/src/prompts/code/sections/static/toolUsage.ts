@@ -14,6 +14,10 @@ export function getToolUsageSection(
   const hasTaskTool = ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
   const isReplModeEnabled = ctx.isReplModeEnabled ?? false
+  const hasPowerShellTool = ctx.enabledTools.has('powershell')
+  const shellToolsLabel = hasPowerShellTool
+    ? `${TOOL_NAMES.BASH} or ${TOOL_NAMES.POWERSHELL}`
+    : TOOL_NAMES.BASH
 
   if (isReplModeEnabled) {
     const items = [
@@ -37,11 +41,11 @@ ${items.map(item => ` - ${item}`).join('\n')}`
           `To search for files use ${TOOL_NAMES.GLOB} instead of find or ls`,
           `To search the content of files, use ${TOOL_NAMES.GREP} instead of grep or rg`,
         ]),
-    `Reserve using the ${TOOL_NAMES.BASH} exclusively for system commands and terminal operations that require shell execution. If you are unsure and there is a relevant dedicated tool, default to using the dedicated tool and only fallback on using the ${TOOL_NAMES.BASH} tool for these if it is absolutely necessary.`,
+    `Reserve using ${shellToolsLabel} exclusively for system commands and terminal operations that require shell execution. Use ${TOOL_NAMES.BASH} for Unix-style shell commands and ${TOOL_NAMES.POWERSHELL} for Windows-native PowerShell commands when it is available. If you are unsure and there is a relevant dedicated tool, default to using the dedicated tool and only fallback on these shell tools when it is absolutely necessary.`,
   ]
 
   const items = [
-    `Do NOT use the ${TOOL_NAMES.BASH} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL to assisting the user:`,
+    `Do NOT use ${shellToolsLabel} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL to assisting the user:`,
     providedToolSubitems,
     hasTaskTool
       ? `Break down and manage your work with the ${ctx.enabledTools.has(TOOL_NAMES.TASK) ? TOOL_NAMES.TASK : TOOL_NAMES.TODO_WRITE} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`

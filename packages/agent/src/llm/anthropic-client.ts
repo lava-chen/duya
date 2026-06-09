@@ -818,11 +818,12 @@ export class AnthropicClient implements LLMClient {
             });
             // Keep partial input on parse error
           }
-          if (currentToolUse.name.toLowerCase() === 'bash') {
+          if (['bash', 'powershell'].includes(currentToolUse.name.toLowerCase())) {
             const command = (currentToolUse.input as Record<string, unknown>)?.command;
             if (typeof command !== 'string' || command.trim().length === 0) {
-              logger.warn('[AnthropicClient] Bash tool_use emitted without command', {
+              logger.warn('[AnthropicClient] Shell tool_use emitted without command', {
                 toolId: currentToolUse.id,
+                toolName: currentToolUse.name,
                 inputKeys: Object.keys(currentToolUse.input ?? {}),
                 rawJsonPreview: toolResultContent.length > 300
                   ? `${toolResultContent.slice(0, 300)}...`

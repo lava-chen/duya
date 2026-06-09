@@ -57,15 +57,20 @@ const DEFAULT_MAX_TEXT_LENGTH = 120;
 
 // ─── Utility JS Generators ──────────────────────────────────────────────────
 
+// All DUYA DOM markers use a single attribute name (data-duya-ref) so the
+// click/type/hover/select/evaluate-action handlers can resolve the ref the
+// snapshot just wrote. SnapshotEngine writes, ref-based actions read.
+const REF_ATTR = 'data-duya-ref';
+
 /**
- * Generate JS to scroll to an element identified by data-opencli-ref.
+ * Generate JS to scroll to an element identified by data-duya-ref.
  */
 export function scrollToRefJs(ref: string): string {
   const safeRef = JSON.stringify(ref);
   return `
     (() => {
       const ref = ${safeRef};
-      const el = document.querySelector('[data-opencli-ref="' + ref + '"]')
+      const el = document.querySelector('[data-duya-ref="' + ref + '"]')
         || document.querySelector('[data-ref="' + ref + '"]');
       if (!el) throw new Error('Element not found: ref=' + ref);
       el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
@@ -109,7 +114,7 @@ export function getFormStateJs(): string {
         const type = (el.getAttribute('type') || (tag === 'textarea' ? 'textarea' : tag === 'select' ? 'select' : 'text')).toLowerCase();
         if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'reset') return null;
         const name = el.name || el.id || null;
-        const ref = el.getAttribute('data-opencli-ref') || null;
+        const ref = el.getAttribute('data-duya-ref') || null;
         const label = findLabel(el);
         let value;
         if (tag === 'select') {
@@ -618,7 +623,7 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
       let line = '  '.repeat(depth) + '- ';
       if (interactive) {
         interactiveIndex++;
-        el.setAttribute('data-opencli-ref', '' + interactiveIndex);
+        el.setAttribute('data-duya-ref', '' + interactiveIndex);
         line += 'svg [ref=' + interactiveIndex + ']';
       } else {
         line += 'svg';
@@ -750,7 +755,7 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
     // Interactive index + data-ref
     if (interactive) {
       interactiveIndex++;
-      el.setAttribute('data-opencli-ref', '' + interactiveIndex);
+      el.setAttribute('data-duya-ref', '' + interactiveIndex);
       refIdentity['' + interactiveIndex] = {
         tag: tag,
         role: el.getAttribute('role') || '',
