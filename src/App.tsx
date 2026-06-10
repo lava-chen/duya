@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useConversationStore } from "@/stores/conversation-store";
 import { ChatView } from "@/components/chat/ChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
@@ -106,6 +107,42 @@ function mergeOptimisticMessagesForCompletedStream(
 }
 
 export function App() {
+  // Plan 203 L1: a single QueryClient per app. The L1 hooks
+  // (`useProvidersQuery`, mutation hooks, `useActiveProviderId`,
+  // `useConfigUpdateSubscription`) all rely on this provider.
+  // `useMemo` ensures the client is created once per mount (and
+  // survives StrictMode double-invoke).
+  const queryClient = useMemo(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            // Providers are config; not real-time. Aligns with
+            // `useProvidersQuery` per-hook override.
+            staleTime: 30_000,
+            gcTime: 5 * 60_000,
+            refetchOnWindowFocus: false,
+            retry: 1,
+          },
+          mutations: {
+            retry: 0,
+          },
+        },
+      }),
+    [],
+  );
+  return (
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider>
+        <FontProvider>
+          <AppShellInner />
+        </FontProvider>
+      </I18nProvider>
+    </QueryClientProvider>
+  );
+}
+
+function AppShellInner() {
   const {
     currentView,
     activeThreadId,
