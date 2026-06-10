@@ -430,13 +430,25 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
       }
     }
 
-    // Separate final text from actions:
-    // If the last action is text, extract it as the final response text
-    // (unless there are only text actions and no thinking/tools)
+    // Separate final text from work actions. Text-only assistant rounds are
+    // normal replies, not "actions"; mixed rounds keep in-progress text inside
+    // the action log and lift only the trailing response text.
     const hasWidgetActions = mergedActions.some(a => a.kind === 'widget');
     const hasThinkingOrTool = mergedActions.some(a => a.kind === 'thinking' || a.kind === 'tool');
     let resultText = '';
     let resultActions = mergedActions;
+
+    if (!hasThinkingOrTool && !hasWidgetActions) {
+      const plainTexts = mergedActions
+        .filter((action): action is ActionItem & { kind: 'text' } => action.kind === 'text')
+        .map(action => action.content);
+
+      return {
+        actions: [],
+        finalText: plainTexts.join('\n'),
+        allPastedContents: allPasted,
+      };
+    }
 
     if (hasThinkingOrTool && mergedActions.length > 0) {
       // Collect trailing text actions into finalText
@@ -453,11 +465,6 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
       if (trailingTexts.length > 0) {
         resultText = trailingTexts.join('\n');
       }
-    }
-
-    // If no thinking/tool at all, keep all text in actions and don't show separate finalText
-    if (!hasThinkingOrTool) {
-      resultText = '';
     }
 
     return {
