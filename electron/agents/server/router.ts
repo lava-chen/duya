@@ -809,18 +809,201 @@ function handlePostPermission(
   });
 }
 
-function handlePostCompact(
+interface ChatInitParams {
+  providerConfig: Record<string, unknown> | undefined;
+  workingDirectory?: string;
+  systemPrompt?: string;
+}
+
+const MAX_CONCURRENT_WORKERS = 16;
+
+/**
+ * Lazy-spawn a worker for a session that does not have a live worker (e.g.
+ * after Agent Server restart, or after a previous chat ended and the worker
+ * was torn down). Loads session row + provider config from DB, mirrors the
+ * spawn-and-init flow from handlePostChat, and waits for the worker's
+ * `ready` signal before returning.
+ *
+ * The actual command (`compact`, future ones) is sent by the caller after
+ * this helper resolves.
+ *
+ * Returns `{ ok: true }` on success; `{ ok: false, status, error }` and
+ * writes the HTTP error to `res` on any failure path.
+ */
+async function lazySpawnWorkerForCompact(
+  sessionId: string,
+  deps: RouterDeps,
+  workerDbRequests: Map<string, ChildProcess>,
+  res: http.ServerResponse,
+): Promise<{ ok: true; child: ChildProcess; init: ChatInitParams } | { ok: false }> {
+  const { sessionManager, workerManager, logger, httpLogger } = deps;
+
+  // Memory / concurrency guards — same as handlePostChat.
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedRatio = (totalMem - freeMem) / totalMem;
+  const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.95');
+  if (usedRatio > MEMORY_THRESHOLD) {
+    logger.warn('System memory usage high, rejecting compact lazy-spawn', { usedRatio, sessionId });
+    sendJson(res, 503, { error: 'System memory usage is high', retryAfterSec: 30 });
+    return { ok: false };
+  }
+  if (workerManager.workerCount >= MAX_CONCURRENT_WORKERS) {
+    logger.warn('Max concurrent workers reached, rejecting compact lazy-spawn', {
+      current: workerManager.workerCount,
+      max: MAX_CONCURRENT_WORKERS,
+      sessionId,
+    });
+    sendJson(res, 503, { error: 'Maximum concurrent agents reached', retryAfterSec: 10 });
+    return { ok: false };
+  }
+
+  // Load session row + provider config from the DB to build init params.
+  let sessionRow: Record<string, unknown> | null = null;
+  let providerConfig: Record<string, unknown> | null = null;
+  try {
+    const rowResult = await deps.dbRequest('session:get', { id: sessionId });
+    sessionRow = (rowResult && typeof rowResult === 'object') ? rowResult as Record<string, unknown> : null;
+    if (sessionRow && typeof sessionRow.provider_id === 'string' && sessionRow.provider_id !== 'env') {
+      const cfg = await deps.dbRequest('config:provider:get', { id: sessionRow.provider_id });
+      providerConfig = (cfg && typeof cfg === 'object') ? cfg as Record<string, unknown> : null;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn('Compact lazy-spawn: failed to load session/provider', { sessionId, error: msg });
+    sendJson(res, 503, { error: `Failed to load session config: ${msg}` });
+    return { ok: false };
+  }
+
+  if (!sessionRow) {
+    // Session truly does not exist in DB (not just in-memory); this is a 404.
+    httpLogger.warn('Compact lazy-spawn: session not in DB', { sessionId });
+    sendJson(res, 404, { error: 'Session not found' });
+    return { ok: false };
+  }
+
+  const init: ChatInitParams = {
+    providerConfig: providerConfig ?? undefined,
+    workingDirectory: typeof sessionRow.working_directory === 'string' ? sessionRow.working_directory : undefined,
+    systemPrompt: typeof sessionRow.system_prompt === 'string' ? sessionRow.system_prompt : undefined,
+  };
+
+  // Spawn the worker.
+  const child = workerManager.spawnWorker(sessionId);
+  const workerPid = child.pid;
+  httpLogger.info('Compact: lazy-spawned worker', { sessionId, pid: workerPid, hasProviderConfig: !!providerConfig });
+
+  // Wire up stdout logging, db:request routing, error/exit handlers.
+  // Mirrors handlePostChat's setup so the worker behaves identically to
+  // a chat-spawned one.
+  child.stdout?.setEncoding('utf8');
+  child.stdout?.on('data', (data: string) => {
+    const text = data.toString();
+    // Forward raw lines for debugging (same as handlePostChat's stdoutChunks).
+    console.log('[agent-server] Worker stdout (compact-lazy):', text.substring(0, 300));
+  });
+
+  child.on('message', (msg: Record<string, unknown>) => {
+    if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
+      workerDbRequests.set(msg.id, child);
+      process.send(msg);
+    }
+  });
+
+  child.on('error', (err) => {
+    logger.error('Compact lazy-spawn: worker error', err, { sessionId });
+  });
+
+  child.on('exit', (code, signal) => {
+    const session = sessionManager.getSession(sessionId);
+    if (session?.state === SessionState.COMPLETED) return;
+    if (code === 0) {
+      try {
+        sessionManager.transitionState(sessionId, SessionState.COMPLETED);
+      } catch {
+        // state transition may be invalid; safe to ignore
+      }
+    } else {
+      sessionManager.setExitInfo(sessionId, code || 0, signal || undefined);
+    }
+  });
+
+  // Send init.
+  workerManager.sendCommand(sessionId, {
+    type: 'init',
+    sessionId,
+    providerConfig: init.providerConfig,
+    workingDirectory: init.workingDirectory || '',
+    defaultWorkspaceDirectory: '',
+    systemPrompt: init.systemPrompt,
+    language: 'zh',
+  });
+
+  // Wait for ready (30s).
+  const waitForReady = (): Promise<void> => {
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('Worker ready timeout (30s)'));
+      }, 30000);
+      let readyBuffer = '';
+      const readyHandler = (data: Buffer): void => {
+        readyBuffer += data.toString();
+        const lines = readyBuffer.split('\n');
+        readyBuffer = lines.pop() || '';
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line || !line.startsWith('{')) continue;
+          try {
+            const m = JSON.parse(line);
+            if (m.type === 'ready' || m.type === 'conductor:ready') {
+              clearTimeout(timeout);
+              cleanup();
+              resolve();
+              return;
+            }
+          } catch {
+            // Continue scanning
+          }
+        }
+      };
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        child.stdout?.removeListener('data', readyHandler);
+      };
+      child.stdout!.on('data', readyHandler);
+    });
+  };
+
+  try {
+    await waitForReady();
+    httpLogger.info('Compact: lazy-spawned worker ready', { sessionId });
+    return { ok: true, child, init };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('Compact lazy-spawn: worker ready timeout', err instanceof Error ? err : new Error(msg), { sessionId });
+    sendJson(res, 500, { error: `Worker initialization timeout: ${msg}` });
+    return { ok: false };
+  }
+}
+
+async function handlePostCompact(
   sessionId: string,
   req: http.IncomingMessage,
   res: http.ServerResponse,
   deps: RouterDeps,
-): void {
+  workerDbRequests: Map<string, ChildProcess>,
+): Promise<void> {
   const { sessionManager, workerManager, httpLogger } = deps;
 
-  const session = sessionManager.getSession(sessionId);
+  let session = sessionManager.getSession(sessionId);
   if (!session) {
-    sendJson(res, 404, { error: 'Session not found' });
-    return;
+    // Mirror handlePostChat: cold session that has not received a chat turn yet
+    // must not block compact — autocreate so downstream checks (worker, state)
+    // produce the most specific 4xx error instead of a misleading "Session not found".
+    sessionManager.createSession(sessionId);
+    session = sessionManager.getSession(sessionId)!;
+    httpLogger.info('Compact: autocreated session', { sessionId });
   }
 
   if (session.state === SessionState.STREAMING || session.state === SessionState.COMPLETING) {
@@ -829,9 +1012,16 @@ function handlePostCompact(
     return;
   }
 
+  // Lazy-spawn a worker if none exists. The session row was either pre-loaded
+  // by hydrateSessionsFromDb or autocreated above; in both cases the DB row
+  // must exist or the helper returns 404.
   if (!workerManager.hasWorker(sessionId)) {
-    sendJson(res, 404, { error: 'No worker for session' });
-    return;
+    httpLogger.info('Compact: no live worker, attempting lazy spawn', { sessionId });
+    const result = await lazySpawnWorkerForCompact(sessionId, deps, workerDbRequests, res);
+    if (!result.ok) {
+      // helper already wrote the error response
+      return;
+    }
   }
 
   httpLogger.info('Compaction requested', { sessionId });
@@ -846,7 +1036,11 @@ function handlePostCompact(
 
   const child = workerManager.getWorker(sessionId);
   if (!child) {
-    sendJson(res, 404, { error: 'No worker for session' });
+    // Race: worker died between lazy-spawn and getWorker. Surface a specific
+    // error so the client can distinguish this from the no-session case.
+    httpLogger.error('Compact: worker missing after lazy-spawn', undefined, { sessionId });
+    res.write(`event: compact:error\ndata: ${JSON.stringify({ type: 'compact:error', sessionId, message: 'Worker became unavailable' })}\n\n`);
+    res.end();
     return;
   }
 
@@ -1104,7 +1298,7 @@ function handleSessionsRoute(
       return;
     }
     if (pathParts.length === 3 && pathParts[2] === 'compact') {
-      handlePostCompact(sessionId, req, res, deps);
+      handlePostCompact(sessionId, req, res, deps, workerDbRequests);
       return;
     }
     if (pathParts.length === 3 && pathParts[2] === 'permission') {

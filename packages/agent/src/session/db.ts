@@ -792,6 +792,67 @@ function initializeSchema(db: BetterSqlite3.Database): void {
     logger.error('Migration failed: creating research_activities table', error instanceof Error ? error : undefined, undefined, 'DB');
   }
 
+  // Schema migration: Create agent_mailbox table for Codex-like in-run instruction pipeline
+  try {
+    const mailboxTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_mailbox'").get();
+    if (!mailboxTableInfo) {
+      db.exec(`
+        CREATE TABLE agent_mailbox (
+          id                     TEXT PRIMARY KEY,
+          session_id             TEXT NOT NULL,
+          submitted_during_run_id TEXT NOT NULL,
+          content                TEXT NOT NULL,
+          kind                   TEXT NOT NULL,
+          status                 TEXT NOT NULL,
+          priority               INTEGER NOT NULL DEFAULT 100,
+          constraints_json       TEXT,
+          attachments_json       TEXT,
+          source                 TEXT NOT NULL DEFAULT 'ui',
+          client_msg_id          TEXT,
+          created_at             INTEGER NOT NULL,
+          claim_token            TEXT,
+          claim_expires_at       INTEGER,
+          observed_at            INTEGER,
+          observed_at_checkpoint TEXT,
+          observed_by_run_id     TEXT,
+          claim_attempts         INTEGER NOT NULL DEFAULT 0,
+          last_claim_error       TEXT,
+          edit_locked_at         INTEGER,
+          apply_mode             TEXT,
+          applied_at             INTEGER,
+          applied_at_checkpoint  TEXT,
+          applied_summary        TEXT,
+          resulting_user_msg_id  TEXT,
+          failure_reason         TEXT,
+          edit_history_json      TEXT,
+          cancelled_at           INTEGER,
+          cancelled_by           TEXT,
+          cancel_reason          TEXT,
+          CHECK (kind IN ('followup','correction','constraint','stop','abort_and_replace')),
+          CHECK (status IN ('pending','observed','applied','cancelled')),
+          CHECK (apply_mode IS NULL OR apply_mode IN
+            ('promote_to_user_message','runtime_instruction','tool_guard',
+             'permission_context','interrupt_signal','deferred_to_next_turn'))
+        );
+
+        CREATE INDEX idx_mailbox_claim_ready
+          ON agent_mailbox(session_id, status, priority, created_at)
+          WHERE status = 'pending'
+             OR (status = 'observed' AND claim_expires_at IS NOT NULL);
+
+        CREATE INDEX idx_mailbox_session_recent
+          ON agent_mailbox(session_id, created_at DESC);
+
+        CREATE UNIQUE INDEX uq_mailbox_client_msg
+          ON agent_mailbox(session_id, client_msg_id)
+          WHERE client_msg_id IS NOT NULL;
+      `);
+      logger.info('Migration: Created agent_mailbox table', undefined, 'DB');
+    }
+  } catch (error) {
+    logger.error('Migration failed: creating agent_mailbox table', error instanceof Error ? error : undefined, undefined, 'DB');
+  }
+
   // Schema migration: Create durable research event/report/source/citation tables (Deep Research P0)
   try {
     db.exec(`
@@ -2976,4 +3037,219 @@ export function deleteModelCapability(modelName: string): boolean {
   const normalized = modelName.trim().toLowerCase();
   const result = db.prepare('DELETE FROM model_capabilities WHERE id = ?').run(normalized);
   return result.changes > 0;
+}
+
+// =============================================================================
+// Mailbox Types & CRUD (Plan 202 — AgentMailbox PR1)
+// =============================================================================
+
+export type MailboxKind = 'followup' | 'correction' | 'constraint' | 'stop' | 'abort_and_replace';
+export type MailboxStatus = 'pending' | 'observed' | 'applied' | 'cancelled';
+export type MailboxApplyMode = 'promote_to_user_message' | 'runtime_instruction' | 'tool_guard'
+  | 'permission_context' | 'interrupt_signal' | 'deferred_to_next_turn';
+
+export interface MailboxRow {
+  id: string;
+  session_id: string;
+  submitted_during_run_id: string;
+  content: string;
+  kind: MailboxKind;
+  status: MailboxStatus;
+  priority: number;
+  constraints_json: string | null;
+  attachments_json: string | null;
+  source: string;
+  client_msg_id: string | null;
+  created_at: number;
+  claim_token: string | null;
+  claim_expires_at: number | null;
+  observed_at: number | null;
+  observed_at_checkpoint: string | null;
+  observed_by_run_id: string | null;
+  claim_attempts: number;
+  last_claim_error: string | null;
+  edit_locked_at: number | null;
+  apply_mode: MailboxApplyMode | null;
+  applied_at: number | null;
+  applied_at_checkpoint: string | null;
+  applied_summary: string | null;
+  resulting_user_msg_id: string | null;
+  failure_reason: string | null;
+  edit_history_json: string | null;
+  cancelled_at: number | null;
+  cancelled_by: string | null;
+  cancel_reason: string | null;
+}
+
+export interface CreateMailboxData {
+  id: string;
+  sessionId: string;
+  submittedDuringRunId: string;
+  content: string;
+  kind: MailboxKind;
+  attachments?: unknown[];
+  clientMsgId?: string;
+  source?: string;
+  constraintsJson?: string;
+}
+
+export interface EditMailboxPatch {
+  content?: string;
+  kind?: MailboxKind;
+}
+
+// =============================================================================
+// Mailbox CRUD Operations
+// =============================================================================
+
+/** Priority mapping for each kind */
+const KIND_PRIORITY: Record<MailboxKind, number> = {
+  abort_and_replace: 0,
+  stop: 10,
+  correction: 50,
+  constraint: 50,
+  followup: 100,
+};
+
+export function mailboxSend(data: CreateMailboxData): MailboxRow {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.mailboxDb.send(data) as unknown as MailboxRow;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+  const priority = KIND_PRIORITY[data.kind] ?? 100;
+
+  // Idempotency check: if client_msg_id exists, return existing row
+  if (data.clientMsgId) {
+    const existing = db.prepare(
+      'SELECT * FROM agent_mailbox WHERE session_id = ? AND client_msg_id = ?'
+    ).get(data.sessionId, data.clientMsgId) as MailboxRow | undefined;
+    if (existing) return existing;
+  }
+
+  db.prepare(`
+    INSERT INTO agent_mailbox (
+      id, session_id, submitted_during_run_id, content, kind, status,
+      priority, constraints_json, attachments_json, source,
+      client_msg_id, created_at
+    ) VALUES (
+      @id, @session_id, @submitted_during_run_id, @content, @kind, 'pending',
+      @priority, @constraints_json, @attachments_json, @source,
+      @client_msg_id, @created_at
+    )
+  `).run({
+    id: data.id,
+    session_id: data.sessionId,
+    submitted_during_run_id: data.submittedDuringRunId || '',
+    content: data.content,
+    kind: data.kind,
+    priority,
+    constraints_json: data.constraintsJson ?? null,
+    attachments_json: data.attachments ? JSON.stringify(data.attachments) : null,
+    source: data.source ?? 'ui',
+    client_msg_id: data.clientMsgId ?? null,
+    created_at: now,
+  });
+
+  return db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id) as MailboxRow;
+}
+
+export function mailboxEdit(id: string, patch: EditMailboxPatch): MailboxRow | null {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.mailboxDb.edit(id, patch) as unknown as MailboxRow | null;
+  }
+
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(id) as MailboxRow | undefined;
+  if (!existing) return null;
+
+  // Only pending rows can be edited
+  if (existing.status !== 'pending') return null;
+
+  // If edit_locked_at is set, reject edits
+  if (existing.edit_locked_at !== null) return null;
+
+  const now = Date.now();
+  const fields: string[] = [];
+  const params: Record<string, unknown> = { id, now };
+
+  // Track edit history
+  const editHistory: Array<{ editedAt: number; prevContent: string; prevKind: string }> = [];
+  if (existing.edit_history_json) {
+    try { editHistory.push(...JSON.parse(existing.edit_history_json)); } catch { /* ignore */ }
+  }
+
+  if (patch.content !== undefined) {
+    editHistory.push({ editedAt: now, prevContent: existing.content, prevKind: existing.kind });
+    fields.push('content = @content');
+    params.content = patch.content;
+  }
+  if (patch.kind !== undefined) {
+    if (!editHistory.some(e => e.prevKind === existing.kind && e.editedAt === now)) {
+      editHistory.push({ editedAt: now, prevContent: existing.content, prevKind: existing.kind });
+    }
+    fields.push('kind = @kind');
+    fields.push('priority = @priority');
+    params.kind = patch.kind;
+    params.priority = KIND_PRIORITY[patch.kind] ?? 100;
+  }
+
+  if (fields.length === 0) return existing;
+
+  fields.push('edit_history_json = @edit_history_json');
+  params.edit_history_json = JSON.stringify(editHistory);
+
+  db.prepare(`UPDATE agent_mailbox SET ${fields.join(', ')} WHERE id = @id`).run(params);
+  return db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(id) as MailboxRow;
+}
+
+export function mailboxCancel(id: string, reason?: string): MailboxRow | null {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.mailboxDb.cancel(id, reason) as unknown as MailboxRow | null;
+  }
+
+  const db = getDb();
+  const now = Date.now();
+
+  const result = db.prepare(`
+    UPDATE agent_mailbox
+    SET status = 'cancelled', cancelled_at = @now, cancelled_by = 'user', cancel_reason = @reason
+    WHERE id = @id AND status = 'pending'
+  `).run({ id, now, reason: reason ?? null });
+
+  if (result.changes === 0) return null;
+  return db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(id) as MailboxRow;
+}
+
+export function mailboxList(sessionId: string, opts?: { status?: MailboxStatus[]; limit?: number }): MailboxRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.mailboxDb.list(sessionId, opts) as unknown as MailboxRow[];
+  }
+
+  const db = getDb();
+  const limit = opts?.limit ?? 50;
+  const statuses = opts?.status;
+
+  if (statuses && statuses.length > 0) {
+    const placeholders = statuses.map(() => '?').join(',');
+    return db.prepare(
+      `SELECT * FROM agent_mailbox WHERE session_id = ? AND status IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`
+    ).all(sessionId, ...statuses, limit) as MailboxRow[];
+  }
+
+  return db.prepare(
+    'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at DESC LIMIT ?'
+  ).all(sessionId, limit) as MailboxRow[];
+}
+
+export function mailboxListForSession(sessionId: string): MailboxRow[] {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return getIpcClient()!.mailboxDb.listForSession(sessionId) as unknown as MailboxRow[];
+  }
+
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at ASC'
+  ).all(sessionId) as MailboxRow[];
 }

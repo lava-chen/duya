@@ -10,7 +10,7 @@ import { registerSkillsHandlers } from './skills-handlers';
 import { registerFilesHandlers } from './files-handlers';
 import { registerLoggerHandlers } from './logger-handlers';
 import { registerUpdaterHandlers } from './updater-handlers';
-import { registerDbHandlers, registerConductorHandlers } from './db-handlers';
+import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers } from './db-handlers';
 import { registerAgentHandlers } from '../agents/agent-communicator';
 import { registerNetHandlers } from './net-handlers';
 import { registerAgentServerHandlers } from './agent-server-handlers';
@@ -27,6 +27,7 @@ export {
   registerUpdaterHandlers,
   registerDbHandlers,
   registerConductorHandlers,
+  registerMailboxHandlers,
   registerAgentHandlers,
   registerNetHandlers,
   registerAgentServerHandlers,
@@ -47,6 +48,7 @@ export function registerAllIpcHandlers(): void {
   registerUpdaterHandlers();
   registerDbHandlers();
   registerConductorHandlers();
+  registerMailboxHandlers();
   registerAgentHandlers();
   registerNetHandlers();
   registerAgentServerHandlers();
