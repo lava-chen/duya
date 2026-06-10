@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, createElement } from 'react';
+import React, { useState, useCallback, createElement } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Icon } from '@phosphor-icons/react';
 import {
@@ -15,6 +15,7 @@ import {
   CaretRightIcon,
   BrainIcon,
   RobotIcon,
+  CopyIcon,
 } from '@/components/icons';
 import { Shimmer } from './Shimmer';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -84,7 +85,17 @@ function truncatePath(path: string, maxLen = 50): string {
 
 const TOOL_REGISTRY: ToolRendererDef[] = [
   {
-    match: (n) => ['bash', 'execute', 'run', 'shell', 'execute_command', 'run_command'].includes(n.toLowerCase()),
+    match: (n) => n.toLowerCase() === 'shell',
+    icon: TerminalIcon,
+    label: '',
+    getSummary: (input) => {
+      const rawCmd = (input as Record<string, unknown>)?.command || (input as Record<string, unknown>)?.cmd || '';
+      const cmd = typeof rawCmd === 'string' ? rawCmd : JSON.stringify(rawCmd);
+      return cmd ? (cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd) : 'shell';
+    },
+  },
+  {
+    match: (n) => ['bash', 'execute', 'run', 'execute_command', 'run_command'].includes(n.toLowerCase()),
     icon: TerminalIcon,
     label: '',
     getSummary: (input) => {
@@ -94,9 +105,29 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    match: (n) => ['write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'str_replace_editor'].includes(n.toLowerCase()),
+    match: (n) => n.toLowerCase() === 'duya_cli' || n.toLowerCase() === 'duya-cli' || n.toLowerCase() === 'duyacli',
+    icon: TerminalIcon,
+    label: 'CLI',
+    getSummary: (input) => {
+      // "Run duya status" / "运行 duya status"
+      const argv = (input as Record<string, unknown>)?.argv;
+      const args = Array.isArray(argv) ? argv.map(String) : [];
+      return args.length > 0 ? `duya ${args.join(' ')}` : 'duya';
+    },
+  },
+  {
+    match: (n) => ['edit', 'edit_file', 'str_replace_editor'].includes(n.toLowerCase()),
     icon: NotePencilIcon,
     label: 'Edit',
+    getSummary: (input) => {
+      const path = getFilePath(input);
+      return path ? extractFilename(path) : 'file';
+    },
+  },
+  {
+    match: (n) => ['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(n.toLowerCase()),
+    icon: NotePencilIcon,
+    label: 'Create',
     getSummary: (input) => {
       const path = getFilePath(input);
       return path ? extractFilename(path) : 'file';
@@ -213,6 +244,73 @@ const CONTEXT_TOOLS = new Set([
 
 function isContextTool(name: string): boolean {
   return CONTEXT_TOOLS.has(name.toLowerCase());
+}
+
+const FILE_EDIT_TOOLS = new Set([
+  'edit', 'edit_file', 'str_replace_editor',
+]);
+
+const FILE_CREATE_TOOLS = new Set([
+  'write', 'writefile', 'write_file', 'create_file', 'createfile',
+]);
+
+type FileEditKind = 'edit' | 'create' | 'unknown';
+
+interface FileEditStats {
+  stats: { additions: number; removals: number };
+  kind: FileEditKind;
+}
+
+/**
+ * Compute live diff stats for edit / write / create_file tools.
+ *
+ * Priority:
+ *   1. If `result` is available, parse the authoritative result format
+ *      (edit: "Changed:/To:" blocks; write: JSON `{content, file_path}`).
+ *   2. Otherwise fall back to the tool's `input` so stats are visible
+ *      from the moment the tool_use arrives (during streaming).
+ */
+function computeFileEditStats(tool: ToolAction): FileEditStats {
+  const inp = tool.input as Record<string, unknown> | undefined;
+  const name = tool.name.toLowerCase();
+  const isCreateTool = FILE_CREATE_TOOLS.has(name);
+  const isEditTool = FILE_EDIT_TOOLS.has(name);
+
+  // 1) Prefer authoritative result when present.
+  if (tool.result && !tool.isError) {
+    const parsed = parseEditResult(tool.result);
+    if (parsed) {
+      const stats = calculateDiff(parsed.oldContent, parsed.newContent).stats;
+      return { stats, kind: 'edit' };
+    }
+    // write result is JSON: { file_path, content, previous_content? }
+    try {
+      const data = JSON.parse(tool.result);
+      if (typeof data?.content === 'string') {
+        const oldContent = typeof data.previous_content === 'string' ? data.previous_content : '';
+        if (oldContent) {
+          const stats = calculateDiff(oldContent, data.content as string).stats;
+          return { stats, kind: 'edit' };
+        }
+        const additions = (data.content as string).split('\n').filter((l: string) => l !== '').length;
+        return { stats: { additions, removals: 0 }, kind: 'create' };
+      }
+    } catch {
+      // not JSON — fall through to input
+    }
+  }
+
+  // 2) Live estimate from `input` while streaming.
+  if (isEditTool && typeof inp?.old_string === 'string' && typeof inp?.new_string === 'string') {
+    const stats = calculateDiff(inp.old_string as string, inp.new_string as string).stats;
+    return { stats, kind: 'edit' };
+  }
+  if (isCreateTool && typeof inp?.content === 'string') {
+    const additions = (inp.content as string).split('\n').filter((l: string) => l !== '').length;
+    return { stats: { additions, removals: 0 }, kind: 'create' };
+  }
+
+  return { stats: { additions: 0, removals: 0 }, kind: 'unknown' };
 }
 
 type Segment =
@@ -398,6 +496,9 @@ function TextRow({ content }: { content: string }) {
 
 function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamingToolOutput?: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const { t, locale } = useTranslation();
   const rawCmd = (tool.input as Record<string, unknown>)?.command || '';
   const cmd = typeof rawCmd === 'string' ? rawCmd : JSON.stringify(rawCmd);
   const isRunning = tool.result === undefined;
@@ -405,6 +506,35 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
   const hasOutput = !!outputText && outputText.trim().length > 0;
   const status = getStatus(tool);
   const lineCount = outputText ? outputText.split('\n').length : 0;
+  // Distinguish shell tool vs bash tool: shellTool -> "Shell", bashTool -> "Bash".
+  const shellLabel = tool.name.toLowerCase() === 'shell' ? 'Shell' : 'Bash';
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+
+  // "Ran command / 已运行命令" — bilingual. For running tools we
+  // fall back to the generic "working" / "运行中" label.
+  const separator = locale === 'zh' ? '，' : ', ';
+  const baseLabel = isRunning
+    ? t('streaming.workingFor')
+    : locale === 'zh'
+      ? '已运行命令'
+      : 'Ran command';
+  const durationStr = formatDuration(tool.durationMs ?? 0);
+  // For zh: "已运行命令，耗时 2s" — uses the existing i18n key.
+  // For en: "Ran command, 2s" — no verb repetition.
+  const ranLabelFull = durationStr
+    ? locale === 'zh'
+      ? `${baseLabel}${separator}${t('streaming.actions.workedFor', { duration: durationStr })}`
+      : `${baseLabel}${separator}${durationStr}`
+    : baseLabel;
 
   const displayLines = (() => {
     if (!outputText) return null;
@@ -424,18 +554,24 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
       >
         <TerminalIcon size={14} className="shrink-0 text-muted-foreground" />
-        <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
-          {cmd}
+        <span
+          className={`font-mono truncate flex-1 text-left transition-colors ${
+            hovered ? 'text-foreground' : 'text-muted-foreground/60'
+          }`}
+        >
+          {expanded ? ranLabelFull : cmd}
         </span>
-        {!isRunning && hasOutput && (
+        {!expanded && !isRunning && hasOutput && (
           <span className="text-[10px] text-muted-foreground/40 tabular-nums">
             {lineCount} lines
           </span>
         )}
-        <StatusDot status={status} />
+        {!expanded && <StatusDot status={status} />}
       </button>
       <AnimatePresence initial={false}>
         {expanded && (
@@ -446,14 +582,184 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="ml-6 mt-1 rounded bg-muted/40 px-2 py-1.5 font-mono text-[11px] text-muted-foreground/80 max-h-[300px] overflow-auto whitespace-pre-wrap break-all">
+            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+              {/* Shell label */}
+              <div className="text-[11px] text-neutral-400 font-medium mb-1.5">{shellLabel}</div>
+
+              {/* Command with copy button */}
+              <div className="group relative font-mono text-[13px] text-neutral-200 leading-relaxed pr-7">
+                <span className="text-neutral-400 mr-1.5 select-none">$</span>
+                <span className="break-all">{cmd}</span>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleCopy(); }}
+                  className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-neutral-500 hover:text-neutral-300 hover:bg-white/5"
+                  title="Copy command"
+                >
+                  {copied ? <CheckCircleIcon size={14} className="text-green-500" /> : <CopyIcon size={14} />}
+                </button>
+              </div>
+
+              {/* Output */}
               {displayLines ? (
-                <div className={isRunning ? 'text-muted-foreground/50' : 'text-muted-foreground/60'}>
+                <div className="font-mono text-[12px] text-neutral-400 whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed mt-1.5">
                   {displayLines}
                 </div>
               ) : (
-                <span className="text-muted-foreground/30 italic">No output</span>
+                <div className="text-[12px] text-neutral-500 italic mt-1.5">No output</div>
               )}
+
+              {/* Status badge - bottom right */}
+              <div className="mt-1.5 flex justify-end">
+                {status === 'success' && (
+                  <div className="flex items-center gap-1 text-[11px] text-green-500">
+                    <CheckCircleIcon size={12} />
+                    <span>Success</span>
+                  </div>
+                )}
+                {status === 'error' && (
+                  <div className="flex items-center gap-1 text-[11px] text-red-500">
+                    <XCircleIcon size={12} />
+                    <span>Failed</span>
+                  </div>
+                )}
+                {status === 'running' && (
+                  <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                    <SpinnerGapIcon size={12} className="animate-spin" />
+                    <span>Running</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+interface DuyaCliResult {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  ok?: boolean;
+  command?: string;
+}
+
+function parseDuyaCliResult(result: string | undefined): DuyaCliResult | null {
+  if (!result) return null;
+  try {
+    const data = JSON.parse(result);
+    if (typeof data === 'object' && data !== null) {
+      return data as DuyaCliResult;
+    }
+  } catch {
+    // Fall through: result might be a plain string. Treat it as stdout.
+  }
+  return { stdout: result };
+}
+
+/**
+ * duya_cli tool row — runs a `duya <args>` subcommand and shows stdout / stderr
+ * separately, mirroring the BashToolRow layout.
+ */
+function DuyaCliToolRow({ tool }: { tool: ToolAction }) {
+  const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const { locale } = useTranslation();
+  const status = getStatus(tool);
+  const hasResult = tool.result !== undefined && tool.result !== '';
+
+  const argv = (tool.input as Record<string, unknown>)?.argv;
+  const args = Array.isArray(argv) ? argv.map(String) : [];
+  const cmd = args.length > 0 ? `duya ${args.join(' ')}` : 'duya';
+  const isRunning = tool.result === undefined;
+  const parsed = hasResult ? parseDuyaCliResult(tool.result) : null;
+  const exitCode = parsed?.exitCode;
+  const stdout = parsed?.stdout ?? '';
+  const okFlag = parsed?.ok;
+  // When tool marks failure via ok=false or non-zero exit, treat as error even
+  // if isError flag is missing. stderr is intentionally hidden from the
+  // card — the failure is conveyed through the bottom-right badge instead.
+  const isError = tool.isError || okFlag === false || (exitCode !== undefined && exitCode !== 0);
+  const hasStdout = !!stdout && stdout.trim().length > 0;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
+      >
+        <TerminalIcon size={14} className="shrink-0 text-muted-foreground" />
+        {locale === 'zh' ? (
+          <span className="text-muted-foreground shrink-0">执行</span>
+        ) : (
+          <span className="text-muted-foreground shrink-0">Run</span>
+        )}
+        <span
+          className={`font-mono truncate flex-1 text-left transition-colors ${
+            hovered ? 'text-foreground' : 'text-muted-foreground/60'
+          }`}
+        >
+          {cmd}
+        </span>
+        {tool.durationMs != null && tool.durationMs > 0 && (
+          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
+            {formatDuration(tool.durationMs)}
+          </span>
+        )}
+        {!expanded && <StatusDot status={isError ? 'error' : status} />}
+      </button>
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+              <div className="font-mono text-[13px] text-neutral-200 leading-relaxed">
+                <span className="break-all">{cmd}</span>
+              </div>
+
+              {hasStdout && (
+                <>
+                  <div className="border-t border-white/10 mt-2 mb-1.5" />
+                  <div className="font-mono text-[12px] text-neutral-300 whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed">
+                    {stdout}
+                  </div>
+                </>
+              )}
+
+              {!hasStdout && !isRunning && (
+                <div className="text-[12px] text-neutral-500 italic mt-2">No output</div>
+              )}
+
+              <div className="mt-1.5 flex justify-end">
+                {status === 'running' && (
+                  <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                    <SpinnerGapIcon size={12} className="animate-spin" />
+                    <span>Running</span>
+                  </div>
+                )}
+                {!isRunning && isError && (
+                  <div className="flex items-center gap-1 text-[11px] text-red-500">
+                    <XCircleIcon size={12} />
+                    <span>{exitCode != null ? `Failed (exit ${exitCode})` : 'Failed'}</span>
+                  </div>
+                )}
+                {!isRunning && !isError && (
+                  <div className="flex items-center gap-1 text-[11px] text-green-500">
+                    <CheckCircleIcon size={12} />
+                    <span>Success</span>
+                  </div>
+                )}
+              </div>
             </div>
           </motion.div>
         )}
@@ -470,6 +776,7 @@ function SubAgentToolRow({
   agentProgressEvents?: AgentProgressEventWithMeta[];
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const renderer = getRenderer(tool.name);
   const summary = renderer.getSummary(tool.input, tool.name);
   const status = getStatus(tool);
@@ -508,6 +815,8 @@ function SubAgentToolRow({
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
       >
         <CaretRightIcon
@@ -516,7 +825,11 @@ function SubAgentToolRow({
         />
         <RobotIcon size={14} className="shrink-0 text-muted-foreground" />
         <span className="font-medium text-muted-foreground shrink-0">Agent</span>
-        <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
+        <span
+          className={`font-mono truncate flex-1 text-left transition-colors ${
+            hovered ? 'text-foreground' : 'text-muted-foreground/60'
+          }`}
+        >
           {summary}
         </span>
         {toolUseCount > 0 && (
@@ -524,6 +837,11 @@ function SubAgentToolRow({
         )}
         {unresolvedTools > 0 && (
           <span className="text-amber-500 text-[10px]">{unresolvedTools} pending</span>
+        )}
+        {tool.durationMs != null && tool.durationMs > 0 && (
+          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
+            {formatDuration(tool.durationMs)}
+          </span>
         )}
         <StatusDot status={status} />
       </button>
@@ -624,6 +942,7 @@ function parseReadLineRange(result: string): { start: number; end: number } | nu
  */
 function ReadToolRow({ tool }: { tool: ToolAction }) {
   const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const filePath = getFilePath(tool.input);
   const fileName = filePath.split(/[/\\]/).pop() || filePath;
   const status = getStatus(tool);
@@ -652,6 +971,8 @@ function ReadToolRow({ tool }: { tool: ToolAction }) {
       <button
         type="button"
         onClick={() => hasResult && setExpanded(prev => !prev)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors ${hasResult ? 'cursor-pointer' : 'cursor-default'}`}
       >
         {hasResult && (
@@ -663,22 +984,24 @@ function ReadToolRow({ tool }: { tool: ToolAction }) {
 
         <FileIcon size={14} className="shrink-0 text-muted-foreground" />
 
-        <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
+        <span
+          className={`font-mono truncate flex-1 text-left transition-colors ${
+            hovered ? 'text-foreground' : 'text-muted-foreground/60'
+          }`}
+        >
           {fileName}
         </span>
 
         {/* Line range info - replaces duplicate file path */}
         {lineRange && (
-          <span className="text-[11px] text-muted-foreground/50 tabular-nums shrink-0">
-            Lines {lineRange.start}-{lineRange.end}
+          <span className="text-[11px] text-muted-foreground/50 tabular-nums shrink-0 font-mono">
+            L{lineRange.start}-{lineRange.end}
           </span>
         )}
 
         {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0">
-            {tool.durationMs < 1000
-              ? `${tool.durationMs}ms`
-              : `${(tool.durationMs / 1000).toFixed(1)}s`}
+          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
+            {formatDuration(tool.durationMs)}
           </span>
         )}
 
@@ -694,8 +1017,30 @@ function ReadToolRow({ tool }: { tool: ToolAction }) {
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="ml-4 mt-1 border-l-2 border-border/30 pl-3 py-2">
+            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
               {renderedResult}
+
+              {/* Status badge - bottom right */}
+              <div className="mt-1.5 flex justify-end">
+                {status === 'success' && (
+                  <div className="flex items-center gap-1 text-[11px] text-green-500">
+                    <CheckCircleIcon size={12} />
+                    <span>Success</span>
+                  </div>
+                )}
+                {status === 'error' && (
+                  <div className="flex items-center gap-1 text-[11px] text-red-500">
+                    <XCircleIcon size={12} />
+                    <span>Failed</span>
+                  </div>
+                )}
+                {status === 'running' && (
+                  <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                    <SpinnerGapIcon size={12} className="animate-spin" />
+                    <span>Running</span>
+                  </div>
+                )}
+              </div>
             </div>
           </motion.div>
         )}
@@ -705,65 +1050,184 @@ function ReadToolRow({ tool }: { tool: ToolAction }) {
 }
 
 /**
- * Edit tool row with +n -m stats
+ * Animated stat number — fades and slides when the value changes.
+ * Used to make the live `+N -M` feel like the digits are ticking.
  */
-function EditToolRow({ tool }: { tool: ToolAction }) {
+function StatNumber({ value, tone }: { value: number; tone: 'add' | 'remove' }) {
+  if (value <= 0) return null;
+  return (
+    <AnimatePresence mode="popLayout" initial={false}>
+      <motion.span
+        key={value}
+        initial={{ y: -6, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 6, opacity: 0 }}
+        transition={{ duration: 0.18, ease: 'easeOut' }}
+        className={`font-mono tabular-nums font-medium ${
+          tone === 'add' ? 'text-green-500' : 'text-red-500'
+        }`}
+      >
+        {tone === 'add' ? `+${value}` : `-${value}`}
+      </motion.span>
+    </AnimatePresence>
+  );
+}
+
+/**
+ * File edit / create tool row.
+ *
+ * Collapsed:  [verb] [blue clickable filename] [git-style +N -M]
+ * Expanded:   diff card with SimpleDiffViewer
+ *
+ * Stats are computed from `input` as soon as the tool_use arrives,
+ * then recomputed from `result` once the tool finishes — the row
+ * stays visible (and updating) throughout streaming.
+ */
+function FileEditToolRow({ tool }: { tool: ToolAction }) {
+  const { t, locale } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [fileHovered, setFileHovered] = useState(false);
   const filePath = getFilePath(tool.input);
   const fileName = filePath.split(/[/\\]/).pop() || filePath;
   const status = getStatus(tool);
   const hasResult = tool.result !== undefined && tool.result !== '';
 
-  // Calculate diff stats
-  const diffData = hasResult ? parseEditResult(tool.result!) : null;
-  const stats = diffData ? calculateDiff(diffData.oldContent, diffData.newContent).stats : { additions: 0, removals: 0 };
+  // Live diff stats — visible from tool_use onwards, updated when result arrives.
+  const { stats, kind } = computeFileEditStats(tool);
+  const isCreate = kind === 'create';
+
+  // Verb shown next to the icon. "已编辑"/"Edited" vs "已创建"/"Created".
+  const verbKey = isCreate ? 'streaming.toolAction.created' : 'streaming.toolAction.edited';
+  const verb = t(verbKey as Parameters<typeof t>[0]);
+  const openFileTitle = t('streaming.toolAction.openFile');
+
+  // Open the file in the system default editor.
+  // shell.openPath delegates to `start` / `open` / `xdg-open` per OS.
+  const handleOpenFile = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!filePath) return;
+      if (window.electronAPI?.shell?.openPath) {
+        void window.electronAPI.shell.openPath(filePath);
+      } else if (typeof window !== 'undefined') {
+        window.open(`file://${filePath}`, '_blank');
+      }
+    },
+    [filePath],
+  );
+
+  // Diff payload for the expanded card. We use the same source as the
+  // stats so the card and the collapsed `+N -M` always agree.
+  const diffPayload = (() => {
+    if (hasResult) {
+      const parsed = parseEditResult(tool.result!);
+      if (parsed) {
+        return { oldContent: parsed.oldContent, newContent: parsed.newContent };
+      }
+      try {
+        const data = JSON.parse(tool.result!);
+        if (typeof data?.content === 'string') {
+          return {
+            oldContent: typeof data.previous_content === 'string' ? data.previous_content : '',
+            newContent: data.content as string,
+          };
+        }
+      } catch {
+        // fall through
+      }
+    }
+    // During streaming, render what the agent has committed so far.
+    const inp = tool.input as Record<string, unknown> | undefined;
+    if (isCreate && typeof inp?.content === 'string') {
+      return { oldContent: '', newContent: inp.content as string };
+    }
+    if (typeof inp?.old_string === 'string' && typeof inp?.new_string === 'string') {
+      return { oldContent: inp.old_string as string, newContent: inp.new_string as string };
+    }
+    return null;
+  })();
+
+  const canExpand = diffPayload !== null;
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => hasResult && setExpanded(prev => !prev)}
-        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors ${hasResult ? 'cursor-pointer' : 'cursor-default'}`}
+      <div
+        role="button"
+        tabIndex={canExpand ? 0 : -1}
+        onClick={() => canExpand && setExpanded((prev) => !prev)}
+        onKeyDown={(e) => {
+          if (!canExpand) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded((prev) => !prev);
+          }
+        }}
+        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs rounded-sm transition-colors group ${
+          canExpand ? 'cursor-pointer hover:bg-muted/30' : 'cursor-default'
+        }`}
       >
-        {hasResult && (
+        {canExpand && (
           <CaretRightIcon
             size={10}
-            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${
+              expanded ? 'rotate-90' : ''
+            }`}
           />
         )}
 
         <NotePencilIcon size={14} className="shrink-0 text-muted-foreground" />
-        <span className="font-medium text-muted-foreground shrink-0">Edit</span>
 
-        <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
-          {fileName}
+        {/* Action verb — 已编辑 / 已创建 / Edited / Created */}
+        <span className="font-medium text-muted-foreground/80 shrink-0">
+          {isCreate && status === 'running' ? (
+            <Shimmer duration={1.5}>{verb}</Shimmer>
+          ) : (
+            verb
+          )}
         </span>
 
-        {/* Diff stats */}
-        {hasResult && (
-          <div className="flex items-center gap-1.5 shrink-0 text-[11px] font-mono">
-            {stats.additions > 0 && (
-              <span className="text-green-500 font-medium">+{stats.additions}</span>
-            )}
-            {stats.removals > 0 && (
-              <span className="text-red-500 font-medium">-{stats.removals}</span>
-            )}
-          </div>
-        )}
+        {/* Blue clickable filename — opens in system default editor */}
+        <button
+          type="button"
+          onClick={handleOpenFile}
+          onMouseEnter={() => setFileHovered(true)}
+          onMouseLeave={() => setFileHovered(false)}
+          title={filePath ? `${openFileTitle}\n${filePath}` : openFileTitle}
+          className={`font-mono truncate min-w-0 max-w-full text-left transition-colors ${
+            fileHovered
+              ? 'text-blue-500 underline underline-offset-2'
+              : 'text-blue-500/90 hover:text-blue-500'
+          }`}
+        >
+          {fileName}
+        </button>
+
+        {/* Live git-style +N -M stats. Only render the counter chrome
+            once at least one of the numbers is > 0 — keeps the row
+            visually quiet before the agent commits to the edit. */}
+        <div className="ml-auto flex items-center gap-1.5 shrink-0 text-[11px] min-h-[14px]">
+          {stats.additions > 0 || stats.removals > 0 ? (
+            <>
+              <StatNumber value={stats.additions} tone="add" />
+              <StatNumber value={stats.removals} tone="remove" />
+            </>
+          ) : status === 'running' ? (
+            <span className="text-muted-foreground/40 font-mono tabular-nums">…</span>
+          ) : null}
+        </div>
 
         {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0">
-            {tool.durationMs < 1000
-              ? `${tool.durationMs}ms`
-              : `${(tool.durationMs / 1000).toFixed(1)}s`}
+          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
+            {formatDuration(tool.durationMs)}
           </span>
         )}
 
         <StatusDot status={status} />
-      </button>
+      </div>
 
       <AnimatePresence initial={false}>
-        {expanded && hasResult && diffData && (
+        {expanded && canExpand && diffPayload && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
@@ -771,12 +1235,34 @@ function EditToolRow({ tool }: { tool: ToolAction }) {
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="ml-4 mt-1 border-l-2 border-border/30 pl-3 py-2">
+            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
               <SimpleDiffViewer
-                oldContent={diffData.oldContent}
-                newContent={diffData.newContent}
+                oldContent={diffPayload.oldContent}
+                newContent={diffPayload.newContent}
                 maxHeight={400}
               />
+
+              {/* Status badge - bottom right */}
+              <div className="mt-1.5 flex justify-end">
+                {status === 'success' && (
+                  <div className="flex items-center gap-1 text-[11px] text-green-500">
+                    <CheckCircleIcon size={12} />
+                    <span>Success</span>
+                  </div>
+                )}
+                {status === 'error' && (
+                  <div className="flex items-center gap-1 text-[11px] text-red-500">
+                    <XCircleIcon size={12} />
+                    <span>Failed</span>
+                  </div>
+                )}
+                {status === 'running' && (
+                  <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                    <SpinnerGapIcon size={12} className="animate-spin" />
+                    <span>Running</span>
+                  </div>
+                )}
+              </div>
             </div>
           </motion.div>
         )}
@@ -796,22 +1282,28 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
   const summary = renderer.getSummary(tool.input, tool.name);
   const filePath = getFilePath(tool.input);
   const status = getStatus(tool);
-  const isBash = renderer.icon === TerminalIcon;
+  const isDuyaCli = ['duya_cli', 'duya-cli', 'duyacli'].includes(tool.name.toLowerCase());
+  const isBash = !isDuyaCli && renderer.icon === TerminalIcon;
   const isSubAgent = renderer.icon === RobotIcon;
-  const isEdit = ['edit', 'edit_file', 'str_replace_editor'].includes(tool.name.toLowerCase());
-  const isRead = ['read', 'readfile', 'read_file'].includes(tool.name.toLowerCase());
+  const lowerName = tool.name.toLowerCase();
+  const isFileEdit = FILE_EDIT_TOOLS.has(lowerName) || FILE_CREATE_TOOLS.has(lowerName);
+  const isRead = ['read', 'readfile', 'read_file'].includes(lowerName);
   const [expanded, setExpanded] = useState(false);
 
   if (isBash) {
     return <BashToolRow tool={tool} streamingToolOutput={streamingToolOutput} />;
   }
 
+  if (isDuyaCli) {
+    return <DuyaCliToolRow tool={tool} />;
+  }
+
   if (isSubAgent) {
     return <SubAgentToolRow tool={tool} agentProgressEvents={agentProgressEvents} />;
   }
 
-  if (isEdit) {
-    return <EditToolRow tool={tool} />;
+  if (isFileEdit) {
+    return <FileEditToolRow tool={tool} />;
   }
 
   if (isRead) {
@@ -836,12 +1328,15 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
 
   const renderedResult = hasResult ? renderToolResult(toolInfo, resultInfo) : null;
   const canExpand = hasResult && renderedResult !== null;
+  const [hovered, setHovered] = useState(false);
 
   return (
     <div>
       <button
         type="button"
         onClick={() => canExpand && setExpanded(prev => !prev)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors ${canExpand ? 'cursor-pointer' : 'cursor-default'}`}
       >
         {canExpand && (
@@ -857,7 +1352,11 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
           <span className="font-medium text-muted-foreground shrink-0">{renderer.label}</span>
         )}
 
-        <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
+        <span
+          className={`font-mono truncate flex-1 text-left transition-colors ${
+            hovered ? 'text-foreground' : 'text-muted-foreground/60'
+          }`}
+        >
           {summary}
         </span>
 
@@ -868,10 +1367,8 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
         )}
 
         {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0">
-            {tool.durationMs < 1000
-              ? `${tool.durationMs}ms`
-              : `${(tool.durationMs / 1000).toFixed(1)}s`}
+          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
+            {formatDuration(tool.durationMs)}
           </span>
         )}
 
@@ -887,8 +1384,30 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="ml-4 mt-1 border-l-2 border-border/30 pl-3 py-2">
+            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
               {renderedResult}
+
+              {/* Status badge - bottom right */}
+              <div className="mt-1.5 flex justify-end">
+                {status === 'success' && (
+                  <div className="flex items-center gap-1 text-[11px] text-green-500">
+                    <CheckCircleIcon size={12} />
+                    <span>Success</span>
+                  </div>
+                )}
+                {status === 'error' && (
+                  <div className="flex items-center gap-1 text-[11px] text-red-500">
+                    <XCircleIcon size={12} />
+                    <span>Failed</span>
+                  </div>
+                )}
+                {status === 'running' && (
+                  <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                    <SpinnerGapIcon size={12} className="animate-spin" />
+                    <span>Running</span>
+                  </div>
+                )}
+              </div>
             </div>
           </motion.div>
         )}
@@ -960,13 +1479,13 @@ function getLastRunningToolAction(actions: ActionItem[]): ToolAction | undefined
 }
 
 function formatDuration(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
+  const totalSeconds = ms / 1000;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
+    return `${minutes}m ${seconds.toFixed(0)}s`;
   }
-  return `${seconds}s`;
+  return `${seconds.toFixed(1)}s`;
 }
 
 const LiveDurationText = React.memo(function LiveDurationText({
