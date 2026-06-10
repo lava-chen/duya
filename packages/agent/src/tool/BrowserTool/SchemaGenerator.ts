@@ -3,7 +3,11 @@ import type { ActionHandler } from './actions/types.js';
 
 /**
  * Auto-generates JSON Schema from ActionHandlers' zod schemas.
- * Eliminates the dual-schema maintenance problem.
+ *
+ * The schema is structured as `anyOf` — one variant per `operation` — so the
+ * LLM can see which fields are required for which operation. A flat merged
+ * `properties` map (the previous shape) hid the per-operation required
+ * fields, causing the agent to omit `url` / `urls` and fail zod validation.
  */
 export class SchemaGenerator {
   static generate(allActions: ActionHandler[]): {
@@ -11,27 +15,33 @@ export class SchemaGenerator {
     operations: string[];
   } {
     const operations = allActions.map(a => a.operation);
-    const properties: Record<string, unknown> = {};
 
-    for (const action of allActions) {
-      const shape = this.extractShape(action.schema as any);
-      if (!shape) continue;
-      for (const [key, value] of Object.entries(shape)) {
-        if (properties[key]) continue;
-        properties[key] = value;
-      }
-    }
+    const variants = allActions.map((action) => {
+      const shape = this.extractShape(action.schema as any) || {};
+      const required = this.extractRequired(action.schema as any);
+      return {
+        type: 'object',
+        properties: {
+          operation: { type: 'string', enum: [action.operation] },
+          ...shape,
+        },
+        required: ['operation', ...required],
+      };
+    });
 
     return {
       inputSchema: {
         type: 'object',
+        // anyOf forces the LLM to pick one variant and include its required
+        // fields. The top-level `operation` enum lists every supported value
+        // so the model can still discover the full operation surface.
+        anyOf: variants,
         properties: {
           operation: {
             type: 'string',
             enum: operations,
             description: 'Browser operation to perform',
           },
-          ...properties,
         },
         required: ['operation'],
       },
@@ -39,43 +49,127 @@ export class SchemaGenerator {
     };
   }
 
-  private static extractShape(obj: any): Record<string, unknown> | null {
-    try {
-      const shape = obj._def?.shape?.() || obj._def?.shape || obj.shape;
-      if (!shape || typeof shape !== 'object') return null;
-
-      const result: Record<string, unknown> = {};
-      for (const [key, prop] of Object.entries(shape) as [string, any][]) {
-        result[key] = this.zodToJsonSchemaProp(prop);
+  /**
+   * Extract the list of required field names from a zod schema by walking
+   * its top-level ZodObject shape and collecting keys whose schema is not
+   * ZodOptional / ZodDefault.
+   */
+  private static extractRequired(schema: any): string[] {
+    const rawShape = this.extractRawShape(schema);
+    if (!rawShape) return [];
+    const required: string[] = [];
+    for (const [key, prop] of Object.entries(rawShape) as [string, any][]) {
+      if (this.isRequiredField(prop)) {
+        required.push(key);
       }
-      return result;
-    } catch {
-      return null;
     }
+    return required;
+  }
+
+  /**
+   * Extract the raw zod field map (before converting to JSON Schema) so the
+   * required-field check sees the original ZodOptional/ZodDefault wrappers.
+   */
+  private static extractRawShape(obj: any): Record<string, unknown> | null {
+    if (!obj) return null;
+    const probes: Array<() => unknown> = [
+      () => obj?._def?.shape?.(),
+      () => obj?._def?.shape,
+      () => obj?.def?.shape,
+      () => obj?.shape,
+    ];
+    for (const probe of probes) {
+      try {
+        const candidate = probe();
+        if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+          return candidate as Record<string, unknown>;
+        }
+      } catch {
+        // try the next path
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Check whether a property's zod schema is optional or has a default.
+   * Walks through ZodOptional / ZodDefault / ZodEffects wrappers to find
+   * the underlying schema and detect an inner ZodOptional.
+   */
+  private static isRequiredField(prop: any): boolean {
+    let cur = prop;
+    for (let i = 0; i < 4 && cur; i++) {
+      const def = cur?._def || cur?.def || {};
+      const typeName = def?.typeName || def?.type || '';
+      if (typeName === 'ZodOptional' || typeName === 'optional') return false;
+      if (typeName === 'ZodDefault' || typeName === 'default') return false;
+      if (typeName === 'ZodEffects' || typeName === 'ZodTransform' || typeName === 'ZodPipe' ||
+          typeName === 'ZodCatch' || typeName === 'ZodReadonly' || typeName === 'ZodLazy' || typeName === 'ZodPromise' ||
+          typeName === 'transform' || typeName === 'pipe' || typeName === 'catch' || typeName === 'readonly' || typeName === 'lazy' || typeName === 'promise') {
+        cur = def?.schema || def?.innerType || def?.type;
+        continue;
+      }
+      return true;
+    }
+    return true;
+  }
+
+  /**
+   * Extract the top-level object shape from a zod schema.
+   *
+   * zod v3 exposes `_def.shape()` (a function); zod v4 uses `def.shape` (a
+   * plain object) and also `schema.shape`. We probe all known paths so the
+   * generator works regardless of which zod major version is in use.
+   */
+  private static extractShape(obj: any): Record<string, unknown> | null {
+    if (!obj) return null;
+    const probes: Array<() => unknown> = [
+      () => obj?._def?.shape?.(),       // zod v3 ZodObject._def.shape()
+      () => obj?._def?.shape,           // zod v3 fallback
+      () => obj?.def?.shape,            // zod v4 ZodObject.def.shape
+      () => obj?.shape,                 // zod v4 / some adapters
+    ];
+    for (const probe of probes) {
+      try {
+        const candidate = probe();
+        if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+          const result: Record<string, unknown> = {};
+          for (const [key, prop] of Object.entries(candidate) as [string, any][]) {
+            result[key] = this.zodToJsonSchemaProp(prop);
+          }
+          return result;
+        }
+      } catch {
+        // try the next path
+      }
+    }
+    return null;
   }
 
   private static zodToJsonSchemaProp(prop: any): Record<string, unknown> {
-    const def = prop._def || prop.def || {};
-    const description = prop.description || def?.description || '';
+    const def = prop?._def || prop?.def || {};
+    const description = prop?.description || def?.description || '';
     const base: Record<string, unknown> = description ? { description } : {};
 
-    // Determine type by constructor name
-    const typeName = def?.typeName || prop._type || '';
+    // Determine type. zod v3 uses `def.typeName` ("ZodString", "ZodNumber", ...).
+    // zod v4 uses `def.type` ("string", "number", "boolean", "array", ...) and
+    // also exposes `prop.type` directly. Probe all known paths.
+    const typeName = def?.typeName || def?.type || prop?.type || prop?._type || '';
 
-    if (typeName === 'ZodString' || def?.checks?.some?.((c: any) => c.kind === 'url')) {
-      const hasUrl = def?.checks?.some?.((c: any) => c.kind === 'url');
+    if (typeName === 'ZodString' || typeName === 'string') {
+      const hasUrl = def?.checks?.some?.((c: any) => c.kind === 'url') || def?.format === 'url';
       return { ...base, type: 'string', ...(hasUrl ? { format: 'uri' } : {}) };
     }
 
-    if (typeName === 'ZodNumber') {
+    if (typeName === 'ZodNumber' || typeName === 'number') {
       return { ...base, type: 'number' };
     }
 
-    if (typeName === 'ZodBoolean') {
+    if (typeName === 'ZodBoolean' || typeName === 'boolean') {
       return { ...base, type: 'boolean' };
     }
 
-    if (typeName === 'ZodArray' || def?.type === 'array') {
+    if (typeName === 'ZodArray' || typeName === 'array') {
       const itemType = def?.typeName === 'ZodArray' ? def?.type : def?.element;
       return {
         ...base,
@@ -85,7 +179,7 @@ export class SchemaGenerator {
     }
 
     if (typeName === 'ZodEnum') {
-      return { ...base, type: 'string', enum: def?.values || [] };
+      return { ...base, type: 'string', enum: def?.values || def?.options || [] };
     }
 
     if (typeName === 'ZodUnion') {
@@ -112,6 +206,14 @@ export class SchemaGenerator {
     if (typeName === 'ZodDefault') {
       const inner = this.zodToJsonSchemaProp(def?.innerType || def?.type);
       return { ...inner, ...base, default: def?.defaultValue?.() ?? def?.defaultValue };
+    }
+
+    // z.preprocess wraps the real schema in a ZodEffects/ZodTransform on
+    // zod/v4. Descend into the inner schema to recover the real type.
+    if (typeName === 'ZodEffects' || typeName === 'ZodTransform' || typeName === 'ZodPipe' ||
+        typeName === 'ZodCatch' || typeName === 'ZodReadonly' || typeName === 'ZodLazy' || typeName === 'ZodPromise') {
+      const inner = def?.schema || def?.innerType || def?.type;
+      if (inner) return this.zodToJsonSchemaProp(inner);
     }
 
     // Fallback for unknown types
