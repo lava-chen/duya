@@ -4,6 +4,7 @@ interface FileAttachmentCardProps {
   id: string;
   name: string;
   thumbnail?: string;
+  url?: string;
   onRemove?: (id: string) => void;
   onClick?: () => void;
   width?: number;
@@ -13,6 +14,7 @@ export function FileAttachmentCard({
   id,
   name,
   thumbnail,
+  url,
   onRemove,
   onClick,
   width = 120,

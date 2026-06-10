@@ -333,13 +333,14 @@ export function ContextBreakdownModal({
           </p>
         )}
 
-        {onCompress && (
+        {onCompress && usage.state !== 'normal' && (
           <footer className="ctx-modal__foot">
             <button
               type="button"
               className="ctx-modal__compress"
               onClick={onCompress}
-              disabled={isCompacting || usage.state === 'normal'}
+              disabled={isCompacting}
+              title={t('context.compress')}
             >
               {isCompacting
                 ? t('context.compressing')

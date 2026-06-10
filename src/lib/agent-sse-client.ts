@@ -668,7 +668,14 @@ export async function compactContext(
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
-    throw new Error(`Failed to compact context: ${response.status} ${errorBody}`);
+    // Route HTTP failures through callbacks.onError so ChatView's
+    // "Compression failed: …" toast renders. Throwing here would leak
+    // as an unhandled promise rejection in the main process (terminal
+    // 815-817 incident).
+    const statusLine = response.statusText ? ` ${response.statusText}` : '';
+    const errorMsg = `HTTP ${response.status}${statusLine}${errorBody ? ` — ${errorBody}` : ''}`;
+    callbacks?.onError?.(errorMsg);
+    return;
   }
 
   if (!response.body) {

@@ -24,6 +24,8 @@ import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
 import type { FileAttachment } from '@/types/message';
 import { SubAgentPanel } from './SubAgentPanel';
+import { MailboxPanel } from './MailboxPanel';
+import { StreamingInputBar } from './StreamingInputBar';
 import { compactContext } from '@/lib/agent-sse-client';
 import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from './AgentModeSelector';
 import type { AgentMode } from './AgentModeSelector';
@@ -705,23 +707,38 @@ export function ChatView({
               permissionProfile={permissionProfile}
             />
 
-            <MessageInput
-              onSend={handleSend}
-              onCommand={handleRecapCommand}
-              onStop={handleStop}
-              disabled={false}
-              isStreaming={isStreaming}
-              hasQueuedMessages={hasQueuedMessages}
-              sessionId={sessionId}
-              modelName={sessionModel}
-              onModelChange={handleModelChange}
-              onProviderChange={handleProviderChange}
-              permissionMode={permissionMode}
-              onPermissionModeChange={handlePermissionModeChange}
-              permissionUpdatePending={permissionUpdatePending}
-              placeholder={t('chat.typeMessage')}
-              messages={messages}
-            />
+            {/* Mailbox panel (Plan202) - shown above input during streaming */}
+            {isStreaming && <MailboxPanel sessionId={sessionId} />}
+
+            {isStreaming ? (
+              <StreamingInputBar
+                onStop={handleStop}
+                modelLabel={sessionModel || t('messageInput.selectModel')}
+                permissionLabel={
+                  permissionMode === 'bypass' ? t('permissionMode.bypass')
+                    : permissionMode === 'auto' ? t('permissionMode.auto')
+                      : t('permissionMode.ask')
+                }
+              />
+            ) : (
+              <MessageInput
+                onSend={handleSend}
+                onCommand={handleRecapCommand}
+                onStop={handleStop}
+                disabled={false}
+                isStreaming={isStreaming}
+                hasQueuedMessages={hasQueuedMessages}
+                sessionId={sessionId}
+                modelName={sessionModel}
+                onModelChange={handleModelChange}
+                onProviderChange={handleProviderChange}
+                permissionMode={permissionMode}
+                onPermissionModeChange={handlePermissionModeChange}
+                permissionUpdatePending={permissionUpdatePending}
+                placeholder={t('chat.typeMessage')}
+                messages={messages}
+              />
+            )}
 
             {/* Bottom toolbar - outside input box */}
             <div className="flex items-center justify-between mt-2 px-1">
