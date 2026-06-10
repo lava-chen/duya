@@ -29,6 +29,9 @@ export enum APIErrorType {
   CONTEXT_LENGTH_EXCEEDED = 'context_length_exceeded',
   PROMPT_TOO_LONG = 'prompt_too_long',
 
+  // Usage / quota errors
+  USAGE_LIMIT = 'usage_limit',
+
   // Other
   UNKNOWN = 'unknown',
   ABORTED = 'aborted',
@@ -214,9 +217,19 @@ export function classifyError(error: unknown): APIErrorType {
     return APIErrorType.CONNECTION_ERROR;
   }
 
-  // Check for context length errors in message
+  // Check for usage / quota limit errors in message
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
+    if (
+      msg.includes('insufficient_quota') ||
+      msg.includes('quota exceeded') ||
+      msg.includes('billing hard limit') ||
+      msg.includes('usage limit') ||
+      msg.includes('quota limit reached') ||
+      msg.includes('exceeded your current quota')
+    ) {
+      return APIErrorType.USAGE_LIMIT;
+    }
     if (
       msg.includes('context_length_exceeded') ||
       msg.includes('context window exceeds limit')
@@ -284,6 +297,12 @@ export function isRetryableError(error: unknown): boolean {
     APIErrorType.SERVER_OVERLOAD,
     APIErrorType.SERVER_ERROR,
   ]);
+
+  // Usage/quota limits are never retryable — user must switch model or wait
+  // for the billing period to reset.
+  if (type === APIErrorType.USAGE_LIMIT) {
+    return false;
+  }
 
   if (retryableTypes.has(type)) {
     return true;
@@ -358,6 +377,8 @@ export function formatErrorForDisplay(error: unknown): string {
       return 'DNS lookup failed. Please check your network connection.';
     case APIErrorType.RATE_LIMIT:
       return 'Rate limit exceeded. Please wait a moment before trying again.';
+    case APIErrorType.USAGE_LIMIT:
+      return 'Usage limit reached. Please switch to a different model or wait for the quota to reset.';
     case APIErrorType.SERVER_OVERLOAD:
       return 'Server is overloaded. Please try again in a few moments.';
     case APIErrorType.AUTH_ERROR:
@@ -382,9 +403,17 @@ export function formatErrorForDisplay(error: unknown): string {
 export function createErrorEvent(error: unknown): SSEEvent {
   const llmError = error instanceof LLMAPIError ? error : createLLMAPIError(error);
 
+  let code: string | undefined;
+  if (llmError.type === APIErrorType.RATE_LIMIT) {
+    code = 'rate_limit_error';
+  } else if (llmError.type === APIErrorType.USAGE_LIMIT) {
+    code = 'usage_limit_exceeded';
+  }
+
   return {
     type: 'error',
     data: formatErrorForDisplay(error),
+    code,
     metadata: {
       errorType: llmError.type,
       statusCode: llmError.statusCode,

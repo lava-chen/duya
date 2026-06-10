@@ -171,6 +171,7 @@ export interface AgentErrorEvent {
   type: 'chat:error';
   sessionId: string;
   message: string;
+  code?: string;
 }
 
 export interface AgentTokenUsageEvent {
