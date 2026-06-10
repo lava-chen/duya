@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CpuIcon,
   SpinnerGapIcon,
@@ -19,13 +20,11 @@ import {
 } from "@/components/icons";
 import { QUICK_PRESETS, findPresetByBaseUrl } from "@/lib/provider-presets";
 import type { QuickPreset } from "@/lib/provider-presets";
-import { SimpleProviderDialog } from "./SimpleProviderDialog";
+import { ProviderConnectDialog, type ProviderFormData, type EditableProvider } from "./ProviderConnectDialog";
 import { useTranslation } from "@/hooks/useTranslation";
 import { PresetIcon } from "./PresetIcon";
 import { useSettings } from "@/hooks/useSettings";
-import type { Provider as IpccProvider } from "@/lib/ipc-client";
 import {
-  listProvidersIPC,
   upsertProviderIPC,
   updateProviderIPC,
   deleteProviderIPC,
@@ -35,6 +34,11 @@ import {
 } from "@/lib/ipc-client";
 import { findPresetByKey } from "@/lib/providers";
 import type { LlmProvider } from "@/lib/providers";
+import type { RendererLlmProviderDTO } from "@/lib/providers/ipc-types";
+import { useProvidersQuery } from "@/lib/providers/hooks/useProvidersQuery";
+import { useConfigUpdateSubscription } from "@/lib/providers/hooks/useConfigUpdateSubscription";
+import { providersQueryKey } from "@/lib/providers/hooks/queryKeys";
+import { extractErrorMessage } from "@/lib/errors/extractErrorMessage";
 import {
   SettingsSection,
   SettingsCard,
@@ -44,7 +48,13 @@ import {
 } from "@/components/settings/ui";
 import { Select } from "antd";
 
-type Provider = IpccProvider;
+/**
+ * Plan 203 Phase 1.4: the section now consumes the L1 React Query
+ * layer (`useProvidersQuery`) instead of inline `useState<Provider[]>`.
+ * The DTO shape is `RendererLlmProviderDTO`; the legacy `providerType`
+ * enum is exposed as `protocol` on the DTO.
+ */
+type Provider = RendererLlmProviderDTO;
 
 interface ModelInfo {
   id: string;
@@ -121,7 +131,7 @@ function ProviderCard({
             <CheckIcon size={14} className="text-muted-foreground" />
           )}
         </div>
-        <div className="shrink-0">{getProviderIcon(provider.providerType, provider.baseUrl)}</div>
+        <div className="shrink-0">{getProviderIcon(provider.protocol, provider.baseUrl)}</div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">{provider.name}</span>
@@ -266,7 +276,7 @@ function ProviderModelSelector({
       try {
         if (window.electronAPI?.net?.testProvider) {
           const result = await window.electronAPI.net.testProvider({
-            provider_type: provider.providerType,
+            provider_type: provider.protocol,
             base_url: provider.baseUrl,
             api_key: provider.apiKey,
             model: "",
@@ -408,9 +418,18 @@ interface DiagnosticResult {
 
 export function ProvidersSection() {
   const { t } = useTranslation();
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const qc = useQueryClient();
+  useConfigUpdateSubscription();
+
+  // Plan 203 Phase 1.4: read through the L1 hook. The query result
+  // is `RendererLlmProviderDTO[]`; we keep the local `Provider` alias
+  // for the rest of the component.
+  const {
+    data: providers = [],
+    isLoading: loading,
+    error: queryError,
+  } = useProvidersQuery();
+
   const [success, setSuccess] = useState<string | null>(null);
 
   const [diagnosticResults, setDiagnosticResults] = useState<DiagnosticResult[]>([]);
@@ -419,31 +438,29 @@ export function ProvidersSection() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<QuickPreset | null>(null);
-  const [editProvider, setEditProvider] = useState<{
-    id: string;
-    name: string;
-    provider_type: string;
-    base_url: string;
-    api_key: string;
-    options?: unknown;
-  } | null>(null);
+  // Plan 203 Phase 2.7: use the canonical `EditableProvider` shape
+  // from `ProviderConnectDialog` so we can delete `SimpleProviderDialog`.
+  const [editProvider, setEditProvider] = useState<EditableProvider | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null);
 
-  const fetchProviders = useCallback(async () => {
-    try {
-      setError(null);
-      const list = await listProvidersIPC();
-      setProviders(list);
-    } catch {
-      setError(t("error.description"));
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
+  // Plan 203 Phase 1.4: replace `fetchProviders()` with React Query
+  // cache invalidation. The IPC handlers (`upsertLlmProviderIPC` /
+  // `updateProviderIPC` / `deleteProviderIPC`) all broadcast
+  // `config:update`, and `useConfigUpdateSubscription` invalidates
+  // the providers query key, so the next render will refetch. We
+  // still call `invalidateQueries` explicitly as a belt-and-suspenders
+  // measure for the cases where the user wants an immediate refresh
+  // after a write (e.g. immediately after a successful save).
+  const refreshProviders = useCallback(() => {
+    qc.invalidateQueries({ queryKey: providersQueryKey() });
+  }, [qc]);
 
-  useEffect(() => {
-    fetchProviders();
-  }, [fetchProviders]);
+  // Normalize the React Query error into the UI-safe shape. Falls
+  // back to the legacy `t("error.description")` string when no error
+  // is present so the banner never shows a blank message.
+  const error: string | null = queryError
+    ? extractErrorMessage(queryError).message || t("error.description")
+    : null;
 
   const handleOpenPresetDialog = (preset: QuickPreset) => {
     setSelectedPreset(preset);
@@ -454,42 +471,48 @@ export function ProvidersSection() {
   const handleEditProvider = (provider: Provider) => {
     const preset =
       findPresetByBaseUrl(provider.baseUrl) ||
-      QUICK_PRESETS.find((p) => p.provider_type === provider.providerType) ||
+      QUICK_PRESETS.find((p) => p.provider_type === provider.protocol) ||
       QUICK_PRESETS[0];
     setSelectedPreset(preset);
     setEditProvider({
       id: provider.id,
       name: provider.name,
-      provider_type: provider.providerType,
+      provider_type: provider.protocol,
       base_url: provider.baseUrl,
       api_key: provider.apiKey,
-      options: provider.options,
+      // Plan 203 Phase 2.7: forward the parsed JSON strings so the
+      // dialog can populate model mapping and enabled models.
+      extra_env: provider.extraEnv,
+      options_json: provider.options,
     });
     setDialogOpen(true);
   };
 
-  const handleSimpleSave = async (data: {
-    name: string;
-    provider_type: string;
-    base_url: string;
-    api_key: string;
-    enabled_models: string[];
-    auth_style?: string;
-  }) => {
-    console.log("[ProvidersSection] handleSimpleSave called", {
-      isEdit: !!editProvider,
-      enabled_models: data.enabled_models,
-      auth_style: data.auth_style,
-    });
-
+  // Plan 203 Phase 2.7: the dialog now emits a richer `ProviderFormData`
+  // (with `protocol`, `extra_env`, `role_models_json`, `options_json`).
+  // We translate it into the same persistence flow the legacy
+  // `handleSimpleSave` used.
+  const handleConnectSave = async (data: ProviderFormData) => {
     const options: Record<string, unknown> = {};
     if (data.enabled_models && data.enabled_models.length > 0) {
       options.enabled_models = data.enabled_models;
     }
-    if (data.auth_style) {
-      options.auth_style = data.auth_style;
+    if (data.options_json) {
+      try {
+        const parsed = JSON.parse(data.options_json);
+        Object.assign(options, parsed);
+      } catch {
+        // ignore — the dialog already validated JSON before submit
+      }
     }
-    console.log("[ProvidersSection] Final options object:", options);
+    if (data.role_models_json) {
+      try {
+        const roleModels = JSON.parse(data.role_models_json) as Record<string, string>;
+        if (roleModels.default) options.defaultModel = roleModels.default;
+      } catch {
+        // ignore
+      }
+    }
 
     if (editProvider) {
       console.log("[ProvidersSection] Updating existing provider:", editProvider.id);
@@ -514,7 +537,7 @@ export function ProvidersSection() {
       if (updated) {
         setSuccess("Provider updated");
         setEditProvider(null);
-        fetchProviders();
+        refreshProviders();
       } else {
         throw new Error(t("error.description"));
       }
@@ -559,7 +582,7 @@ export function ProvidersSection() {
         const r = await upsertLlmProviderIPC(llmDraft as unknown as Record<string, unknown>);
         if (r.ok) {
           setSuccess(t("settings.providers.connect"));
-          fetchProviders();
+          refreshProviders();
         } else {
           throw new Error(r.message ?? t("error.description"));
         }
@@ -578,7 +601,7 @@ export function ProvidersSection() {
 
         if (created) {
           setSuccess(t("settings.providers.connect"));
-          fetchProviders();
+          refreshProviders();
         } else {
           throw new Error(t("error.description"));
         }
@@ -654,12 +677,14 @@ export function ProvidersSection() {
       const deleted = await deleteProviderIPC(deleteTarget.id);
       if (deleted) {
         setSuccess(t("settings.providers.disconnect"));
-        fetchProviders();
+        refreshProviders();
       } else {
-        setError(t("error.description"));
+        // Plan 203 Phase 1.4: errors are now derived from the React
+        // Query error, not from a local `setError` call. The delete
+        // IPC failure surfaces through a follow-up query error if the
+        // next read fails; otherwise we just rely on the toast.
+        throw new Error(t("error.description"));
       }
-    } catch {
-      setError(t("error.description"));
     } finally {
       setDeleteTarget(null);
     }
@@ -843,15 +868,17 @@ export function ProvidersSection() {
         </div>
       )}
 
-      {/* Connect/Edit Dialog */}
-      <SimpleProviderDialog
+      {/* Plan 203 Phase 2.7: route through ProviderConnectDialog (the
+          slimmer dialog backed by the L2 hooks). SimpleProviderDialog
+          has been deleted; this is the only connect/edit dialog. */}
+      <ProviderConnectDialog
         preset={selectedPreset}
         open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
           if (!open) setEditProvider(null);
         }}
-        onSave={handleSimpleSave}
+        onSave={handleConnectSave}
         editProvider={editProvider}
       />
     </div>

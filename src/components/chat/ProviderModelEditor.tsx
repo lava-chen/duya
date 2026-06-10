@@ -1,25 +1,26 @@
 // ProviderModelEditor.tsx - Edit which models a provider can use
 // Fetches available models from provider API, allows user to select/deselect
-// Phase 2: also writes per-model contextWindow into ModelCapabilityService
-// (renderer in-memory) and persists through `provider:upsertModelCapability`
-// IPC. The model capability is intentionally NOT stored in the LlmProvider
-// body — it lives in its own table/record so a single provider can host
-// many models with different context windows (e.g. 200K vs 1M).
+//
+// Plan 203 Phase 2.6: state management delegated to `useModelSelection`.
+// The component now only owns UI-only state (expanded, filter,
+// customModelInput, fetch loading/error) and the IPC call to
+// `upsertModelCapabilityIPC`. The model set + capability map + edit
+// flow live in the L2 hook, which is unit-tested independently.
 
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   MagnifyingGlassIcon,
   CheckIcon,
   SpinnerGapIcon,
   PlusIcon,
-  XIcon,
   CaretDownIcon,
   CaretUpIcon,
 } from '@/components/icons';
 import type { ModelOption } from './ModelSelector';
 import { upsertModelCapabilityIPC } from '@/lib/ipc-client';
+import { useModelSelection } from '@/components/settings/forms/hooks/useModelSelection';
 
 interface ProviderModelEditorProps {
   providerId: string;
@@ -35,14 +36,26 @@ export function ProviderModelEditor({
   onChange,
 }: ProviderModelEditorProps) {
   const [expanded, setExpanded] = useState(false);
+
+  // Delegate the model + capability state to the L2 hook.
+  const selection = useModelSelection({
+    initialEnabled: enabledModelIds,
+  });
+
+  // UI-only state (kept in the component because they are display-only
+  // and don't need cross-form sharing).
   const [allModels, setAllModels] = useState<ModelOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
-  const [selected, setSelected] = useState<Set<string>>(new Set(enabledModelIds));
   const [customModelInput, setCustomModelInput] = useState('');
-  // Track if we've synced with prop changes to avoid update loops
-  const syncedRef = useRef(true);
+
+  // Sync the hook's enabled set with prop changes (only when prop changes
+  // from outside; user toggles flow through the hook directly).
+  useEffect(() => {
+    selection.setEnabledFromProp(enabledModelIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabledModelIds.join('|')]);
 
   // Fetch models from provider API
   const fetchModels = useCallback(async () => {
@@ -80,7 +93,7 @@ export function ProviderModelEditor({
     } finally {
       setLoading(false);
     }
-  }, [providerId]);
+  }, []);
 
   // Fetch on expand
   useEffect(() => {
@@ -89,105 +102,71 @@ export function ProviderModelEditor({
     }
   }, [expanded, allModels.length, fetchModels]);
 
-  // Sync selected set with prop changes only when needed (not from user interaction)
-  useEffect(() => {
-    if (syncedRef.current) {
-      syncedRef.current = false;
-      setSelected(new Set(enabledModelIds));
-    }
-  }, [enabledModelIds]);
+  // Wrap hook toggles to notify the parent on every change.
+  const toggleAndNotify = useCallback(
+    (modelId: string) => {
+      selection.toggleModel(modelId);
+      // The new set will be reflected in the next render; compute the
+      // toggle's effect synchronously so the parent's enabledModelIds
+      // stays accurate.
+      const wasEnabled = selection.isEnabled(modelId);
+      onChange(
+        wasEnabled
+          ? enabledModelIds.filter((m) => m !== modelId)
+          : Array.from(new Set([...enabledModelIds, modelId])),
+      );
+    },
+    [selection, enabledModelIds, onChange],
+  );
 
-  const toggleModel = useCallback((modelId: string) => {
-    console.log("[ProviderModelEditor] toggleModel called:", modelId);
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(modelId)) {
-        next.delete(modelId);
-        console.log("[ProviderModelEditor] Removed model:", modelId);
-      } else {
-        next.add(modelId);
-        console.log("[ProviderModelEditor] Added model:", modelId);
-      }
-      // Notify parent immediately
-      const newSelected = Array.from(next);
-      console.log("[ProviderModelEditor] Calling onChange with:", newSelected);
-      onChange(newSelected);
-      return next;
-    });
-  }, [onChange]);
-
-  const addCustomModel = useCallback(() => {
+  const addCustomModelAndNotify = useCallback(() => {
     const id = customModelInput.trim();
     if (!id) return;
-    if (selected.has(id)) {
-      setCustomModelInput('');
-      return;
+    selection.addCustomModel(id);
+    if (!allModels.find((m) => m.id === id)) {
+      setAllModels((prev) => [...prev, { id, display_name: id }]);
     }
-
-    // Add to selected and to allModels if not already present
-    setSelected(prev => {
-      const next = new Set(prev);
-      next.add(id);
-      onChange(Array.from(next));
-      return next;
-    });
-
-    if (!allModels.find(m => m.id === id)) {
-      setAllModels(prev => [...prev, { id, display_name: id }]);
+    if (!enabledModelIds.includes(id)) {
+      onChange([...enabledModelIds, id]);
     }
-
     setCustomModelInput('');
-  }, [customModelInput, selected, allModels, onChange]);
+  }, [customModelInput, allModels, enabledModelIds, onChange, selection]);
 
-  // Phase 2: per-model contextWindow editor. Writes to the
-  // ModelCapabilityService via the new IPC. The capability record is
-  // intentionally separate from the LlmProvider body.
-  const [editingCapFor, setEditingCapFor] = useState<string | null>(null);
-  const [editingCapValue, setEditingCapValue] = useState<string>('');
+  // Per-model context window editor. Wraps the hook's
+  // begin/commit/cancel with the IPC persistence call.
+  const saveCapability = useCallback(
+    async (modelId: string) => {
+      const parsed = Number.parseInt(selection.editingCtxValue, 10);
+      selection.commitEditContext();
+      if (!Number.isFinite(parsed) || parsed <= 0) return;
+      try {
+        await upsertModelCapabilityIPC({
+          providerId,
+          modelId,
+          contextWindow: parsed,
+          source: 'user',
+          updatedAt: Date.now(),
+        });
+        setAllModels((prev) =>
+          prev.map((m) => (m.id === modelId ? { ...m, context_length: parsed } : m)),
+        );
+      } catch {
+        // Capability upsert is best-effort; the model list still works.
+      }
+    },
+    [selection, providerId],
+  );
 
-  const beginEditCapability = useCallback((modelId: string, current?: number) => {
-    setEditingCapFor(modelId);
-    setEditingCapValue(current ? String(current) : '');
-  }, []);
-
-  const saveCapability = useCallback(async (modelId: string) => {
-    const trimmed = editingCapValue.trim();
-    const parsed = trimmed ? Number(trimmed) : NaN;
-    if (trimmed && (Number.isNaN(parsed) || parsed < 0)) {
-      // ignore — keep editing open
-      return;
-    }
-    setEditingCapFor(null);
-    setEditingCapValue('');
-    if (!Number.isFinite(parsed) || parsed <= 0) return;
-    try {
-      await upsertModelCapabilityIPC({
-        providerId,
-        modelId,
-        contextWindow: parsed,
-        source: 'user',
-        updatedAt: Date.now(),
-      });
-      // Reflect locally so the UI shows the new context window.
-      setAllModels(prev =>
-        prev.map(m => (m.id === modelId ? { ...m, context_length: parsed } : m)),
-      );
-    } catch {
-      // Capability upsert is best-effort; the model list still works.
-    }
-  }, [editingCapValue, providerId]);
-
-  // Filter models
   const filteredModels = filter
-    ? allModels.filter(m =>
-        m.id.toLowerCase().includes(filter.toLowerCase()) ||
-        m.display_name.toLowerCase().includes(filter.toLowerCase())
+    ? allModels.filter(
+        (m) =>
+          m.id.toLowerCase().includes(filter.toLowerCase()) ||
+          m.display_name.toLowerCase().includes(filter.toLowerCase()),
       )
     : allModels;
 
-  // Separate into enabled (selected) and available
-  const enabledModels = filteredModels.filter(m => selected.has(m.id));
-  const availableModels = filteredModels.filter(m => !selected.has(m.id));
+  const enabledModelObjects = filteredModels.filter((m) => selection.isEnabled(m.id));
+  const availableModels = filteredModels.filter((m) => !selection.isEnabled(m.id));
 
   const formatContext = (ctx?: number) => {
     if (!ctx) return '';
@@ -195,6 +174,8 @@ export function ProviderModelEditor({
     if (ctx >= 1000) return `${(ctx / 1000).toFixed(0)}K`;
     return String(ctx);
   };
+
+  const selectedCount = selection.enabledModels.size;
 
   return (
     <div className="space-y-1.5">
@@ -205,9 +186,9 @@ export function ProviderModelEditor({
       >
         {expanded ? <CaretUpIcon size={12} /> : <CaretDownIcon size={12} />}
         Model Selection
-        {selected.size > 0 && (
+        {selectedCount > 0 && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent">
-            {selected.size}
+            {selectedCount}
           </span>
         )}
       </button>
@@ -220,11 +201,13 @@ export function ProviderModelEditor({
             <input
               type="text"
               value={filter}
-              onChange={e => setFilter(e.target.value)}
+              onChange={(e) => setFilter(e.target.value)}
               placeholder="Type to filter models..."
               className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
-            {loading && <SpinnerGapIcon size={14} className="animate-spin text-muted-foreground" />}
+            {loading && (
+              <SpinnerGapIcon size={14} className="animate-spin text-muted-foreground" />
+            )}
             <button
               type="button"
               onClick={fetchModels}
@@ -239,14 +222,19 @@ export function ProviderModelEditor({
             <input
               type="text"
               value={customModelInput}
-              onChange={e => setCustomModelInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomModel(); } }}
+              onChange={(e) => setCustomModelInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addCustomModelAndNotify();
+                }
+              }}
               placeholder="Add custom model ID..."
               className="flex-1 px-2 py-1 rounded border border-border/50 text-xs bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/50 font-mono"
             />
             <button
               type="button"
-              onClick={addCustomModel}
+              onClick={addCustomModelAndNotify}
               disabled={!customModelInput.trim()}
               className="flex items-center gap-1 px-2 py-1 rounded border border-border/50 bg-chip text-[10px] hover:bg-accent/10 disabled:opacity-50"
             >
@@ -264,19 +252,19 @@ export function ProviderModelEditor({
           {/* Model list */}
           <div className="max-h-[300px] overflow-y-auto">
             {/* Enabled models section */}
-            {enabledModels.length > 0 && (
+            {enabledModelObjects.length > 0 && (
               <>
                 <div className="px-3 py-1 text-[10px] text-muted-foreground font-medium bg-chip/30 sticky top-0">
-                  ENABLED ({enabledModels.length})
+                  ENABLED ({enabledModelObjects.length})
                 </div>
-                {enabledModels.map(model => (
+                {enabledModelObjects.map((model) => (
                   <div
                     key={model.id}
                     className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent/5 transition-colors"
                   >
                     <button
                       type="button"
-                      onClick={() => toggleModel(model.id)}
+                      onClick={() => toggleAndNotify(model.id)}
                       className="flex-1 flex items-center gap-2 min-w-0"
                     >
                       <span className="shrink-0 w-4 h-4 rounded border border-accent bg-accent/10 flex items-center justify-center">
@@ -284,22 +272,21 @@ export function ProviderModelEditor({
                       </span>
                       <div className="flex-1 min-w-0">
                         <div className="text-xs truncate">{model.display_name}</div>
-                        <div className="text-[10px] text-muted-foreground truncate font-mono">{model.id}</div>
+                        <div className="text-[10px] text-muted-foreground truncate font-mono">
+                          {model.id}
+                        </div>
                       </div>
                     </button>
-                    {editingCapFor === model.id ? (
+                    {selection.editingCtxFor === model.id ? (
                       <input
                         autoFocus
                         type="number"
-                        value={editingCapValue}
-                        onChange={e => setEditingCapValue(e.target.value)}
+                        value={selection.editingCtxValue}
+                        onChange={(e) => selection.setEditingCtxValue(e.target.value)}
                         onBlur={() => saveCapability(model.id)}
-                        onKeyDown={e => {
+                        onKeyDown={(e) => {
                           if (e.key === 'Enter') saveCapability(model.id);
-                          if (e.key === 'Escape') {
-                            setEditingCapFor(null);
-                            setEditingCapValue('');
-                          }
+                          if (e.key === 'Escape') selection.cancelEditContext();
                         }}
                         placeholder="ctx"
                         className="w-20 px-1.5 py-0.5 rounded border border-border/50 text-[10px] bg-chip text-foreground focus:outline-none focus:ring-1 focus:ring-accent/50"
@@ -307,13 +294,13 @@ export function ProviderModelEditor({
                     ) : (
                       <button
                         type="button"
-                        onClick={() => beginEditCapability(model.id, model.context_length)}
+                        onClick={() => selection.beginEditContext(model.id, model.context_length)}
                         className="shrink-0 text-[10px] text-muted-foreground hover:text-accent"
                         title="Set context window"
                       >
-                        {model.context_length
-                          ? formatContext(model.context_length)
-                          : 'set ctx'}
+                        {formatContext(
+                          selection.modelCapabilities.get(model.id) ?? model.context_length,
+                        ) || 'set ctx'}
                       </button>
                     )}
                   </div>
@@ -327,17 +314,19 @@ export function ProviderModelEditor({
                 <div className="px-3 py-1 text-[10px] text-muted-foreground font-medium bg-chip/30 sticky top-0 border-t border-border/20">
                   AVAILABLE ({availableModels.length})
                 </div>
-                {availableModels.map(model => (
+                {availableModels.map((model) => (
                   <button
                     key={model.id}
                     type="button"
-                    onClick={() => toggleModel(model.id)}
+                    onClick={() => toggleAndNotify(model.id)}
                     className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent/5 transition-colors"
                   >
                     <span className="shrink-0 w-4 h-4 rounded border border-border/50" />
                     <div className="flex-1 min-w-0">
                       <div className="text-xs truncate">{model.display_name}</div>
-                      <div className="text-[10px] text-muted-foreground truncate font-mono">{model.id}</div>
+                      <div className="text-[10px] text-muted-foreground truncate font-mono">
+                        {model.id}
+                      </div>
                     </div>
                     {model.context_length && (
                       <span className="shrink-0 text-[10px] text-muted-foreground">
@@ -369,7 +358,9 @@ export function ProviderModelEditor({
 
           {/* Footer with summary */}
           <div className="px-3 py-1.5 border-t border-border/30 text-[10px] text-muted-foreground flex items-center justify-between">
-            <span>{selected.size} model{selected.size !== 1 ? 's' : ''} selected</span>
+            <span>
+              {selectedCount} model{selectedCount !== 1 ? 's' : ''} selected
+            </span>
             <span>{allModels.length} available</span>
           </div>
         </div>

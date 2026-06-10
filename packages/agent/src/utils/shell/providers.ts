@@ -10,18 +10,31 @@ export interface ResolvedShellProvider {
   buildArgs(command: string): string[];
 }
 
+export function wrapPowerShellCommand(command: string): string {
+  return [
+    '$ProgressPreference = \'SilentlyContinue\'',
+    '$InformationPreference = \'Continue\'',
+    '$OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    '[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    'if ($PSVersionTable.PSVersion.Major -ge 7) { $PSStyle.OutputRendering = \'PlainText\' }',
+    command,
+  ].join('; ');
+}
+
 export function encodePowerShellCommand(command: string): string {
   return Buffer.from(command, 'utf16le').toString('base64');
 }
 
 export function buildPowerShellArgs(command: string): string[] {
+  const wrappedCommand = wrapPowerShellCommand(command);
   return [
     '-NoProfile',
     '-NonInteractive',
     '-ExecutionPolicy',
     'Bypass',
     '-EncodedCommand',
-    encodePowerShellCommand(command),
+    encodePowerShellCommand(wrappedCommand),
   ];
 }
 

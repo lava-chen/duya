@@ -201,10 +201,19 @@ function getMiniMaxWeeklyStatus(model: Record<string, unknown>): number {
 }
 
 function hasMiniMaxQuota(model: Record<string, unknown>): boolean {
-  // Active session or weekly window: status === 1 with a percent value.
-  const sessionActive = getMiniMaxSessionStatus(model) === 1 && getMiniMaxSessionPercent(model) != null;
-  const weeklyActive = getMiniMaxWeeklyStatus(model) === 1 && getMiniMaxWeeklyPercent(model) != null;
-  return sessionActive || weeklyActive;
+  // Include active plans (status === 1) and exhausted plans (status === 3) as
+  // long as a percent value is present. When a user hits their quota limit
+  // MiniMax switches status from 1 to 3, but the percent field (usually 0)
+  // is still returned. Without this the UI shows "No active quota" instead
+  // of the expected 0% bar.
+  const sessionStatus = getMiniMaxSessionStatus(model);
+  const weeklyStatus = getMiniMaxWeeklyStatus(model);
+  const sessionPercent = getMiniMaxSessionPercent(model);
+  const weeklyPercent = getMiniMaxWeeklyPercent(model);
+
+  const sessionValid = (sessionStatus === 1 || sessionStatus === 3) && sessionPercent != null;
+  const weeklyValid = (weeklyStatus === 1 || weeklyStatus === 3) && weeklyPercent != null;
+  return sessionValid || weeklyValid;
 }
 
 function getMiniMaxResetAt(
@@ -248,9 +257,12 @@ function addMiniMaxPercentQuota(
   getStatus: (m: Record<string, unknown>) => number,
   resetArgs: [number, string, string, string, string]
 ): void {
-  if (getStatus(model) !== 1) return;
+  const status = getStatus(model);
   const percent = getPercent(model);
   if (percent == null) return;
+  // Accept active plans (status 1) and exhausted plans (status 3) so that
+  // a 0% remaining quota is still rendered in the UI.
+  if (status !== 1 && status !== 3) return;
   quotas[key] = buildMiniMaxPercentQuota(percent, getMiniMaxResetAt(model, ...resetArgs));
 }
 

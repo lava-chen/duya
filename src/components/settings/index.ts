@@ -1,4 +1,3 @@
-export { ProviderManager } from "./ProviderManager";
 export { SecuritySection } from "./SecuritySection";
 export { AppearanceSection } from "./AppearanceSection";
 export { GeneralSection } from "./GeneralSection";
@@ -11,3 +10,7 @@ export { default as BrowserExtensionSection } from "./BrowserExtensionSection";
 export { SupportSection } from "./SupportSection";
 export { CapabilitiesSection } from "./CapabilitiesSection";
 export { ProviderConnectDialog, type ProviderFormData } from "./ProviderConnectDialog";
+export { ProviderManagement } from "./ProviderManagement";
+export { ProviderList } from "@/components/providers/ProviderList";
+export { ProviderActions } from "@/components/providers/ProviderActions";
+export { useApiKeyLink } from "./forms/hooks/useApiKeyLink";
