@@ -29,6 +29,7 @@ import {
   checkDatabaseSizeWarning,
 } from '../db/index';
 import type { DbInitResult, DatabaseStats } from '../db/index';
+import { emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
 
 // Re-export lifecycle functions for backward compatibility
 export {
@@ -56,21 +57,14 @@ import {
 const dbLogger = getLogger();
 const resolveDatabasePath = _resolveDatabasePath;
 
-// db accessor — handlers use `db` directly; delegates to getDatabase()
-function dbAccessor(): NonNullable<ReturnType<typeof getDatabase>> {
-  const d = getDatabase();
-  if (!d) throw new Error('Database not initialized');
-  return d;
+// Type-safe database access helper. Throws if database is not initialized.
+function getDb(): NonNullable<ReturnType<typeof getDatabase>> {
+  const database = getDatabase();
+  if (!database) {
+    throw new Error('Database not initialized');
+  }
+  return database;
 }
-// Wrap accessor in a Proxy to allow `db.prepare(...)` usage
-const db = new Proxy({} as ReturnType<typeof getDatabase> & object, {
-  get(_target, prop) {
-    const d = getDatabase();
-    if (!d) throw new Error('Database not initialized');
-    return (d as unknown as Record<string, unknown>)[prop as string];
-  },
-}) as NonNullable<ReturnType<typeof getDatabase>>;
-
 
 export function registerDbHandlers(): void {
   // ==================== Safe Mode Handler ====================
@@ -84,11 +78,8 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:relocateDatabase', async (_event, newDir: string) => {
-    if (!db) {
-      return { success: false, error: 'Database not initialized' };
-    }
-
-    const currentPath = db.name;
+    const database = getDb();
+    const currentPath = database.name;
     const newDbPath = path.join(newDir, 'duya-main.db');
 
     if (newDbPath === currentPath) {
@@ -143,7 +134,7 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:session:get', (_event, sessionId: string) => {
-    return db!.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
+    return getDb().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
   });
 
   ipcMain.handle('db:session:update', (_event, sessionId: string, data: Record<string, unknown>) => {
@@ -175,47 +166,50 @@ export function registerDbHandlers(): void {
       }
     }
 
-    db!.prepare(`UPDATE chat_sessions SET ${fields.join(', ')} WHERE id = @sessionId`).run(params);
-    return db!.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
+    const database = getDb();
+    database.prepare(`UPDATE chat_sessions SET ${fields.join(', ')} WHERE id = @sessionId`).run(params);
+    return database.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
   });
 
   ipcMain.handle('db:session:delete', (_event, sessionId: string) => {
-    const txn = db!.transaction(() => {
-      db!.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
-      const result = db!.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
+    const database = getDb();
+    const txn = database.transaction(() => {
+      database.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+      const result = database.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
       return result.changes > 0;
     });
     return txn();
   });
 
   ipcMain.handle('db:session:list', () => {
-    return db!.prepare("SELECT * FROM chat_sessions WHERE is_deleted = 0 AND mode != 'automation' ORDER BY updated_at DESC").all();
+    return getDb().prepare("SELECT * FROM chat_sessions WHERE is_deleted = 0 AND mode != 'automation' ORDER BY updated_at DESC").all();
   });
 
   ipcMain.handle('db:session:listByWorkingDirectory', (_event, workingDirectory: string) => {
+    const database = getDb();
     if (!workingDirectory) {
-      return db!.prepare(
+      return database.prepare(
         "SELECT * FROM chat_sessions WHERE is_deleted = 0 AND working_directory = '' ORDER BY updated_at DESC"
       ).all();
     }
-    return db!.prepare(
+    return database.prepare(
       'SELECT * FROM chat_sessions WHERE is_deleted = 0 AND working_directory = ? ORDER BY updated_at DESC'
     ).all(workingDirectory);
   });
 
   ipcMain.handle('db:session:listByParentId', (_event, parentId: string) => {
-    return db!.prepare(
+    return getDb().prepare(
       'SELECT * FROM chat_sessions WHERE is_deleted = 0 AND parent_id = ? ORDER BY created_at ASC'
     ).all(parentId);
   });
 
   ipcMain.handle('db:session:saveDraft', (_event, sessionId: string, draft: string) => {
-    db!.prepare('UPDATE chat_sessions SET draft_message = ?, updated_at = ? WHERE id = ?')
+    getDb().prepare('UPDATE chat_sessions SET draft_message = ?, updated_at = ? WHERE id = ?')
       .run(draft, Date.now(), sessionId);
   });
 
   ipcMain.handle('db:session:getDraft', (_event, sessionId: string) => {
-    const row = db!.prepare('SELECT draft_message FROM chat_sessions WHERE id = ?')
+    const row = getDb().prepare('SELECT draft_message FROM chat_sessions WHERE id = ?')
       .get(sessionId) as { draft_message: string } | undefined;
     return row?.draft_message ?? '';
   });
@@ -243,7 +237,8 @@ export function registerDbHandlers(): void {
     attachments?: unknown[];
   }) => {
     const now = Date.now();
-    db!.prepare(`
+    const database = getDb();
+    database.prepare(`
       INSERT OR REPLACE INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
       VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
     `).run({
@@ -268,41 +263,42 @@ export function registerDbHandlers(): void {
       created_at: now,
     });
 
-    db!.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, data.session_id);
+    database.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, data.session_id);
 
-    return db!.prepare('SELECT * FROM messages WHERE id = ?').get(data.id);
+    return database.prepare('SELECT * FROM messages WHERE id = ?').get(data.id);
   });
 
   ipcMain.handle('db:message:getBySession', (_event, sessionId: string) => {
-    const result = db!.prepare(
+    const result = getDb().prepare(
       'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
     ).all(sessionId);
     return result;
   });
 
   ipcMain.handle('db:message:getCount', (_event, sessionId: string) => {
-    const result = db!.prepare(
+    const result = getDb().prepare(
       'SELECT COUNT(*) as count FROM messages WHERE session_id = ?'
     ).get(sessionId) as { count: number };
     return result.count;
   });
 
   ipcMain.handle('db:message:deleteBySession', (_event, sessionId: string) => {
-    const result = db!.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+    const result = getDb().prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
     return result.changes;
   });
 
   ipcMain.handle('db:message:replace', (_event, sessionId: string, messages: unknown[], generation: number) => {
     const now = Date.now();
+    const database = getDb();
 
-    let sessionGen = db!.prepare(
+    let sessionGen = database.prepare(
       'SELECT generation FROM chat_sessions WHERE id = ?'
     ).get(sessionId) as { generation: number } | undefined;
 
     if (!sessionGen) {
       // Auto-create session if it doesn't exist (happens when frontend creates session without DB entry)
       dbLogger.info('Session not found, auto-creating', { sessionId });
-      db!.prepare(`
+      database.prepare(`
         INSERT INTO chat_sessions (
           id, title, model, system_prompt, working_directory,
           project_name, status, mode, provider_id, generation,
@@ -332,7 +328,7 @@ export function registerDbHandlers(): void {
         updated_at: now,
       });
       // Re-fetch to get the created session
-      sessionGen = db!.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
+      sessionGen = database.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
       if (!sessionGen) {
         return { success: false, reason: 'session_not_found' };
       }
@@ -345,13 +341,13 @@ export function registerDbHandlers(): void {
     const newGeneration = Math.max(generation, sessionGen.generation + 1);
 
     try {
-      db!.transaction(() => {
-        db!.prepare('UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ?')
+      database.transaction(() => {
+        database.prepare('UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ?')
           .run(newGeneration, now, sessionId);
 
-        db!.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+        database.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
-        const stmt = db!.prepare(`
+        const stmt = database.prepare(`
           INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
           VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
         `);
@@ -444,17 +440,18 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:message:truncateAfter', (_event, sessionId: string, messageId: string) => {
-    const result = db!.prepare(
+    const database = getDb();
+    const result = database.prepare(
       'SELECT created_at FROM messages WHERE id = ? AND session_id = ?'
     ).get(messageId, sessionId) as { created_at: number } | undefined;
 
     if (!result) return { deletedCount: 0 };
 
-    const deleteResult = db!.prepare(
+    const deleteResult = database.prepare(
       'DELETE FROM messages WHERE session_id = ? AND created_at > ?'
     ).run(sessionId, result.created_at);
 
-    db!.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
+    database.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
 
     return { deletedCount: deleteResult.changes };
   });
@@ -464,11 +461,12 @@ export function registerDbHandlers(): void {
   ipcMain.handle('db:lock:acquire', (_event, sessionId: string, lockId: string, owner: string, ttlSec = 300) => {
     const now = Date.now();
     const expiresAt = now + ttlSec * 1000;
+    const database = getDb();
 
-    const txn = db!.transaction(() => {
-      db!.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
+    const txn = database.transaction(() => {
+      database.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
       try {
-        db!.prepare(
+        database.prepare(
           'INSERT INTO session_runtime_locks (session_id, lock_id, owner, expires_at) VALUES (?, ?, ?, ?)'
         ).run(sessionId, lockId, owner, expiresAt);
         return true;
@@ -482,14 +480,14 @@ export function registerDbHandlers(): void {
   ipcMain.handle('db:lock:renew', (_event, sessionId: string, lockId: string, ttlSec = 300) => {
     const now = Date.now();
     const expiresAt = now + ttlSec * 1000;
-    const result = db!.prepare(
+    const result = getDb().prepare(
       'UPDATE session_runtime_locks SET expires_at = ? WHERE session_id = ? AND lock_id = ?'
     ).run(expiresAt, sessionId, lockId);
     return result.changes > 0;
   });
 
   ipcMain.handle('db:lock:release', (_event, sessionId: string, lockId: string) => {
-    const result = db!.prepare(
+    const result = getDb().prepare(
       'DELETE FROM session_runtime_locks WHERE session_id = ? AND lock_id = ?'
     ).run(sessionId, lockId);
     return result.changes > 0;
@@ -497,8 +495,9 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:lock:isLocked', (_event, sessionId: string) => {
     const now = Date.now();
-    db!.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
-    const stmt = db!.prepare('SELECT 1 FROM session_runtime_locks WHERE session_id = ?');
+    const database = getDb();
+    database.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
+    const stmt = database.prepare('SELECT 1 FROM session_runtime_locks WHERE session_id = ?');
     return stmt.get(sessionId) !== undefined;
   });
 
@@ -513,19 +512,20 @@ export function registerDbHandlers(): void {
     owner?: string;
   }) => {
     const now = Date.now();
-    db!.prepare(`
+    const database = getDb();
+    database.prepare(`
       INSERT INTO tasks (id, session_id, subject, description, active_form, owner, status, blocks, blocked_by, metadata, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, 'pending', '[]', '[]', '{}', ?, ?)
     `).run(data.id, data.session_id, data.subject, data.description, data.active_form ?? null, data.owner ?? null, now, now);
-    return db!.prepare('SELECT * FROM tasks WHERE id = ?').get(data.id);
+    return database.prepare('SELECT * FROM tasks WHERE id = ?').get(data.id);
   });
 
   ipcMain.handle('db:task:get', (_event, id: string) => {
-    return db!.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    return getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(id);
   });
 
   ipcMain.handle('db:task:getBySession', (_event, sessionId: string) => {
-    return db!.prepare('SELECT * FROM tasks WHERE session_id = ? ORDER BY created_at ASC').all(sessionId);
+    return getDb().prepare('SELECT * FROM tasks WHERE session_id = ? ORDER BY created_at ASC').all(sessionId);
   });
 
   ipcMain.handle('db:task:update', (_event, id: string, data: Record<string, unknown>) => {
@@ -561,30 +561,32 @@ export function registerDbHandlers(): void {
       values.push(JSON.stringify(data.metadata));
     }
 
+    const database = getDb();
     values.push(id);
-    db!.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values);
-    return db!.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    database.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    return database.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
   });
 
   ipcMain.handle('db:task:delete', (_event, id: string) => {
-    const result = db!.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+    const result = getDb().prepare('DELETE FROM tasks WHERE id = ?').run(id);
     return result.changes > 0;
   });
 
   ipcMain.handle('db:task:deleteBySession', (_event, sessionId: string) => {
-    db!.prepare('DELETE FROM tasks WHERE session_id = ?').run(sessionId);
+    getDb().prepare('DELETE FROM tasks WHERE session_id = ?').run(sessionId);
   });
 
   ipcMain.handle('db:task:claim', (_event, id: string, owner: string) => {
     const now = Date.now();
-    const row = db!.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    const database = getDb();
+    const row = database.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
     if (!row) return { success: false, reason: 'task_not_found' };
     if (row.owner && row.owner !== owner) return { success: false, reason: 'already_claimed' };
     if (row.status === 'completed') return { success: false, reason: 'already_resolved' };
 
     const blockedBy = JSON.parse((row.blocked_by as string) || '[]') as string[];
     if (blockedBy.length > 0) {
-      const unresolvedIds = db!.prepare(
+      const unresolvedIds = database.prepare(
         `SELECT id FROM tasks WHERE id IN (${blockedBy.map(() => '?').join(',')}) AND status != 'completed'`
       ).all(...blockedBy) as { id: string }[];
       if (unresolvedIds.length > 0) {
@@ -592,13 +594,14 @@ export function registerDbHandlers(): void {
       }
     }
 
-    db!.prepare(`UPDATE tasks SET owner = ?, status = 'in_progress', updated_at = ? WHERE id = ?`).run(owner, now, id);
-    return { success: true, task: db!.prepare('SELECT * FROM tasks WHERE id = ?').get(id) };
+    database.prepare(`UPDATE tasks SET owner = ?, status = 'in_progress', updated_at = ? WHERE id = ?`).run(owner, now, id);
+    return { success: true, task: database.prepare('SELECT * FROM tasks WHERE id = ?').get(id) };
   });
 
   ipcMain.handle('db:task:block', (_event, fromId: string, toId: string) => {
-    const from = db!.prepare('SELECT * FROM tasks WHERE id = ?').get(fromId) as Record<string, unknown> | undefined;
-    const to = db!.prepare('SELECT * FROM tasks WHERE id = ?').get(toId) as Record<string, unknown> | undefined;
+    const database = getDb();
+    const from = database.prepare('SELECT * FROM tasks WHERE id = ?').get(fromId) as Record<string, unknown> | undefined;
+    const to = database.prepare('SELECT * FROM tasks WHERE id = ?').get(toId) as Record<string, unknown> | undefined;
     if (!from || !to) return false;
 
     const fromBlocks: string[] = JSON.parse((from.blocks as string) || '[]');
@@ -606,23 +609,24 @@ export function registerDbHandlers(): void {
 
     if (!fromBlocks.includes(toId)) {
       fromBlocks.push(toId);
-      db!.prepare('UPDATE tasks SET blocks = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(fromBlocks), Date.now(), fromId);
+      database.prepare('UPDATE tasks SET blocks = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(fromBlocks), Date.now(), fromId);
     }
     if (!toBlockedBy.includes(fromId)) {
       toBlockedBy.push(fromId);
-      db!.prepare('UPDATE tasks SET blocked_by = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(toBlockedBy), Date.now(), toId);
+      database.prepare('UPDATE tasks SET blocked_by = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(toBlockedBy), Date.now(), toId);
     }
     return true;
   });
 
   ipcMain.handle('db:task:unassignTeammate', (_event, sessionId: string, owner: string) => {
     const now = Date.now();
-    const tasks = db!.prepare(
+    const database = getDb();
+    const tasks = database.prepare(
       `SELECT id, subject FROM tasks WHERE session_id = ? AND status != 'completed' AND owner = ?`
     ).all(sessionId, owner) as { id: string; subject: string }[];
     if (tasks.length === 0) return { unassignedTasks: [], notificationMessage: '' };
 
-    db!.prepare(
+    database.prepare(
       `UPDATE tasks SET owner = NULL, status = 'pending', updated_at = ? WHERE session_id = ? AND status != 'completed' AND owner = ?`
     ).run(now, sessionId, owner);
 
@@ -634,7 +638,7 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:task:getByOwner', (_event, sessionId: string, owner: string) => {
-    return db!.prepare(
+    return getDb().prepare(
       `SELECT * FROM tasks WHERE session_id = ? AND status != 'completed' AND owner = ?`
     ).all(sessionId, owner);
   });
@@ -720,13 +724,13 @@ export function registerDbHandlers(): void {
   // ==================== Settings Handlers ====================
 
   ipcMain.handle('db:setting:get', (_event, key: string) => {
-    const row = db!.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value ?? null;
   });
 
   ipcMain.handle('db:setting:set', (_event, key: string, value: string) => {
     const now = Date.now();
-    db!.prepare(`
+    getDb().prepare(`
       INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, value, now);
@@ -736,14 +740,14 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:setting:getAll', () => {
-    const rows = db!.prepare('SELECT key, value FROM settings').all() as Array<{ key: string; value: string }>;
+    const rows = getDb().prepare('SELECT key, value FROM settings').all() as Array<{ key: string; value: string }>;
     const settings: Record<string, string> = {};
     for (const row of rows) settings[row.key] = row.value;
     return settings;
   });
 
   ipcMain.handle('db:setting:getJson', (_event, key: string, defaultValue: unknown) => {
-    const value = db!.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    const value = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
     if (!value) return defaultValue;
     try {
       return JSON.parse(value.value);
@@ -754,7 +758,7 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:setting:setJson', (_event, key: string, value: unknown) => {
     const now = Date.now();
-    db!.prepare(`
+    getDb().prepare(`
       INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, JSON.stringify(value), now);
@@ -780,7 +784,8 @@ export function registerDbHandlers(): void {
     toolInput?: Record<string, unknown>;
   }) => {
     const now = Date.now();
-    db!.prepare(`
+    const database = getDb();
+    database.prepare(`
       INSERT INTO permission_requests (id, session_id, tool_name, tool_input, status, created_at)
       VALUES (?, ?, ?, ?, 'pending', ?)
     `).run(
@@ -790,11 +795,11 @@ export function registerDbHandlers(): void {
       data.toolInput ? JSON.stringify(data.toolInput) : null,
       now
     );
-    return db!.prepare('SELECT * FROM permission_requests WHERE id = ?').get(data.id);
+    return database.prepare('SELECT * FROM permission_requests WHERE id = ?').get(data.id);
   });
 
   ipcMain.handle('db:permission:get', (_event, id: string) => {
-    return db!.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
+    return getDb().prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
   });
 
   ipcMain.handle('db:permission:resolve', (_event, id: string, status: string, extra?: {
@@ -804,7 +809,8 @@ export function registerDbHandlers(): void {
     sessionId?: string;
   }) => {
     const now = Date.now();
-    db!.prepare(`
+    const database = getDb();
+    database.prepare(`
       UPDATE permission_requests SET
         status = ?,
         decision = ?,
@@ -841,18 +847,19 @@ export function registerDbHandlers(): void {
       dbLogger.warn('Agent process not available for permission:resolve forwarding', { sessionId, isRunning: sessionId ? agentPool.isRunning(sessionId) : false }, LogComponent.DB);
     }
 
-    return db!.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
+    return database.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
   });
 
   // ==================== Search Handlers ====================
 
   ipcMain.handle('db:search:sessions', (_event, query: string, limit = 10) => {
+    const database = getDb();
     try {
-      const ftsAvailable = db!.prepare(
+      const ftsAvailable = database.prepare(
         "SELECT 1 FROM pragma_compile_options WHERE compile_options = 'ENABLE_FTS5'"
       ).get();
       if (ftsAvailable) {
-        return db!.prepare(`
+        return database.prepare(`
           SELECT s.*, substr(m.content, 1, 300) as snippet
           FROM messages_fts f
           JOIN messages m ON f.rowid = m.rowid
@@ -863,7 +870,7 @@ export function registerDbHandlers(): void {
         `).all(query, limit);
       }
     } catch {}
-    return db!.prepare(`
+    return database.prepare(`
       SELECT s.*, substr(m.content, 1, 300) as snippet
       FROM messages m
       JOIN chat_sessions s ON m.session_id = s.id
@@ -876,16 +883,17 @@ export function registerDbHandlers(): void {
   // ==================== Channel Binding Handlers ====================
 
   ipcMain.handle('db:channel:getBindings', (_event, channelType?: string) => {
+    const database = getDb();
     if (channelType) {
-      return db!.prepare(
+      return database.prepare(
         'SELECT * FROM channel_bindings WHERE channel_type = ? ORDER BY updated_at DESC'
       ).all(channelType);
     }
-    return db!.prepare('SELECT * FROM channel_bindings ORDER BY updated_at DESC').all();
+    return database.prepare('SELECT * FROM channel_bindings ORDER BY updated_at DESC').all();
   });
 
   ipcMain.handle('db:channel:getBinding', (_event, channelType: string, chatId: string) => {
-    return db!.prepare(
+    return getDb().prepare(
       'SELECT * FROM channel_bindings WHERE channel_type = ? AND chat_id = ?'
     ).get(channelType, chatId);
   });
@@ -901,7 +909,8 @@ export function registerDbHandlers(): void {
     mode?: string;
   }) => {
     const now = Date.now();
-    db!.prepare(`
+    const database = getDb();
+    database.prepare(`
       INSERT INTO channel_bindings (id, channel_type, chat_id, duya_session_id, sdk_session_id, working_directory, model, mode, active, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -923,18 +932,18 @@ export function registerDbHandlers(): void {
       now,
       now
     );
-    return db!.prepare('SELECT * FROM channel_bindings WHERE id = ?').get(data.id);
+    return database.prepare('SELECT * FROM channel_bindings WHERE id = ?').get(data.id);
   });
 
   ipcMain.handle('db:channel:getOffset', (_event, channelType: string, offsetKey: string) => {
-    return db!.prepare(
+    return getDb().prepare(
       'SELECT * FROM channel_offsets WHERE channel_type = ? AND offset_key = ?'
     ).get(channelType, offsetKey);
   });
 
   ipcMain.handle('db:channel:setOffset', (_event, channelType: string, offsetKey: string, offsetValue: string, offsetType = 'long_polling') => {
     const now = Date.now();
-    db!.prepare(`
+    getDb().prepare(`
       INSERT INTO channel_offsets (channel_type, offset_key, offset_value, offset_type, updated_at)
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(channel_type, offset_key) DO UPDATE SET
@@ -947,7 +956,7 @@ export function registerDbHandlers(): void {
   // ==================== Project Group Handlers ====================
 
   ipcMain.handle('db:project:getGroups', () => {
-    return db!.prepare(`
+    return getDb().prepare(`
       SELECT
         working_directory,
         project_name,
@@ -984,7 +993,8 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:migration:checkNeeded', (_event, newDbPath: string) => {
-    const currentPath = db ? db.name : getDatabasePath();
+    const database = getDb();
+    const currentPath = database.name;
     const targetExists = fs.existsSync(newDbPath);
     const sourceExists = fs.existsSync(currentPath);
     const needed = sourceExists && currentPath !== newDbPath && !targetExists;
@@ -1043,7 +1053,7 @@ export function registerDbHandlers(): void {
   // ==================== Weixin Account Handlers ====================
 
   ipcMain.handle('db:weixin:getAccounts', () => {
-    return db!.prepare('SELECT * FROM weixin_accounts ORDER BY created_at DESC').all();
+    return getDb().prepare('SELECT * FROM weixin_accounts ORDER BY created_at DESC').all();
   });
 
   ipcMain.handle('db:weixin:upsertAccount', (_event, data: {
@@ -1056,7 +1066,8 @@ export function registerDbHandlers(): void {
     enabled?: boolean;
   }) => {
     const now = Date.now();
-    db!.prepare(`
+    const database = getDb();
+    database.prepare(`
       INSERT INTO weixin_accounts (account_id, user_id, name, base_url, cdn_base_url, token, enabled, last_login_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id) DO UPDATE SET
@@ -1080,7 +1091,7 @@ export function registerDbHandlers(): void {
       now
     );
     emitGatewayConfigChanged(`db:weixin:upsertAccount:${data.accountId}`);
-    return db!.prepare('SELECT * FROM weixin_accounts WHERE account_id = ?').get(data.accountId);
+    return database.prepare('SELECT * FROM weixin_accounts WHERE account_id = ?').get(data.accountId);
   });
 
   ipcMain.handle('db:weixin:updateAccount', (_event, accountId: string, data: {
@@ -1101,15 +1112,17 @@ export function registerDbHandlers(): void {
 
     if (fields.length === 0) return null;
 
+    const database = getDb();
     values.push(accountId);
-    db!.prepare(`UPDATE weixin_accounts SET ${fields.join(', ')} WHERE account_id = ?`).run(...values);
+    database.prepare(`UPDATE weixin_accounts SET ${fields.join(', ')} WHERE account_id = ?`).run(...values);
     emitGatewayConfigChanged(`db:weixin:updateAccount:${accountId}`);
-    return db!.prepare('SELECT * FROM weixin_accounts WHERE account_id = ?').get(accountId);
+    return database.prepare('SELECT * FROM weixin_accounts WHERE account_id = ?').get(accountId);
   });
 
   ipcMain.handle('db:weixin:deleteAccount', (_event, accountId: string) => {
-    db!.prepare('DELETE FROM weixin_context_tokens WHERE account_id = ?').run(accountId);
-    const result = db!.prepare('DELETE FROM weixin_accounts WHERE account_id = ?').run(accountId);
+    const database = getDb();
+    database.prepare('DELETE FROM weixin_context_tokens WHERE account_id = ?').run(accountId);
+    const result = database.prepare('DELETE FROM weixin_accounts WHERE account_id = ?').run(accountId);
     if (result.changes > 0) {
       emitGatewayConfigChanged(`db:weixin:deleteAccount:${accountId}`);
     }
@@ -1117,7 +1130,7 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:weixin:getContextToken', (_event, accountId: string, peerUserId: string) => {
-    const row = db!.prepare(
+    const row = getDb().prepare(
       'SELECT context_token FROM weixin_context_tokens WHERE account_id = ? AND peer_user_id = ?'
     ).get(accountId, peerUserId) as { context_token: string } | undefined;
     return row?.context_token || null;
@@ -1125,7 +1138,7 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:weixin:setContextToken', (_event, accountId: string, peerUserId: string, contextToken: string) => {
     const now = Date.now();
-    db!.prepare(`
+    getDb().prepare(`
       INSERT INTO weixin_context_tokens (account_id, peer_user_id, context_token, updated_at)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(account_id, peer_user_id) DO UPDATE SET
@@ -1137,17 +1150,18 @@ export function registerDbHandlers(): void {
   // ==================== Agent Profile Handlers ====================
 
   ipcMain.handle('db:agentProfile:list', () => {
-    return db!.prepare('SELECT * FROM agent_profiles ORDER BY is_preset DESC, name ASC').all();
+    return getDb().prepare('SELECT * FROM agent_profiles ORDER BY is_preset DESC, name ASC').all();
   });
 
   ipcMain.handle('db:agentProfile:get', (_event, id: string) => {
-    return db!.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
+    return getDb().prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
   });
 
   ipcMain.handle('db:agentProfile:create', (_event, data: Record<string, unknown>) => {
     const now = Date.now();
     const id = (data.id as string) || crypto.randomUUID();
-    db!.prepare(`
+    const database = getDb();
+    database.prepare(`
       INSERT INTO agent_profiles (
         id, name, description, allowed_tools, disallowed_tools, prompt_system, default_model,
         user_visible, is_preset, is_enabled, created_at, updated_at
@@ -1169,7 +1183,7 @@ export function registerDbHandlers(): void {
       created_at: now,
       updated_at: now,
     });
-    return db!.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
+    return database.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
   });
 
   ipcMain.handle('db:agentProfile:update', (_event, id: string, data: Record<string, unknown>) => {
@@ -1194,27 +1208,30 @@ export function registerDbHandlers(): void {
       }
     }
 
-    db!.prepare(`UPDATE agent_profiles SET ${fields.join(', ')} WHERE id = @id`).run(params);
-    return db!.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
+    const database = getDb();
+    database.prepare(`UPDATE agent_profiles SET ${fields.join(', ')} WHERE id = @id`).run(params);
+    return database.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
   });
 
   ipcMain.handle('db:agentProfile:delete', (_event, id: string) => {
+    const database = getDb();
     // Prevent deleting preset profiles
-    const profile = db!.prepare('SELECT is_preset FROM agent_profiles WHERE id = ?').get(id) as { is_preset: number } | undefined;
+    const profile = database.prepare('SELECT is_preset FROM agent_profiles WHERE id = ?').get(id) as { is_preset: number } | undefined;
     if (!profile) return false;
     if (profile.is_preset === 1) {
       throw new Error('Cannot delete preset agent profiles');
     }
-    const result = db!.prepare('DELETE FROM agent_profiles WHERE id = ?').run(id);
+    const result = database.prepare('DELETE FROM agent_profiles WHERE id = ?').run(id);
     return result.changes > 0;
   });
 
   // ==================== Session Agent Profile Binding ====================
 
   ipcMain.handle('db:session:setAgentProfile', (_event, sessionId: string, agentProfileId: string | null) => {
-    db!.prepare('UPDATE chat_sessions SET agent_profile_id = ?, updated_at = ? WHERE id = ?')
+    const database = getDb();
+    database.prepare('UPDATE chat_sessions SET agent_profile_id = ?, updated_at = ? WHERE id = ?')
       .run(agentProfileId, Date.now(), sessionId);
-    return db!.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
+    return database.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
   });
 
   // ==================== DB Stats Handler ====================
@@ -1238,14 +1255,8 @@ export function registerDbHandlers(): void {
 export function registerConductorHandlers(): void {
   if (!getDatabase()) return;
 
-  const ensureDb = () => {
-    const d = getDatabase();
-    if (!d) throw new Error('Database not initialized');
-    return d;
-  };
-
   ipcMain.handle('conductor:canvas:list', () => {
-    const rows = ensureDb().prepare(
+    const rows = getDb().prepare(
       'SELECT * FROM conductor_canvases ORDER BY sort_order, created_at DESC'
     ).all() as any[];
     return rows.map((r: any) => ({
@@ -1260,7 +1271,7 @@ export function registerConductorHandlers(): void {
   });
 
   ipcMain.handle('conductor:canvas:create', (_event, data: { name: string; description?: string }) => {
-    const d = ensureDb();
+    const d = getDb();
     const id = randomUUID();
     const now = Date.now();
     d.prepare(
@@ -1280,7 +1291,7 @@ export function registerConductorHandlers(): void {
   });
 
   ipcMain.handle('conductor:canvas:update', (_event, id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }) => {
-    const d = ensureDb();
+    const d = getDb();
     const now = Date.now();
     const fields: string[] = ['updated_at = ?'];
     const values: unknown[] = [now];
@@ -1319,13 +1330,13 @@ export function registerConductorHandlers(): void {
   });
 
   ipcMain.handle('conductor:canvas:delete', (_event, id: string) => {
-    const d = ensureDb();
+    const d = getDb();
     const result = d.prepare('DELETE FROM conductor_canvases WHERE id = ?').run(id);
     return result.changes > 0;
   });
 
   ipcMain.handle('conductor:snapshot', (_event, canvasId: string) => {
-    const d = ensureDb();
+    const d = getDb();
     const canvas = d.prepare('SELECT * FROM conductor_canvases WHERE id = ?').get(canvasId) as any;
     if (!canvas) return null;
 
@@ -1416,7 +1427,7 @@ export function registerConductorHandlers(): void {
   });
 
   ipcMain.handle('conductor:action', (_event, request: Record<string, unknown>) => {
-    const d = ensureDb();
+    const d = getDb();
     const action = request.action as string;
     const actor = (request.actor as string) || 'user';
     const canvasId = request.canvasId as string;
@@ -1941,7 +1952,7 @@ export function registerConductorHandlers(): void {
   });
 
   ipcMain.handle('conductor:undo', (_event, canvasId: string) => {
-    const d = ensureDb();
+    const d = getDb();
     const now = Date.now();
 
     const lastAction = d.prepare(
@@ -2063,7 +2074,7 @@ export function registerConductorHandlers(): void {
   });
 
   ipcMain.handle('conductor:redo', (_event, canvasId: string) => {
-    const d = ensureDb();
+    const d = getDb();
     const now = Date.now();
 
     const undoneAction = d.prepare(
@@ -2322,4 +2333,146 @@ function invertPatch(patch: Record<string, unknown>, actionType: string): Record
     default:
       return {};
   }
+}
+
+// ==================== Mailbox Handlers (Plan 202 — PR1) ====================
+
+export function registerMailboxHandlers(): void {
+  const KIND_PRIORITY: Record<string, number> = {
+    abort_and_replace: 0,
+    stop: 10,
+    correction: 50,
+    constraint: 50,
+    followup: 100,
+  };
+
+  ipcMain.handle('mailbox:send', (_event, data: {
+    id: string;
+    sessionId: string;
+    content: string;
+    kind: string;
+    submittedDuringRunId: string;
+    attachments?: unknown[];
+    clientMsgId?: string;
+    source?: string;
+    constraintsJson?: string;
+  }) => {
+    const database = getDb();
+    const now = Date.now();
+    const priority = KIND_PRIORITY[data.kind] ?? 100;
+
+    // Idempotency check
+    if (data.clientMsgId) {
+      const existing = database.prepare(
+        'SELECT * FROM agent_mailbox WHERE session_id = ? AND client_msg_id = ?'
+      ).get(data.sessionId, data.clientMsgId);
+      if (existing) return existing;
+    }
+
+    database.prepare(`
+      INSERT INTO agent_mailbox (
+        id, session_id, submitted_during_run_id, content, kind, status,
+        priority, constraints_json, attachments_json, source,
+        client_msg_id, created_at
+      ) VALUES (
+        @id, @session_id, @submitted_during_run_id, @content, @kind, 'pending',
+        @priority, @constraints_json, @attachments_json, @source,
+        @client_msg_id, @created_at
+      )
+    `).run({
+      id: data.id,
+      session_id: data.sessionId,
+      submitted_during_run_id: data.submittedDuringRunId || '',
+      content: data.content,
+      kind: data.kind,
+      priority,
+      constraints_json: data.constraintsJson ?? null,
+      attachments_json: data.attachments ? JSON.stringify(data.attachments) : null,
+      source: data.source ?? 'ui',
+      client_msg_id: data.clientMsgId ?? null,
+      created_at: now,
+    });
+
+    const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
+    emitMailCreated(row as Record<string, unknown>);
+    return row;
+  });
+
+  ipcMain.handle('mailbox:edit', (_event, data: { id: string; content?: string; kind?: string }) => {
+    const database = getDb();
+    const existing = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id) as Record<string, unknown> | undefined;
+    if (!existing) return null;
+    if (existing.status !== 'pending') return null;
+    if (existing.edit_locked_at !== null) return null;
+
+    const now = Date.now();
+    const fields: string[] = [];
+    const params: Record<string, unknown> = { id: data.id };
+
+    const editHistory: Array<{ editedAt: number; prevContent: string; prevKind: string }> = [];
+    if (existing.edit_history_json) {
+      try { editHistory.push(...JSON.parse(existing.edit_history_json as string)); } catch { /* ignore */ }
+    }
+
+    if (data.content !== undefined) {
+      editHistory.push({ editedAt: now, prevContent: existing.content as string, prevKind: existing.kind as string });
+      fields.push('content = @content');
+      params.content = data.content;
+    }
+    if (data.kind !== undefined) {
+      if (!editHistory.some(e => e.prevKind === existing.kind && e.editedAt === now)) {
+        editHistory.push({ editedAt: now, prevContent: existing.content as string, prevKind: existing.kind as string });
+      }
+      fields.push('kind = @kind');
+      fields.push('priority = @priority');
+      params.kind = data.kind;
+      params.priority = KIND_PRIORITY[data.kind] ?? 100;
+    }
+
+    if (fields.length === 0) return existing;
+
+    fields.push('edit_history_json = @edit_history_json');
+    params.edit_history_json = JSON.stringify(editHistory);
+
+    database.prepare(`UPDATE agent_mailbox SET ${fields.join(', ')} WHERE id = @id`).run(params);
+    const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
+    emitMailEdited(row as Record<string, unknown>, existing.content as string);
+    return row;
+  });
+
+  ipcMain.handle('mailbox:cancel', (_event, data: { id: string; reason?: string }) => {
+    const database = getDb();
+    const now = Date.now();
+    const result = database.prepare(`
+      UPDATE agent_mailbox
+      SET status = 'cancelled', cancelled_at = @now, cancelled_by = 'user', cancel_reason = @reason
+      WHERE id = @id AND status = 'pending'
+    `).run({ id: data.id, now, reason: data.reason ?? null });
+
+    if (result.changes === 0) return null;
+    const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
+    emitMailCancelled(row as Record<string, unknown>, data.reason);
+    return row;
+  });
+
+  ipcMain.handle('mailbox:list', (_event, data: { sessionId: string; status?: string[]; limit?: number }) => {
+    const database = getDb();
+    const limit = data.limit ?? 50;
+    const statuses = data.status;
+    if (statuses && statuses.length > 0) {
+      const placeholders = statuses.map(() => '?').join(',');
+      return database.prepare(
+        `SELECT * FROM agent_mailbox WHERE session_id = ? AND status IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`
+      ).all(data.sessionId, ...statuses, limit);
+    }
+    return database.prepare(
+      'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at DESC LIMIT ?'
+    ).all(data.sessionId, limit);
+  });
+
+  ipcMain.handle('mailbox:listForSession', (_event, data: { sessionId: string }) => {
+    return getDb().prepare(
+      'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at ASC'
+    ).all(data.sessionId);
+  });
 }

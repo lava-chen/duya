@@ -984,6 +984,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return cm.getAllProviders();
     }
 
+    case 'config:provider:get': {
+      const cm = getConfigManager();
+      const id = p.id as string;
+      if (!id) return null;
+      return cm.getAllProviders()[id] || null;
+    }
+
     case 'config:provider:getActive': {
       const cm = getConfigManager();
       return cm.getActiveProvider() || null;
@@ -2182,6 +2189,144 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       const result = db.prepare('DELETE FROM model_capabilities WHERE id = ?').run(modelName);
       return { success: result.changes > 0 };
     }
+
+    // ==================== Mailbox actions (Plan 202 — PR1) ====================
+    case 'mailbox:send': {
+      const now = Date.now();
+      const priority = (() => {
+        const kind = p.kind as string;
+        switch (kind) {
+          case 'abort_and_replace': return 0;
+          case 'stop': return 10;
+          case 'correction': case 'constraint': return 50;
+          default: return 100;
+        }
+      })();
+
+      // Idempotency check
+      if (p.clientMsgId) {
+        const existing = db.prepare(
+          'SELECT * FROM agent_mailbox WHERE session_id = ? AND client_msg_id = ?'
+        ).get(p.sessionId, p.clientMsgId);
+        if (existing) return existing;
+      }
+
+      db.prepare(`
+        INSERT INTO agent_mailbox (
+          id, session_id, submitted_during_run_id, content, kind, status,
+          priority, constraints_json, attachments_json, source,
+          client_msg_id, created_at
+        ) VALUES (
+          @id, @session_id, @submitted_during_run_id, @content, @kind, 'pending',
+          @priority, @constraints_json, @attachments_json, @source,
+          @client_msg_id, @created_at
+        )
+      `).run({
+        id: p.id,
+        session_id: p.sessionId,
+        submitted_during_run_id: p.submittedDuringRunId || '',
+        content: p.content,
+        kind: p.kind,
+        priority,
+        constraints_json: p.constraintsJson ?? null,
+        attachments_json: p.attachments ? JSON.stringify(p.attachments) : null,
+        source: p.source ?? 'ui',
+        client_msg_id: p.clientMsgId ?? null,
+        created_at: now,
+      });
+
+      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
+      // Broadcast event
+      try {
+        const { emitMailCreated } = require('../messaging/mailbox-broadcaster');
+        emitMailCreated(row as Record<string, unknown>);
+      } catch { /* broadcaster may not be available in all contexts */ }
+      return row;
+    }
+
+    case 'mailbox:edit': {
+      const existing = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id) as Record<string, unknown> | undefined;
+      if (!existing) return null;
+      if (existing.status !== 'pending') return null;
+      if (existing.edit_locked_at !== null) return null;
+
+      const now = Date.now();
+      const fields: string[] = [];
+      const params: Record<string, unknown> = { id: p.id };
+
+      const editHistory: Array<{ editedAt: number; prevContent: string; prevKind: string }> = [];
+      if (existing.edit_history_json) {
+        try { editHistory.push(...JSON.parse(existing.edit_history_json as string)); } catch { /* ignore */ }
+      }
+
+      if (p.content !== undefined) {
+        editHistory.push({ editedAt: now, prevContent: existing.content as string, prevKind: existing.kind as string });
+        fields.push('content = @content');
+        params.content = p.content;
+      }
+      if (p.kind !== undefined) {
+        if (!editHistory.some(e => e.prevKind === existing.kind && e.editedAt === now)) {
+          editHistory.push({ editedAt: now, prevContent: existing.content as string, prevKind: existing.kind as string });
+        }
+        fields.push('kind = @kind');
+        fields.push('priority = @priority');
+        params.kind = p.kind;
+        const kindPriority: Record<string, number> = { abort_and_replace: 0, stop: 10, correction: 50, constraint: 50, followup: 100 };
+        params.priority = kindPriority[p.kind as string] ?? 100;
+      }
+
+      if (fields.length === 0) return existing;
+
+      fields.push('edit_history_json = @edit_history_json');
+      params.edit_history_json = JSON.stringify(editHistory);
+
+      db.prepare(`UPDATE agent_mailbox SET ${fields.join(', ')} WHERE id = @id`).run(params);
+      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
+      // Broadcast event
+      try {
+        const { emitMailEdited } = require('../messaging/mailbox-broadcaster');
+        emitMailEdited(row as Record<string, unknown>, existing.content as string);
+      } catch { /* broadcaster may not be available */ }
+      return row;
+    }
+
+    case 'mailbox:cancel': {
+      const now = Date.now();
+      const reason = p.reason as string | undefined;
+      const result = db.prepare(`
+        UPDATE agent_mailbox
+        SET status = 'cancelled', cancelled_at = @now, cancelled_by = 'user', cancel_reason = @reason
+        WHERE id = @id AND status = 'pending'
+      `).run({ id: p.id, now, reason: reason ?? null });
+
+      if (result.changes === 0) return null;
+      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
+      // Broadcast event
+      try {
+        const { emitMailCancelled } = require('../messaging/mailbox-broadcaster');
+        emitMailCancelled(row as Record<string, unknown>, reason);
+      } catch { /* broadcaster may not be available */ }
+      return row;
+    }
+
+    case 'mailbox:list': {
+      const limit = (p.limit as number) ?? 50;
+      const statuses = p.status as string[] | undefined;
+      if (statuses && statuses.length > 0) {
+        const placeholders = statuses.map(() => '?').join(',');
+        return db.prepare(
+          `SELECT * FROM agent_mailbox WHERE session_id = ? AND status IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`
+        ).all(p.sessionId, ...statuses, limit);
+      }
+      return db.prepare(
+        'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at DESC LIMIT ?'
+      ).all(p.sessionId, limit);
+    }
+
+    case 'mailbox:listForSession':
+      return db.prepare(
+        'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at ASC'
+      ).all(p.sessionId);
 
     default:
       throw new Error(`Unknown DB action: ${action}`);

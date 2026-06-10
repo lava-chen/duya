@@ -739,6 +739,34 @@ export const modelCapabilityDb = {
   delete: (modelName: string) => sendDbRequest('modelCapability:delete', { modelName }),
 };
 
+// ==================== Mailbox Operations ====================
+
+export const mailboxDb = {
+  send: (data: {
+    id: string;
+    sessionId: string;
+    submittedDuringRunId: string;
+    content: string;
+    kind: string;
+    attachments?: unknown[];
+    clientMsgId?: string;
+    source?: string;
+    constraintsJson?: string;
+  }) => sendDbRequest('mailbox:send', data),
+
+  edit: (id: string, patch: { content?: string; kind?: string }) =>
+    sendDbRequest('mailbox:edit', { id, ...patch }),
+
+  cancel: (id: string, reason?: string) =>
+    sendDbRequest('mailbox:cancel', { id, reason }),
+
+  list: (sessionId: string, opts?: { status?: string[]; limit?: number }) =>
+    sendDbRequest('mailbox:list', { sessionId, ...opts }),
+
+  listForSession: (sessionId: string) =>
+    sendDbRequest('mailbox:listForSession', { sessionId }),
+};
+
 // ==================== Automation Operations ====================
 
 export const automationDb = {

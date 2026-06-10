@@ -83,6 +83,49 @@ const conductorService = new ConductorService(workerManager, dbRequest);
 let isShuttingDown = false;
 const activeConnections = new Set<http.ServerResponse>();
 
+/**
+ * Hydrate SessionManager with placeholder entries for every existing chat session
+ * in the DB. This prevents "Session not found" 404s for endpoints that look up
+ * sessions by id (status, compact, permission, …) when the Agent Server has
+ * just started and has no in-memory record of historical sessions.
+ *
+ * Placeholders are created as IDLE (no worker). Endpoints that require a live
+ * worker (chat, compact-without-pre-warmup) will still fail with a specific
+ * error if `workerManager.hasWorker(id)` is false.
+ */
+async function hydrateSessionsFromDb(): Promise<void> {
+  try {
+    const rows = (await dbRequest('session:list', {})) as Array<{ id: string }> | undefined;
+    if (!Array.isArray(rows)) {
+      logger.warn('hydrateSessionsFromDb: session:list returned non-array', { type: typeof rows });
+      return;
+    }
+    let created = 0;
+    for (const row of rows) {
+      if (!row?.id) continue;
+      if (sessionManager.getSession(row.id)) continue;
+      try {
+        sessionManager.createSession(row.id);
+        created++;
+      } catch (err) {
+        // createSession throws on duplicate id; safe to ignore here.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('already exists')) {
+          logger.warn('hydrateSessionsFromDb: createSession failed', { sessionId: row.id, error: msg });
+        }
+      }
+    }
+    logger.info('Session hydration complete', { total: rows.length, created, preExisting: rows.length - created });
+  } catch (err) {
+    logger.warn('Session hydration failed', err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+// Run hydration in the background so the server can start listening immediately.
+// Endpoints tolerate a session not being pre-loaded: handlePostChat already
+// autocreates, and the no-worker guard still produces a specific 404.
+void hydrateSessionsFromDb();
+
 const deps: RouterDeps = {
   sessionManager,
   workerManager,

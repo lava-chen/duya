@@ -4,7 +4,7 @@ import { platform as getPlatform } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase } from './db/connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
 import { registerProviderIpcHandlers } from './services/providers/provider-ipc-handlers';
@@ -119,6 +119,7 @@ if (gotTheLock) {
       logger.error('Database initialization failed', undefined, { error: dbResult.error }, 'Main');
       registerDbHandlers();
       registerConductorHandlers();
+      registerMailboxHandlers();
       registerAgentHandlers();
       registerNetHandlers();
       createSafeModeWindow(dbResult.error || 'Unknown error', dbResult.dbPath || dbPath, getIconPath);
