@@ -1,9 +1,22 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+/**
+ * ProviderConnectDialog — Plan 203 Phase 2.5 slim version.
+ *
+ * State management is delegated to L2 hooks:
+ * - `useApiKeyState`   — apiKey visibility + mask
+ * - `useBaseUrlState`  — baseUrl + preset candidates
+ * - `useModelSelection`— enabled models + custom models + ctx edit
+ * - `usePresetDraft`   — preset → LlmProvider draft + validation
+ *
+ * The component still owns UI-only state (test result, ollama
+ * model fetch, advanced section toggle, etc.) because none of
+ * those are shared concerns. The hooks are unit-tested
+ * independently; this file focuses on wiring.
+ */
+
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
-  KeyIcon,
-  GlobeIcon,
   SpinnerGapIcon,
   CheckCircleIcon,
   XCircleIcon,
@@ -20,6 +33,10 @@ import type { QuickPreset } from "@/lib/provider-presets";
 import { ProviderModelEditor } from "@/components/chat/ProviderModelEditor";
 import { testProviderIPC, getOllamaModelsIPC, type OllamaModel } from "@/lib/ipc-client";
 import { PresetIcon } from "./PresetIcon";
+import { useApiKeyState } from "./forms/hooks/useApiKeyState";
+import { useBaseUrlState } from "./forms/hooks/useBaseUrlState";
+import { useModelSelection } from "./forms/hooks/useModelSelection";
+import { usePresetDraft } from "./forms/hooks/usePresetDraft";
 
 // AutoLink component to detect and render URLs as clickable links
 function AutoLink({ text }: { text: string }) {
@@ -90,9 +107,43 @@ export function ProviderConnectDialog({
   const { t, locale } = useTranslation();
   const isEdit = !!editProvider;
 
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [name, setName] = useState("");
+  // ── L2 hook state ──
+  const apiKeyState = useApiKeyState({
+    apiKey: editProvider?.api_key || "",
+  });
+  const baseUrlState = useBaseUrlState(
+    { baseUrl: editProvider?.base_url },
+    preset
+      ? {
+          defaultBaseUrl: preset.baseUrl,
+          endpointCandidates: (preset as { endpointCandidates?: string[] }).endpointCandidates,
+        }
+      : undefined,
+  );
+  const modelSelection = useModelSelection({
+    initialEnabled: useMemo(() => {
+      // Populate enabled models from the edit provider's options_json.
+      if (!editProvider) return [];
+      try {
+        const opts =
+          typeof editProvider.options_json === "string"
+            ? JSON.parse(editProvider.options_json || "{}")
+            : editProvider.options_json || {};
+        return (opts as { enabled_models?: string[] }).enabled_models || [];
+      } catch {
+        return [];
+      }
+    }, [editProvider]),
+  });
+  const presetDraft = usePresetDraft({
+    initialPreset: preset,
+    initialProviderId: editProvider?.id || "",
+    initialName: editProvider?.name || preset?.name || "",
+    initialApiKey: editProvider?.api_key || undefined,
+    initialBaseUrl: editProvider?.base_url || preset?.baseUrl,
+  });
+
+  // ── UI-only state ──
   const [extraEnv, setExtraEnv] = useState("{}");
   const [modelName, setModelName] = useState("");
   const [mapSonnet, setMapSonnet] = useState("");
@@ -100,7 +151,6 @@ export function ProviderConnectDialog({
   const [mapHaiku, setMapHaiku] = useState("");
   const [titleModel, setTitleModel] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -110,9 +160,6 @@ export function ProviderConnectDialog({
     error?: string;
     suggestion?: string;
   } | null>(null);
-  const [enabledModels, setEnabledModels] = useState<string[]>([]);
-
-  // Ollama models fetching
   const [ollamaModels, setOllamaModels] = useState<OllamaModel[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [fetchModelsError, setFetchModelsError] = useState<string | null>(null);
@@ -123,13 +170,14 @@ export function ProviderConnectDialog({
   useEffect(() => {
     const timer = setTimeout(() => {
       if (!preset) return;
-      const hasBaseUrl = !!(baseUrl.trim() || preset.baseUrl);
+      const hasBaseUrl = !!(baseUrlState.baseUrl.trim() || preset.baseUrl);
       const needsModel = preset.fields.includes("model_names");
       setModelWarning(hasBaseUrl && needsModel && !modelName.trim());
     }, 300);
     return () => clearTimeout(timer);
-  }, [baseUrl, modelName, preset]);
+  }, [baseUrlState.baseUrl, modelName, preset]);
 
+  // Reset form on dialog open / preset / editProvider change
   useEffect(() => {
     if (!open || !preset) return;
     setError(null);
@@ -137,20 +185,16 @@ export function ProviderConnectDialog({
     setTesting(false);
     setTestResult(null);
     setShowAdvanced(false);
-    setShowKey(false);
-    // Reset Ollama states
     setOllamaModels([]);
     setFetchModelsError(null);
     setShowModelSelector(false);
 
     if (isEdit && editProvider) {
-      setName(editProvider.name);
-      setBaseUrl(editProvider.base_url);
+      presetDraft.setName(editProvider.name);
+      baseUrlState.setBaseUrl(editProvider.base_url);
       setExtraEnv(editProvider.extra_env || JSON.stringify(preset.defaultEnvOverrides));
-      setApiKey(editProvider.api_key || "");
+      apiKeyState.setApiKey(editProvider.api_key || "");
 
-      // Parse role_models_json for model mapping
-      // Use first preset model as fallback for missing values
       const firstPresetModel = preset.defaultModels?.[0]?.modelId || "";
       try {
         const rm = JSON.parse(editProvider.role_models_json || "{}");
@@ -164,62 +208,59 @@ export function ProviderConnectDialog({
         setMapOpus(firstPresetModel);
         setMapHaiku(firstPresetModel);
       }
-      // Parse enabled_models and title_model from options_json
-      // Note: Electron IPC may auto-parse JSON, so options_json might be an object
       try {
-        const opts = typeof editProvider.options_json === 'string'
-          ? JSON.parse(editProvider.options_json || "{}")
-          : (editProvider.options_json || {});
-        console.log("[ProviderConnectDialog] Parsed options:", opts);
-        setEnabledModels(opts.enabled_models || []);
-        setTitleModel(opts.title_model || "");
-      } catch (e) {
-        console.log("[ProviderConnectDialog] Failed to parse options:", e);
-        setEnabledModels([]);
+        const opts =
+          typeof editProvider.options_json === "string"
+            ? JSON.parse(editProvider.options_json || "{}")
+            : editProvider.options_json || {};
+        modelSelection.setEnabledFromProp(
+          (opts as { enabled_models?: string[] }).enabled_models || [],
+        );
+        setTitleModel((opts as { title_model?: string }).title_model || "");
+      } catch {
+        modelSelection.setEnabledFromProp([]);
         setTitleModel("");
       }
     } else {
-      setBaseUrl(preset.baseUrl);
-      setName(preset.name);
+      baseUrlState.setBaseUrl(preset.baseUrl);
+      presetDraft.setName(preset.name);
       setExtraEnv(JSON.stringify(preset.defaultEnvOverrides || {}));
-      setApiKey("");
+      apiKeyState.setApiKey("");
       setModelName("");
       setMapSonnet("");
       setMapOpus("");
       setMapHaiku("");
       setTitleModel("");
-      // Initialize enabled models from preset defaults
-      setEnabledModels(
-        preset.defaultModels?.map(m => m.upstreamModelId || m.modelId) || []
+      modelSelection.setEnabledFromProp(
+        preset.defaultModels?.map((m) => m.upstreamModelId || m.modelId) || [],
       );
     }
+    // We intentionally do not depend on the hook setters; they are
+    // stable callbacks and re-running this effect would cause loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, preset, isEdit, editProvider]);
 
   // Close model selector when clicking outside
   useEffect(() => {
     if (!showModelSelector) return;
-
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest('.ollama-model-selector')) {
+      if (!target.closest(".ollama-model-selector")) {
         setShowModelSelector(false);
       }
     };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showModelSelector]);
-
-  // Must be before any conditional returns (React hooks rules)
-  const handleEnabledModelsChange = useCallback((models: string[]) => {
-    setEnabledModels(models);
-  }, []);
 
   if (!preset) return null;
 
-  // Check if this is an Ollama preset
-  const isOllamaPreset = preset.key === 'ollama' || preset.provider_type === 'ollama' ||
-    (baseUrl && (baseUrl.includes('11434') || baseUrl.includes('ollama')));
+  const isOllamaPreset =
+    preset.key === "ollama" ||
+    preset.provider_type === "ollama" ||
+    (baseUrlState.baseUrl &&
+      (baseUrlState.baseUrl.includes("11434") ||
+        baseUrlState.baseUrl.includes("ollama")));
 
   // Fetch Ollama models
   const handleFetchOllamaModels = async () => {
@@ -228,7 +269,7 @@ export function ProviderConnectDialog({
     setOllamaModels([]);
 
     try {
-      const result = await getOllamaModelsIPC(baseUrl || preset.baseUrl);
+      const result = await getOllamaModelsIPC(baseUrlState.baseUrl || preset.baseUrl);
       if (result.success && result.models) {
         setOllamaModels(result.models);
         setShowModelSelector(true);
@@ -242,7 +283,6 @@ export function ProviderConnectDialog({
     }
   };
 
-  // Select Ollama model
   const handleSelectOllamaModel = (modelId: string) => {
     setModelName(modelId);
     setShowModelSelector(false);
@@ -256,8 +296,8 @@ export function ProviderConnectDialog({
     try {
       const data = await testProviderIPC({
         provider_type: preset.provider_type,
-        base_url: baseUrl || preset.baseUrl,
-        api_key: apiKey,
+        base_url: baseUrlState.baseUrl || preset.baseUrl,
+        api_key: apiKeyState.apiKey,
         auth_style: preset.authStyle,
         model: modelName || preset.defaultModels?.[0]?.modelId || "",
       });
@@ -265,9 +305,8 @@ export function ProviderConnectDialog({
       if (data.success) {
         setTestResult({ success: true, message: data.message || t("provider.connectionSuccess") });
       } else {
-        // Use i18n for known error codes, fallback to raw message
         let errorMsg = data.error?.message || t("provider.connectionFailed");
-        if (data.error?.code === 'NO_MODEL') {
+        if (data.error?.code === "NO_MODEL") {
           errorMsg = t("provider.noModel");
         }
         setTestResult({
@@ -287,33 +326,19 @@ export function ProviderConnectDialog({
     e.preventDefault();
     setError(null);
 
-    console.log("[ProviderConnectDialog] handleSubmit called", {
-      isEdit,
-      enabledModels,
-      editProvider: editProvider?.id,
-    });
-
-    if (preset.fields.includes("api_key") && !apiKey && !isEdit) {
+    if (preset.fields.includes("api_key") && !apiKeyState.apiKey && !isEdit) {
       setError(t("provider.apiKeyRequired"));
       return;
     }
 
     // Build role_models_json from model mapping
-    // Use first preset model as fallback when UI fields don't provide values
     let roleModelsJson = "{}";
     const roleModels: Record<string, string> = {};
     const firstPresetModel = preset.defaultModels?.[0]?.modelId || "";
-
-    // Start with first preset model as default
-    if (firstPresetModel) {
-      roleModels.default = firstPresetModel;
-    }
-
-    // Override with UI values if present (user explicitly set them)
+    if (firstPresetModel) roleModels.default = firstPresetModel;
     if (preset.fields.includes("model_names") && modelName.trim()) {
       roleModels.default = modelName.trim();
     }
-
     if (preset.fields.includes("model_mapping")) {
       const hasAny = mapSonnet.trim() || mapOpus.trim() || mapHaiku.trim();
       if (hasAny) {
@@ -326,12 +351,10 @@ export function ProviderConnectDialog({
         roleModels.haiku = mapHaiku.trim();
       }
     }
-
     if (Object.keys(roleModels).length > 0) {
       roleModelsJson = JSON.stringify(roleModels);
     }
 
-    // Validate JSON fields
     try {
       JSON.parse(extraEnv);
     } catch {
@@ -341,30 +364,22 @@ export function ProviderConnectDialog({
 
     setSaving(true);
     try {
-      // Build options_json with enabled_models and title_model
       const optionsJson: Record<string, unknown> = {};
-      if (enabledModels.length > 0) {
-        optionsJson.enabled_models = enabledModels;
-      }
-      if (titleModel.trim()) {
-        optionsJson.title_model = titleModel.trim();
-      }
-      const optionsJsonString = Object.keys(optionsJson).length > 0 ? JSON.stringify(optionsJson) : undefined;
-
-      console.log("[ProviderConnectDialog] Submitting data:", {
-        enabled_models: enabledModels.length > 0 ? enabledModels : undefined,
-        options_json: optionsJsonString,
-      });
+      const enabledList = Array.from(modelSelection.enabledModels);
+      if (enabledList.length > 0) optionsJson.enabled_models = enabledList;
+      if (titleModel.trim()) optionsJson.title_model = titleModel.trim();
+      const optionsJsonString =
+        Object.keys(optionsJson).length > 0 ? JSON.stringify(optionsJson) : undefined;
 
       await onSave({
-        name: name.trim() || preset.name,
+        name: presetDraft.draftLlmProvider?.name?.trim() || preset.name,
         provider_type: preset.provider_type,
         protocol: preset.protocol,
-        base_url: baseUrl.trim() || preset.baseUrl,
-        api_key: apiKey,
+        base_url: baseUrlState.baseUrl.trim() || preset.baseUrl,
+        api_key: apiKeyState.apiKey,
         extra_env: extraEnv,
         role_models_json: roleModelsJson,
-        enabled_models: enabledModels.length > 0 ? enabledModels : undefined,
+        enabled_models: enabledList.length > 0 ? enabledList : undefined,
         options_json: optionsJsonString,
       });
       onOpenChange(false);
@@ -376,23 +391,26 @@ export function ProviderConnectDialog({
   };
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center ${open ? "" : "hidden"}`}>
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center ${
+        open ? "" : "hidden"
+      }`}
+    >
       {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={() => onOpenChange(false)}
-      />
+      <div className="absolute inset-0 bg-black/50" onClick={() => onOpenChange(false)} />
 
-      {/* Dialog - matching settings card style with solid background */}
+      {/* Dialog */}
       <div className="relative z-10 w-full max-w-md mx-4 bg-[var(--main-bg)] border border-border/50 rounded-xl shadow-xl overflow-hidden max-h-[90vh] overflow-y-auto">
-        {/* Header - matching settings section header */}
+        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border/30 bg-[var(--main-bg)]">
           <div className="flex items-center gap-3">
             <div className="shrink-0 text-muted-foreground">
               <PresetIcon iconKey={preset.iconKey} />
             </div>
             <div>
-              <h2 className="text-sm font-semibold">{isEdit ? t("provider.edit") : t("provider.connect")} {preset.name}</h2>
+              <h2 className="text-sm font-semibold">
+                {isEdit ? t("provider.edit") : t("provider.connect")} {preset.name}
+              </h2>
               <p className="text-xs text-muted-foreground mt-0.5">{preset.descriptionZh}</p>
             </div>
           </div>
@@ -404,17 +422,21 @@ export function ProviderConnectDialog({
           </button>
         </div>
 
-        {/* Meta info - compact badge style */}
+        {/* Meta info */}
         {preset.meta && (
           <div className="px-4 pt-3 pb-1">
             <div className="flex items-center gap-2 flex-wrap">
               {preset.meta.billingModel && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-chip text-muted-foreground border border-border/30">
-                  {preset.meta.billingModel === "token_plan" ? t("provider.tokenPlan")
-                    : preset.meta.billingModel === "coding_plan" ? t("provider.codingPlan")
-                    : preset.meta.billingModel === "pay_as_you_go" ? t("provider.payAsYouGo")
-                    : preset.meta.billingModel === "free" ? t("provider.free")
-                    : preset.meta.billingModel}
+                  {preset.meta.billingModel === "token_plan"
+                    ? t("provider.tokenPlan")
+                    : preset.meta.billingModel === "coding_plan"
+                      ? t("provider.codingPlan")
+                      : preset.meta.billingModel === "pay_as_you_go"
+                        ? t("provider.payAsYouGo")
+                        : preset.meta.billingModel === "free"
+                          ? t("provider.free")
+                          : preset.meta.billingModel}
                 </span>
               )}
               {preset.meta.apiKeyUrl && (
@@ -441,7 +463,7 @@ export function ProviderConnectDialog({
           </div>
         )}
 
-        {/* Form - matching settings row style */}
+        {/* Form */}
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {/* Name field */}
           {preset.fields.includes("name") && (
@@ -449,8 +471,8 @@ export function ProviderConnectDialog({
               <label className="text-xs font-medium text-muted-foreground">{t("provider.name")}</label>
               <input
                 type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                value={presetDraft.draftLlmProvider?.name || ""}
+                onChange={(e) => presetDraft.setName(e.target.value)}
                 placeholder={preset.name}
                 className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50"
               />
@@ -463,15 +485,15 @@ export function ProviderConnectDialog({
               <label className="text-xs font-medium text-muted-foreground">Base URL</label>
               <input
                 type="text"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
+                value={baseUrlState.baseUrl}
+                onChange={(e) => baseUrlState.setBaseUrl(e.target.value)}
                 placeholder={preset.baseUrl}
                 className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
               />
             </div>
           )}
 
-          {/* API Key with visibility toggle */}
+          {/* API Key */}
           {preset.fields.includes("api_key") && (
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">
@@ -479,23 +501,30 @@ export function ProviderConnectDialog({
               </label>
               <div className="flex gap-2">
                 <input
-                  type={showKey ? "text" : "password"}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  type={apiKeyState.revealApiKey ? "text" : "password"}
+                  value={
+                    apiKeyState.hasUserApiKey
+                      ? apiKeyState.apiKey
+                      : apiKeyState.maskedApiKey
+                  }
+                  onChange={(e) => apiKeyState.setApiKey(e.target.value)}
                   placeholder={preset.authStyle === "auth_token" ? "token-..." : "sk-..."}
                   className="flex-1 px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
                   autoFocus
                 />
                 <button
                   type="button"
-                  onClick={() => setShowKey(!showKey)}
+                  onClick={apiKeyState.toggleReveal}
                   className="px-3 py-2 rounded-lg border border-border/50 bg-chip text-muted-foreground hover:text-foreground"
                 >
-                  {showKey ? <EyeSlashIcon size={14} /> : <EyeIcon size={14} />}
+                  {apiKeyState.revealApiKey ? <EyeSlashIcon size={14} /> : <EyeIcon size={14} />}
                 </button>
               </div>
               <p className="text-[10px] text-muted-foreground">
-                {t("provider.authMethod")}: {preset.authStyle === "auth_token" ? "Authorization: Bearer ..." : "X-Api-Key: ..."}
+                {t("provider.authMethod")}:{" "}
+                {preset.authStyle === "auth_token"
+                  ? "Authorization: Bearer ..."
+                  : "X-Api-Key: ..."}
               </p>
             </div>
           )}
@@ -504,8 +533,9 @@ export function ProviderConnectDialog({
           {preset.fields.includes("model_names") && (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-muted-foreground">{t("provider.modelName")}</label>
-                {/* Ollama model fetch button */}
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t("provider.modelName")}
+                </label>
                 {isOllamaPreset && (
                   <button
                     type="button"
@@ -525,7 +555,6 @@ export function ProviderConnectDialog({
                 )}
               </div>
 
-              {/* Model input with dropdown for Ollama */}
               <div className="relative">
                 <input
                   type="text"
@@ -534,24 +563,26 @@ export function ProviderConnectDialog({
                   placeholder={isOllamaPreset ? "llama3.2" : "ark-code-latest"}
                   className={`w-full px-3 py-2 rounded-lg border text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono ${
                     modelWarning
-                      ? 'border-destructive/70 focus:ring-destructive/50'
-                      : 'border-border/50'
+                      ? "border-destructive/70 focus:ring-destructive/50"
+                      : "border-border/50"
                   }`}
                 />
 
-                {/* Model name warning */}
                 {modelWarning && (
                   <p className="text-[11px] text-destructive mt-1">
-                    {locale === "zh" ? "请填写模型名称，Gateway 需要模型配置才能正常工作" : "Model name is required - Gateway needs a model to function properly"}
+                    {locale === "zh"
+                      ? "请填写模型名称，Gateway 需要模型配置才能正常工作"
+                      : "Model name is required - Gateway needs a model to function properly"}
                   </p>
                 )}
 
-                {/* Ollama model selector dropdown */}
                 {isOllamaPreset && showModelSelector && ollamaModels.length > 0 && (
                   <div className="ollama-model-selector absolute z-20 mt-1 w-full bg-[var(--main-bg)] border border-border/50 rounded-lg shadow-lg max-h-48 overflow-y-auto">
                     <div className="p-1">
                       <div className="text-[10px] text-muted-foreground px-2 py-1 border-b border-border/30">
-                        {locale === "zh" ? `选择本地模型 (${ollamaModels.length}个)` : `Select local model (${ollamaModels.length})`}
+                        {locale === "zh"
+                          ? `选择本地模型 (${ollamaModels.length}个)`
+                          : `Select local model (${ollamaModels.length})`}
                       </div>
                       {ollamaModels.map((model) => (
                         <button
@@ -573,10 +604,10 @@ export function ProviderConnectDialog({
                 )}
               </div>
 
-              {/* Error message */}
               {isOllamaPreset && fetchModelsError && (
                 <p className="text-[10px] text-destructive">
-                  {t("configStep.fetchFailed")}{fetchModelsError}
+                  {t("configStep.fetchFailed")}
+                  {fetchModelsError}
                 </p>
               )}
 
@@ -591,7 +622,9 @@ export function ProviderConnectDialog({
           {/* Extra Env */}
           {preset.fields.includes("extra_env") && (
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">{t("provider.envVars")}</label>
+              <label className="text-xs font-medium text-muted-foreground">
+                {t("provider.envVars")}
+              </label>
               <textarea
                 value={extraEnv}
                 onChange={(e) => setExtraEnv(e.target.value)}
@@ -606,18 +639,18 @@ export function ProviderConnectDialog({
           {isEdit && editProvider && (
             <ProviderModelEditor
               providerId={editProvider.id}
-              enabledModelIds={enabledModels}
-              onChange={handleEnabledModelsChange}
+              enabledModelIds={Array.from(modelSelection.enabledModels)}
+              onChange={(ids) => modelSelection.setEnabledFromProp(ids)}
             />
           )}
 
-          {/* Title Model - for session title generation */}
+          {/* Title Model */}
           {isEdit && editProvider && (
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">{t("provider.titleModel")}</label>
-              <p className="text-[10px] text-muted-foreground">
-                {t("provider.titleModelHint")}
-              </p>
+              <label className="text-xs font-medium text-muted-foreground">
+                {t("provider.titleModel")}
+              </label>
+              <p className="text-[10px] text-muted-foreground">{t("provider.titleModelHint")}</p>
               <input
                 type="text"
                 value={titleModel}
@@ -642,15 +675,18 @@ export function ProviderConnectDialog({
 
               {showAdvanced && (
                 <div className="space-y-4 border-t border-border/50 pt-3">
-                  {/* Model mapping */}
                   {preset.fields.includes("model_mapping") && (
                     <div className="space-y-2">
-                      <label className="text-xs font-medium text-muted-foreground">{t("provider.modelMapping")}</label>
+                      <label className="text-xs font-medium text-muted-foreground">
+                        {t("provider.modelMapping")}
+                      </label>
                       <p className="text-[10px] text-muted-foreground">
                         {t("provider.modelMappingHint")}
                       </p>
                       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 items-center">
-                        <span className="text-xs text-muted-foreground text-right">{t("provider.Sonnet")}</span>
+                        <span className="text-xs text-muted-foreground text-right">
+                          {t("provider.Sonnet")}
+                        </span>
                         <input
                           type="text"
                           value={mapSonnet}
@@ -658,7 +694,9 @@ export function ProviderConnectDialog({
                           placeholder="claude-sonnet-4-6"
                           className="w-full px-3 py-1.5 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
                         />
-                        <span className="text-xs text-muted-foreground text-right">{t("provider.Opus")}</span>
+                        <span className="text-xs text-muted-foreground text-right">
+                          {t("provider.Opus")}
+                        </span>
                         <input
                           type="text"
                           value={mapOpus}
@@ -666,7 +704,9 @@ export function ProviderConnectDialog({
                           placeholder="claude-opus-4-6"
                           className="w-full px-3 py-1.5 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
                         />
-                        <span className="text-xs text-muted-foreground text-right">{t("provider.Haiku")}</span>
+                        <span className="text-xs text-muted-foreground text-right">
+                          {t("provider.Haiku")}
+                        </span>
                         <input
                           type="text"
                           value={mapHaiku}
@@ -679,7 +719,9 @@ export function ProviderConnectDialog({
                   )}
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-muted-foreground">{t("provider.envVars")}</label>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      {t("provider.envVars")}
+                    </label>
                     <textarea
                       value={extraEnv}
                       onChange={(e) => setExtraEnv(e.target.value)}
@@ -693,13 +735,15 @@ export function ProviderConnectDialog({
             </>
           )}
 
-          {/* Test Result - matching settings error/success style */}
+          {/* Test Result */}
           {testResult && (
-            <div className={`rounded-lg px-3 py-2 text-sm border ${
-              testResult.success
-                ? "bg-green-500/10 border-green-500/30 text-green-600"
-                : "bg-destructive/10 border-destructive/30 text-destructive"
-            }`}>
+            <div
+              className={`rounded-lg px-3 py-2 text-sm border ${
+                testResult.success
+                  ? "bg-green-500/10 border-green-500/30 text-green-600"
+                  : "bg-destructive/10 border-destructive/30 text-destructive"
+              }`}
+            >
               <div className="flex items-center gap-2">
                 {testResult.success ? (
                   <CheckCircleIcon size={14} />
@@ -720,7 +764,7 @@ export function ProviderConnectDialog({
             </div>
           )}
 
-          {/* Footer - matching settings button style */}
+          {/* Footer */}
           <div className="flex items-center justify-between pt-2 border-t border-border/30">
             <button
               type="button"
@@ -733,10 +777,17 @@ export function ProviderConnectDialog({
               <button
                 type="button"
                 onClick={handleTestConnection}
-                disabled={testing || (!apiKey && preset.fields.includes("api_key"))}
+                disabled={
+                  testing ||
+                  (!apiKeyState.apiKey && preset.fields.includes("api_key"))
+                }
                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border/50 bg-chip text-xs font-medium hover:bg-accent/10 disabled:opacity-50"
               >
-                {testing ? <SpinnerGapIcon size={12} className="animate-spin" /> : <CircleNotchIcon size={12} />}
+                {testing ? (
+                  <SpinnerGapIcon size={12} className="animate-spin" />
+                ) : (
+                  <CircleNotchIcon size={12} />
+                )}
                 {testing ? t("settings.providers.testing") : t("bridge.testConnection")}
               </button>
               <button

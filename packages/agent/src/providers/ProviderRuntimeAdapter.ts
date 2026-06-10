@@ -266,3 +266,50 @@ export function toRuntimeConfigFromDomain(
     requestOptions,
   };
 }
+
+// =============================================================================
+// Authoritative LLM-client selector
+// =============================================================================
+//
+// New agent code MUST resolve the LLM client discriminator from a
+// `ProviderRuntimeConfig.apiFormat`, never from URL string sniffing.
+// This is the single boundary that replaces the legacy
+// `inferProvider(baseURL, providerType)` heuristic in
+// `packages/agent/src/llm/index.ts`.
+//
+// Mapping rules (Phase 3 contract):
+//   - 'openai-chat'    -> 'openai'    (OpenAI Chat Completions client)
+//   - 'openai-responses' -> 'openai'  (Phase 4: dedicated client)
+//   - 'gemini'         -> 'openai'    (Phase 3: OpenAI-compatible bridge)
+//   - 'anthropic'      -> 'anthropic' (Anthropic Messages client)
+//   - 'bedrock'        -> 'anthropic' (Anthropic wire-protocol on AWS)
+//   - 'vertex'         -> 'anthropic' (Anthropic wire-protocol on GCP)
+//   - 'ollama'         -> 'ollama'    (Ollama native client)
+//
+// If you are about to introduce a new `RuntimeApiFormat` value, you
+// must extend this function AND the LLMClient union
+// (`LLMClientOptions` in `llm/base.ts`). New values without a
+// resolver throw — fail loud, do not silently default to 'openai'.
+
+export function resolveLlmClientDiscriminator(
+  apiFormat: RuntimeApiFormat,
+): 'anthropic' | 'openai' | 'ollama' {
+  switch (apiFormat) {
+    case 'openai-chat':
+    case 'openai-responses':
+    case 'gemini':
+      return 'openai';
+    case 'anthropic':
+    case 'bedrock':
+    case 'vertex':
+      return 'anthropic';
+    case 'ollama':
+      return 'ollama';
+    default: {
+      const exhaustive: never = apiFormat;
+      throw new Error(
+        `resolveLlmClientDiscriminator: unhandled apiFormat ${exhaustive as string}`,
+      );
+    }
+  }
+}

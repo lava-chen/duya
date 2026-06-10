@@ -80,9 +80,9 @@ describe('DuyaCliTool (unit)', () => {
     });
 
     it('rejects plugin with unknown subcommand', async () => {
-      const result = await tool.execute({ command: 'plugin', subcommand: 'install' });
+      const result = await tool.execute({ command: 'plugin', subcommand: 'not-a-subcommand' });
       expect(result.error).toBe(true);
-      expect(result.result).toMatch(/unknown subcommand 'install' for 'plugin'/);
+      expect(result.result).toMatch(/unknown subcommand 'not-a-subcommand' for 'plugin'/);
     });
 
     it('rejects plugin info without id (runner returns 64)', async () => {
@@ -204,6 +204,26 @@ describe('DuyaCliTool (unit)', () => {
   });
 
   describe('argv-style (Plan 99 — preferred)', () => {
+    it('dispatches status via argv without requiring an explicit default subcommand', async () => {
+      const result = await tool.execute({ argv: ['status', '--format', 'json'] });
+      expect(result.error).toBeFalsy();
+      const payload = JSON.parse(result.result);
+      expect(payload.command).toBe('status');
+      expect(payload.subcommand).toBe(null);
+      expect(payload.exitCode).not.toBe(64);
+      expect(payload.stderr).not.toMatch(/unknown command: status/);
+    });
+
+    it('dispatches doctor via argv without requiring an explicit default subcommand', async () => {
+      const result = await tool.execute({ argv: ['doctor', '--format', 'json'] });
+      expect(result.error).toBeFalsy();
+      const payload = JSON.parse(result.result);
+      expect(payload.command).toBe('doctor');
+      expect(payload.subcommand).toBe(null);
+      expect(payload.exitCode).not.toBe(64);
+      expect(payload.stderr).not.toMatch(/unknown command: doctor/);
+    });
+
     it('dispatches cron list via argv', async () => {
       const result = await tool.execute({ argv: ['cron', 'list'] });
       expect(result.error).toBeFalsy();
@@ -256,11 +276,11 @@ describe('DuyaCliTool (unit)', () => {
     });
 
     it('refuses unknown subcommand via argv', async () => {
-      const result = await tool.execute({ argv: ['plugin', 'install'] });
+      const result = await tool.execute({ argv: ['plugin', 'not-a-subcommand'] });
       expect(result.error).toBeFalsy();
       const payload = JSON.parse(result.result);
       expect(payload.exitCode).toBe(64);
-      expect(payload.stderr).toMatch(/unknown plugin subcommand: install/);
+      expect(payload.stderr).toMatch(/unknown plugin subcommand: not-a-subcommand/);
     });
 
     it('parses --yes flag for write operations', async () => {
@@ -361,6 +381,28 @@ describe('DuyaCliTool (unit)', () => {
     it('the agent tool enum does not include the removed "duya_config" command path', () => {
       const enum_ = ((tool.input_schema as Record<string, unknown>).properties as Record<string, Record<string, unknown>>).command.enum as string[];
       expect(enum_).not.toContain('duya_config');
+    });
+  });
+
+  describe('single-subcommand structured dispatch', () => {
+    it('dispatches status without a subcommand in structured mode', async () => {
+      const result = await tool.execute({ command: 'status', format: 'json' });
+      expect(result.error).toBeFalsy();
+      const payload = JSON.parse(result.result);
+      expect(payload.command).toBe('status');
+      expect(payload.subcommand).toBe(null);
+      expect(payload.exitCode).not.toBe(64);
+      expect(payload.stderr).not.toMatch(/unknown command: status/);
+    });
+
+    it('dispatches doctor without a subcommand in structured mode', async () => {
+      const result = await tool.execute({ command: 'doctor', format: 'json' });
+      expect(result.error).toBeFalsy();
+      const payload = JSON.parse(result.result);
+      expect(payload.command).toBe('doctor');
+      expect(payload.subcommand).toBe(null);
+      expect(payload.exitCode).not.toBe(64);
+      expect(payload.stderr).not.toMatch(/unknown command: doctor/);
     });
   });
 });

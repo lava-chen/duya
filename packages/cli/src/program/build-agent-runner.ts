@@ -132,7 +132,8 @@ export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult
       };
     }
 
-    const resolved = resolveSubcommand(CLI_DESCRIPTORS, inv.command, inv.subcommand);
+    const resolvedSubcommand = resolveInvocationSubcommand(inv.command, inv.subcommand);
+    const resolved = resolveSubcommand(CLI_DESCRIPTORS, inv.command, resolvedSubcommand);
     if (!resolved) {
       return {
         exitCode: 64,
@@ -194,6 +195,20 @@ export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult
     const { value, stdout, stderr } = await captureStreams(async () => sub.run(ctx));
     return { exitCode: value, stdout, stderr };
   };
+}
+
+function resolveInvocationSubcommand(
+  command: string,
+  subcommand: string | undefined,
+): string | undefined {
+  if (subcommand) return subcommand;
+  const cmd = CLI_DESCRIPTORS.find((d) => d.name === command);
+  if (!cmd?.subcommands) return undefined;
+  const subcommandNames = Object.keys(cmd.subcommands);
+  if (subcommandNames.length === 1 && subcommandNames[0] === 'default') {
+    return 'default';
+  }
+  return undefined;
 }
 
 /**
