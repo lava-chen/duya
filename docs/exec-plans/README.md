@@ -41,6 +41,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [83-plugin-codex-ui-alignment](./active/83-plugin-codex-ui-alignment.md) | Plugin Codex UI Alignment — capability marketplace and settings UX | P1 | Planning |
 | [84-research-agent-memory-and-literature-plugin](./active/84-research-agent-memory-and-literature-plugin.md) | Research Agent Memory + Literature Plugin — 独立文献插件与研究记忆子系统 | P1 | Planning |
 | [203-provider-ui-interaction-architecture](./active/203-provider-ui-interaction-architecture.md) | Provider UI 4 层架构（Query / Hook-per-concern / Orchestrator / Wiring）— Phase 1+2+3 之后的地基重构，**不改 UX 减 1900 行** | P1 | Phase 0–5 ✅ |
+| [204-provider-card-redesign](./active/204-provider-card-redesign.md) | Provider Card UX 重做 — 在 Plan 203 4 层架构之上，对齐 cc-switch 卡片视觉（hover 操作区 + 右上角 Add + 测试/限额查询/删除 + 删诊断）| P1 | Planning |
 
 ### Plugin System Enhancement Plans (Claude Code Alignment)
 
