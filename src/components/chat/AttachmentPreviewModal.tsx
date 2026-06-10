@@ -71,7 +71,6 @@ function PdfPreview({ attachment }: { attachment: FileAttachment }) {
   return (
     <div className="attachment-preview-pdf-wrapper">
       <div className="attachment-preview-pdf-header">
-        <span className="attachment-preview-pdf-filename">{attachment.name}</span>
         <button
           type="button"
           onClick={handleOpenInBrowser}

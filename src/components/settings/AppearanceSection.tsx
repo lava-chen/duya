@@ -37,12 +37,16 @@ export function AppearanceSection() {
 
   const fonts = FONT_KEYS.map(f => ({ value: f.value, label: t(f.key as TranslationKey) }));
   const [compactMode, setCompactMode] = useState(false);
+  const [messageFontSize, setMessageFontSize] = useState<"small" | "medium" | "large">("medium");
 
   useEffect(() => {
     if (settings) {
       setTheme((settings.theme as "light" | "dark" | "system") || "system");
       setFont(settings.font || "system");
       setCompactMode(settings.compactMode ?? false);
+      const size = (settings.messageFontSize as "small" | "medium" | "large") || "medium";
+      setMessageFontSize(size);
+      document.documentElement.setAttribute("data-message-font-size", size);
     }
   }, [settings]);
 
@@ -82,6 +86,13 @@ export function AppearanceSection() {
       root.classList.remove("compact");
     }
     await save({ compactMode: enabled });
+  };
+
+  const applyMessageFontSize = async (newSize: "small" | "medium" | "large") => {
+    setMessageFontSize(newSize);
+    const root = document.documentElement;
+    root.setAttribute("data-message-font-size", newSize);
+    await save({ messageFontSize: newSize });
   };
 
   if (loading) {
@@ -129,6 +140,20 @@ export function AppearanceSection() {
             onValueChange={applyFont}
             options={fonts}
           />
+          <div className="px-4 py-3.5 border-t border-border">
+            <label className="text-sm font-medium text-foreground block mb-3">
+              {t('settings.appearance.fontSize')}
+            </label>
+            <SettingsSegmented
+              value={messageFontSize}
+              onValueChange={(v) => applyMessageFontSize(v as "small" | "medium" | "large")}
+              options={[
+                { value: "small", label: t('settings.appearance.fontSizeSmall') },
+                { value: "medium", label: t('settings.appearance.fontSizeMedium') },
+                { value: "large", label: t('settings.appearance.fontSizeLarge') },
+              ]}
+            />
+          </div>
         </SettingsCard>
       </SettingsSection>
 

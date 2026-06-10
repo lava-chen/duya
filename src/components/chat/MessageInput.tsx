@@ -904,6 +904,7 @@ export function MessageInput({
                   id={file.id}
                   name={file.name}
                   thumbnail={file.displayUrl || file.thumbnail}
+                  url={file.url}
                   onRemove={removeFile}
                   width={104}
                 />

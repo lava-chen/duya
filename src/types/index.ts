@@ -87,6 +87,7 @@ export interface AppSettings {
   // Appearance settings
   font?: string;
   compactMode?: boolean;
+  messageFontSize?: 'small' | 'medium' | 'large';
   // Browser security settings
   blockedDomains: string[];
   // Favorite agent profiles for quick access (max 3)

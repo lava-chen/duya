@@ -209,7 +209,7 @@ export function AttachmentMenu({
         ref={buttonRef}
         type="button"
         onClick={handleToggle}
-        className="w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-200 bg-transparent hover:bg-muted group"
+        className="w-6 h-6 rounded-lg flex items-center justify-center transition-colors duration-200 hover:bg-[var(--surface-hover)] group"
         title={t('attachmentMenu.attach') || 'Attach'}
       >
         <PlusIcon

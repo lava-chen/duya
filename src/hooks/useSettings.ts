@@ -44,6 +44,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     // Appearance settings
     font: undefined,
     compactMode: false,
+    messageFontSize: 'medium',
     // Browser security settings
     blockedDomains: [],
     // Favorite agent profiles for quick access (max 3)
@@ -148,6 +149,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       // Appearance settings
       font: raw.font ?? defaults.font,
       compactMode: raw.compactMode === "true",
+      messageFontSize: (raw.messageFontSize as AppSettings['messageFontSize']) || defaults.messageFontSize,
       // Browser security settings
       blockedDomains: raw.blockedDomains ? JSON.parse(raw.blockedDomains) : defaults.blockedDomains,
       // Favorite agent profiles for quick access (max 3)
@@ -228,6 +230,7 @@ export function useSettings(): {
     // Appearance settings
     font: undefined,
     compactMode: false,
+    messageFontSize: 'medium',
     // Browser security settings
     blockedDomains: [],
     // Favorite agent profiles for quick access (max 3)

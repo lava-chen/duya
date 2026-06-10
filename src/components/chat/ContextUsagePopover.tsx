@@ -246,12 +246,13 @@ export function ContextUsagePopover({
         >
           {t('context.viewDetails')} ▸
         </button>
-        {onCompress && usage.state === 'critical' && (
+        {onCompress && usage.state !== 'normal' && (
           <button
             type="button"
             className="ctx-popover__compress"
             onClick={onCompress}
             disabled={isCompacting}
+            title={t('context.compress')}
           >
             {isCompacting
               ? t('context.compressing')

@@ -6112,7 +6112,7 @@ html.compact .panel-zone {
 .attachment-preview-pdf-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -6541,4 +6541,325 @@ html.compact .panel-zone {
 @keyframes message-input-drop-fade {
   from { opacity: 0; transform: scale(0.96); }
   to   { opacity: 1; transform: scale(1); }
+}
+
+/* Message font size presets */
+html[data-message-font-size="small"] .prose-sm,
+html[data-message-font-size="small"] .prose {
+  font-size: 13px !important;
+}
+
+html[data-message-font-size="small"] .prose-sm p,
+html[data-message-font-size="small"] .prose p {
+  font-size: inherit !important;
+}
+
+html[data-message-font-size="small"] .prose-sm h1,
+html[data-message-font-size="small"] .prose h1 {
+  font-size: 1.5em !important;
+}
+
+html[data-message-font-size="small"] .prose-sm h2,
+html[data-message-font-size="small"] .prose h2 {
+  font-size: 1.25em !important;
+}
+
+html[data-message-font-size="small"] .prose-sm h3,
+html[data-message-font-size="small"] .prose h3 {
+  font-size: 1.125em !important;
+}
+
+html[data-message-font-size="large"] .prose-sm,
+html[data-message-font-size="large"] .prose {
+  font-size: 17px !important;
+}
+
+html[data-message-font-size="large"] .prose-sm p,
+html[data-message-font-size="large"] .prose p {
+  font-size: inherit !important;
+}
+
+html[data-message-font-size="large"] .prose-sm h1,
+html[data-message-font-size="large"] .prose h1 {
+  font-size: 1.5em !important;
+}
+
+html[data-message-font-size="large"] .prose-sm h2,
+html[data-message-font-size="large"] .prose h2 {
+  font-size: 1.25em !important;
+}
+
+html[data-message-font-size="large"] .prose-sm h3,
+html[data-message-font-size="large"] .prose h3 {
+  font-size: 1.125em !important;
+}
+
+/* ============================================
+   Mailbox Panel Styles - Connected to Input (Plan 202)
+   ============================================ */
+
+.mailbox-panel-wrapper {
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 10;
+}
+
+.mailbox-panel {
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  overflow: hidden;
+}
+
+.mailbox-panel.resolved {
+  border-radius: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.mailbox-panel-body {
+  padding: 0.4rem 0.5rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.mailbox-panel-empty {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 0.5rem;
+  opacity: 0.7;
+}
+
+/* ============================================
+   MailboxBubble — compact single-row queue item
+   Sits inline in .mailbox-panel-body. Designed to
+   match the dark "继续" panel reference: one row
+   per pending instruction, kind chip + content,
+   subtle 2px left accent in the kind color.
+   ============================================ */
+
+.mailbox-bubble {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem 0.3rem 0.6rem;
+  border-radius: 0.3rem;
+  background: transparent;
+  border-left: 2px solid var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.2;
+  min-width: 0;
+  transition: background-color 0.12s ease;
+}
+
+.mailbox-bubble:hover {
+  background: var(--surface-hover);
+}
+
+.mailbox-bubble--cancelled {
+  opacity: 0.55;
+}
+
+.mailbox-bubble-content {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mailbox-bubble-content--cancelled {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.mailbox-bubble-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  /* Always visible — these are the row's primary actions. */
+}
+
+/* Hover-only action group (e.g. edit) — sits next to the always-visible
+   actions and fades in on hover so it doesn't clutter the row. */
+
+.mailbox-bubble-hover-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.mailbox-bubble:hover .mailbox-bubble-hover-actions,
+.mailbox-bubble:focus-within .mailbox-bubble-hover-actions {
+  opacity: 1;
+}
+
+.mailbox-bubble-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 0.25rem;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.mailbox-bubble-action:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.mailbox-bubble-action--danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+
+/* Editing state — replaces content + actions with an input + save button */
+
+.mailbox-bubble--editing {
+  gap: 0.4rem;
+}
+
+.mailbox-bubble-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 0.25rem;
+  outline: none;
+}
+
+.mailbox-bubble-save {
+  height: 24px;
+  padding: 0 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--main-bg);
+  background: var(--accent);
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+}
+
+.mailbox-bubble-save:hover {
+  opacity: 0.9;
+}
+
+/* ============================================
+   Streaming Input Bar Styles (Plan 202)
+   ============================================ */
+
+.streaming-input-bar-wrapper {
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 10;
+}
+
+.streaming-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem 0.75rem 0 0;
+  min-height: 36px;
+}
+
+.streaming-input-bar-resolved {
+  border-radius: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.streaming-input-bar-left,
+.streaming-input-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.streaming-input-bar-mid {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.streaming-input-bar-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.streaming-input-bar-selector:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.streaming-input-bar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.streaming-input-bar-icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.streaming-input-bar-stop-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.streaming-input-bar-stop-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
 }
