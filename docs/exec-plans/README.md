@@ -40,6 +40,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [82-researcher-codex-ui-alignment](./active/82-researcher-codex-ui-alignment.md) | Researcher Codex UI Alignment — Codex 级 Agent UX + 科研助手定位 | P0 | Planning |
 | [83-plugin-codex-ui-alignment](./active/83-plugin-codex-ui-alignment.md) | Plugin Codex UI Alignment — capability marketplace and settings UX | P1 | Planning |
 | [84-research-agent-memory-and-literature-plugin](./active/84-research-agent-memory-and-literature-plugin.md) | Research Agent Memory + Literature Plugin — 独立文献插件与研究记忆子系统 | P1 | Planning |
+| [203-provider-ui-interaction-architecture](./active/203-provider-ui-interaction-architecture.md) | Provider UI 4 层架构（Query / Hook-per-concern / Orchestrator / Wiring）— Phase 1+2+3 之后的地基重构，**不改 UX 减 1900 行** | P1 | Phase 0–5 ✅ |
 
 ### Plugin System Enhancement Plans (Claude Code Alignment)
 
