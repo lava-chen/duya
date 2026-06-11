@@ -1,43 +1,10 @@
 /**
- * src/lib/providers/hooks/useSetActiveProviderMutation.ts
- *
- * L1 React Query mutation for activating a provider.
- *
- * Plan 203 Phase 1.1.
+ * @deprecated Use useSetDefaultProviderMutation. The single-active
+ * concept is gone; setting the default is a soft preference, not a
+ * lock. This file is a thin shim that re-exports the new hook.
+ * Will be removed once all callers migrate.
  */
-
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { setActiveLlmProviderIPC } from '@/lib/ipc-client';
-import {
-  providersQueryKey,
-  modelCapabilitiesQueryKey,
-  providerHealthQueryKey,
-  providerModelsQueryKey,
-} from './queryKeys';
-
-export function useSetActiveProviderMutation() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (providerId: string) => setActiveLlmProviderIPC(providerId),
-    onSuccess: () => {
-      // The active provider tag moved; the full list and any per-provider
-      // caches that depend on the active state should refetch.
-      qc.invalidateQueries({ queryKey: providersQueryKey() });
-    },
-  });
-}
-
-/** Mutation that also invalidates a specific provider's capability /
- *  health / model caches. Use this from per-card actions. */
-export function useActivateProviderMutation() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (providerId: string) => setActiveLlmProviderIPC(providerId),
-    onSuccess: (_data, providerId) => {
-      qc.invalidateQueries({ queryKey: providersQueryKey() });
-      qc.invalidateQueries({ queryKey: modelCapabilitiesQueryKey(providerId) });
-      qc.invalidateQueries({ queryKey: providerModelsQueryKey(providerId) });
-      qc.invalidateQueries({ queryKey: providerHealthQueryKey(providerId) });
-    },
-  });
-}
+export {
+  useSetDefaultProviderMutation as useSetActiveProviderMutation,
+  useSetDefaultWithCascadeMutation as useActivateProviderMutation,
+} from './useSetDefaultProviderMutation';
