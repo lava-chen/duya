@@ -62,7 +62,11 @@ export interface Provider {
   providerType: string
   baseUrl: string
   apiKey: string
-  isActive: boolean
+  /** @deprecated Use isDefault. The single-active concept is gone;
+   *  this is kept as a transitional alias. */
+  isActive?: boolean
+  /** Soft default — implicit fallback for chat/vision/etc. */
+  isDefault?: boolean
   hasApiKey: boolean
   sortOrder: number
   extraEnv: string

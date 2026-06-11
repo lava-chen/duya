@@ -228,7 +228,10 @@ export function toRendererDto(llm: LlmProvider): {
   providerType: string;
   baseUrl: string;
   apiKey: string;
+  /** @deprecated Use isDefault. Transitional alias. */
   isActive: boolean;
+  /** Soft default — implicit fallback for chat/vision/etc. */
+  isDefault: boolean;
   hasApiKey: boolean;
   sortOrder: number;
   extraEnv: string;
@@ -241,7 +244,12 @@ export function toRendererDto(llm: LlmProvider): {
 } {
   // Re-derive a legacy ApiProvider and mask it. This keeps the renderer
   // contract stable while we move internal code to LlmProvider.
+  // We derive `isDefault` from the cache (AppConfig.defaultProviderId)
+  // so the legacy `isActive` boolean on the masked DTO stays
+  // consistent with the new "soft default" model.
   const legacy = toLegacyApiProvider(llm);
   const masked = maskApiProvider(legacy);
-  return { ...masked, isActive: legacy.isActive };
+  const isDefault =
+    Boolean(llm.meta?.tags?.includes('active')) || legacy.isActive === true;
+  return { ...masked, isActive: isDefault, isDefault };
 }

@@ -318,9 +318,19 @@ export function MessageInput({
           }
         });
 
-        // Find active provider for tracking
-        const activeProvider = providers.find((p) => p.isActive && (p.hasApiKey || p.providerType === 'ollama'))
-          || providers.find((p) => p.hasApiKey || p.providerType === 'ollama');
+        // Find the default provider for tracking. With the
+        // multi-provider model, the default is the implicit
+        // fallback; we surface it first, then fall back to the
+        // first configured provider. (The local `activeProviderId`
+        // state is a misnomer from the single-active era — it
+        // tracks the default, not a hard lock.)
+        const defaultProvider = providers.find(
+          (p) => p.isDefault && (p.hasApiKey || p.providerType === 'ollama'),
+        );
+        const activeProvider =
+          defaultProvider ?? providers.find(
+            (p) => p.hasApiKey || p.providerType === 'ollama',
+          );
 
         if (activeProvider) {
           setHasProvider(true);
@@ -340,12 +350,27 @@ export function MessageInput({
             continue;
           }
 
-          // Only use enabled_models from provider options
+          // Plan 209 P4-prime: build the per-provider model list
+          // with a layered fallback. The order is:
+          //   1. options.enabled_models (the authoritative list
+          //      written by ProviderEditView)
+          //   2. options.defaultModel (written by the legacy
+          //      ModelSelectionSection — the only field that
+          //      existed before Plan 205)
+          //   3. (no preset fallback here; the model list must
+          //      reflect user choice, not preset defaults)
+          //
+          // Without this fallback, providers whose only persisted
+          // option is `defaultModel` (e.g. set via the global
+          // ModelSelectionSection) appear with no models in the
+          // dropdown even though a working model is configured.
           let enabledModels: string[] = [];
           try {
             const opts = JSON.parse(provider.options || '{}');
             if (opts.enabled_models && Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0) {
               enabledModels = opts.enabled_models;
+            } else if (typeof opts.defaultModel === 'string' && opts.defaultModel.length > 0) {
+              enabledModels = [opts.defaultModel];
             }
           } catch { /* ignore */ }
 
