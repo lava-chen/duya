@@ -185,6 +185,11 @@ export interface ProviderAPI {
   upsertLlm: (data: Record<string, unknown>) => Promise<{ ok: boolean; provider?: unknown; code?: string; message?: string }>
   deleteLlm: (id: string) => Promise<boolean>
   setActiveLlm: (id: string) => Promise<boolean>
+  /** New soft-default channel. The default is the implicit fallback
+   *  used by chat/vision/etc when no per-thread provider is set. */
+  setDefaultLlm: (payload: { id: string | null }) => Promise<boolean>
+  /** Get the current default provider (masked DTO). */
+  getDefault: () => Promise<unknown | null>
   test: (payload: { providerId: string; presetKey?: string }) => Promise<{
     providerId: string
     ok: boolean
@@ -340,6 +345,33 @@ export interface NetAPI {
     success: boolean
     models?: Array<{ id: string; name: string; size?: number; modified_at?: string }>
     error?: string
+  }>
+  /**
+   * Plan 205 Phase H1: list available models for a provider so
+   * the user can pick from a dropdown in `ProviderEditView`.
+   * Returns the OpenAI-compatible `/v1/models` shape, normalized
+   * across vendors.
+   */
+  getProviderModels: (body: {
+    protocol?: string
+    base_url?: string
+    api_key?: string
+    auth_style?: string
+    /**
+     * Plan 209 fix-up: when set, the main process resolves the
+     * real on-disk api_key for the provider and uses it to drive
+     * the fetch. See `FetchProviderModelsBody` in
+     * `src/lib/ipc-client.ts` for the full resolution rules.
+     */
+    provider_id?: string
+  }) => Promise<{
+    success: boolean
+    models?: Array<{ id: string; ownedBy: string | null }>
+    error?: {
+      code: string
+      message: string
+      suggestion?: string
+    }
   }>
   testBridgeChannel: (channel: string) => Promise<{
     success: boolean
@@ -1563,6 +1595,9 @@ const electronAPI: ElectronAPI = {
     upsertLlm: (data: Record<string, unknown>) => ipcRenderer.invoke('provider:upsertLlm', data),
     deleteLlm: (id: string) => ipcRenderer.invoke('provider:deleteLlm', id),
     setActiveLlm: (id: string) => ipcRenderer.invoke('provider:setActiveLlm', id),
+    setDefaultLlm: (payload: { id: string | null }) =>
+      ipcRenderer.invoke('provider:setDefaultLlm', payload),
+    getDefault: () => ipcRenderer.invoke('provider:getDefault'),
     test: (payload: { providerId: string; presetKey?: string }) =>
       ipcRenderer.invoke('provider:test', payload),
     testModel: (payload: { providerId: string; modelId: string }) =>
@@ -1608,6 +1643,7 @@ const electronAPI: ElectronAPI = {
     testProvider: (body) => ipcRenderer.invoke('net:provider:test', body),
     getProviderUsage: (body) => ipcRenderer.invoke('net:provider:usage', body),
     getOllamaModels: (baseUrl: string) => ipcRenderer.invoke('net:ollama:models', baseUrl),
+    getProviderModels: (body) => ipcRenderer.invoke('net:provider:models', body),
     testBridgeChannel: (channel) => ipcRenderer.invoke('net:bridge:test', channel),
     weixinQrStart: () => ipcRenderer.invoke('net:weixin:qr:start'),
     weixinQrPoll: (sessionId: string) => ipcRenderer.invoke('net:weixin:qr:poll', sessionId),

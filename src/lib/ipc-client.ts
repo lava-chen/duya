@@ -471,6 +471,7 @@ export async function upsertProviderIPC(data: {
   apiKey?: string
   isActive?: boolean
   options?: Record<string, unknown>
+  notes?: string
 }): Promise<Provider | null> {
   const raw = await window.electronAPI!.provider!.upsert({
     id: data.id,
@@ -480,6 +481,7 @@ export async function upsertProviderIPC(data: {
     apiKey: data.apiKey,
     isActive: data.isActive,
     options: data.options,
+    notes: data.notes,
   }) as BackendProvider | null
   return raw ? backendProviderToProvider(raw) : null
 }
@@ -568,8 +570,20 @@ export async function deleteLlmProviderIPC(id: string): Promise<boolean> {
   return (await window.electronAPI!.provider!.deleteLlm(id)) as boolean
 }
 
+/**
+ * @deprecated Use setDefaultLlmProviderIPC. The single-active concept is
+ * gone; setting the default does NOT lock the other providers.
+ */
 export async function setActiveLlmProviderIPC(id: string): Promise<boolean> {
-  return (await window.electronAPI!.provider!.setActiveLlm(id)) as boolean
+  return setDefaultLlmProviderIPC(id)
+}
+
+export async function setDefaultLlmProviderIPC(id: string | null): Promise<boolean> {
+  return (await window.electronAPI!.provider!.setDefaultLlm({ id })) as boolean
+}
+
+export async function getDefaultLlmProviderIPC(): Promise<Provider | null> {
+  return (await window.electronAPI!.provider!.getDefault()) as Provider | null
 }
 
 export function testProviderIPC(
@@ -780,6 +794,55 @@ export interface OllamaModelsResult {
 
 export async function getOllamaModelsIPC(baseUrl: string): Promise<OllamaModelsResult> {
   return window.electronAPI!.net.getOllamaModels(baseUrl)
+}
+
+/**
+ * Plan 205 Phase H1: list available models for a provider. Used
+ * by `ProviderEditView` so the user can pick a model from a
+ * dropdown (the OpenAI-compatible `/v1/models` shape, normalized
+ * across vendors).
+ */
+export interface FetchedModel {
+  id: string;
+  ownedBy: string | null;
+}
+
+export interface FetchProviderModelsResult {
+  success: boolean;
+  models?: FetchedModel[];
+  error?: {
+    code: string;
+    message: string;
+    suggestion?: string;
+  };
+}
+
+export interface FetchProviderModelsBody {
+  protocol?: string;
+  base_url?: string;
+  api_key?: string;
+  auth_style?: 'api_key' | 'auth_token' | 'env_only' | 'custom_header';
+  /**
+   * Plan 209 fix-up: when the renderer is editing an existing
+   * provider and the user has NOT typed a new key, the on-disk
+   * key is used to drive the fetch. The renderer never sees the
+   * raw key, so it has to ask the main process to look it up.
+   *
+   * The IPC handler resolves this in priority order:
+   *   1. If `api_key` is a non-empty, non-masked string, use it
+   *      (the user retyped).
+   *   2. Else if `provider_id` is set and the on-disk provider
+   *      has a real key, use the on-disk key.
+   *   3. Else fall back to whatever was sent (likely empty →
+   *      NO_CREDENTIALS).
+   */
+  provider_id?: string;
+}
+
+export async function fetchProviderModelsIPC(
+  body: FetchProviderModelsBody,
+): Promise<FetchProviderModelsResult> {
+  return window.electronAPI!.net.getProviderModels(body);
 }
 
 export interface BridgeTestResult {
