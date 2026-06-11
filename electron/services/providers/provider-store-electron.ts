@@ -29,8 +29,12 @@ class ConfigManagerReader implements ProviderStoreReader {
   readOne(id: string) {
     return this.cm.getAllProviders()[id];
   }
+  /** @deprecated Use readDefault. */
   readActive() {
-    return this.cm.getActiveProvider();
+    return this.cm.getDefaultProvider();
+  }
+  readDefault() {
+    return this.cm.getDefaultProvider();
   }
   writeAll(map: Record<string, ApiProvider>): boolean {
     return this.cm.setConfig('apiProviders', map, 'renderer');
