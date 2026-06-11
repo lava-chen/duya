@@ -373,6 +373,46 @@ proc.on('exit', (code) => {
 
 Renderer 通过 `agent:disconnected` 感知 Agent 崩溃，已落库的消息不丢失。
 
+### Provider 模型（多服务商并存）
+
+DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `settings.json` 中配置任意数量的 LLM 服务商，每位服务商都**可独立选用**。系统不再强制全局"唯一活跃服务商"约束。
+
+#### 数据结构
+
+- **`AppConfig.apiProviders: Record<string, ApiProvider>`** — 全部已配置服务商，按 id 索引。
+- **`AppConfig.defaultProviderId: string | null`** — **软默认**。仅作为隐式回退，不锁定其他服务商。
+- **渲染层 DTO (`RendererLlmProviderDTO.isDefault`)** — 由 `defaultProviderId` 派生；取代旧字段 `isActive`。
+
+#### 路由优先级
+
+会话、视觉、网关、Wiki Agent、标题生成、嵌入、定时任务等子系统，按以下优先级选择服务商：
+
+1. **会话级 pin** — 主进程 `AgentProcessPool` 接收渲染层 `setSessionProvider(sessionId, providerId)`，将该会话钉到指定服务商。
+2. **任务级显式选择** — 视觉 / 网关 / 嵌入等子系统可以显式传入 `providerId`。
+3. **软默认** — `AppConfig.defaultProviderId`。
+4. **首个可用服务商** — 配置中第一个 `hasApiKey` 为 `true`（或 `providerType === 'ollama'`）的条目。
+5. **未配置** — `sendProviderInit` 记录 WARN 日志并跳过 init，UI 暴露"未配置默认服务商"提示。
+
+#### 迁移
+
+`multi-provider-v1` 迁移在 `ConfigManager` 加载时执行一次：
+
+- 若 `defaultProviderId` 未设置且**有且仅有一个** `isActive=true` 的服务商，则将该 id 写入 `defaultProviderId`。
+- 清除所有 `isActive` 标志（让 `isDefault` 成为唯一权威状态）。
+- 标记 `migrations['multi-provider-v1'] = true`，防止重入。
+
+#### 受影响的子模块
+
+| 子模块 | 行为 |
+|:---|:---|
+| Agent Process Pool | 优先使用 `RunningProcess.providerId`，回退到 `defaultProviderId`；切换 provider 触发 `reinitProcess` |
+| 视觉 | `providerId` → `defaultProviderId` → 首个可用 |
+| 网关 / Wiki Agent / 标题生成 / 嵌入 | 同上 |
+| 定时任务 | 同上 |
+| Provider UI 卡片 | 旧 "In use" / "Enable" 改为 "Default" / "Set as default"；不再隐藏非默认卡片的 delete 按钮 |
+| 设置面板 | 新增 **Default Provider** 区块，使用 `ProviderPickerView` |
+| CLI | 新增 `duya config provider set-default [id] --clear`；`provider activate` 标记为 deprecated |
+
 ### 安全扫描系统
 
 DUYA 实现了多层安全扫描机制，防止提示词注入和恶意代码执行：
