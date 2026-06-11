@@ -4,7 +4,7 @@
  * Plan 203 Phase 3.3: the L4 orchestrator. Pure presentation:
  *
  *   1. Reads the provider list via `useProvidersQuery` (L1).
- *   2. Reads the active provider id via `useActiveProviderId`.
+ *   2. Reads the default provider id via `useDefaultProviderId`.
  *   3. Renders a `ProviderRow` per provider. Each row calls
  *      `useProviderCardState` (L4 hook) — see `ProviderRow`.
  *   4. Each row contains the `ProviderActions` action cluster.
@@ -42,7 +42,7 @@
 
 import { useMemo, useCallback } from 'react';
 import { useProvidersQuery } from '@/lib/providers/hooks/useProvidersQuery';
-import { useActiveProviderId } from './hooks/useActiveProviderId';
+import { useDefaultProviderId } from './hooks/useDefaultProviderId';
 import { useProviderCardState } from './hooks/useProviderCardState';
 import { useQuotaNavigation } from './hooks/useQuotaNavigation';
 import { ProviderActions } from './ProviderActions';
@@ -57,7 +57,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 export interface ProviderListProps {
   /** The appId binding. Reserved for Plan 205; today always 'duya'. */
   appId: AppId;
-  /** Switch (set the provider as active). */
+  /** Switch (set the provider as the soft default). */
   onSwitch: (id: string) => void;
   /** Open the edit dialog for the provider. */
   onEdit: (provider: RendererLlmProviderDTO) => void;
@@ -135,7 +135,7 @@ function getPresetWebsite(
 function ProviderRow(props: {
   provider: RendererLlmProviderDTO;
   appId: AppId;
-  activeProviderId: string | null;
+  defaultProviderId: string | null;
   isProxyTakeover: boolean;
   isTesting: boolean;
   canCheckQuota: boolean;
@@ -150,7 +150,7 @@ function ProviderRow(props: {
   const {
     provider: p,
     appId,
-    activeProviderId,
+    defaultProviderId,
     isProxyTakeover,
     isTesting,
     canCheckQuota,
@@ -164,7 +164,7 @@ function ProviderRow(props: {
   const card = useProviderCardState({
     provider: p,
     appId,
-    context: { activeProviderId, proxyTakeover: isProxyTakeover },
+    context: { defaultProviderId, proxyTakeover: isProxyTakeover },
   });
   const iconKey = getProviderIconKey(p.protocol, p.baseUrl);
   const website = getPresetWebsite(p);
@@ -177,39 +177,51 @@ function ProviderRow(props: {
     <div
       data-testid={`provider-card-${p.id}`}
       className={
-        'group relative overflow-hidden rounded-xl border border-border ' +
-        'bg-card text-card-foreground p-4 ' +
-        'transition-all duration-300 ' +
-        'hover:border-border-active hover:shadow-sm ' +
-        (card.isCurrent ? 'ring-1 ring-accent/40' : '')
+        // Plan 205 Phase L4: the card now has a clearly tinted
+        // background (`bg-surface/50` matches the duya
+        // settings card), `rounded-2xl` for a softer feel, and
+        // `p-5` for breathing room. The current provider gets a
+        // stronger visual signal: a tinted background tint
+        // (`bg-accent/[0.04]`) AND a `ring` border.
+        'group relative overflow-hidden rounded-2xl border p-5 transition-all duration-200 ' +
+        (card.isCurrent
+          ? 'bg-accent/[0.04] border-accent/40 ring-1 ring-accent/20 shadow-sm'
+          : 'bg-surface/40 border-border/50 hover:border-border-active hover:bg-surface/60 hover:shadow-sm')
       }
     >
       <div className="flex items-center gap-4">
-        <div className="h-10 w-10 shrink-0 rounded-lg bg-muted flex items-center justify-center border border-border group-hover:scale-105 transition-transform duration-300">
-          <PresetIcon iconKey={iconKey} size={20} />
+        <div className="h-11 w-11 shrink-0 rounded-xl bg-muted flex items-center justify-center border border-border/50 group-hover:scale-105 transition-transform duration-200">
+          <PresetIcon iconKey={iconKey} size={22} />
         </div>
-        <div className="flex-1 min-w-0 space-y-1">
+        <div className="flex-1 min-w-0 space-y-1.5">
           <div className="flex flex-wrap items-center gap-2 min-h-5">
-            <h3 className="text-sm font-semibold leading-none truncate">{p.name}</h3>
+            <h3 className="text-[15px] font-semibold leading-none truncate text-foreground">
+              {p.name}
+            </h3>
             <span
               className={
                 'text-[10px] px-1.5 py-0.5 rounded-md font-semibold ' +
                 (p.hasApiKey
-                  ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-                  : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300')
+                  ? 'bg-green-500/15 text-green-700 dark:text-green-300'
+                  : 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-300')
               }
             >
               {p.hasApiKey ? t('provider.configured') : t('provider.noKey')}
             </span>
-            {card.isCurrent && (
-              <span
-                data-testid={`provider-active-${p.id}`}
-                className="inline-flex items-center rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent border border-accent/20"
-              >
-                {t('provider.tooltip.inUse')}
-              </span>
-            )}
+            {/* The "In use" state is communicated via the
+                main button (disabled, check icon) and the
+                card's tinted background / ring border. A
+                separate badge would be redundant. */}
           </div>
+          {p.notes && (
+            <p
+              className="text-xs text-muted-foreground/80 max-w-[280px] truncate"
+              title={p.notes}
+              data-testid={`provider-card-notes-${p.id}`}
+            >
+              {p.notes}
+            </p>
+          )}
           {website && (
             <button
               type="button"
@@ -258,13 +270,13 @@ export function ProviderList({
   isProxyTakeover = false,
 }: ProviderListProps) {
   const { t } = useTranslation();
-  // Both `useProvidersQuery` and `useActiveProviderId` MUST be
+  // Both `useProvidersQuery` and `useDefaultProviderId` MUST be
   // called with the same `appId` so they read from the same
   // React Query cache entry. Today duya has a single appId, so
   // either both pass `appId` or neither does — passing `appId`
   // is the future-compatible path for Plan 205.
   const { data: providers = [], isLoading } = useProvidersQuery(appId);
-  const activeId = useActiveProviderId(appId);
+  const defaultId = useDefaultProviderId(appId);
 
   // Stable list, sorted by sortOrder. Memoized so the per-row
   // re-render is bounded to the row itself.
@@ -331,7 +343,7 @@ export function ProviderList({
           key={p.id}
           provider={p}
           appId={appId}
-          activeProviderId={activeId}
+          defaultProviderId={defaultId}
           isProxyTakeover={isProxyTakeover}
           isTesting={testingProviderIds?.has(p.id) ?? false}
           canCheckQuota={canCheckQuotaById.get(p.id) ?? false}

@@ -3,29 +3,34 @@
  *
  * Plan 203 Phase 3.1: pure hook that derives the per-card boolean
  * state and per-card capability flags from a single
- * `RendererLlmProviderDTO` + the surrounding context (active id,
+ * `RendererLlmProviderDTO` + the surrounding context (default id,
  * proxy takeover, etc.). The L4 `ProviderList` orchestrator calls
  * this once per card and threads the result down to `ProviderCard`
  * and `ProviderActions`.
  *
  * Why a hook and not a plain function:
  * - Future cards may want a memoized `useMemo` over context (e.g.
- *   a `useActiveProviderId` subscription), so a hook leaves room
+ *   a `useDefaultProviderId` subscription), so a hook leaves room
  *   for that without breaking the public contract.
  *
  * Why a "hook" that today is essentially a `useMemo`:
  * - The current implementation is pure. Keeping it as a hook
  *   future-proofs the per-card state without forcing an immediate
- *   migration. Once `useActiveProviderId` (Phase 3.4) starts
- *   subscribing to the providers query, the hook signature is
- *   already a hook — no refactor required.
+ *   migration. Once `useDefaultProviderId` starts subscribing to
+ *   the providers query, the hook signature is already a hook —
+ *   no refactor required.
  *
  * State fields:
  *
  *  Identity & live status:
- *   - isCurrent         : this card is the active provider.
+ *   - isCurrent         : this card is the user's soft default
+ *                         provider (the implicit fallback for
+ *                         chat/vision/etc).
  *   - isActive          : the LlmProvider.meta.tags contains 'active'.
- *                         (Mirrors the DTO `isActive` field.)
+ *                         (Mirrors the DTO `isActive` field, kept
+ *                         as a transitional alias.)
+ *   - isDefault         : the DTO `isDefault` field, derived from
+ *                         `AppConfig.defaultProviderId`.
  *
  *  Future dimensions (Plan 204+):
  *   - isInConfig        : additive-mode app (e.g. opencode). duya
@@ -71,8 +76,9 @@ import type { RendererLlmProviderDTO } from '@/lib/providers/ipc-types';
 import type { AppId } from '@/lib/providers/hooks/queryKeys';
 
 export interface ProviderCardContext {
-  /** ID of the currently active provider. May be `null` when none. */
-  activeProviderId: string | null;
+  /** ID of the user's soft default provider (the implicit
+   *  fallback for chat/vision/etc). May be `null` when none. */
+  defaultProviderId: string | null;
   /** Whether a proxy is taking over the live config. duya has no
    *  proxy; today this is always `false`. */
   proxyTakeover: boolean;
@@ -82,6 +88,7 @@ export interface ProviderCardState {
   // ── Identity & live status ──
   isCurrent: boolean;
   isActive: boolean;
+  isDefault: boolean;
 
   // ── Future dimensions (defaults today) ──
   isInConfig: boolean;
@@ -107,7 +114,7 @@ export interface UseProviderCardStateOptions {
   provider: RendererLlmProviderDTO;
   /** The appId binding. Reserved for Plan 205; today always `'duya'`. */
   appId: AppId;
-  /** Surrounding context (active id, proxy takeover). */
+  /** Surrounding context (default id, proxy takeover). */
   context: ProviderCardContext;
 }
 
@@ -118,8 +125,9 @@ export function useProviderCardState(
 ): ProviderCardState {
   const { provider, context } = options;
   return useMemo<ProviderCardState>(() => {
-    const isCurrent = context.activeProviderId === provider.id;
-    const isActive = provider.isDefault ?? provider.isActive ?? false;
+    const isCurrent = context.defaultProviderId === provider.id;
+    const isDefault = provider.isDefault ?? false;
+    const isActive = isDefault; // transitional alias
     const isReadOnly = false; // Plan 205
     const isOmo = false; // duya has no OMO concept
     const isProxyTakeover = context.proxyTakeover;
@@ -133,7 +141,7 @@ export function useProviderCardState(
     // `canEdit` is false for read-only providers (hermes v12+).
     const canEdit = !isReadOnly;
     // Plan 209: `canDelete` is now true for every non-read-only
-    // provider, including the active one. The pre-Plan-209 logic
+    // provider, including the default one. The pre-Plan-209 logic
     // hid the delete button on the active card because deleting
     // it would leave the user without an active provider. But
     // that prevented the user from ever getting out of a bad
@@ -153,6 +161,7 @@ export function useProviderCardState(
     return {
       isCurrent,
       isActive,
+      isDefault,
       isInConfig,
       isFailoverMode,
       isProxyTakeover,
@@ -168,5 +177,5 @@ export function useProviderCardState(
       canOpenTerminal,
       canSetAsDefault,
     };
-  }, [provider, context.activeProviderId, context.proxyTakeover]);
+  }, [provider, context.defaultProviderId, context.proxyTakeover]);
 }
