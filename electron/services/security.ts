@@ -20,8 +20,6 @@
  * Check coverage (matches openclaw/duya's security audit):
  *   S001 — Providers with empty / placeholder API keys
  *   S002 — Insecure base URLs (http:// to non-loopback)
- *   S003 — Active provider missing isActive=true (config drift)
- *   S004 — Multiple active providers (config drift)
  *   S005 — Settings keys that look like plaintext credentials
  *   S006 — Workspace directory is missing or world-writable
  *   S007 — Channel allowlists referencing mutable fields (tags / names)
@@ -30,6 +28,12 @@
  *   S010 — UserData directory permissions (POSIX only)
  *   S011 — Hook tokens / shared secrets shorter than 32 chars
  *   S012 — Audit log missing or older than 30 days (informs the user)
+ *
+ * Note: the old S003 (no active provider) and S004 (multiple active
+ * providers) checks have been removed. The single-active concept was
+ * replaced by a soft `defaultProviderId`; coverage gaps for a missing
+ * or stale default now surface as plain chat errors from
+ * `sendProviderInit`, not as audit findings.
  *
  * Auto-fix coverage (Phase 3 ships these; new fixes slot in):
  *   F001 — Tighten userData perms to 0o700 (POSIX)
@@ -212,43 +216,9 @@ const checks: Check[] = [
     },
   },
 
-  // S003 / S004 — Active provider state
-  {
-    id: 'S003',
-    run() {
-      const out: Finding[] = [];
-      try {
-        const providers = getConfigManager().getAllProviders();
-        const active = Object.values(providers).filter((p) => p.isActive);
-        if (active.length === 0 && Object.keys(providers).length > 0) {
-          out.push({
-            id: 'S003',
-            severity: 'high',
-            title: 'No active provider configured',
-            message: 'You have providers configured but none is marked active. The agent will fail to start a chat.',
-            remediation: 'Run `duya config provider-activate <id>` to mark one active.',
-            autoFixable: false,
-          });
-        }
-        if (active.length > 1) {
-          out.push({
-            id: 'S004',
-            severity: 'medium',
-            title: `Multiple providers marked active (${active.length})`,
-            message: `${active.length} providers are marked isActive=true. The active provider is non-deterministic.`,
-            remediation: 'Run `duya config provider-activate <id>` to keep exactly one active.',
-            autoFixable: false,
-            context: { active: active.map((p) => p.id) },
-          });
-        }
-      } catch (err) {
-        log.warn('security: S003/S004 check failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      return out;
-    },
-  },
+  // S003 / S004 — removed in the multi-provider migration. The
+  // single-active-provider concept is gone; default-provider gaps
+  // are now surfaced as chat errors, not audit findings.
 
   // S005 — Settings keys that look like plaintext credentials
   {
