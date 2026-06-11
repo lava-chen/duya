@@ -10,7 +10,7 @@ import { registerAgentHandlers } from './agents/agent-communicator';
 import { registerProviderIpcHandlers } from './services/providers/provider-ipc-handlers';
 import { registerNetHandlers } from './ipc/net-handlers';
 import { startGatewayProcess, stopGatewayProcess, registerGatewayIpcHandlers, forwardToGateway, isGatewaySession, waitForGatewayReady } from './gateway/index';
-import { initConfigManager, getConfigManager, toLLMProvider, resolveDatabasePath, updateDatabasePath } from './config/index';
+import { initConfigManager, getConfigManager, toLLMProvider, resolveDatabasePath, updateDatabasePath, migrateMultiProviderV1 } from './config/index';
 import { initChannelManager, getChannelManager } from './messaging/index';
 import { initPerformanceMonitor } from './services/performance-monitor';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
@@ -133,6 +133,9 @@ if (gotTheLock) {
     // Step 3: Initialize ConfigManager
     // ============================================================
     const configManager = initConfigManager();
+    // One-shot boot migrations. Each migration is idempotent (guarded by
+    // a marker in `AppConfig.migrations`), so it's safe to call on every boot.
+    migrateMultiProviderV1(configManager);
     initWikiAgentRuntime();
 
     // Migrate provider data from database to ConfigManager (one-time migration)
@@ -199,6 +202,11 @@ if (gotTheLock) {
     registerProviderIpcHandlers();
     registerNetHandlers();
     registerGatewayIpcHandlers();
+    // Plan 202: register mailbox handlers in the success path
+    // too. Previously they were only registered in the
+    // database-init failure branch, so the renderer's
+    // `mailbox:list` calls returned "No handler registered".
+    registerMailboxHandlers();
 
     // ============================================================
     // Step 4.5: Start Agent Server (HTTP+SSE for Agent communication)
