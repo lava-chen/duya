@@ -9,6 +9,11 @@ release/
 build/
 *.tsbuildinfo
 
+# Storybook
+.storybook/
+storybook-static/
+src/stories/
+
 # Environment files
 .env
 .env.local
