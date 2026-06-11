@@ -190,6 +190,12 @@ export interface AppConfig {
   conductorFeatureFlags?: ConductorFeatureFlags;
   /** Custom skills directory path */
   skill_path?: string;
+  /**
+   * Per-config migration markers. Each entry is `{ <migrationName>: true }`
+   * once the named migration has been applied. The boot sequence reads this
+   * before invoking any migration to ensure idempotency.
+   */
+  migrations?: Record<string, boolean>;
 }
 
 export type ConfigKey = keyof AppConfig;
@@ -205,7 +211,7 @@ export type ConfigResponse =
   | { type: 'config:response'; key: string; value: unknown }
   | { type: 'error'; message: string };
 
-export type PortRole = 'renderer' | 'agent';
+export type PortRole = 'renderer' | 'agent' | 'main';
 
 // LLM Provider type for agent process
 export type LLMProvider = 'anthropic' | 'openai' | 'ollama';
@@ -348,6 +354,16 @@ function validateConfig(key: ConfigKey, value: unknown): { valid: boolean; error
       return validateUiPreferences(key, value);
     case 'visionSettings':
       return validateVisionSettings(key, value);
+    case 'migrations':
+      if (typeof value !== 'object' || value === null) {
+        return { valid: false, error: 'migrations must be an object' };
+      }
+      for (const [name, done] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof name !== 'string' || typeof done !== 'boolean') {
+          return { valid: false, error: 'migrations entries must be { [name: string]: boolean }' };
+        }
+      }
+      return { valid: true };
     default:
       return { valid: true };
   }
@@ -436,6 +452,7 @@ const DEFAULT_CONFIG: AppConfig = {
       executeEnabled: false,
     },
   },
+  migrations: {},
 };
 
 // =============================================================================
@@ -578,6 +595,7 @@ export class ConfigManager {
             dynamic: { ...DEFAULT_CONFIG.conductorFeatureFlags.dynamic, ...config.conductorFeatureFlags.dynamic },
           }
         : DEFAULT_CONFIG.conductorFeatureFlags,
+      migrations: { ...DEFAULT_CONFIG.migrations, ...(config.migrations ?? {}) },
     };
   }
 
@@ -696,6 +714,10 @@ export class ConfigManager {
         return true;
       case 'agent':
         return key === 'agentSettings' || key === 'visionSettings' || key === 'outputStyles';
+      case 'main':
+        // The main process can write any field; used by boot-time migrations
+        // that need to update `migrations`, `defaultProviderId`, etc.
+        return true;
       default:
         return false;
     }
