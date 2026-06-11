@@ -597,7 +597,15 @@ const zh: Record<TranslationKey, string> = {
   'provider.tooltip.quota': '限额查询',
   'provider.tooltip.delete': '断开',
   'provider.tooltip.enable': '启用',
-  'provider.tooltip.inUse': '使用中',
+  'provider.tooltip.setDefault': '设为默认',
+  'provider.tooltip.default': '默认服务商',
+  'provider.badge.default': '默认',
+  'provider.actions.setDefault': '设为默认',
+  'provider.defaultProviderSection.title': '默认服务商',
+  'provider.defaultProviderSection.description':
+    '当会话没有显式选择服务商时使用，也作为视觉、网关、Wiki Agent、标题生成、嵌入模型和定时任务的回退。',
+  'provider.defaultProviderSection.empty':
+    '未设置默认服务商，请选一个以启用后台任务和回退。',
   'provider.configured': '已配置',
   'provider.noKey': '未配置密钥',
   'provider.loading': '加载服务商中…',
