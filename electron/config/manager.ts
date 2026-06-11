@@ -18,6 +18,18 @@ import path from 'path';
 import writeFileAtomic from 'write-file-atomic';
 import { getLogger, LogComponent } from '../logging/logger';
 
+// `app` is undefined when this module is loaded from the agent-server
+// child process (which is spawned with ELECTRON_RUN_AS_NODE=1). Read
+// `isPackaged` defensively so the module-level DEFAULT_CONFIG can be
+// evaluated in any process context without throwing.
+function safeIsPackaged(): boolean {
+  try {
+    return Boolean((app as { isPackaged?: unknown } | undefined)?.isPackaged);
+  } catch {
+    return false;
+  }
+}
+
 // =============================================================================
 // TYPES & INTERFACES
 // =============================================================================
@@ -348,6 +360,7 @@ function validateConfig(key: ConfigKey, value: unknown): { valid: boolean; error
 const DEFAULT_CONFIG: AppConfig = {
   version: 1,
   apiProviders: {},
+  defaultProviderId: null,
   agentSettings: {
     defaultModel: '',
     temperature: 0.7,
@@ -419,7 +432,7 @@ const DEFAULT_CONFIG: AppConfig = {
       enabled: true,
     },
     dynamic: {
-      previewEnabled: !app.isPackaged,
+      previewEnabled: !safeIsPackaged(),
       executeEnabled: false,
     },
   },
@@ -553,6 +566,7 @@ export class ConfigManager {
     return {
       version: config.version ?? DEFAULT_CONFIG.version,
       apiProviders: { ...DEFAULT_CONFIG.apiProviders, ...config.apiProviders },
+      defaultProviderId: config.defaultProviderId ?? null,
       agentSettings: { ...DEFAULT_CONFIG.agentSettings, ...config.agentSettings },
       uiPreferences: { ...DEFAULT_CONFIG.uiPreferences, ...config.uiPreferences },
       visionSettings: mergedVisionSettings,
