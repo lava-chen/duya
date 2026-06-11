@@ -56,12 +56,16 @@ import { providerHealthService } from '../../../src/lib/providers/health/Provide
 import { findPresetByKey } from '../../../src/lib/providers/presets';
 import { validateProvider } from '../../../src/lib/providers/domain/ProviderValidation';
 import { redactSecrets } from '../../../src/lib/providers/domain/ProviderValidation';
+import { isMaskedKey } from '../../../src/lib/providers/secret';
 
 /** Read interface — implemented by the live store. Tests can substitute. */
 export interface ProviderStoreReader {
   readAll(): Record<string, ApiProvider>;
   readOne(id: string): ApiProvider | undefined;
+  /** @deprecated Use readDefault. The single-active concept is gone. */
   readActive(): ApiProvider | undefined;
+  /** Soft default — the implicit fallback for chat/vision/etc. */
+  readDefault(): ApiProvider | undefined;
   writeAll(map: Record<string, ApiProvider>): boolean;
   onChange(cb: () => void): () => void;
 }
@@ -100,7 +104,20 @@ export class ProviderStore {
   private reader: ProviderStoreReader;
   private capabilityStore: CapabilityStore;
   private cache: Map<string, LlmProvider> = new Map();
+  /**
+   * @deprecated The single-active concept is gone. Use `defaultId` instead.
+   * Retained so callers compiled against the old API still type-check
+   * during the migration window.
+   */
   private activeId: string | undefined;
+  /**
+   * Soft default provider id. The chat, agent process, vision, gateway,
+   * wiki-agent, title generation, embedding, and automation subsystems
+   * fall back to this id when no explicit per-thread or per-task
+   * provider is set. Multiple providers can be configured and used;
+   * this is only the implicit fallback. May be undefined.
+   */
+  private defaultId: string | undefined;
   private initialized = false;
 
   /**
@@ -147,19 +164,34 @@ export class ProviderStore {
   // ===========================================================================
 
   /** Load the legacy apiProviders, migrate to LlmProvider, cache. Idempotent. */
-  migrateAllLegacyProviders(): { count: number; activeId?: string } {
+  migrateAllLegacyProviders(): { count: number; activeId?: string; defaultId?: string } {
     const legacy = this.reader.readAll();
     this.cache.clear();
     this.activeId = undefined;
+    this.defaultId = this.reader.readDefault()?.id;
     for (const legacyProvider of Object.values(legacy)) {
       const llm = migrateLegacyApiProvider(legacyProvider);
       this.cache.set(llm.id, llm);
       if (legacyProvider.isActive) this.activeId = legacyProvider.id;
     }
+    // Fallback for direct callers (e.g. unit tests) that populate
+    // `isActive: true` but never went through the boot-time
+    // `migrateMultiProviderV1`. If the reader has no default set,
+    // inherit from the legacy `isActive` flag. Production code paths
+    // always run the boot migration first, so this branch is a no-op
+    // outside of tests.
+    if (!this.defaultId && this.activeId && this.cache.has(this.activeId)) {
+      this.defaultId = this.activeId;
+    }
+    // If the configured default was deleted, drop it.
+    if (this.defaultId && !this.cache.has(this.defaultId)) {
+      this.defaultId = undefined;
+    }
     this.initialized = true;
     return {
       count: this.cache.size,
       activeId: this.activeId,
+      defaultId: this.defaultId,
     };
   }
 
@@ -184,10 +216,18 @@ export class ProviderStore {
     return this.cache.get(id);
   }
 
+  /**
+   * @deprecated Use getDefaultLlmProvider. The single-active concept is gone;
+   * this returns the soft default for backward compatibility.
+   */
   getActiveLlmProvider(): LlmProvider | undefined {
+    return this.getDefaultLlmProvider();
+  }
+
+  getDefaultLlmProvider(): LlmProvider | undefined {
     this.ensureInitialized();
-    if (!this.activeId) return undefined;
-    return this.cache.get(this.activeId);
+    if (!this.defaultId) return undefined;
+    return this.cache.get(this.defaultId);
   }
 
   // ===========================================================================
@@ -196,6 +236,42 @@ export class ProviderStore {
 
   upsertLlmProvider(provider: LlmProvider): { ok: true } | { ok: false; code: string; message: string } {
     this.ensureInitialized();
+    // Plan 209: defense in depth. Even though the renderer is
+    // supposed to never send a masked value as `auth.apiKey`, the
+    // earlier version of the code (pre-Plan 209) would happily
+    // persist it. We reject it here so a renderer bug cannot
+    // silently destroy a user's credential. The error code is
+    // stable: `'masked_key'`.
+    if (provider.auth?.apiKey !== undefined && isMaskedKey(provider.auth.apiKey)) {
+      const msg = 'apiKey looks like a masked placeholder; refusing to persist';
+      logError('ProviderStore.upsertLlmProvider rejected masked apiKey', { id: provider.id });
+      return { ok: false, code: 'masked_key', message: msg };
+    }
+    // Plan 209 / Fix-up: when the caller sends an `auth` whose
+    // `apiKey` is undefined (i.e. the user did not retype the key
+    // on edit), preserve the existing on-disk apiKey. Otherwise
+    // the renderer-side `sharedMeta.auth = { type: 'api-key' }`
+    // would have an empty `apiKey` field, `validateAuth` would
+    // fail with `auth.missingApiKey`, and the entire upsert —
+    // including `enabled_models` — would be silently dropped.
+    //
+    // We only merge the existing apiKey when the auth type
+    // still expects one (api-key / bearer). A caller setting
+    // `auth.type = 'none'` is explicitly clearing the credential
+    // and we must honor that.
+    if (
+      provider.auth &&
+      provider.auth.apiKey === undefined &&
+      (provider.auth.type === 'api-key' || provider.auth.type === 'bearer')
+    ) {
+      const existing = this.cache.get(provider.id);
+      if (existing && existing.auth?.apiKey) {
+        provider = {
+          ...provider,
+          auth: { ...provider.auth, apiKey: existing.auth.apiKey },
+        };
+      }
+    }
     const result = validateProvider(provider);
     if (!result.ok) {
       return { ok: false, code: result.code ?? 'invalid', message: result.message ?? 'invalid' };
@@ -211,18 +287,40 @@ export class ProviderStore {
     if (!this.cache.has(id)) return false;
     this.cache.delete(id);
     if (this.activeId === id) this.activeId = undefined;
+    if (this.defaultId === id) this.defaultId = undefined;
     this.persist();
     return true;
   }
 
+  /**
+   * @deprecated Use setDefaultLlmProvider. Retained for one release so
+   * existing callers keep compiling.
+   */
   setActiveLlmProvider(id: string): boolean {
+    return this.setDefaultLlmProvider(id);
+  }
+
+  /**
+   * Set (or clear) the soft default provider. The default is the
+   * implicit fallback used by chat/vision/gateway/etc when no explicit
+   * per-thread or per-task provider is set. Multiple providers remain
+   * usable in parallel — setting the default does NOT lock the others.
+   *
+   * Pass `null` to clear the default.
+   */
+  setDefaultLlmProvider(id: string | null): boolean {
     this.ensureInitialized();
-    if (!this.cache.has(id)) return false;
-    this.activeId = id;
-    // Reflect on the cached providers so listProviders() shows the active tag.
+    if (id !== null && !this.cache.has(id)) return false;
+    this.defaultId = id ?? undefined;
+    // Keep `activeId` in sync so the legacy bridge still has a single
+    // owner for the `ApiProvider.isActive` round-trip. After the legacy
+    // `isActive` is removed (Task 15) this assignment is harmless.
+    this.activeId = this.defaultId;
+    // Reflect on the cached providers so the renderer DTO mapper can
+    // still surface the `'active'` tag during the migration window.
     for (const [pid, p] of this.cache) {
       const tags = new Set(p.meta.tags ?? []);
-      if (pid === id) tags.add('active');
+      if (pid === this.defaultId) tags.add('active');
       else tags.delete('active');
       p.meta.tags = Array.from(tags);
     }
@@ -409,14 +507,18 @@ export class ProviderStore {
     const map: Record<string, ApiProvider> = {};
     for (const p of this.cache.values()) {
       const legacy = toLegacyApiProvider(p);
-      legacy.isActive = p.id === this.activeId;
+      // Keep `isActive` derived from `defaultId` so the legacy on-disk
+      // format stays consistent. The renderer DTO mapper reads `isDefault`
+      // from the new code path; the legacy `isActive` field is only used
+      // by the migration (multi-provider-v1) and any pre-existing readers.
+      legacy.isActive = p.id === this.defaultId;
       map[p.id] = legacy;
     }
     try {
       this.reader.writeAll(map);
       logInfo('ProviderStore.persist', {
         count: Object.keys(map).length,
-        active: this.activeId,
+        default: this.defaultId,
       });
     } catch (err) {
       logError('ProviderStore.persist failed', err);
