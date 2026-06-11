@@ -271,21 +271,31 @@ export async function runConfigProviderRemove(ctx: CliSubcommandContext): Promis
 }
 
 export async function runConfigProviderActivate(ctx: CliSubcommandContext): Promise<ExitCode> {
+  process.stderr.write('[DEPRECATED] `duya config provider activate` is deprecated; use `duya config provider set-default` instead.\n');
+  return runConfigProviderSetDefault(ctx);
+}
+
+export async function runConfigProviderSetDefault(ctx: CliSubcommandContext): Promise<ExitCode> {
   const id = ctx.args[0];
   if (!id) {
-    process.stderr.write('config provider activate <id> — id is required\n');
+    process.stderr.write('config provider set-default <id> — id is required (use --clear to unset the default)\n');
     return 64;
   }
+  const clear = ctx.options.configClear === true;
   try {
     const client = await CliApiClient.connect();
-    const body = await client.post<{ ok: boolean; active: string }>(
-      `/v1/config/providers/${encodeURIComponent(id)}/activate`,
-      {},
+    const body = await client.put<{ ok: boolean; defaultProviderId: string | null }>(
+      `/v1/config/providers/${encodeURIComponent(id)}/default`,
+      { clear },
     );
     if (ctx.format === 'json') {
       process.stdout.write(renderJson(body) + '\n');
     } else {
-      process.stdout.write(`provider '${id}' activated\n`);
+      process.stdout.write(
+        clear
+          ? `default provider cleared\n`
+          : `default provider set to '${body.defaultProviderId ?? id}'\n`,
+      );
     }
     return 0;
   } catch (err) {

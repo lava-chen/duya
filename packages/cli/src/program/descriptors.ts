@@ -714,11 +714,23 @@ const subConfigProviderRemove: CliSubcommand = {
 };
 
 const subConfigProviderActivate: CliSubcommand = {
-  description: 'Mark a provider as the active one. Plan 102 write op; replaces `duya_config provider_activate`.',
+  description: 'DEPRECATED. Use `provider set-default`. Kept for one release as a thin wrapper.',
   write: true,
   args: [{ name: 'id', required: true, description: 'Provider id' }],
   options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
   run: (ctx) => runConfigProviderActivate(ctx),
+};
+
+const subConfigProviderSetDefault: CliSubcommand = {
+  description:
+    'Set the soft default provider. The default is the implicit fallback when a thread has no explicit provider, and for vision, gateway, wiki-agent, title generation, embedding, and scheduled automation. Pass --clear to unset the default.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Provider id (ignored when --clear is set)' }],
+  options: [
+    { flags: '--clear', description: 'Unset the default provider' },
+    { flags: '--yes', description: 'Skip confirmation prompt' },
+  ],
+  run: (ctx) => runConfigProviderSetDefault(ctx),
 };
 
 const subConfigSettingsShow: CliSubcommand = {
@@ -1053,6 +1065,7 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       'provider-add': subConfigProviderAdd,
       'provider-remove': subConfigProviderRemove,
       'provider-activate': subConfigProviderActivate,
+      'provider-set-default': subConfigProviderSetDefault,
       'settings-show': subConfigSettingsShow,
       'settings-set': subConfigSettingsSet,
       'vision-show': subConfigVisionShow,

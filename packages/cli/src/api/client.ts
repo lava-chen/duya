@@ -125,8 +125,21 @@ export class CliApiClient {
     return this.requestWithBody<T>('POST', path, body, opts);
   }
 
+  /**
+   * PUT request for write operations that semantically replace
+   * (e.g. setting a singleton state value). Same retry / correlation
+   * semantics as `post`.
+   */
+  async put<T = unknown>(
+    path: string,
+    body: unknown,
+    opts: RequestOptions & { correlationId?: string } = {},
+  ): Promise<T> {
+    return this.requestWithBody<T>('PUT', path, body, opts);
+  }
+
   private async requestWithBody<T = unknown>(
-    method: 'POST' | 'PATCH' | 'DELETE',
+    method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     path: string,
     body: unknown,
     opts: RequestOptions & { correlationId?: string; invokedBy?: 'cli' | 'agent-tool' | `agent-tool:${string}` } = {},

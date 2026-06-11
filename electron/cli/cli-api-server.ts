@@ -42,6 +42,7 @@ import {
   handleAddConfigProvider,
   handleRemoveConfigProvider,
   handleActivateConfigProvider,
+  handleSetDefaultConfigProvider,
   handleGetAgentSettings,
   handleSetAgentSettings,
   handleGetVisionSettings,
@@ -648,9 +649,15 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
-  // POST /v1/config/providers/:id/activate
+  // POST /v1/config/providers/:id/activate (deprecated; use PUT /default)
   if (req.method === 'POST' && parts.length === 5 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'providers' && parts[4] === 'activate') {
     void handleActivateConfigProvider(req, res, decodeURIComponent(parts[3]));
+    return;
+  }
+
+  // PUT /v1/config/providers/:id/default
+  if (req.method === 'PUT' && parts.length === 5 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'providers' && parts[4] === 'default') {
+    void handleSetDefaultConfigProvider(req, res, decodeURIComponent(parts[3]));
     return;
   }
 

@@ -303,6 +303,11 @@ export async function handleRemoveConfigProvider(req: IncomingMessage, res: Serv
 // POST /v1/config/providers/:id/activate
 // ---------------------------------------------------------------------------
 
+/**
+ * @deprecated Use `set-default` instead. The single-active concept is gone;
+ * we now track a soft `defaultProviderId`. This handler delegates to
+ * `setDefaultProvider` so the legacy CLI command keeps working.
+ */
 export async function handleActivateConfigProvider(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
   try {
     const cm = getConfigManager();
@@ -314,6 +319,50 @@ export async function handleActivateConfigProvider(req: IncomingMessage, res: Se
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.provider.activate', id);
     sendJson(res, 200, { ok: true, active: id });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PUT /v1/config/providers/:id/default
+// ---------------------------------------------------------------------------
+
+/**
+ * Set the soft default provider (multi-provider model). The body is
+ * `{}` to set the default to the given id, or `{ clear: true }` to
+ * drop the default. Returns the resulting `defaultProviderId`.
+ */
+export async function handleSetDefaultConfigProvider(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+  let body: Record<string, unknown> = {};
+  try {
+    if (req.headers['content-length'] && Number(req.headers['content-length']) > 0) {
+      body = (await readBody(req)) as Record<string, unknown>;
+    }
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  try {
+    const cm = getConfigManager();
+    const clear = body.clear === true;
+    if (clear) {
+      const ok = cm.setDefaultProvider(null);
+      if (!ok) {
+        sendError(res, 500, 'set_default_failed', 'Could not clear defaultProviderId');
+        return;
+      }
+    } else {
+      const ok = cm.setDefaultProvider(id);
+      if (!ok) {
+        sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
+        return;
+      }
+    }
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.provider.setDefault', id, clear ? 'clear' : 'set');
+    sendJson(res, 200, { ok: true, defaultProviderId: clear ? null : id });
   } catch (err) {
     const c = classify(err);
     sendError(res, c.status, c.code, c.message);
