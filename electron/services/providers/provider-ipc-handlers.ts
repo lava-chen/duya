@@ -9,7 +9,9 @@
  *   - provider:getLlm
  *   - provider:upsertLlm
  *   - provider:deleteLlm
- *   - provider:setActiveLlm
+ *   - provider:setActiveLlm        (deprecated: use setDefaultLlm)
+ *   - provider:setDefaultLlm
+ *   - provider:getDefault          (renderer-mask; returns the default's masked DTO)
  *   - provider:getActiveRuntimeConfig   (privileged: agent / main only)
  *   - provider:getRuntimeConfig          (privileged: agent / main only)
  *   - provider:test
@@ -18,8 +20,9 @@
  *   - provider:upsertModelCapability
  *
  * Secret rules:
- *   - listLlm / getLlm / upsertLlm / deleteLlm / setActiveLlm / test /
- *     syncModels return MASKED provider shapes (no apiKey / accessToken).
+ *   - listLlm / getLlm / upsertLlm / deleteLlm / setActiveLlm / setDefaultLlm
+ *     / getDefault / test / syncModels return MASKED provider shapes
+ *     (no apiKey / accessToken).
  *   - getActiveRuntimeConfig / getRuntimeConfig are agent-only and return
  *     the full ProviderRuntimeConfig including secrets. They refuse
  *     if the caller is the renderer.
@@ -99,9 +102,25 @@ export function registerProviderIpcHandlers(opts?: {
     return store.deleteLlmProvider(id);
   });
 
-  // --- set active ---
+  // --- set active (deprecated: use setDefault) ---
   ipcMain.handle('provider:setActiveLlm', (_event, id: string) => {
-    return store.setActiveLlmProvider(id);
+    logger.warn(
+      'provider:setActiveLlm is deprecated; use provider:setDefaultLlm',
+      { id },
+      LogComponent.AgentCommunicator,
+    );
+    return store.setDefaultLlmProvider(id);
+  });
+
+  // --- set default ---
+  ipcMain.handle('provider:setDefaultLlm', (_event, payload: { id: string | null }) => {
+    return store.setDefaultLlmProvider(payload?.id ?? null);
+  });
+
+  // --- get default (masked) ---
+  ipcMain.handle('provider:getDefault', () => {
+    const p = store.getDefaultLlmProvider();
+    return p ? toMaskedDto(p) : null;
   });
 
   // --- get active runtime config (privileged) ---
