@@ -24,7 +24,7 @@
  */
 
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { listProvidersIPC } from '@/lib/ipc-client';
+import { listProvidersIPC, getDefaultLlmProviderIPC } from '@/lib/ipc-client';
 import { toRendererLlmProviderDTO, type RendererLlmProviderDTO } from '../ipc-types';
 import { providersQueryKey, type AppId } from './queryKeys';
 
@@ -34,8 +34,14 @@ export function useProvidersQuery(
   return useQuery({
     queryKey: providersQueryKey(appId),
     queryFn: async (): Promise<RendererLlmProviderDTO[]> => {
-      const raw = await listProvidersIPC();
-      return raw.map((p) => toRendererLlmProviderDTO(p as never, Date.now()));
+      const [raw, defaultProvider] = await Promise.all([
+        listProvidersIPC(),
+        getDefaultLlmProviderIPC().catch(() => null),
+      ]);
+      const defaultProviderId = defaultProvider?.id ?? null;
+      return raw.map((p) =>
+        toRendererLlmProviderDTO(p as never, { defaultProviderId }),
+      );
     },
     // Providers are config; not real-time. 30s staleTime is plenty.
     staleTime: 30_000,

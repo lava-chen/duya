@@ -119,7 +119,7 @@ export function useProviderCardState(
   const { provider, context } = options;
   return useMemo<ProviderCardState>(() => {
     const isCurrent = context.activeProviderId === provider.id;
-    const isActive = provider.isActive;
+    const isActive = provider.isDefault ?? provider.isActive ?? false;
     const isReadOnly = false; // Plan 205
     const isOmo = false; // duya has no OMO concept
     const isProxyTakeover = context.proxyTakeover;
@@ -132,11 +132,17 @@ export function useProviderCardState(
     // Capability flags.
     // `canEdit` is false for read-only providers (hermes v12+).
     const canEdit = !isReadOnly;
-    // `canDelete` is true for additive-mode (always) and for
-    // non-current in normal mode. False for the active provider
-    // in normal mode (deleting the active provider would leave
-    // the user without one).
-    const canDelete = !isReadOnly && (isOmo || !isCurrent);
+    // Plan 209: `canDelete` is now true for every non-read-only
+    // provider, including the active one. The pre-Plan-209 logic
+    // hid the delete button on the active card because deleting
+    // it would leave the user without an active provider. But
+    // that prevented the user from ever getting out of a bad
+    // state (e.g. a corrupted active provider that keeps
+    // failing). The delete handler in ProviderList now shows a
+    // confirmation dialog for the active case that explicitly
+    // warns the user and clears the active reference on
+    // success.
+    const canDelete = !isReadOnly;
     const canDuplicate = !isReadOnly;
     const canTest = !isReadOnly;
     // Phase 4 plans: usage script editor, terminal, default model.

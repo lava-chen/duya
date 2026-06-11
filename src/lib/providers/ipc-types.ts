@@ -130,7 +130,7 @@ function legacyBackendToLlm(b: BackendProvider): LlmProvider {
  * Differs from `LlmProvider` in three ways:
  * 1. `auth` is flattened to a single masked `apiKey` string + `hasApiKey` boolean.
  * 2. `endpoints` is flattened to a single `baseUrl` string.
- * 3. `meta` is flattened into top-level `sortOrder`, `isActive`,
+ * 3. `meta` is flattened into top-level `sortOrder`, `isDefault`,
  *    `createdAt`, `updatedAt`, `notes` scalars.
  * 4. `extraEnv` / `headers` / `options` (Record) are JSON-stringified so
  *    they survive the IPC bridge without losing object identity.
@@ -151,7 +151,13 @@ export interface RendererLlmProviderDTO {
 
   // Flattened meta
   sortOrder: number;
-  isActive: boolean;
+  /** True when this provider is the user's soft default (implicit
+   *  fallback for chat/vision/etc). Multiple providers can coexist;
+   *  this only flags the implicit default. */
+  isDefault: boolean;
+  /** @deprecated Use isDefault. The single-active concept is gone;
+   *  retained as a backward-compat alias for one release. */
+  isActive?: boolean;
   notes: string;
   createdAt: number;
   updatedAt: number;
@@ -267,8 +273,9 @@ export function deriveLegacyProviderType(
  */
 export function toRendererLlmProviderDTO(
   input: LlmProvider | BackendProvider,
-  now: number = Date.now(),
+  opts: { defaultProviderId?: string | null; now?: number } = {},
 ): RendererLlmProviderDTO {
+  const { defaultProviderId = null, now = Date.now() } = opts;
   const llm: LlmProvider =
     'apiFormat' in input
       ? input
@@ -283,7 +290,13 @@ export function toRendererLlmProviderDTO(
   );
   const createdAt = llm.meta?.createdAt ?? now;
   const updatedAt = llm.meta?.updatedAt ?? now;
-  const isActive = llm.meta?.tags?.includes('active') ?? false;
+  // `isDefault` is derived from the explicit `defaultProviderId` argument.
+  // We also fall back to the legacy `'active'` tag so DTO consumers keep
+  // working during the migration window (the main-side store writes the
+  // tag in sync with `defaultId`).
+  const isDefault =
+    (defaultProviderId != null && llm.id === defaultProviderId) ||
+    llm.meta?.tags?.includes('active') === true;
 
   return {
     id: llm.id,
@@ -294,7 +307,9 @@ export function toRendererLlmProviderDTO(
     hasApiKey,
     baseUrl,
     sortOrder: llm.meta?.sortIndex ?? 0,
-    isActive,
+    isDefault,
+    // Backward-compat: emit `isActive` as an alias for `isDefault`.
+    isActive: isDefault,
     notes: llm.meta?.notes ?? '',
     createdAt,
     updatedAt,
