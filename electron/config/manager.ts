@@ -757,8 +757,31 @@ export class ConfigManager {
     return this.config.apiProviders[providerId]?.apiKey;
   }
 
+  /**
+   * @deprecated Use getDefaultProvider(). The single-active concept has
+   * been replaced by a soft defaultProviderId. Will be removed.
+   */
   getActiveProvider(): ApiProvider | undefined {
-    return Object.values(this.config.apiProviders).find(p => p.isActive);
+    return this.getDefaultProvider();
+  }
+
+  getDefaultProvider(): ApiProvider | undefined {
+    const id = this.config.defaultProviderId;
+    if (!id) return undefined;
+    return this.config.apiProviders[id];
+  }
+
+  setDefaultProvider(id: string | null): boolean {
+    if (id !== null && !this.config.apiProviders[id]) {
+      this.logger.error(
+        `setDefaultProvider: provider not found: ${id}`,
+        undefined,
+        undefined,
+        LogComponent.ConfigManager,
+      );
+      return false;
+    }
+    return this.setConfig('defaultProviderId', id);
   }
 
   upsertProvider(provider: ApiProvider): boolean {
@@ -767,18 +790,13 @@ export class ConfigManager {
     return this.setConfig('apiProviders', providers);
   }
 
+  /**
+   * @deprecated The single-active concept has been replaced by a soft
+   * `defaultProviderId`. Use `setDefaultProvider(id)` instead. Will be removed
+   * once all callers migrate.
+   */
   activateProvider(providerId: string): boolean {
-    const providers = { ...this.config.apiProviders };
-    let found = false;
-    for (const [id, p] of Object.entries(providers)) {
-      providers[id] = { ...p, isActive: id === providerId };
-      if (id === providerId) found = true;
-    }
-    if (!found) {
-      this.logger.error(`activateProvider: provider not found: ${providerId}`, undefined, undefined, LogComponent.ConfigManager);
-      return false;
-    }
-    return this.setConfig('apiProviders', providers);
+    return this.setDefaultProvider(providerId);
   }
 
   deleteProvider(providerId: string): boolean {
