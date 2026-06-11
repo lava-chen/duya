@@ -6,18 +6,21 @@
  * that consumes the `ProviderCardState` derived by
  * `useProviderCardState`. The 5 stable states are:
  *
- *   1. omo-in-use    (OMO mode active, current)
- *   2. omo-enable    (OMO mode inactive, not current)
- *   3. failover-in   (failover queue, in queue)
- *   4. failover-add  (failover mode, not in queue)
+ *   1. omo-default  (OMO mode active, current)
+ *   2. omo-enable   (OMO mode inactive, not current)
+ *   3. failover-in  (failover queue, in queue)
+ *   4. failover-add (failover mode, not in queue)
  *   5. blocked-by-proxy
- *   6. in-use        (current provider, normal mode)
- *   7. enable        (default)
+ *   6. default      (current soft default, normal mode)
+ *   7. set-default  (default)
  *
- * Today duya is single-appId, so 1–5 collapse to "in-use" / "enable"
- * for the current scope. The 5-state machine is kept so Plan 204+
- * (failover) and Plan 208 (proxy) can flip the appropriate flags
- * without changing the consumer.
+ * With the multi-provider model, "default" is no longer a lock —
+ * any configured provider can be used in chat/vision/etc. The
+ * main button just promotes a provider to the implicit fallback.
+ * Today duya is single-appId, so 1–5 collapse to "default" /
+ * "set-default" for the current scope. The 5-state machine is
+ * kept so Plan 204+ (failover) and Plan 208 (proxy) can flip
+ * the appropriate flags without changing the consumer.
  *
  * The other action buttons (edit, test, quota, delete) are pure
  * JSX that consume the per-card capability flags. They are
@@ -85,14 +88,18 @@ export interface MainButtonState {
  * Decision tree (Plan 203 D203.4 — 5 stable states, `isTesting`
  * is orthogonal and only affects the icon + disabled flags):
  *
- *   - isOmo + isCurrent             → "in-use" (check)
- *   - isOmo                         → "enable" (play)
+ *   - isOmo + isCurrent             → "default" (check)
+ *   - isOmo                         → "set-default" (play)
  *   - isInConfig (additive)         → "remove from config" (minus)
  *   - isFailoverMode + inQueue      → "in queue" (check)
  *   - isFailoverMode                → "add to queue" (plus)
  *   - isOfficialBlockedByProxy      → "blocked by proxy" (shield, disabled)
- *   - isCurrent                     → "in-use" (check, disabled)
- *   - default                       → "enable" (play)
+ *   - isCurrent                     → "default" (check, disabled)
+ *   - default                       → "set-default" (play)
+ *
+ * With the multi-provider model, "set-default" just promotes
+ * the provider to the implicit fallback. It does NOT lock the
+ * other providers — every configured provider remains usable.
  *
  * Today duya is single-appId, so `isInConfig` is always true
  * (the only way to have a provider in the list is to be in the
@@ -113,7 +120,7 @@ export function getMainButtonState(
           'bg-gray-200 text-muted-foreground hover:bg-gray-200 hover:text-muted-foreground ' +
           'dark:bg-gray-700 dark:hover:bg-gray-700',
         icon: 'Check',
-        text: 'In use',
+        text: 'Default',
       };
     }
     return {
@@ -121,7 +128,7 @@ export function getMainButtonState(
       variant: 'default',
       className: '',
       icon: 'Play',
-      text: 'Enable',
+      text: 'Set as default',
     };
   }
 
@@ -178,7 +185,7 @@ export function getMainButtonState(
     };
   }
 
-  // In-use family (current provider in normal mode).
+  // Default family (current soft default in normal mode).
   if (card.isCurrent) {
     return {
       disabled: true,
@@ -187,11 +194,11 @@ export function getMainButtonState(
         'bg-gray-200 text-muted-foreground hover:bg-gray-200 hover:text-muted-foreground ' +
         'dark:bg-gray-700 dark:hover:bg-gray-700',
       icon: 'Check',
-      text: 'In use',
+      text: 'Default',
     };
   }
 
-  // Default: enable.
+  // Default: set as default.
   return {
     disabled: false,
     variant: 'default',
@@ -200,7 +207,7 @@ export function getMainButtonState(
         'dark:bg-emerald-600 dark:hover:bg-emerald-700'
       : '',
     icon: 'Play',
-    text: 'Enable',
+    text: 'Set as default',
   };
 }
 
@@ -298,10 +305,18 @@ export function ProviderActions({
         <span>{main.text}</span>
       </button>
 
-      {/* Plan 204 Phase 1.2: hover-only icon-button cluster.
-          `group-hover:opacity-100` requires the parent card to
-          have `group` class (set by `ProviderRow` in ProviderList). */}
-      <div className="flex items-center gap-1.5 opacity-0 pointer-events-none group-hover:opacity-100 group-focus-within:opacity-100 group-hover:pointer-events-auto group-focus-within:pointer-events-auto transition-opacity duration-200">
+      {/* Plan 209: action cluster is now always visible at low
+          opacity, full opacity on hover/focus-within. The
+          pre-Plan-209 implementation hid every secondary
+          action (edit, delete, test, ...) on `opacity-0`, which
+          made the delete button effectively undiscoverable
+          when the user wasn't already hovering the row. The
+          user reported "I can't delete any provider" because
+          they never realized the button was there. We now
+          keep the cluster at ~30% opacity by default so the
+          buttons read as available without competing with the
+          primary "In use / Enable" affordance. */}
+      <div className="flex items-center gap-1.5 opacity-30 group-hover:opacity-100 group-focus-within:opacity-100 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
         {card.canEdit && (
           <button
             type="button"
@@ -393,8 +408,10 @@ export function ProviderActions({
           <button
             type="button"
             onClick={onDelete}
+            data-testid="provider-action-delete"
             className={ICON_BTN_CLASS + ' hover:text-destructive'}
             title={t('provider.tooltip.delete')}
+            aria-label={t('provider.tooltip.delete')}
           >
             <TrashIcon size={14} />
           </button>
