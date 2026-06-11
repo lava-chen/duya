@@ -596,7 +596,15 @@ const en = {
   'provider.tooltip.quota': 'Check quota',
   'provider.tooltip.delete': 'Disconnect',
   'provider.tooltip.enable': 'Enable',
-  'provider.tooltip.inUse': 'In use',
+  'provider.tooltip.setDefault': 'Set as default',
+  'provider.tooltip.default': 'Default provider',
+  'provider.badge.default': 'Default',
+  'provider.actions.setDefault': 'Set as default',
+  'provider.defaultProviderSection.title': 'Default provider',
+  'provider.defaultProviderSection.description':
+    'Used when a thread has no explicit provider, and as a fallback for vision, gateway, wiki-agent, title generation, embedding, and scheduled automation tasks.',
+  'provider.defaultProviderSection.empty':
+    'No default provider is set. Pick one to enable background tasks and fallbacks.',
   'provider.configured': 'Configured',
   'provider.noKey': 'No key',
   'provider.loading': 'Loading providers…',
