@@ -33,14 +33,16 @@ export function VisionModelSelector({
 
   const providers = externalProviders || internalProviders;
 
-  // Load providers on mount if not provided externally
+  // Load providers on mount if not provided externally.
+  // With the multi-provider model, every configured provider is
+  // a vision-model candidate. We do NOT filter on `isActive`.
   useEffect(() => {
     if (externalProviders) return;
     async function loadProviders() {
       setLoading(true);
       try {
         const list = await listProviders();
-        setInternalProviders(list.filter(p => p.isActive));
+        setInternalProviders(list);
       } finally {
         setLoading(false);
       }

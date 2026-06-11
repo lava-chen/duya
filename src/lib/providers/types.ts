@@ -217,7 +217,9 @@ export interface ApiProvider {
     | 'google';
   baseUrl: string;
   apiKey: string;
-  isActive: boolean;
+  /** @deprecated Use isDefault on the AppConfig. The single-active
+   *  concept is gone; this is kept as a transitional alias. */
+  isActive?: boolean;
   extraEnv?: Record<string, string>;
   headers?: Record<string, string>;
   options?: Record<string, unknown>;
@@ -232,7 +234,11 @@ export interface MaskedApiProvider {
   providerType: ApiProvider['providerType'];
   baseUrl: string;
   apiKey: string;
-  isActive: boolean;
+  /** @deprecated Use isDefault. The single-active concept is gone;
+   *  this is kept as a transitional alias for one release. */
+  isActive?: boolean;
+  /** Soft default — implicit fallback for chat/vision/etc. */
+  isDefault?: boolean;
   hasApiKey: boolean;
   sortOrder: number;
   extraEnv: string;

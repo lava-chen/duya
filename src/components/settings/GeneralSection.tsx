@@ -122,8 +122,11 @@ export function GeneralSection() {
         const providers = await listProviders();
         const models: { value: string; label: string }[] = [];
 
+        // With the multi-provider model, every configured provider
+        // is a gateway-model candidate. We do NOT filter on
+        // `isActive` (the single-active era); the user picks any
+        // configured provider from the dropdown.
         for (const provider of providers) {
-          if (!provider.isActive) continue;
 
           // Parse options to get enabled_models
           let enabledModels: string[] = [];

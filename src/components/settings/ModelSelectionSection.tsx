@@ -104,13 +104,17 @@ export function ModelSelectionSection() {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Load providers
+  // Load providers. With the multi-provider model, every
+  // configured provider is a candidate for vision / gateway /
+  // wiki-agent / title slots. We do NOT filter on `isActive`
+  // (the single-active era); instead, the user picks any
+  // configured provider from the dropdown.
   useEffect(() => {
     const loadProviders = async () => {
       try {
         setProvidersLoading(true);
         const list = await listProviders();
-        setProviders(list.filter(p => p.isActive));
+        setProviders(list);
       } catch (err) {
         console.error('[ModelSelection] Failed to load providers:', err);
       } finally {
@@ -130,8 +134,7 @@ export function ModelSelectionSection() {
 
         // First load providers (needed for mapping provider type to provider ID)
         const providersList = await listProviders();
-        const activeProviders = providersList.filter(p => p.isActive);
-        setProviders(activeProviders);
+        setProviders(providersList);
 
         // Load vision settings from ConfigManager
         const visionSettings = await window.electronAPI.vision.get() as { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean };
@@ -139,7 +142,7 @@ export function ModelSelectionSection() {
 
         // Convert provider type name (e.g. "ollama") to provider ID
         if (visionSettings?.model && visionSettings?.provider) {
-          const matchingProvider = activeProviders.find(p => {
+          const matchingProvider = providersList.find(p => {
             const providerType = p.providerType?.toLowerCase() || '';
             const providerName = p.name?.toLowerCase() || '';
             return providerType === visionSettings.provider?.toLowerCase() ||

@@ -268,8 +268,14 @@ export function AutomationView() {
             (p as Provider & { hasApiKey: boolean }).hasApiKey = hasKey;
           }
         });
-        const activeProvider = providers.find((p) => p.isActive && p.hasApiKey)
-          || providers.find((p) => p.hasApiKey);
+        // With the multi-provider model, the default provider is
+        // the implicit fallback. Automation scripts can use ANY
+        // configured provider — they no longer gate on a single
+        // active flag. We still surface the default first, but
+        // fall back to the first configured provider.
+        const defaultProvider = providers.find((p) => p.isDefault && p.hasApiKey);
+        const activeProvider =
+          defaultProvider ?? providers.find((p) => p.hasApiKey);
 
         if (activeProvider) {
           const isOllama = activeProvider.providerType === 'ollama' ||
