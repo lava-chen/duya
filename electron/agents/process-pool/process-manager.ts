@@ -13,6 +13,14 @@ export interface RunningProcess {
   startTime: number;
   lastPong: number;
   sessionId: string;
+  /**
+   * Per-thread provider id. With the multi-provider model, the
+   * renderer can pin a session to a specific provider via the
+   * `chat:provider` message; the pool then re-initializes the
+   * process with that provider instead of the global default.
+   * `null` means "use the global default".
+   */
+  providerId: string | null;
 }
 
 export function calculateMaxConcurrent(): number {

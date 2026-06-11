@@ -375,20 +375,31 @@ if (gotTheLock) {
               }
             }
 
-            // Fall back to active provider if no model specified or provider not found
+            // Fall back to default provider if no model specified
+            // or provider not found. The "active provider" concept
+            // is gone; the soft default is the implicit fallback.
             if (!targetProvider) {
-              targetProvider = configManager?.getActiveProvider();
+              targetProvider = configManager?.getDefaultProvider();
             }
 
             if (!targetProvider) {
-              logger.error('No active provider configured for conductor agent', undefined, { sessionId: conductorSessionId }, LogComponent.Main);
+              logger.error('No default provider configured for conductor agent', undefined, { sessionId: conductorSessionId }, LogComponent.Main);
               channelManager.sendToChannel('conductor', {
                 type: 'conductor:error',
                 sessionId: conductorSessionId,
-                message: 'No active provider configured',
+                message: 'No default provider configured',
               });
               return;
             }
+
+            // Pin this session to the chosen provider so that the
+            // pool's `sendProviderInit` uses this provider for the
+            // rest of the session's life. With the multi-provider
+            // model, every session is bound to the provider the
+            // user actually picked (from the model dropdown), not
+            // whatever the global default happens to be at any
+            // given moment.
+            agentPool.setSessionProvider(conductorSessionId, targetProvider.id);
 
             const providerModel = selectedModel ||
               targetProvider.options?.defaultModel ||

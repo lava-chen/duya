@@ -73,6 +73,37 @@ export class AgentProcessPool {
   // Process Lifecycle
   // ========================================================================
 
+  /**
+   * Pin a session to a specific provider id. Subsequent
+   * `sendProviderInit` calls for this session will use that
+   * provider instead of the global default. Pass `null` to clear
+   * the per-session pin and fall back to the global default.
+   *
+   * The pin is applied at the next re-initialization boundary
+   * (start, post-busy idle, or config-change). It does NOT
+   * interrupt an in-flight turn.
+   */
+  setSessionProvider(sessionId: string, providerId: string | null): void {
+    const proc = this.running.get(sessionId);
+    if (!proc) {
+      // Session not yet started; cache the pin so startProcess
+      // picks it up. We store it on the pool itself.
+      if (providerId !== null) {
+        this.pendingProviderPins.set(sessionId, providerId);
+      } else {
+        this.pendingProviderPins.delete(sessionId);
+      }
+      return;
+    }
+    if (proc.providerId === providerId) return;
+    proc.providerId = providerId;
+    this.pendingProviderPins.delete(sessionId);
+    this.reinitProcess(sessionId);
+  }
+
+  /** Per-session pin queued before the session was started. */
+  private pendingProviderPins = new Map<string, string>();
+
   async acquire(sessionId: string): Promise<{ isNew: boolean }> {
     if (this.isShuttingDown) {
       throw new Error('Process pool is shutting down');
@@ -148,7 +179,12 @@ export class AgentProcessPool {
           startTime: Date.now(),
           lastPong: Date.now(),
           sessionId,
+          // Apply any pin that was queued before this session
+          // was actually started; otherwise default to null
+          // (i.e. use the global default).
+          providerId: this.pendingProviderPins.get(sessionId) ?? null,
         };
+        this.pendingProviderPins.delete(sessionId);
 
         this.logger.info(`Agent process started: ${runtime.command} ${runtime.args.join(' ')}`, undefined, LogComponent.AgentProcessPool);
 
@@ -427,16 +463,30 @@ export class AgentProcessPool {
 
   private sendProviderInit(sessionId: string): void {
     const configManager = getConfigManager();
-    const activeProvider = configManager.getActiveProvider();
-    if (!activeProvider) {
+    // Per-thread pin wins over the global default. With the
+    // multi-provider model, every session can be pinned to a
+    // specific provider id via `setSessionProvider`. When the
+    // pin is null (or the pin targets a deleted provider), we
+    // fall back to the user's soft default.
+    const proc = this.running.get(sessionId);
+    const pinnedId = proc?.providerId ?? null;
+    const pinned = pinnedId ? configManager.getAllProviders()[pinnedId] : undefined;
+    const target = pinned ?? configManager.getDefaultProvider();
+    if (!target) {
+      this.logger.warn(
+        `sendProviderInit: no provider for session ${sessionId} ` +
+          `(pinnedId=${pinnedId}, defaultId=${configManager.getConfig().defaultProviderId ?? 'null'})`,
+        undefined,
+        LogComponent.AgentProcessPool,
+      );
       return;
     }
 
     const providerConfig = {
-      apiKey: activeProvider.apiKey,
-      baseURL: activeProvider.baseUrl,
-      model: activeProvider.options?.defaultModel || activeProvider.options?.model || '',
-      provider: toLLMProvider(activeProvider.providerType),
+      apiKey: target.apiKey,
+      baseURL: target.baseUrl,
+      model: target.options?.defaultModel || target.options?.model || '',
+      provider: toLLMProvider(target.providerType),
       authStyle: 'api_key' as const,
     };
 
