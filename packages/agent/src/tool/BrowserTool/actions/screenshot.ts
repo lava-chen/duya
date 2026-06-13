@@ -2,7 +2,13 @@ import { z } from 'zod/v4';
 import type { ActionHandler, ActionContext } from './types.js';
 
 const screenshotSchema = z.object({
-  fullPage: z.boolean().optional().default(false).describe('Capture full page'),
+  fullPage: z.preprocess(
+    (val) => {
+      if (typeof val === 'string') return val.toLowerCase() === 'true';
+      return val;
+    },
+    z.boolean().optional().default(false)
+  ).describe('Capture full page'),
   selector: z.string().optional().describe('CSS selector for element screenshot'),
 });
 

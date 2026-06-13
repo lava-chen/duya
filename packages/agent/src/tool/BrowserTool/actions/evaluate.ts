@@ -23,7 +23,16 @@ export const evaluateAction: ActionHandler<z.infer<typeof evaluateSchema>> = {
 // ─── iframe_evaluate ──────────────────────────────────────
 
 const iframeEvaluateSchema = z.object({
-  frameIndex: z.number().describe('Iframe index from frames list'),
+  frameIndex: z.preprocess(
+    (val) => {
+      if (typeof val === 'string') {
+        const parsed = Number(val);
+        return isNaN(parsed) ? val : parsed;
+      }
+      return val;
+    },
+    z.number()
+  ).describe('Iframe index from frames list'),
   script: z.string().describe('JavaScript code to execute in iframe'),
 });
 

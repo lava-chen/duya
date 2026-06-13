@@ -103,9 +103,17 @@ export class SchemaGenerator {
       const typeName = def?.typeName || def?.type || '';
       if (typeName === 'ZodOptional' || typeName === 'optional') return false;
       if (typeName === 'ZodDefault' || typeName === 'default') return false;
-      if (typeName === 'ZodEffects' || typeName === 'ZodTransform' || typeName === 'ZodPipe' ||
+      // ZodPipe (z.preprocess on zod/v4): the required-ness of the field
+      // is determined by the OUTER (output) schema, not the inner
+      // transform. Walk def.out so a required array wrapped in preprocess
+      // is still reported as required.
+      if (typeName === 'ZodPipe' || typeName === 'pipe') {
+        cur = def?.out;
+        continue;
+      }
+      if (typeName === 'ZodEffects' || typeName === 'ZodTransform' ||
           typeName === 'ZodCatch' || typeName === 'ZodReadonly' || typeName === 'ZodLazy' || typeName === 'ZodPromise' ||
-          typeName === 'transform' || typeName === 'pipe' || typeName === 'catch' || typeName === 'readonly' || typeName === 'lazy' || typeName === 'promise') {
+          typeName === 'transform' || typeName === 'catch' || typeName === 'readonly' || typeName === 'lazy' || typeName === 'promise') {
         cur = def?.schema || def?.innerType || def?.type;
         continue;
       }
@@ -156,6 +164,23 @@ export class SchemaGenerator {
     // also exposes `prop.type` directly. Probe all known paths.
     const typeName = def?.typeName || def?.type || prop?.type || prop?._type || '';
 
+    // z.preprocess() compiles to a ZodPipe on zod/v4 (def.in = transform,
+    // def.out = real schema). We want the LLM to see the OUTPUT type (the
+    // real schema after preprocessing), not the transform input. Descend
+    // into def.out first so e.g. `z.preprocess(fn, z.array(z.string()))`
+    // emits `type: 'array'` instead of the silent `type: 'string'`
+    // fallback we used to hit when we walked def.schema/innerType.
+    if (typeName === 'ZodPipe' || typeName === 'pipe') {
+      const out = def?.out;
+      if (out) {
+        const resolved = this.zodToJsonSchemaProp(out);
+        if (resolved.type === 'string' && !description) {
+          return { ...base, type: 'string', description: 'JSON string – pass a stringified JSON array, e.g. \'["url1","url2"]\'' };
+        }
+        return resolved;
+      }
+    }
+
     if (typeName === 'ZodString' || typeName === 'string') {
       const hasUrl = def?.checks?.some?.((c: any) => c.kind === 'url') || def?.format === 'url';
       return { ...base, type: 'string', ...(hasUrl ? { format: 'uri' } : {}) };
@@ -198,14 +223,16 @@ export class SchemaGenerator {
       return { ...base, type: types.size === 1 ? [...types][0] : [...types] };
     }
 
-    if (typeName === 'ZodOptional') {
-      const inner = this.zodToJsonSchemaProp(def?.innerType || def?.type);
-      return { ...inner, ...base };
+    if (typeName === 'optional') {
+      const inner = def?.innerType || def?.type;
+      if (inner) return this.zodToJsonSchemaProp(inner);
+      return { ...base };
     }
 
-    if (typeName === 'ZodDefault') {
-      const inner = this.zodToJsonSchemaProp(def?.innerType || def?.type);
-      return { ...inner, ...base, default: def?.defaultValue?.() ?? def?.defaultValue };
+    if (typeName === 'default') {
+      const inner = def?.innerType || def?.type;
+      if (inner) return this.zodToJsonSchemaProp(inner);
+      return { ...base, default: def?.defaultValue?.() ?? def?.defaultValue };
     }
 
     // z.preprocess wraps the real schema in a ZodEffects/ZodTransform on

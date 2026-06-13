@@ -264,10 +264,12 @@ ${strategySection}
 
 - **parallel_fetch** - Investigate multiple URLs simultaneously (fast HTTP or real browsers)
   \`\`\`json
-  {"operation": "parallel_fetch", "urls": ["https://site1.com", "https://site2.com"], "task": "Compare pricing", "timeoutMs": 30000}
-  Uses real browsers by default (Extension CDP / Duya browser plugin). Set \`"useBrowser": false\` for fast HTTP only (no JS rendering).
+  {"operation": "parallel_fetch", "urls": ["https://site1.com", "https://site2.com"], "task": "Compare pricing", "timeoutMs": 30000, "useBrowser": true}
   \`\`\`
-  **Required parameter: \`urls\`** — must be an array of URL strings. Example: ["https://a.com", "https://b.com"]
+  - \`urls\` **must be a JSON array** of URL strings. Do NOT wrap the array in quotes. Example: \`["https://a.com", "https://b.com"]\`
+  - \`timeoutMs\` **must be a number**, not a string. Do NOT wrap it in quotes. Example: \`30000\`
+  - \`useBrowser\` **must be a boolean** (\`true\` or \`false\`), not a string. Do NOT wrap it in quotes.
+  Uses real browsers by default (Extension CDP / Duya browser plugin). Set \`useBrowser: false\` for fast HTTP only (no JS rendering).
   Opens multiple independent browser sessions (up to 5) to investigate different URLs at the same time.
   Each URL gets its own browser window and DOM snapshot.
   Use this for:
