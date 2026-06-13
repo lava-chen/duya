@@ -74,12 +74,12 @@ export function SettingsSelectRow({
   return (
     <div
       className={cn(
-        "flex items-center justify-between px-4 py-3.5",
+        "flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between",
         disabled && "opacity-50",
         className
       )}
     >
-      <div className="flex-1 min-w-0 pr-4">
+      <div className="min-w-0 flex-1 sm:pr-4">
         <div className="text-sm font-medium text-foreground">{label}</div>
         {description && (
           <div className="text-sm text-muted-foreground mt-0">{description}</div>
@@ -89,7 +89,7 @@ export function SettingsSelectRow({
         value={value}
         onChange={onValueChange}
         disabled={disabled}
-        className="settings-select-antd settings-select-row"
+        className="w-full settings-select-antd settings-select-row sm:w-[21rem]"
         popupMatchSelectWidth={false}
         classNames={{ popup: { root: "settings-select-dropdown" } }}
         options={options.map((option) => ({

@@ -47,13 +47,16 @@
   font-display: swap;
 }
 
-/* Styrene Font - Primary UI Font */
+/* Styrene Font - Primary UI Font (Latin only; CJK falls through to
+   Microsoft YaHei / PingFang SC so the sidebar items use the same CJK
+   face the right pane already does). */
 @font-face {
   font-family: 'Styrene';
   src: url('/fonts/Styrene.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+2000-206F, U+20A0-20CF, U+2122, U+2190-21FF, U+2200-22FF;
 }
 
 @font-face {
@@ -62,6 +65,7 @@
   font-weight: 500;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+2000-206F, U+20A0-20CF, U+2122, U+2190-21FF, U+2200-22FF;
 }
 
 @font-face {
@@ -70,6 +74,7 @@
   font-weight: 600;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+2000-206F, U+20A0-20CF, U+2122, U+2190-21FF, U+2200-22FF;
 }
 
 @font-face {
@@ -78,6 +83,7 @@
   font-weight: 700;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+2000-206F, U+20A0-20CF, U+2122, U+2190-21FF, U+2200-22FF;
 }
 
 /* Shimmer animation for loading states */
@@ -289,8 +295,11 @@ body {
     radial-gradient(circle at 86% 0%, var(--bg-accent-2), transparent 44%);
   color: var(--text);
   font-family: 'Styrene', "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* No -webkit-font-smoothing override on purpose: on Windows it disables
+     ClearType and makes the CJK fallback fonts (YaHei / PingFang) look
+     "sticky" with hard vertical strokes. The platform default (subpixel
+     / ClearType on Windows, grayscale on macOS) gives the cleanest result
+     for the same font stack. */
 }
 
 /* Message font styles - Styrene as primary font */
@@ -551,7 +560,11 @@ a {
 
 .sidebar-section-label {
   color: var(--muted);
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  /* Inherit body font stack (Styrene → Segoe UI / PingFang SC / YaHei)
+     instead of the mono stack — the mono fallback (Cascadia / Consolas)
+     has no CJK glyphs, so Chinese section headers used to land on a
+     different system font and look visibly heavier than the items below. */
+  font-family: inherit;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   font-size: 0.75rem;
@@ -2324,78 +2337,123 @@ a {
 
 /* ========================================
    Settings Select (Ant Design) Styles
-   ======================================== */
+   ========================================
+   Note: antd v6 removed `.ant-select-selector` (replaced by
+   `.ant-select-content`) and paints the background/border directly on
+   the root `.ant-select` via the `--ant-select-*` CSS variables.
+   Override the variables on the root so both v5 (`.ant-select-selector`)
+   and v6 (`.ant-select-content` / root) get themed correctly. */
 
 .settings-select-antd {
   min-width: 140px;
+  /* antd v6 visual variables — must be set on the root .ant-select */
+  --ant-select-background-color: var(--surface);
+  --ant-select-border-color: var(--border);
+  --ant-select-color: var(--text);
+  --ant-select-affix-color: var(--text);
+  /* Match the page font. antd v6 only sets font-family: inherit on
+     .ant-select-input; the .ant-select-content / content-value used to
+     display the selected value falls back to the browser sans-serif
+     stack and visually clashes with Styrene. */
+  font-family: 'Styrene', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
-.settings-select-antd .ant-select-selector {
+/* antd v6: the root element is the visual trigger. */
+.settings-select-antd.ant-select {
   background: var(--surface) !important;
   background-color: var(--surface) !important;
+  border: 1px solid var(--border) !important;
   border-color: var(--border) !important;
   border-radius: 0.5rem !important;
-  padding: 0 0.75rem !important;
+  height: 36px !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+/* antd v5 fallback: keep the old `.ant-select-selector` rules in case
+   any leftover v5 Selects still use it. */
+.settings-select-antd .ant-select-selector {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  border-radius: 0.5rem !important;
+  box-shadow: none !important;
+  padding: 0 2.5rem 0 0.875rem !important;
   height: 36px !important;
 }
 
-/* Target all possible inner elements that might have white background */
+.settings-select-row.ant-select {
+  width: min(100%, 21rem);
+  flex-shrink: 0;
+}
+
+/* Keep the content layer transparent so antd doesn't render a nested box. */
+.settings-select-antd .ant-select-selection-wrap,
+.settings-select-antd .ant-select-selection-search,
+.settings-select-antd .ant-select-selection-item,
+.settings-select-antd .ant-select-selection-placeholder,
+.settings-select-antd .ant-select-selection-search-input,
+.settings-select-antd .ant-select-content,
+.settings-select-antd .ant-select-content *,
 .settings-select-antd .ant-select-selector *,
-.settings-select-antd .ant-select-selector .ant-select-selection-search-input,
-.settings-select-antd .ant-select-selector input,
-.settings-select-antd .ant-select-selector .ant-select-selection-item,
-.settings-select-antd .ant-select-selector .ant-select-selection-placeholder {
+.settings-select-antd .ant-select-selector input {
   background: transparent !important;
   background-color: transparent !important;
 }
 
-/* Ensure the selector wrapper itself has correct background */
-.settings-select-antd.ant-select:not(.ant-select-customize-input) .ant-select-selector {
-  background: var(--surface) !important;
-  background-color: var(--surface) !important;
-}
-
-/* Target single mode specific selector */
+.settings-select-antd.ant-select:not(.ant-select-customize-input) .ant-select-selector,
 .settings-select-antd.ant-select-single .ant-select-selector {
-  background: var(--surface) !important;
-  background-color: var(--surface) !important;
+  display: flex !important;
+  align-items: center !important;
 }
 
 /* Target the inner input/selector element */
 .settings-select-antd .ant-select-selector .ant-select-selection-search-input,
-.settings-select-antd .ant-select-selector input {
+.settings-select-antd .ant-select-selector input,
+.settings-select-antd .ant-select-content input {
   background: transparent !important;
   background-color: transparent !important;
   color: var(--text) !important;
 }
 
-.settings-select-antd .ant-select-selection-item {
+.settings-select-antd .ant-select-selection-item,
+.settings-select-antd .ant-select-content .ant-select-selection-item,
+.settings-select-antd .ant-select-selection-placeholder {
   color: var(--text) !important;
   font-size: 0.875rem !important;
-  line-height: 34px !important;
+  line-height: 1.25 !important;
+  display: block !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 .settings-select-antd .ant-select-arrow {
   color: var(--muted) !important;
+  inset-inline-end: 0.875rem !important;
+  width: auto !important;
+  height: auto !important;
+  margin-top: 0 !important;
+  transform: translateY(-50%) !important;
 }
 
-.settings-select-antd:hover .ant-select-selector {
+.settings-select-antd.ant-select:hover {
   border-color: var(--accent) !important;
 }
 
-.settings-select-antd.ant-select-focused .ant-select-selector {
+.settings-select-antd.ant-select.ant-select-focused {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 2px var(--accent-soft) !important;
 }
 
-.settings-select-antd.ant-select-disabled .ant-select-selector {
+.settings-select-antd.ant-select-disabled {
   background: var(--surface) !important;
   background-color: var(--surface) !important;
   opacity: 0.5;
 }
 
 /* Ensure the select trigger has correct background */
-.settings-select-antd .ant-select-selection-placeholder {
+.settings-select-antd .ant-select-selection-placeholder,
+.settings-select-antd .ant-select-content .ant-select-selection-placeholder {
   color: var(--muted) !important;
 }
 
@@ -5411,12 +5469,13 @@ html.compact .panel-zone {
   z-index: 10;
 }
 
-/* Pending card: rounded top, flat bottom, same chrome as .sub-agent-panel */
+/* Pending card: rounded top, flat bottom — matches the input box (rounded-3xl = 1.5rem) */
 .permission-prompt-panel {
   border-radius: 0.75rem 0.75rem 0 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-bottom: none;
+  box-shadow: 0 -1px 6px rgba(0, 0, 0, 0.05);
   overflow: hidden;
 }
 
@@ -5424,6 +5483,7 @@ html.compact .panel-zone {
 .permission-prompt-panel.resolved {
   border-radius: 0.75rem;
   border-bottom: 1px solid var(--border);
+  box-shadow: none;
 }
 
 .permission-prompt-wrapper.ask-user-question {
@@ -5746,7 +5806,6 @@ html[data-theme="light"] .ask-question-option.selected {
   background: rgba(255, 255, 255, 0.16);
   color: rgba(255, 255, 255, 0.88);
 }
-
 
 .permission-prompt-header {
   display: flex;
@@ -7084,6 +7143,34 @@ html[data-message-font-size="large"] .prose h3 {
 
 .mailbox-bubble-save:hover {
   opacity: 0.9;
+}
+
+/* ============================================
+   BrowserGroup — collapse consecutive browser
+   actions (e.g. browser_tool with multiple
+   operations) into a single toggle that shows
+   the snapshot / compactSnapshot content and
+   hides the raw JSON behind a "显示原始工具
+   调用输出" button.
+   ============================================ */
+
+.browser-group {
+  width: 100%;
+}
+
+.browser-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0.15rem 0;
+}
+
+.browser-group-fallback {
+  margin: 0.35rem 0.5rem 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 0.35rem;
 }
 
 /* ============================================

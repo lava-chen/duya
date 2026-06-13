@@ -17,17 +17,16 @@ export function SettingsCard({
   const childArray = React.Children.toArray(children).filter(Boolean);
 
   const variantStyles = {
-    default: "bg-surface/50 border-border/50",
-    highlight: "bg-accent/[0.03] border-accent/20",
-    danger: "bg-destructive/[0.03] border-destructive/20",
-    success: "bg-green-500/[0.03] border-green-500/20",
+    default: "bg-white/[0.025] border-border/30",
+    highlight: "bg-accent/[0.04] border-accent/25",
+    danger: "bg-destructive/[0.04] border-destructive/25",
+    success: "bg-green-500/[0.04] border-green-500/25",
   };
 
   return (
     <div
       className={cn(
-        "rounded-xl border overflow-hidden backdrop-blur-sm transition-all duration-200",
-        "hover:shadow-sm",
+        "rounded-xl border overflow-hidden transition-all duration-200",
         variantStyles[variant],
         className
       )}
@@ -35,7 +34,7 @@ export function SettingsCard({
       {divided && childArray.length > 1
         ? childArray.map((child, index) => (
             <React.Fragment key={index}>
-              {index > 0 && <div className="h-px bg-border/50 mx-4" />}
+              {index > 0 && <div className="h-px bg-border/20 mx-4" />}
               {child}
             </React.Fragment>
           ))
