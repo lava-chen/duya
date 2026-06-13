@@ -20,5 +20,11 @@
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["node_modules", "electron/**"]
+  "exclude": [
+    "node_modules",
+    "electron/**",
+    "src/**/*.stories.tsx",
+    "src/**/*.stories.ts",
+    "src/**/__stories__/**"
+  ]
 }
