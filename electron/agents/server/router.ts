@@ -8,7 +8,7 @@ import { WorkerManager } from './worker-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { ConductorService } from './conductor-service';
 import { Logger } from './logger';
-import { toLLMProvider, type ApiProvider } from '../../config/manager';
+import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 
 export interface RouterDeps {
   sessionManager: SessionManager;

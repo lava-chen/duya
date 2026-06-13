@@ -34,19 +34,12 @@ function safeIsPackaged(): boolean {
 // TYPES & INTERFACES
 // =============================================================================
 
-export interface ApiProvider {
-  id: string;
-  name: string;
-  providerType: 'anthropic' | 'openai' | 'ollama' | 'openai-compatible' | 'openrouter' | 'bedrock' | 'vertex' | 'gemini-image' | 'google';
-  baseUrl: string;
-  apiKey: string;
-  isActive: boolean;
-  extraEnv?: Record<string, string>;
-  headers?: Record<string, string>;
-  options?: Record<string, unknown>;
-  notes?: string;
-  sortOrder?: number;
-}
+// `ApiProvider` and `toLLMProvider` live in `./provider-types` so the
+// agent-server bundle (which runs in `ELECTRON_RUN_AS_NODE=1` and cannot
+// `require('electron')`) can import the type and the mapping without
+// pulling in the electron-native parts of the config manager.
+export { type ApiProvider, type ApiProviderType, type LLMProvider, toLLMProvider } from './provider-types';
+import type { ApiProvider } from './provider-types';
 
 export interface VisionSettings {
   provider: string;
@@ -216,31 +209,7 @@ export type PortRole = 'renderer' | 'agent' | 'main';
 // LLM Provider type for agent process
 export type LLMProvider = 'anthropic' | 'openai' | 'ollama';
 
-/**
- * Convert provider type to LLM provider for agent process
- * Now Ollama has its own native API client
- */
-export function toLLMProvider(providerType: ApiProvider['providerType'], baseUrl?: string): LLMProvider {
-  switch (providerType) {
-    case 'anthropic':
-    case 'bedrock':
-    case 'vertex':
-      return 'anthropic';
-    case 'openai':
-    case 'openai-compatible':
-    case 'openrouter':
-    case 'google':
-    case 'gemini-image':
-      if (baseUrl?.includes('localhost:11434') || baseUrl?.includes('127.0.0.1:11434')) {
-        return 'ollama';
-      }
-      return 'openai';
-    case 'ollama':
-      return 'ollama';
-    default:
-      return 'anthropic';
-  }
-}
+// `toLLMProvider` is re-exported above from `./provider-types`.
 
 // =============================================================================
 // SCHEMA VALIDATION
