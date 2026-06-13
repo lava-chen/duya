@@ -696,7 +696,7 @@ export function isGatewaySession(sessionId: string): boolean {
 // IPC handlers
 const _gatewayStatusRequests = new Map<string, { resolve: (value: any) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
 
-function getOrBuildInitConfig(): GatewayInitConfig {
+export function getOrBuildInitConfig(): GatewayInitConfig {
   // 注意：不再缓存。每次调用都从 DB 重读，确保 UI 保存新凭据后下一次 start 拿到最新值。
   // 缓存导致过 "配置完 channel 后必须重启 dev 才能生效" 的 bug。
 
