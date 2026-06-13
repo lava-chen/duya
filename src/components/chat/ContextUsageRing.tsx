@@ -36,7 +36,7 @@ export function ContextUsageRing({
   onCompress,
   isCompacting = false,
 }: ContextUsageRingProps) {
-  const usage = useContextUsage(messages, modelName);
+  const usage = useContextUsage(messages, modelName, contextWindow);
   const breakdown = useContextBreakdown(
     messages,
     usage,

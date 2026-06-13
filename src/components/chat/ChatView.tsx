@@ -15,7 +15,7 @@ import { subscribeToPermissions, subscribeToPhase } from '@/lib/stream-session-m
 import { Info, CaretDown } from '@phosphor-icons/react';
 import type { PermissionMode } from './PermissionModeSelector';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
-import { getThreadIPC, updateThreadIPC, listThreadsByParentIdIPC, getProviderIPC } from '@/lib/ipc-client';
+import { getThreadIPC, updateThreadIPC, listThreadsByParentIdIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
 import { useSettings } from '@/hooks/useSettings';
 import { useStreamPhase } from '@/hooks/useStreamPhase';
 import { useStreamingContextUsage } from '@/hooks/useStreamingContextUsage';
@@ -25,7 +25,6 @@ import { useConversationStore } from '@/stores/conversation-store';
 import type { FileAttachment } from '@/types/message';
 import { SubAgentPanel } from './SubAgentPanel';
 import { MailboxPanel } from './MailboxPanel';
-import { StreamingInputBar } from './StreamingInputBar';
 import { compactContext } from '@/lib/agent-sse-client';
 import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from './AgentModeSelector';
 import type { AgentMode } from './AgentModeSelector';
@@ -118,6 +117,13 @@ export function ChatView({
   const { settings, save: saveSettings } = useSettings();
   const [compressionNotification, setCompressionNotification] = useState<string | null>(null);
   const [sessionModel, setSessionModel] = useState<string>('');
+  const [sessionProviderId, setSessionProviderId] = useState<string>('');
+  // Per-model `contextWindow` resolved from the
+  // `provider_model_capabilities` table. The user toggles this via the
+  // 200K/1M buttons on the provider edit page; without this hook the
+  // ContextUsageRing falls back to a hardcoded 200K for any minimax-*
+  // model id, which silently hides 1M sessions.
+  const [capabilityContextWindow, setCapabilityContextWindow] = useState<number | undefined>(undefined);
   const [permissionMode, setPermissionMode] = useState<PermissionMode | null>(null);
   const [permissionUpdatePending, setPermissionUpdatePending] = useState(false);
   const [agentMode, setAgentMode] = useState<AgentMode>('main');
@@ -207,6 +213,9 @@ export function ChatView({
     sessionId,
     permissionProfile,
   });
+  const isAskUserQuestionPending =
+    pendingPermission?.toolName === 'AskUserQuestion' ||
+    pendingPermission?.mode === 'ask_user_question';
 
   // Load session model and permission mode on mount
   // Priority: 1) session saved model (if not default) 2) lastSelectedModel
@@ -215,6 +224,7 @@ export function ChatView({
       getThreadIPC(sessionId)
         .then(async data => {
           if (data?.thread) {
+            setSessionProviderId(data.thread.providerId || '');
             // Priority 1: Session has a specific model saved (and it's not the DB default)
             if (data.thread.model && data.thread.model !== DB_DEFAULT_MODEL) {
               // Check if model is in UI format "[providerName] modelId"
@@ -291,6 +301,42 @@ export function ChatView({
     // Fallback: treat as pure model name
     return { providerName: null, modelName: model.replace(/^"|"$/g, '') };
   }, []);
+
+  // Resolve the model's `contextWindow` capability so the context ring
+  // renders the right grid (10×10 for 200K, 20×10 for 1M+). Re-fires
+  // whenever the session's (providerId, model) pair changes — including
+  // model switches from the picker above the input.
+  useEffect(() => {
+    if (!sessionProviderId || !sessionModel) {
+      setCapabilityContextWindow(undefined);
+      return;
+    }
+    const { modelName: pureModel } = parseModelName(sessionModel);
+    if (!pureModel) {
+      setCapabilityContextWindow(undefined);
+      return;
+    }
+    let cancelled = false;
+    void getModelCapabilityIPC({
+      providerId: sessionProviderId,
+      modelId: pureModel,
+    })
+      .then((cap) => {
+        if (cancelled) return;
+        setCapabilityContextWindow(
+          cap && typeof cap.contextWindow === 'number' && cap.contextWindow > 0
+            ? cap.contextWindow
+            : undefined,
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCapabilityContextWindow(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionProviderId, sessionModel, parseModelName]);
 
   // Handle model change - persist to session AND global settings
   const handleModelChange = useCallback((model: string) => {
@@ -699,26 +745,26 @@ export function ChatView({
               />
             </div>
 
-            {/* Permission prompt - attached above input */}
-            <PermissionPrompt
-              pendingPermission={pendingPermission}
-              permissionResolved={permissionResolved}
-              onPermissionResponse={respondToPermission}
-              permissionProfile={permissionProfile}
-            />
+            {!isAskUserQuestionPending && (
+              <div className="max-w-[750px] mx-auto">
+                <PermissionPrompt
+                  pendingPermission={pendingPermission}
+                  permissionResolved={permissionResolved}
+                  onPermissionResponse={respondToPermission}
+                  permissionProfile={permissionProfile}
+                />
+              </div>
+            )}
 
             {/* Mailbox panel (Plan202) - shown above input during streaming */}
             {isStreaming && <MailboxPanel sessionId={sessionId} />}
 
-            {isStreaming ? (
-              <StreamingInputBar
-                onStop={handleStop}
-                modelLabel={sessionModel || t('messageInput.selectModel')}
-                permissionLabel={
-                  permissionMode === 'bypass' ? t('permissionMode.bypass')
-                    : permissionMode === 'auto' ? t('permissionMode.auto')
-                      : t('permissionMode.ask')
-                }
+            {isAskUserQuestionPending ? (
+              <PermissionPrompt
+                pendingPermission={pendingPermission}
+                permissionResolved={permissionResolved}
+                onPermissionResponse={respondToPermission}
+                permissionProfile={permissionProfile}
               />
             ) : (
               <MessageInput
@@ -766,6 +812,7 @@ export function ChatView({
                 <ContextUsageRing
                   messages={messages}
                   modelName={sessionModel}
+                  contextWindow={capabilityContextWindow}
                   onCompress={handleCompact}
                   isCompacting={isCompacting}
                 />
