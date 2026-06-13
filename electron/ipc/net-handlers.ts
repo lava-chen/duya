@@ -1,13 +1,22 @@
 import { ipcMain } from 'electron';
 import { testProviderConnection, TestProviderBody } from '../services/network/provider-tester';
 import { fetchOllamaModels } from '../services/network/model-detector';
+import { fetchProviderModels, FetchProviderModelsBody } from '../services/network/model-fetcher';
 import { testBridgeChannel } from '../services/network/bridge-tester';
 import { startWeixinQrLogin, pollWeixinQrStatus, cancelWeixinQrSession } from '../services/network/wechat-qr';
 import { getProviderUsage, ProviderUsageBody } from '../services/network/provider-usage';
 import { getLogger, LogComponent } from '../logging/logger';
+import { isMaskedKey } from '../../src/lib/providers/secret';
+import { getProviderStore } from '../services/providers/provider-store-electron';
 
 export { testBridgeChannel } from '../services/network/bridge-tester';
 export { testProviderConnection, TestProviderBody, ConnectionTestResult } from '../services/network/provider-tester';
+export {
+  fetchProviderModels,
+  FetchProviderModelsBody,
+  FetchProviderModelsResult,
+  FetchedModel,
+} from '../services/network/model-fetcher';
 
 export function registerNetHandlers(): void {
   ipcMain.handle('net:provider:test', async (_event, body: TestProviderBody) => {
@@ -102,5 +111,78 @@ export function registerNetHandlers(): void {
     }
   });
 
+  // Plan 205 Phase H1: list-models endpoint used by
+  // `ProviderEditView` so the user can pick a model from a
+  // dropdown instead of typing a raw id.
+  ipcMain.handle('net:provider:models', async (_event, body: FetchProviderModelsBody) => {
+    try {
+      // Plan 209 fix-up: when the renderer is editing an existing
+      // provider (`provider_id` is set) and the renderer did NOT
+      // supply a usable `api_key` (i.e. the user did not retype
+      // their key, or the only value available is the masked
+      // hint), fall back to the on-disk key. Without this the
+      // fetch always 401s because the masked hint like
+      // `sk-a***cdef` is never accepted upstream.
+      const resolved = await resolveFetchProviderModelsBody(body);
+      return await fetchProviderModels(resolved);
+    } catch (error) {
+      getLogger().error('Provider models fetch error', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.NetHandlers);
+      return {
+        success: false,
+        error: {
+          code: 'UNKNOWN_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to fetch provider models',
+        },
+      };
+    }
+  });
+
   getLogger().info('Registered network IPC handlers', undefined, LogComponent.NetHandlers);
+}
+
+/**
+ * Plan 209 fix-up: resolve the `api_key` (and optionally
+ * `base_url` / `protocol`) for a fetch-models request by falling
+ * back to the on-disk provider. The renderer only ever sees the
+ * masked hint, so the only way it can fetch models against an
+ * existing provider is to ask the main process to look up the
+ * real key.
+ *
+ * Resolution order (first match wins):
+ *   1. `body.api_key` is a non-empty, non-masked value → use it
+ *      (the user retyped their key on the edit page).
+ *   2. `body.provider_id` is set and the on-disk provider has a
+ *      real (non-masked) `auth.apiKey` → use the on-disk key,
+ *      and fill in `base_url` / `protocol` from the same
+ *      provider if the renderer didn't supply them.
+ *   3. Otherwise return the body unchanged; the fetcher will
+ *      short-circuit with `NO_CREDENTIALS`.
+ *
+ * Exported (not just module-private) so unit tests can exercise
+ * the resolution logic without standing up a full ipcMain harness.
+ */
+export async function resolveFetchProviderModelsBody(
+  body: FetchProviderModelsBody,
+): Promise<FetchProviderModelsBody> {
+  if (body.api_key && !isMaskedKey(body.api_key)) {
+    return body;
+  }
+  if (!body.provider_id) {
+    return body;
+  }
+  try {
+    const stored = getProviderStore().getLlmProvider(body.provider_id);
+    if (!stored?.auth?.apiKey || isMaskedKey(stored.auth.apiKey)) {
+      return body;
+    }
+    return {
+      ...body,
+      api_key: stored.auth.apiKey,
+      base_url: body.base_url || stored.endpoints?.baseUrl || undefined,
+      protocol: body.protocol || (stored as { protocol?: string }).protocol || undefined,
+    };
+  } catch {
+    // Store not available (e.g. in unit tests). Fall through.
+    return body;
+  }
 }
