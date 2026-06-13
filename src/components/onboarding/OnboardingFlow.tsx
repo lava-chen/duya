@@ -198,6 +198,7 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
         apiKey: isOllama ? 'ollama' : data.api_key.trim(),
         isActive: true,
         options: Object.keys(options).length > 0 ? options : undefined,
+        notes: data.notes,
       });
 
       if (provider) {

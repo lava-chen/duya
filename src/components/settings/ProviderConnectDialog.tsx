@@ -37,6 +37,7 @@ import { useApiKeyState } from "./forms/hooks/useApiKeyState";
 import { useBaseUrlState } from "./forms/hooks/useBaseUrlState";
 import { useModelSelection } from "./forms/hooks/useModelSelection";
 import { usePresetDraft } from "./forms/hooks/usePresetDraft";
+import { isMaskedKey } from "@/lib/providers/secret";
 
 // AutoLink component to detect and render URLs as clickable links
 function AutoLink({ text }: { text: string }) {
@@ -82,6 +83,7 @@ export interface EditableProvider {
   extra_env?: string;
   role_models_json?: string;
   options_json?: string;
+  notes?: string;
 }
 
 export interface ProviderFormData {
@@ -95,6 +97,13 @@ export interface ProviderFormData {
   enabled_models?: string[];
   options_json?: string;
   is_active?: boolean;
+  /**
+   * Plan 209 P3: user-editable note shown on the provider card
+   * and used to disambiguate multiple accounts of the same
+   * vendor. Optional — the onboarding flow now collects it but
+   * keeps the type optional so existing callers keep compiling.
+   */
+  notes?: string;
 }
 
 export function ProviderConnectDialog({
@@ -150,6 +159,13 @@ export function ProviderConnectDialog({
   const [mapOpus, setMapOpus] = useState("");
   const [mapHaiku, setMapHaiku] = useState("");
   const [titleModel, setTitleModel] = useState("");
+  // Plan 209 P3: the new `ProviderEditView` exposes a "Notes"
+  // input for distinguishing multiple accounts of the same
+  // vendor (e.g. "company account" vs "personal"). The
+  // onboarding dialog previously skipped this field — users
+  // could only set it by editing later. Now we capture it at
+  // add-time so the first-saved state is complete.
+  const [notes, setNotes] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -193,7 +209,15 @@ export function ProviderConnectDialog({
       presetDraft.setName(editProvider.name);
       baseUrlState.setBaseUrl(editProvider.base_url);
       setExtraEnv(editProvider.extra_env || JSON.stringify(preset.defaultEnvOverrides));
-      apiKeyState.setApiKey(editProvider.api_key || "");
+      // Plan 209: the hook auto-detects a mask in `apiKey` and
+      // keeps it as `maskedApiKey` with `keyState: 'untouched'`.
+      // Forwarding the same value through `setApiKey` here would
+      // flip to 'replaced' and re-introduce the pre-Plan-209 bug.
+      if (!isMaskedKey(editProvider.api_key || "")) {
+        apiKeyState.setApiKey(editProvider.api_key || "");
+      }
+      // Plan 209 P3: seed notes from the existing provider.
+      setNotes(editProvider.notes || "");
 
       const firstPresetModel = preset.defaultModels?.[0]?.modelId || "";
       try {
@@ -226,6 +250,7 @@ export function ProviderConnectDialog({
       presetDraft.setName(preset.name);
       setExtraEnv(JSON.stringify(preset.defaultEnvOverrides || {}));
       apiKeyState.setApiKey("");
+      setNotes("");
       setModelName("");
       setMapSonnet("");
       setMapOpus("");
@@ -326,7 +351,7 @@ export function ProviderConnectDialog({
     e.preventDefault();
     setError(null);
 
-    if (preset.fields.includes("api_key") && !apiKeyState.apiKey && !isEdit) {
+    if (preset.fields.includes("api_key") && apiKeyState.keyState !== "replaced" && !isEdit) {
       setError(t("provider.apiKeyRequired"));
       return;
     }
@@ -371,16 +396,31 @@ export function ProviderConnectDialog({
       const optionsJsonString =
         Object.keys(optionsJson).length > 0 ? JSON.stringify(optionsJson) : undefined;
 
+      // Plan 209: the dialog emits the legacy `api_key: string`
+      // shape (consumed by `onSave`). When the user is in
+      // 'untouched' state (existing edit), the apiKey is the
+      // masked value — passing it through would re-introduce the
+      // pre-Plan-209 bug. We forward '' in that case and let the
+      // consumer's onSave figure out whether to keep the existing
+      // credential (typically by re-reading the server).
+      const apiKeyOut =
+        apiKeyState.keyState === "replaced"
+          ? apiKeyState.apiKey
+          : apiKeyState.keyState === "cleared"
+            ? ""
+            : "";
+
       await onSave({
         name: presetDraft.draftLlmProvider?.name?.trim() || preset.name,
         provider_type: preset.provider_type,
         protocol: preset.protocol,
         base_url: baseUrlState.baseUrl.trim() || preset.baseUrl,
-        api_key: apiKeyState.apiKey,
+        api_key: apiKeyOut,
         extra_env: extraEnv,
         role_models_json: roleModelsJson,
         enabled_models: enabledList.length > 0 ? enabledList : undefined,
         options_json: optionsJsonString,
+        notes: notes.trim() || undefined,
       });
       onOpenChange(false);
     } catch (err) {
@@ -465,17 +505,29 @@ export function ProviderConnectDialog({
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          {/* Name field */}
+          {/* Name + Notes (side-by-side) */}
           {preset.fields.includes("name") && (
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">{t("provider.name")}</label>
-              <input
-                type="text"
-                value={presetDraft.draftLlmProvider?.name || ""}
-                onChange={(e) => presetDraft.setName(e.target.value)}
-                placeholder={preset.name}
-                className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50"
-              />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">{t("provider.name")}</label>
+                <input
+                  type="text"
+                  value={presetDraft.draftLlmProvider?.name || ""}
+                  onChange={(e) => presetDraft.setName(e.target.value)}
+                  placeholder={preset.name}
+                  className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">{t("provider.notes")}</label>
+                <input
+                  type="text"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder={t("provider.notesPlaceholder")}
+                  className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50"
+                />
+              </div>
             </div>
           )}
 
@@ -502,13 +554,15 @@ export function ProviderConnectDialog({
               <div className="flex gap-2">
                 <input
                   type={apiKeyState.revealApiKey ? "text" : "password"}
-                  value={
-                    apiKeyState.hasUserApiKey
-                      ? apiKeyState.apiKey
-                      : apiKeyState.maskedApiKey
-                  }
+                  value={apiKeyState.apiKey}
                   onChange={(e) => apiKeyState.setApiKey(e.target.value)}
-                  placeholder={preset.authStyle === "auth_token" ? "token-..." : "sk-..."}
+                  placeholder={
+                    apiKeyState.maskedApiKey
+                      ? t("provider.apiKeyKeepCurrent")
+                      : preset.authStyle === "auth_token"
+                        ? "token-..."
+                        : "sk-..."
+                  }
                   className="flex-1 px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
                   autoFocus
                 />
@@ -779,7 +833,8 @@ export function ProviderConnectDialog({
                 onClick={handleTestConnection}
                 disabled={
                   testing ||
-                  (!apiKeyState.apiKey && preset.fields.includes("api_key"))
+                  (preset.fields.includes("api_key") &&
+                    apiKeyState.keyState !== "replaced")
                 }
                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border/50 bg-chip text-xs font-medium hover:bg-accent/10 disabled:opacity-50"
               >
