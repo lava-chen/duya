@@ -97,6 +97,8 @@ import {
   FeatherIcon,
   DownloadSimpleIcon,
   ArrowCounterClockwiseIcon,
+  TestTubeIcon,
+  UsersThreeIcon,
 } from "@phosphor-icons/react";
 
 // Tabler Icons - Agent icons & Channel icons
@@ -215,6 +217,9 @@ export {
   IconMessageCircle as ChannelIcon,
   // Reset icon
   ArrowCounterClockwiseIcon,
+  // Plan 204 — provider actions icons
+  TestTubeIcon,
+  UsersThreeIcon,
 };
 
 // Aliases for backward compatibility
