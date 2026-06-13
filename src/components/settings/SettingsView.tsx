@@ -15,6 +15,8 @@ import {
   CapabilitiesSection,
 } from "@/components/settings";
 import { UsageDashboard } from "@/components/usage";
+import { ProviderPickerView } from "@/components/providers/ProviderPickerView";
+import { ProviderEditView } from "@/components/providers/ProviderEditView";
 
 export function SettingsView() {
   const { settingsTab } = useConversationStore();
@@ -25,6 +27,9 @@ export function SettingsView() {
         {settingsTab === "general" && <GeneralSection />}
         {settingsTab === "appearance" && <AppearanceSection />}
         {settingsTab === "providers" && <ProvidersSection />}
+        {/* Plan 205: inline sub-views for adding / editing a provider. */}
+        {settingsTab === "provider-picker" && <ProviderPickerView />}
+        {settingsTab === "provider-edit" && <ProviderEditView />}
         {settingsTab === "skills" && <SkillsSection />}
         {settingsTab === "mcp" && <MCPSection />}
         {settingsTab === "channels" && <BridgeSection />}

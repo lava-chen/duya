@@ -26,13 +26,16 @@
  *   - `useOpenExternal` (L1 utility)
  *   - `ProviderAddButton` (right-aligned entry into the picker)
  *   - `ProviderEmptyState` (rendered when the list is empty)
- *   - `DefaultProviderSection` (settings UI to pick the soft default)
+ *
+ * Note: `DefaultProviderSection` was removed — the provider list
+ * already exposes the same "promote to default" affordance per
+ * row, so the standalone section beneath the list was a
+ * duplicate.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ProviderList } from '@/components/providers/ProviderList';
 import { ProviderAddButton } from '@/components/providers/ProviderAddButton';
-import { DefaultProviderSection } from './DefaultProviderSection';
 import { useSetDefaultProviderMutation } from '@/lib/providers/hooks/useSetDefaultProviderMutation';
 import { useDeleteProviderMutation } from '@/lib/providers/hooks/useDeleteProviderMutation';
 import { useProviderTestMutation } from '@/lib/providers/hooks/useProviderTestMutation';
@@ -221,8 +224,6 @@ export function ProviderManagement({ appId = 'duya' }: ProviderManagementProps) 
         onOpenWebsite={openExternal}
         testingProviderIds={testingIds}
       />
-
-      <DefaultProviderSection appId={appId} />
     </div>
   );
 }

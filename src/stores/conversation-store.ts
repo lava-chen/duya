@@ -51,7 +51,29 @@ export interface ProjectGroup {
 
 // View types for state-driven UI
 export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor' | 'memory';
-export type SettingsTab = 'general' | 'appearance' | 'providers' | 'skills' | 'mcp' | 'channels' | 'browser' | 'security' | 'usage' | 'agents' | 'support' | 'plugins';
+// Plan 205: sub-views inside the `providers` settings tab.
+// `provider-picker` lists the preset cards; `provider-edit` shows
+// the inline edit form for the chosen preset (create) or existing
+// provider (edit). Both are pages inside the settings tab, not
+// modals.
+export type SettingsTab =
+  | 'general' | 'appearance' | 'providers'
+  | 'provider-picker' | 'provider-edit'
+  | 'skills' | 'mcp' | 'channels' | 'browser' | 'security'
+  | 'usage' | 'agents' | 'support' | 'plugins';
+
+/**
+ * Plan 205: the target of the `provider-edit` page. Either
+ * `presetKey` is set (new provider) or `providerId` is set (edit
+ * existing). The page reads this from the store and dispatches
+ * the right flow.
+ */
+export interface ProviderEditTarget {
+  /** New provider flow: which preset to prefill. */
+  presetKey?: string;
+  /** Edit existing provider flow. */
+  providerId?: string;
+}
 
 interface ConversationState {
   // View state for zero-router UI
@@ -59,6 +81,9 @@ interface ConversationState {
   settingsTab: SettingsTab;
   // View to restore when leaving settings; null when no snapshot was taken.
   previousView: ViewType | null;
+  // Plan 205: the current provider edit target. Cleared on
+  // navigation away from `provider-edit`.
+  providerEditTarget: ProviderEditTarget | null;
 
   // Existing state
   threads: Thread[];
@@ -74,6 +99,10 @@ interface ConversationState {
   // Actions
   setCurrentView: (view: ViewType) => void;
   setSettingsTab: (tab: SettingsTab) => void;
+  /** Plan 205: enter the provider edit page with the given target. */
+  enterProviderEdit: (target: ProviderEditTarget) => void;
+  /** Plan 205: clear the provider edit target on navigation away. */
+  clearProviderEdit: () => void;
   enterSettings: () => void;
   exitSettings: () => void;
   createThread: (options?: { workingDirectory?: string; projectName?: string; providerId?: string; model?: string }) => Promise<Thread | null>;
@@ -144,6 +173,7 @@ export const useConversationStore = create<ConversationState>()(
       currentView: 'home',
       settingsTab: 'general',
       previousView: null,
+      providerEditTarget: null,
 
       // Existing state
       threads: [],
@@ -158,6 +188,9 @@ export const useConversationStore = create<ConversationState>()(
 
       setCurrentView: (view) => set({ currentView: view }),
       setSettingsTab: (tab) => set({ settingsTab: tab }),
+      enterProviderEdit: (target) =>
+        set({ settingsTab: 'provider-edit', providerEditTarget: target }),
+      clearProviderEdit: () => set({ providerEditTarget: null }),
       enterSettings: () => {
         const { currentView } = get();
         // Don't overwrite a still-valid snapshot if the user re-enters settings
