@@ -8,9 +8,17 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
   for (const event of events) {
     switch (event.type) {
       case 'text':
-        // NOTE: We intentionally skip text events in streaming mode.
-        // Text is rendered as a single continuous block via useStreamingText
-        // to avoid markdown fragmentation when text is split by thinking/tool events.
+        // Each text event's `content` is the local text accumulated since
+        // the last non-text event (see stream-session-manager — it appends
+        // deltas to the trailing text event and only creates a new one when
+        // a non-text event arrives in between). Push it through so the
+        // renderer can interleave text and tool calls in chronological
+        // order; the cumulative text rendering path is removed in
+        // StreamingMessage and TextRow applies typewriter on the last
+        // block to keep the streaming pacing smooth.
+        if (event.content) {
+          actions.push({ kind: 'text', content: event.content });
+        }
         break;
       case 'thinking':
         if (event.content.trim()) {
