@@ -2,8 +2,23 @@ import { z } from 'zod/v4';
 import type { ActionHandler, ActionContext } from './types.js';
 
 const snapshotSchema = z.object({
-  maxLength: z.number().optional().default(100000).describe('Maximum snapshot length'),
-  interactiveOnly: z.boolean().optional().default(false).describe('Only show interactive elements'),
+  maxLength: z.preprocess(
+    (val) => {
+      if (typeof val === 'string') {
+        const parsed = Number(val);
+        return isNaN(parsed) ? val : parsed;
+      }
+      return val;
+    },
+    z.number().optional().default(100000)
+  ).describe('Maximum snapshot length'),
+  interactiveOnly: z.preprocess(
+    (val) => {
+      if (typeof val === 'string') return val.toLowerCase() === 'true';
+      return val;
+    },
+    z.boolean().optional().default(false)
+  ).describe('Only show interactive elements'),
 });
 
 export const snapshotAction: ActionHandler<z.infer<typeof snapshotSchema>> = {

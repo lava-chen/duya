@@ -125,7 +125,16 @@ export const hoverAction: ActionHandler<z.infer<typeof hoverSchema>> = {
 const waitSchema = z.object({
   type: z.enum(['ms', 'element', 'load']).describe('Wait type: ms (milliseconds), element (wait for element), load (wait for page load)'),
   value: z.string().optional().describe('Value: milliseconds for ms, selector for element'),
-  timeoutMs: z.number().optional().default(15000).describe('Maximum wait time in milliseconds'),
+  timeoutMs: z.preprocess(
+    (val) => {
+      if (typeof val === 'string') {
+        const parsed = Number(val);
+        return isNaN(parsed) ? val : parsed;
+      }
+      return val;
+    },
+    z.number().optional().default(15000)
+  ).describe('Maximum wait time in milliseconds'),
 });
 
 export const waitAction: ActionHandler<z.infer<typeof waitSchema>> = {

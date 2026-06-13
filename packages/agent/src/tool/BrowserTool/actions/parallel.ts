@@ -6,7 +6,7 @@ import type { ActionHandler } from './types.js';
 const parallelFetchSchema = z.object({
   urls: z.preprocess(
     (val) => {
-      // LLM may pass a stringified JSON array, normalize to string[]
+      // LLM may pass a stringified JSON array or an object wrapper, normalize to string[]
       if (typeof val === 'string') {
         try {
           const parsed = JSON.parse(val);
@@ -15,14 +15,33 @@ const parallelFetchSchema = z.object({
           return [val as string];
         }
       }
+      if (val && typeof val === 'object' && !Array.isArray(val) && 'item' in val) {
+        const items = (val as Record<string, unknown>).item;
+        return Array.isArray(items) ? items : [items];
+      }
       return val;
     },
     z.array(z.string())
   ).describe('REQUIRED. Array of URLs to investigate in parallel. Example: ["https://site1.com", "https://site2.com"]'),
-  useBrowser: z.boolean().optional().default(true).describe('Use real browser (Extension CDP / Duya browser plugin) for JS-rendered snapshots. Default: true. Set to false to use fast HTTP fetch (no JS rendering).'),
+  useBrowser: z.preprocess(
+    (val) => {
+      if (typeof val === 'string') return val.toLowerCase() === 'true';
+      return val;
+    },
+    z.boolean().optional().default(true)
+  ).describe('Use real browser (Extension CDP / Duya browser plugin) for JS-rendered snapshots. Default: true. Set to false to use fast HTTP fetch (no JS rendering).'),
   task: z.string().optional().describe('Optional task description for context-aware investigation'),
   evaluate: z.string().optional().describe('Optional JavaScript to execute on each page after load (only when useBrowser=true)'),
-  timeoutMs: z.number().optional().default(30000).describe('Per-page timeout in milliseconds (default 30000)'),
+  timeoutMs: z.preprocess(
+    (val) => {
+      if (typeof val === 'string') {
+        const parsed = Number(val);
+        return isNaN(parsed) ? val : parsed;
+      }
+      return val;
+    },
+    z.number().optional().default(30000)
+  ).describe('Per-page timeout in milliseconds (default 30000)'),
 });
 
 export const parallelFetchAction: ActionHandler<z.infer<typeof parallelFetchSchema>> = {
