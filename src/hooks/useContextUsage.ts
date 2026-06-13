@@ -33,7 +33,30 @@ export interface ContextUsage {
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 
-export function getContextWindowForModel(modelName?: string): number {
+/**
+ * Resolve the context window for a given model id.
+ *
+ * Order of preference:
+ * 1. Caller-supplied `contextWindow` (sourced from the
+ *    `provider_model_capabilities` SQLite table — what the user toggled via
+ *    the 200K/1M buttons in the provider edit view). This is the only signal
+ *    that reflects per-model user intent; the rest are coarse fallbacks.
+ * 2. Hardcoded substring matches for well-known model families that
+ *    historically shipped with a fixed window.
+ * 3. The 200K default (matches Claude 3.x / Sonnet 4.x base context).
+ *
+ * NOTE: do not add new branches for `claude-sonnet-4-6[1M]`-style ids.
+ * The 1M variant is a *capability override*, not a model identifier — it is
+ * already expressed by the caller's `contextWindow` argument when the user
+ * has opted in.
+ */
+export function getContextWindowForModel(
+  modelName?: string,
+  contextWindow?: number,
+): number {
+  if (typeof contextWindow === 'number' && contextWindow > 0) {
+    return contextWindow;
+  }
   if (!modelName) return DEFAULT_CONTEXT_WINDOW;
   const lower = modelName.toLowerCase();
   if (lower.includes('claude-3-opus')) return 200_000;
@@ -57,12 +80,13 @@ export function formatTokens(n: number): string {
 export function useContextUsage(
   messages: Message[],
   modelName?: string,
+  contextWindow?: number,
 ): ContextUsage {
   return useMemo(() => {
-    const contextWindow = getContextWindowForModel(modelName);
+    const resolvedContextWindow = getContextWindowForModel(modelName, contextWindow);
     const noData: ContextUsage = {
       modelName: modelName || 'unknown',
-      contextWindow,
+      contextWindow: resolvedContextWindow,
       used: 0,
       ratio: 0,
       estimatedNextTurn: 0,
@@ -85,11 +109,11 @@ export function useContextUsage(
         const cacheCreation = usage.cache_creation_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
         const used = inputTokens + cacheRead + cacheCreation;
-        const ratio = contextWindow ? used / contextWindow : 0;
+        const ratio = resolvedContextWindow ? used / resolvedContextWindow : 0;
 
         const estimatedNextTurn = used + outputTokens + 200;
-        const estimatedNextRatio = contextWindow
-          ? estimatedNextTurn / contextWindow
+        const estimatedNextRatio = resolvedContextWindow
+          ? estimatedNextTurn / resolvedContextWindow
           : 0;
 
         const effectiveRatio = Math.max(ratio, estimatedNextRatio);
@@ -104,7 +128,7 @@ export function useContextUsage(
 
         return {
           modelName: modelName || 'unknown',
-          contextWindow,
+          contextWindow: resolvedContextWindow,
           used,
           ratio,
           estimatedNextTurn,
@@ -122,7 +146,7 @@ export function useContextUsage(
     }
 
     return noData;
-  }, [messages, modelName]);
+  }, [messages, modelName, contextWindow]);
 }
 
 /** Per-message source breakdown for the popover grid + detail modal.

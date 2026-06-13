@@ -535,8 +535,17 @@ export class duyaAgent {
       });
     }
 
+    // Wire the model-level `contextWindow` (e.g. 1M for Sonnet 4.6 1M) into
+    // the compaction budget. Falls back to the 200K default if the renderer
+    // didn't attach a capability row (e.g. legacy call site or missing entry).
+    const capabilityContextWindow =
+      options.runtimeConfig?.modelCapabilities?.contextWindow;
     this.compactionManager = createCompactionManager({
       enableReinjection: true,
+      maxTokens:
+        typeof capabilityContextWindow === 'number' && capabilityContextWindow > 0
+          ? capabilityContextWindow
+          : undefined,
     });
 
     // Wire up the LLM summarizer so strategies can generate summaries

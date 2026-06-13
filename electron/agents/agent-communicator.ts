@@ -100,8 +100,11 @@ export function registerAgentHandlers(): void {
     const llm = store.getLlmProvider(provider.id);
     let runtimeConfig: Record<string, unknown> | undefined;
     if (llm) {
+      const resolvedModelId = session?.model || defaultModel;
+      const capability = store.getModelCapability(provider.id, resolvedModelId);
       const cfg = buildRuntimeConfig(llm, {
-        modelId: session?.model || defaultModel,
+        modelId: resolvedModelId,
+        capabilities: capability,
       });
       runtimeConfig = {
         providerId: cfg.providerId,
@@ -111,6 +114,7 @@ export function registerAgentHandlers(): void {
         accessToken: cfg.accessToken,
         headers: cfg.headers,
         model: cfg.model,
+        modelCapabilities: cfg.modelCapabilities,
         requestOptions: cfg.requestOptions,
       };
     }
@@ -216,17 +220,33 @@ export function registerAgentHandlers(): void {
     const provider = configManager.getActiveProvider();
     if (!provider) return null;
 
-    const model = (provider.options?.defaultModel as string) ||
+    // Plan 209 P4-prime: the original implementation only read
+    // `options.defaultModel / model / enabled_models[0]` and
+    // returned '' if none were set. That meant a freshly-added
+    // provider (no options yet) could not be used to start a
+    // chat because `stream-session-manager` saw an empty
+    // `model` and aborted with "No model configured". We now
+    // fall through to `getDefaultModelForProvider` so any
+    // anthropic/openai/etc. provider gets a sensible default
+    // out of the box. The `options.*` keys still win when set.
+    const explicit =
+      (provider.options?.defaultModel as string) ||
       (provider.options?.model as string) ||
-      (Array.isArray(provider.options?.enabled_models) && (provider.options?.enabled_models as string[])[0]) ||
+      (Array.isArray(provider.options?.enabled_models) &&
+        (provider.options?.enabled_models as string[])[0]) ||
       '';
+    const model = explicit || getDefaultModelForProvider(provider.providerType, provider.options);
 
     // Derive the runtime config from the migrated LlmProvider so the
     // new path is exercised on every Chat call.
     const llm = store.getActiveLlmProvider();
     let runtimeConfig: Record<string, unknown> | null = null;
     if (llm) {
-      const cfg = buildRuntimeConfig(llm, { modelId: model });
+      const capability = store.getModelCapability(llm.id, model);
+      const cfg = buildRuntimeConfig(llm, {
+        modelId: model,
+        capabilities: capability,
+      });
       runtimeConfig = {
         providerId: cfg.providerId,
         providerName: cfg.providerName,
@@ -236,6 +256,7 @@ export function registerAgentHandlers(): void {
         accessToken: cfg.accessToken,
         headers: cfg.headers,
         model: cfg.model,
+        modelCapabilities: cfg.modelCapabilities,
         requestOptions: cfg.requestOptions,
       };
     }
@@ -259,13 +280,30 @@ export function registerAgentHandlers(): void {
     const provider = configManager.getAllProviders()[providerId];
     if (!provider) return null;
 
+    // Plan 209 P4-prime: prefer the requested `model`, then fall
+    // through to the provider's options, then to the protocol-
+    // aware default. Without this fallback, a title model that
+    // asks for `minimax-cn:undefined` (e.g. from a stale
+    // `title_model` value) silently yields an empty string.
+    const resolvedModel =
+      model ||
+      (provider.options?.defaultModel as string) ||
+      (provider.options?.model as string) ||
+      (Array.isArray(provider.options?.enabled_models) &&
+        (provider.options?.enabled_models as string[])[0]) ||
+      getDefaultModelForProvider(provider.providerType, provider.options);
+
     // Build the same runtime config shape on this path too.
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
     const llm = store.getLlmProvider(providerId);
     let runtimeConfig: Record<string, unknown> | null = null;
     if (llm) {
-      const cfg = buildRuntimeConfig(llm, { modelId: model || '' });
+      const capability = store.getModelCapability(providerId, resolvedModel);
+      const cfg = buildRuntimeConfig(llm, {
+        modelId: resolvedModel,
+        capabilities: capability,
+      });
       runtimeConfig = {
         providerId: cfg.providerId,
         providerName: cfg.providerName,
@@ -275,6 +313,7 @@ export function registerAgentHandlers(): void {
         accessToken: cfg.accessToken,
         headers: cfg.headers,
         model: cfg.model,
+        modelCapabilities: cfg.modelCapabilities,
         requestOptions: cfg.requestOptions,
       };
     }
@@ -282,7 +321,7 @@ export function registerAgentHandlers(): void {
     return {
       apiKey: provider.apiKey,
       baseUrl: provider.baseUrl || undefined,
-      model: model || '',
+      model: resolvedModel,
       provider: toLLMProvider(provider.providerType),
       authStyle: 'api_key' as const,
       runtimeConfig,

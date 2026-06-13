@@ -307,6 +307,24 @@ export interface AgentOptions {
     accessToken?: string;
     headers: Record<string, string>;
     model: string;
+    /**
+     * Per-model capability row from the renderer's
+     * `provider_model_capabilities` table. Currently used to thread
+     * the user-toggled `contextWindow` (200K vs 1M) into the
+     * compaction budget and skill listing; new fields can be added
+     * without an interface bump.
+     */
+    modelCapabilities?: {
+      providerId?: string;
+      modelId?: string;
+      displayName?: string;
+      contextWindow?: number;
+      maxOutputTokens?: number;
+      supportsToolUse?: boolean;
+      supportsVision?: boolean;
+      supportsReasoning?: boolean;
+      supportsPromptCache?: boolean;
+    };
     requestOptions?: Record<string, unknown>;
   };
 }
