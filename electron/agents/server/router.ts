@@ -8,6 +8,7 @@ import { WorkerManager } from './worker-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { ConductorService } from './conductor-service';
 import { Logger } from './logger';
+import { toLLMProvider, type ApiProvider } from '../../config/manager';
 
 export interface RouterDeps {
   sessionManager: SessionManager;
@@ -818,6 +819,60 @@ interface ChatInitParams {
 const MAX_CONCURRENT_WORKERS = 16;
 
 /**
+ * Build the legacy `InitMessage.providerConfig` shape that the agent
+ * worker expects, from the persisted session row + the resolved
+ * `ApiProvider`. The legacy `ApiProvider` DTO does NOT carry a `model`
+ * field (it lives on `chat_sessions.model`), and it uses `providerType`
+ * / `baseUrl` where the worker expects `provider` / `baseURL`. Without
+ * this transform the worker crashes with "Model is required" on its
+ * first `new duyaAgent({...})` call — see the bug logged from the
+ * `compact` lazy-spawn path.
+ *
+ * Mirrors the construction in `agent-communicator.ts:agent:getProviderConfig`
+ * so chat-spawned and compact-spawned workers get equivalent configs.
+ */
+function buildInitProviderConfig(
+  sessionRow: Record<string, unknown>,
+  provider: ApiProvider | undefined,
+): Record<string, unknown> | undefined {
+  // Resolve the model: session row wins (it's the user's explicit choice
+  // for this session), then provider.options.defaultModel/model, then
+  // an empty string. We intentionally do NOT call
+  // getDefaultModelForProvider() here — that would silently substitute a
+  // fallback and the worker would still crash on empty `model` if no
+  // provider options exist.
+  const opts = (provider?.options ?? undefined) as Record<string, unknown> | undefined;
+  const sessionModel = typeof sessionRow.model === 'string' ? sessionRow.model.trim() : '';
+  const optModel = typeof opts?.defaultModel === 'string'
+    ? (opts.defaultModel as string).trim()
+    : typeof opts?.model === 'string'
+      ? (opts.model as string).trim()
+      : '';
+  const model = sessionModel || optModel;
+
+  if (!provider) {
+    // No provider in DB and no active provider — still surface the model
+    // (if any) so the worker at least has a value to validate against.
+    if (!model) return undefined;
+    return { model };
+  }
+
+  return {
+    apiKey: typeof provider.apiKey === 'string' ? provider.apiKey : '',
+    baseURL: typeof provider.baseUrl === 'string' && provider.baseUrl
+      ? provider.baseUrl
+      : undefined,
+    model,
+    // `providerType` (e.g. 'openai-compatible') is the persisted type;
+    // `provider` is the LLM-protocol discriminator the agent uses to
+    // pick its client factory. The mapping is local-URL-aware (Ollama
+    // detection on 11434) so we must pass `baseUrl` through.
+    provider: toLLMProvider(provider.providerType, provider.baseUrl),
+    authStyle: 'api_key' as const,
+  };
+}
+
+/**
  * Lazy-spawn a worker for a session that does not have a live worker (e.g.
  * after Agent Server restart, or after a previous chat ended and the worker
  * was torn down). Loads session row + provider config from DB, mirrors the
@@ -859,14 +914,33 @@ async function lazySpawnWorkerForCompact(
   }
 
   // Load session row + provider config from the DB to build init params.
+  // All config access goes through `dbRequest` (IPC → main process) because
+  // the agent server runs as a raw Node.js child process where Electron's
+  // `app` module is unavailable. Calling `getConfigManager()` directly here
+  // would crash on `app.getPath('userData')` → 503.
   let sessionRow: Record<string, unknown> | null = null;
-  let providerConfig: Record<string, unknown> | null = null;
+  let providerConfig: Record<string, unknown> | undefined;
   try {
     const rowResult = await deps.dbRequest('session:get', { id: sessionId });
     sessionRow = (rowResult && typeof rowResult === 'object') ? rowResult as Record<string, unknown> : null;
-    if (sessionRow && typeof sessionRow.provider_id === 'string' && sessionRow.provider_id !== 'env') {
-      const cfg = await deps.dbRequest('config:provider:get', { id: sessionRow.provider_id });
-      providerConfig = (cfg && typeof cfg === 'object') ? cfg as Record<string, unknown> : null;
+    if (sessionRow) {
+      const providerId = typeof sessionRow.provider_id === 'string' ? sessionRow.provider_id : '';
+      let apiProvider: ApiProvider | undefined;
+      if (providerId && providerId !== 'env') {
+        try {
+          apiProvider = await deps.dbRequest('config:provider:get', { id: providerId }) as ApiProvider | undefined;
+        } catch {
+          // fall through to active provider
+        }
+      }
+      if (!apiProvider) {
+        try {
+          apiProvider = await deps.dbRequest('config:provider:getActive', {}) as ApiProvider | undefined;
+        } catch {
+          // no provider available; buildInitProviderConfig handles undefined
+        }
+      }
+      providerConfig = buildInitProviderConfig(sessionRow, apiProvider);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -883,7 +957,7 @@ async function lazySpawnWorkerForCompact(
   }
 
   const init: ChatInitParams = {
-    providerConfig: providerConfig ?? undefined,
+    providerConfig,
     workingDirectory: typeof sessionRow.working_directory === 'string' ? sessionRow.working_directory : undefined,
     systemPrompt: typeof sessionRow.system_prompt === 'string' ? sessionRow.system_prompt : undefined,
   };
