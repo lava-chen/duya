@@ -18,7 +18,7 @@ import { ToolRegistry } from '../registry.js'
 import { getPromptProfileForSubagentType } from '../../prompts/modes/index.js'
 import { PromptManager } from '../../prompts/PromptManager.js'
 import { appendMessages } from '../../session/db.js'
-import { messageDb } from '../../ipc/db-client.js'
+import type { TokenUsage } from '../../types.js'
 
 export interface RunAgentParams {
   agentDefinition: AgentDefinition
@@ -196,6 +196,7 @@ export async function* runAgent({
 
   const textParts: string[] = []
   const thinkingParts: string[] = []
+  let tokenUsage: TokenUsage | null = null
   let toolCalls = 0
   let hasError = false
   let errorMessage = ''
@@ -327,6 +328,8 @@ export async function* runAgent({
           const thinkingData = typeof event.data === 'string' ? event.data : JSON.stringify(event.data)
           thinkingParts.push(thinkingData)
           onProgress?.({ type: 'thinking', data: thinkingData, agentId })
+        } else if (event.type === 'result') {
+          tokenUsage = event.data
         } else if (event.type === 'done') {
           onProgress?.({ type: 'done', duration: Date.now() - startTime, agentId })
           break
@@ -400,12 +403,19 @@ export async function* runAgent({
     content: contentBlocks,
     timestamp: Date.now(),
     metadata: resultMetadata,
+    ...(tokenUsage ? { token_usage: tokenUsage } : {}),
   } as Message
 
   // Persist sub-agent messages to its DB session so the session can be replayed
   if (sessionId) {
     const allMessages = subAgent.getMessages()
     if (allMessages.length > 0) {
+      if (tokenUsage) {
+        const lastAssistant = [...allMessages].reverse().find(message => message.role === 'assistant')
+        if (lastAssistant) {
+          ;(lastAssistant as Message & { token_usage?: TokenUsage }).token_usage = tokenUsage
+        }
+      }
       try {
         const persistResult = await appendMessages(sessionId, allMessages)
         if (!persistResult.success) {

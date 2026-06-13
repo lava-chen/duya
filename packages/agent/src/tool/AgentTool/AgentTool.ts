@@ -14,7 +14,7 @@ import { getBuiltInAgents } from './builtInAgents.js';
 import { formatAgentLine, getPrompt } from './prompt.js';
 import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
 import { backgroundTaskRegistry, type BackgroundTaskResult } from './BackgroundTaskRegistry.js';
-import { sessionDb, messageDb } from '../../ipc/db-client.js';
+import { sessionDb } from '../../ipc/db-client.js';
 import { sendEvent } from '../../process/worker-protocol.js';
 
 export { formatAgentLine }
@@ -175,13 +175,6 @@ export class AgentTool extends BaseTool {
           parent_session_id: context.options.sessionId,
           agent_type: 'sub-agent',
           agent_name: subAgentName,
-        });
-        await messageDb.add({
-          id: crypto.randomUUID(),
-          session_id: subAgentSessionId,
-          role: 'user',
-          content: agentInput.prompt,
-          msg_type: 'text',
         });
       } catch (err) {
         console.warn('[AgentTool] Failed to create sub-agent session in DB:', err);

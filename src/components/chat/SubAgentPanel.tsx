@@ -9,6 +9,7 @@ import {
 } from '@/components/icons';
 import { useStreamingAgentProgress, type AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import { useStreamPhase } from '@/hooks/useStreamPhase';
+import type { StreamPhase } from '@/types';
 
 export interface SubAgentInfo {
   id: string;
@@ -59,11 +60,15 @@ function groupEventsByAgent(events: AgentProgressEventWithMeta[]): Map<string, A
   return groups;
 }
 
-function getAgentStatus(events: AgentProgressEventWithMeta[]): SubAgentInfo['status'] {
+function getAgentStatus(events: AgentProgressEventWithMeta[], phase: StreamPhase): SubAgentInfo['status'] {
   if (events.length === 0) return 'waiting';
   const lastEvent = events[events.length - 1];
   if (lastEvent.type === 'done') return 'completed';
   if (lastEvent.type === 'error') return 'error';
+  const streamInactive = phase === 'completed' || phase === 'error' || phase === 'idle';
+  if (streamInactive) {
+    return 'completed';
+  }
   return 'running';
 }
 
@@ -86,6 +91,7 @@ function getAgentDisplayNameFromEvents(events: AgentProgressEventWithMeta[]): st
 
 export function useAgents(sessionId: string): SubAgentInfo[] {
   const events = useStreamingAgentProgress(sessionId);
+  const phase = useStreamPhase(sessionId);
 
   return useMemo(() => {
     const groups = groupEventsByAgent(events);
@@ -94,7 +100,7 @@ export function useAgents(sessionId: string): SubAgentInfo[] {
 
     for (const [agentId, agentEvents] of groups) {
       const customName = getAgentDisplayNameFromEvents(agentEvents);
-      const status = getAgentStatus(agentEvents);
+      const status = getAgentStatus(agentEvents, phase);
       const isTerminal = status === 'completed' || status === 'error';
       const dbSessionId = agentEvents.find(e => e.sessionId)?.sessionId;
 
@@ -115,7 +121,7 @@ export function useAgents(sessionId: string): SubAgentInfo[] {
     }
 
     return agents;
-  }, [events]);
+  }, [events, phase]);
 }
 
 export const useSubAgents = useAgents;
