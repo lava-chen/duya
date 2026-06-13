@@ -13,6 +13,10 @@ build/
 .storybook/
 storybook-static/
 src/stories/
+# Co-located story files (Storybook v8+ convention) — not committed
+*.stories.tsx
+*.stories.ts
+**/__stories__/
 
 # Environment files
 .env
@@ -107,3 +111,11 @@ _dbg-out.txt
 
 # Local codegraph index
 .codegraph/
+
+# Ad-hoc scratch scripts left in repo root
+/test-*.mjs
+/*.cjs
+/tc.out
+/tc.out2
+/diag.js
+/fix-*.js
