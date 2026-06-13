@@ -121,6 +121,9 @@ These decisions are binding for all future CLI development. No implementation ma
   | `GET /v1/sessions/:id/messages` (list) | `id / role / content / name? / msgType / createdAt / tokenUsage? / durationMs? / toolName?` |
   | `GET /v1/sessions/:id/messages/:msgId` (info) | `+ toolCallId? / toolInput? / thinking? / attachments?` |
   | `GET /v1/sessions/:id/messages/count` (count) | `count: number` |
+  | `POST /v1/plugins/:id/enable` (Plan 100) | `id / enabled: true / changedAt: ISO8601` |
+  | `POST /v1/plugins/:id/disable` (Plan 100) | `id / enabled: false / changedAt: ISO8601` |
+  | `GET /v1/plugins/doctor` (Plan 100) | `checks: [{ id, status: 'ok' \| 'warn' \| 'error', message, pluginId? }]` |
 
   **Message DTOs redact internal columns**: `viz_spec`, `sub_agent_id`,
   `seq_index`, `status` are never exposed.
@@ -163,7 +166,7 @@ These decisions are binding for all future CLI development. No implementation ma
 - Future: `duya message list <session-id>`
 
 ### 4.4 Reversible Management Actions (Phase 7, Post Permission Model)
-- `duya plugin enable <id>` / `duya plugin disable <id>`
+- `duya plugin enable <id>` / `duya plugin disable <id>` — ✅ COMPLETE (Plan 100)
 - `duya skill enable <id>` / `duya skill disable <id>`
 - `duya mcp enable <id>` / `duya mcp disable <id>`
 
@@ -383,33 +386,19 @@ DTOs freeze **redacts** internal columns (`viz_spec`, `sub_agent_id`,
 - `duya channel enable/disable` (gateway-managed)
 - `duya message search` (semantic search needs embeddings)
 
-### Phase 13 — `duya config …` + `duya mcp` write surface (Plan 102) ✅ COMPLETE
-Plan: [`docs/exec-plans/completed/102-duya-config-into-cli.md`](../../exec-plans/completed/102-duya-config-into-cli.md)
+### Phase 12 — Plugin CLI Completion ✅ COMPLETE (Plan 100)
 
-- **Merge**: the legacy agent tool `duya_config` is **removed**; every
-  action it covered is now reachable via `duya_cli` → `duya config …`
-  or `duya_cli` → `duya mcp add/remove/assign`. Single agent-side
-  entry point to the desktop config surface.
-- **Tree shape**: subcommands are flat (`config-provider-add`,
-  `config-settings-show`, …) to match the existing 2-level resolver.
-  Original 3-level proposal (`config provider add`) is preserved
-  semantically via dash-joined names; the agent argv parser passes
-  the third token as `subcommand` and the descriptor carries the
-  remaining flags via `ctx.options`.
-- **Audit**: 8 new `config.*` audit event kinds
-  (`config.provider.add`, …, `config.pairing.revoke`) and 3 new
-  `mcp.*` kinds (`mcp.add`, `mcp.remove`, `mcp.assign`). All routed
-  through `controlPlaneAudit.ts` with `X-Duya-Invoked-By` header.
-- **Routes**: 14 new `electron/cli/handlers/config.ts` endpoints
-  + 3 new MCP write endpoints in `mcps.ts`. The existing
-  `cli-api-server.ts` route table grows by 17 entries.
-- **Field rename**: vision `isActive` is renamed to `enabled` at the
-  wire boundary (the legacy `duya_config` field has no compat to
-  preserve). The handler still accepts `isActive` for forward-compat
-  with old callers.
-- **Tests**: 27/27 `registry.test.ts` PASS (5 new), 34/34
-  `DuyaCliTool.test.ts` PASS (6 new). The "duya_config is not in the
-  tool enum" regression test is the contract gate.
+| Command | Notes |
+|---------|-------|
+| `duya plugin list [--enabled] [--verbose] [--format tsv\|json]` | Backward-compatible; new flags opt-in. `--verbose` switches to per-plugin detail blocks; `tsv` is script-friendly. |
+| `duya plugin info <id>` | 7-field DTO unchanged; error envelope now uses `{ error: { code, message } }` shape consistent with cron / skill. |
+| `duya plugin enable <id> --yes` | Phase 7 write op; calls `PluginManager.setEnabled` (preserves `PolicyEngine.isManagedPluginLocked`); audit logged to unified `control-plane-audit.log.jsonl` with `X-Correlation-Id`. |
+| `duya plugin disable <id> --yes` | Same as enable, inverse. |
+| `duya plugin doctor` | Five checks: registry accessible / manifest valid / load status / capability consistent / source path exists. Exits 1 if any check is `error`. |
+
+**DTOs frozen** (see §3.4): `POST /v1/plugins/:id/enable` / `…/disable` /
+`GET /v1/plugins/doctor`. **Plugin install / remove / update / marketplace
+remain GUI-only** per §3.2 (capability scope design still pending).
 
 ---
 
