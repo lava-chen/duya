@@ -12,7 +12,7 @@
  * Adapted from claude-code-haha's AskUserQuestionTool.
  */
 
-import { BaseTool } from '../BaseTool.js';
+import { BaseTool, PermissionRequiredError } from '../BaseTool.js';
 import type { ToolResult, PermissionCheckResult, ToolContext } from '../types.js';
 import type { ToolUseContext } from '../../types.js';
 import { z } from 'zod';
@@ -243,14 +243,18 @@ export class AskUserQuestionTool extends BaseTool {
   }
 
   /**
-   * Always allows permission — the tool itself IS the user interaction.
-   * The actual ask/response flow runs through the `ask_user_question`
-   * permission mode surfaced by `checkPermissions` → requestPermission.
+   * The tool itself IS the user interaction — there is no external
+   * permission to gate. We declare `requiresUserConfirmation: true` plus
+   * `mode: 'ask_user_question'` so the executor's pre-check routes through
+   * the dedicated AskUserQuestionUI panel rather than the generic
+   * Allow/Deny prompt. The throw path in `execute()` is a defensive
+   * backstop that reaches the same flow via `PermissionRequiredError`.
    */
   checkPermissions(_input: unknown, _context: ToolContext): PermissionCheckResult {
     return {
       allowed: true,
-      requiresUserConfirmation: false,
+      requiresUserConfirmation: true,
+      mode: 'ask_user_question',
     };
   }
 
@@ -292,7 +296,11 @@ export class AskUserQuestionTool extends BaseTool {
       };
     }
 
-    // Phase 1: Trigger permission_request with ask_user_question mode
+    // Phase 1: Trigger permission_request with ask_user_question mode.
+    // Throw PermissionRequiredError instead of returning a string sentinel —
+    // StreamingToolExecutor catches this and routes to ToolUseContext.requestPermission.
+    // The legacy <tool_use_permission_required> string fallback is still
+    // supported for tools that have not been migrated.
     const permissionPayload = {
       id: toolUseId,
       toolName: this.name,
@@ -301,14 +309,7 @@ export class AskUserQuestionTool extends BaseTool {
       expiresAt: Date.now() + 5 * 60 * 1000,
     };
 
-    return {
-      id: toolUseId,
-      name: this.name,
-      result: `<tool_use_permission_required>${JSON.stringify(permissionPayload)}</tool_use_permission_required>`,
-      metadata: {
-        permissionInfo: permissionPayload,
-      },
-    };
+    throw new PermissionRequiredError(permissionPayload);
   }
 
   generateUserFacingDescription(input: unknown): string {
