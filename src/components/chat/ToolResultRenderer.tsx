@@ -87,38 +87,75 @@ const globRenderer: ToolResultRenderer = {
 
 /**
  * GrepTool result renderer
- * Parses: { numFiles, filenames: [...] } or { mode, numMatches, content }
- * Renders: "12 matches across 5 files"
+ * Parses: { matches: [{ file, line, column, content }], total, truncated }
+ * Renders: "N matches in M files" + per-file collapsible list with line snippets
  */
 const grepRenderer: ToolResultRenderer = {
   canRender: (name, content) => {
-    return (name === 'grep' || name === 'search') && content.includes('"numFiles"');
+    return (name === 'grep' || name === 'search') && content.includes('"matches"');
   },
   render: (name, content) => {
     try {
       const data = JSON.parse(content);
-      const numFiles = data.numFiles as number;
-      const filenames = data.filenames as string[];
+      const matches = (data.matches as Array<{ file: string; line: number; column: number; content: string }>) || [];
+      const total = (data.total as number) ?? matches.length;
+      const truncated = data.truncated as boolean;
 
-      if (numFiles === 0) {
+      if (matches.length === 0) {
         return <span className="text-muted-foreground">No matches found</span>;
       }
+
+      // Group matches by file, preserving first-seen order
+      const fileOrder: string[] = [];
+      const byFile = new Map<string, typeof matches>();
+      for (const m of matches) {
+        if (!byFile.has(m.file)) {
+          fileOrder.push(m.file);
+          byFile.set(m.file, []);
+        }
+        byFile.get(m.file)!.push(m);
+      }
+
+      const fileCount = fileOrder.length;
+      const maxFiles = 15;
+      const visibleFiles = fileOrder.slice(0, maxFiles);
+      const hiddenFileCount = fileOrder.length - maxFiles;
 
       return (
         <div className="space-y-1.5">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">{filenames.length}</span>
-            <span>file{filenames.length !== 1 ? 's' : ''} with matches</span>
+            <span className="font-medium text-foreground">{total}</span>
+            <span>match{total !== 1 ? 'es' : ''}</span>
+            <span>in</span>
+            <span className="font-medium text-foreground">{fileCount}</span>
+            <span>file{fileCount !== 1 ? 's' : ''}</span>
+            {truncated && <span className="text-amber-600">(truncated)</span>}
           </div>
           <div className="bg-muted/30 rounded p-2 font-mono text-[11px] leading-relaxed max-h-[180px] overflow-auto">
-            {filenames.slice(0, 15).map((f: string, i: number) => (
-              <div key={i} className="truncate pr-2" title={f}>
-                {f}
-              </div>
-            ))}
-            {filenames.length > 15 && (
+            {visibleFiles.map((file) => {
+              const fileMatches = byFile.get(file)!;
+              const displayPath = file.length > 50 ? '…' + file.slice(-49) : file;
+              return (
+                <div key={file} className="space-y-0.5">
+                  <div className="truncate pr-2 text-foreground/80" title={file}>
+                    {displayPath}
+                  </div>
+                  {fileMatches.slice(0, 3).map((m, i) => (
+                    <div key={i} className="pl-3 pr-2 truncate text-muted-foreground/80">
+                      <span className="text-muted-foreground/50">:{m.line}</span> {m.content.trim()}
+                    </div>
+                  ))}
+                  {fileMatches.length > 3 && (
+                    <div className="pl-3 pr-2 text-muted-foreground/50">
+                      ... and {fileMatches.length - 3} more in this file
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {hiddenFileCount > 0 && (
               <div className="text-muted-foreground/50 mt-1">
-                ... and {filenames.length - 15} more
+                ... and {hiddenFileCount} more file{hiddenFileCount !== 1 ? 's' : ''}
               </div>
             )}
           </div>
@@ -536,93 +573,13 @@ const browserRenderer: ToolResultRenderer = {
     const lowerName = name.toLowerCase();
     return lowerName === 'browser' || lowerName === 'browsertool';
   },
-  render: (name, content) => {
-    try {
-      const data = JSON.parse(content);
-
-      // Check if running in fallback mode
-      const isFallback = data.mode === 'fallback';
-      const hasError = data.error && (
-        data.error.includes('fallback') ||
-        data.error.includes('Extension') ||
-        data.error.includes('not available')
-      );
-
-      // Show fallback mode warning banner
-      if (isFallback || hasError) {
-        return (
-          <div className="space-y-3">
-            {/* Fallback mode warning banner */}
-            <div
-              className="flex items-start gap-3 p-3 rounded-xl"
-              style={{
-                backgroundColor: 'rgba(251, 191, 36, 0.08)',
-                border: '1px solid rgba(251, 191, 36, 0.25)',
-              }}
-            >
-              <div
-                className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
-                style={{ backgroundColor: 'rgba(251, 191, 36, 0.15)' }}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width={16}
-                  height={16}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={{ color: '#f59e0b' }}
-                >
-                  <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-                  <path d="M12 9v4" />
-                  <path d="M12 17h.01" />
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium mb-1" style={{ color: 'var(--text)' }}>
-                  Limited Mode: Browser Extension Not Installed
-                </p>
-                <p className="text-[11px] leading-relaxed" style={{ color: 'var(--muted)' }}>
-                  Running in fallback mode. Interactive features like clicking, typing, screenshots,
-                  and JavaScript execution are unavailable. Install the DUYA Browser Bridge extension for full functionality.
-                </p>
-                <div className="flex items-center gap-2 mt-2">
-                  <button
-                    onClick={() => window.open('chrome://extensions/', '_blank')}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] transition-colors hover:opacity-90"
-                    style={{
-                      backgroundColor: 'rgba(94, 109, 255, 0.15)',
-                      color: 'var(--accent)',
-                    }}
-                  >
-                    <ChromeIcon size={12} />
-                    Install Extension
-                    <ArrowRightIcon size={12} />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Show the actual result content */}
-            <div className="bg-muted/30 rounded p-2 font-mono text-[11px] whitespace-pre-wrap max-h-[200px] overflow-auto">
-              {JSON.stringify(data, null, 2)}
-            </div>
-          </div>
-        );
-      }
-
-      // Normal browser tool result - show as JSON
-      return (
-        <div className="bg-muted/30 rounded p-2 font-mono text-[11px] whitespace-pre-wrap max-h-[200px] overflow-auto">
-          {JSON.stringify(data, null, 2)}
-        </div>
-      );
-    } catch {
-      return null;
-    }
+  render: () => {
+    // Browser tools are rendered by `BrowserGroup` (which can collapse
+    // consecutive browser actions into a single toggle and show the
+    // snapshot / compactSnapshot content instead of raw JSON). This
+    // renderer is kept only as a canRender flag so legacy callers
+    // don't try to JSON-dump a browser result.
+    return null;
   },
 };
 
