@@ -5,31 +5,11 @@ import { ArrowLeftIcon, ArrowsClockwiseIcon, ChartBarIcon } from "@/components/i
 import { useTranslation } from "@/hooks/useTranslation";
 import { listProvidersIPC } from "@/lib/ipc-client";
 import type { Provider as IpccProvider } from "@/lib/ipc-client";
+import { isQuotaSupported } from "@/lib/providers/canCheckQuota";
 import { ProviderQuotaCard, type ProviderQuotaState } from "./ProviderQuotaCard";
 
 interface ProviderQuotaViewProps {
   onBack: () => void;
-}
-
-/**
- * Detect whether a provider is eligible for the quota API.
- *
- * Mirrors `electron/services/network/provider-usage.ts#detectProvider`.
- * Order: providerType first (the canonical id), baseUrl as fallback so a
- * custom relay URL still works when the providerType is missing.
- */
-function isQuotaSupported(providerType: string | undefined, baseUrl: string | undefined): boolean {
-  const t = (providerType || '').toLowerCase();
-  if (t === 'minimax' || t === 'minimax-cn') return true;
-  if (t === 'glm' || t === 'glm-cn' || t === 'glm_cn') return true;
-
-  const u = (baseUrl || '').toLowerCase();
-  return (
-    u.includes('minimax.io') ||
-    u.includes('minimaxi.com') ||
-    u.includes('bigmodel.cn') ||
-    u.includes('z.ai')
-  );
 }
 
 interface UnmaskedConfig {
