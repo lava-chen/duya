@@ -1,10 +1,9 @@
 'use client';
  
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ToolUseInfo, ToolResultInfo } from '@/types';
 import { ToolActionsGroup } from './ToolActionsGroup';
 import { Shimmer } from './Shimmer';
-import { MarkdownRenderer } from './MarkdownRenderer';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import { useStreamingText } from '@/hooks/useStreamingText';
@@ -19,9 +18,13 @@ import { useStreamStartedAt } from '@/hooks/useStreamStartedAt';
 import { useStreamingAgentProgress } from '@/hooks/useStreamingAgentProgress';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
-import { parseAllShowWidgets, hasUnclosedWidgetFence, getPartialWidgetCode } from '@/lib/widget-parser';
  
-// ─── Adaptive Typewriter ──────────────────────────────────────────────────────
+// ─── Adaptive Typewriter — moved to src/hooks/useAdaptiveTypewriter.ts ──────
+//
+// The hook is reused by TextRow in ToolActionsGroup so per-block text
+// segments can pace themselves in step with the SSE arrival rate. The
+// original implementation in this file was extracted verbatim to keep
+// the streaming feel consistent with the previous cumulative-text view.
 //
 // Design goals:
 //   1. Display text at a smooth, even pace — no sudden jumps.
@@ -29,132 +32,7 @@ import { parseAllShowWidgets, hasUnclosedWidgetFence, getPartialWidgetCode } fro
 //   3. When streaming ends, flush remaining buffer instantly (no tail lag).
 //   4. Never re-render the markdown component more often than necessary.
 //
-// Algorithm:
-//   • We keep a `targetRef` (the latest full text from SSE).
-//   • A rAF loop advances a `displayedChars` cursor at `charsPerFrame` speed.
-//   • `charsPerFrame` is calculated every MEASURE_INTERVAL ms based on how many
-//     new chars arrived during that window.  We add a 20% headroom so the
-//     typewriter stays comfortably ahead of incoming data.
-//   • When `isStreaming` flips to false we flush the entire remaining buffer in
-//     one frame so there's no trailing animation after the response is done.
-//   • The hook returns a stable string reference — it only changes when the
-//     displayed slice actually grows, preventing spurious re-renders.
- 
-const MEASURE_INTERVAL_MS  = 500;   // How often we recalculate typing speed
-const MIN_CHARS_PER_FRAME  = 1;     // Floor: at least one char per frame
-const MAX_CHARS_PER_FRAME  = 80;    // Cap: avoid giant single-frame jumps
-const HEADROOM_FACTOR      = 1.2;   // Stay 20% faster than arrival rate
- 
-function useAdaptiveTypewriter(fullText: string, isStreaming: boolean): string {
-  // Displayed slice length (number of chars shown so far)
-  const displayedRef   = useRef(0);
-  // Mutable target (avoids stale closures in rAF)
-  const targetRef      = useRef(fullText);
-  const isStreamingRef = useRef(isStreaming);
-  // Speed measurement state
-  const lastMeasureRef    = useRef<number>(performance.now());
-  const charsAtMeasureRef = useRef(0);          // target length at last measure point
-  const charsPerFrameRef  = useRef(MIN_CHARS_PER_FRAME);
-  // rAF handle
-  const rafRef = useRef<number | null>(null);
-  // React state — only updated when the visible slice actually changes
-  const [displayed, setDisplayed] = useState('');
- 
-  // Keep refs in sync with latest props on every render (no re-subscriptions)
-  targetRef.current      = fullText;
-  isStreamingRef.current = isStreaming;
- 
-  // Main rAF loop — started once and kept alive while streaming
-  const tick = useCallback(() => {
-    const fullText    = targetRef.current;   // latest SSE text
-    const targetLen   = fullText.length;
-    let   cur        = displayedRef.current;
- 
-    // ── 1. Speed recalculation ──────────────────────────────────────────────
-    const elapsed = performance.now() - lastMeasureRef.current;
-    if (elapsed >= MEASURE_INTERVAL_MS) {
-      const newChars    = targetLen - charsAtMeasureRef.current;  // chars that arrived
-      const frames     = elapsed / 16.67;                      // ~60 fps
-      const rawCPF     = (newChars / frames) * HEADROOM_FACTOR;
-      charsPerFrameRef.current = Math.min(
-        MAX_CHARS_PER_FRAME,
-        Math.max(MIN_CHARS_PER_FRAME, Math.ceil(rawCPF))
-      );
-      lastMeasureRef.current    = performance.now();
-      charsAtMeasureRef.current = targetLen;
-    }
- 
-    // ── 2. Flush immediately when streaming has ended ───────────────────────
-    if (!isStreamingRef.current) {
-      if (cur < targetLen) {
-        displayedRef.current = targetLen;
-        setDisplayed(targetRef.current);
-      }
-      rafRef.current = null;
-      return; // stop the loop
-    }
- 
-    // ── 3. Advance cursor ───────────────────────────────────────────────────
-    if (cur < targetLen) {
-      const next = Math.min(targetLen, cur + charsPerFrameRef.current);
-      displayedRef.current = next;
-      // Slice at a safe UTF-16 boundary (avoid splitting surrogates)
-      setDisplayed(targetRef.current.slice(0, next));
-    }
- 
-    rafRef.current = requestAnimationFrame(tick);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
- 
-  // Start / stop the loop based on streaming state
-  useEffect(() => {
-    if (isStreaming) {
-      if (rafRef.current === null) {
-        // Reset measurement baseline when a new stream begins
-        lastMeasureRef.current    = performance.now();
-        charsAtMeasureRef.current = displayedRef.current;
-        rafRef.current = requestAnimationFrame(tick);
-      }
-    } else {
-      // Streaming just ended — cancel the scheduled frame
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      // Flush synchronously so there's zero tail-lag.
-      // This runs AFTER the last tick (if any), so displayedRef is already up to date.
-      // We guard with displayedRef < fullText.length to cover the rare case where
-      // targetRef was updated *after* the final tick ran — SSE events like
-      // db_persisted can still arrive after phase → 'completed'.
-      if (displayedRef.current < targetRef.current.length) {
-        displayedRef.current = targetRef.current.length;
-        setDisplayed(targetRef.current);
-      }
-    }
-  }, [isStreaming, tick]);
- 
-  // When new text arrives while we have no active loop (e.g. first chars),
-  // kick off the loop again.
-  useEffect(() => {
-    if (isStreaming && fullText.length > displayedRef.current && rafRef.current === null) {
-      lastMeasureRef.current    = performance.now();
-      charsAtMeasureRef.current = displayedRef.current;
-      rafRef.current = requestAnimationFrame(tick);
-    }
-  }, [fullText, isStreaming, tick]);
- 
-  // On session reset (text shrinks back to ''), reset all state
-  useEffect(() => {
-    if (fullText === '') {
-      displayedRef.current      = 0;
-      charsPerFrameRef.current  = MIN_CHARS_PER_FRAME;
-      lastMeasureRef.current    = performance.now();
-      charsAtMeasureRef.current = 0;
-      setDisplayed('');
-    }
-  }, [fullText]);
- 
-  return displayed;
-}
+// (See the hook file for the full algorithm and comments.)
  
 // ─── Helpers ──────────────────────────────────────────────────────────────────
  
@@ -270,104 +148,14 @@ function StreamingStatusBar({
   );
 }
  
-// ─── Markdown renderer — no internal throttle ─────────────────────────────────
+// ─── Markdown renderer for streaming messages ──────────────────────────────
 //
-// Previously this component had a `useThrottledValue` that added an additional
-// 150 ms delay on top of the typewriter.  That caused two problems:
-//   • Visible stutter: the displayed text advanced, then frozen for 150 ms, then jumped.
-//   • Double-throttle: typewriter already controls the pacing; a second layer is redundant.
-//
-// Now we render `content` directly.  Pacing is entirely owned by `useAdaptiveTypewriter`.
- 
-const StreamingMarkdown = React.memo(function StreamingMarkdown({
-  content,
-}: {
-  content: string;
-}) {
-  if (!content) return null;
-  return (
-    <MarkdownRenderer className="mt-3 prose prose-sm max-w-none message-content">
-      {content}
-    </MarkdownRenderer>
-  );
-});
-// ─── Text + widget rendering ──────────────────────────────────────────────────
- 
-const StreamingTextContent = React.memo(function StreamingTextContent({
-  text,
-  isStreaming,
-  sourceMessageId,
-}: {
-  text: string;
-  isStreaming: boolean;
-  sourceMessageId?: string;
-}) {
-  // Single source of pacing: adaptive typewriter.
-  // When streaming ends it flushes instantly — no tail animation.
-  const displayContent = useAdaptiveTypewriter(text, isStreaming);
- 
-  if (!displayContent) return null;
- 
-  const hasWidgetFence = text.includes('```show-widget');
- 
-  if (!hasWidgetFence) {
-    return <StreamingMarkdown content={displayContent} />;
-  }
- 
-  // ── Widget fence handling ──────────────────────────────────────────────────
-  // We use `text` (full SSE content) for parsing decisions but `displayContent`
-  // (typewriter slice) for actual rendering, so widgets never appear ahead of text.
- 
-  const hasUnclosed = hasUnclosedWidgetFence(text);
- 
-  if (hasUnclosed) {
-    const partial = getPartialWidgetCode(text);
-    if (partial) {
-      return (
-        <div className="mt-3">
-          {partial.beforeText.trim() && (
-            <StreamingMarkdown content={partial.beforeText} />
-          )}
-          <WidgetErrorBoundary widgetCode={partial.partialCode}>
-            <WidgetRenderer
-              widgetCode={partial.partialCode}
-              isStreaming={true}
-              showOverlay={true}
-              sourceMessageId={sourceMessageId}
-              sourceLabel="Streaming message"
-            />
-          </WidgetErrorBoundary>
-        </div>
-      );
-    }
-  }
- 
-  // All widget fences are closed — render full segments using displayContent
-  // so text portions still go through the typewriter.
-  const segments = parseAllShowWidgets(displayContent);
-  return (
-    <div className="mt-3">
-      {segments.map((seg, i) => {
-        if (seg.type === 'text') {
-          return <StreamingMarkdown key={`t-${i}`} content={seg.content || ''} />;
-        }
-        if (seg.type === 'widget' && seg.data) {
-          return (
-            <WidgetErrorBoundary key={`w-${i}`} widgetCode={seg.data.widget_code}>
-              <WidgetRenderer
-                widgetCode={seg.data.widget_code}
-                isStreaming={false}
-                sourceMessageId={sourceMessageId}
-                sourceLabel="Streaming message"
-              />
-            </WidgetErrorBoundary>
-          );
-        }
-        return null;
-      })}
-    </div>
-  );
-});
+// Text content used to be rendered by a dedicated StreamingTextContent
+// block backed by useStreamingText. Now text events are interleaved with
+// tool calls in the actions list, so TextRow inside ToolActionsGroup
+// handles the streaming markdown rendering directly. This file no
+// longer needs the standalone StreamingMarkdown / StreamingTextContent
+// components — keeping the import surface small.
  
 // ─── Tool display ─────────────────────────────────────────────────────────────
  
@@ -513,10 +301,14 @@ export const StreamingMessage = React.memo(function StreamingMessage({
           agentProgressEvents={agentProgressEvents}
           liveStartedAt={startedAt}
         />
- 
-        {/* Text content — paced by adaptive typewriter */}
-        <StreamingTextContent text={text} isStreaming={isStreaming} sourceMessageId={sessionId} />
- 
+
+        {/* Text is now part of the actions list above (each text event
+            becomes a `kind: 'text'` action interleaved with tools). The
+            cumulative `text` value from useStreamingText is still kept
+            alive so StreamingStatus can show "Generating...". The
+            previous separate StreamingTextContent render is removed to
+            avoid duplicating the agent's prose below the tool rows. */}
+
         <StreamingVizWidgets actions={actions} sourceMessageId={sessionId} />
  
         {/* Initial "thinking" shimmer — shown until first tool or text arrives */}
