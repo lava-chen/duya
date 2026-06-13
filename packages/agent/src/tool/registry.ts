@@ -4,6 +4,7 @@
  */
 
 import type { Tool, ToolResult, ToolUseContext } from '../types.js';
+import { PermissionRequiredError } from './BaseTool.js';
 
 /**
  * 工具执行器接口
@@ -288,6 +289,9 @@ export class ToolRegistry {
     try {
       return await tool.executor.execute(input, workingDirectory, context);
     } catch (error) {
+      if (error instanceof PermissionRequiredError) {
+        throw error;
+      }
       return {
         id: '',
         name,

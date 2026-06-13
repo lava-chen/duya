@@ -5426,6 +5426,328 @@ html.compact .panel-zone {
   border-bottom: 1px solid var(--border);
 }
 
+.permission-prompt-wrapper.ask-user-question {
+  margin-bottom: 0;
+  z-index: 22;
+}
+
+.permission-prompt-panel.ask-user-question-panel {
+  border-radius: 1.35rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.ask-question-sheet {
+  padding: 1rem 1.15rem 0.9rem;
+}
+
+.ask-question-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 0.05rem 0.6rem;
+}
+
+.ask-question-title {
+  color: var(--text);
+  font-size: 0.96rem;
+  font-weight: 620;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.ask-question-pager {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.25rem;
+  user-select: none;
+}
+
+.ask-question-pager-btn {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  height: 1.5rem;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  width: 1.5rem;
+}
+
+.ask-question-pager-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ask-question-pager-btn:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.ask-question-pager-count {
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-width: 3.5rem;
+  text-align: center;
+}
+
+.ask-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.ask-question-option-wrap {
+  position: relative;
+}
+
+.ask-question-option {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0.58rem;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  gap: 0.55rem;
+  min-height: 2.05rem;
+  padding: 0.34rem 0.55rem;
+  text-align: left;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+  width: 100%;
+}
+
+.ask-question-option:hover,
+.ask-question-option.selected {
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
+}
+
+html[data-theme="light"] .ask-question-option:hover,
+html[data-theme="light"] .ask-question-option.selected {
+  background: rgba(16, 24, 40, 0.055);
+}
+
+.ask-question-option-number {
+  color: var(--muted);
+  flex: 0 0 1.35rem;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  text-align: right;
+}
+
+.ask-question-option-label {
+  color: var(--text);
+  flex: 1;
+  font-size: 0.88rem;
+  font-weight: 540;
+  line-height: 1.25;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-question-option.feedback .ask-question-option-label {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.ask-question-recommended {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  margin-left: 0.35rem;
+}
+
+.ask-question-radio,
+.ask-question-check {
+  align-items: center;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  display: flex;
+  flex: 0 0 auto;
+  height: 1rem;
+  justify-content: center;
+  opacity: 0.7;
+  width: 1rem;
+}
+
+.ask-question-radio {
+  border-radius: 999px;
+}
+
+.ask-question-check {
+  border-radius: 0.28rem;
+}
+
+.ask-question-radio.selected,
+.ask-question-check.selected {
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.ask-question-radio span {
+  background: var(--accent);
+  border-radius: 999px;
+  height: 0.42rem;
+  width: 0.42rem;
+}
+
+.ask-question-info {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 auto;
+  height: 1.25rem;
+  justify-content: center;
+  opacity: 0.75;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  width: 1.25rem;
+}
+
+.ask-question-info:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  opacity: 1;
+}
+
+.ask-question-description {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  margin: 0.15rem 2.6rem 0.2rem 1.95rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.ask-question-feedback-input {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+  flex: 1;
+  font-size: 0.88rem;
+  font-weight: 500;
+  line-height: 1.25;
+  margin: 0;
+  min-width: 0;
+  outline: none;
+  padding: 0;
+  width: 100%;
+}
+
+.ask-question-feedback-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+}
+
+.ask-question-feedback-input:focus {
+  box-shadow: none;
+}
+
+.ask-question-footer {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.45rem 0.05rem 0;
+}
+
+.ask-question-footer > .ask-question-option.feedback {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ask-question-footer-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.65rem;
+}
+
+.ask-question-dismiss,
+.ask-question-continue {
+  align-items: center;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.86rem;
+  gap: 0.45rem;
+  height: 2rem;
+  padding: 0 0.78rem;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+}
+
+.ask-question-dismiss {
+  background: transparent;
+  color: var(--muted);
+}
+
+.ask-question-dismiss:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ask-question-continue {
+  background: var(--accent);
+  color: white;
+  font-weight: 620;
+  box-shadow: 0 2px 8px var(--accent-shadow);
+}
+
+.ask-question-continue:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.ask-question-continue:disabled {
+  cursor: default;
+  opacity: 0.45;
+  transform: none;
+}
+
+.ask-question-dismiss kbd,
+.ask-question-continue kbd {
+  border-radius: 0.35rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.18rem 0.35rem;
+}
+
+.ask-question-dismiss kbd {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.ask-question-continue kbd {
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+
 .permission-prompt-header {
   display: flex;
   align-items: center;

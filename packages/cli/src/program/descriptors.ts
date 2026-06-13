@@ -63,6 +63,7 @@ import {
   runConfigProviderInfo,
   runConfigProviderList,
   runConfigProviderRemove,
+  runConfigProviderSetDefault,
   runConfigSettingsSet,
   runConfigSettingsShow,
   runConfigStyleList,

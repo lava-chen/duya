@@ -3,7 +3,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { PermissionRequestEvent } from '@/types/stream';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -12,9 +12,11 @@ import {
   ShieldIcon,
   QuestionIcon,
   CaretRightIcon,
+  CaretLeftIcon,
   CircleNotchIcon,
   CheckIcon,
   XIcon,
+  InfoIcon,
 } from '@/components/icons';
 
 interface PermissionPromptProps {
@@ -246,7 +248,16 @@ function GenericPermissionPrompt({
 }
 
 /**
- * AskUserQuestion mode - shows multi-option questions
+ * AskUserQuestion mode - shows multi-option questions, one at a time.
+ *
+ * Layout (Codex-style, overlays the chat input):
+ *   Header:    question text + "< N of M >" switcher (hidden for single-question)
+ *   Options:   numbered rows with (i) info button per option (when description present)
+ *   Last row:  fixed "No, tell duya what to do differently" — opens a textarea
+ *   Footer:    "Dismiss ESC" hint on the left, "Continue ↩" primary button on the right
+ *
+ * Keyboard: ESC dismisses, Enter submits (only when current question is answered
+ * OR the "tell duya differently" textarea has text).
  */
 function AskUserQuestionUI({
   toolInput,
@@ -263,147 +274,303 @@ function AskUserQuestionUI({
     multiSelect: boolean;
     header?: string;
   }>;
-  const questionCount = questions.length;
-  const firstHeader = questions[0]?.header;
-  const [expanded, setExpanded] = useState(true);
-  const [selections, setSelections] = useState<Record<string, Set<string>>>({});
-  const [otherTexts, setOtherTexts] = useState<Record<string, string>>({});
-  const [useOther, setUseOther] = useState<Record<string, boolean>>({});
+  const total = questions.length;
 
-  const toggleOption = (qIdx: string, label: string, multi: boolean) => {
-    setSelections((prev) => {
-      const current = new Set(prev[qIdx] || []);
-      if (multi) {
-        if (current.has(label)) { current.delete(label); } else { current.add(label); }
-      } else {
-        current.clear();
-        current.add(label);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  // answers[questionText] = selected label(s) joined with " || " (matches legacy format)
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  // feedbacks[questionText] = inline free-text answer for that question.
+  const [feedbacks, setFeedbacks] = useState<Record<string, string>>({});
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  // Which option's (i) description popover is open (by option label)
+  const [openInfo, setOpenInfo] = useState<string | null>(null);
+
+  const current = questions[currentIdx];
+  if (!current) return null;
+
+  const currentAnswer = answers[current.question] || '';
+  const feedback = feedbacks[current.question] || '';
+  const hasSelection = currentAnswer.length > 0;
+  const hasFeedback = feedback.trim().length > 0;
+  // canSubmit requires either: an option selected, or the "tell duya" textarea filled
+  const canSubmit = hasSelection || hasFeedback;
+  const isLast = currentIdx === total - 1;
+  const isMulti = current.multiSelect;
+
+  useEffect(() => {
+    const recommended = current.options.find((opt) => opt.label.includes('(Recommended)'));
+    if (!recommended || answers[current.question] || feedbackOpen || feedbacks[current.question]) return;
+    setAnswers((prev) => ({ ...prev, [current.question]: recommended.label }));
+  }, [answers, current.options, current.question, feedbackOpen, feedbacks]);
+
+  // Toggle / set an option for the current question
+  const handleSelectOption = (label: string) => {
+    setAnswers((prev) => {
+      const existing = prev[current.question] || '';
+      if (isMulti) {
+        const set = new Set(existing.split(' || ').filter(Boolean));
+        if (set.has(label)) set.delete(label); else set.add(label);
+        return { ...prev, [current.question]: Array.from(set).join(' || ') };
       }
-      return { ...prev, [qIdx]: current };
+      // Single-select: clicking the same label again deselects it
+      if (existing === label) {
+        const next = { ...prev };
+        delete next[current.question];
+        return next;
+      }
+      return { ...prev, [current.question]: label };
     });
-    setUseOther((prev) => ({ ...prev, [qIdx]: false }));
+    // Selecting an option closes the feedback textarea (mutually exclusive per question)
+    setFeedbacks((prev) => {
+      const next = { ...prev };
+      delete next[current.question];
+      return next;
+    });
+    setFeedbackOpen(false);
   };
 
-  const toggleOther = (qIdx: string, multi: boolean) => {
-    if (!multi) {
-      setSelections((prev) => ({ ...prev, [qIdx]: new Set() }));
+  const handleToggleFeedback = () => {
+    setFeedbackOpen((v) => !v);
+    // Toggling feedback clears any option selection for this question
+    if (!feedbackOpen && hasSelection) {
+      setAnswers((prev) => {
+        const next = { ...prev };
+        delete next[current.question];
+        return next;
+      });
     }
-    setUseOther((prev) => ({ ...prev, [qIdx]: !prev[qIdx] }));
   };
 
-  const handleSubmit = () => {
-    const answers: Record<string, string> = {};
-    questions.forEach((q, i) => {
-      const qIdx = String(i);
-      const selected = Array.from(selections[qIdx] || []);
-      if (useOther[qIdx] && otherTexts[qIdx]?.trim()) {
-        selected.push(`Other: ${otherTexts[qIdx].trim()}`);
+  const moveToQuestion = (idx: number) => {
+    setCurrentIdx(Math.max(0, Math.min(total - 1, idx)));
+    setFeedbackOpen(false);
+    setOpenInfo(null);
+  };
+
+  const getAnswerForQuestion = (question: string, sourceAnswers: Record<string, string>) => {
+    const inlineFeedback = feedbacks[question]?.trim();
+    return inlineFeedback ? `User feedback: ${inlineFeedback}` : sourceAnswers[question];
+  };
+
+  const handleContinue = () => {
+    if (!canSubmit) return;
+
+    const updatedAnswers: Record<string, string> = { ...answers };
+    if (hasFeedback) {
+      // Free-text feedback replaces any option answer for this question
+      updatedAnswers[current.question] = `User feedback: ${feedback.trim()}`;
+    }
+
+    if (!isLast) {
+      setAnswers(updatedAnswers);
+      moveToQuestion(currentIdx + 1);
+      return;
+    }
+
+    const finalAnswers: Record<string, string> = {};
+    for (const question of questions) {
+      const answer = getAnswerForQuestion(question.question, updatedAnswers);
+      if (answer?.trim()) {
+        finalAnswers[question.question] = answer;
       }
-      answers[q.question] = selected.join(' || ');
-    });
-    onSubmit('allow', { questions: toolInput.questions, answers });
+    }
+
+    const firstMissingIdx = questions.findIndex((question) => !finalAnswers[question.question]?.trim());
+    if (firstMissingIdx >= 0) {
+      setAnswers(updatedAnswers);
+      moveToQuestion(firstMissingIdx);
+      return;
+    }
+    onSubmit('allow', { questions: toolInput.questions, answers: finalAnswers });
   };
 
-  const hasAnswer = questions.some((_, i) => {
-    const qIdx = String(i);
-    return (selections[qIdx]?.size || 0) > 0 || (useOther[qIdx] && otherTexts[qIdx]?.trim());
-  });
+  const handleDismiss = () => {
+    onSubmit('allow', { questions: toolInput.questions, answers: {}, _dismissed: true });
+  };
+
+  // Document-level keyboard shortcuts: ESC dismiss, Enter submit
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Don't hijack typing in the feedback textarea or in the chat input
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' ||
+          (target as HTMLElement).isContentEditable)) {
+        if (e.key === 'Escape' && feedbackOpen) {
+          e.preventDefault();
+          handleDismiss();
+        } else if (e.key === 'Enter' && canSubmit && feedbackOpen) {
+          e.preventDefault();
+          handleContinue();
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      } else if (e.key === 'Enter' && canSubmit) {
+        e.preventDefault();
+        handleContinue();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSubmit, feedbackOpen, feedback, answers, currentIdx]);
 
   return (
-    <>
-      <PanelHeader
-        toolName="AskUserQuestion"
-        title="AskUserQuestion"
-        summary={
-          firstHeader
-            ? `${questionCount} 个问题 · ${firstHeader}${questionCount > 1 ? ' …' : ''}`
-            : `${questionCount} 个问题`
-        }
-        detailCount={questions.length}
-        expanded={expanded}
-        onToggle={() => setExpanded((v) => !v)}
-        t={t}
-      />
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: 'easeInOut' }}
-            className="overflow-hidden"
-          >
-            <div className="permission-prompt-questions">
-              {questions.map((q, i) => {
-                const qIdx = String(i);
-                const selected = selections[qIdx] || new Set<string>();
-                return (
-                  <div key={qIdx} className="permission-prompt-question">
-                    {q.header && (
-                      <span className="permission-prompt-question-header">{q.header}</span>
-                    )}
-                    <p className="permission-prompt-question-text">{q.question}</p>
-                    <div className="permission-prompt-options">
-                      {q.options.map((opt) => {
-                        const isSelected = selected.has(opt.label);
-                        const isRecommended = opt.label.includes('(Recommended)');
-                        const cleanLabel = opt.label.replace(' (Recommended)', '');
-                        return (
-                          <button
-                            key={opt.label}
-                            type="button"
-                            onClick={() => toggleOption(qIdx, opt.label, q.multiSelect)}
-                            className={`permission-prompt-option ${isSelected ? 'selected' : ''}`}
-                            title={opt.description}
-                          >
-                            {q.multiSelect && (
-                              <span className="permission-prompt-option-check">
-                                {isSelected ? '☑' : '☐'}
-                              </span>
-                            )}
-                            <span>{cleanLabel}</span>
-                            {isRecommended && (
-                              <span className="permission-prompt-option-star" aria-label="recommended">★</span>
-                            )}
-                          </button>
-                        );
-                      })}
-                      <button
-                        type="button"
-                        onClick={() => toggleOther(qIdx, q.multiSelect)}
-                        className={`permission-prompt-option ${useOther[qIdx] ? 'selected' : ''}`}
-                      >
-                        {t('permission.other')}
-                      </button>
-                    </div>
-                    {useOther[qIdx] && (
-                      <input
-                        type="text"
-                        placeholder={t('permission.typeAnswer')}
-                        value={otherTexts[qIdx] || ''}
-                        onChange={(e) => setOtherTexts((prev) => ({ ...prev, [qIdx]: e.target.value }))}
-                        className="permission-prompt-other-input"
-                        autoFocus
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </motion.div>
+    <div className="ask-question-sheet">
+      <div className="ask-question-sheet-header">
+        <div className="flex-1 min-w-0">
+          <p className="ask-question-title">{current.question}</p>
+        </div>
+        {total > 1 && (
+          <div className="ask-question-pager">
+            <button
+              type="button"
+              onClick={() => moveToQuestion(currentIdx - 1)}
+              disabled={currentIdx === 0}
+              className="ask-question-pager-btn"
+              aria-label="Previous question"
+            >
+              <CaretLeftIcon size={12} />
+            </button>
+            <span className="ask-question-pager-count">
+              {t('permission.questionSwitcher', { current: currentIdx + 1, total })}
+            </span>
+            <button
+              type="button"
+              onClick={() => moveToQuestion(currentIdx + 1)}
+              disabled={isLast}
+              className="ask-question-pager-btn"
+              aria-label="Next question"
+            >
+              <CaretRightIcon size={12} />
+            </button>
+          </div>
         )}
-      </AnimatePresence>
-      <div className="permission-prompt-actions">
+      </div>
+
+      <div className="ask-question-options">
+        {current.options.map((opt, i) => {
+          const isSelected = currentAnswer === opt.label || (isMulti && currentAnswer.split(' || ').includes(opt.label));
+          const isRecommended = opt.label.includes('(Recommended)');
+          const cleanLabel = opt.label.replace(' (Recommended)', '');
+          const showInfo = !!opt.description && openInfo === opt.label;
+          return (
+            <div key={opt.label} className="ask-question-option-wrap">
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => handleSelectOption(opt.label)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleSelectOption(opt.label);
+                  }
+                }}
+                className={`ask-question-option ${isSelected ? 'selected' : ''}`}
+              >
+                <span className="ask-question-option-number">
+                  {i + 1}.
+                </span>
+                <span className="ask-question-option-label">
+                  {cleanLabel}
+                  {isRecommended && (
+                    <span className="ask-question-recommended">推荐</span>
+                  )}
+                </span>
+                {isMulti ? (
+                  <span
+                    className={`ask-question-check ${isSelected ? 'selected' : ''}`}
+                    aria-hidden
+                  >
+                    {isSelected && <CheckIcon size={10} weight="bold" />}
+                  </span>
+                ) : (
+                  <span
+                    className={`ask-question-radio ${isSelected ? 'selected' : ''}`}
+                    aria-hidden
+                  >
+                    {isSelected && <span />}
+                  </span>
+                )}
+                {opt.description && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenInfo((v) => (v === opt.label ? null : opt.label));
+                    }}
+                    className="ask-question-info"
+                    aria-label="Show description"
+                  >
+                    <InfoIcon size={12} weight="regular" />
+                  </button>
+                )}
+              </div>
+              {showInfo && opt.description && (
+                <div
+                  className="ask-question-description"
+                  role="tooltip"
+                >
+                  {opt.description}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="ask-question-footer">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={handleToggleFeedback}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleToggleFeedback();
+            }
+          }}
+          className={`ask-question-option feedback ${feedbackOpen || hasFeedback ? 'selected' : ''}`}
+        >
+          <span className="ask-question-option-number">
+            {current.options.length + 1}.
+          </span>
+          {feedbackOpen ? (
+            <input
+              autoFocus
+              value={feedback}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setFeedbacks((prev) => ({ ...prev, [current.question]: e.target.value }))}
+              placeholder={t('permission.feedbackPlaceholder')}
+              className="ask-question-feedback-input"
+            />
+          ) : (
+            <span className="ask-question-option-label">
+              {t('permission.tellDuyaWhatToDoDifferently')}
+            </span>
+          )}
+        </div>
+        <div className="ask-question-footer-actions">
+        <button type="button" onClick={handleDismiss} className="ask-question-dismiss">
+          <span>{t('permission.dismissHint')}</span>
+          <kbd>ESC</kbd>
+        </button>
         <button
           type="button"
-          onClick={handleSubmit}
-          disabled={!hasAnswer}
-          className="permission-prompt-btn permission-prompt-btn-primary"
+          onClick={handleContinue}
+          disabled={!canSubmit}
+          className="ask-question-continue"
         >
-          {t('permission.submit')}
+          <span>{t('permission.continueHint')}</span>
+          <kbd>
+            ⏎
+          </kbd>
         </button>
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -551,8 +718,13 @@ export function PermissionPrompt({
 }: PermissionPromptProps) {
   const { t } = useTranslation();
 
-  // Don't render permission UI when full_access
-  if (permissionProfile === 'full_access') return null;
+  const isInteractiveQuestion =
+    pendingPermission?.toolName === 'AskUserQuestion' ||
+    pendingPermission?.mode === 'ask_user_question';
+
+  // Full-access mode skips permission prompts, but AskUserQuestion is
+  // user input rather than a permission gate, so it must stay visible.
+  if (permissionProfile === 'full_access' && !isInteractiveQuestion) return null;
 
   // Nothing to show
   if (!pendingPermission && !permissionResolved) return null;
@@ -574,8 +746,8 @@ export function PermissionPrompt({
   if (!pendingPermission) return null;
 
   return (
-    <div className="permission-prompt-wrapper">
-      <div className="permission-prompt-panel">
+    <div className={`permission-prompt-wrapper ${toolName === 'AskUserQuestion' ? 'ask-user-question' : ''}`}>
+      <div className={`permission-prompt-panel ${toolName === 'AskUserQuestion' ? 'ask-user-question-panel' : ''}`}>
         {/* Auto mode indicator */}
         {autoModeInfo?.active && (
           <div className="permission-prompt-auto-chip">

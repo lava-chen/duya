@@ -18,6 +18,7 @@ import type {
   AgentProgressEvent,
 } from '../types.js'
 import type { ToolRegistry } from './registry.js'
+import { PermissionRequiredError } from './BaseTool.js'
 import { ToolRetryExecutor } from './retry/ToolRetryExecutor.js'
 import { DEFAULT_RETRY_STRATEGIES } from './retry/BuiltInStrategies.js'
 import type { RetryStrategy } from './retry/types.js'
@@ -1151,13 +1152,18 @@ export class StreamingToolExecutor {
           sessionId: this.toolUseContext.options.sessionId ?? 'default',
           getAppState: this.toolUseContext.getAppState,
         };
-        const permResult = (executor as { checkPermissions: (input: unknown, context: unknown) => { allowed: boolean; requiresUserConfirmation?: boolean; reason?: string } }).checkPermissions(tool.block.input, toolContext);
+        const permResult = (executor as { checkPermissions: (input: unknown, context: unknown) => { allowed: boolean; requiresUserConfirmation?: boolean; reason?: string; mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode' } }).checkPermissions(tool.block.input, toolContext);
         if (permResult.requiresUserConfirmation && this.toolUseContext.requestPermission) {
+          // Use the tool's stable `tool.id` (= toolUseId) as the permission
+          // request id so that any answers the user submits can be looked up
+          // by the tool's two-phase retry logic. The pre-check id MUST match
+          // the throw-path id for `storePendingAnswer` (keyed by id) to
+          // resolve the same entry the second-phase `execute()` reads from.
           const permissionRequest = {
-            id: crypto.randomUUID(),
+            id: tool.id,
             toolName: tool.block.name,
             toolInput: tool.block.input as Record<string, unknown>,
-            mode: 'generic' as const,
+            mode: permResult.mode || 'generic',
             expiresAt: Date.now() + 5 * 60 * 1000,
             decisionReason: permResult.reason,
           };
@@ -1235,11 +1241,16 @@ export class StreamingToolExecutor {
         }
       })
 
+      const executionContext: ToolUseContext = {
+        ...this.toolUseContext,
+        toolUseId: tool.id,
+      }
+
       // For Agent tool, create a context with progress callback to stream sub-agent events
       const isAgentTool = tool.block.name === 'Agent'
       const toolContext: ToolUseContext = isAgentTool
         ? {
-            ...this.toolUseContext,
+            ...executionContext,
             reportAgentProgress: (event: AgentProgressEvent) => {
               if (event.type === 'done') {
                 tool.backgroundDone = true
@@ -1252,19 +1263,71 @@ export class StreamingToolExecutor {
               }
             },
           }
-        : this.toolUseContext
+        : executionContext
 
       // Execute with timeout AND abort support
-      const result = await Promise.race([
-        this.toolRegistry.execute(
-          this.resolveToolKey(tool.block.name),
-          tool.block.input as Record<string, unknown>,
-          this.toolUseContext.options.workingDirectory,
-          toolContext
-        ),
-        timeoutPromise,
-        abortPromise,
-      ])
+      let result: ToolResult | null
+      try {
+        result = await Promise.race([
+          this.toolRegistry.execute(
+            this.resolveToolKey(tool.block.name),
+            tool.block.input as Record<string, unknown>,
+            this.toolUseContext.options.workingDirectory,
+            toolContext
+          ),
+          timeoutPromise,
+          abortPromise,
+        ])
+      } catch (err) {
+        // New typed-error path: tool threw PermissionRequiredError instead of
+        // returning a string sentinel.
+        if (err instanceof PermissionRequiredError) {
+          // If the pre-check (line 1145) already ran `checkPermissions` and
+          // got an `allow` from the user for this exact tool id, the user's
+          // answer has already been stored in `AskUserQuestionTool`'s
+          // `pendingAnswers` map. Skip the second permission request and
+          // go straight to Phase 2 retry, which will read the stored
+          // answer and return the formatted string to the LLM.
+          const appState = this.toolUseContext.getAppState();
+          const approvedMap = appState._approvedToolUses as Record<string, boolean> | undefined;
+          if (approvedMap && approvedMap[tool.id]) {
+            const retryResult = await this.toolRegistry.execute(
+              this.resolveToolKey(tool.block.name),
+              tool.block.input as Record<string, unknown>,
+              this.toolUseContext.options.workingDirectory,
+              executionContext
+            );
+            if (retryResult && !retryResult.error) {
+              messages.push({
+                role: 'tool' as const,
+                content: typeof retryResult.result === 'string'
+                  ? retryResult.result
+                  : JSON.stringify(retryResult.result),
+                tool_call_id: tool.id,
+                duration_ms: Date.now() - startTime,
+              });
+              this.finalizeTool(tool, messages);
+              return;
+            }
+            // Retry failed (e.g. user dismissed with no answer) — fall
+            // through to the standard deny path below.
+            messages.push(
+              createErrorMessage(tool.id, `<tool_error>User did not provide an answer</tool_error>`)
+            );
+            this.finalizeTool(tool, messages, 'No answer provided');
+            return;
+          }
+          // Pre-check did not run (sub-agent path, or `checkPermissions`
+          // returned `requiresUserConfirmation: false`). Go through the
+          // normal permission-request flow.
+          await this.handlePermissionRequest(err.permissionInfo, tool, messages, startTime)
+          return
+        }
+        // AbortError / timeout / any other unexpected throw falls through
+        // to the outer catch at line ~1429 which handles AbortError and
+        // retry-with-fallback for everything else.
+        throw err
+      }
 
       // Process results
       tool.stage = 'processing_results'
@@ -1309,104 +1372,19 @@ export class StreamingToolExecutor {
         : JSON.stringify(result.result)
 
       // Check if result indicates a permission is required
+      // (legacy string-sentinel path, kept as a fallback for tools that have
+      // not been migrated to throw PermissionRequiredError).
       if (resultContent.includes('<tool_use_permission_required>')) {
-        let permissionInfo = result.metadata?.permissionInfo as {
-          id: string;
-          toolName: string;
-          toolInput: Record<string, unknown>;
-          mode: 'generic' | 'ask_user_question' | 'exit_plan_mode';
-          expiresAt: number;
-          decisionReason?: string;
-        } | undefined;
-
-        if (!permissionInfo) {
-          const match = resultContent.match(/<tool_use_permission_required>(.*?)<\/tool_use_permission_required>/);
-          if (match) {
-            try {
-              permissionInfo = JSON.parse(match[1]);
-            } catch {
-              // Failed to parse, continue with basic info
-            }
-          }
-        }
-
-        if (permissionInfo && this.toolUseContext.requestPermission) {
+        const match = resultContent.match(/<tool_use_permission_required>(.*?)<\/tool_use_permission_required>/);
+        if (match) {
           try {
-            const decision = await this.toolUseContext.requestPermission(permissionInfo);
-
-            if (decision === 'deny') {
-              messages.push(
-                createErrorMessage(tool.id, `<tool_error>Permission denied by user</tool_error>`)
-              );
-              this.finalizeTool(tool, messages, 'Permission denied');
-              return;
-            }
-
-            // Permission granted - mark this tool use as approved and actually retry execution.
-            // Previously we only emitted a "granted" message and returned, which caused
-            // empty/no-op tool results after user approval.
-            this.toolUseContext.setAppState((prev) => ({
-              ...prev,
-              _approvedToolUses: {
-                ...(prev._approvedToolUses as Record<string, boolean> || {}),
-                [tool.id]: true,
-              },
-            }));
-
-            const retryResult = await this.toolRegistry.execute(
-              this.resolveToolKey(tool.block.name),
-              tool.block.input as Record<string, unknown>,
-              this.toolUseContext.options.workingDirectory,
-              this.toolUseContext
-            );
-
-            if (!retryResult) {
-              messages.push(
-                createErrorMessage(
-                  tool.id,
-                  `<tool_use_error>Error: No such tool available: ${tool.block.name}</tool_use_error>`,
-                ),
-              );
-              this.finalizeTool(tool, messages, undefined, 'Tool not found');
-              return;
-            }
-
-            if (retryResult.error) {
-              messages.push(
-                createErrorMessage(tool.id, retryResult.result, true),
-              );
-              this.finalizeTool(tool, messages, undefined, String(retryResult.result));
-              return;
-            }
-
-            messages.push({
-              role: 'tool' as const,
-              content: typeof retryResult.result === 'string'
-                ? retryResult.result
-                : JSON.stringify(retryResult.result),
-              tool_call_id: tool.id,
-              duration_ms: Date.now() - startTime,
-            });
-            this.finalizeTool(tool, messages);
+            const permissionInfo = JSON.parse(match[1]);
+            await this.handlePermissionRequest(permissionInfo, tool, messages, startTime);
             return;
-
-          } catch (permError) {
-            messages.push(
-              createErrorMessage(tool.id, `<tool_error>Permission request failed: ${permError instanceof Error ? permError.message : 'Unknown error'}</tool_error>`)
-            );
-            this.finalizeTool(tool, messages, 'Permission request failed');
-            return;
+          } catch {
+            // Failed to parse - fall through and treat as plain result.
           }
         }
-
-        // No requestPermission callback available - treat as denied
-        messages.push({
-          role: 'tool' as const,
-          content: `<tool_error>Permission system not configured</tool_error>`,
-          tool_call_id: tool.id,
-        });
-        this.finalizeTool(tool, messages, 'Permission system not configured');
-        return;
       }
 
       messages.push({
@@ -1509,6 +1487,122 @@ export class StreamingToolExecutor {
       }
 
       this.finalizeTool(tool, messages, errorMessage)
+    }
+  }
+
+  /**
+   * Handle a permission request from a tool.
+   *
+   * Called from two paths:
+   *  1. The new typed-error path: tool threw `PermissionRequiredError` (caught
+   *     in executeTool around the `toolRegistry.execute()` Promise.race).
+   *  2. The legacy string-sentinel path: tool returned a result whose content
+   *     contained `<tool_use_permission_required>...</tool_use_permission_required>`.
+   *
+   * Both paths converge here so there is exactly one place that talks to
+   * `ToolUseContext.requestPermission` and one retry logic.
+   *
+   * On `allow`: marks the tool as approved in appState and retries execution
+   *   with the original `toolUseContext` (preserving `toolUseId` so two-phase
+   *   tools like `AskUserQuestionTool` can read stored answers by id).
+   * On `deny`: pushes a `Permission denied` tool error and finalizes.
+   * On no `requestPermission` callback (e.g. sub-agents): pushes a
+   *   `Permission system not configured` tool error and finalizes.
+   */
+  private async handlePermissionRequest(
+    permissionInfo: {
+      id: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+      mode: 'generic' | 'ask_user_question' | 'exit_plan_mode';
+      expiresAt: number;
+      decisionReason?: string;
+    },
+    tool: TrackedTool,
+    messages: Message[],
+    startTime: number
+  ): Promise<void> {
+    if (!this.toolUseContext.requestPermission) {
+      messages.push({
+        role: 'tool' as const,
+        content: `<tool_error>Permission system not configured</tool_error>`,
+        tool_call_id: tool.id,
+      });
+      this.finalizeTool(tool, messages, 'Permission system not configured');
+      return;
+    }
+
+    try {
+      const decision = await this.toolUseContext.requestPermission(permissionInfo);
+
+      if (decision === 'deny') {
+        messages.push(
+          createErrorMessage(tool.id, `<tool_error>Permission denied by user</tool_error>`)
+        );
+        this.finalizeTool(tool, messages, 'Permission denied');
+        return;
+      }
+
+      // Permission granted - mark this tool use as approved and actually retry execution.
+      // Previously we only emitted a "granted" message and returned, which caused
+      // empty/no-op tool results after user approval.
+      this.toolUseContext.setAppState((prev) => ({
+        ...prev,
+        _approvedToolUses: {
+          ...(prev._approvedToolUses as Record<string, boolean> || {}),
+          [tool.id]: true,
+        },
+      }));
+
+      // Retry with `this.toolUseContext` (NOT `toolContext`) so the tool sees
+      // the same `toolUseId` as Phase 1 - this is what makes two-phase tools
+      // like AskUserQuestionTool work (Phase 2 looks up `pendingAnswers` by id).
+      const retryResult = await this.toolRegistry.execute(
+        this.resolveToolKey(tool.block.name),
+        tool.block.input as Record<string, unknown>,
+        this.toolUseContext.options.workingDirectory,
+        {
+          ...this.toolUseContext,
+          toolUseId: tool.id,
+        }
+      );
+
+      if (!retryResult) {
+        messages.push(
+          createErrorMessage(
+            tool.id,
+            `<tool_use_error>Error: No such tool available: ${tool.block.name}</tool_use_error>`,
+          ),
+        );
+        this.finalizeTool(tool, messages, undefined, 'Tool not found');
+        return;
+      }
+
+      if (retryResult.error) {
+        messages.push(
+          createErrorMessage(tool.id, retryResult.result, true),
+        );
+        this.finalizeTool(tool, messages, undefined, String(retryResult.result));
+        return;
+      }
+
+      messages.push({
+        role: 'tool' as const,
+        content: typeof retryResult.result === 'string'
+          ? retryResult.result
+          : JSON.stringify(retryResult.result),
+        tool_call_id: tool.id,
+        duration_ms: Date.now() - startTime,
+      });
+      this.finalizeTool(tool, messages);
+      return;
+
+    } catch (permError) {
+      messages.push(
+        createErrorMessage(tool.id, `<tool_error>Permission request failed: ${permError instanceof Error ? permError.message : 'Unknown error'}</tool_error>`)
+      );
+      this.finalizeTool(tool, messages, 'Permission request failed');
+      return;
     }
   }
 
