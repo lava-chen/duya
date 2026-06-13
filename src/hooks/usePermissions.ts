@@ -163,7 +163,10 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
     }
     lastSeenIdRef.current = request.id;
 
-    if (permissionProfile === 'full_access' && sessionId) {
+    const requiresUserAnswer =
+      request.toolName === 'AskUserQuestion' || request.mode === 'ask_user_question';
+
+    if (permissionProfile === 'full_access' && sessionId && !requiresUserAnswer) {
       waitingRef.current = true;
       setPendingPermission(null);
       setPermissionResolved(null);

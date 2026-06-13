@@ -276,7 +276,7 @@ export class CliApiClient {
   }
 
   private async sendMethod(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     url: string,
     token: string,
     timeoutMs: number,
