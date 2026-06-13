@@ -46,6 +46,33 @@ export class ToolPermissionError extends Error {
   }
 }
 
+/**
+ * Thrown by a tool's `execute()` to signal that the tool needs explicit user
+ * permission before it can run. The error carries the structured permission
+ * request payload (id, toolName, toolInput, mode, expiresAt) so the executor
+ * can route it to `ToolUseContext.requestPermission` without depending on
+ * string-sentinel detection in the tool's result content.
+ *
+ * This replaces the legacy `<tool_use_permission_required>...</tool_use_permission_required>`
+ * sentinel that used to be embedded in `ToolResult.result`. The sentinel path
+ * is still supported as a fallback for tools that have not been migrated.
+ */
+export class PermissionRequiredError extends Error {
+  constructor(
+    public readonly permissionInfo: {
+      id: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+      mode: 'generic' | 'ask_user_question' | 'exit_plan_mode';
+      expiresAt: number;
+      decisionReason?: string;
+    }
+  ) {
+    super('Tool execution requires user permission');
+    this.name = 'PermissionRequiredError';
+  }
+}
+
 // ============================================================
 // BaseTool Class
 // ============================================================

@@ -50,6 +50,13 @@ export interface PermissionCheckResult {
   allowed: boolean;
   reason?: string;
   requiresUserConfirmation?: boolean;
+  /**
+   * Permission mode to use when surfacing this tool's permission request to
+   * the user. Defaults to 'generic' in the executor. Tools that have their
+   * own dedicated UI (e.g. AskUserQuestion) should set this to
+   * 'ask_user_question' so the panel renders the right layout.
+   */
+  mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode';
 }
 
 // ============================================================
