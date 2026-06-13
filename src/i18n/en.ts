@@ -124,6 +124,11 @@ const en = {
   'streaming.toolAction.label.agent': 'Agent',
   'streaming.toolAction.label.browser': 'Browser',
   'streaming.toolAction.label.askQuestion': 'Asked',
+  'streaming.toolAction.label.memory': 'Memory',
+  'streaming.toolAction.label.memoryList': 'Read',
+  'streaming.toolAction.label.memoryAdd': 'Saved',
+  'streaming.toolAction.label.memoryReplace': 'Updated',
+  'streaming.toolAction.label.memoryRemove': 'Removed',
 
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',
@@ -465,18 +470,6 @@ const en = {
   'settings.providers.titleModel': 'Title Model',
   'settings.providers.titleModelDesc': 'For auto-generating conversation titles',
 
-  'settings.defaultProvider.title': 'Default provider',
-  'settings.defaultProvider.description':
-    'Used as the implicit fallback for chat, vision, and the agent. ' +
-    'Other providers stay usable; this is just the default when nothing ' +
-    'else is set.',
-  'settings.defaultProvider.noneConfigured':
-    'No providers configured. Add a provider first, then come back to set a default.',
-  'settings.defaultProvider.current': 'Default',
-  'settings.defaultProvider.setAsDefault': 'Set as default',
-  'settings.defaultProvider.noDefaultHint':
-    'No default set. Subsystems that need an implicit fallback will pick the first configured provider.',
-
   'settings.appearance.title': 'Appearance',
   'settings.appearance.description': 'Customize the look and feel',
   'settings.appearance.theme': 'Theme',
@@ -600,11 +593,6 @@ const en = {
   'provider.tooltip.default': 'Default provider',
   'provider.badge.default': 'Default',
   'provider.actions.setDefault': 'Set as default',
-  'provider.defaultProviderSection.title': 'Default provider',
-  'provider.defaultProviderSection.description':
-    'Used when a thread has no explicit provider, and as a fallback for vision, gateway, wiki-agent, title generation, embedding, and scheduled automation tasks.',
-  'provider.defaultProviderSection.empty':
-    'No default provider is set. Pick one to enable background tasks and fallbacks.',
   'provider.configured': 'Configured',
   'provider.noKey': 'No key',
   'provider.loading': 'Loading providers…',

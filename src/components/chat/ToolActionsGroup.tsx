@@ -16,6 +16,8 @@ import {
   BrainIcon,
   RobotIcon,
   CopyIcon,
+  ChromeIcon,
+  QuestionIcon,
 } from '@/components/icons';
 import { Shimmer } from './Shimmer';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -27,6 +29,8 @@ import { renderToolResult } from './ToolResultRenderer';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import { SimpleDiffViewer, calculateDiff } from '@/components/diff/SimpleDiffViewer';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useAdaptiveTypewriter } from '@/hooks/useAdaptiveTypewriter';
+import { parseSubAgentToolResult } from '@/lib/subagent-result';
 
 export interface ToolAction {
   id?: string;
@@ -61,7 +65,11 @@ interface ToolActionsGroupProps {
 interface ToolRendererDef {
   match: (name: string) => boolean;
   icon: Icon;
-  label: string;
+  /** i18n key for the verb shown next to the icon (e.g. "已编辑"/"Edited").
+   *  Null when no label is shown (e.g. shell/bash where the command itself
+   *  is the label). Translation happens at render time inside ToolActionRow
+   *  because hooks can't be called at module top level. */
+  labelKey: import('@/i18n').TranslationKey | null;
   getSummary: (input: unknown, name?: string) => string;
   renderDetail?: (tool: ToolAction, streamingOutput?: string) => React.ReactNode;
 }
@@ -87,7 +95,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => n.toLowerCase() === 'shell',
     icon: TerminalIcon,
-    label: '',
+    labelKey: null,
     getSummary: (input) => {
       const rawCmd = (input as Record<string, unknown>)?.command || (input as Record<string, unknown>)?.cmd || '';
       const cmd = typeof rawCmd === 'string' ? rawCmd : JSON.stringify(rawCmd);
@@ -97,7 +105,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => ['bash', 'execute', 'run', 'execute_command', 'run_command'].includes(n.toLowerCase()),
     icon: TerminalIcon,
-    label: '',
+    labelKey: null,
     getSummary: (input) => {
       const rawCmd = (input as Record<string, unknown>)?.command || (input as Record<string, unknown>)?.cmd || '';
       const cmd = typeof rawCmd === 'string' ? rawCmd : JSON.stringify(rawCmd);
@@ -107,7 +115,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => n.toLowerCase() === 'duya_cli' || n.toLowerCase() === 'duya-cli' || n.toLowerCase() === 'duyacli',
     icon: TerminalIcon,
-    label: 'CLI',
+    labelKey: 'streaming.toolAction.label.cli',
     getSummary: (input) => {
       // "Run duya status" / "运行 duya status"
       const argv = (input as Record<string, unknown>)?.argv;
@@ -118,7 +126,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => ['edit', 'edit_file', 'str_replace_editor'].includes(n.toLowerCase()),
     icon: NotePencilIcon,
-    label: 'Edit',
+    labelKey: 'streaming.toolAction.label.edit',
     getSummary: (input) => {
       const path = getFilePath(input);
       return path ? extractFilename(path) : 'file';
@@ -127,7 +135,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => ['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(n.toLowerCase()),
     icon: NotePencilIcon,
-    label: 'Create',
+    labelKey: 'streaming.toolAction.label.create',
     getSummary: (input) => {
       const path = getFilePath(input);
       return path ? extractFilename(path) : 'file';
@@ -136,7 +144,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => ['read', 'readfile', 'read_file', 'read_multiple_files'].includes(n.toLowerCase()),
     icon: FileIcon,
-    label: 'Read',
+    labelKey: 'streaming.toolAction.label.read',
     getSummary: (input) => {
       const path = getFilePath(input);
       return path ? extractFilename(path) : 'file';
@@ -145,7 +153,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => ['search', 'glob', 'grep', 'find_files', 'search_files'].includes(n.toLowerCase()),
     icon: MagnifyingGlassIcon,
-    label: 'Search',
+    labelKey: 'streaming.toolAction.label.search',
     getSummary: (input) => {
       const inp = input as Record<string, unknown> | undefined;
       const rawPattern = inp?.pattern || inp?.query || inp?.glob || '';
@@ -156,7 +164,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
   {
     match: (n) => ['agent', 'task', 'subagent', 'sub_agent'].includes(n.toLowerCase()),
     icon: RobotIcon,
-    label: 'Agent',
+    labelKey: 'streaming.toolAction.label.agent',
     getSummary: (input) => {
       const inp = input as Record<string, unknown> | undefined;
       const name = inp?.name || inp?.description || '';
@@ -171,9 +179,38 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
+    match: (n) => isBrowserTool(n),
+    icon: ChromeIcon,
+    labelKey: 'streaming.toolAction.label.browser',
+    getSummary: (input, name) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      if (typeof inp.title === 'string' && inp.title.trim()) return inp.title.trim();
+      if (typeof inp.description === 'string' && inp.description.trim()) return inp.description.trim();
+      if (typeof inp.url === 'string' && inp.url) return inp.url;
+      if (typeof inp.operation === 'string' && inp.operation) return inp.operation as string;
+      return name || 'browser';
+    },
+  },
+  {
+    // AskUserQuestion. Mirrors BashToolRow's pattern — a dedicated
+    // AskUserQuestionResultRow renders both the collapsed header and the
+    // expanded dark card. We register an entry so the registry can still
+    // produce a sensible icon / summary if the row component ever falls
+    // back to the generic renderer.
+    match: (n) => n.toLowerCase() === 'askuserquestion',
+    icon: QuestionIcon,
+    labelKey: 'streaming.toolAction.label.askQuestion',
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const firstQ = (inp.questions as Array<{ question?: string }> | undefined)?.[0];
+      const q = firstQ?.question || '';
+      return q ? (q.length > 60 ? q.slice(0, 57) + '...' : q) : 'question';
+    },
+  },
+  {
     match: () => true,
     icon: WrenchIcon,
-    label: '',
+    labelKey: null,
     getSummary: (input, name?: string) => {
       const prefix = name || '';
       if (!input || typeof input !== 'object') return prefix;
@@ -246,6 +283,97 @@ function isContextTool(name: string): boolean {
   return CONTEXT_TOOLS.has(name.toLowerCase());
 }
 
+// Browser tools (chrome / browser / browsertool / browser_tool).
+// Consecutive browser actions are collapsed into a single "已使用 浏览器"
+// group rather than rendered as a wall of JSON dumps.
+const BROWSER_TOOLS = new Set([
+  'browser', 'browsertool', 'browser_tool', 'chrome',
+]);
+
+function isBrowserTool(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (BROWSER_TOOLS.has(lower)) return true;
+  // Match browser sub-actions like browser_navigate, browser_click,
+  // browser_screenshot, etc. — agents often expose browser capability
+  // as one base tool with an `operation` parameter, but they may also
+  // expose it as a family of namespaced tools. Treating any name
+  // starting with "browser_" as a browser tool keeps every consecutive
+  // call inside the same BrowserGroup instead of leaking the last one
+  // out as a standalone row.
+  if (lower.startsWith('browser_') || lower.startsWith('browser-')) {
+    return true;
+  }
+  return false;
+}
+
+// AskUserQuestion has a dedicated row layout (mirrors BashToolRow).
+// The tool name is registered as 'AskUserQuestion' on the agent side
+// (see ASK_USER_QUESTION_TOOL_NAME in packages/agent). Only one
+// canonical name exists — no sub-action family to match.
+const ASK_USER_QUESTION_TOOLS = new Set(['askuserquestion']);
+
+function isAskUserQuestionTool(name: string): boolean {
+  return ASK_USER_QUESTION_TOOLS.has(name.toLowerCase());
+}
+
+// Try to extract a snapshot-style field from a browser tool's result JSON.
+// Returns the snapshot text or `null` if none is present.
+export function extractBrowserSnapshot(result: string | undefined): string | null {
+  if (!result) return null;
+  try {
+    const data = JSON.parse(result);
+    if (typeof data?.compactSnapshot === 'string' && data.compactSnapshot.trim()) {
+      return data.compactSnapshot;
+    }
+    if (typeof data?.snapshot === 'string' && data.snapshot.trim()) {
+      return data.snapshot;
+    }
+    if (typeof data?.content === 'string' && data.content.trim()) {
+      return data.content;
+    }
+  } catch {
+    // not JSON — ignore
+  }
+  return null;
+}
+
+// Pull a human-friendly title for one browser action. Falls back to the
+// operation name, the URL, or the tool name.
+export function getBrowserActionTitle(input: unknown, toolName: string): string {
+  const inp = (input || {}) as Record<string, unknown>;
+  if (typeof inp.title === 'string' && inp.title.trim()) return inp.title.trim();
+  if (typeof inp.description === 'string' && inp.description.trim()) return inp.description.trim();
+  const op = inp.operation;
+  if (typeof op === 'string' && op.trim()) {
+    const opName = op.replace(/_/g, ' ');
+    return opName.charAt(0).toUpperCase() + opName.slice(1);
+  }
+  if (typeof inp.url === 'string' && inp.url.trim()) return inp.url;
+  return toolName || 'Browser action';
+}
+
+// Detect if the browser tool is running in fallback mode (extension not
+// installed) so we can show a single warning banner at the top of the
+// group rather than repeating the message per action.
+export function isBrowserFallbackMode(tools: ToolAction[]): boolean {
+  for (const t of tools) {
+    if (!t.result) continue;
+    try {
+      const data = JSON.parse(t.result);
+      if (data?.mode === 'fallback') return true;
+      if (typeof data?.error === 'string' &&
+          (data.error.includes('fallback') ||
+           data.error.includes('Extension') ||
+           data.error.includes('not available'))) {
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return false;
+}
+
 const FILE_EDIT_TOOLS = new Set([
   'edit', 'edit_file', 'str_replace_editor',
 ]);
@@ -315,11 +443,13 @@ function computeFileEditStats(tool: ToolAction): FileEditStats {
 
 type Segment =
   | { kind: 'context'; tools: ToolAction[] }
+  | { kind: 'browser'; tools: ToolAction[] }
   | { kind: 'single'; tool: ToolAction };
 
 function computeSegments(tools: ToolAction[]): Segment[] {
   const segments: Segment[] = [];
   let contextBuffer: ToolAction[] = [];
+  let browserBuffer: ToolAction[] = [];
 
   const flushContext = () => {
     if (contextBuffer.length >= 3) {
@@ -332,15 +462,37 @@ function computeSegments(tools: ToolAction[]): Segment[] {
     contextBuffer = [];
   };
 
+  const flushBrowser = () => {
+    // Only collapse into a BrowserGroup when there are 2+ consecutive
+    // browser actions. A single browser call has no reason to render
+    // behind a "已使用 浏览器" header — the standalone ToolActionRow
+    // already shows the icon + label + summary, which is exactly what
+    // a single browser call should look like.
+    if (browserBuffer.length >= 2) {
+      segments.push({ kind: 'browser', tools: browserBuffer });
+    } else {
+      for (const t of browserBuffer) {
+        segments.push({ kind: 'single', tool: t });
+      }
+    }
+    browserBuffer = [];
+  };
+
   for (const tool of tools) {
-    if (isContextTool(tool.name)) {
+    if (isBrowserTool(tool.name)) {
+      flushContext();
+      browserBuffer.push(tool);
+    } else if (isContextTool(tool.name)) {
+      flushBrowser();
       contextBuffer.push(tool);
     } else {
       flushContext();
+      flushBrowser();
       segments.push({ kind: 'single', tool });
     }
   }
   flushContext();
+  flushBrowser();
   return segments;
 }
 
@@ -381,6 +533,73 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
             <div className="ml-4 border-l-2 border-border/30 pl-2">
               {tools.map((tool, i) => (
                 <ToolActionRow key={tool.id || `ctx-${i}`} tool={tool} />
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// =============================================================================
+// BrowserGroup — collapses consecutive browser actions into a single
+// "已使用 浏览器" toggle. The expanded body lists each browser action
+// using the same `ToolActionRow` component used for standalone browser
+// actions outside the group, so the inside / outside UI stays identical
+// (icon, label, summary, status, expandable detail).
+// =============================================================================
+
+export function BrowserGroup({ tools }: { tools: ToolAction[] }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+
+  const hasRunning = tools.some((t) => t.result === undefined);
+  const hasError = tools.some((t) => t.isError);
+  const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
+
+  return (
+    <div className="browser-group">
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
+      >
+        <CaretRightIcon
+          size={10}
+          className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+        />
+        <span className="font-medium text-muted-foreground">
+          {tools.length === 1
+            ? t('streaming.toolAction.usedBrowser')
+            : t('streaming.toolAction.usedBrowserCount', { count: tools.length })}
+        </span>
+        <span className="ml-auto">
+          <StatusDot status={groupStatus} />
+        </span>
+      </button>
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0 }}
+            animate={{ height: 'auto' }}
+            exit={{ height: 0 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="browser-group-body">
+              {isBrowserFallbackMode(tools) && (
+                <div className="browser-group-fallback">
+                  <span className="font-medium text-[11px] text-amber-500">
+                    {t('streaming.toolAction.fallbackTitle')}
+                  </span>
+                  <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                    {t('streaming.toolAction.fallbackDesc')}
+                  </p>
+                </div>
+              )}
+              {tools.map((tool, i) => (
+                <ToolActionRow key={tool.id || `brw-${i}`} tool={tool} />
               ))}
             </div>
           </motion.div>
@@ -442,24 +661,32 @@ function ThinkingRow({ content, isStreaming }: { content: string; isStreaming?: 
   );
 }
 
-function TextRow({ content }: { content: string }) {
+function TextRow({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+  // When this is the live, growing text block, pace it with the adaptive
+  // typewriter so the user sees the text stream in smoothly instead of
+  // jumping in SSE chunk sizes. Older (stable) blocks render their full
+  // content immediately — the typewriter's rAF loop is a no-op for them
+  // because their target length is already caught up to displayed.
+  const displayedContent = useAdaptiveTypewriter(content, !!isStreaming);
+  const renderSource = isStreaming ? displayedContent : content;
+
   const hasWidgetFence = content.includes('```show-widget');
 
   if (!hasWidgetFence) {
     return (
       <MarkdownRenderer className="px-2 py-1.5 text-sm text-foreground/90 prose prose-sm dark:prose-invert max-w-none message-content">
-        {content}
+        {renderSource}
       </MarkdownRenderer>
     );
   }
 
-  const segments = parseAllShowWidgets(content);
+  const segments = parseAllShowWidgets(renderSource);
   const hasWidgets = segments.some(s => s.type === 'widget');
 
   if (!hasWidgets) {
     return (
       <MarkdownRenderer className="px-2 py-1.5 text-sm text-foreground/90 prose prose-sm dark:prose-invert max-w-none message-content">
-        {content}
+        {renderSource}
       </MarkdownRenderer>
     );
   }
@@ -610,7 +837,7 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
               )}
 
               {/* Status badge - bottom right */}
-              <div className="mt-1.5 flex justify-end">
+              <div className="mt-1 flex justify-end">
                 {status === 'success' && (
                   <div className="flex items-center gap-1 text-[11px] text-green-500">
                     <CheckCircleIcon size={12} />
@@ -740,7 +967,7 @@ function DuyaCliToolRow({ tool }: { tool: ToolAction }) {
                 <div className="text-[12px] text-neutral-500 italic mt-2">No output</div>
               )}
 
-              <div className="mt-1.5 flex justify-end">
+              <div className="mt-1 flex justify-end">
                 {status === 'running' && (
                   <div className="flex items-center gap-1 text-[11px] text-amber-500">
                     <SpinnerGapIcon size={12} className="animate-spin" />
@@ -779,11 +1006,27 @@ function SubAgentToolRow({
   const [hovered, setHovered] = useState(false);
   const renderer = getRenderer(tool.name);
   const summary = renderer.getSummary(tool.input, tool.name);
-  const status = getStatus(tool);
-  const isRunning = tool.result === undefined;
+  const parsedResult = React.useMemo(() => parseSubAgentToolResult(tool.result), [tool.result]);
+  const displayResult = parsedResult?.error || parsedResult?.content || tool.result;
+  const isError = tool.isError || !!parsedResult?.error;
+  const status: ToolStatus = tool.result === undefined ? 'running' : isError ? 'error' : 'success';
+  const isRunning = status === 'running';
 
   // Filter events for this sub-agent
-  const subAgentEvents = agentProgressEvents || [];
+  const subAgentEvents = React.useMemo(() => {
+    const events = agentProgressEvents || [];
+    const sessionId = parsedResult?.sessionId;
+    if (sessionId) {
+      const filteredBySession = events.filter((event) => event.sessionId === sessionId);
+      if (filteredBySession.length > 0) return filteredBySession;
+    }
+    const taskId = parsedResult?.taskId;
+    if (taskId) {
+      const filteredByTask = events.filter((event) => event.agentId === taskId);
+      if (filteredByTask.length > 0) return filteredByTask;
+    }
+    return events;
+  }, [agentProgressEvents, parsedResult?.sessionId, parsedResult?.taskId]);
   const toolUseCount = subAgentEvents.filter((e) => e.type === 'tool_use').length;
   const toolResultCount = subAgentEvents.filter((e) => e.type === 'tool_result').length;
   const unresolvedTools = Math.max(0, toolUseCount - toolResultCount);
@@ -807,8 +1050,20 @@ function SubAgentToolRow({
         result.push({ type: 'error', title: 'Failed', status: 'error' });
       }
     }
+    if (tool.result !== undefined) {
+      result.forEach((step) => {
+        if (step.status === 'running') step.status = isError ? 'error' : 'done';
+      });
+      if (result.length === 0) {
+        result.push({
+          type: isError ? 'error' : 'done',
+          title: parsedResult?.background ? 'Background agent launched' : isError ? 'Failed' : 'Completed',
+          status: isError ? 'error' : 'done',
+        });
+      }
+    }
     return result;
-  }, [subAgentEvents]);
+  }, [isError, parsedResult?.background, subAgentEvents, tool.result]);
 
   return (
     <div>
@@ -858,7 +1113,7 @@ function SubAgentToolRow({
             <div className="ml-4 mt-1 border-l-2 border-border/30 pl-3 py-2">
               {steps.length === 0 ? (
                 <div className="text-[11px] text-muted-foreground/60">
-                  {isRunning ? 'Initializing...' : 'No progress data'}
+                  {isRunning ? 'Initializing...' : 'Completed'}
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -879,9 +1134,25 @@ function SubAgentToolRow({
                   ))}
                 </div>
               )}
-              {tool.result && (
-                <div className="mt-2 text-[11px] text-muted-foreground/70 whitespace-pre-wrap">
-                  {tool.result}
+              {(parsedResult?.resolvedAgentType || parsedResult?.sessionId) && (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-neutral-500">
+                  {(parsedResult?.resolvedAgentType || parsedResult?.agentType) && (
+                    <span className="rounded-full border border-white/10 px-2 py-0.5">
+                      {parsedResult?.resolvedAgentType || parsedResult?.agentType}
+                    </span>
+                  )}
+                  {parsedResult?.sessionId && (
+                    <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono">
+                      {parsedResult.sessionId.slice(0, 8)}
+                    </span>
+                  )}
+                </div>
+              )}
+              {displayResult && (
+                <div className="mt-2 rounded-md bg-black/10 p-2">
+                  <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none message-content max-h-[160px] overflow-y-auto pr-1 text-[12px] text-neutral-300">
+                    {displayResult}
+                  </MarkdownRenderer>
                 </div>
               )}
             </div>
@@ -1021,7 +1292,428 @@ function ReadToolRow({ tool }: { tool: ToolAction }) {
               {renderedResult}
 
               {/* Status badge - bottom right */}
-              <div className="mt-1.5 flex justify-end">
+              <div className="mt-1 flex justify-end">
+                {status === 'success' && (
+                  <div className="flex items-center gap-1 text-[11px] text-green-500">
+                    <CheckCircleIcon size={12} />
+                    <span>Success</span>
+                  </div>
+                )}
+                {status === 'error' && (
+                  <div className="flex items-center gap-1 text-[11px] text-red-500">
+                    <XCircleIcon size={12} />
+                    <span>Failed</span>
+                  </div>
+                )}
+                {status === 'running' && (
+                  <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                    <SpinnerGapIcon size={12} className="animate-spin" />
+                    <span>Running</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/**
+ * AskUserQuestionResultRow — action-stream row for the AskUserQuestion tool.
+ *
+ * Mirrors the collapsed / expanded shape of BashToolRow and DuyaCliToolRow:
+ *  - Collapsed: [icon] [AskUserQuestion] [first question's text] [status dot]
+ *  - Expanded:  dark card with the tool label, the parsed answer pairs
+ *               ("Q1 → A1 / Q2 → A2"), and a Success badge at the bottom.
+ *
+ * The result string is the LLM-facing format produced by
+ * AskUserQuestionTool.formatAnswersForLLM():
+ *   User has answered your questions: "Q1"="A1", "Q2"="A2". You can now ...
+ *
+ * Parsing extracts the "question"="answer" pairs via regex. On parse
+ * failure (e.g. the format ever changes), we fall back to rendering the
+ * raw result text inside the same dark card.
+ */
+function AskUserQuestionResultRow({ tool }: { tool: ToolAction }) {
+  const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const status = getStatus(tool);
+  const summary = (() => {
+    const inp = (tool.input || {}) as Record<string, unknown>;
+    const firstQ = (inp.questions as Array<{ question?: string }> | undefined)?.[0];
+    return firstQ?.question || 'question';
+  })();
+
+  // Parse `"question"="answer"` pairs from formatAnswersForLLM output.
+  const parsedAnswers = (() => {
+    if (!tool.result) return [];
+    const re = /"(.+?)"="((?:[^"\\]|\\.)*)"/g;
+    const out: Array<{ q: string; a: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(tool.result)) !== null) {
+      out.push({ q: m[1], a: m[2] });
+    }
+    return out;
+  })();
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => tool.result !== undefined && setExpanded((prev) => !prev)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs rounded-sm transition-colors ${
+          tool.result !== undefined ? 'hover:bg-muted/30 cursor-pointer' : 'cursor-default'
+        }`}
+      >
+        {tool.result !== undefined && (
+          <CaretRightIcon
+            size={10}
+            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${
+              expanded ? 'rotate-90' : ''
+            }`}
+          />
+        )}
+
+        <QuestionIcon size={14} className="shrink-0 text-muted-foreground" />
+
+        <span
+          className={`font-mono truncate flex-1 text-left transition-colors ${
+            hovered ? 'text-foreground' : 'text-muted-foreground/60'
+          }`}
+        >
+          {summary}
+        </span>
+
+        {tool.durationMs != null && tool.durationMs > 0 && (
+          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
+            {formatDuration(tool.durationMs)}
+          </span>
+        )}
+
+        <StatusDot status={status} />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {expanded && tool.result !== undefined && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+              {/* Tool label — same chrome as BashToolRow's "Shell"/"Bash" tag */}
+              <div className="text-[11px] text-neutral-400 font-medium mb-1.5">
+                AskUserQuestion
+              </div>
+
+              {/* Answer pairs */}
+              {parsedAnswers.length > 0 ? (
+                <div className="space-y-1">
+                  {parsedAnswers.map((pair, i) => (
+                    <div key={i} className="font-mono text-[12px] text-neutral-200 leading-relaxed">
+                      <span className="text-neutral-400 mr-1.5 select-none">›</span>
+                      <span className="break-words">{pair.q}</span>
+                      <span className="text-neutral-500 mx-1.5">→</span>
+                      <span className="text-emerald-400 break-words">{pair.a}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="font-mono text-[12px] text-neutral-300 whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed">
+                  {tool.result}
+                </div>
+              )}
+
+              {/* Status badge - bottom right, matching BashToolRow */}
+              <div className="mt-2 flex justify-end">
+                {status === 'success' && (
+                  <div className="flex items-center gap-1 text-[11px] text-green-500">
+                    <CheckCircleIcon size={12} />
+                    <span>Success</span>
+                  </div>
+                )}
+                {status === 'error' && (
+                  <div className="flex items-center gap-1 text-[11px] text-red-500">
+                    <XCircleIcon size={12} />
+                    <span>Failed</span>
+                  </div>
+                )}
+                {status === 'running' && (
+                  <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                    <SpinnerGapIcon size={12} className="animate-spin" />
+                    <span>Running</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// =============================================================================
+// MemoryToolRow — dedicated row for the `Memory` tool (see
+// packages/agent/src/memory/tool.ts). The tool returns a JSON envelope:
+//   { success, entries?, usage?, error?, message? }
+//
+// Collapsed:  [BrainIcon] [verb] [human-readable summary] [StatusDot]
+// Expanded:   dark card with action-specific body
+//   - list:    entries table (type tag · summary · timestamp · content)
+//   - add:     saved summary + content
+//   - replace: oldText (strikethrough) + new summary / content
+//   - remove:  removed oldText
+//   - error:   red-tinted error message
+// Status badge in the card footer mirrors BashToolRow / AskUserQuestionResultRow.
+// =============================================================================
+
+const MEMORY_TYPE_TONE: Record<string, string> = {
+  user: 'text-sky-400 bg-sky-400/10',
+  feedback: 'text-amber-400 bg-amber-400/10',
+  project: 'text-violet-400 bg-violet-400/10',
+  reference: 'text-emerald-400 bg-emerald-400/10',
+};
+
+const MEMORY_VERB_BY_ACTION: Record<string, import('@/i18n').TranslationKey> = {
+  list: 'streaming.toolAction.label.memoryList',
+  add: 'streaming.toolAction.label.memoryAdd',
+  replace: 'streaming.toolAction.label.memoryReplace',
+  remove: 'streaming.toolAction.label.memoryRemove',
+};
+
+function formatMemorySummary(input: Record<string, unknown>): string {
+  const action = typeof input.action === 'string' ? input.action : '';
+  const summary = typeof input.summary === 'string' ? input.summary.trim() : '';
+  switch (action) {
+    case 'list':
+      return 'memory'; // count placeholder — overwritten when result arrives
+    case 'add':
+      return summary ? `Saved "${summary.length > 50 ? summary.slice(0, 47) + '…' : summary}"` : 'Saved memory';
+    case 'replace':
+      return summary ? `Updated "${summary.length > 50 ? summary.slice(0, 47) + '…' : summary}"` : 'Updated memory';
+    case 'remove':
+      return 'Removed memory';
+    default:
+      return action || 'memory';
+  }
+}
+
+interface MemoryEntry {
+  id?: string;
+  summary?: string;
+  content?: string;
+  timestamp?: string;
+  type?: string;
+}
+
+function parseMemoryResult(result: string | undefined): {
+  ok: boolean;
+  entries?: MemoryEntry[];
+  usage?: string;
+  error?: string;
+  message?: string;
+} {
+  if (!result) return { ok: true };
+  try {
+    const data = JSON.parse(result);
+    if (data && typeof data === 'object') {
+      return {
+        ok: data.success !== false,
+        entries: Array.isArray(data.entries) ? data.entries : undefined,
+        usage: typeof data.usage === 'string' ? data.usage : undefined,
+        error: typeof data.error === 'string' ? data.error : undefined,
+        message: typeof data.message === 'string' ? data.message : undefined,
+      };
+    }
+  } catch {
+    // not JSON — fall through
+  }
+  return { ok: true };
+}
+
+function MemoryEntryLine({ entry }: { entry: MemoryEntry }) {
+  const tone = entry.type ? MEMORY_TYPE_TONE[entry.type] : undefined;
+  const content = typeof entry.content === 'string' ? entry.content.trim() : '';
+  return (
+    <div className="border-l-2 border-border/40 pl-2.5 py-1">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {entry.type && tone && (
+          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${tone}`}>
+            {entry.type}
+          </span>
+        )}
+        <span className="text-[12px] text-neutral-100 break-words flex-1 min-w-0">
+          {entry.summary || '(no summary)'}
+        </span>
+        {entry.timestamp && (
+          <span className="text-[10px] text-neutral-500 font-mono tabular-nums shrink-0">
+            § {entry.timestamp}
+          </span>
+        )}
+      </div>
+      {content && (
+        <div className="text-[11px] text-neutral-400 mt-1 whitespace-pre-wrap break-words leading-relaxed">
+          {content.length > 240 ? content.slice(0, 237) + '…' : content}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MemoryToolRow({ tool }: { tool: ToolAction }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const status = getStatus(tool);
+  const hasResult = tool.result !== undefined && tool.result !== '';
+  const inp = (tool.input || {}) as Record<string, unknown>;
+  const action = typeof inp.action === 'string' ? inp.action : '';
+  const target = typeof inp.target === 'string' ? inp.target : 'global';
+  const subtarget = typeof inp.subtarget === 'string' ? inp.subtarget : 'memory';
+
+  const parsed = hasResult ? parseMemoryResult(tool.result) : null;
+  const entryCount = parsed?.entries?.length ?? 0;
+  const isError = status === 'error' || (parsed?.ok === false);
+
+  // Collapsed summary: prefer the live entry count for `list` so the user
+  // sees "Read 3 memories" as soon as the result arrives.
+  const summary = (() => {
+    if (action === 'list' && parsed?.entries) {
+      return entryCount === 1 ? '1 memory' : `${entryCount} memories`;
+    }
+    return formatMemorySummary(inp);
+  })();
+
+  const verbKey = MEMORY_VERB_BY_ACTION[action];
+  const verb = verbKey ? t(verbKey) : t('streaming.toolAction.label.memory');
+
+  // Sub-label inside the card header (e.g. "global · memory").
+  const subLabel = target === 'project' ? 'project' : `global · ${subtarget}`;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => hasResult && setExpanded((prev) => !prev)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs rounded-sm transition-colors ${
+          hasResult ? 'hover:bg-muted/30 cursor-pointer' : 'cursor-default'
+        }`}
+      >
+        {hasResult && (
+          <CaretRightIcon
+            size={10}
+            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${
+              expanded ? 'rotate-90' : ''
+            }`}
+          />
+        )}
+        <BrainIcon size={14} className="shrink-0 text-muted-foreground" />
+        <span className="font-medium text-muted-foreground shrink-0">{verb}</span>
+        <span
+          className={`font-mono truncate flex-1 text-left transition-colors ${
+            hovered ? 'text-foreground' : 'text-muted-foreground/60'
+          }`}
+        >
+          {summary}
+        </span>
+        {tool.durationMs != null && tool.durationMs > 0 && (
+          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
+            {formatDuration(tool.durationMs)}
+          </span>
+        )}
+        <StatusDot status={isError ? 'error' : status} />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {expanded && hasResult && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+              {/* Card header — same chrome as BashToolRow's "Shell" tag */}
+              <div className="flex items-baseline gap-2 mb-2">
+                <span className="text-[11px] text-neutral-400 font-medium">Memory</span>
+                <span className="text-[10px] text-neutral-500 font-mono">{subLabel}</span>
+              </div>
+
+              {/* Body — dispatched by action */}
+              {isError && parsed?.error ? (
+                <div className="bg-red-500/10 rounded p-2 font-mono text-[11px] text-red-400 whitespace-pre-wrap max-h-[200px] overflow-auto">
+                  {parsed.error}
+                </div>
+              ) : action === 'list' ? (
+                <>
+                  {parsed?.usage && (
+                    <div className="text-[10px] text-neutral-500 font-mono mb-1.5">
+                      {parsed.usage}
+                    </div>
+                  )}
+                  {entryCount === 0 ? (
+                    <div className="text-[12px] text-neutral-500 italic">No memories</div>
+                  ) : (
+                    <div className="space-y-1 max-h-[260px] overflow-auto pr-1">
+                      {(parsed?.entries ?? []).map((entry, i) => (
+                        <MemoryEntryLine key={entry.id ?? `entry-${i}`} entry={entry} />
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : action === 'add' || action === 'replace' ? (
+                <div className="space-y-1.5">
+                  {typeof inp.oldText === 'string' && inp.oldText && (
+                    <div className="text-[11px] text-neutral-500 leading-relaxed">
+                      <span className="text-neutral-600 mr-1.5 select-none">−</span>
+                      <span className="line-through break-words">{inp.oldText}</span>
+                    </div>
+                  )}
+                  <div className="text-[12px] text-neutral-100 leading-relaxed">
+                    <span className="text-emerald-500 mr-1.5 select-none">+</span>
+                    <span className="break-words">
+                      {typeof inp.summary === 'string' && inp.summary ? inp.summary : '(no summary)'}
+                    </span>
+                  </div>
+                  {typeof inp.content === 'string' && inp.content && (
+                    <div className="text-[11px] text-neutral-400 mt-1 whitespace-pre-wrap break-words leading-relaxed border-l-2 border-emerald-500/30 pl-2">
+                      {inp.content}
+                    </div>
+                  )}
+                  {parsed?.message && (
+                    <div className="text-[10px] text-neutral-500 mt-1">{parsed.message}</div>
+                  )}
+                </div>
+              ) : action === 'remove' ? (
+                <div className="space-y-1.5">
+                  {typeof inp.oldText === 'string' && inp.oldText && (
+                    <div className="text-[11px] text-neutral-400 leading-relaxed">
+                      <span className="text-red-400 mr-1.5 select-none">−</span>
+                      <span className="line-through break-words">{inp.oldText}</span>
+                    </div>
+                  )}
+                  {parsed?.message && (
+                    <div className="text-[10px] text-neutral-500">{parsed.message}</div>
+                  )}
+                </div>
+              ) : (
+                <div className="font-mono text-[11px] text-neutral-400 whitespace-pre-wrap break-all max-h-[200px] overflow-auto">
+                  {tool.result}
+                </div>
+              )}
+
+              {/* Status badge — bottom right, matching BashToolRow */}
+              <div className="mt-2 flex justify-end">
                 {status === 'success' && (
                   <div className="flex items-center gap-1 text-[11px] text-green-500">
                     <CheckCircleIcon size={12} />
@@ -1235,15 +1927,15 @@ function FileEditToolRow({ tool }: { tool: ToolAction }) {
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+            <div className="mx-0.5 my-0.5 rounded-lg bg-[#2d2d2d] p-1.5 relative">
               <SimpleDiffViewer
                 oldContent={diffPayload.oldContent}
                 newContent={diffPayload.newContent}
-                maxHeight={400}
+                maxHeight={200}
               />
 
               {/* Status badge - bottom right */}
-              <div className="mt-1.5 flex justify-end">
+              <div className="mt-1 flex justify-end">
                 {status === 'success' && (
                   <div className="flex items-center gap-1 text-[11px] text-green-500">
                     <CheckCircleIcon size={12} />
@@ -1278,6 +1970,7 @@ interface ToolActionRowProps {
 }
 
 function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolActionRowProps) {
+  const { t } = useTranslation();
   const renderer = getRenderer(tool.name);
   const summary = renderer.getSummary(tool.input, tool.name);
   const filePath = getFilePath(tool.input);
@@ -1288,6 +1981,8 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
   const lowerName = tool.name.toLowerCase();
   const isFileEdit = FILE_EDIT_TOOLS.has(lowerName) || FILE_CREATE_TOOLS.has(lowerName);
   const isRead = ['read', 'readfile', 'read_file'].includes(lowerName);
+  const isAskUserQuestion = isAskUserQuestionTool(tool.name);
+  const isMemory = lowerName === 'memory';
   const [expanded, setExpanded] = useState(false);
 
   if (isBash) {
@@ -1310,6 +2005,14 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
     return <ReadToolRow tool={tool} />;
   }
 
+  if (isAskUserQuestion) {
+    return <AskUserQuestionResultRow tool={tool} />;
+  }
+
+  if (isMemory) {
+    return <MemoryToolRow tool={tool} />;
+  }
+
   const hasResult = tool.result !== undefined && tool.result !== '';
   const isRunning = tool.result === undefined;
 
@@ -1330,6 +2033,13 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
   const canExpand = hasResult && renderedResult !== null;
   const [hovered, setHovered] = useState(false);
 
+  // Resolve the verb label (e.g. "已编辑" / "Edited") through i18n.
+  // The registry stores a key rather than a string because hooks can't
+  // run at module top level, so the translation is resolved here at
+  // render time. Falls back to the key string when the entry is null
+  // (e.g. shell/bash that show the command itself as the label).
+  const label = renderer.labelKey ? t(renderer.labelKey) : null;
+
   return (
     <div>
       <button
@@ -1348,8 +2058,8 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
 
         {createElement(renderer.icon, { size: 14, className: 'shrink-0 text-muted-foreground' })}
 
-        {renderer.label && (
-          <span className="font-medium text-muted-foreground shrink-0">{renderer.label}</span>
+        {label && (
+          <span className="font-medium text-muted-foreground shrink-0">{label}</span>
         )}
 
         <span
@@ -1388,7 +2098,7 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
               {renderedResult}
 
               {/* Status badge - bottom right */}
-              <div className="mt-1.5 flex justify-end">
+              <div className="mt-1 flex justify-end">
                 {status === 'success' && (
                   <div className="flex items-center gap-1 text-[11px] text-green-500">
                     <CheckCircleIcon size={12} />
@@ -1426,14 +2136,19 @@ function getRunningDescription(tools: ToolAction[]): string {
 function renderActionItem(
   action: ActionItem,
   index: number,
-  isStreaming?: boolean
+  isStreaming?: boolean,
+  isLastTextAction?: boolean,
 ): React.ReactNode {
   const key = `${action.kind}-${index}`;
   switch (action.kind) {
     case 'thinking':
       return <ThinkingRow key={key} content={action.content} isStreaming={action.isStreaming ?? isStreaming} />;
     case 'text':
-      return <TextRow key={key} content={action.content} />;
+      // Only the last (still-growing) text block needs the typewriter
+      // pacing. Older blocks have stable content; the typewriter's rAF
+      // loop would be a no-op for them but we'd rather not even mount
+      // the extra state.
+      return <TextRow key={key} content={action.content} isStreaming={isLastTextAction} />;
     case 'tool':
       return <ToolActionRow key={key} tool={action.tool} streamingToolOutput={action.streamingToolOutput} />;
     case 'widget':
@@ -1450,6 +2165,90 @@ function renderActionItem(
     default:
       return null;
   }
+}
+
+// Find the index of the last text action so the renderer can pass the
+// `isLastTextAction` flag to it. The last text block is the one that's
+// still growing as SSE text deltas arrive — it's the only block that
+// actually needs the typewriter pacing.
+function findLastTextIndex(actions: ActionItem[]): number {
+  for (let i = actions.length - 1; i >= 0; i--) {
+    if (actions[i].kind === 'text') return i;
+  }
+  return -1;
+}
+
+// Renders the `flat` body — preserves action order but collapses
+// consecutive browser / context tools into groups.
+function renderFlatActions(
+  actions: ActionItem[],
+  segments: Segment[],
+  _segmentKeys: Array<{ segment: Segment; keys: string[] }>,
+  isStreaming: boolean | undefined,
+  streamingToolOutput: string | undefined,
+  agentProgressEvents: AgentProgressEventWithMeta[] | undefined,
+): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let toolIdx = 0;
+  let segIdx = 0;
+  const lastTextIdx = findLastTextIndex(actions);
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i];
+    if (action.kind === 'tool') {
+      if (segIdx >= segments.length) {
+        out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+      } else {
+        const seg = segments[segIdx];
+        if (seg.kind === 'single' && seg.tool === action.tool) {
+          const isLastRunning = !seg.tool.result;
+          out.push(
+            <ToolActionRow
+              key={`tool-${toolIdx}`}
+              tool={seg.tool}
+              streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
+              agentProgressEvents={agentProgressEvents}
+            />,
+          );
+          toolIdx++;
+          segIdx++;
+        } else {
+          if (seg.kind === 'context') {
+            out.push(<ContextGroup key={`group-${toolIdx}`} tools={seg.tools} />);
+            toolIdx += seg.tools.length;
+          } else if (seg.kind === 'browser') {
+            out.push(<BrowserGroup key={`group-${toolIdx}`} tools={seg.tools} />);
+            toolIdx += seg.tools.length;
+          } else {
+            // single fallback (shouldn't reach here)
+            out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+            toolIdx++;
+          }
+          segIdx++;
+          // After rendering a group, the remaining tools in the group are
+          // already shown inside it. Skip past the next (groupSize - 1)
+          // tool actions in `actions` so they aren't re-rendered as
+          // standalone rows. Non-tool actions encountered in between are
+          // still rendered in their original position.
+          const groupSize =
+            seg.kind === 'context' || seg.kind === 'browser'
+              ? seg.tools.length
+              : 1;
+          let toolsToSkip = groupSize - 1;
+          while (toolsToSkip > 0 && i + 1 < actions.length) {
+            i++;
+            if (actions[i].kind === 'tool') {
+              toolsToSkip--;
+            } else {
+              out.push(renderActionItem(actions[i], i, isStreaming, i === lastTextIdx));
+            }
+          }
+        }
+      }
+    } else {
+      out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+    }
+  }
+  return out;
 }
 
 function computeSummaryFromActions(
@@ -1562,32 +2361,123 @@ export function ToolActionsGroup({
 
   if (actions.length === 0) return null;
 
+  const lastRunningTool = getLastRunningToolAction(actions);
+
+  // Pre-group consecutive browser/context tools so the renderer can show
+  // a single toggle per group instead of one toggle per action.
+  const toolActions = React.useMemo(
+    () => actions.filter((a): a is Extract<ActionItem, { kind: 'tool' }> => a.kind === 'tool'),
+    [actions],
+  );
+  const segments = React.useMemo(
+    () => computeSegments(toolActions.map((a) => a.tool)),
+    [toolActions],
+  );
+  // Map each segment back to the matching action indices (for keys).
+  const segmentActionKeys = React.useMemo(() => {
+    const out: Array<{ segment: Segment; keys: string[] }> = [];
+    let toolIdx = 0;
+    for (const seg of segments) {
+      const count = seg.kind === 'single' ? 1 : seg.tools.length;
+      const keys: string[] = [];
+      for (let k = 0; k < count; k++) {
+        keys.push(`tool-${toolIdx}`);
+        toolIdx++;
+      }
+      out.push({ segment: seg, keys });
+    }
+    return out;
+  }, [segments]);
+
+  const renderSegment = (seg: Segment, keys: string[]) => {
+    if (seg.kind === 'single') {
+      const isLastRunning = lastRunningTool?.id === seg.tool.id;
+      return (
+        <ToolActionRow
+          key={keys[0]}
+          tool={seg.tool}
+          streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
+          agentProgressEvents={agentProgressEvents}
+        />
+      );
+    }
+    if (seg.kind === 'context') {
+      return <ContextGroup key={keys.join('-')} tools={seg.tools} />;
+    }
+    // browser
+    return <BrowserGroup key={keys.join('-')} tools={seg.tools} />;
+  };
+
+  // For the indented body, we want to preserve the original action order
+  // (thinking → tool → text → widget …). Walk `actions` and emit either
+  // a grouped render unit (context/browser) or the original action item.
+  const renderOrderedBody = () => {
+    const out: React.ReactNode[] = [];
+    let toolIdx = 0;
+    let segIdx = 0;
+    const lastTextIdx = findLastTextIndex(actions);
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      if (action.kind === 'tool') {
+        if (segIdx >= segments.length) {
+          out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+        } else {
+          const seg = segments[segIdx];
+          if (seg.kind === 'single' && seg.tool === action.tool) {
+            out.push(renderSegment(seg, [`tool-${toolIdx}`]));
+            toolIdx++;
+            segIdx++;
+          } else if (seg.kind === 'context' || seg.kind === 'browser') {
+            // group segment
+            out.push(
+              renderSegment(
+                seg,
+                seg.tools.map((_t, k) => `tool-${toolIdx + k}`),
+              ),
+            );
+            toolIdx += seg.tools.length;
+            segIdx++;
+            // After rendering a group, the remaining tools in the group are
+            // already shown inside it. Skip past the next (groupSize - 1)
+            // tool actions in `actions` so they aren't re-rendered as
+            // standalone rows. Non-tool actions encountered in between are
+            // still rendered in their original position.
+            let toolsToSkip = seg.tools.length - 1;
+            while (toolsToSkip > 0 && i + 1 < actions.length) {
+              i++;
+              if (actions[i].kind === 'tool') {
+                toolsToSkip--;
+              } else {
+                out.push(renderActionItem(actions[i], i, isStreaming, i === lastTextIdx));
+              }
+            }
+          } else {
+            // defensive — render as a single
+            out.push(renderSegment(seg, [`tool-${toolIdx}`]));
+            toolIdx++;
+            segIdx++;
+          }
+        }
+      } else {
+        out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+      }
+    }
+    return out;
+  };
+
   if (flat) {
-    const lastRunningTool = getLastRunningToolAction(actions);
     return (
       <div className="w-[min(100%,48rem)]">
         <div className="border-l-2 border-border/50 pl-2 ml-1.5">
-          {actions.map((action, i) => {
-            if (action.kind === 'tool') {
-              const isLastRunning = lastRunningTool?.id === action.tool.id;
-              return (
-                <ToolActionRow
-                  key={`tool-${i}`}
-                  tool={action.tool}
-                  streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
-                  agentProgressEvents={agentProgressEvents}
-                />
-              );
-            }
-            return renderActionItem(action, i, isStreaming);
-          })}
+          {/* For flat mode, interleave non-tool actions with the grouped
+              tool segments so the visual order is preserved. */}
+          {renderFlatActions(actions, segments, segmentActionKeys, isStreaming, streamingToolOutput, agentProgressEvents)}
         </div>
       </div>
     );
   }
 
   const summaryParts = computeSummaryFromActions(actions, isStreaming, t);
-  const lastRunningTool = getLastRunningToolAction(actions);
   const runningDesc = lastRunningTool
     ? getRenderer(lastRunningTool.name).getSummary(lastRunningTool.input, lastRunningTool.name)
     : '';
@@ -1654,20 +2544,7 @@ export function ToolActionsGroup({
               transition={{ duration: 0.12, ease: 'easeOut' }}
             >
               <div className="ml-1.5 mt-0.5 border-l-2 border-border/50 pl-2">
-                {actions.map((action, i) => {
-                  if (action.kind === 'tool') {
-                    const isLastRunning = lastRunningTool?.id === action.tool.id;
-                    return (
-                      <ToolActionRow
-                        key={`tool-${i}`}
-                        tool={action.tool}
-                        streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
-                        agentProgressEvents={agentProgressEvents}
-                      />
-                    );
-                  }
-                  return renderActionItem(action, i, isStreaming);
-                })}
+                {renderOrderedBody()}
               </div>
             </motion.div>
           </motion.div>
