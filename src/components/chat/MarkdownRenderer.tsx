@@ -36,7 +36,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, cl
   const processed = preprocessMarkdownBold(children);
 
   return (
-    <div className={className || 'prose prose-sm max-w-none message-content'}>
+    <div className={className || 'prose prose-sm dark:prose-invert max-w-none message-content'}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
