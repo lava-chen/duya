@@ -126,6 +126,11 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.label.agent': 'Agent',
   'streaming.toolAction.label.browser': '浏览器',
   'streaming.toolAction.label.askQuestion': '已询问',
+  'streaming.toolAction.label.memory': '记忆',
+  'streaming.toolAction.label.memoryList': '已读取',
+  'streaming.toolAction.label.memoryAdd': '已添加',
+  'streaming.toolAction.label.memoryReplace': '已更新',
+  'streaming.toolAction.label.memoryRemove': '已删除',
 
   'permission.allow': '允许',
   'permission.deny': '拒绝',
@@ -467,17 +472,6 @@ const zh: Record<TranslationKey, string> = {
   'settings.providers.titleModel': '标题模型',
   'settings.providers.titleModelDesc': '用于自动生成会话标题',
 
-  'settings.defaultProvider.title': '默认服务商',
-  'settings.defaultProvider.description':
-    '作为聊天、视觉、Agent 等子系统的隐式回退。其他服务商仍可使用，' +
-    '这里只是没显式指定时的默认。',
-  'settings.defaultProvider.noneConfigured':
-    '还没有配置任何服务商，请先添加一个。',
-  'settings.defaultProvider.current': '当前默认',
-  'settings.defaultProvider.setAsDefault': '设为默认',
-  'settings.defaultProvider.noDefaultHint':
-    '未设置默认。子系统的隐式回退会使用第一个已配置的服务商。',
-
   'settings.appearance.title': '外观',
   'settings.appearance.description': '自定义外观和风格',
   'settings.appearance.theme': '主题',
@@ -601,11 +595,6 @@ const zh: Record<TranslationKey, string> = {
   'provider.tooltip.default': '默认服务商',
   'provider.badge.default': '默认',
   'provider.actions.setDefault': '设为默认',
-  'provider.defaultProviderSection.title': '默认服务商',
-  'provider.defaultProviderSection.description':
-    '当会话没有显式选择服务商时使用，也作为视觉、网关、Wiki Agent、标题生成、嵌入模型和定时任务的回退。',
-  'provider.defaultProviderSection.empty':
-    '未设置默认服务商，请选一个以启用后台任务和回退。',
   'provider.configured': '已配置',
   'provider.noKey': '未配置密钥',
   'provider.loading': '加载服务商中…',
