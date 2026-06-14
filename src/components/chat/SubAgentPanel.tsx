@@ -214,6 +214,7 @@ interface SubAgentRowProps {
 }
 
 function SubAgentRow({ agent, onOpen }: SubAgentRowProps) {
+  const canOpen = Boolean(agent.sessionId);
   return (
     <div className="sub-agent-row">
       <div className="sub-agent-row-content">
@@ -235,8 +236,11 @@ function SubAgentRow({ agent, onOpen }: SubAgentRowProps) {
         <button
           type="button"
           className="sub-agent-open-btn"
+          disabled={!canOpen}
+          title={canOpen ? '在新会话中打开' : '等待 sub-agent 首次响应…'}
           onClick={(e) => {
             e.stopPropagation();
+            if (!canOpen) return;
             onOpen();
           }}
         >

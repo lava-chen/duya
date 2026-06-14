@@ -304,7 +304,7 @@ export interface SkillReviewEvent {
 
 /** Sub-agent progress event */
 export interface AgentProgressEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'done' | 'error';
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error';
   data?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;

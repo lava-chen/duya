@@ -55,7 +55,7 @@ const SUBAGENT_EVENT_STALL_TIMEOUT_MS = 45000
 
 /** Progress event emitted during sub-agent execution */
 export interface AgentProgressEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'done' | 'error'
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error'
   data?: string
   toolName?: string
   toolInput?: Record<string, unknown>
