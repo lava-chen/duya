@@ -206,6 +206,29 @@ export class AgentTool extends BaseTool {
           onProgress,
         })
 
+        // Emit a 'started' progress event synchronously so the UI can grab
+        // subAgentSessionId at t=0 instead of waiting for the first real
+        // progress event (which may be delayed or buffered by pendingProgress
+        // after the parent turn has already emitted 'done'). Mirrors the
+        // emitTerminalProgress() path that bypasses reportAgentProgress.
+        const parentSessionId = context.options.sessionId
+        if (parentSessionId) {
+          try {
+            sendEvent({
+              type: 'chat:agent_progress',
+              sessionId: parentSessionId,
+              agentEventType: 'started',
+              agentId: taskId,
+              agentType: agentDefinition.agentType,
+              agentName: agentInput.name,
+              agentDescription: agentInput.description || agentInput.name,
+              agentSessionId: subAgentSessionId,
+            })
+          } catch (err) {
+            console.warn('[AgentTool] Failed to emit spawn agent_progress:', err)
+          }
+        }
+
         const agentGenerator = runAgent({
           agentDefinition,
           promptMessages,
