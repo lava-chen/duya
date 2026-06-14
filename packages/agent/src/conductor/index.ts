@@ -1,10 +1,28 @@
-export type { ConductorSnapshot } from './ConductorProfile.js';
+export type { ConductorSnapshot } from '@duya/conductor/agent';
 
 export { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from './CanvasOrchestratorProfile.js';
 
-export { buildConductorSystemPrompt, CONDUCTOR_PROMPT_PROFILE } from './prompt.js';
-
-export { buildConductorCanvasSection } from '../prompts/sections/dynamic/conductorCanvas.js';
+export {
+  buildConductorCanvasSection,
+  buildConductorSystemPrompt,
+  CONDUCTOR_PROMPT_PROFILE,
+  createPendingWidget,
+  DynamicWidgetOutputSchema,
+  extractAllDuyaWidgetFences,
+  getConductorCanvasSection,
+  getVizSpecSection,
+  parseDuyaWidgetFence,
+  setConductorCanvasState,
+  VIZ_SPEC_PROMPT,
+  VIZ_SPEC_WORKED_EXAMPLES,
+} from '@duya/conductor/agent';
+export type {
+  CodeFenceParseResult,
+  ConductorCanvasSectionContext,
+  ConductorCanvasSnapshot,
+  DynamicWidgetOutput,
+  PendingDynamicWidget,
+} from '@duya/conductor/agent';
 
 export {
   PerceptionEngine,
@@ -27,10 +45,4 @@ export {
 } from './WidgetEventBus.js';
 export type { WidgetEvent, WidgetEventHandler } from './WidgetEventBus.js';
 
-export {
-  DynamicWidgetOutputSchema,
-  parseDuyaWidgetFence,
-  extractAllDuyaWidgetFences,
-} from './dynamicProtocol.js';
-export type { DynamicWidgetOutput, PendingDynamicWidget, CodeFenceParseResult } from './dynamicProtocol.js';
 export { ConductorAgent, type ConductorAgentConfig } from './ConductorAgent.js';

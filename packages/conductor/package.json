@@ -1,0 +1,51 @@
+{
+  "name": "@duya/conductor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DUYA Conductor workspace package",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./shared": {
+      "types": "./dist/shared/index.d.ts",
+      "default": "./dist/shared/index.js"
+    },
+    "./renderer": {
+      "types": "./dist/renderer/index.d.ts",
+      "default": "./dist/renderer/index.js"
+    },
+    "./electron": {
+      "types": "./dist/electron/index.d.ts",
+      "default": "./dist/electron/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.3.6",
+    "zustand": "^5.0.12",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.3.3"
+  }
+}

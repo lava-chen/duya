@@ -103,6 +103,11 @@ export async function getRendererUrl(): Promise<string> {
   }
 
   if (isDev) {
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+    if (devServerUrl) {
+      logger.info(`Using VITE_DEV_SERVER_URL=${devServerUrl}`, undefined, LogComponent.Main);
+      return devServerUrl;
+    }
     const detectedPort = await detectDevServerPort();
     if (detectedPort) {
       return `http://localhost:${detectedPort}`;
@@ -123,6 +128,7 @@ export async function getRendererUrl(): Promise<string> {
 export async function createWindow(
   handleConductorMessage: (data: unknown) => void,
 ): Promise<void> {
+  logger.info('createWindow: start', undefined, LogComponent.Main);
   const isHiddenLaunch = wasLaunchedAsHidden();
   if (isHiddenLaunch) {
     logger.info('App launched as hidden login item, starting minimized to tray', undefined, LogComponent.Main);
@@ -155,6 +161,21 @@ export async function createWindow(
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+  logger.info('createWindow: BrowserWindow created', undefined, LogComponent.Main);
+  mainWindow.once('ready-to-show', () => {
+    if (!isHiddenLaunch && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+      if (isDev && !isPreviewMode) {
+        mainWindow.setAlwaysOnTop(true);
+        setTimeout(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.setAlwaysOnTop(false);
+          }
+        }, 1000);
+      }
+    }
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     if (isHttpUrl(targetUrl)) {
@@ -265,10 +286,23 @@ export async function createWindow(
     if (isDev && !isPreviewMode) {
       mainWindow.webContents.openDevTools();
     }
+    if (!isHiddenLaunch && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+      if (isDev && !isPreviewMode) {
+        mainWindow.setAlwaysOnTop(true);
+        setTimeout(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.setAlwaysOnTop(false);
+          }
+        }, 1000);
+      }
+    }
   } catch (err) {
     logger.error('Failed to start renderer', err instanceof Error ? err : new Error(String(err)), undefined, 'Main');
     dialog.showErrorBox('Startup Error', `Failed to start application: ${err}`);
   }
+  logger.info('createWindow: loadURL invoked', undefined, LogComponent.Main);
 
   mainWindow.on('close', (event) => {
     if (!isQuitting) {

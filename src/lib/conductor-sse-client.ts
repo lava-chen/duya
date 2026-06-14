@@ -1,4 +1,4 @@
-import type { ConductorActionRequest, ConductorV2Snapshot } from "@/types/conductor";
+import type { ConductorActionRequest, ConductorV2Snapshot } from "@duya/conductor/shared";
 
 const SSE_LINE_REGEX = /^(event|id|data):\s*(.*)$/;
 let cachedPort: number | null = null;

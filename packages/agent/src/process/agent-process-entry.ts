@@ -1073,11 +1073,27 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // Image content blocks are only included for natively multimodal-capable
     // models (e.g. Claude, GPT-4V). For text-only models, pre-analysis text
     // is the sole image context.
-    // Model capability detection — checks regex heuristics, DB cache, then API probe
-    const modelIsMultimodal = probeConfig
-      ? await detectModelCapability(probeConfig)
-      : isModelLikelyMultimodal(mainModelName);
-    log(`[Image-Processing] Model multimodal detection: ${mainModelName} → ${modelIsMultimodal} (${probeConfig ? 'probed' : 'regex-only fallback'})`);
+    // Model capability detection is only relevant when the user actually attached
+    // image files. Avoid probing on plain-text turns, and never let a capability
+    // probe failure abort the main chat path.
+    let modelIsMultimodal = false;
+    let multimodalDetectionMode = 'skipped-no-images';
+    if (imageFiles.length > 0) {
+      try {
+        if (probeConfig?.model) {
+          modelIsMultimodal = await detectModelCapability(probeConfig);
+          multimodalDetectionMode = 'probed';
+        } else {
+          modelIsMultimodal = isModelLikelyMultimodal(mainModelName);
+          multimodalDetectionMode = 'regex-only fallback';
+        }
+      } catch (capabilityErr) {
+        warn('[Agent-Process] Model capability probe failed, falling back to regex detection:', capabilityErr);
+        modelIsMultimodal = isModelLikelyMultimodal(mainModelName);
+        multimodalDetectionMode = 'regex-after-probe-error';
+      }
+    }
+    log(`[Image-Processing] Model multimodal detection: ${mainModelName} → ${modelIsMultimodal} (${multimodalDetectionMode})`);
 
     console.error('[DEBUG] Vision config check:', {
       hasAgent: !!agent,

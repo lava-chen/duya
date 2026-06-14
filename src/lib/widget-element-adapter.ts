@@ -1,4 +1,4 @@
-import type { ConductorWidget, CanvasElement, ElementKind } from '@/types/conductor';
+import type { ConductorWidget, CanvasElement, ElementKind } from '@duya/conductor/shared';
 
 export function widgetToElementAdapter(widget: ConductorWidget): CanvasElement {
   const elementKind = `widget/${widget.type}` as ElementKind;

@@ -14,7 +14,15 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "paths": {
+      "@duya/conductor": ["../conductor/dist/index.d.ts"],
+      "@duya/conductor/shared": ["../conductor/dist/shared/index.d.ts"],
+      "@duya/conductor/agent": ["../conductor/dist/agent/index.d.ts"],
+      "@duya/conductor/electron": ["../conductor/dist/electron/index.d.ts"],
+      "@duya/conductor/renderer": ["../conductor/dist/renderer/index.d.ts"],
+      "@duya/conductor/*": ["../conductor/dist/*"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

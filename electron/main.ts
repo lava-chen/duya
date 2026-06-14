@@ -230,97 +230,8 @@ if (gotTheLock) {
       logger.error('Failed to initialize agent process pool', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
-    try {
-      const database = getDatabase();
-      if (database) {
-        initAutomationScheduler(database);
-      }
-    } catch (error) {
-      logger.error('Failed to initialize automation scheduler', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
-    }
-
-    try {
-      const docParser = initDocumentParser();
-      await docParser.start();
-    } catch (error) {
-      logger.error('Failed to start document parser', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
-    }
-
-    // Apply app auto-start setting (Windows login)
-    const autoStartValue = getAutoStartFromSettings();
-    if (autoStartValue) {
-      setAutoStart(true);
-    }
-
-    // Auto-start Gateway if bridge_auto_start is enabled
-    try {
-      const db = getDatabase();
-      if (db) {
-        const row = db.prepare("SELECT value FROM settings WHERE key = 'bridge_auto_start'").get() as { value: string } | undefined;
-        if (row?.value === 'true') {
-          const { startGateway } = await import('./gateway/message-bus');
-          await startGateway();
-        }
-      }
-    } catch (error) {
-      logger.error('Failed to auto-start Gateway', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
-    }
-
     // ============================================================
-    // Step 5: Start Browser Daemon
-    // ============================================================
-    try {
-      const allowedExtensionIds = getJsonSetting<string[]>('browserExtensionAllowedIds', []);
-      const normalizedExtensionIds = Array.from(new Set(
-        (Array.isArray(allowedExtensionIds) ? allowedExtensionIds : [])
-          .filter((id) => typeof id === 'string')
-          .map((id) => id.trim())
-          .filter((id) => id.length > 0),
-      ));
-      setAllowedExtensionIds(normalizedExtensionIds);
-      await startBrowserDaemon();
-    } catch (error) {
-      logger.error('Failed to start Browser Daemon', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
-    }
-
-    // ============================================================
-    // Step 5.5: Register custom file protocol for widget image embedding
-    // ============================================================
-    protocol.handle('duya-file', async (request) => {
-      try {
-        const url = new URL(request.url);
-        let filePath = decodeURIComponent(url.pathname);
-
-        if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(filePath)) {
-          filePath = filePath.slice(1);
-        }
-        filePath = filePath.replace(/\//g, path.sep);
-
-        const data = await fs.promises.readFile(filePath);
-
-        const ext = path.extname(filePath).toLowerCase();
-        const mimeTypes: Record<string, string> = {
-          '.png': 'image/png',
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.gif': 'image/gif',
-          '.svg': 'image/svg+xml',
-          '.webp': 'image/webp',
-          '.bmp': 'image/bmp',
-        };
-        const mimeType = mimeTypes[ext] || 'application/octet-stream';
-
-        return new Response(data, {
-          status: 200,
-          headers: { 'Content-Type': mimeType, 'Cache-Control': 'public, max-age=3600' },
-        });
-      } catch {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
-
-    // ============================================================
-    // Step 6: Launch UI
+    // Step 5: Launch UI early so background services cannot block it
     // ============================================================
     const agentPool = getAgentProcessPool();
 
@@ -504,6 +415,95 @@ if (gotTheLock) {
     await createWindow(handleConductorMessage);
     recapService.init(getMainWindow()!);
     createTray();
+
+    try {
+      const database = getDatabase();
+      if (database) {
+        initAutomationScheduler(database);
+      }
+    } catch (error) {
+      logger.error('Failed to initialize automation scheduler', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+    }
+
+    try {
+      const docParser = initDocumentParser();
+      await docParser.start();
+    } catch (error) {
+      logger.error('Failed to start document parser', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+    }
+
+    // Apply app auto-start setting (Windows login)
+    const autoStartValue = getAutoStartFromSettings();
+    if (autoStartValue) {
+      setAutoStart(true);
+    }
+
+    // Auto-start Gateway if bridge_auto_start is enabled
+    try {
+      const db = getDatabase();
+      if (db) {
+        const row = db.prepare("SELECT value FROM settings WHERE key = 'bridge_auto_start'").get() as { value: string } | undefined;
+        if (row?.value === 'true') {
+          const { startGateway } = await import('./gateway/message-bus');
+          await startGateway();
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to auto-start Gateway', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+    }
+
+    // ============================================================
+    // Step 6: Start Browser Daemon
+    // ============================================================
+    try {
+      const allowedExtensionIds = getJsonSetting<string[]>('browserExtensionAllowedIds', []);
+      const normalizedExtensionIds = Array.from(new Set(
+        (Array.isArray(allowedExtensionIds) ? allowedExtensionIds : [])
+          .filter((id) => typeof id === 'string')
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0),
+      ));
+      setAllowedExtensionIds(normalizedExtensionIds);
+      await startBrowserDaemon();
+    } catch (error) {
+      logger.error('Failed to start Browser Daemon', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+    }
+
+    // ============================================================
+    // Step 5.5: Register custom file protocol for widget image embedding
+    // ============================================================
+    protocol.handle('duya-file', async (request) => {
+      try {
+        const url = new URL(request.url);
+        let filePath = decodeURIComponent(url.pathname);
+
+        if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(filePath)) {
+          filePath = filePath.slice(1);
+        }
+        filePath = filePath.replace(/\//g, path.sep);
+
+        const data = await fs.promises.readFile(filePath);
+
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.gif': 'image/gif',
+          '.svg': 'image/svg+xml',
+          '.webp': 'image/webp',
+          '.bmp': 'image/bmp',
+        };
+        const mimeType = mimeTypes[ext] || 'application/octet-stream';
+
+        return new Response(data, {
+          status: 200,
+          headers: { 'Content-Type': mimeType, 'Cache-Control': 'public, max-age=3600' },
+        });
+      } catch {
+        return new Response('Not Found', { status: 404 });
+      }
+    });
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

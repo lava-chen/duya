@@ -27,6 +27,40 @@ function copyDirRecursive(src, dest) {
   }
 }
 
+function inspectNativeBinary(binaryPath) {
+  if (!fs.existsSync(binaryPath)) {
+    return { exists: false, architectures: [] };
+  }
+
+  try {
+    const output = execSync(`file "${binaryPath}"`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    }).trim();
+
+    const architectures = [];
+    if (output.includes('arm64')) architectures.push('arm64');
+    if (output.includes('x86_64') || output.includes('x64')) architectures.push('x64');
+    if (output.includes('arm64e') && !architectures.includes('arm64')) architectures.push('arm64');
+
+    return {
+      exists: true,
+      architectures,
+      description: output,
+    };
+  } catch (error) {
+    return {
+      exists: true,
+      architectures: [],
+      description: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function matchesTargetArch(binaryInfo, targetArch) {
+  return binaryInfo.architectures.includes(targetArch);
+}
+
 module.exports = async function afterPack(context) {
   const appOutDir = context.appOutDir;
   const arch = context.arch;
@@ -45,27 +79,19 @@ module.exports = async function afterPack(context) {
   // Step 1: Ensure better-sqlite3 is available for Electron ABI
   console.log('[afterPack] Step 1: Ensuring better-sqlite3 for Electron ABI...');
 
-  // Check if electron-builder already provided a prebuilt binary
-  let foundPrebuilt = false;
-  function findPrebuiltNode(dir) {
-    if (!fs.existsSync(dir)) return;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        findPrebuiltNode(fullPath);
-      } else if (entry.name === 'better_sqlite3.node') {
-        console.log(`[afterPack] Found prebuilt binary: ${fullPath}`);
-        foundPrebuilt = true;
-      }
-    }
-  }
-  findPrebuiltNode(path.join(appOutDir, 'resources'));
+  const packagedBinary = path.join(appOutDir, 'resources', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+  const packagedBinaryInfo = inspectNativeBinary(packagedBinary);
 
-  if (foundPrebuilt) {
-    console.log('[afterPack] Prebuilt better-sqlite3 binary already exists, skipping rebuild');
+  if (packagedBinaryInfo.exists) {
+    console.log(`[afterPack] Packaged better-sqlite3 binary: ${packagedBinaryInfo.description}`);
   } else {
-    console.log('[afterPack] No prebuilt binary found, attempting rebuild...');
+    console.log('[afterPack] Packaged better-sqlite3 binary not found before rebuild');
+  }
+
+  if (matchesTargetArch(packagedBinaryInfo, archName)) {
+    console.log(`[afterPack] Existing better-sqlite3 binary already matches target arch ${archName}`);
+  } else {
+    console.log(`[afterPack] better-sqlite3 binary missing or wrong arch for ${archName}, rebuilding...`);
     try {
       const rebuildCmd = `npx electron-rebuild -f -o better-sqlite3 -v ${electronVersion} -a ${archName}`;
       console.log(`[afterPack] Running: ${rebuildCmd}`);
@@ -98,7 +124,15 @@ module.exports = async function afterPack(context) {
     );
 
     if (fs.existsSync(rebuiltSource)) {
+      const rebuiltInfo = inspectNativeBinary(rebuiltSource);
       console.log(`[afterPack] Rebuilt .node file: ${rebuiltSource}`);
+      console.log(`[afterPack] Rebuilt binary info: ${rebuiltInfo.description || 'unavailable'}`);
+
+      if (!matchesTargetArch(rebuiltInfo, archName)) {
+        throw new Error(
+          `Rebuilt better-sqlite3 architecture mismatch: expected ${archName}, got ${rebuiltInfo.architectures.join(', ') || 'unknown'}`
+        );
+      }
 
       const targetDir = path.join(appOutDir, 'resources', 'better-sqlite3', 'build', 'Release');
       if (!fs.existsSync(targetDir)) {

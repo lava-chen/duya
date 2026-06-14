@@ -1,7 +1,7 @@
 import * as http from 'http';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import { ChildProcess } from 'child_process';
+import { ChildProcess, execFileSync } from 'child_process';
 import { SessionManager } from './session-store';
 import { SessionState, ConductorAction } from './types';
 import { WorkerManager } from './worker-manager';
@@ -38,6 +38,104 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
   const pathname = url.split('?')[0] || '/';
   const parts = pathname.split('/').filter(Boolean);
   return { pathname, parts };
+}
+
+interface MemoryGuardSnapshot {
+  platform: NodeJS.Platform;
+  totalMemBytes: number;
+  freeMemBytes: number;
+  freeMemGB: number;
+  usedRatio: number;
+  usedRatioThreshold: number;
+  minimumFreeMemBytes: number;
+  minimumFreeMemGB: number;
+  darwinSystemFreePercent: number | null;
+  darwinSystemFreePercentThreshold: number;
+}
+
+interface MemoryGuardResult {
+  shouldReject: boolean;
+  snapshot: MemoryGuardSnapshot;
+}
+
+function roundTo(value: number, digits: number = 2): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function parseEnvFloat(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseEnvInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readDarwinSystemFreePercent(): number | null {
+  if (process.platform !== 'darwin') return null;
+
+  try {
+    const output = execFileSync('/usr/bin/memory_pressure', ['-Q'], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    const match = output.match(/System-wide memory free percentage:\s+(\d+)%/i);
+    if (!match) return null;
+
+    const value = Number.parseInt(match[1], 10);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function getMemoryGuardResult(): MemoryGuardResult {
+  const totalMemBytes = os.totalmem();
+  const freeMemBytes = os.freemem();
+  const usedRatio = (totalMemBytes - freeMemBytes) / totalMemBytes;
+  const usedRatioThreshold = parseEnvFloat('DUYA_MEMORY_THRESHOLD', 0.95);
+  const minimumFreeMemBytes = parseEnvInt('DUYA_MEMORY_MIN_FREE_BYTES', 1024 * 1024 * 1024);
+  const darwinSystemFreePercentThreshold = parseEnvFloat('DUYA_DARWIN_MEMORY_FREE_PERCENT_THRESHOLD', 5);
+  const darwinSystemFreePercent = readDarwinSystemFreePercent();
+
+  const snapshot: MemoryGuardSnapshot = {
+    platform: process.platform,
+    totalMemBytes,
+    freeMemBytes,
+    freeMemGB: roundTo(freeMemBytes / (1024 * 1024 * 1024)),
+    usedRatio: roundTo(usedRatio, 4),
+    usedRatioThreshold,
+    minimumFreeMemBytes,
+    minimumFreeMemGB: roundTo(minimumFreeMemBytes / (1024 * 1024 * 1024)),
+    darwinSystemFreePercent,
+    darwinSystemFreePercentThreshold,
+  };
+
+  if (process.platform === 'darwin') {
+    const hasLowAbsoluteFreeMem = freeMemBytes <= minimumFreeMemBytes;
+    const hasHighUsedRatio = usedRatio > usedRatioThreshold;
+    const hasLowDarwinFreePercent = darwinSystemFreePercent !== null
+      ? darwinSystemFreePercent <= darwinSystemFreePercentThreshold
+      : hasLowAbsoluteFreeMem;
+
+    return {
+      shouldReject: hasHighUsedRatio && hasLowAbsoluteFreeMem && hasLowDarwinFreePercent,
+      snapshot,
+    };
+  }
+
+  return {
+    shouldReject: usedRatio > usedRatioThreshold,
+    snapshot,
+  };
 }
 
 function mapEventType(eventType: string): string {
@@ -163,19 +261,22 @@ async function handlePostChat(
     const defaultWorkspaceDirectory = parsed.defaultWorkspaceDirectory;
 
     try {
-      const totalMem = os.totalmem();
-      const freeMem = os.freemem();
-      const usedRatio = (totalMem - freeMem) / totalMem;
-
-      const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.95');
-      if (usedRatio > MEMORY_THRESHOLD) {
-        logger.warn('System memory usage high, rejecting chat', { usedRatio, totalMem, freeMem, sessionId });
+      const memoryGuard = getMemoryGuardResult();
+      if (memoryGuard.shouldReject) {
+        logger.warn('System memory usage high, rejecting chat', {
+          sessionId,
+          memoryGuard: memoryGuard.snapshot,
+        });
         res.writeHead(503, 'Service Unavailable', {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*',
           'Retry-After': '30',
         });
-        res.end(JSON.stringify({ error: 'System memory usage is high' }));
+        res.end(JSON.stringify({
+          error: 'System memory usage is high',
+          retryAfterSec: 30,
+          metrics: memoryGuard.snapshot,
+        }));
         return;
       }
 
@@ -894,13 +995,17 @@ async function lazySpawnWorkerForCompact(
   const { sessionManager, workerManager, logger, httpLogger } = deps;
 
   // Memory / concurrency guards — same as handlePostChat.
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const usedRatio = (totalMem - freeMem) / totalMem;
-  const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.95');
-  if (usedRatio > MEMORY_THRESHOLD) {
-    logger.warn('System memory usage high, rejecting compact lazy-spawn', { usedRatio, sessionId });
-    sendJson(res, 503, { error: 'System memory usage is high', retryAfterSec: 30 });
+  const memoryGuard = getMemoryGuardResult();
+  if (memoryGuard.shouldReject) {
+    logger.warn('System memory usage high, rejecting compact lazy-spawn', {
+      sessionId,
+      memoryGuard: memoryGuard.snapshot,
+    });
+    sendJson(res, 503, {
+      error: 'System memory usage is high',
+      retryAfterSec: 30,
+      metrics: memoryGuard.snapshot,
+    });
     return { ok: false };
   }
   if (workerManager.workerCount >= MAX_CONCURRENT_WORKERS) {

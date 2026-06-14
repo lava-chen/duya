@@ -15,6 +15,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -138,6 +139,51 @@ function checkExists(filePath, isDir = false) {
   }
 }
 
+function detectExpectedNativeArch() {
+  if (platform === 'darwin' || platform === 'mac') {
+    const envArch = process.env.npm_config_arch || process.env.ARCH;
+    if (envArch === 'x64' || envArch === 'arm64') return envArch;
+    return os.arch();
+  }
+
+  return null;
+}
+
+function inspectNativeBinary(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { status: 'MISSING', detail: 'not found' };
+  }
+
+  try {
+    const output = execSync(`file "${filePath}"`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    }).trim();
+
+    const archs = [];
+    if (output.includes('arm64')) archs.push('arm64');
+    if (output.includes('x86_64') || output.includes('x64')) archs.push('x64');
+    const expectedArch = detectExpectedNativeArch();
+
+    if (expectedArch && !archs.includes(expectedArch)) {
+      return {
+        status: 'ARCH_MISMATCH',
+        detail: `${output} (expected ${expectedArch})`,
+      };
+    }
+
+    return {
+      status: 'OK',
+      detail: output,
+    };
+  } catch (err) {
+    return {
+      status: 'ERROR',
+      detail: `file inspection failed: ${err.message}`,
+    };
+  }
+}
+
 console.log('\n' + '='.repeat(80));
 console.log('  DUYA Packaged Build Verification');
 console.log(`  Platform: ${platform}`);
@@ -171,14 +217,17 @@ for (const [label, [filePath, isDir]] of Object.entries(CHECKS)) {
   }
 
   const result = checkExists(filePath, isDir);
-  results.push({ label, ...result });
+  const finalResult = !isDir && label === 'better-sqlite3/build/Release/better_sqlite3.node'
+    ? inspectNativeBinary(filePath)
+    : result;
+  results.push({ label, ...finalResult });
 
-  const icon = result.status === 'OK' ? '✓' : result.status === 'MISSING' ? '✗' : '⚠';
+  const icon = finalResult.status === 'OK' ? '✓' : finalResult.status === 'MISSING' ? '✗' : '⚠';
   console.log(`    ${icon} ${path.basename(label) ? label : label}`);
 
-  if (result.status === 'OK') {
+  if (finalResult.status === 'OK') {
     passed++;
-  } else if (result.status === 'MISSING') {
+  } else if (finalResult.status === 'MISSING') {
     if (OPTIONAL_CHECKS.has(label)) {
       console.log(`      → (optional, missing — see plan 106)`);
     } else {
@@ -187,6 +236,7 @@ for (const [label, [filePath, isDir]] of Object.entries(CHECKS)) {
     }
   } else {
     failed++;
+    console.error(`      → ${finalResult.detail}`);
   }
 }
 

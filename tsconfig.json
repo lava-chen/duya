@@ -15,6 +15,8 @@
     "incremental": true,
     "paths": {
       "@/*": ["./src/*"],
+      "@duya/conductor": ["./packages/conductor/src"],
+      "@duya/conductor/*": ["./packages/conductor/src/*"],
       "@duya/agent": ["./packages/agent/dist"],
       "@duya/agent/*": ["./packages/agent/dist/*"]
     }

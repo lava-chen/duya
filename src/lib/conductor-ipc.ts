@@ -1,4 +1,4 @@
-import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot } from "../types/conductor";
+import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot } from "@duya/conductor/shared";
 import type { ConnectorEndpoint } from "../types/canvas-node";
 
 function getConductorAPI() {

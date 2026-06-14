@@ -1,6 +1,6 @@
 import { createCanvas, createElement, getSnapshot, listCanvases } from "@/lib/conductor-ipc";
 import { useConductorStore } from "@/stores/conductor-store";
-import type { CanvasElement, CanvasPosition, ConductorCanvas, VizSpec } from "@/types/conductor";
+import type { CanvasElement, CanvasPosition, ConductorCanvas, VizSpec } from "@duya/conductor/shared";
 
 interface AddChatWidgetToCanvasParams {
   widgetCode: string;

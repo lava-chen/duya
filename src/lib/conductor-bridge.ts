@@ -1,5 +1,5 @@
 import { getSnapshot } from './conductor-ipc';
-import type { ConductorSnapshot } from '../types/conductor';
+import type { ConductorSnapshot } from '@duya/conductor/shared';
 
 type StatePatchHandler = (patch: Record<string, unknown>) => void;
 type SnapshotHandler = (snapshot: ConductorSnapshot) => void;
