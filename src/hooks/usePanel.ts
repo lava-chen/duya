@@ -1,8 +1,9 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
+import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import type { PageId, PageTab } from "@/components/layout/panels/registry";
 
-export type PanelTab = 'canvas' | 'files' | 'research';
+export type { PageId, PageTab } from "@/components/layout/panels/registry";
 
 export interface PanelContextValue {
   panelOpen: boolean;
@@ -10,8 +11,14 @@ export interface PanelContextValue {
   togglePanel: () => void;
   panelWidth: number;
   setPanelWidth: (width: number) => void;
-  activeTab: PanelTab;
-  setActiveTab: (tab: PanelTab) => void;
+
+  tabs: PageTab[];
+  activeTabId: string | null;
+
+  openPanel: (pageId: PageId, params?: Record<string, unknown>) => string;
+  closePanel: (tabId: string) => void;
+  activateTab: (tabId: string) => void;
+  openOrActivatePage: (pageId: PageId, params?: Record<string, unknown>) => string;
 }
 
 export const PanelContext = createContext<PanelContextValue | null>(null);
@@ -19,24 +26,34 @@ export const PanelContext = createContext<PanelContextValue | null>(null);
 const MIN_PANEL_WIDTH = 220;
 const MAX_PANEL_WIDTH = 960;
 const DEFAULT_PANEL_WIDTH = 340;
-const CANVAS_RATIO = 0.58;
 
-function getSidebarWidth(): number {
-  const sidebar = document.querySelector('.app-sidebar') as HTMLElement | null;
-  return sidebar?.offsetWidth ?? 260;
+function genId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function calculateCanvasPanelWidth(): number {
-  const sidebarWidth = getSidebarWidth();
-  const availableWidth = window.innerWidth - sidebarWidth;
-  const targetWidth = Math.round(availableWidth * CANVAS_RATIO);
-  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, targetWidth));
+/**
+ * Build a dedup key for a pageId + params. Pages that don't
+ * multi-instance (multiInstance=false) collapse to pageId alone.
+ */
+function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
+  switch (pageId) {
+    case "files":
+      return `files::${(params?.workingDirectory as string | undefined) ?? ""}`;
+    case "conductor":
+      return `conductor::${(params?.canvasId as string | undefined) ?? "__active__"}`;
+    default:
+      return `${pageId}::${JSON.stringify(params ?? {})}`;
+  }
 }
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
-  const [activeTab, setActiveTab] = useState<PanelTab>('files');
+  const [tabs, setTabs] = useState<PageTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   const togglePanel = useCallback(() => {
     setPanelOpen((prev) => !prev);
@@ -46,29 +63,93 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setPanelWidth(Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width)));
   }, []);
 
-  const setActiveTabWithPanel = useCallback((tab: PanelTab) => {
-    const isCanvasTab = tab === 'canvas';
-
+  const openPanel = useCallback<PanelContextValue["openPanel"]>((pageId, params) => {
+    const id = genId();
+    const newTab: PageTab = {
+      id,
+      pageId,
+      title: defaultTitle(pageId),
+      params,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(id);
     setPanelOpen(true);
-
-    if (isCanvasTab) {
-      setPanelWidth(calculateCanvasPanelWidth());
-    }
-
-    setActiveTab(tab);
+    return id;
   }, []);
 
-  const value = useMemo(
+  const openOrActivatePage = useCallback<PanelContextValue["openOrActivatePage"]>(
+    (pageId, params) => {
+      const key = dedupKey(pageId, params);
+      let existing: PageTab | undefined;
+      setTabs((prev) => {
+        existing = prev.find(
+          (t) => t.pageId === pageId && dedupKey(t.pageId, t.params) === key
+        );
+        return prev;
+      });
+      if (existing) {
+        setActiveTabId(existing.id);
+        setPanelOpen(true);
+        return existing.id;
+      }
+      return openPanel(pageId, params);
+    },
+    [openPanel]
+  );
+
+  const closePanel = useCallback<PanelContextValue["closePanel"]>((tabId) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === tabId);
+      if (idx === -1) return prev;
+      const next = prev.filter((t) => t.id !== tabId);
+      setActiveTabId((current) => {
+        if (current !== tabId) return current;
+        if (next.length === 0) return null;
+        const fallback = next[Math.min(idx, next.length - 1)];
+        return fallback.id;
+      });
+      if (next.length === 0) {
+        setPanelOpen(false);
+      }
+      return next;
+    });
+  }, []);
+
+  const activateTab = useCallback<PanelContextValue["activateTab"]>((tabId) => {
+    setTabs((prev) => {
+      if (!prev.some((t) => t.id === tabId)) return prev;
+      setActiveTabId(tabId);
+      setPanelOpen(true);
+      return prev;
+    });
+  }, []);
+
+  const value = useMemo<PanelContextValue>(
     () => ({
       panelOpen,
       setPanelOpen,
       togglePanel,
       panelWidth,
       setPanelWidth: handleSetWidth,
-      activeTab,
-      setActiveTab: setActiveTabWithPanel,
+      tabs,
+      activeTabId,
+      openPanel,
+      closePanel,
+      activateTab,
+      openOrActivatePage,
     }),
-    [panelOpen, togglePanel, panelWidth, handleSetWidth, activeTab, setActiveTabWithPanel]
+    [
+      panelOpen,
+      togglePanel,
+      panelWidth,
+      handleSetWidth,
+      tabs,
+      activeTabId,
+      openPanel,
+      closePanel,
+      activateTab,
+      openOrActivatePage,
+    ]
   );
 
   return React.createElement(PanelContext.Provider, { value }, children);
@@ -80,4 +161,15 @@ export function usePanel(): PanelContextValue {
     throw new Error("usePanel must be used within a PanelProvider");
   }
   return ctx;
+}
+
+function defaultTitle(pageId: PageId): string {
+  switch (pageId) {
+    case "files": return "文件树";
+    case "conductor": return "Conductor";
+    case "research": return "Research";
+    case "terminal": return "终端";
+    case "browser": return "浏览器";
+    default: return pageId;
+  }
 }
