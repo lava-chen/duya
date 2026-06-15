@@ -119,3 +119,6 @@ _dbg-out.txt
 /tc.out2
 /diag.js
 /fix-*.js
+
+# Brainstorm visual companion scratch
+.superpowers/
