@@ -12,6 +12,7 @@ import { DocxParser } from './parsers/docx.js';
 import { PptxParser } from './parsers/pptx.js';
 import { PdfParser } from './parsers/pdf.js';
 import { ImageParser } from './parsers/image.js';
+import { NotebookParser } from './parsers/notebook.js';
 import type { RawParse } from './types.js';
 
 export interface Parser {
@@ -26,6 +27,7 @@ export const REGISTRY: Record<string, ParserFactory> = {
   '.docx': () => new DocxParser(),
   '.pptx': () => new PptxParser(),
   '.pdf': () => new PdfParser(),
+  '.ipynb': () => new NotebookParser(),
   '.png': () => new ImageParser(),
   '.jpg': () => new ImageParser(),
   '.jpeg': () => new ImageParser(),
