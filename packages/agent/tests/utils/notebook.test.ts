@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   readNotebook,
+  summarizeNotebook,
+  validateCellRange,
   NotebookParseError,
   UnsupportedNbformatError,
+  NotebookCellRangeError,
 } from '../../src/utils/notebook.js';
 
 const VALID_V4 = {
@@ -58,5 +61,48 @@ describe('readNotebook', () => {
     } finally {
       rmSync(join(path, '..'), { recursive: true, force: true });
     }
+  });
+});
+
+describe('summarizeNotebook', () => {
+  it('produces a header line with cell counts and kernel', () => {
+    const summary = summarizeNotebook({
+      language: 'python',
+      nbformat: 4,
+      nbformatMinor: 5,
+      totalOutputBytes: 8_200_000,
+      cells: [
+        { index: 0, cellId: 'cell-1', cellType: 'code', source: '', language: 'python', executionCount: 1, outputs: [] },
+        { index: 1, cellId: 'cell-2', cellType: 'code', source: '', language: 'python', executionCount: 2, outputs: [] },
+        { index: 2, cellId: 'cell-3', cellType: 'code', source: '', language: 'python', executionCount: null, outputs: [] },
+        { index: 3, cellId: 'cell-4', cellType: 'code', source: '', language: 'python', outputs: [{ type: 'error', text: 'x' }] },
+        { index: 4, cellId: 'cell-5', cellType: 'markdown', source: '' },
+      ],
+    });
+    expect(summary).toContain('5 cells');
+    expect(summary).toContain('kernel=python');
+    expect(summary).toContain('4 code');
+    expect(summary).toContain('1 markdown');
+    expect(summary).toContain('2 executed');
+    expect(summary).toContain('1 error');
+    expect(summary).toContain('2 unexecuted');
+  });
+});
+
+describe('validateCellRange', () => {
+  it('accepts a valid in-bounds range', () => {
+    expect(() => validateCellRange({ start: 1, end: 5 }, 10)).not.toThrow();
+  });
+
+  it('accepts end=-1 (sentinel)', () => {
+    expect(() => validateCellRange({ start: 1, end: -1 }, 10)).not.toThrow();
+  });
+
+  it('rejects start > cellCount', () => {
+    expect(() => validateCellRange({ start: 100, end: 110 }, 10)).toThrow(NotebookCellRangeError);
+  });
+
+  it('rejects end < start (non-sentinel)', () => {
+    expect(() => validateCellRange({ start: 5, end: 2 }, 10)).toThrow(NotebookCellRangeError);
   });
 });

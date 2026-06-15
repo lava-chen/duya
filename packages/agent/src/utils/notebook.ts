@@ -288,7 +288,7 @@ function estimateOutputBytes(outputs: NotebookOutput[]): number {
   return total;
 }
 
-function validateCellRange(
+export function validateCellRange(
   range: { start: number; end: number },
   cellCount: number,
 ): void {
@@ -328,4 +328,31 @@ export function isLargeOutput(
   threshold: number = OUTPUT_TEXT_CAP,
 ): boolean {
   return estimateOutputBytes(outputs) > threshold;
+}
+
+export function summarizeNotebook(result: ReadNotebookResult): string {
+  const codeCells = result.cells.filter((c) => c.cellType === 'code');
+  const markdownCells = result.cells.filter((c) => c.cellType === 'markdown');
+  const rawCells = result.cells.filter((c) => c.cellType === 'raw');
+
+  const executed = codeCells.filter(
+    (c) => c.executionCount !== undefined && c.executionCount !== null,
+  );
+  const errored = codeCells.filter(
+    (c) => c.outputs?.some((o) => o.type === 'error') ?? false,
+  );
+  const unexecuted = codeCells.filter(
+    (c) => c.executionCount === null || c.executionCount === undefined,
+  );
+
+  const outputMb = (result.totalOutputBytes / (1024 * 1024)).toFixed(1);
+  return [
+    `${result.cells.length} cells`,
+    `kernel=${result.language}`,
+    `${codeCells.length} code (${executed.length} executed, ${errored.length} error, ${unexecuted.length} unexecuted)`,
+    `${markdownCells.length} markdown`,
+    `${rawCells.length} raw`,
+    `${outputMb}MB outputs`,
+    `nbformat ${result.nbformat}.${result.nbformatMinor}`,
+  ].join(', ');
 }
