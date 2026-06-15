@@ -13,7 +13,7 @@
  *   - per-output 10KB cap is local (duya has no shared formatOutput)
  */
 
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // ============================================================
@@ -79,11 +79,6 @@ export interface ProcessedCell {
   outputs?: NotebookOutput[];
 }
 
-export interface ReadNotebookOptions {
-  cellRange?: { start: number; end: number };
-  sidecarDir?: string;
-}
-
 export interface ReadNotebookResult {
   cells: ProcessedCell[];
   language: string;
@@ -128,40 +123,28 @@ interface RawNotebook {
 }
 
 // ============================================================
-// readNotebook
+// parseNotebookJson
 // ============================================================
 
 const SUPPORTED_NBFORMATS = new Set([3, 4]);
 
 /**
- * Read a .ipynb file from disk, validate nbformat, normalize cells.
- * Throws NotebookParseError or UnsupportedNbformatError on bad input.
- *
- * The cellRange option slices cells (1-indexed, inclusive) before
- * processing. sidecarDir is currently unused (image extraction
- * happens in extractOutputImage, called by the parser).
+ * Pure function: parse raw notebook JSON content into processed cells.
+ * Use this when you already have the JSON string in hand. For file-based
+ * reads, see file-parser/parsers/notebook.ts (NotebookParser) which
+ * handles I/O + image extraction.
  */
-export async function readNotebook(
-  filePath: string,
-  options: ReadNotebookOptions = {},
-): Promise<ReadNotebookResult> {
-  let raw: string;
-  try {
-    raw = await readFile(filePath, 'utf-8');
-  } catch (err) {
-    throw new NotebookParseError(
-      `Cannot read notebook '${filePath}': ${err instanceof Error ? err.message : String(err)}`,
-      err,
-    );
-  }
-
+export function parseNotebookJson(
+  content: string,
+  options: { cellRange?: { start: number; end: number } } = {},
+): ReadNotebookResult {
   let notebook: RawNotebook;
   try {
-    notebook = JSON.parse(raw) as RawNotebook;
+    notebook = JSON.parse(content) as RawNotebook;
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new NotebookParseError(
-      `Cannot read notebook '${filePath}': invalid notebook JSON: ${reason}`,
+      `Cannot read notebook: invalid notebook JSON: ${reason}`,
       err,
     );
   }

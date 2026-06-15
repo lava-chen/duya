@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  readNotebook,
+  parseNotebookJson,
   summarizeNotebook,
   validateCellRange,
   extractOutputImage,
@@ -22,46 +22,26 @@ const VALID_V4 = {
   ],
 };
 
-function writeTempNotebook(content: string | object): string {
-  const dir = mkdtempSync(join(tmpdir(), 'notebook-test-'));
-  const path = join(dir, 'sample.ipynb');
-  writeFileSync(path, typeof content === 'string' ? content : JSON.stringify(content));
-  return path;
-}
-
-describe('readNotebook', () => {
-  it('parses a valid v4 notebook with mixed cell types', async () => {
-    const path = writeTempNotebook(VALID_V4);
-    try {
-      const result = await readNotebook(path);
-      expect(result.cells).toHaveLength(2);
-      expect(result.cells[0]?.cellId).toBe('abc-123');
-      expect(result.cells[0]?.cellType).toBe('code');
-      expect(result.cells[1]?.cellId).toBe('cell-2');
-      expect(result.cells[1]?.cellType).toBe('markdown');
-      expect(result.cells[1]?.source).toBe('# Hello\nworld');
-      expect(result.language).toBe('python');
-    } finally {
-      rmSync(join(path, '..'), { recursive: true, force: true });
-    }
+describe('parseNotebookJson', () => {
+  it('parses a valid v4 notebook with mixed cell types', () => {
+    const result = parseNotebookJson(JSON.stringify(VALID_V4));
+    expect(result.cells).toHaveLength(2);
+    expect(result.cells[0]?.cellId).toBe('abc-123');
+    expect(result.cells[0]?.cellType).toBe('code');
+    expect(result.cells[1]?.cellId).toBe('cell-2');
+    expect(result.cells[1]?.cellType).toBe('markdown');
+    expect(result.cells[1]?.source).toBe('# Hello\nworld');
+    expect(result.language).toBe('python');
   });
 
-  it('throws NotebookParseError on malformed JSON', async () => {
-    const path = writeTempNotebook('{ not valid json');
-    try {
-      await expect(readNotebook(path)).rejects.toThrow(NotebookParseError);
-    } finally {
-      rmSync(join(path, '..'), { recursive: true, force: true });
-    }
+  it('throws NotebookParseError on malformed JSON', () => {
+    expect(() => parseNotebookJson('{ not valid json')).toThrow(NotebookParseError);
   });
 
-  it('throws UnsupportedNbformatError on nbformat 2', async () => {
-    const path = writeTempNotebook({ nbformat: 2, cells: [] });
-    try {
-      await expect(readNotebook(path)).rejects.toThrow(UnsupportedNbformatError);
-    } finally {
-      rmSync(join(path, '..'), { recursive: true, force: true });
-    }
+  it('throws UnsupportedNbformatError on nbformat 2', () => {
+    expect(() => parseNotebookJson(JSON.stringify({ nbformat: 2, cells: [] }))).toThrow(
+      UnsupportedNbformatError,
+    );
   });
 });
 
