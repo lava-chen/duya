@@ -75,6 +75,34 @@ describe('ReadTool', () => {
       expect(result.valid).toBe(false);
       expect(result.error).toContain('cannot exceed 1000000');
     });
+
+    it('should validate cell_range with start and end', () => {
+      const result = validateReadInput({
+        file_path: '/test.ipynb',
+        cell_range: { start: 1, end: 5 },
+      });
+      expect(result.valid).toBe(true);
+      if (result.valid) {
+        expect(result.data.cell_range).toEqual({ start: 1, end: 5 });
+      }
+    });
+
+    it('should accept cell_range with end=-1 (end of notebook)', () => {
+      const result = validateReadInput({
+        file_path: '/test.ipynb',
+        cell_range: { start: 5, end: -1 },
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it('should reject cell_range start < 1', () => {
+      const result = validateReadInput({
+        file_path: '/test.ipynb',
+        cell_range: { start: 0, end: 5 },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('cell_range.start');
+    });
   });
 
   describe('ReadTool class', () => {

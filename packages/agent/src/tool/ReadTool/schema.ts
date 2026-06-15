@@ -29,6 +29,25 @@ const lineRangeSchema = z.object({
 });
 
 /**
+ * cell_range.start: 1-indexed positive integer
+ * cell_range.end: positive integer OR -1 (sentinel for "end of notebook")
+ * Mirrors lineRangeSchema's end=-1 semantics.
+ */
+const cellRangeSchema = z.object({
+  start: z
+    .number()
+    .int()
+    .min(1, 'cell_range.start must be an integer >= 1')
+    .describe('Starting cell number (1-indexed).'),
+  end: z
+    .number()
+    .int()
+    .min(-1, 'cell_range.end must be greater than cell_range.start, or use -1 for end of notebook')
+    .max(1_000_000, 'cell_range.end cannot exceed 1000000')
+    .describe('Ending cell number (1-indexed, inclusive). Use -1 to read to end of notebook.'),
+});
+
+/**
  * pages: "N" or "N-M" format. Whitespace tolerated.
  * Caps the upper bound to 10000 to prevent silly inputs.
  */
@@ -51,6 +70,11 @@ export const readInputSchema = z.object({
     .optional()
     .describe(
       'Optional PDF page range, e.g. "1-5" or "3". Only valid for PDF files. If not provided, the entire document is read.',
+    ),
+  cell_range: cellRangeSchema
+    .optional()
+    .describe(
+      'Optional cell range for Jupyter notebooks (.ipynb). 1-indexed, inclusive. Use -1 for end.',
     ),
   max_tokens: z
     .number()
