@@ -18,14 +18,17 @@ export function ResearchModePanel({
   snapshot,
   onForceStop,
 }: ResearchModePanelProps) {
-  const { panelOpen, activeTab, setPanelOpen, setActiveTab } = usePanel();
+  const { panelOpen, tabs, activeTabId, openOrActivatePage, setPanelOpen } = usePanel();
+
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+  const isResearchActive = panelOpen && activeTab?.pageId === 'research';
 
   const toggleResearchPanel = () => {
-    if (panelOpen && activeTab === 'research') {
+    if (isResearchActive) {
       setPanelOpen(false);
       return;
     }
-    setActiveTab('research');
+    openOrActivatePage('research');
   };
 
   if (!snapshot.mode || snapshot.mode !== 'research') return null;
