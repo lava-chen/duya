@@ -60,6 +60,46 @@ function isOllama(protocol: string | undefined, baseUrl: string | undefined): bo
 }
 
 /**
+ * Known Anthropic-compat trailing path segments. When the
+ * baseUrl ends with one of these, the user is hitting an
+ * Anthropic-shaped sub-endpoint (DeepSeek, GLM, Bailian,
+ * StepFun, etc.) but the OpenAI-style `GET /v1/models` (or
+ * bare `GET /models`) lives on the *host root*, not the
+ * sub-path. We try the original first, then a stripped host
+ * version.
+ *
+ * Order matters: longest prefix first, so `/api/anthropic`
+ * wins over `/anthropic`. Mirrors `cc-switch/src-tauri/src/
+ * services/model_fetch.rs::KNOWN_COMPAT_SUFFIXES`.
+ */
+const KNOWN_COMPAT_SUFFIXES: readonly string[] = [
+  '/api/claudecode',
+  '/api/anthropic',
+  '/apps/anthropic',
+  '/api/coding',
+  '/claudecode',
+  '/anthropic',
+  '/step_plan',
+  '/coding',
+  '/claude',
+];
+
+/**
+ * Strip a known Anthropic-compat suffix from a baseUrl.
+ * Returns the remaining prefix, or `null` if no suffix
+ * matches. Longest-prefix-first so `/api/anthropic` wins
+ * over `/anthropic`.
+ */
+function stripCompatSuffix(baseUrl: string): string | null {
+  for (const suffix of KNOWN_COMPAT_SUFFIXES) {
+    if (baseUrl.endsWith(suffix)) {
+      return baseUrl.slice(0, baseUrl.length - suffix.length);
+    }
+  }
+  return null;
+}
+
+/**
  * Build the candidate URL list to probe. We try the most likely
  * paths first, then fall back to less common ones. The first one
  * that returns a successful JSON `{ data: [...] }` or `{ models:
@@ -72,22 +112,58 @@ function isOllama(protocol: string | undefined, baseUrl: string | undefined): bo
  *   - OpenRouter: `GET {base}/api/v1/models` → `{ data: [...] }`
  *   - z.ai / GLM: `GET {base}/api/models` → `{ data: [...] }`
  *
- * The function strips a trailing `/v1` and `/v1/...` segment from
- * the base URL so we can build the candidates from the bare host.
+ * Two-stage strategy (matches cc-switch):
+ *   1. Build the primary candidate from the original baseUrl
+ *      (`${trimmed}/v1/models`, or `${trimmed}/models` if the
+ *      user already includes `/v1`).
+ *   2. If the baseUrl ends with a known compat suffix (e.g.
+ *      `https://api.deepseek.com/anthropic`), strip it and
+ *      retry against the host root. This catches vendors
+ *      (DeepSeek, GLM, Bailian, StepFun, etc.) that expose
+ *      OpenAI-style `/v1/models` or `/models` on the host
+ *      root, not on the anthropic sub-path.
+ *
+ * Deduplicates while preserving insertion order — linear scan
+ * is fine because we cap at ~3-4 candidates.
  */
-function buildCandidateUrls(baseUrl: string): string[] {
-  const trimmed = baseUrl.replace(/\/+$/, '');
-  // Strip common path prefixes to derive the host root.
-  const hostRoot = trimmed.replace(
-    /\/(v1|v1beta|v1alpha)(\/.*)?$/i,
-    '',
-  );
-  return [
-    `${trimmed}/models`,         // already-prefixed
-    `${hostRoot}/v1/models`,     // OpenAI / Anthropic canonical
-    `${hostRoot}/api/v1/models`, // OpenRouter
-    `${hostRoot}/api/models`,    // z.ai / GLM
-  ];
+export function buildCandidateUrls(baseUrl: string): string[] {
+  const trimmed = baseUrl.trim().replace(/\/+$/, '');
+  if (!trimmed) return [];
+
+  const candidates: string[] = [];
+
+  // Stage 1: primary on the original baseUrl. If the user
+  // already supplied a `/v1` tail, don't double it.
+  if (/\/(v1|v1beta|v1alpha)$/i.test(trimmed)) {
+    candidates.push(`${trimmed}/models`);
+  } else {
+    candidates.push(`${trimmed}/v1/models`);
+  }
+
+  // Stage 2: strip known compat suffixes and try the host root.
+  // The bare `${root}/models` candidate is what DeepSeek's
+  // official docs recommend and what the `fetchProviderModels`
+  // user reported as broken — the previous implementation only
+  // tried the suffixed path, which 404s.
+  const stripped = stripCompatSuffix(trimmed);
+  if (stripped) {
+    const root = stripped.replace(/\/+$/, '');
+    if (root && root.includes('://')) {
+      candidates.push(`${root}/v1/models`);
+      candidates.push(`${root}/models`);
+    }
+  }
+
+  // Dedup, preserve first occurrence.
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const url of candidates) {
+    if (!seen.has(url)) {
+      seen.add(url);
+      out.push(url);
+    }
+  }
+  return out;
 }
 
 interface RawModelEntry {
@@ -157,6 +233,13 @@ function classifyError(
       code: 'RATE_LIMITED',
       message: '请求过于频繁',
       suggestion: '请稍后再试',
+    };
+  }
+  if (m.includes('404') || m.includes('Not Found')) {
+    return {
+      code: 'ENDPOINT_NOT_FOUND',
+      message: 'API 端点未找到 (404)',
+      suggestion: `供应商未在已知路径暴露模型列表。请检查 Base URL 是否正确。当前 URL: ${baseUrl || '未设置'}`,
     };
   }
   if (m.includes('timeout') || m.includes('aborted') || m.includes('AbortError')) {
