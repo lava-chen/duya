@@ -7,7 +7,6 @@ import { lazy, Suspense, useState, useCallback, useRef, useEffect, useMemo } fro
 import { useConversationStore } from "@/stores/conversation-store";
 import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
-import { FolderIcon, SquaresFourIcon } from "@/components/icons";
 
 // Custom event for triggering onboarding reset
 const RESET_ONBOARDING_EVENT = "duya:reset-onboarding";
@@ -26,8 +25,8 @@ const DEFAULT_SIDEBAR_WIDTH = 260;
 function AppShellInner({ children }: AppShellProps) {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
-  const { currentView, isHydrated, threads, activeThreadId } = useConversationStore();
-  const { panelOpen, activeTab, setPanelOpen, setActiveTab } = usePanel();
+  const { currentView, isHydrated } = useConversationStore();
+  const { panelOpen, tabs, activeTabId, setPanelOpen } = usePanel();
 
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
@@ -109,26 +108,10 @@ function AppShellInner({ children }: AppShellProps) {
     }
   }, [currentView, panelOpen, setPanelOpen]);
 
-  const isConductorOpen = panelOpen && activeTab === 'canvas';
-  const isResearchOpen = panelOpen && activeTab === 'research';
-
-  const selectedProject = useMemo(() => {
-    const thread = threads.find((t) => t.id === activeThreadId);
-    if (thread?.workingDirectory) {
-      return { workingDirectory: thread.workingDirectory, projectName: thread.projectName || thread.workingDirectory };
-    }
-    return null;
-  }, [threads, activeThreadId]);
-  const showPanelToggle = currentView === 'chat' && !!selectedProject;
-
-  const handlePanelButtonClick = useCallback((tab: 'files' | 'canvas') => {
-    if (panelOpen && activeTab === tab) {
-      setPanelOpen(false);
-      return;
-    }
-    setActiveTab(tab);
-    setPanelOpen(true);
-  }, [panelOpen, activeTab, setPanelOpen, setActiveTab]);
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+  const activePageId = activeTab?.pageId;
+  const isConductorOpen = panelOpen && activePageId === 'conductor';
+  const isResearchOpen = panelOpen && activePageId === 'research';
 
   return (
     <div className="app-shell-root" data-conductor-open={isConductorOpen ? "true" : undefined} data-research-open={isResearchOpen ? "true" : undefined}>
@@ -161,28 +144,6 @@ function AppShellInner({ children }: AppShellProps) {
             </div>
           </div>
           <PanelZone />
-          {showPanelToggle && (
-            <div className="chat-panel-floating-actions">
-              <button
-                type="button"
-                className={`chat-panel-floating-btn${panelOpen && activeTab === 'files' ? ' active' : ''}`}
-                onClick={() => handlePanelButtonClick('files')}
-                title="Files"
-                aria-label="Files"
-              >
-                <FolderIcon size={16} />
-              </button>
-              <button
-                type="button"
-                className={`chat-panel-floating-btn${panelOpen && activeTab === 'canvas' ? ' active' : ''}`}
-                onClick={() => handlePanelButtonClick('canvas')}
-                title="Canvas"
-                aria-label="Canvas"
-              >
-                <SquaresFourIcon size={16} />
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>
