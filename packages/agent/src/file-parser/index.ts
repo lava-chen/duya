@@ -26,6 +26,7 @@ import {
   type ParseChunk,
   type ParseResult,
   type RawParse,
+  type TextChunk,
 } from './types.js';
 
 export interface NodeFileParserOptions {
@@ -157,7 +158,13 @@ export class NodeFileParser {
     fileHash: string,
   ): ParseResult {
     const text = raw.text ?? '';
-    const textChunks = chunkText(text);
+    // Parsers that emit pre-chunked text (e.g. NotebookParser) provide
+    // raw.chunks. Use those directly so cell-level structure is
+    // preserved for the result-builder and downstream consumers like
+    // cell_range filtering. Fall back to paragraph chunking otherwise.
+    const textChunks: TextChunk[] = raw.chunks && raw.chunks.length > 0
+      ? raw.chunks
+      : chunkText(text);
     const textChunkCount = textChunks.length;
 
     const imageChunks: ImageChunk[] = [];

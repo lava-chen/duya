@@ -12,7 +12,6 @@
  *   - ENOENT suggests a similar file or thin-space macOS fix
  *   - mtime-based dedup returns a stub when content didn't change
  *   - truncation respects paragraph/sentence boundaries
- *   - malware reminder injected (skipped for claude-opus-4-6)
  *   - DUYA_FILE_PARSER_DISABLED kill switch on the document path
  */
 
@@ -33,6 +32,7 @@ import { getFileParserConfig } from '../../file-parser/config.js';
 import {
   NodeFileParser,
   getParser,
+  type ParseChunk,
   type ParseResult,
 } from '../../file-parser/index.js';
 import {
@@ -55,7 +55,7 @@ import {
   getFileMtimeMs,
   type ReadState,
 } from './file-state.js';
-import { serializeParseResult, MALWARE_REMINDER } from './result-builder.js';
+import { serializeParseResult } from './result-builder.js';
 
 // Re-export ReadInput + validateReadInput for tests / external callers
 export { validateReadInput } from './schema.js';
@@ -82,6 +82,10 @@ const FILE_UNCHANGED_STUB =
   'File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.';
 
 function isDocMode(input: ReadInput, ext: string | null): boolean {
+  // .ipynb must always go through the document parser — its first
+  // bytes look like JSON which the binary magic-byte sniff in
+  // readFileContent would refuse.
+  if (ext === '.ipynb') return true;
   if (input.line_range) return false;
   if (input.pages) return true;
   if (ext && TEXT_EXTENSIONS.has(ext)) return false;
@@ -213,10 +217,23 @@ export class ReadTool extends BaseTool {
 
     const rawExt = input.file_path.toLowerCase().match(/\.[^./\\]+$/)?.[0] ?? null;
 
-    if (!isDocMode(input, rawExt)) {
-      return readFileContent(input, id, workingDirectory, context);
+    let dispatchInput = input;
+    if (input.cell_range && rawExt !== '.ipynb') {
+      const { cell_range, ...rest } = input;
+      dispatchInput = rest as ReadInput;
     }
-    return this.readAsDocument(input, id, workingDirectory, context, rawExt);
+
+    if (!isDocMode(dispatchInput, rawExt)) {
+      const result = await readFileContent(dispatchInput, id, workingDirectory, context);
+      if (input.cell_range && rawExt !== '.ipynb') {
+        return {
+          ...result,
+          result: `<system-reminder>cell_range only applies to .ipynb files; ignored.</system-reminder>\n\n${result.result}`,
+        };
+      }
+      return result;
+    }
+    return this.readAsDocument(dispatchInput, id, workingDirectory, context, rawExt);
   }
 
   private async readAsDocument(
@@ -279,10 +296,15 @@ export class ReadTool extends BaseTool {
       const result = await this.parser.parseFile(resolved, context?.abortController?.signal);
       const { result: text, metadata } = serializeParseResult(result, {
         maxTokens: input.max_tokens ?? DEFAULT_MAX_TOKENS,
-        model: context?.options?.mainLoopModel,
         resolvedPath: normalizePath(resolved),
       });
-      return { id, name: 'read', result: text, metadata };
+
+      let finalText = text;
+      if (input.cell_range) {
+        finalText = filterChunksByCellRange(text, input.cell_range, result.chunks);
+      }
+
+      return { id, name: 'read', result: finalText, metadata };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       return { id, name: 'read', error: true, result: `Error reading file: ${msg}` };
@@ -347,18 +369,6 @@ async function sniffBinary(resolvedPath: string): Promise<{ binary: boolean; for
   if (sig) return { binary: true, format: sig };
   if (looksBinaryByHeuristic(head)) return { binary: true, format: 'binary (heuristic)' };
   return { binary: false };
-}
-
-const MITIGATION_EXEMPT_MODELS = new Set(['claude-opus-4-6']);
-
-/** Test override: when true, suppress the malware reminder regardless of model. */
-const MALWARE_EXEMPT_MODEL_TEST_OVERRIDE = false;
-
-function isMalwareExempt(model: string | undefined): boolean {
-  if (!model) return false;
-  if (MITIGATION_EXEMPT_MODELS.has(model)) return true;
-  const short = model.split('/').pop() ?? model;
-  return MITIGATION_EXEMPT_MODELS.has(short);
 }
 
 const FILE_NOT_FOUND_CWD_NOTE = 'Current working directory:';
@@ -528,14 +538,10 @@ export async function readFileContent(
       getReadStateStore().set(resolvedPath, state);
     }
 
-    // Malware reminder (skipped for whitelisted models)
-    const shouldRemind = !isMalwareExempt(_context?.options?.mainLoopModel);
-    const tail = shouldRemind ? `\n\n${MALWARE_REMINDER.trim()}` : '';
-
     return {
       id,
       name: 'read',
-      result: `File: ${normalizePath(resolvedPath)}\nLines: ${startLine}-${endLine}\n\n${output}${tail}`,
+      result: `File: ${normalizePath(resolvedPath)}\nLines: ${startLine}-${endLine}\n\n${output}`,
       metadata: { filePath: normalizePath(resolvedPath), lineCount: endLine - startLine + 1 },
     };
   } catch (error) {
@@ -629,4 +635,27 @@ function suggestHandlerForFormat(
   }
 
   return 'Use a tool that handles this format directly.';
+}
+
+/**
+ * Drop cell chunks outside the requested range. Matches the
+ * 1-indexed, inclusive semantics of cell_range. The summary chunk
+ * (index === -1) is always kept.
+ */
+function filterChunksByCellRange(
+  _text: string,
+  range: { start: number; end: number },
+  chunks: ParseChunk[],
+): string {
+  const summaryChunk = chunks.find((c) => c.index === -1);
+  const cellChunks = chunks.filter((c) => c.index !== -1);
+  const last = range.end === -1 ? cellChunks.length : range.end;
+  const first = range.start - 1;
+  const sliced = cellChunks.slice(first, last);
+  const parts: string[] = [];
+  if (summaryChunk && summaryChunk.type === 'text') parts.push(summaryChunk.text);
+  for (const c of sliced) {
+    if (c.type === 'text') parts.push(c.text);
+  }
+  return parts.join('\n\n');
 }
