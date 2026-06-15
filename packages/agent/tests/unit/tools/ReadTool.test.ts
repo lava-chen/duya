@@ -214,4 +214,42 @@ describe('ReadTool .ipynb dispatch', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('produces a stable serialized format for a sample notebook (snapshot)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-snap-'));
+    const path = join(dir, 'snapshot.ipynb');
+    const nb = {
+      nbformat: 4,
+      nbformat_minor: 5,
+      metadata: { language_info: { name: 'python' } },
+      cells: [
+        { cell_type: 'markdown', source: ['# Title\n', 'A short notebook.'] },
+        {
+          cell_type: 'code',
+          id: 'exec-1',
+          source: 'print("hi")',
+          outputs: [{ output_type: 'stream', text: 'hi' }],
+          execution_count: 1,
+        },
+      ],
+    };
+    writeFileSync(path, JSON.stringify(nb));
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path });
+      // Lock the cell-serialization format. Matches the actual
+      // serializeCellForModel output: <language> is always included
+      // (Task 5 subagent deviation from plan, but consistent with
+      // CC's behavior), <execution_count> follows <language>, code
+      // cell text outputs are appended after the source with an
+      // "Output:" prefix.
+      expect(result.result).toContain('[2 cells, kernel=python, 1 code (1 executed, 0 error, 0 unexecuted), 1 markdown, 0 raw,');
+      expect(result.result).toContain('<cell id="cell-1"># Title\nA short notebook.</cell id="cell-1">');
+      expect(result.result).toContain(
+        '<cell id="exec-1"><language>python</language><execution_count>1</execution_count>print("hi")\n\nOutput:\nhi</cell id="exec-1">',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
