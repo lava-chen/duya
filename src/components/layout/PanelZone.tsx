@@ -7,17 +7,23 @@ import { getPageDescriptor } from "./panels/registry";
 import { ResizeHandle } from "./ResizeHandle";
 
 function PanelCollapsedButton() {
-  const { setPanelOpen } = usePanel();
+  const { setPanelOpen, tabs } = usePanel();
+  const hasOpenTabs = tabs.length > 0;
   return (
     <div className="panel-zone panel-zone-collapsed">
       <button
         type="button"
         className="panel-collapsed-button"
         onClick={() => setPanelOpen(true)}
-        title="打开侧栏"
+        title={hasOpenTabs ? `展开侧栏（${tabs.length} 个标签）` : "打开侧栏"}
         aria-label="打开侧栏"
       >
         <span className="panel-collapsed-button-glyph">‹</span>
+        {hasOpenTabs && (
+          <span className="panel-collapsed-button-badge" aria-hidden="true">
+            {tabs.length}
+          </span>
+        )}
       </button>
     </div>
   );
@@ -26,7 +32,10 @@ function PanelCollapsedButton() {
 export function PanelZone() {
   const { panelOpen, panelWidth, setPanelWidth, tabs, activeTabId } = usePanel();
 
-  if (!panelOpen && tabs.length === 0) {
+  // When the panel is closed, always show the collapsed affordance,
+  // even if there are open tabs. Tabs are preserved in memory so
+  // re-opening restores the previous state.
+  if (!panelOpen) {
     return <PanelCollapsedButton />;
   }
 

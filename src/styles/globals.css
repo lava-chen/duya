@@ -7292,6 +7292,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-collapsed-button {
+  position: relative;
   display: flex;
   width: 100%;
   align-items: center;
@@ -7311,6 +7312,23 @@ html[data-message-font-size="large"] .prose h3 {
 .panel-collapsed-button-glyph {
   font-size: 18px;
   line-height: 1;
+}
+
+.panel-collapsed-button-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--accent, #7c3aed);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 8px;
+  pointer-events: none;
 }
 
 .panel-header {
