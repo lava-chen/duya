@@ -13,7 +13,8 @@
  *   - per-output 10KB cap is local (duya has no shared formatOutput)
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 // ============================================================
 // Errors
@@ -355,4 +356,67 @@ export function summarizeNotebook(result: ReadNotebookResult): string {
     `${outputMb}MB outputs`,
     `nbformat ${result.nbformat}.${result.nbformatMinor}`,
   ].join(', ');
+}
+
+export interface ExtractedImage {
+  imagePath: string;
+  mediaType: 'image/png' | 'image/jpeg';
+  originalSize: number;
+}
+
+/**
+ * Decode image/png or image/jpeg from a cell output's data dict,
+ * write it to a sidecar file, and return the path. Returns undefined
+ * if no image present, or if sidecar write fails (caller logs).
+ *
+ * Whitespace is stripped from base64 before decode — nbformat
+ * allows newlines/spaces in the data string.
+ *
+ * @param data the output's `data` dict (e.g. `{'image/png': 'iVBOR...'}`)
+ * @param cellIdx 0-based cell index (used in filename)
+ * @param outputIdx 0-based output index within the cell (for disambiguation)
+ * @param sidecarDir absolute path to the sidecar directory
+ */
+export async function extractOutputImage(
+  data: Record<string, unknown> | undefined,
+  cellIdx: number,
+  outputIdx: number,
+  sidecarDir: string,
+): Promise<ExtractedImage | undefined> {
+  if (!data) return undefined;
+  const png = data['image/png'];
+  const jpeg = data['image/jpeg'];
+
+  let mediaType: 'image/png' | 'image/jpeg';
+  let raw: unknown;
+  if (typeof png === 'string') {
+    mediaType = 'image/png';
+    raw = png;
+  } else if (typeof jpeg === 'string') {
+    mediaType = 'image/jpeg';
+    raw = jpeg;
+  } else {
+    return undefined;
+  }
+
+  if (typeof raw !== 'string') return undefined;
+  const cleaned = raw.replace(/\s/g, '');
+  const buffer = Buffer.from(cleaned, 'base64');
+  if (buffer.length === 0) return undefined;
+
+  const ext = mediaType === 'image/png' ? 'png' : 'jpg';
+  const imagePath = join(sidecarDir, `cell-${cellIdx}-${outputIdx}.${ext}`);
+
+  try {
+    await mkdir(sidecarDir, { recursive: true });
+    await writeFile(imagePath, buffer);
+  } catch {
+    return undefined;
+  }
+
+  return {
+    imagePath,
+    mediaType,
+    originalSize: buffer.length,
+  };
 }
