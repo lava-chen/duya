@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   readNotebook,
   summarizeNotebook,
   validateCellRange,
+  extractOutputImage,
   NotebookParseError,
   UnsupportedNbformatError,
   NotebookCellRangeError,
@@ -104,5 +105,70 @@ describe('validateCellRange', () => {
 
   it('rejects end < start (non-sentinel)', () => {
     expect(() => validateCellRange({ start: 5, end: 2 }, 10)).toThrow(NotebookCellRangeError);
+  });
+});
+
+describe('extractOutputImage', () => {
+  it('decodes image/png from data and writes to sidecar', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'notebook-sidecar-'));
+    const sidecar = join(dir, 'cells');
+    try {
+      // 1x1 transparent PNG
+      const png =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      const data = { 'image/png': png };
+      const result = await extractOutputImage(data, 0, 0, sidecar);
+      expect(result).toBeDefined();
+      expect(result?.mediaType).toBe('image/png');
+      expect(result?.imagePath).toBe(join(sidecar, 'cell-0-0.png'));
+      expect(existsSync(result!.imagePath)).toBe(true);
+      const written = readFileSync(result!.imagePath);
+      expect(written.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined when no image data present', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'notebook-sidecar-'));
+    const sidecar = join(dir, 'cells');
+    try {
+      expect(await extractOutputImage({ 'text/plain': 'hi' }, 0, 0, sidecar)).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('strips whitespace from base64 before writing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'notebook-sidecar-'));
+    const sidecar = join(dir, 'cells');
+    try {
+      const png =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      const data = { 'image/png': `  ${png.slice(0, 10)}\n${png.slice(10)}  ` };
+      const result = await extractOutputImage(data, 0, 0, sidecar);
+      expect(result?.imagePath).toBe(join(sidecar, 'cell-0-0.png'));
+      expect(readFileSync(result!.imagePath).length).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined and does not throw when sidecar dir is unwritable', async () => {
+    // Use a path under a file (not a dir) to force mkdir failure
+    const dir = mkdtempSync(join(tmpdir(), 'notebook-sidecar-fail-'));
+    const blocker = join(dir, 'blocker');
+    writeFileSync(blocker, 'i am a file');
+    try {
+      const result = await extractOutputImage(
+        { 'image/png': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=' },
+        0,
+        0,
+        join(blocker, 'cells'), // can't mkdir under a file
+      );
+      expect(result).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
