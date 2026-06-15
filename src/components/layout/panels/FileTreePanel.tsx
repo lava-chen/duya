@@ -20,6 +20,7 @@ import {
 } from "@/components/file-tree";
 import { useConversationStore } from "@/stores/conversation-store";
 import { TaskListPanel } from "@/components/layout/sidebar/TaskListPanel";
+import type { PageTab } from "./registry";
 
 function containsMatch(node: FileTreeNode, query: string): boolean {
   const q = query.toLowerCase();
@@ -201,7 +202,7 @@ function ContextMenu({
   );
 }
 
-export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
+export function FileTreePanel({ tab, embedded = true }: { tab?: PageTab; embedded?: boolean }) {
   const { panelWidth, setPanelWidth } = usePanel();
   const { t } = useTranslation();
   const { activeThreadId, threads } = useConversationStore();
@@ -219,8 +220,13 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
     type: "file",
   });
 
-  const activeThread = threads.find((t) => t.id === activeThreadId);
-  const workingDirectory = activeThread?.workingDirectory;
+  // When mounted as a registry page, tab is provided and the path is
+  // frozen at open time. When mounted standalone (legacy / tests), fall
+  // back to the active thread's working directory.
+  const fallbackThread = threads.find((t) => t.id === activeThreadId);
+  const workingDirectory =
+    (tab?.params?.workingDirectory as string | undefined) ??
+    fallbackThread?.workingDirectory;
 
   const workspaceName = useMemo(() => {
     if (!workingDirectory) return "";
