@@ -1,42 +1,108 @@
-// src/components/layout/PanelZone.tsx
 "use client";
 
 import { usePanel } from "@/hooks/usePanel";
 import { PanelHeader } from "./PanelHeader";
-import { getPageDescriptor } from "./panels/registry";
+import { PAGE_REGISTRY, getPageDescriptor, type PageId, type PageDescriptor } from "./panels/registry";
 import { ResizeHandle } from "./ResizeHandle";
 
-function PanelCollapsedButton() {
-  const { setPanelOpen, tabs } = usePanel();
-  const hasOpenTabs = tabs.length > 0;
+function shortcutFor(id: PageId): string | null {
+  switch (id) {
+    case "research": return "Ctrl+Shift+G";
+    case "terminal": return "Ctrl+`";
+    case "browser": return "Ctrl+T";
+    case "files": return "Ctrl+P";
+    case "conductor": return "Ctrl+Alt+S";
+    default: return null;
+  }
+}
+
+function PagePickerList() {
+  const { openOrActivatePage } = usePanel();
+  const entries = Object.values(PAGE_REGISTRY);
+
   return (
-    <div className="panel-zone panel-zone-collapsed">
-      <button
-        type="button"
-        className="panel-collapsed-button"
-        onClick={() => setPanelOpen(true)}
-        title={hasOpenTabs ? `展开侧栏（${tabs.length} 个标签）` : "打开侧栏"}
-        aria-label="打开侧栏"
-      >
-        <span className="panel-collapsed-button-glyph">‹</span>
-        {hasOpenTabs && (
-          <span className="panel-collapsed-button-badge" aria-hidden="true">
-            {tabs.length}
-          </span>
-        )}
-      </button>
+    <div className="page-picker">
+      {entries.map((entry) => (
+        <PickerRow
+          key={entry.id}
+          entry={entry}
+          shortcut={shortcutFor(entry.id)}
+          onSelect={() => openOrActivatePage(entry.id)}
+        />
+      ))}
     </div>
   );
 }
 
-export function PanelZone() {
-  const { panelOpen, panelWidth, setPanelWidth, tabs, activeTabId } = usePanel();
+function PickerRow({
+  entry,
+  shortcut,
+  onSelect,
+}: {
+  entry: PageDescriptor;
+  shortcut: string | null;
+  onSelect: () => void;
+}) {
+  const Icon = entry.icon;
 
-  // When the panel is closed, always show the collapsed affordance,
-  // even if there are open tabs. Tabs are preserved in memory so
-  // re-opening restores the previous state.
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={`page-picker-row${entry.available ? "" : " disabled"}`}
+      disabled={!entry.available}
+      onClick={() => {
+        if (!entry.available) return;
+        onSelect();
+      }}
+      title={entry.available ? entry.label : `${entry.label}（未实现）`}
+    >
+      <span className="page-picker-row-main">
+        <span className="page-picker-row-icon">
+          <Icon size={16} weight="regular" />
+        </span>
+        <span className="page-picker-row-name">{entry.label}</span>
+      </span>
+
+      <span className="page-picker-row-meta">
+        {shortcut && (
+          <span className="page-picker-row-shortcut">{shortcut}</span>
+        )}
+        {!entry.available && (
+          <span className="page-picker-row-hint">未实现</span>
+        )}
+      </span>
+    </button>
+  );
+}
+
+export function PanelZone() {
+  const {
+    panelOpen,
+    panelWidth,
+    setPanelWidth,
+    tabs,
+    activeTabId,
+    panelView,
+  } = usePanel();
+
   if (!panelOpen) {
-    return <PanelCollapsedButton />;
+    return null;
+  }
+
+  if (tabs.length === 0 || panelView === "picker") {
+    return (
+      <div className="panel-zone">
+        <ResizeHandle
+          side="left"
+          onResize={(delta) => setPanelWidth(panelWidth - delta)}
+        />
+        <div className="sidebar-panel-inner sidebar-panel-launcher" style={{ width: panelWidth }}>
+          <PanelHeader />
+          <PagePickerList />
+        </div>
+      </div>
+    );
   }
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
@@ -56,11 +122,7 @@ export function PanelZone() {
               const Component = desc.component;
               return <Component tab={activeTab} embedded />;
             })()
-          ) : (
-            <div className="panel-empty-state">
-              <p>从右上角 + 按钮选择要打开的页面</p>
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
