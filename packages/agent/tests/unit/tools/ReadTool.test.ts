@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   validateReadInput,
   ReadTool,
+  _resetSharedParser,
 } from '../../../src/tool/ReadTool/ReadTool.js';
 
 describe('ReadTool', () => {
@@ -142,5 +146,72 @@ describe('ReadTool', () => {
       expect(tool.generateUserFacingDescription({ file_path: '/test.txt' })).toBe('read: /test.txt');
       expect(tool.generateUserFacingDescription({ file_path: '/test.txt', line_range: { start: 1, end: 10 } })).toBe('read: /test.txt:1-10');
     });
+  });
+});
+
+describe('ReadTool .ipynb dispatch', () => {
+  beforeEach(() => {
+    _resetSharedParser();
+  });
+
+  it('routes .ipynb through the document parser (not text mode)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
+    const path = join(dir, 'foo.ipynb');
+    const nb = {
+      nbformat: 4,
+      metadata: { language_info: { name: 'python' } },
+      cells: [{ cell_type: 'code', source: 'x=1', outputs: [], execution_count: 1 }],
+    };
+    writeFileSync(path, JSON.stringify(nb));
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path });
+      expect(result.error).toBeFalsy();
+      expect(result.result).toContain('1 cells');
+      expect(result.result).toContain('<cell id="cell-1">');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('routes .ipynb to document mode even when cell_range is set', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
+    const path = join(dir, 'foo.ipynb');
+    const nb = {
+      nbformat: 4,
+      metadata: { language_info: { name: 'python' } },
+      cells: [
+        { cell_type: 'code', source: 'a=1', outputs: [], execution_count: 1 },
+        { cell_type: 'code', source: 'b=2', outputs: [], execution_count: 2 },
+        { cell_type: 'code', source: 'c=3', outputs: [], execution_count: 3 },
+      ],
+    };
+    writeFileSync(path, JSON.stringify(nb));
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path, cell_range: { start: 2, end: 3 } });
+      expect(result.error).toBeFalsy();
+      expect(result.result).toContain('<cell id="cell-2">');
+      expect(result.result).toContain('<cell id="cell-3">');
+      expect(result.result).not.toContain('<cell id="cell-1">');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a system reminder when cell_range is set for non-ipynb files', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
+    const path = join(dir, 'foo.txt');
+    writeFileSync(path, 'hello\nworld\n');
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path, cell_range: { start: 1, end: 2 } });
+      // cell_range ignored, file still read as text
+      expect(result.error).toBeFalsy();
+      expect(result.result).toContain('hello');
+      expect(result.result).toContain('cell_range only applies to .ipynb files');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
