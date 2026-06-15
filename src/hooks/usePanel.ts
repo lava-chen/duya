@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { PageId, PageTab } from "@/components/layout/panels/registry";
 
 export type { PageId, PageTab } from "@/components/layout/panels/registry";
@@ -55,6 +55,15 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   const [tabs, setTabs] = useState<PageTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
+  // Mirror tabs into a ref so callbacks can read the latest value
+  // synchronously. The setter-updater pattern does not guarantee the
+  // updater runs before subsequent reads in the same call frame, so
+  // we can't read `tabs` from inside `setTabs((prev) => …)`.
+  const tabsRef = useRef<PageTab[]>(tabs);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+
   const togglePanel = useCallback(() => {
     setPanelOpen((prev) => !prev);
   }, []);
@@ -80,13 +89,9 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   const openOrActivatePage = useCallback<PanelContextValue["openOrActivatePage"]>(
     (pageId, params) => {
       const key = dedupKey(pageId, params);
-      let existing: PageTab | undefined;
-      setTabs((prev) => {
-        existing = prev.find(
-          (t) => t.pageId === pageId && dedupKey(t.pageId, t.params) === key
-        );
-        return prev;
-      });
+      const existing = tabsRef.current.find(
+        (t) => t.pageId === pageId && dedupKey(t.pageId, t.params) === key
+      );
       if (existing) {
         setActiveTabId(existing.id);
         setPanelOpen(true);
@@ -116,12 +121,8 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const activateTab = useCallback<PanelContextValue["activateTab"]>((tabId) => {
-    setTabs((prev) => {
-      if (!prev.some((t) => t.id === tabId)) return prev;
-      setActiveTabId(tabId);
-      setPanelOpen(true);
-      return prev;
-    });
+    setActiveTabId(tabId);
+    setPanelOpen(true);
   }, []);
 
   const value = useMemo<PanelContextValue>(
