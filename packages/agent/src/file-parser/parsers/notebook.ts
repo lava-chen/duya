@@ -102,7 +102,7 @@ export class NotebookParser {
       chunks,
       images,
       extractMethod: 'hybrid',
-    } as unknown as RawParse;
+    };
   }
 }
 

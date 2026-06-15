@@ -45,6 +45,13 @@ export interface ParseResult {
 
 export interface RawParse {
   text: string;
+  /**
+   * Optional ordered text chunks (e.g. notebook cells, PDF pages).
+   * The result-builder joins these into the final string and applies
+   * max-tokens truncation. When present, the consumer (ReadTool) may
+   * also filter by index (e.g. `cell_range`).
+   */
+  chunks?: TextChunk[];
   images?: Array<{ base64: string; mediaType: ImageChunk['mediaType']; page?: number }>;
   thumbnail?: ThumbnailData;
   extractMethod: ExtractMethod;
