@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   DotsThreeIcon,
+  CaretLeftIcon,
   CaretRightIcon,
 } from "@phosphor-icons/react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
@@ -28,15 +29,15 @@ type MenuAction =
  * In-content header for the active chat session.
  *
  * Mirrors the IDE-style "open file" tab: thread title (click-to-rename),
- * inline project name, action menu (…), and panel toggles (files/canvas)
- * on the right. Mounted by ChatView at the top of the chat surface; takes
- * the place of the title that used to live in the OS-level TitleBar.
+ * inline project name, and action menu (…). Mounted by ChatView at the
+ * top of the chat surface; takes the place of the title that used to live
+ * in the OS-level TitleBar.
  */
 export function ChatHeader({ thread }: ChatHeaderProps) {
   const { t } = useTranslation();
   const updateThreadTitle = useConversationStore((s) => s.updateThreadTitle);
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
-  const { openOrActivatePage } = usePanel();
+  const { openOrActivatePage, panelOpen, togglePanel } = usePanel();
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(thread.title || "");
@@ -52,8 +53,6 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
     ? thread.workingDirectory.split(/[\\/]/).pop() || thread.workingDirectory
     : "");
 
-  // Keep the draft in sync when the active thread changes externally
-  // (e.g. first user message auto-titles the thread).
   useEffect(() => {
     if (!isEditing) {
       setDraft(thread.title || "");
@@ -67,7 +66,6 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
     }
   }, [isEditing]);
 
-  // Close menu on outside click and Escape
   useEffect(() => {
     if (!menuOpen) return;
     const handleDown = (e: MouseEvent) => {
@@ -90,9 +88,6 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
     };
   }, [menuOpen]);
 
-  // Position the menu under the ⋯ trigger using position:fixed coordinates.
-  // We open down-and-to-the-RIGHT (so the menu stays inside .app-content,
-  // which has overflow:hidden), and clamp to the viewport edges.
   useLayoutEffect(() => {
     if (!menuOpen || !menuListRef.current || !triggerRef.current) return;
     const el = menuListRef.current;
@@ -100,26 +95,20 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
     const pad = 8;
     const gap = 4;
 
-    // Measure first (temporarily visible) to know the menu's own size.
     const menuW = el.offsetWidth || 240;
     const menuH = el.offsetHeight || 200;
 
-    // Preferred: open down-and-to-the-RIGHT, left edge aligned to trigger left.
     let left = trigger.left;
     let top = trigger.bottom + gap;
 
-    // If opening to the right would push the menu off-screen, flip to the
-    // LEFT side of the trigger (right edge aligned to trigger right).
     if (left + menuW > window.innerWidth - pad) {
       left = trigger.right - menuW;
     }
-    // Clamp horizontally inside the viewport.
     if (left < pad) left = pad;
     if (left + menuW > window.innerWidth - pad) {
       left = window.innerWidth - pad - menuW;
     }
 
-    // If opening downward would push the menu off-screen, flip above trigger.
     if (top + menuH > window.innerHeight - pad) {
       top = trigger.top - gap - menuH;
     }
@@ -264,38 +253,51 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
           )}
 
           {!isEditing && (
-            <div className="chat-header-menu-wrap" ref={menuRootRef}>
-              <button
-                ref={triggerRef}
-                type="button"
-                className={`chat-header-btn chat-header-menu-trigger${menuOpen ? " active" : ""}`}
-                onClick={() => setMenuOpen((v) => !v)}
-                title={t("chat.header.more")}
-                aria-label="More actions"
-                aria-expanded={menuOpen}
-                aria-haspopup="menu"
-              >
-                <DotsThreeIcon size={16} weight="bold" />
-              </button>
-
-              {menuOpen && (
-                <div
-                  ref={menuListRef}
-                  role="menu"
-                  className="chat-header-menu"
-                  onMouseLeave={() => setOpenSubmenu(null)}
+            <div className="chat-header-actions">
+              <div className="chat-header-menu-wrap" ref={menuRootRef}>
+                <button
+                  ref={triggerRef}
+                  type="button"
+                  className={`chat-header-btn chat-header-menu-trigger${menuOpen ? " active" : ""}`}
+                  onClick={() => setMenuOpen((v) => !v)}
+                  title={t("chat.header.more")}
+                  aria-label="More actions"
+                  aria-expanded={menuOpen}
+                  aria-haspopup="menu"
                 >
-                  {menuItems.map((item) => (
-                    <MenuItem
-                      key={item.id}
-                      item={item}
-                      openSubmenu={openSubmenu}
-                      setOpenSubmenu={setOpenSubmenu}
-                      closeMenu={closeMenu}
-                    />
-                  ))}
-                </div>
-              )}
+                  <DotsThreeIcon size={16} weight="bold" />
+                </button>
+
+                {menuOpen && (
+                  <div
+                    ref={menuListRef}
+                    role="menu"
+                    className="chat-header-menu"
+                    onMouseLeave={() => setOpenSubmenu(null)}
+                  >
+                    {menuItems.map((item) => (
+                      <MenuItem
+                        key={item.id}
+                        item={item}
+                        openSubmenu={openSubmenu}
+                        setOpenSubmenu={setOpenSubmenu}
+                        closeMenu={closeMenu}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                className={`chat-header-btn chat-header-sidebar-trigger${panelOpen ? " active" : ""}`}
+                onClick={togglePanel}
+                title={panelOpen ? "收起侧栏" : "打开侧栏"}
+                aria-label={panelOpen ? "收起侧栏" : "打开侧栏"}
+                aria-pressed={panelOpen}
+              >
+                <CaretLeftIcon size={14} weight="bold" />
+              </button>
             </div>
           )}
         </div>

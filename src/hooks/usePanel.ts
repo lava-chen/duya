@@ -1,9 +1,11 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { PageId, PageTab } from "@/components/layout/panels/registry";
+import { isPageId, type PageId, type PageTab } from "@/components/layout/panels/registry";
 
 export type { PageId, PageTab } from "@/components/layout/panels/registry";
+
+export type PanelView = "content" | "picker";
 
 export interface PanelContextValue {
   panelOpen: boolean;
@@ -12,6 +14,9 @@ export interface PanelContextValue {
   panelWidth: number;
   setPanelWidth: (width: number) => void;
 
+  panelView: PanelView;
+  setPanelView: (view: PanelView) => void;
+
   tabs: PageTab[];
   activeTabId: string | null;
 
@@ -19,6 +24,7 @@ export interface PanelContextValue {
   closePanel: (tabId: string) => void;
   activateTab: (tabId: string) => void;
   openOrActivatePage: (pageId: PageId, params?: Record<string, unknown>) => string;
+  reorderTabs: (fromId: string, toId: string, position: "before" | "after") => void;
 }
 
 export const PanelContext = createContext<PanelContextValue | null>(null);
@@ -27,6 +33,65 @@ const MIN_PANEL_WIDTH = 220;
 const MAX_PANEL_WIDTH = 960;
 const DEFAULT_PANEL_WIDTH = 340;
 
+const PANEL_STORAGE_KEY = "duya:panel:v1";
+
+interface PersistedPanelState {
+  tabs: PageTab[];
+  activeTabId: string | null;
+  panelOpen: boolean;
+  panelView: PanelView;
+}
+
+/**
+ * Read previously-persisted panel state. Validates `pageId` values
+ * against the live registry and silently drops unknown entries so a
+ * stale `localStorage` payload (e.g. after removing a page) cannot
+ * crash the provider.
+ */
+function loadPersistedState(): PersistedPanelState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PANEL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedPanelState> | null;
+    if (!parsed || !Array.isArray(parsed.tabs)) return null;
+    const tabs: PageTab[] = [];
+    for (const t of parsed.tabs) {
+      if (!t || typeof t.id !== "string" || !isPageId(t.pageId)) continue;
+      tabs.push({
+        id: t.id,
+        pageId: t.pageId,
+        title: typeof t.title === "string" ? t.title : defaultTitle(t.pageId),
+        params:
+          t.params && typeof t.params === "object" && !Array.isArray(t.params)
+            ? (t.params as Record<string, unknown>)
+            : undefined,
+      });
+    }
+    return {
+      tabs,
+      activeTabId:
+        typeof parsed.activeTabId === "string" &&
+        tabs.some((t) => t.id === parsed.activeTabId)
+          ? parsed.activeTabId
+          : null,
+      panelOpen: !!parsed.panelOpen,
+      panelView: parsed.panelView === "picker" ? "picker" : "content",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedState(state: PersistedPanelState): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Quota / private mode — fail silently, the in-memory state still works.
+  }
+}
+
 function genId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -34,10 +99,6 @@ function genId(): string {
   return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/**
- * Build a dedup key for a pageId + params. Pages that don't
- * multi-instance (multiInstance=false) collapse to pageId alone.
- */
 function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
   switch (pageId) {
     case "files":
@@ -50,22 +111,42 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
 }
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
-  const [tabs, setTabs] = useState<PageTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  // Load persisted state exactly once. `useRef(undefined)` lets us
+  // distinguish "haven't tried yet" from "loaded null" so subsequent
+  // renders (e.g. React strict mode double-invoke) don't re-read
+  // localStorage.
+  const initialRef = useRef<PersistedPanelState | null | undefined>(undefined);
+  if (initialRef.current === undefined) {
+    initialRef.current = loadPersistedState();
+  }
+  const initial = initialRef.current;
 
-  // Mirror tabs into a ref so callbacks can read the latest value
-  // synchronously. The setter-updater pattern does not guarantee the
-  // updater runs before subsequent reads in the same call frame, so
-  // we can't read `tabs` from inside `setTabs((prev) => …)`.
+  const [panelOpen, setPanelOpen] = useState<boolean>(initial?.panelOpen ?? false);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [panelView, setPanelView] = useState<PanelView>(initial?.panelView ?? "picker");
+  const [tabs, setTabs] = useState<PageTab[]>(initial?.tabs ?? []);
+  const [activeTabId, setActiveTabId] = useState<string | null>(initial?.activeTabId ?? null);
+
   const tabsRef = useRef<PageTab[]>(tabs);
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
 
+  // Persist the slice of state that needs to survive a reload.
+  // `panelWidth` is intentionally excluded — it's a transient UI
+  // affordance, not part of the panel "contents".
+  useEffect(() => {
+    savePersistedState({ tabs, activeTabId, panelOpen, panelView });
+  }, [tabs, activeTabId, panelOpen, panelView]);
+
   const togglePanel = useCallback(() => {
-    setPanelOpen((prev) => !prev);
+    setPanelOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setPanelView(tabsRef.current.length > 0 ? "content" : "picker");
+      }
+      return next;
+    });
   }, []);
 
   const handleSetWidth = useCallback((width: number) => {
@@ -83,6 +164,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(id);
     setPanelOpen(true);
+    setPanelView("content");
     return id;
   }, []);
 
@@ -95,6 +177,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       if (existing) {
         setActiveTabId(existing.id);
         setPanelOpen(true);
+        setPanelView("content");
         return existing.id;
       }
       return openPanel(pageId, params);
@@ -106,6 +189,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === tabId);
       if (idx === -1) return prev;
+      const closing = prev[idx];
+      if (closing.pageId === "terminal" && typeof window !== "undefined") {
+        void window.electronAPI?.terminal?.kill?.(tabId).catch(() => {});
+      }
       const next = prev.filter((t) => t.id !== tabId);
       setActiveTabId((current) => {
         if (current !== tabId) return current;
@@ -114,6 +201,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
         return fallback.id;
       });
       if (next.length === 0) {
+        setPanelView("picker");
         setPanelOpen(false);
       }
       return next;
@@ -123,7 +211,32 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   const activateTab = useCallback<PanelContextValue["activateTab"]>((tabId) => {
     setActiveTabId(tabId);
     setPanelOpen(true);
+    setPanelView("content");
   }, []);
+
+  const reorderTabs = useCallback<PanelContextValue["reorderTabs"]>(
+    (fromId, toId, position) => {
+      setTabs((prev) => {
+        const fromIdx = prev.findIndex((t) => t.id === fromId);
+        const toIdxRaw = prev.findIndex((t) => t.id === toId);
+        if (fromIdx === -1 || toIdxRaw === -1 || fromIdx === toIdxRaw) return prev;
+        const insertAt =
+          position === "after" && toIdxRaw > fromIdx
+            ? toIdxRaw
+            : position === "after" && toIdxRaw < fromIdx
+              ? toIdxRaw + 1
+              : position === "before" && toIdxRaw > fromIdx
+                ? toIdxRaw - 1
+                : toIdxRaw;
+        if (insertAt === fromIdx) return prev;
+        const next = prev.slice();
+        const [moved] = next.splice(fromIdx, 1);
+        next.splice(insertAt, 0, moved);
+        return next;
+      });
+    },
+    []
+  );
 
   const value = useMemo<PanelContextValue>(
     () => ({
@@ -132,24 +245,29 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       togglePanel,
       panelWidth,
       setPanelWidth: handleSetWidth,
+      panelView,
+      setPanelView,
       tabs,
       activeTabId,
       openPanel,
       closePanel,
       activateTab,
       openOrActivatePage,
+      reorderTabs,
     }),
     [
       panelOpen,
       togglePanel,
       panelWidth,
       handleSetWidth,
+      panelView,
       tabs,
       activeTabId,
       openPanel,
       closePanel,
       activateTab,
       openOrActivatePage,
+      reorderTabs,
     ]
   );
 
@@ -166,9 +284,9 @@ export function usePanel(): PanelContextValue {
 
 function defaultTitle(pageId: PageId): string {
   switch (pageId) {
-    case "files": return "文件树";
-    case "conductor": return "Conductor";
-    case "research": return "Research";
+    case "files": return "文件";
+    case "conductor": return "指挥台";
+    case "research": return "审查";
     case "terminal": return "终端";
     case "browser": return "浏览器";
     default: return pageId;

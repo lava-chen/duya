@@ -108,6 +108,7 @@ import {
   IconCode,
   IconMessageCircle,
   IconRobot,
+  IconLayoutSidebarRight,
 } from "@tabler/icons-react";
 
 // Re-export all icons
