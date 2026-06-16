@@ -11,7 +11,6 @@ import {
   DotsThreeIcon,
   CaretRightIcon,
 } from "@phosphor-icons/react";
-import { SidebarRightIcon } from "@/components/icons";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
@@ -37,7 +36,7 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
   const { t } = useTranslation();
   const updateThreadTitle = useConversationStore((s) => s.updateThreadTitle);
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
-  const { openOrActivatePage, panelOpen, togglePanel } = usePanel();
+  const { openOrActivatePage } = usePanel();
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(thread.title || "");
@@ -287,17 +286,6 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
                   </div>
                 )}
               </div>
-
-              <button
-                type="button"
-                className={`chat-header-btn chat-header-sidebar-trigger${panelOpen ? " active" : ""}`}
-                onClick={togglePanel}
-                title={panelOpen ? "收起侧栏" : "打开侧栏"}
-                aria-label={panelOpen ? "收起侧栏" : "打开侧栏"}
-                aria-pressed={panelOpen}
-              >
-                <SidebarRightIcon size={16} stroke={1.75} />
-              </button>
             </div>
           )}
         </div>

@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 
-import { useConversationStore } from "@/stores/conversation-store";
 import { useSettings } from "@/hooks/useSettings";
 import { getWikiRuntimeStatusIPC, subscribeWikiActivityIPC } from "@/lib/memory-ipc";
 import type { WikiRuntimeState } from "@/types/memory";
@@ -12,22 +11,13 @@ interface TitleBarProps {
 }
 
 export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
-  const { threads, activeThreadId, currentView } = useConversationStore();
-  const { settings } = useSettings();
   const brandIconSrc = `${import.meta.env.BASE_URL}icon.png`;
   const [wikiState, setWikiState] = useState<WikiRuntimeState>("idle");
   const [wikiSummary, setWikiSummary] = useState<string | null>(null);
   const [wikiUpdatedAt, setWikiUpdatedAt] = useState<number | null>(null);
 
-  // Only show title in chat view with active thread
-  const showThreadInfo = currentView === "chat" && activeThreadId;
-
-  const activeThread = threads.find((t) => t.id === activeThreadId);
-
+  const { settings } = useSettings();
   const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
-
-  const threadTitle = activeThread?.title || "New Thread";
-  const projectName = activeThread?.projectName || "No Project";
 
   // Detect platform for window controls layout (macOS traffic lights on left, Windows on right)
   const isMac = window.electronAPI?.versions?.platform === "darwin";
@@ -114,23 +104,17 @@ export function TitleBar({ sidebarWidth = 260 }: TitleBarProps) {
       </div>
       <div className="titlebar-spacer" style={{ width: sidebarWidth }} />
       <div className="titlebar-content-area">
-        {showThreadInfo && activeThread && (
-          <>
-            <span className="titlebar-thread-title">{threadTitle}</span>
-            <span className="titlebar-project-name">{projectName}</span>
-            {wikiAgentEnabled && (
-              <span
-                className={`titlebar-wiki-status titlebar-wiki-status-${wikiState}`}
-                title={wikiSecondaryLabel ? `${wikiLabel}\n${wikiSecondaryLabel}` : wikiLabel}
-                aria-label={wikiLabel}
-              >
-                <span className="titlebar-wiki-status-dot" />
-                <span className="titlebar-wiki-status-text">
-                  {wikiSecondaryLabel ? `${wikiLabel} · ${wikiSecondaryLabel}` : wikiLabel}
-                </span>
-              </span>
-            )}
-          </>
+        {wikiAgentEnabled && (
+          <span
+            className={`titlebar-wiki-status titlebar-wiki-status-${wikiState}`}
+            title={wikiSecondaryLabel ? `${wikiLabel}\n${wikiSecondaryLabel}` : wikiLabel}
+            aria-label={wikiLabel}
+          >
+            <span className="titlebar-wiki-status-dot" />
+            <span className="titlebar-wiki-status-text">
+              {wikiSecondaryLabel ? `${wikiLabel} · ${wikiSecondaryLabel}` : wikiLabel}
+            </span>
+          </span>
         )}
       </div>
     </div>
