@@ -1,0 +1,405 @@
+/**
+ * notebook - Jupyter notebook (.ipynb) parsing utilities
+ *
+ * Pure-function helpers used by file-parser/parsers/notebook.ts. Reads
+ * a notebook from disk, validates its nbformat, and normalizes cells
+ * into ProcessedCell shape suitable for serialization to the model.
+ *
+ * Mirrors the strategy in claude-code-haha/src/utils/notebook.ts but
+ * adapted for duya:
+ *   - cellId is 1-based (`cell-${index + 1}`) to match duya's
+ *     1-based cell_range and line_range semantics
+ *   - image outputs land in a sidecar directory, not in tool_result
+ *   - per-output 10KB cap is local (duya has no shared formatOutput)
+ */
+
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+// ============================================================
+// Errors
+// ============================================================
+
+export class NotebookParseError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = 'NotebookParseError';
+  }
+}
+
+export class UnsupportedNbformatError extends Error {
+  constructor(
+    public readonly nbformat: number,
+  ) {
+    super(`Cannot read notebook: unsupported nbformat version ${nbformat} (only 3 and 4 supported)`);
+    this.name = 'UnsupportedNbformatError';
+  }
+}
+
+export class NotebookCellRangeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotebookCellRangeError';
+  }
+}
+
+// ============================================================
+// Public types
+// ============================================================
+
+export type CellType = 'code' | 'markdown' | 'raw';
+
+export type NotebookOutput =
+  | { type: 'stream'; text: string }
+  | {
+      type: 'execute_result';
+      text?: string;
+      image?: { imagePath: string; mediaType: string; originalSize: number };
+    }
+  | {
+      type: 'display_data';
+      text?: string;
+      image?: { imagePath: string; mediaType: string; originalSize: number };
+    }
+  | { type: 'error'; text: string };
+
+export interface ProcessedCell {
+  /** 0-based position in the notebook */
+  index: number;
+  /** cell.id if present, else `cell-${index + 1}` (1-based) */
+  cellId: string;
+  cellType: CellType;
+  /** source joined into a single string */
+  source: string;
+  /** code cells only */
+  language?: string;
+  /** code cells only; null/undefined preserved */
+  executionCount?: number;
+  /** code cells only */
+  outputs?: NotebookOutput[];
+}
+
+export interface ReadNotebookResult {
+  cells: ProcessedCell[];
+  language: string;
+  /** Original nbformat 3 or 4, for summary header */
+  nbformat: number;
+  nbformatMinor: number;
+  /** Sum of output text/image bytes — for summary header */
+  totalOutputBytes: number;
+}
+
+// ============================================================
+// Raw nbformat shapes (subset)
+// ============================================================
+
+interface RawCell {
+  cell_type: string;
+  id?: string;
+  source: string | string[];
+  metadata?: Record<string, unknown>;
+  outputs?: RawOutput[];
+  execution_count?: number | null;
+}
+
+interface RawOutput {
+  output_type: string;
+  text?: string | string[];
+  data?: Record<string, string | string[] | number | boolean | null>;
+  ename?: string;
+  evalue?: string;
+  traceback?: string[];
+  name?: string;
+}
+
+interface RawNotebook {
+  nbformat?: number;
+  nbformat_minor?: number;
+  metadata?: {
+    kernelspec?: { name?: string; language?: string };
+    language_info?: { name?: string };
+  };
+  cells?: RawCell[];
+}
+
+// ============================================================
+// parseNotebookJson
+// ============================================================
+
+const SUPPORTED_NBFORMATS = new Set([3, 4]);
+
+/**
+ * Pure function: parse raw notebook JSON content into processed cells.
+ * Use this when you already have the JSON string in hand. For file-based
+ * reads, see file-parser/parsers/notebook.ts (NotebookParser) which
+ * handles I/O + image extraction.
+ */
+export function parseNotebookJson(
+  content: string,
+  options: { cellRange?: { start: number; end: number } } = {},
+): ReadNotebookResult {
+  let notebook: RawNotebook;
+  try {
+    notebook = JSON.parse(content) as RawNotebook;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new NotebookParseError(
+      `Cannot read notebook: invalid notebook JSON: ${reason}`,
+      err,
+    );
+  }
+
+  const nbformat = notebook.nbformat ?? 0;
+  if (!SUPPORTED_NBFORMATS.has(nbformat)) {
+    throw new UnsupportedNbformatError(nbformat);
+  }
+
+  const language =
+    notebook.metadata?.language_info?.name ??
+    notebook.metadata?.kernelspec?.language ??
+    'python';
+
+  const allCells = notebook.cells ?? [];
+  if (options.cellRange) {
+    validateCellRange(options.cellRange, allCells.length);
+  }
+
+  const startIdx = options.cellRange ? options.cellRange.start - 1 : 0;
+  const endIdx =
+    options.cellRange && options.cellRange.end !== -1
+      ? Math.min(options.cellRange.end, allCells.length)
+      : allCells.length;
+  const slice = allCells.slice(startIdx, endIdx);
+
+  const cells: ProcessedCell[] = slice.map((rawCell, i) =>
+    processCell(rawCell, startIdx + i, language),
+  );
+
+  const totalOutputBytes = cells.reduce((sum, c) => {
+    if (!c.outputs) return sum;
+    return sum + estimateOutputBytes(c.outputs);
+  }, 0);
+
+  return {
+    cells,
+    language,
+    nbformat,
+    nbformatMinor: notebook.nbformat_minor ?? 0,
+    totalOutputBytes,
+  };
+}
+
+// ============================================================
+// Internal helpers (exported for tests)
+// ============================================================
+
+export function processCell(
+  raw: RawCell,
+  index: number,
+  language: string,
+): ProcessedCell {
+  const cellId = raw.id ?? `cell-${index + 1}`;
+  const cellType: CellType =
+    raw.cell_type === 'code' || raw.cell_type === 'markdown' || raw.cell_type === 'raw'
+      ? raw.cell_type
+      : 'raw';
+  const source = Array.isArray(raw.source) ? raw.source.join('') : raw.source;
+
+  const cell: ProcessedCell = {
+    index,
+    cellId,
+    cellType,
+    source,
+  };
+
+  if (cellType === 'code') {
+    cell.language = language;
+    if (raw.execution_count != null) {
+      cell.executionCount = raw.execution_count;
+    }
+    if (raw.outputs && raw.outputs.length > 0) {
+      cell.outputs = raw.outputs.map(processOutput);
+    }
+  }
+
+  return cell;
+}
+
+export function processOutput(raw: RawOutput): NotebookOutput {
+  switch (raw.output_type) {
+    case 'stream': {
+      const text = Array.isArray(raw.text) ? raw.text.join('') : raw.text ?? '';
+      return { type: 'stream', text: truncateOutputText(text).text };
+    }
+    case 'execute_result':
+    case 'display_data': {
+      const text = extractTextFromData(raw.data);
+      // image extraction happens in the parser (needs sidecar dir);
+      // this function only handles text.
+      return {
+        type: raw.output_type as 'execute_result' | 'display_data',
+        text: text ? truncateOutputText(text).text : undefined,
+      };
+    }
+    case 'error': {
+      const ename = raw.ename ?? '';
+      const evalue = raw.evalue ?? '';
+      const traceback = (raw.traceback ?? []).join('\n');
+      const composed = `${ename}: ${evalue}\n${traceback}`;
+      return { type: 'error', text: truncateOutputText(composed).text };
+    }
+    default:
+      return { type: 'stream', text: '' };
+  }
+}
+
+function extractTextFromData(data: RawOutput['data']): string {
+  if (!data) return '';
+  const textPlain = data['text/plain'];
+  if (typeof textPlain === 'string') return textPlain;
+  if (Array.isArray(textPlain)) return textPlain.join('');
+  return '';
+}
+
+function estimateOutputBytes(outputs: NotebookOutput[]): number {
+  let total = 0;
+  for (const o of outputs) {
+    if (o.type === 'stream' || o.type === 'error') total += o.text.length;
+    else if (o.type === 'execute_result' || o.type === 'display_data') {
+      if (o.text) total += o.text.length;
+    }
+  }
+  return total;
+}
+
+export function validateCellRange(
+  range: { start: number; end: number },
+  cellCount: number,
+): void {
+  if (range.start < 1) {
+    throw new NotebookCellRangeError(
+      `cell_range invalid: start (${range.start}) must be >= 1`,
+    );
+  }
+  if (range.end !== -1 && range.end < range.start) {
+    throw new NotebookCellRangeError(
+      `cell_range invalid: end (${range.end}) < start (${range.start})`,
+    );
+  }
+  if (range.start > cellCount) {
+    throw new NotebookCellRangeError(
+      `cell_range {start:${range.start}, end:${range.end}} exceeds notebook size (${cellCount} cells)`,
+    );
+  }
+}
+
+const OUTPUT_TEXT_CAP = 10_000;
+
+export function truncateOutputText(text: string): { text: string; truncated: boolean } {
+  if (text.length <= OUTPUT_TEXT_CAP) return { text, truncated: false };
+  // Cut at nearest paragraph break within the budget
+  const slice = text.slice(0, OUTPUT_TEXT_CAP);
+  const paraBreak = slice.lastIndexOf('\n\n');
+  const cut = paraBreak > OUTPUT_TEXT_CAP / 2 ? paraBreak : OUTPUT_TEXT_CAP;
+  return {
+    text: `${slice.slice(0, cut)}\n\n[Output truncated at 10KB. Use bash with: cat <notebook_path> | jq '.cells[N].outputs' to see full output.]`,
+    truncated: true,
+  };
+}
+
+export function isLargeOutput(
+  outputs: NotebookOutput[],
+  threshold: number = OUTPUT_TEXT_CAP,
+): boolean {
+  return estimateOutputBytes(outputs) > threshold;
+}
+
+export function summarizeNotebook(result: ReadNotebookResult): string {
+  const codeCells = result.cells.filter((c) => c.cellType === 'code');
+  const markdownCells = result.cells.filter((c) => c.cellType === 'markdown');
+  const rawCells = result.cells.filter((c) => c.cellType === 'raw');
+
+  const executed = codeCells.filter(
+    (c) => c.executionCount !== undefined && c.executionCount !== null,
+  );
+  const errored = codeCells.filter(
+    (c) => c.outputs?.some((o) => o.type === 'error') ?? false,
+  );
+  const unexecuted = codeCells.filter(
+    (c) => c.executionCount === null || c.executionCount === undefined,
+  );
+
+  const outputMb = (result.totalOutputBytes / (1024 * 1024)).toFixed(1);
+  return [
+    `${result.cells.length} cells`,
+    `kernel=${result.language}`,
+    `${codeCells.length} code (${executed.length} executed, ${errored.length} error, ${unexecuted.length} unexecuted)`,
+    `${markdownCells.length} markdown`,
+    `${rawCells.length} raw`,
+    `${outputMb}MB outputs`,
+    `nbformat ${result.nbformat}.${result.nbformatMinor}`,
+  ].join(', ');
+}
+
+export interface ExtractedImage {
+  imagePath: string;
+  mediaType: 'image/png' | 'image/jpeg';
+  originalSize: number;
+}
+
+/**
+ * Decode image/png or image/jpeg from a cell output's data dict,
+ * write it to a sidecar file, and return the path. Returns undefined
+ * if no image present, or if sidecar write fails (caller logs).
+ *
+ * Whitespace is stripped from base64 before decode — nbformat
+ * allows newlines/spaces in the data string.
+ *
+ * @param data the output's `data` dict (e.g. `{'image/png': 'iVBOR...'}`)
+ * @param cellIdx 0-based cell index (used in filename)
+ * @param outputIdx 0-based output index within the cell (for disambiguation)
+ * @param sidecarDir absolute path to the sidecar directory
+ */
+export async function extractOutputImage(
+  data: Record<string, unknown> | undefined,
+  cellIdx: number,
+  outputIdx: number,
+  sidecarDir: string,
+): Promise<ExtractedImage | undefined> {
+  if (!data) return undefined;
+  const png = data['image/png'];
+  const jpeg = data['image/jpeg'];
+
+  let mediaType: 'image/png' | 'image/jpeg';
+  let raw: unknown;
+  if (typeof png === 'string') {
+    mediaType = 'image/png';
+    raw = png;
+  } else if (typeof jpeg === 'string') {
+    mediaType = 'image/jpeg';
+    raw = jpeg;
+  } else {
+    return undefined;
+  }
+
+  if (typeof raw !== 'string') return undefined;
+  const cleaned = raw.replace(/\s/g, '');
+  const buffer = Buffer.from(cleaned, 'base64');
+  if (buffer.length === 0) return undefined;
+
+  const ext = mediaType === 'image/png' ? 'png' : 'jpg';
+  const imagePath = join(sidecarDir, `cell-${cellIdx}-${outputIdx}.${ext}`);
+
+  try {
+    await mkdir(sidecarDir, { recursive: true });
+    await writeFile(imagePath, buffer);
+  } catch {
+    return undefined;
+  }
+
+  return {
+    imagePath,
+    mediaType,
+    originalSize: buffer.length,
+  };
+}

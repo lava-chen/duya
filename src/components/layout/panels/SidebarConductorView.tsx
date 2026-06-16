@@ -9,8 +9,15 @@ import { listCanvases, createCanvas, getSnapshot, executeAction } from "@/lib/co
 import { registerAllElements } from "@/conductor/elements";
 import "@/conductor/widgets";
 import type { CanvasPosition } from "@/types/conductor";
+import type { PageTab } from "./registry";
 
-export function SidebarConductorView() {
+export function SidebarConductorView({
+  tab,
+  embedded: _embedded = false,
+}: {
+  tab?: PageTab;
+  embedded?: boolean;
+}) {
   const {
     activeCanvasId,
     setCanvases,
@@ -24,6 +31,11 @@ export function SidebarConductorView() {
     updateElement,
     removeElement,
   } = useConductorStore();
+
+  // When mounted as a registry page, tab is provided and the canvas is
+  // frozen at open time. When mounted standalone (legacy / tests), fall
+  // back to the active canvas id from the conductor store.
+  const tabCanvasId = tab?.params?.canvasId as string | undefined;
 
   const [isLoading, setIsLoading] = useState(true);
 
@@ -41,7 +53,33 @@ export function SidebarConductorView() {
 
         setCanvases(list);
 
-        if (list.length > 0 && !activeCanvasId) {
+        if (tabCanvasId) {
+          // Canvas id was provided via tab params — look it up in the
+          // list and activate it. Only switch if the canvas exists; the
+          // first-canvas / create-new fallbacks below are the legacy
+          // "active canvas" behavior used when no canvasId is given.
+          const target = list.find((c) => c.id === tabCanvasId);
+          if (target) {
+            setActiveCanvas(target.id);
+            const snap = await getSnapshot(target.id);
+            if (snap && !cancelled) setSnapshot(snap);
+            connectBridge(target.id);
+          } else if (list.length > 0) {
+            setActiveCanvas(list[0].id);
+            const snap = await getSnapshot(list[0].id);
+            if (snap && !cancelled) setSnapshot(snap);
+            connectBridge(list[0].id);
+          } else {
+            const canvas = await createCanvas("Workbench");
+            if (!cancelled) {
+              setCanvases([canvas]);
+              setActiveCanvas(canvas.id);
+              connectBridge(canvas.id);
+              const snap = await getSnapshot(canvas.id);
+              if (snap) setSnapshot(snap);
+            }
+          }
+        } else if (list.length > 0 && !activeCanvasId) {
           setActiveCanvas(list[0].id);
           const snap = await getSnapshot(list[0].id);
           if (snap && !cancelled) setSnapshot(snap);
@@ -68,7 +106,7 @@ export function SidebarConductorView() {
       cancelled = true;
       disconnectBridge();
     };
-  }, []);
+  }, [tabCanvasId, activeCanvasId, setCanvases, setActiveCanvas, setSnapshot, connectBridge, disconnectBridge, setUiError]);
 
   const handlePositionChange = useCallback(
     (id: string, position: CanvasPosition) => {

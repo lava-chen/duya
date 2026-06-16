@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   validateReadInput,
   ReadTool,
+  _resetSharedParser,
 } from '../../../src/tool/ReadTool/ReadTool.js';
 
 describe('ReadTool', () => {
@@ -75,6 +79,34 @@ describe('ReadTool', () => {
       expect(result.valid).toBe(false);
       expect(result.error).toContain('cannot exceed 1000000');
     });
+
+    it('should validate cell_range with start and end', () => {
+      const result = validateReadInput({
+        file_path: '/test.ipynb',
+        cell_range: { start: 1, end: 5 },
+      });
+      expect(result.valid).toBe(true);
+      if (result.valid) {
+        expect(result.data.cell_range).toEqual({ start: 1, end: 5 });
+      }
+    });
+
+    it('should accept cell_range with end=-1 (end of notebook)', () => {
+      const result = validateReadInput({
+        file_path: '/test.ipynb',
+        cell_range: { start: 5, end: -1 },
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it('should reject cell_range start < 1', () => {
+      const result = validateReadInput({
+        file_path: '/test.ipynb',
+        cell_range: { start: 0, end: 5 },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('cell_range.start');
+    });
   });
 
   describe('ReadTool class', () => {
@@ -114,5 +146,110 @@ describe('ReadTool', () => {
       expect(tool.generateUserFacingDescription({ file_path: '/test.txt' })).toBe('read: /test.txt');
       expect(tool.generateUserFacingDescription({ file_path: '/test.txt', line_range: { start: 1, end: 10 } })).toBe('read: /test.txt:1-10');
     });
+  });
+});
+
+describe('ReadTool .ipynb dispatch', () => {
+  beforeEach(() => {
+    _resetSharedParser();
+  });
+
+  it('routes .ipynb through the document parser (not text mode)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
+    const path = join(dir, 'foo.ipynb');
+    const nb = {
+      nbformat: 4,
+      metadata: { language_info: { name: 'python' } },
+      cells: [{ cell_type: 'code', source: 'x=1', outputs: [], execution_count: 1 }],
+    };
+    writeFileSync(path, JSON.stringify(nb));
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path });
+      expect(result.error).toBeFalsy();
+      expect(result.result).toContain('1 cells');
+      expect(result.result).toContain('<cell id="cell-1">');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('routes .ipynb to document mode even when cell_range is set', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
+    const path = join(dir, 'foo.ipynb');
+    const nb = {
+      nbformat: 4,
+      metadata: { language_info: { name: 'python' } },
+      cells: [
+        { cell_type: 'code', source: 'a=1', outputs: [], execution_count: 1 },
+        { cell_type: 'code', source: 'b=2', outputs: [], execution_count: 2 },
+        { cell_type: 'code', source: 'c=3', outputs: [], execution_count: 3 },
+      ],
+    };
+    writeFileSync(path, JSON.stringify(nb));
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path, cell_range: { start: 2, end: 3 } });
+      expect(result.error).toBeFalsy();
+      expect(result.result).toContain('<cell id="cell-2">');
+      expect(result.result).toContain('<cell id="cell-3">');
+      expect(result.result).not.toContain('<cell id="cell-1">');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a system reminder when cell_range is set for non-ipynb files', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
+    const path = join(dir, 'foo.txt');
+    writeFileSync(path, 'hello\nworld\n');
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path, cell_range: { start: 1, end: 2 } });
+      // cell_range ignored, file still read as text
+      expect(result.error).toBeFalsy();
+      expect(result.result).toContain('hello');
+      expect(result.result).toContain('cell_range only applies to .ipynb files');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('produces a stable serialized format for a sample notebook (snapshot)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-snap-'));
+    const path = join(dir, 'snapshot.ipynb');
+    const nb = {
+      nbformat: 4,
+      nbformat_minor: 5,
+      metadata: { language_info: { name: 'python' } },
+      cells: [
+        { cell_type: 'markdown', source: ['# Title\n', 'A short notebook.'] },
+        {
+          cell_type: 'code',
+          id: 'exec-1',
+          source: 'print("hi")',
+          outputs: [{ output_type: 'stream', text: 'hi' }],
+          execution_count: 1,
+        },
+      ],
+    };
+    writeFileSync(path, JSON.stringify(nb));
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path });
+      // Lock the cell-serialization format. Matches the actual
+      // serializeCellForModel output: <language> is always included
+      // (Task 5 subagent deviation from plan, but consistent with
+      // CC's behavior), <execution_count> follows <language>, code
+      // cell text outputs are appended after the source with an
+      // "Output:" prefix.
+      expect(result.result).toContain('[2 cells, kernel=python, 1 code (1 executed, 0 error, 0 unexecuted), 1 markdown, 0 raw,');
+      expect(result.result).toContain('<cell id="cell-1"># Title\nA short notebook.</cell id="cell-1">');
+      expect(result.result).toContain(
+        '<cell id="exec-1"><language>python</language><execution_count>1</execution_count>print("hi")\n\nOutput:\nhi</cell id="exec-1">',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

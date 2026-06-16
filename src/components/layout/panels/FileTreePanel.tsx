@@ -10,16 +10,14 @@ import {
   Path,
   Plus,
 } from "@phosphor-icons/react";
-import { usePanel } from "@/hooks/usePanel";
-import { useTranslation } from "@/hooks/useTranslation";
-import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import {
   FileTree,
   RenderTreeNodes,
   type FileTreeNode,
 } from "@/components/file-tree";
 import { useConversationStore } from "@/stores/conversation-store";
-import { TaskListPanel } from "@/components/layout/sidebar/TaskListPanel";
+import { useTranslation } from "@/hooks/useTranslation";
+import type { PageTab } from "./registry";
 
 function containsMatch(node: FileTreeNode, query: string): boolean {
   const q = query.toLowerCase();
@@ -201,10 +199,9 @@ function ContextMenu({
   );
 }
 
-export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
-  const { panelWidth, setPanelWidth } = usePanel();
-  const { t } = useTranslation();
+export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
   const { activeThreadId, threads } = useConversationStore();
+  const { t } = useTranslation();
 
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
@@ -219,41 +216,33 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
     type: "file",
   });
 
-  const activeThread = threads.find((t) => t.id === activeThreadId);
-  const workingDirectory = activeThread?.workingDirectory;
-
-  const workspaceName = useMemo(() => {
-    if (!workingDirectory) return "";
-    const parts = workingDirectory.split(/[/\\]/);
-    return parts[parts.length - 1] || workingDirectory;
-  }, [workingDirectory]);
+  // When mounted as a registry page, tab is provided and the path is
+  // frozen at open time. When mounted standalone (legacy / tests), fall
+  // back to the active thread's working directory.
+  const fallbackThread = threads.find((t) => t.id === activeThreadId);
+  const workingDirectory =
+    (tab?.params?.workingDirectory as string | undefined) ??
+    fallbackThread?.workingDirectory;
 
   const fetchTree = useCallback(async () => {
-    console.log("[FileTreePanel] fetchTree called, workingDirectory:", workingDirectory);
-    
     if (!workingDirectory) {
-      console.log("[FileTreePanel] No working directory");
       setTree([]);
       setError(null);
       setLoading(false);
       return;
     }
 
-    // Check if files API is available
     if (!window.electronAPI?.files?.browse) {
-      console.log("[FileTreePanel] Files API not available");
       setTree([]);
       setError("File browser not available - please rebuild Electron");
       setLoading(false);
       return;
     }
 
-    console.log("[FileTreePanel] Calling files.browse...");
     setLoading(true);
     setError(null);
     try {
       const result = await window.electronAPI.files.browse(workingDirectory, 4);
-      console.log("[FileTreePanel] files.browse result:", result);
       if (result.success) {
         setTree(result.tree);
       } else {
@@ -261,7 +250,6 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
         setError(result.error || "Failed to load file tree");
       }
     } catch (e) {
-      console.error("[FileTreePanel] files.browse error:", e);
       setTree([]);
       setError(String(e) || "Failed to load file tree");
     } finally {
@@ -273,23 +261,15 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
     fetchTree();
   }, [fetchTree]);
 
-  const handleResize = useCallback(
-    (delta: number) => {
-      setPanelWidth(panelWidth - delta);
-    },
-    [panelWidth, setPanelWidth]
-  );
-
   const handleOpenFile = useCallback(async (path: string) => {
     try {
       if (window.electronAPI?.shell?.openPath) {
         await window.electronAPI.shell.openPath(path);
       } else {
-        // Fallback for non-Electron environments
-        window.open(`file://${path}`, '_blank');
+        window.open(`file://${path}`, "_blank");
       }
     } catch (e) {
-      console.error("[FileTreePanel] Failed to open file:", e);
+      // File open failed - ignore
     }
   }, []);
 
@@ -322,208 +302,107 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
     setRenamingName(name);
   }, []);
 
-  const handleRenameSubmit = useCallback(async (path: string, newName: string) => {
-    try {
-      const result = await window.electronAPI.files.rename(path, newName);
-      if (result.success) {
-        await fetchTree();
-      } else {
-        console.error("[FileTreePanel] Rename failed:", result.error);
+  const handleRenameSubmit = useCallback(
+    async (path: string, newName: string) => {
+      try {
+        const result = await window.electronAPI.files.rename(path, newName);
+        if (result.success) {
+          await fetchTree();
+        }
+      } catch (e) {
+        // Rename failed - ignore
+      } finally {
+        setRenamingPath(undefined);
+        setRenamingName(undefined);
       }
-    } catch (e) {
-      console.error("[FileTreePanel] Rename error:", e);
-    } finally {
-      setRenamingPath(undefined);
-      setRenamingName(undefined);
-    }
-  }, [fetchTree]);
+    },
+    [fetchTree]
+  );
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(undefined);
     setRenamingName(undefined);
   }, []);
 
-  const handleDelete = useCallback(async (path: string) => {
-    const name = path.split(/[/\\]/).pop() || "";
-    if (!window.confirm(`Delete "${name}"?`)) return;
-    try {
-      const result = await window.electronAPI.files.delete(path);
-      if (result.success) {
-        await fetchTree();
-      } else {
-        console.error("[FileTreePanel] Delete failed:", result.error);
+  const handleDelete = useCallback(
+    async (path: string) => {
+      const name = path.split(/[/\\]/).pop() || "";
+      if (!window.confirm(`Delete "${name}"?`)) return;
+      try {
+        const result = await window.electronAPI.files.delete(path);
+        if (result.success) {
+          await fetchTree();
+        }
+      } catch (e) {
+        // Delete failed - ignore
       }
-    } catch (e) {
-      console.error("[FileTreePanel] Delete error:", e);
-    }
-  }, [fetchTree]);
+    },
+    [fetchTree]
+  );
 
   const handleCopyAbsolutePath = useCallback((path: string) => {
-    navigator.clipboard.writeText(path).catch(console.error);
+    navigator.clipboard.writeText(path).catch(() => {});
   }, []);
 
   const handleCopyRelativePath = useCallback(
     (path: string) => {
       if (workingDirectory) {
         const relativePath = path.replace(workingDirectory, "").replace(/^[\\/]/, "");
-        navigator.clipboard.writeText(relativePath).catch(console.error);
+        navigator.clipboard.writeText(relativePath).catch(() => {});
       }
     },
     [workingDirectory]
   );
 
   const handleAddToInput = useCallback((path: string) => {
-    // Dispatch custom event that MessageInput will listen to
     const event = new CustomEvent("file-tree-add-to-input", {
       detail: { path },
     });
     window.dispatchEvent(event);
   }, []);
 
-  const defaultExpanded = new Set<string>();
+  const defaultExpanded = useMemo(() => new Set<string>(), []);
 
-  // Show loading state
-  if (loading) {
-    return (
-      <div className={embedded ? "file-tree-panel-embedded" : "file-tree-panel"}>
-        {!embedded && <ResizeHandle side="left" onResize={handleResize} />}
-        <div
-          className="file-tree-panel-inner"
-          style={embedded ? undefined : { width: panelWidth }}
-        >
-          <TaskListPanel />
-          <div className="file-tree-panel-header">
-            <div className="file-tree-panel-header-title">
-              <span className="file-tree-panel-header-label">Workspace</span>
-              {workspaceName && (
-                <span className="file-tree-panel-header-name">{workspaceName}</span>
-              )}
-            </div>
-          </div>
-          <div className="file-tree-panel-toolbar">
-            <div className="file-tree-search">
-              <MagnifyingGlass size={12} className="file-tree-search-icon" />
-              <input
-                type="text"
-                placeholder={t("fileTree.filterFiles")}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="file-tree-search-input"
-                disabled
-              />
-            </div>
-            <button
-              type="button"
-              className="file-tree-refresh-btn"
-              disabled
-              aria-label={t("fileTree.refresh")}
-            >
-              <ArrowsClockwise size={12} className="animate-spin" />
-            </button>
-          </div>
-          <div className="file-tree-panel-body">
-            <div className="file-tree-loading">
-              <ArrowsClockwise
-                size={16}
-                className="animate-spin text-muted-foreground"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Show error or empty state
-  if (tree.length === 0) {
-    return (
-      <div className={embedded ? "file-tree-panel-embedded" : "file-tree-panel"}>
-        {!embedded && <ResizeHandle side="left" onResize={handleResize} />}
-        <div
-          className="file-tree-panel-inner"
-          style={embedded ? undefined : { width: panelWidth }}
-        >
-          <TaskListPanel />
-          <div className="file-tree-panel-header">
-            <div className="file-tree-panel-header-title">
-              <span className="file-tree-panel-header-label">Workspace</span>
-              {workspaceName && (
-                <span className="file-tree-panel-header-name">{workspaceName}</span>
-              )}
-            </div>
-          </div>
-          <div className="file-tree-panel-toolbar">
-            <div className="file-tree-search">
-              <MagnifyingGlass size={12} className="file-tree-search-icon" />
-              <input
-                type="text"
-                placeholder={t("fileTree.filterFiles")}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="file-tree-search-input"
-              />
-            </div>
-            <button
-              type="button"
-              className="file-tree-refresh-btn"
-              onClick={fetchTree}
-              aria-label={t("fileTree.refresh")}
-            >
-              <ArrowsClockwise size={12} />
-            </button>
-          </div>
-          <div className="file-tree-panel-body">
-            <p className="file-tree-empty">
-              {error
-                ? error
-                : workingDirectory
-                ? t("fileTree.noFiles")
-                : t("fileTree.selectFolder")}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Show tree
   return (
-    <div className={embedded ? "file-tree-panel-embedded" : "file-tree-panel"}>
-      {!embedded && <ResizeHandle side="left" onResize={handleResize} />}
-      <div
-        className="file-tree-panel-inner"
-        style={embedded ? undefined : { width: panelWidth }}
-      >
-        <TaskListPanel />
-        <div className="file-tree-panel-header">
-          <div className="file-tree-panel-header-title">
-            <span className="file-tree-panel-header-label">Workspace</span>
-            {workspaceName && (
-              <span className="file-tree-panel-header-name">{workspaceName}</span>
-            )}
-          </div>
+    <div className="file-tree-panel-embedded">
+      <div className="file-tree-search-row">
+        <div className="file-tree-search">
+          <MagnifyingGlass size={12} className="file-tree-search-icon" />
+          <input
+            type="text"
+            placeholder={t("fileTree.filterFiles")}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="file-tree-search-input"
+          />
         </div>
-        <div className="file-tree-panel-toolbar">
-          <div className="file-tree-search">
-            <MagnifyingGlass size={12} className="file-tree-search-icon" />
-            <input
-              type="text"
-              placeholder={t("fileTree.filterFiles")}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="file-tree-search-input"
+        <button
+          type="button"
+          className="file-tree-refresh-btn"
+          onClick={fetchTree}
+          aria-label={t("fileTree.refresh")}
+          disabled={loading}
+        >
+          <ArrowsClockwise size={12} className={loading ? "animate-spin" : ""} />
+        </button>
+      </div>
+      <div className="file-tree-panel-body">
+        {loading && tree.length === 0 ? (
+          <div className="file-tree-loading">
+            <ArrowsClockwise
+              size={16}
+              className="animate-spin text-muted-foreground"
             />
           </div>
-          <button
-            type="button"
-            className="file-tree-refresh-btn"
-            onClick={fetchTree}
-            aria-label={t("fileTree.refresh")}
-          >
-            <ArrowsClockwise size={12} />
-          </button>
-        </div>
-        <div className="file-tree-panel-body">
+        ) : tree.length === 0 ? (
+          <p className="file-tree-empty">
+            {error
+              ? error
+              : workingDirectory
+                ? t("fileTree.noFiles")
+                : t("fileTree.selectFolder")}
+          </p>
+        ) : (
           <FileTree
             defaultExpanded={defaultExpanded}
             onOpenFile={handleOpenFile}
@@ -536,7 +415,7 @@ export function FileTreePanel({ embedded = false }: { embedded?: boolean }) {
           >
             <FileTreeContent nodes={tree} searchQuery={searchQuery} />
           </FileTree>
-        </div>
+        )}
       </div>
       <ContextMenu
         state={contextMenu}

@@ -77,7 +77,7 @@ function WidgetActions({
   const [addError, setAddError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { setActiveTab } = usePanel();
+  const { openOrActivatePage } = usePanel();
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -124,8 +124,8 @@ function WidgetActions({
       setAdded(true);
       setTimeout(() => setAdded(false), 2000);
 
-      // Open sidebar panel and switch to canvas tab
-      setActiveTab('canvas');
+      // Open sidebar panel and switch to conductor tab
+      openOrActivatePage('conductor');
 
       // Center on the newly added element after the panel opens
       requestAnimationFrame(() => {

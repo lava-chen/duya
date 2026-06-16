@@ -45,6 +45,7 @@ ${lineFormat}
 - This tool can read PDFs (.pdf). Use the \`pages\` parameter to read specific page ranges (e.g. pages: "1-5"). For scanned PDFs without embedded text, image extraction may be limited; use the vision tool for visual analysis.
 - This tool can read Word documents (.docx) and PowerPoint files (.pptx), extracting their text content along with any embedded images.
 - This tool can read image files (PNG, JPEG, GIF, WebP). The tool returns the image as a base64 attachment plus metadata; use the vision tool when you need to reason about the image content.
+- This tool can read Jupyter notebooks (.ipynb files). It returns a per-cell summary header, then each cell as \`<cell id="cell-N"><language>python</language>source</cell id="cell-N">\`. Code cell outputs are included unless they exceed 10KB (replaced with a jq hint). Use the \`cell_range\` parameter to read a 1-indexed inclusive subset (e.g. \`cell_range: {start: 5, end: 15}\`, end=-1 for to-end). Image outputs (matplotlib etc.) are written to \`<notebook>.cells/\` and surfaced via the vision tool.
 - This tool can only read files, not directories. To read a directory, use an ls command via the ${BASH_TOOL_NAME} tool.
 - You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.`

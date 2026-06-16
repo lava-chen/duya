@@ -812,6 +812,35 @@ export interface MarketplaceAPI {
   checkName: (name: string) => Promise<{ success: boolean; data?: { name: string; blocked: boolean }; error?: string }>
 }
 
+export interface TerminalAPI {
+  [key: string]: unknown
+  spawn: (params: {
+    id?: string
+    shell?: string
+    cwd?: string
+    cols?: number
+    rows?: number
+    title?: string
+  }) => Promise<{ ok: boolean; [key: string]: unknown }>
+  list: () => Promise<{ ok: boolean; [key: string]: unknown }>
+  snapshot: (id: string) => Promise<{ ok: boolean; [key: string]: unknown }>
+  write: (id: string, data: string) => Promise<{ ok: boolean; [key: string]: unknown }>
+  resize: (id: string, cols: number, rows: number) => Promise<{ ok: boolean; [key: string]: unknown }>
+  kill: (id: string) => Promise<{ ok: boolean; [key: string]: unknown }>
+  suggest: (
+    prefix: string,
+    shell?: string,
+    cwd?: string,
+    limit?: number
+  ) => Promise<{ ok: boolean; [key: string]: unknown }>
+  record: (
+    command: string,
+    shell: string,
+    cwd: string,
+    source?: string
+  ) => Promise<{ ok: boolean; [key: string]: unknown }>
+}
+
 export interface ElectronAPI {
   versions: {
     electron: string
@@ -917,6 +946,9 @@ export interface ElectronAPI {
   agentProfile: AgentProfileAPI
   plugin: PluginAPI
   marketplace: MarketplaceAPI
+  terminal: TerminalAPI
+  onTerminalOutput: (callback: (event: { id: string; data: string }) => void) => () => void
+  onTerminalExit: (callback: (event: { id: string; code: number | null }) => void) => () => void
   recap: RecapAPI
   wiki: WikiAPI
   mailbox: MailboxAPI
@@ -1905,6 +1937,36 @@ const electronAPI: ElectronAPI = {
     remove: (payload) => ipcRenderer.invoke('marketplace:remove', payload),
     reset: () => ipcRenderer.invoke('marketplace:reset'),
     checkName: (name: string) => ipcRenderer.invoke('marketplace:check-name', name),
+  },
+  terminal: {
+    spawn: (params) => ipcRenderer.invoke('terminal:spawn', params),
+    list: () => ipcRenderer.invoke('terminal:list'),
+    snapshot: (id) => ipcRenderer.invoke('terminal:snapshot', { id }),
+    write: (id, data) => ipcRenderer.invoke('terminal:write', { id, data }),
+    resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
+    kill: (id) => ipcRenderer.invoke('terminal:kill', { id }),
+    suggest: (prefix, shell, cwd, limit) =>
+      ipcRenderer.invoke('terminal:suggest', { prefix, shell, cwd, limit }),
+    record: (command, shell, cwd, source = 'user') =>
+      ipcRenderer.invoke('terminal:record', { command, shell, cwd, source }),
+  },
+  onTerminalOutput: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { id: string; data: string }) => {
+      callback(data)
+    }
+    ipcRenderer.on('terminal:output', handler)
+    return () => {
+      ipcRenderer.removeListener('terminal:output', handler)
+    }
+  },
+  onTerminalExit: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { id: string; code: number | null }) => {
+      callback(data)
+    }
+    ipcRenderer.on('terminal:exit', handler)
+    return () => {
+      ipcRenderer.removeListener('terminal:exit', handler)
+    }
   },
   import: {
     detect: () => ipcRenderer.invoke('import:detect'),

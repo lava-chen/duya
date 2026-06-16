@@ -44,6 +44,14 @@ const zh: Record<TranslationKey, string> = {
   'chat.recentThreads': '最近对话',
   'chat.describeWhatToBuild': '描述你想构建什么...',
 
+  'chat.header.openSideChat': '打开侧边聊天',
+  'chat.header.copy': '复制',
+  'chat.header.copyId': '复制 ID',
+  'chat.header.copyTitle': '复制标题',
+  'chat.header.addAutomation': '添加自动化...',
+  'chat.header.more': '更多',
+  'chat.header.projectWorkspace': '工作区',
+
   'messageInput.attachFiles': '附加文件',
   'messageInput.dropFilesHint': '松开以添加为附件',
   'messageInput.slashCommands': '斜杠命令',
@@ -151,6 +159,41 @@ const zh: Record<TranslationKey, string> = {
   'permission.doThisInstead': '改为这样做',
   'permission.planApproved': '计划已批准 — 执行中',
   'permission.planRejected': '计划已拒绝',
+
+  // Plan mode prompt — EnterPlanMode confirmation
+  'planModePrompt.title': '是否进入计划模式？',
+  'planModePrompt.body':
+    '助手希望进入计划模式以探索代码库并设计实现方案。计划模式下助手无法编辑文件或执行命令，只能进行读取和搜索。',
+  'planModePrompt.confirm': '是，进入计划模式',
+  'planModePrompt.decline': '不，直接开始实现',
+
+  // ExitPlanMode redesigned prompt
+  'exitPlanMode.title': '可以开始编码了吗？',
+  'exitPlanMode.editorHint': '按 ctrl-g 在编辑器中修改',
+  'exitPlanMode.approve': '是，批准计划',
+  'exitPlanMode.approveAndAutoAccept': '是，并自动放行编辑',
+  'exitPlanMode.approveAndBypass': '是，并完全放行',
+  'exitPlanMode.keepPlanning': '否，继续计划',
+  'exitPlanMode.feedbackPlaceholder': '告诉助手要改什么…',
+  'exitPlanMode.noPlanContent': '助手未附上计划内容。下方为请求授权的操作。',
+  'exitPlanMode.planLabel': '计划',
+  'exitPlanMode.permissionsLabel': '请求授权',
+
+  // Plan content card in the chat stream
+  'planCard.label': '实施计划',
+
+  // Plan mode banner - top-of-chat indicator when the agent is in a read-only mode
+  'planMode.general': '通用模式',
+  'planMode.plan': '计划模式',
+  'planMode.explore': '探索模式',
+  'planMode.verify': '验证模式',
+  'planMode.codeReview': '代码评审模式',
+  'planMode.generalDesc': '所有工具可用。',
+  'planMode.planDesc': '只读 — agent 正在设计方案。点击退出可返回通用模式。',
+  'planMode.exploreDesc': '只读 — agent 正在搜索代码库。点击退出可返回通用模式。',
+  'planMode.verifyDesc': '只读 — agent 正在验证实现。点击退出可返回通用模式。',
+  'planMode.codeReviewDesc': '只读 — agent 正在评审代码。点击退出可返回通用模式。',
+  'planMode.requestExit': '退出模式',
   'permission.answerSubmitted': '答案已提交',
   'permission.allowed': '已允许',
   'permission.denied': '已拒绝',
@@ -175,8 +218,15 @@ const zh: Record<TranslationKey, string> = {
   'mailbox.composer.placeholder': '运行时发送消息...',
   'mailbox.composer.suggested': '建议',
   'mailbox.composer.reclassifyHint': '服务端可重新分类',
+  'mailbox.composer.send': '发送',
+  'mailbox.composer.stop': '停止',
+  'mailbox.composer.ariaLabel': '运行时指令输入',
+  'mailbox.composer.kindFollowup': '追问',
+  'mailbox.composer.kindCorrection': '更正',
+  'mailbox.composer.kindConstraint': '约束',
   'mailbox.bubble.waiting': '等待 Agent 拾取...',
   'mailbox.bubble.cancelled': '已取消',
+  'mailbox.bubble.drainedBridge': '已合并到下一轮',
   'mailbox.bubble.pendingHint': '已保存，Agent 在后续阶段会吸收队列中的消息。',
 
   'settings.title': '设置',

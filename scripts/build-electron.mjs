@@ -18,6 +18,7 @@ async function buildElectron() {
     external: [
       'electron',
       'better-sqlite3',
+      'node-pty',
       // Playwright dynamic requires that esbuild cannot resolve
       'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
       'chromium-bidi/lib/cjs/cdp/CdpConnection',
@@ -62,10 +63,10 @@ async function buildElectron() {
   copyNativeModules();
 }
 
-// Copy better-sqlite3 native module to dist/ for production
+// Copy native modules to dist/ for production.
 function copyNativeModules() {
   const distNodeModules = 'dist/node_modules';
-  const nativeModules = ['better-sqlite3', 'bindings', 'file-uri-to-path'];
+  const nativeModules = ['better-sqlite3', 'bindings', 'file-uri-to-path', 'node-pty'];
 
   for (const mod of nativeModules) {
     const sourceDir = path.join('node_modules', mod);

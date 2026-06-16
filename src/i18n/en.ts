@@ -42,6 +42,14 @@ const en = {
   'chat.recentThreads': 'Recent Threads',
   'chat.describeWhatToBuild': 'Describe what you want to build...',
 
+  'chat.header.openSideChat': 'Open side chat',
+  'chat.header.copy': 'Copy',
+  'chat.header.copyId': 'Copy ID',
+  'chat.header.copyTitle': 'Copy title',
+  'chat.header.addAutomation': 'Add automation...',
+  'chat.header.more': 'More',
+  'chat.header.projectWorkspace': 'Workspace',
+
   'messageInput.attachFiles': 'Attach files',
   'messageInput.dropFilesHint': 'Drop to add as attachment',
   'messageInput.slashCommands': 'Slash commands',
@@ -149,6 +157,41 @@ const en = {
   'permission.doThisInstead': 'Do this instead',
   'permission.planApproved': 'Plan approved — executing',
   'permission.planRejected': 'Plan rejected',
+
+  // Plan mode prompt — EnterPlanMode confirmation
+  'planModePrompt.title': 'Enter plan mode?',
+  'planModePrompt.body':
+    'The agent wants to enter plan mode to explore the codebase and design an implementation approach. In plan mode the agent cannot edit files or run commands — it will only read and search.',
+  'planModePrompt.confirm': 'Yes, enter plan mode',
+  'planModePrompt.decline': 'No, start implementing now',
+
+  // ExitPlanMode redesigned prompt
+  'exitPlanMode.title': 'Ready to code?',
+  'exitPlanMode.editorHint': 'press ctrl-g to edit in your editor',
+  'exitPlanMode.approve': 'Yes, approve plan',
+  'exitPlanMode.approveAndAutoAccept': 'Yes, and auto-accept edits',
+  'exitPlanMode.approveAndBypass': 'Yes, and bypass permissions',
+  'exitPlanMode.keepPlanning': 'No, keep planning',
+  'exitPlanMode.feedbackPlaceholder': 'Tell the agent what to change...',
+  'exitPlanMode.noPlanContent': 'The agent did not include a plan. The proposed permissions are shown below.',
+  'exitPlanMode.planLabel': 'Plan',
+  'exitPlanMode.permissionsLabel': 'Requested permissions',
+
+  // Plan content card in the chat stream
+  'planCard.label': 'Implementation Plan',
+
+  // Plan mode banner - top-of-chat indicator when the agent is in a read-only mode
+  'planMode.general': 'General Mode',
+  'planMode.plan': 'Plan Mode',
+  'planMode.explore': 'Explore Mode',
+  'planMode.verify': 'Verify Mode',
+  'planMode.codeReview': 'Code Review Mode',
+  'planMode.generalDesc': 'All tools available.',
+  'planMode.planDesc': 'Read-only — agent is designing an implementation plan. Use Exit to return to general mode.',
+  'planMode.exploreDesc': 'Read-only — agent is searching the codebase. Use Exit to return to general mode.',
+  'planMode.verifyDesc': 'Read-only — agent is verifying implementation. Use Exit to return to general mode.',
+  'planMode.codeReviewDesc': 'Read-only — agent is reviewing code. Use Exit to return to general mode.',
+  'planMode.requestExit': 'Exit Mode',
   'permission.answerSubmitted': 'Answer submitted',
   'permission.allowed': 'Allowed',
   'permission.denied': 'Denied',
@@ -173,8 +216,15 @@ const en = {
   'mailbox.composer.placeholder': 'Send a message during execution...',
   'mailbox.composer.suggested': 'suggested',
   'mailbox.composer.reclassifyHint': 'server may re-classify',
+  'mailbox.composer.send': 'Send',
+  'mailbox.composer.stop': 'Stop',
+  'mailbox.composer.ariaLabel': 'In-run instruction composer',
+  'mailbox.composer.kindFollowup': 'Follow-up',
+  'mailbox.composer.kindCorrection': 'Correction',
+  'mailbox.composer.kindConstraint': 'Constraint',
   'mailbox.bubble.waiting': 'Waiting to be picked up...',
   'mailbox.bubble.cancelled': 'Cancelled',
+  'mailbox.bubble.drainedBridge': 'Merged into the next turn',
   'mailbox.bubble.pendingHint': 'Saved. The agent will absorb queued messages in the next implementation phase.',
 
   'settings.title': 'Settings',
