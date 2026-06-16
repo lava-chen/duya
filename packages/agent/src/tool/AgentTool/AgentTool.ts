@@ -16,6 +16,7 @@ import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
 import { backgroundTaskRegistry, type BackgroundTaskResult } from './BackgroundTaskRegistry.js';
 import { sessionDb } from '../../ipc/db-client.js';
 import { sendEvent } from '../../process/worker-protocol.js';
+import { buildChatAgentProgressPayload, type AgentProgressPayloadMeta } from './agentLifecycleBridge.js';
 
 export { formatAgentLine }
 
@@ -180,21 +181,58 @@ export class AgentTool extends BaseTool {
         console.warn('[AgentTool] Failed to create sub-agent session in DB:', err);
       }
 
-      const onProgress = context.reportAgentProgress
-        ? (event: AgentProgressEvent) => {
-            context.reportAgentProgress!({
-              ...event,
-              agentType: agentDefinition.agentType,
-              agentName: agentInput.name,
-              agentDescription: agentInput.description || agentInput.name,
-              sessionId: subAgentSessionId,
-            });
-          }
-        : undefined;
+      // Shared helper: build a `chat:agent_progress` SSE payload for a
+      // single sub-agent progress event. See agentLifecycleBridge for the
+      // full wire-format contract (router → SSE → renderer remap).
+      const parentSessionId = context.options.sessionId
+      // taskId is declared here (synchronously, before payloadMeta) so the
+      // closure below can capture it. For non-background invocations the
+      // value is unused — the executor's pendingProgress is the only sink.
+      const taskId = crypto.randomUUID()
+      const payloadMeta: AgentProgressPayloadMeta = {
+        parentSessionId: parentSessionId ?? '',
+        subAgentSessionId,
+        agentId: taskId,
+        agentType: agentDefinition.agentType,
+        agentName: agentInput.name,
+        agentDescription: agentInput.description || agentInput.name,
+      }
+
+      // For background sub-agents, intermediate events (text, thinking,
+      // tool_use, tool_result) are emitted directly to SSE so the UI
+      // sees them live. The previous path forwarded them to
+      // context.reportAgentProgress, which buffered them into
+      // pendingProgress and only drained on the parent's next `done`
+      // yield — leaving the UI stuck on "initializing agent" for the
+      // entire duration of the sub-agent. Terminal events (`done`,
+      // `error`) are emitted via emitTerminalProgress below and also
+      // call context.notifyBackgroundDone to flip the executor's
+      // `backgroundDone` flag without re-buffering the duplicate.
+      const emitLiveProgress = (event: AgentProgressEvent) => {
+        if (!parentSessionId) return
+        try {
+          sendEvent(buildChatAgentProgressPayload(event, payloadMeta))
+        } catch (err) {
+          console.warn('[AgentTool] Failed to emit live agent_progress:', err)
+        }
+      }
+
+      const onProgress = agentInput.run_in_background
+        ? emitLiveProgress
+        : context.reportAgentProgress
+          ? (event: AgentProgressEvent) => {
+              context.reportAgentProgress!({
+                ...event,
+                agentType: agentDefinition.agentType,
+                agentName: agentInput.name,
+                agentDescription: agentInput.description || agentInput.name,
+                sessionId: subAgentSessionId,
+              })
+            }
+          : undefined;
 
       if (agentInput.run_in_background) {
         const startTime = Date.now()
-        const taskId = crypto.randomUUID()
 
         backgroundTaskRegistry.register({
           taskId,
@@ -208,22 +246,10 @@ export class AgentTool extends BaseTool {
 
         // Emit a 'started' progress event synchronously so the UI can grab
         // subAgentSessionId at t=0 instead of waiting for the first real
-        // progress event (which may be delayed or buffered by pendingProgress
-        // after the parent turn has already emitted 'done'). Mirrors the
-        // emitTerminalProgress() path that bypasses reportAgentProgress.
-        const parentSessionId = context.options.sessionId
+        // progress event. Mirrors the emitTerminalProgress() path.
         if (parentSessionId) {
           try {
-            sendEvent({
-              type: 'chat:agent_progress',
-              sessionId: parentSessionId,
-              agentEventType: 'started',
-              agentId: taskId,
-              agentType: agentDefinition.agentType,
-              agentName: agentInput.name,
-              agentDescription: agentInput.description || agentInput.name,
-              agentSessionId: subAgentSessionId,
-            })
+            sendEvent(buildChatAgentProgressPayload({ type: 'started', agentId: taskId }, payloadMeta))
           } catch (err) {
             console.warn('[AgentTool] Failed to emit spawn agent_progress:', err)
           }
@@ -243,32 +269,23 @@ export class AgentTool extends BaseTool {
         });
 
         (async () => {
-          const parentSessionId = context.options.sessionId
           if (!parentSessionId) return
           const emitTerminalProgress = (event: AgentProgressEvent) => {
             // Forward the sub-agent's terminal progress event directly to the
             // worker stdout so router.ts can stream it to the parent SSE client.
-            // The reportAgentProgress path buffers into pendingProgress which is
-            // never drained once the parent agent's LLM stream has already
-            // emitted 'done' — so the parent's UI would stay stuck on
-            // "正在运行..." until manual reload.
+            // We do NOT call onProgress (which would re-buffer into
+            // pendingProgress) and we do NOT push to pendingProgress via
+            // reportAgentProgress — both would cause duplicate `done` events
+            // to fire (once now via SSE, once later when pendingProgress
+            // is drained by getRemainingResults). Instead, use the new
+            // notifyBackgroundDone hook which only flips the executor's
+            // `backgroundDone` flag and wakes the wait loop.
             try {
-              sendEvent({
-                type: 'chat:agent_progress',
-                sessionId: parentSessionId,
-                agentEventType: event.type,
-                agentId: event.agentId,
-                agentType: agentDefinition.agentType,
-                agentName: agentInput.name,
-                agentDescription: agentInput.description || agentInput.name,
-                agentSessionId: subAgentSessionId,
-                ...(event.duration !== undefined ? { duration: event.duration } : {}),
-                ...(event.data !== undefined ? { data: event.data } : {}),
-              })
+              sendEvent(buildChatAgentProgressPayload(event, payloadMeta))
             } catch (err) {
               console.warn('[AgentTool] Failed to emit terminal agent_progress:', err)
             }
-            onProgress?.(event)
+            context.notifyBackgroundDone?.()
           }
 
           try {

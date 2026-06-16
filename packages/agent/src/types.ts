@@ -461,6 +461,14 @@ export interface ToolUseContext {
    */
   reportAgentProgress?: (event: AgentProgressEvent) => void;
   /**
+   * Signal that a background sub-agent has finished without buffering
+   * any final events into pendingProgress. For background sub-agents the
+   * AgentTool already streams the terminal `done` event directly via SSE;
+   * this hook only needs to flip `backgroundDone` on the tracked tool so
+   * the executor's `getRemainingResults` loop can exit.
+   */
+  notifyBackgroundDone?: () => void;
+  /**
    * @deprecated 向主进程发起单向消息。新代码应使用 ipcRequest 获得响应。
    */
   sendToMain?: (msg: Record<string, unknown>) => void;

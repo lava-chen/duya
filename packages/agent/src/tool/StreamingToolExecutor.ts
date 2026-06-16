@@ -1262,6 +1262,20 @@ export class StreamingToolExecutor {
                 this.progressAvailableResolve()
               }
             },
+            // For background sub-agents, intermediate events are streamed live
+            // via SSE from AgentTool itself (not buffered into pendingProgress —
+            // pendingProgress would only be drained on the next parent turn's
+            // `done` yield, which can be seconds or minutes later, leaving the
+            // UI stuck on "initializing agent"). The terminal `done` event
+            // still needs to flip backgroundDone so `getRemainingResults`
+            // exits; this hook does that without re-buffering the duplicate
+            // event into pendingProgress.
+            notifyBackgroundDone: () => {
+              tool.backgroundDone = true
+              if (this.progressAvailableResolve) {
+                this.progressAvailableResolve()
+              }
+            },
           }
         : executionContext
 

@@ -215,11 +215,20 @@ export async function* runAgent({
   }, PERSIST_INTERVAL_MS) : null
 
   try {
-    // Create an abort controller for the sub-agent, linked to parent's abort controller
+    // Create an abort controller for the sub-agent, linked to parent's abort controller.
+    // The parent's signal aborts `subAgentAbort`; we forward that to the sub-agent's
+    // own interrupt() so the in-flight LLM HTTP request is cancelled (not just the
+    // outer for-await loop in runAgent). Without this, a long-running LLM call
+    // would keep streaming into the void after the user cancels the parent turn.
     const subAgentAbort = new AbortController()
     const onParentAbort = () => {
       console.log(`[AgentTool] Parent abort triggered for agent ${agentDefinition.agentType}, stopping sub-agent`)
       subAgentAbort.abort()
+      try {
+        subAgent.interrupt()
+      } catch (err) {
+        console.warn('[AgentTool] subAgent.interrupt() threw:', err)
+      }
     }
     toolUseContext.abortController.signal.addEventListener('abort', onParentAbort)
 
