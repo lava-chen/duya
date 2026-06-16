@@ -9,9 +9,9 @@ import {
 } from "react";
 import {
   DotsThreeIcon,
-  CaretLeftIcon,
   CaretRightIcon,
 } from "@phosphor-icons/react";
+import { SidebarRightIcon } from "@/components/icons";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
@@ -251,56 +251,56 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
               <span className="chat-header-project-text">{projectName}</span>
             </span>
           )}
-
-          {!isEditing && (
-            <div className="chat-header-actions">
-              <div className="chat-header-menu-wrap" ref={menuRootRef}>
-                <button
-                  ref={triggerRef}
-                  type="button"
-                  className={`chat-header-btn chat-header-menu-trigger${menuOpen ? " active" : ""}`}
-                  onClick={() => setMenuOpen((v) => !v)}
-                  title={t("chat.header.more")}
-                  aria-label="More actions"
-                  aria-expanded={menuOpen}
-                  aria-haspopup="menu"
-                >
-                  <DotsThreeIcon size={16} weight="bold" />
-                </button>
-
-                {menuOpen && (
-                  <div
-                    ref={menuListRef}
-                    role="menu"
-                    className="chat-header-menu"
-                    onMouseLeave={() => setOpenSubmenu(null)}
-                  >
-                    {menuItems.map((item) => (
-                      <MenuItem
-                        key={item.id}
-                        item={item}
-                        openSubmenu={openSubmenu}
-                        setOpenSubmenu={setOpenSubmenu}
-                        closeMenu={closeMenu}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <button
-                type="button"
-                className={`chat-header-btn chat-header-sidebar-trigger${panelOpen ? " active" : ""}`}
-                onClick={togglePanel}
-                title={panelOpen ? "收起侧栏" : "打开侧栏"}
-                aria-label={panelOpen ? "收起侧栏" : "打开侧栏"}
-                aria-pressed={panelOpen}
-              >
-                <CaretLeftIcon size={14} weight="bold" />
-              </button>
-            </div>
-          )}
         </div>
+
+        {!isEditing && (
+          <div className="chat-header-actions">
+            <div className="chat-header-menu-wrap" ref={menuRootRef}>
+              <button
+                ref={triggerRef}
+                type="button"
+                className={`chat-header-btn chat-header-menu-trigger${menuOpen ? " active" : ""}`}
+                onClick={() => setMenuOpen((v) => !v)}
+                title={t("chat.header.more")}
+                aria-label="More actions"
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+              >
+                <DotsThreeIcon size={16} weight="bold" />
+              </button>
+
+              {menuOpen && (
+                <div
+                  ref={menuListRef}
+                  role="menu"
+                  className="chat-header-menu"
+                  onMouseLeave={() => setOpenSubmenu(null)}
+                >
+                  {menuItems.map((item) => (
+                    <MenuItem
+                      key={item.id}
+                      item={item}
+                      openSubmenu={openSubmenu}
+                      setOpenSubmenu={setOpenSubmenu}
+                      closeMenu={closeMenu}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              className={`chat-header-btn chat-header-sidebar-trigger${panelOpen ? " active" : ""}`}
+              onClick={togglePanel}
+              title={panelOpen ? "收起侧栏" : "打开侧栏"}
+              aria-label={panelOpen ? "收起侧栏" : "打开侧栏"}
+              aria-pressed={panelOpen}
+            >
+              <SidebarRightIcon size={16} stroke={1.75} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
