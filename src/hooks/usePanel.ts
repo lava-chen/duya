@@ -2,6 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { isPageId, type PageId, type PageTab } from "@/components/layout/panels/registry";
+import { useConversationStore } from "@/stores/conversation-store";
 
 export type { PageId, PageTab } from "@/components/layout/panels/registry";
 
@@ -33,7 +34,8 @@ const MIN_PANEL_WIDTH = 220;
 const MAX_PANEL_WIDTH = 960;
 const DEFAULT_PANEL_WIDTH = 340;
 
-const PANEL_STORAGE_KEY = "duya:panel:v1";
+const PANEL_STORAGE_PREFIX = "duya:panel:v2:";
+const HOME_PANEL_KEY = "__home__";
 
 interface PersistedPanelState {
   tabs: PageTab[];
@@ -42,16 +44,29 @@ interface PersistedPanelState {
   panelView: PanelView;
 }
 
+function emptyPanelState(): PersistedPanelState {
+  return {
+    tabs: [],
+    activeTabId: null,
+    panelOpen: false,
+    panelView: "picker",
+  };
+}
+
+function panelStorageKey(sessionKey: string): string {
+  return `${PANEL_STORAGE_PREFIX}${sessionKey}`;
+}
+
 /**
  * Read previously-persisted panel state. Validates `pageId` values
  * against the live registry and silently drops unknown entries so a
  * stale `localStorage` payload (e.g. after removing a page) cannot
  * crash the provider.
  */
-function loadPersistedState(): PersistedPanelState | null {
+function loadPersistedState(sessionKey: string): PersistedPanelState | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(PANEL_STORAGE_KEY);
+    const raw = window.localStorage.getItem(panelStorageKey(sessionKey));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistedPanelState> | null;
     if (!parsed || !Array.isArray(parsed.tabs)) return null;
@@ -83,10 +98,10 @@ function loadPersistedState(): PersistedPanelState | null {
   }
 }
 
-function savePersistedState(state: PersistedPanelState): void {
+function savePersistedState(sessionKey: string, state: PersistedPanelState): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(panelStorageKey(sessionKey), JSON.stringify(state));
   } catch {
     // Quota / private mode — fail silently, the in-memory state still works.
   }
@@ -111,21 +126,28 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
 }
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
+  const activeThreadId = useConversationStore((s) => s.activeThreadId);
+  const sessionKey = activeThreadId ?? HOME_PANEL_KEY;
+
   // Load persisted state exactly once. `useRef(undefined)` lets us
   // distinguish "haven't tried yet" from "loaded null" so subsequent
   // renders (e.g. React strict mode double-invoke) don't re-read
   // localStorage.
   const initialRef = useRef<PersistedPanelState | null | undefined>(undefined);
   if (initialRef.current === undefined) {
-    initialRef.current = loadPersistedState();
+    initialRef.current = loadPersistedState(sessionKey);
   }
-  const initial = initialRef.current;
+  const initial = initialRef.current ?? emptyPanelState();
 
-  const [panelOpen, setPanelOpen] = useState<boolean>(initial?.panelOpen ?? false);
+  const [panelOpen, setPanelOpen] = useState<boolean>(initial.panelOpen);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
-  const [panelView, setPanelView] = useState<PanelView>(initial?.panelView ?? "picker");
-  const [tabs, setTabs] = useState<PageTab[]>(initial?.tabs ?? []);
-  const [activeTabId, setActiveTabId] = useState<string | null>(initial?.activeTabId ?? null);
+  const [panelView, setPanelView] = useState<PanelView>(initial.panelView);
+  const [tabs, setTabs] = useState<PageTab[]>(initial.tabs);
+  const [activeTabId, setActiveTabId] = useState<string | null>(initial.activeTabId);
+
+  const currentSessionKeyRef = useRef(sessionKey);
+  const panelStateRef = useRef<PersistedPanelState>(initial);
+  panelStateRef.current = { tabs, activeTabId, panelOpen, panelView };
 
   const tabsRef = useRef<PageTab[]>(tabs);
   useEffect(() => {
@@ -136,14 +158,28 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   // `panelWidth` is intentionally excluded — it's a transient UI
   // affordance, not part of the panel "contents".
   useEffect(() => {
-    savePersistedState({ tabs, activeTabId, panelOpen, panelView });
+    savePersistedState(currentSessionKeyRef.current, { tabs, activeTabId, panelOpen, panelView });
   }, [tabs, activeTabId, panelOpen, panelView]);
+
+  useEffect(() => {
+    const previousSessionKey = currentSessionKeyRef.current;
+    if (previousSessionKey === sessionKey) return;
+
+    savePersistedState(previousSessionKey, panelStateRef.current);
+
+    const next = loadPersistedState(sessionKey) ?? emptyPanelState();
+    currentSessionKeyRef.current = sessionKey;
+    setTabs(next.tabs);
+    setActiveTabId(next.activeTabId);
+    setPanelOpen(next.panelOpen);
+    setPanelView(next.panelView);
+  }, [sessionKey]);
 
   const togglePanel = useCallback(() => {
     setPanelOpen((prev) => {
       const next = !prev;
       if (next) {
-        setPanelView(tabsRef.current.length > 0 ? "content" : "picker");
+        setPanelView("content");
       }
       return next;
     });

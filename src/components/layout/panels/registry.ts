@@ -12,6 +12,7 @@ import {
 import { FileTreePanel } from "./FileTreePanel";
 import { SidebarConductorView } from "./SidebarConductorView";
 import { ResearchActivityPanel } from "./ResearchActivityPanel";
+import { TerminalPanel } from "./TerminalPanel";
 
 export type PageId = "files" | "conductor" | "research" | "terminal" | "browser";
 
@@ -61,8 +62,8 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     label: "终端",
     icon: TerminalIcon,
     multiInstance: true,
-    available: false,
-    component: (() => null) as ComponentType<{ tab: PageTab; embedded: boolean }>,
+    available: true,
+    component: TerminalPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   browser: {
     id: "browser",

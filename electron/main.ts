@@ -37,6 +37,7 @@ import { registerPluginHandlers } from './ipc/plugin-handlers';
 import { registerCapabilityManagementHandlers } from './ipc/capability-management-handlers';
 import { registerMCPInventoryHandlers } from './ipc/mcp-inventory-handlers';
 import { registerLiteratureHandlers } from './ipc/literature-handlers';
+import { registerTerminalHandlers } from './ipc/terminal-handlers';
 import { registerImportHandlers } from './import/import-handlers';
 import { getMarketplaceSyncManager } from './plugins/marketplace';
 import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
@@ -207,6 +208,7 @@ if (gotTheLock) {
     // database-init failure branch, so the renderer's
     // `mailbox:list` calls returned "No handler registered".
     registerMailboxHandlers();
+    registerTerminalHandlers();
 
     // ============================================================
     // Step 4.5: Start Agent Server (HTTP+SSE for Agent communication)
