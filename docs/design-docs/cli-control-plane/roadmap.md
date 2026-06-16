@@ -111,8 +111,8 @@ These decisions are binding for all future CLI development. No implementation ma
   | `GET /v1/sessions/:id` (show) | `id / title / createdAt / updatedAt / model / messageCount` |
   | `GET /v1/skills` (list) | `id / name / description / source / enabled` |
   | `GET /v1/skills/:id` (info) | `id / name / description / category / source / enabled / customized / userInvocable / allowedTools / platforms` |
-  | `GET /v1/channels` (list) | `id / platform / name / guild? / type / bound: bool` |
-  | `GET /v1/channels/:id` (info) | `+ duyaSessionId? / sdkSessionId? / workingDirectory? / model?` |
+  | `GET /v1/channels` (list) | `id / platform / name / guild? / type / source: 'directory'\|'binding' / bound: bool / lastActivityAt?` (v1.1.0) |
+  | `GET /v1/channels/:id` (info) | `+ duyaSessionId? / sdkSessionId? / workingDirectory? / model?` (Plan 99) |
   | `GET /v1/platforms` (list) | `platform / enabled / connected / totalMessages / lastConnectedAt? / lastErrorAt? / lastError?` |
   | `GET /v1/platforms/:p/status` (status) | `+ running / streaming / toolProgress / showReasoning` |
   | `GET /v1/crons` (list) | `id / name / description? / status / scheduleKind / scheduleExpr / nextRunAt? / lastRunAt? / lastError?` |
@@ -130,6 +130,15 @@ These decisions are binding for all future CLI development. No implementation ma
 
   **Channel/Platform DTOs redact credentials**: API keys and IM
   platform tokens are never exposed.
+
+  **Channel list v1.1.0** (Plan 108) adds `source` and `lastActivityAt?`
+  to the `GET /v1/channels` row. Both are additive and non-breaking:
+  `source: 'directory' | 'binding'` is required on every row,
+  `lastActivityAt` is a millisecond timestamp from
+  `gateway_user_map.updated_at` when the row is a binding. The
+  merged view keeps the CLI in sync with the Gateway UI, which
+  already surfaces binding rows that have no directory entry
+  (e.g. weixin chats added via the modern pairing flow).
 
 - **No arbitrary internal or sensitive fields** may be added to JSON output.
 

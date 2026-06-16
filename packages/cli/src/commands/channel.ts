@@ -34,7 +34,9 @@ export interface ChannelListItemDTO {
   name: string;
   guild?: string;
   type: string;
+  source: 'directory' | 'binding';
   bound: boolean;
+  lastActivityAt?: number;
 }
 
 export interface ChannelInfoItemDTO extends ChannelListItemDTO {
@@ -70,13 +72,16 @@ function renderListText(channels: ChannelListItemDTO[]): string {
   const idWidth = Math.max(2, ...channels.map((c) => c.id.length));
   const platformWidth = Math.max(8, ...channels.map((c) => c.platform.length));
   const nameWidth = Math.max(4, ...channels.map((c) => c.name.length));
+  const sourceWidth = Math.max(6, ...channels.map((c) => c.source.length));
   const header = [
     'ID'.padEnd(idWidth),
     'PLATFORM'.padEnd(platformWidth),
     'NAME'.padEnd(nameWidth),
+    'SOURCE'.padEnd(sourceWidth),
     'GUILD'.padEnd(0),
     'TYPE'.padEnd(0),
     'BOUND',
+    'LAST ACTIVITY',
   ].join('  ');
   const sep = '-'.repeat(header.length);
   const rows = channels.map((c) =>
@@ -84,9 +89,11 @@ function renderListText(channels: ChannelListItemDTO[]): string {
       c.id.padEnd(idWidth),
       c.platform.padEnd(platformWidth),
       c.name.padEnd(nameWidth),
+      c.source.padEnd(sourceWidth),
       c.guild ?? '-',
       c.type,
       c.bound ? 'yes' : 'no',
+      c.lastActivityAt ? new Date(c.lastActivityAt).toISOString() : '-',
     ].join('  '),
   );
   return [header, sep, ...rows].join('\n');
@@ -99,8 +106,12 @@ function renderInfoText(c: ChannelInfoItemDTO): string {
     `  name:       ${c.name}`,
     `  guild:      ${c.guild ?? '-'}`,
     `  type:       ${c.type}`,
+    `  source:     ${c.source}`,
     `  bound:      ${c.bound ? 'yes' : 'no'}`,
   ];
+  if (c.lastActivityAt) {
+    lines.push(`  lastActivityAt: ${new Date(c.lastActivityAt).toISOString()}`);
+  }
   if (c.bound) {
     lines.push(`  duyaSession: ${c.duyaSessionId ?? '-'}`);
     if (c.sdkSessionId) lines.push(`  sdkSession:  ${c.sdkSessionId}`);
