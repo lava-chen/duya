@@ -68,6 +68,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [200-cli-surface-expansion](./active/200-cli-surface-expansion.md) | CLI Surface Expansion — `duya update / backup / security` (openclaw-comparison) + polish existing (status / plugin / config / session / message / mcp / skill / channel / cron / gateway) | P1 | All phases ✅ |
 | [201-cli-packaged-smoke-fixes](./active/201-cli-packaged-smoke-fixes.md) | CLI Packaged Smoke-Test Fixes — `adaptIdFirst` for `(id,format)` info commands, auto-inject `--format`, auto-dispatch `default` sub, add missing `channel_directory` table, drop `setup` from control plane | P0 | Phases 1–5 ✅, Phase 6 ⏳ (verify on next packaged build) |
 | [107-cron-cli-bugfix](./active/107-cron-cli-bugfix.md) | Cron CLI Bugfix — `info` / `message show` DTO wrap, `delete` 500 ReferenceError, schedule field-name UX, CI does not typecheck `electron/` | P0 | Phase 1 ✅, Phase 2 📋 |
+| [108-cli-channel-list-and-help](./active/108-cli-channel-list-and-help.md) | CLI Channel list / channel --help bugfix — merge `channel_bindings` into `duya channel list`; wire `--help` / `help` for every descriptor-driven top-level command | P0 | Planning |
 | [101-plugin-system-cleanup](./completed/101-plugin-system-cleanup.md) | Plugin System Cleanup & Runtime Wiring — 死代码清理 (`runtimeFactories` / `plugins/literature` / `PermissionService` override) + 接入路径修正 + capabilityCounts 派生 | P1 | Complete |
 
 ### Infrastructure & Architecture Plans

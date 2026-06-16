@@ -7,11 +7,11 @@
  * responsibility (see `electron/gateway/message-bus.ts`). This
  * module is a thin HTTP adapter.
  *
- * Stable JSON contract (Plan 99 P3):
+ * Stable JSON contract (Plan 99 P3, extended in Plan 108):
  *   GET /v1/channels?platform=…
- *     { channels: [{ id, platform, name, guild?, type, bound }] }
+ *     { channels: [{ id, platform, name, guild?, type, source, bound, lastActivityAt? }] }
  *   GET /v1/channels/:id
- *     { id, platform, name, guild?, type, bound, duyaSessionId?, sdkSessionId?, workingDirectory?, model? }
+ *     { id, platform, name, guild?, type, source, bound, duyaSessionId?, sdkSessionId?, workingDirectory?, model?, lastActivityAt? }
  *   GET /v1/platforms
  *     { platforms: [{ platform, enabled, connected, totalMessages, lastConnectedAt?, lastErrorAt?, lastError? }] }
  *   GET /v1/platforms/:p/status
@@ -23,6 +23,12 @@
  * with the gateway's current session states. We do NOT expose
  * raw session ids, model strings, or working directories unless
  * the channel is currently bound (per Plan 98 §"channel" DTO freeze).
+ *
+ * Plan 108: `source` is `'directory'` for an entry pushed by adapter
+ * discovery and `'binding'` for a row synthesized from
+ * `gateway_user_map` (the modern session↔chat relationship). This
+ * keeps the CLI in sync with the Gateway UI, which already shows
+ * binding rows when no directory entry exists.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -30,6 +36,7 @@ import {
   getChannelDirectory,
   getChannelStatus,
   getAllChannelStatuses,
+  listChannelDirectoryWithBindings,
   type ChannelEntry,
   type ChannelStatus,
 } from '../../gateway/channel-directory';
@@ -59,7 +66,9 @@ interface ChannelListItem {
   name: string;
   guild?: string;
   type: string;
+  source: 'directory' | 'binding';
   bound: boolean;
+  lastActivityAt?: number;
 }
 
 interface ChannelInfoItem extends ChannelListItem {
@@ -101,26 +110,42 @@ function findBoundSessionId(channelId: string): string | undefined {
   return undefined;
 }
 
-function toListItem(entry: ChannelEntry): ChannelListItem {
+function toListItem(entry: ChannelEntry & {
+  source: 'directory' | 'binding';
+  boundSessionId?: string;
+  lastActivityAt?: number;
+}): ChannelListItem {
+  const bound =
+    entry.boundSessionId !== undefined ||
+    findBoundSessionId(`${entry.platform}:${entry.id}`) !== undefined;
   return {
     id: entry.id,
     platform: entry.platform,
     name: entry.name,
     ...(entry.guild ? { guild: entry.guild } : {}),
     type: entry.type,
-    bound: findBoundSessionId(entry.id) !== undefined,
+    source: entry.source,
+    bound,
+    ...(entry.lastActivityAt !== undefined ? { lastActivityAt: entry.lastActivityAt } : {}),
   };
 }
 
-function toInfoItem(entry: ChannelEntry): ChannelInfoItem {
-  const duyaSessionId = findBoundSessionId(entry.id);
+function toInfoItem(entry: ChannelEntry & {
+  source: 'directory' | 'binding';
+  boundSessionId?: string;
+  lastActivityAt?: number;
+}): ChannelInfoItem {
+  const liveSessionId = findBoundSessionId(`${entry.platform}:${entry.id}`);
+  const duyaSessionId = entry.boundSessionId ?? liveSessionId;
   const list: ChannelListItem = {
     id: entry.id,
     platform: entry.platform,
     name: entry.name,
     ...(entry.guild ? { guild: entry.guild } : {}),
     type: entry.type,
+    source: entry.source,
     bound: duyaSessionId !== undefined,
+    ...(entry.lastActivityAt !== undefined ? { lastActivityAt: entry.lastActivityAt } : {}),
   };
   if (!duyaSessionId) return list;
   // Only expose session details when the channel is actually bound.
@@ -181,7 +206,7 @@ function toPlatformStatusItem(platform: string, status: ChannelStatus | undefine
 function handleListChannels(_req: IncomingMessage, res: ServerResponse, platform: string | undefined): void {
   void _req;
   try {
-    const entries = getChannelDirectory(platform);
+    const entries = listChannelDirectoryWithBindings(platform);
     const channels: ChannelListItem[] = entries.map(toListItem);
     sendJson(res, 200, { channels });
   } catch (err) {
@@ -197,9 +222,13 @@ function handleGetChannel(_req: IncomingMessage, res: ServerResponse, id: string
     return;
   }
   try {
-    // We don't know the platform up-front, so scan every entry.
-    const entries = getChannelDirectory();
-    const match = entries.find((c) => c.id === id);
+    // Plan 108: the merged directory+bindings list covers every chat
+    // the user has ever talked to, so the id can match either a
+    // directory row id or a binding chat_id.
+    const entries = listChannelDirectoryWithBindings();
+    const match = entries.find(
+      (c) => c.id === id || `${c.platform}:${c.id}` === id,
+    );
     if (!match) {
       sendError(res, 404, 'channel_not_found', `Channel not found: ${id}`);
       return;

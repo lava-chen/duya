@@ -9,6 +9,12 @@ export interface ChannelEntry {
   type: string;
 }
 
+export interface ChannelEntryWithBinding extends ChannelEntry {
+  source: 'directory' | 'binding';
+  boundSessionId?: string;
+  lastActivityAt?: number;
+}
+
 export interface ChannelStatus {
   platform: string;
   running: boolean;
@@ -68,6 +74,85 @@ export function getChannelDirectory(platform?: string): ChannelEntry[] {
   return db.prepare(
     'SELECT id, platform, name, guild, type FROM channel_directory ORDER BY platform, guild, name'
   ).all() as ChannelEntry[];
+}
+
+interface GatewayUserMapRow {
+  id: string;
+  platform: string;
+  platform_user_id: string;
+  platform_chat_id: string;
+  session_id: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * List every channel the user has interacted with, joining
+ * `channel_directory` (per-platform inventory pushed by adapters) with
+ * `gateway_user_map` (the modern path: platform + chat_id -> duya
+ * session id). Plan 108 — the CLI control plane's `duya channel list`
+ * used to read only the directory, which is empty until an adapter
+ * runs discovery. The merge keeps the directory as the source of
+ * truth for chat name + guild when present, and adds binding-only
+ * rows for chats the user has talked to without adapter discovery
+ * (weixin, gateway-created DM sessions, etc.).
+ */
+export function listChannelDirectoryWithBindings(
+  platform?: string,
+): ChannelEntryWithBinding[] {
+  const db = getDatabase();
+  if (!db) return [];
+
+  const directoryRows = getChannelDirectory(platform);
+  const bindingQuery = platform
+    ? db.prepare(
+        'SELECT id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at FROM gateway_user_map WHERE platform = ?',
+      ).all(platform)
+    : db.prepare(
+        'SELECT id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at FROM gateway_user_map',
+      ).all();
+  const bindingRows = bindingQuery as GatewayUserMapRow[];
+
+  const bindingsByKey = new Map<string, GatewayUserMapRow>();
+  for (const row of bindingRows) {
+    bindingsByKey.set(`${row.platform}:${row.platform_chat_id}`, row);
+  }
+
+  const out: ChannelEntryWithBinding[] = [];
+  const seenIds = new Set<string>();
+
+  for (const entry of directoryRows) {
+    const key = `${entry.platform}:${entry.id}`;
+    const binding = bindingsByKey.get(key);
+    out.push({
+      ...entry,
+      source: 'directory',
+      ...(binding ? { boundSessionId: binding.session_id, lastActivityAt: binding.updated_at } : {}),
+    });
+    seenIds.add(key);
+  }
+
+  for (const binding of bindingRows) {
+    const key = `${binding.platform}:${binding.platform_chat_id}`;
+    if (seenIds.has(key)) continue;
+    out.push({
+      id: binding.platform_chat_id,
+      platform: binding.platform,
+      name: binding.platform_chat_id,
+      type: 'dm',
+      source: 'binding',
+      boundSessionId: binding.session_id,
+      lastActivityAt: binding.updated_at,
+    });
+  }
+
+  out.sort((a, b) => {
+    if (a.platform !== b.platform) return a.platform.localeCompare(b.platform);
+    if ((a.guild ?? '') !== (b.guild ?? '')) return (a.guild ?? '').localeCompare(b.guild ?? '');
+    return a.name.localeCompare(b.name);
+  });
+
+  return out;
 }
 
 export function resolveChannelName(platform: string, name: string): string | null {
