@@ -335,7 +335,7 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
     return (
       <div
         ref={innerRef}
-        className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none min-h-[40px] max-h-[150px] overflow-y-auto empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground"
+        className="w-full bg-transparent px-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none min-h-[40px] max-h-[150px] overflow-y-auto empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground"
         contentEditable={!disabled}
         suppressContentEditableWarning
         data-placeholder={placeholder || ''}
