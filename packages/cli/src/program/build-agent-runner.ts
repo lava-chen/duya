@@ -25,6 +25,7 @@ import {
   listCommandNames,
   listSubcommandNames,
   resolveSubcommand,
+  type CliCommandDescriptor,
   type CliSubcommandContext,
   type ExitCode,
 } from './registry.js';
@@ -119,6 +120,24 @@ export interface CliRunResult {
  */
 export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult> {
   return async (inv) => {
+    // Plan 108 — help is a virtual subcommand that lives in the
+    // agent tool's dispatcher (not in the descriptor registry) so
+    // `duya <command> --help` / `duya <command> help` work the same
+    // way they do in the Commander-driven CLI bundle. Without this
+    // branch the runner would fall through to "unknown subcommand"
+    // and return exit 64. We handle it before the id-required
+    // preflight so `duya help` (no command) is also valid.
+    if (inv.subcommand === 'help' || inv.command === 'help') {
+      return {
+        exitCode: 0,
+        stdout: renderHelp(
+          inv.command === 'help' ? undefined : inv.command,
+          parseFormat(inv.format),
+        ),
+        stderr: '',
+      };
+    }
+
     // Pre-flight check: subcommands that require an <id> argument
     // must return exit code 64 with a friendly hint when the id is
     // missing. This mirrors the legacy `DuyaCliTool/runner.ts`
@@ -269,4 +288,98 @@ function buildUnknownError(inv: CliInvocation): string {
     }
   }
   return `unknown command: ${inv.command} (allowed: ${listCommandNames(CLI_DESCRIPTORS)})`;
+}
+
+/**
+ * Render help text for either a specific top-level command or the
+ * full command list. Plan 108 — the agent tool needs the same
+ * "describe the subcommands I can use" affordance the external
+ * Commander CLI auto-provides via `--help` / `help [command]`. We
+ * don't go through Commander (this path never touches argv parsing),
+ * so we synthesize the text from the descriptor registry.
+ *
+ * `format: 'json'` returns a structured list so the agent can
+ * consume it programmatically. `format: 'text'` returns the
+ * human-readable table.
+ */
+export function renderHelp(
+  commandName: string | undefined,
+  format: OutputFormat = 'text',
+): string {
+  if (!commandName) {
+    if (format === 'json') {
+      return JSON.stringify(
+        {
+          commands: CLI_DESCRIPTORS.map((d) => ({
+            name: d.name,
+            description: d.description,
+            subcommands: d.subcommands ? Object.entries(d.subcommands).map(([name, sub]) => ({
+              name,
+              description: sub.description,
+            })) : [],
+          })),
+        },
+        null,
+        2,
+      );
+    }
+    return renderTopLevelHelp(CLI_DESCRIPTORS);
+  }
+
+  const cmd = CLI_DESCRIPTORS.find((d) => d.name === commandName);
+  if (!cmd) {
+    return `unknown command: ${commandName} (allowed: ${listCommandNames(CLI_DESCRIPTORS)})`;
+  }
+  if (format === 'json') {
+    return JSON.stringify(
+      {
+        command: cmd.name,
+        description: cmd.description,
+        subcommands: cmd.subcommands ? Object.entries(cmd.subcommands).map(([name, sub]) => ({
+          name,
+          description: sub.description,
+        })) : [],
+      },
+      null,
+      2,
+    );
+  }
+  return renderCommandHelp(cmd);
+}
+
+function renderTopLevelHelp(descriptors: readonly CliCommandDescriptor[]): string {
+  const nameWidth = Math.max(8, ...descriptors.map((d) => d.name.length));
+  const lines: string[] = [
+    'duya — DUYA desktop control plane',
+    '',
+    'Usage: duya <command> [subcommand] [options]',
+    '',
+    'Commands:',
+  ];
+  for (const d of descriptors) {
+    lines.push(`  ${d.name.padEnd(nameWidth)}  ${d.description}`);
+  }
+  lines.push('');
+  lines.push('Run `duya <command> help` for subcommand details.');
+  return lines.join('\n');
+}
+
+function renderCommandHelp(cmd: CliCommandDescriptor): string {
+  const lines: string[] = [
+    `duya ${cmd.name} — ${cmd.description}`,
+    '',
+    `Usage: duya ${cmd.name} [subcommand] [options]`,
+  ];
+  if (cmd.subcommands && Object.keys(cmd.subcommands).length > 0) {
+    const nameWidth = Math.max(
+      6,
+      ...Object.entries(cmd.subcommands).map(([n]) => n.length),
+    );
+    lines.push('', 'Subcommands:');
+    for (const [name, sub] of Object.entries(cmd.subcommands)) {
+      lines.push(`  ${name.padEnd(nameWidth)}  ${sub.description}`);
+    }
+  }
+  lines.push('', 'Run `duya <command> --help` for option details.');
+  return lines.join('\n');
 }
