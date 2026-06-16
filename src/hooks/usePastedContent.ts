@@ -73,7 +73,7 @@ export function usePastedContent() {
    * Handle paste event from textarea
    * Returns the pasted content if it was treated as an attachment, null otherwise
    */
-  const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>): PastedContent | null => {
+  const handlePaste = useCallback((event: React.ClipboardEvent<HTMLElement>): PastedContent | null => {
     const pastedText = event.clipboardData.getData('text');
 
     // Only treat as pasted content if it's long enough
