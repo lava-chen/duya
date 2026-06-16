@@ -119,7 +119,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       enterSettings,
       exitSettings,
     } = useConversationStore();
-    const { setActiveTab } = usePanel();
+    const { openOrActivatePage } = usePanel();
     const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
     useEffect(() => {
@@ -353,7 +353,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             const handleNavClick = () => {
               setCurrentView(item.view);
               if (item.view === 'conductor') {
-                setActiveTab('canvas');
+                openOrActivatePage('conductor');
               }
             };
 

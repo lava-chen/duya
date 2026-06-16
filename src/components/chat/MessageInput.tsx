@@ -34,12 +34,36 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { AttachmentMenu } from './AttachmentMenu';
 import { ContextUsageRing } from './ContextUsageRing';
+import { RichTextInput, terminalReferenceToken } from './RichTextInput';
 import type { Message } from '@/types/message';
 
 interface FileChip {
   id: string;
   name: string;
   path: string;
+}
+
+interface TerminalReferenceChip {
+  id: string;
+  shell: string;
+  cwd: string;
+  text: string;
+  createdAt: number;
+}
+
+function getEditableCursorPosition(element: HTMLElement | null, fallback: number): number {
+  if (!element) return fallback;
+  if ('selectionStart' in element && typeof element.selectionStart === 'number') {
+    return element.selectionStart;
+  }
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return fallback;
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.endContainer)) return fallback;
+  const preRange = document.createRange();
+  preRange.selectNodeContents(element);
+  preRange.setEnd(range.endContainer, range.endOffset);
+  return preRange.toString().length;
 }
 
 interface MessageInputProps {
@@ -151,7 +175,7 @@ export function MessageInput({
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   // Map model ID (with prefix) to provider ID
   const [modelProviderMap, setModelProviderMap] = useState<Map<string, string>>(new Map());
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasFetchedModels = useRef(false);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -165,6 +189,7 @@ export function MessageInput({
 
   // File chips from file tree
   const [fileChips, setFileChips] = useState<FileChip[]>([]);
+  const [terminalReferenceChips, setTerminalReferenceChips] = useState<TerminalReferenceChip[]>([]);
 
   // Badge state (for non-immediate commands like /compact)
   const [badge, setBadge] = useState<CommandBadge | null>(null);
@@ -271,8 +296,56 @@ export function MessageInput({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const handleTerminalQuote = (e: Event) => {
+      const customEvent = e as CustomEvent<{
+        shell: string;
+        cwd: string;
+        text: string;
+      }>;
+      const detail = customEvent.detail;
+      if (!detail?.text?.trim()) return;
+
+      const text = detail.text.trim();
+      const id = crypto.randomUUID();
+      const token = terminalReferenceToken(id);
+      const cursorPos = getEditableCursorPosition(textareaRef.current, inputValue.length);
+      setTerminalReferenceChips((prev) => [
+        ...prev,
+        {
+          id,
+          shell: detail.shell,
+          cwd: detail.cwd,
+          text,
+          createdAt: Date.now(),
+        },
+      ]);
+      setInputValue((prev) => `${prev.slice(0, cursorPos)}${token}${prev.slice(cursorPos)}`);
+
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustTextareaHeight();
+      });
+    };
+
+    window.addEventListener("terminal-add-to-input", handleTerminalQuote as EventListener);
+    return () => {
+      window.removeEventListener("terminal-add-to-input", handleTerminalQuote as EventListener);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputValue.length]);
+
   const removeFileChip = useCallback((id: string) => {
     setFileChips((prev) => prev.filter((c) => c.id !== id));
+    requestAnimationFrame(() => {
+      adjustTextareaHeight();
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const removeTerminalReferenceChip = useCallback((id: string) => {
+    setTerminalReferenceChips((prev) => prev.filter((chip) => chip.id !== id));
+    setInputValue((prev) => prev.split(terminalReferenceToken(id)).join(''));
     requestAnimationFrame(() => {
       adjustTextareaHeight();
     });
@@ -282,14 +355,28 @@ export function MessageInput({
   // Build content with file chip paths inserted
   // Append file paths at the end of the message
   const buildContentWithChips = useCallback((textValue: string): string => {
-    if (fileChips.length === 0) return textValue;
-    
-    const filePaths = fileChips.map((chip) => chip.path).join('\n');
-    if (!textValue.trim()) {
-      return filePaths;
+    const additions: string[] = [];
+    let textWithReferences = textValue;
+
+    if (fileChips.length > 0) {
+      additions.push(fileChips.map((chip) => chip.path).join('\n'));
     }
-    return `${textValue}\n\n${filePaths}`;
-  }, [fileChips]);
+
+    for (const chip of terminalReferenceChips) {
+      const block = [
+        `Terminal reference (${chip.shell}, ${chip.cwd}):`,
+        "```text",
+        chip.text,
+        "```",
+      ].join("\n");
+      textWithReferences = textWithReferences.split(terminalReferenceToken(chip.id)).join(block);
+    }
+
+    if (additions.length === 0) return textWithReferences;
+    const suffix = additions.join("\n\n");
+    if (!textWithReferences.trim()) return suffix;
+    return `${textWithReferences}\n\n${suffix}`;
+  }, [fileChips, terminalReferenceChips]);
 
   // Sync model with prop
   // Also clean up double-quoted model names (legacy data cleanup)
@@ -598,8 +685,7 @@ export function MessageInput({
 
   // Handle input change
   const handleInputChange = useCallback(
-    async (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const val = e.target.value;
+    async (val: string) => {
       setInputValue(val);
       prePasteValueRef.current = val;
       adjustTextareaHeight();
@@ -609,7 +695,7 @@ export function MessageInput({
   );
 
   const handlePasteEvent = useCallback(
-    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    async (e: React.ClipboardEvent<HTMLDivElement>) => {
       // First check for image files in clipboard
       const items = e.clipboardData?.items;
       if (items) {
@@ -645,7 +731,11 @@ export function MessageInput({
       const pastedContent = handlePaste(e);
       if (pastedContent) {
         setTimeout(() => {
-          if (textareaRef.current && textareaRef.current.value !== prePasteValue) {
+          if (
+            textareaRef.current &&
+            'value' in textareaRef.current &&
+            textareaRef.current.value !== prePasteValue
+          ) {
             setInputValue(prePasteValue);
           }
         }, 0);
@@ -707,7 +797,7 @@ export function MessageInput({
       const trimmedValue = inputValue.trim();
 
       // Check if we have any content to send (input, pasted content, files, file chips, or parsed docs)
-      const hasContent = trimmedValue || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0;
+      const hasContent = trimmedValue || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0 || terminalReferenceChips.length > 0;
       if (!hasContent) return;
       if (disabled || isStreaming) return;
 
@@ -750,6 +840,7 @@ export function MessageInput({
         clearDraft();
         setInputValue('');
         setFileChips([]);
+        setTerminalReferenceChips([]);
         clearPastedContents();
         clearFiles();
         onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode);
@@ -769,6 +860,7 @@ export function MessageInput({
           clearDraft();
           setInputValue('');
           setFileChips([]);
+          setTerminalReferenceChips([]);
           clearPastedContents();
           return;
         }
@@ -781,6 +873,7 @@ export function MessageInput({
         clearDraft();
         setInputValue('');
         setFileChips([]);
+        setTerminalReferenceChips([]);
         clearPastedContents();
         clearFiles();
         return;
@@ -800,17 +893,18 @@ export function MessageInput({
       setSendMode(undefined);
       setInputValue('');
       setFileChips([]);
+      setTerminalReferenceChips([]);
       clearPastedContents();
       clearFiles();
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
+    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, terminalReferenceChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
   );
 
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    (e: KeyboardEvent<HTMLDivElement>) => {
       // When popover is open, handle navigation
       if (popoverMode && popoverMode !== 'cli' && filteredItems.length > 0) {
         if (e.key === 'ArrowDown') {
@@ -840,13 +934,13 @@ export function MessageInput({
       // Submit on Enter (without shift)
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        const hasContent = inputValue.trim() || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0;
+        const hasContent = inputValue.trim() || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0 || terminalReferenceChips.length > 0;
         if (!isStreaming && hasContent) {
           handleSubmit({ preventDefault: () => {} } as FormEvent);
         }
       }
     },
-    [isStreaming, inputValue, hasPastedContents, attachedFiles, fileChips, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
+    [isStreaming, inputValue, hasPastedContents, attachedFiles, fileChips, terminalReferenceChips, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
   );
 
   const handleStop = useCallback(() => {
@@ -968,17 +1062,44 @@ export function MessageInput({
             </div>
           )}
 
+          {terminalReferenceChips.length > 0 && (
+            <div className="terminal-reference-chip-list">
+              {terminalReferenceChips.map((chip) => {
+                const firstLine = chip.text.split(/\r?\n/).find((line) => line.trim())?.trim() || "Terminal selection";
+                const lineCount = chip.text.split(/\r?\n/).length;
+                return (
+                  <div
+                    key={chip.id}
+                    className="terminal-reference-chip"
+                    title={`${chip.shell} - ${chip.cwd}\n${chip.text}`}
+                  >
+                    <button
+                      type="button"
+                      className="terminal-reference-chip-remove"
+                      onClick={() => removeTerminalReferenceChip(chip.id)}
+                      aria-label="Remove terminal reference"
+                    >
+                      <XIcon size={10} />
+                    </button>
+                    <span className="terminal-reference-chip-label">{firstLine}</span>
+                    <span className="terminal-reference-chip-meta">{lineCount}行</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* Textarea */}
-          <textarea
+          <RichTextInput
             ref={textareaRef}
-            className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none min-h-[48px] max-h-[150px] py-2 px-3"
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePasteEvent}
             placeholder={badge ? t('messageInput.addDetails') : cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
             disabled={disabled}
-            rows={1}
+            terminalReferenceChips={terminalReferenceChips}
+            onRemoveTerminalReferenceChip={removeTerminalReferenceChip}
           />
 
           {/* Command Badge */}
@@ -1037,14 +1158,11 @@ export function MessageInput({
                   setInputValue((prev) => {
                     const textarea = textareaRef.current;
                     if (textarea) {
-                      const cursorPos = textarea.selectionStart;
+                      const cursorPos = getEditableCursorPosition(textarea, prev.length);
                       const before = prev.slice(0, cursorPos);
                       const after = prev.slice(cursorPos);
                       const newValue = before + skillCommand + after;
-                      // Set cursor position after the inserted skill
                       setTimeout(() => {
-                        textarea.selectionStart = cursorPos + skillCommand.length;
-                        textarea.selectionEnd = cursorPos + skillCommand.length;
                         textarea.focus();
                       }, 0);
                       return newValue;
@@ -1149,7 +1267,7 @@ export function MessageInput({
               ) : (
                 <button
                   type="submit"
-                  disabled={disabled || (!inputValue.trim() && !hasPastedContents && attachedFiles.length === 0 && fileChips.length === 0) || isStreaming}
+                  disabled={disabled || (!inputValue.trim() && !hasPastedContents && attachedFiles.length === 0 && fileChips.length === 0 && terminalReferenceChips.length === 0) || isStreaming}
                   className="w-8 h-8 rounded-full text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-colors ml-1"
                   style={{ backgroundColor: 'var(--send-btn)' }}
                   onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--send-btn-hover)'; }}

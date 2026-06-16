@@ -5,10 +5,11 @@ import { useCallback, useRef, useEffect } from "react";
 interface ResizeHandleProps {
   side: "left" | "right";
   onResize: (delta: number) => void;
+  onResizeStart?: () => void;
   onResizeEnd?: () => void;
 }
 
-export function ResizeHandle({ side, onResize, onResizeEnd }: ResizeHandleProps) {
+export function ResizeHandle({ side, onResize, onResizeStart, onResizeEnd }: ResizeHandleProps) {
   const isDragging = useRef(false);
   const startXRef = useRef(0);
 
@@ -17,10 +18,11 @@ export function ResizeHandle({ side, onResize, onResizeEnd }: ResizeHandleProps)
       e.preventDefault();
       isDragging.current = true;
       startXRef.current = e.clientX;
+      onResizeStart?.();
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     },
-    []
+    [onResizeStart]
   );
 
   useEffect(() => {

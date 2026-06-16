@@ -108,6 +108,7 @@ import {
   IconCode,
   IconMessageCircle,
   IconRobot,
+  IconLayoutSidebarRight,
 } from "@tabler/icons-react";
 
 // Re-export all icons
@@ -236,6 +237,9 @@ export const DocumentTextIcon = FileTextIcon;
 
 // ClockIcon is an alias for ClockCounterClockwiseIcon
 export const ClockIcon = ClockCounterClockwiseIcon;
+
+// SidebarRightIcon is an alias for IconLayoutSidebarRight (tabler)
+export const SidebarRightIcon = IconLayoutSidebarRight;
 
 // TelescopeIcon is not shipped in @phosphor-icons/core, so we ship a small
 // inline SVG instead. Shape: a tilted telescope tube on a tripod stand.

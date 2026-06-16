@@ -14,6 +14,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase } from '@/lib/stream-session-manager';
 import { Info, CaretDown } from '@phosphor-icons/react';
 import type { PermissionMode } from './PermissionModeSelector';
+import { ChatHeader } from './ChatHeader';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
 import { getThreadIPC, updateThreadIPC, listThreadsByParentIdIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
 import { useSettings } from '@/hooks/useSettings';
@@ -149,6 +150,11 @@ export function ChatView({
     }
     return null;
   }, [storeThreads, sessionId]);
+
+  const activeThread = useMemo(
+    () => storeThreads.find((t) => t.id === sessionId) || null,
+    [storeThreads, sessionId]
+  );
 
   const handleSelectProject = useCallback((project: { workingDirectory: string; projectName: string }) => {
     setThreadWorkingDirectory(sessionId, project.workingDirectory, project.projectName);
@@ -539,6 +545,8 @@ export function ChatView({
 
   return (
     <div className="chat-view flex flex-col flex-1 min-h-0 relative">
+      {activeThread && <ChatHeader thread={activeThread} />}
+
       {/* Back to parent button when viewing a sub-agent */}
       {(() => {
         const { parentSessionId, goToParentSession, threads } = useConversationStore.getState();

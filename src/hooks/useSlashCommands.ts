@@ -37,8 +37,58 @@ export interface UseSlashCommandsReturn {
   handleInsertSlash: () => void;
 }
 
+type SlashInputElement = HTMLTextAreaElement | HTMLDivElement;
+
+function getCursorPosition(element: SlashInputElement): number {
+  if ('selectionStart' in element) {
+    return element.selectionStart;
+  }
+
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return element.textContent?.length ?? 0;
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.endContainer)) return element.textContent?.length ?? 0;
+
+  const preRange = document.createRange();
+  preRange.selectNodeContents(element);
+  preRange.setEnd(range.endContainer, range.endOffset);
+  return preRange.toString().length;
+}
+
+function setCursorPosition(element: SlashInputElement, position: number): void {
+  if ('selectionStart' in element) {
+    element.selectionStart = position;
+    element.selectionEnd = position;
+    return;
+  }
+
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let remaining = position;
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const length = node.textContent?.length ?? 0;
+    if (remaining <= length) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return;
+    }
+    remaining -= length;
+  }
+
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
 export function useSlashCommands(opts: {
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  textareaRef: React.RefObject<SlashInputElement | null>;
   inputValue: string;
   setInputValue: (value: string) => void;
   popoverMode: PopoverMode;
@@ -165,7 +215,7 @@ export function useSlashCommands(opts: {
       const textarea = textareaRef.current;
       if (!textarea) return;
 
-      const cursorPos = textarea.selectionStart;
+      const cursorPos = getCursorPosition(textarea);
       const trigger = detectPopoverTrigger(val, cursorPos);
 
       if (trigger) {
@@ -193,16 +243,14 @@ export function useSlashCommands(opts: {
   const handleInsertSlash = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    const cursorPos = textarea.selectionStart;
+    const cursorPos = getCursorPosition(textarea);
     const before = inputValue.slice(0, cursorPos);
     const after = inputValue.slice(cursorPos);
     const newValue = before + '/' + after;
     const newCursorPos = cursorPos + 1;
     setInputValue(newValue);
-    textarea.value = newValue;
-    textarea.selectionStart = newCursorPos;
-    textarea.selectionEnd = newCursorPos;
     textarea.focus();
+    requestAnimationFrame(() => setCursorPosition(textarea, newCursorPos));
     handleInputChange(newValue);
   }, [inputValue, handleInputChange, textareaRef, setInputValue]);
 
