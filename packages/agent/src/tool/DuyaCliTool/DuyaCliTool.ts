@@ -57,11 +57,15 @@ const COMMANDS: readonly CliCommandPath[] = CLI_DESCRIPTORS.map((d) => d.name);
 
 /**
  * Subcommand map: `command -> [allowed subcommand names]`. Auto-derived.
+ * Plan 108 — `help` is a virtual subcommand handled by the runner's
+ * help branch, so we expose it on every command that has subcommands
+ * (and also at the top level via the `duya help` argv form) instead
+ * of expanding the frozen `CliCommandPath` enum.
  */
 const SUBCOMMANDS: Partial<Record<CliCommandPath, readonly string[]>> = Object.fromEntries(
   CLI_DESCRIPTORS.filter((d) => d.subcommands).map((d) => [
     d.name,
-    Object.keys(d.subcommands!),
+    [...Object.keys(d.subcommands!), 'help'],
   ]),
 );
 
@@ -146,6 +150,15 @@ function parseArgv(argv: string[]): CliInvocation {
   const out: CliInvocation = { command: '', extraArgs: [] };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
+    // Plan 108 — `--help` / `-h` is the standard "show help" flag.
+    // Surface it to the runner as `subcommand: 'help'` so the
+    // runner's help branch (which prints the subcommand table)
+    // handles it uniformly with the structured path. Without this,
+    // the unknown-flag branch below would silently swallow `--help`.
+    if (tok === '--help' || tok === '-h') {
+      out.subcommand = 'help';
+      continue;
+    }
     if (tok === '--format' && i + 1 < argv.length) {
       out.format = argv[++i];
       continue;
