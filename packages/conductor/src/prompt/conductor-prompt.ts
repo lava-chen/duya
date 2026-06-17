@@ -1,8 +1,15 @@
 /**
- * @deprecated Placeholder. Real profile moved in Phase 3.
+ * Conductor Agent Prompt Profile Configuration
+ * Standalone prompt profile for conductor agent
  */
 
-export const CONDUCTOR_PROMPT_PROFILE = {
+import type { PromptProfile } from '@duya/agent/prompts/modes/types';
+
+/**
+ * Conductor-specific prompt profile
+ * Uses full base with conductor-specific overrides
+ */
+export const CONDUCTOR_PROMPT_PROFILE: PromptProfile = {
   base: 'full',
   overrides: {
     disableSections: [
@@ -15,4 +22,4 @@ export const CONDUCTOR_PROMPT_PROFILE = {
       'visionGuidelines',
     ],
   },
-} as const;
+};

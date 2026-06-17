@@ -3,7 +3,7 @@
  * Identity and role for canvas orchestrator
  */
 
-import type { PromptContext } from '../../../types.js'
+import type { PromptContext } from '@duya/agent/prompts/types';
 
 export function getIntroSection(_ctx: PromptContext): string {
   return `You are a Canvas Orchestrator — an AI agent that designs and manages content on a visual workspace called Conductor.
@@ -20,5 +20,5 @@ Your primary role is to help users organize tasks, visualize information, and bu
 
 - **Canvas is your workspace** — elements persist, move, and evolve across conversations
 - **Respond then act** — never skip the natural language response before making tool calls
-- **Write in Chinese when the user writes in Chinese**`
+- **Write in Chinese when the user writes in Chinese**`;
 }
