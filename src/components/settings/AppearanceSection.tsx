@@ -57,13 +57,22 @@ export function AppearanceSection() {
     const root = document.documentElement;
     root.classList.remove("light", "dark");
 
+    let resolvedTheme: "light" | "dark";
     if (newTheme === "system") {
       const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      root.classList.add(systemPrefersDark ? "dark" : "light");
-      root.setAttribute("data-theme", systemPrefersDark ? "dark" : "light");
+      resolvedTheme = systemPrefersDark ? "dark" : "light";
+      root.classList.add(resolvedTheme);
+      root.setAttribute("data-theme", resolvedTheme);
     } else {
+      resolvedTheme = newTheme;
       root.classList.add(newTheme);
       root.setAttribute("data-theme", newTheme);
+    }
+
+    try {
+      window.localStorage.setItem("duya-theme", resolvedTheme);
+    } catch {
+      // localStorage may be unavailable; the boot script will fall back to system preference.
     }
 
     await save({ theme: newTheme });
