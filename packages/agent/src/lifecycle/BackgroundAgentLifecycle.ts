@@ -44,6 +44,14 @@ export class BackgroundAgentLifecycle {
       subscribers: new Set(),
     }
     this.tasks.set(input.taskId, record)
+    logger.info('[SubAgent] lifecycle registered', {
+      taskId: input.taskId,
+      parentSessionId: input.parentSessionId,
+      subAgentSessionId: input.subAgentSessionId,
+      agentType: input.agentType,
+      agentName: input.agentName,
+      outputFilePath: record.outputFilePath,
+    }, 'SubAgent')
     return record
   }
 
@@ -53,9 +61,17 @@ export class BackgroundAgentLifecycle {
     if (!this.isLegalTransition(r.status, next)) {
       throw new Error(`illegal transition ${r.status} -> ${next} for ${taskId}`)
     }
+    const previousStatus = r.status
     r.status = next
     r.completedAt = Date.now()
     mutate(r)
+    logger.info('[SubAgent] lifecycle transition', {
+      taskId,
+      from: previousStatus,
+      to: next,
+      parentSessionId: r.parentSessionId,
+      subAgentSessionId: r.subAgentSessionId,
+    }, 'SubAgent')
     for (const cb of r.subscribers) cb(r)
   }
 
@@ -116,12 +132,27 @@ export class BackgroundAgentLifecycle {
     if (!r) throw new Error(`unknown taskId ${taskId}`)
 
     // pending -> running
-    if (r.status === 'pending') r.status = 'running'
+    if (r.status === 'pending') {
+      r.status = 'running'
+      logger.info('[SubAgent] lifecycle running', {
+        taskId,
+        parentSessionId: r.parentSessionId,
+        subAgentSessionId: r.subAgentSessionId,
+        agentType: r.agentType,
+        agentName: r.agentName,
+      }, 'SubAgent')
+    }
     let lastMessage: Message | undefined
 
     try {
       for await (const ev of source) {
         if (isAgentProgressEvent(ev)) {
+          logger.debug('[SubAgent] lifecycle progress event', {
+            taskId,
+            eventType: ev.type,
+            hasData: ev.data !== undefined,
+            toolName: ev.toolName,
+          }, 'SubAgent')
           await applyProgressEvent({ record: r, onProgress }, ev)
           // Forward as SSE chat:agent_progress (canonical schema)
           try {
@@ -148,9 +179,11 @@ export class BackgroundAgentLifecycle {
       notificationQueue.enqueue(this.tasks.get(taskId)!)
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
+        logger.warn('[SubAgent] lifecycle aborted', { taskId, err }, 'SubAgent')
         this.kill(taskId, 'parent_abort')
         notificationQueue.enqueue(this.tasks.get(taskId)!)
       } else {
+        logger.error('[SubAgent] lifecycle failed', err as Error, { taskId }, 'SubAgent')
         this.fail(taskId, (err as Error).message ?? 'Unknown error')
         notificationQueue.enqueue(this.tasks.get(taskId)!)
       }

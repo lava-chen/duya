@@ -38,6 +38,7 @@ import { getToolUsageSection } from './sections/toolUsage.js'
 import { getToneAndStyleSection } from './sections/toneAndStyle.js'
 import { getOutputEfficiencySection } from './sections/outputEfficiency.js'
 import { getEnvironmentSection } from './sections/dynamic/environment.js'
+import { getSystemLocation } from './systemLocation.js'
 import { getPlatformSection } from './sections/dynamic/platform.js'
 import { getMcpInstructionsSection } from './sections/dynamic/mcpInstructions.js'
 import { getSessionGuidanceSection } from './sections/dynamic/sessionGuidance.js'
@@ -50,13 +51,22 @@ import { getMemorySection } from './sections/dynamic/memorySection.js'
 import { getMemoryContextSection } from './sections/dynamic/memoryContextSection.js'
 import { getWidgetGuidelinesSection } from './sections/dynamic/widgetGuidelines.js'
 import { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
-import { buildConductorCanvasSection } from './sections/dynamic/conductorCanvas.js'
+// Conductor canvas section is owned by `@duya/conductor` and is registered
+// into the prompt system via `registerConductor()` at host startup. The
+// section itself is shared between the conductor's own
+// `ConductorPromptSystem` and this standard `PromptManager` path. We
+// look it up lazily so the agent's tsc does not have a hard build-time
+// dependency on `@duya/conductor`'s dist (the conductor package depends
+// on the agent's dist, so a static import here would form a cycle).
 import { getMemoryManager } from '../memory/index.js'
 import { getShellForPrompt } from '../utils/shellDetector.js'
 import {
   initializeAgentsMd,
 } from './sections/dynamic/agentsMdSection.js'
 import { getAgentsMdManager } from '../agentsmd/index.js'
+
+const nativeImport = new Function('specifier', 'return import(specifier)') as
+  <T>(specifier: string) => Promise<T>;
 
 // ============================================================
 // Prompt Manager
@@ -66,6 +76,7 @@ export class PromptManager {
   private cache: PromptCache
   private options: PromptManagerOptions
   private profile: PromptProfile
+  private systemLocationPromise: Promise<PromptContext['location']> | null = null
 
   constructor(options: PromptManagerOptions = {}) {
     this.cache = createPromptCache()
@@ -105,7 +116,8 @@ export class PromptManager {
     enabledTools?: Set<string>,
     mcpServers?: PromptContext['mcpServers'],
   ): Promise<SystemPrompt> {
-    const context = this.buildContext(enabledTools, mcpServers)
+    const location = await this.resolveSystemLocation()
+    const context = this.buildContext(enabledTools, mcpServers, location)
 
     const outputStyleConfig = this.options.outputStyleConfig ?? null
     const keepCodingInstructions = outputStyleConfig?.keepCodingInstructions !== false
@@ -163,7 +175,15 @@ export class PromptManager {
       maybeVolatile('memoryContext', () => getMemoryContextSection(context), 'Memory prefetch based on user query'),
       maybeVolatile('widgetGuidelines', () => getWidgetGuidelinesSection(context), 'Widget creation guidelines for generative UI'),
       maybeVolatile('visionGuidelines', () => getVisionGuidelinesSection(context), 'Vision tool guidelines for image analysis'),
-      maybeVolatile('conductorCanvas', () => buildConductorCanvasSection(context), 'Canvas workspace context for conductor profile'),
+      maybeVolatile('conductorCanvas', async () => {
+        // Lazy load to break the build-time cycle with @duya/conductor.
+        // The conductor's own ConductorPromptSystem uses the same factory
+        // — this code path is only reached when the `conductorCanvas`
+        // overlay is enabled in the profile, which only happens when
+        // `registerConductor()` has been called at startup.
+        const { buildConductorCanvasSection } = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor');
+        return buildConductorCanvasSection(context);
+      }, 'Canvas workspace context for conductor profile'),
     ].filter((s): s is PromptSection => s !== null)
 
     // Resolve static sections (cached)
@@ -203,11 +223,45 @@ export class PromptManager {
   }
 
   /**
+   * Resolve the user's system location.
+   * In the Electron renderer, fetches the authoritative value from main via IPC.
+   * In CLI/standalone mode (no `window.electronAPI`), falls back to the current
+   * Node runtime's Intl data. The promise is memoized so repeated prompt builds
+   * only pay the IPC round-trip once.
+   */
+  private resolveSystemLocation(): Promise<PromptContext['location']> {
+    if (this.systemLocationPromise) return this.systemLocationPromise
+    this.systemLocationPromise = (async () => {
+      const fallback: PromptContext['location'] = {
+        locale: Intl.DateTimeFormat().resolvedOptions().locale,
+        localeCountryCode: null,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }
+      // Priority 1: registry value set by the init message from the main process.
+      const registered = getSystemLocation()
+      if (registered && typeof registered.timezone === 'string') return registered
+      // Priority 2: renderer-injected API (when this module runs in the renderer).
+      const getLocation = (globalThis as { electronAPI?: { system?: { getLocation?: () => Promise<PromptContext['location']> } } })
+        .electronAPI?.system?.getLocation
+      if (typeof getLocation !== 'function') return fallback
+      try {
+        const value = await getLocation()
+        if (value && typeof value.timezone === 'string') return value
+      } catch {
+        // fall through to Intl fallback
+      }
+      return fallback
+    })()
+    return this.systemLocationPromise
+  }
+
+  /**
    * Build the prompt context from current runtime state.
    */
   private buildContext(
     enabledTools?: Set<string>,
     mcpServers?: PromptContext['mcpServers'],
+    location?: PromptContext['location'],
   ): PromptContext {
     // Preserve empty string as a valid value (means "no project folder")
     // Only fallback to process.cwd() when explicitly undefined/null
@@ -225,6 +279,7 @@ export class PromptManager {
       mcpServers,
       sessionStartTime: Date.now(),
       language: this.options.language,
+      location,
       userType: this.options.userType,
       outputStyleConfig: this.options.outputStyleConfig,
       communicationPlatform: this.options.communicationPlatform,

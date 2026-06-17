@@ -9,6 +9,7 @@
 
 import type { ChildProcess } from 'child_process';
 import { spawn } from 'child_process';
+import { app } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { getConfigManager, toLLMProvider } from '../../config/manager.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
@@ -494,6 +495,11 @@ export class AgentProcessPool {
       type: 'init',
       sessionId,
       providerConfig,
+      systemLocation: {
+        locale: app.getLocale(),
+        localeCountryCode: app.getLocaleCountryCode(),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
     });
   }
 

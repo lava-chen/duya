@@ -13,6 +13,7 @@ import type {
   OverlayPatchConfig,
   PromptProfile,
 } from './types.js'
+import { PromptsRegistry } from '../PromptsRegistry.js'
 
 /**
  * Default prompt profile used when no override is specified
@@ -41,7 +42,12 @@ export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig>
 }
 
 /**
- * Overlay patches - small adjustments, not new top-level semantics
+ * Overlay patches - small adjustments, not new top-level semantics.
+ *
+ * Built-in overlays (`coding`, `chat`) are statically defined here.
+ * Subsystem overlays (e.g. `conductor` from `@duya/conductor`) are
+ * registered at runtime via `PromptsRegistry.registerOverlayPatch()`
+ * and resolved dynamically by `resolveOverlayPatch()` below.
  */
 export const OVERLAY_SECTION_PATCHES: Record<PromptOverlay, OverlayPatchConfig> = {
   coding: {
@@ -52,11 +58,20 @@ export const OVERLAY_SECTION_PATCHES: Record<PromptOverlay, OverlayPatchConfig> 
     // chat overlay != "no tool instructions", it just weakens verbose tool guidance
     // Specific behavior controlled internally by toolUsage section based on profile
   },
-  conductor: {
-    enable: ['conductorCanvas'],
-    disable: ['taskHandling', 'agentsMd'],
-  },
 };
+
+/**
+ * Resolve an overlay patch from either the built-in map or the
+ * runtime registry. The dynamic lookup is what lets subsystems
+ * (conductor) contribute overlay patches without agent knowing
+ * about them at compile time.
+ */
+function resolveOverlayPatch(overlay: PromptOverlay | string): OverlayPatchConfig | undefined {
+  if (overlay in OVERLAY_SECTION_PATCHES) {
+    return OVERLAY_SECTION_PATCHES[overlay as PromptOverlay];
+  }
+  return PromptsRegistry.getOverlayPatch(overlay);
+}
 
 /**
  * Resolve which sections are enabled for a given profile
@@ -71,7 +86,8 @@ export function resolveEnabledSections(profile: PromptProfile): Set<string> {
   // Apply overlay patches
   if (profile.overlays) {
     for (const overlay of profile.overlays) {
-      const patch = OVERLAY_SECTION_PATCHES[overlay]
+      const patch = resolveOverlayPatch(overlay)
+      if (!patch) continue
       if (patch.enable) {
         for (const section of patch.enable) {
           enabled.add(section)

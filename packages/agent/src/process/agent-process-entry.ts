@@ -24,7 +24,7 @@ import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js'
 import { buildAttachmentContext } from '../llm/attachment-context.js';
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
-import type { Message, MessageContent, MCPServerConfig } from '../types.js';
+import type { Message, MessageContent, MCPServerConfig, Tool } from '../types.js';
 import { messageDb, pluginDb, settingDb, sessionDb } from '../ipc/db-client.js';
 import { IncrementalSaveQueue } from './incremental-save-queue.js';
 import {
@@ -40,10 +40,17 @@ import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
 import { classifyError, APIErrorType } from '../llm/errors.js';
 import { getDefaultPromptManager } from '../prompts/PromptManager.js';
+import { setSystemLocation } from '../prompts/systemLocation.js';
 import type { PromptProfile } from '../prompts/modes/types.js';
 import type { ConductorSnapshot } from '../conductor/ConductorProfile.js';
-import { setConductorCanvasState } from '../prompts/sections/dynamic/conductorCanvas.js';
-import { duyaAgent } from '../index.js';
+// Note: `setConductorCanvasState` and `registerConductor` are loaded
+// lazily inside their call sites (see `handleConductorInit` /
+// `main`) to break the build-time cycle with the `@duya/conductor`
+// package. Importing the symbols statically here would force the
+// agent's tsc to follow the chain `agent → @duya/conductor → @duya/agent/conductor/profile → dist/conductor/ConductorProfile.d.ts`
+// and trigger TS5055 on re-builds (the .d.ts would be both an input
+// and an output of the same tsc invocation).
+import { buildSandboxImage, duyaAgent, setSandboxEnabled } from '../index.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
@@ -54,6 +61,8 @@ import { isModelLikelyMultimodal } from '../llm/multimodal-detection.js';
 import { detectModelCapability } from '../llm/model-capability-cache.js';
 import type { ProbeConfig } from '../llm/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
+import { setConductorToolProvider } from '../tool/builtin.js';
+import type { ToolExecutor } from '../tool/registry.js';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -109,6 +118,12 @@ interface InitMessage {
   language?: string;
   sandboxEnabled?: boolean;
   securityScanEnabled?: boolean;
+  /** Authoritative locale/timezone from the user's machine (sent by main). */
+  systemLocation?: {
+    locale: string;
+    localeCountryCode: string | null;
+    timezone: string;
+  };
 }
 
 interface ConductorInitMessage {
@@ -194,6 +209,8 @@ const titleGeneratedBySession = new Map<string, string>();
 // Title generation model config (from settings)
 let titleGenerationModelConfig: { provider: string; apiKey: string; baseURL: string; model: string } | null = null;
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
+const nativeImport = new Function('specifier', 'return import(specifier)') as
+  <T>(specifier: string) => Promise<T>;
 
 // Conductor agent global state
 let conductorAgent: duyaAgent | null = null;
@@ -577,13 +594,6 @@ function summarizeConversationForWiki(messages: Message[], maxMessages = 12): st
 // ============================================================================
 
 async function initAgent(config: InitMessage['providerConfig'], workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string): Promise<void> {
-  // Dynamic import - .js extension required for NodeNext moduleResolution
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const agentModule = await import('../index.js') as any;
-  const duyaAgent = agentModule.default;
-  const setSandboxEnabled = agentModule.setSandboxEnabled as ((enabled: boolean) => void) | undefined;
-  const buildSandboxImage = agentModule.buildSandboxImage as ((onProgress?: (msg: string) => void) => Promise<boolean>) | undefined;
-
   // Store system prompt for use in chat
   sessionSystemPrompt = sysPrompt;
 
@@ -793,14 +803,16 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
         agentName?: string;
         agentDescription?: string;
         sessionId?: string;
+        agentSessionId?: string;
       } | undefined;
       if (agentEvent) {
-        const { type: agentEventType, sessionId: _sessionId, ...rest } = agentEvent;
+        const { type: agentEventType, sessionId: _parentSessionId, agentSessionId, ...rest } = agentEvent;
         return {
           ...rest,
           type: 'chat:agent_progress',
           agentEventType,
-          agentSessionId: _sessionId,
+          sessionId: _parentSessionId,
+          agentSessionId,
         };
       }
       return null;
@@ -1821,6 +1833,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 // ============================================================================
 
 async function handleConductorInit(msg: ConductorInitMessage): Promise<void> {
+  const { setConductorCanvasState } = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor');
   setConductorCanvasState(msg.snapshot);
 
   const promptManager = getDefaultPromptManager();
@@ -1858,6 +1871,7 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
 
   // Update canvas state snapshot for every message (not just init)
   if (msg.snapshot) {
+    const { setConductorCanvasState } = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor');
     setConductorCanvasState(msg.snapshot);
   }
 
@@ -1955,7 +1969,7 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
           });
 
           // Flush perception events and send as context update for next turn
-          const { getPerceptionEngine } = await import('../conductor/PerceptionEngine.js');
+          const { getPerceptionEngine } = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor');
           const perceptionContext = getPerceptionEngine().formatEventsAsContext();
           if (perceptionContext) {
             sendToMain({
@@ -2195,7 +2209,9 @@ async function reloadMCP(): Promise<void> {
 
 async function handleCommand(msg: WorkerCommand): Promise<void> {
   const msgType = msg.type as string;
-  log('[Agent-Process] Received command:', msgType, 'sessionId:', (msg as Record<string, unknown>).sessionId);
+  if (msgType !== 'db:response') {
+    log('[Agent-Process] Received command:', msgType, 'sessionId:', (msg as Record<string, unknown>).sessionId);
+  }
 
   switch (msgType) {
     case 'init': {
@@ -2240,6 +2256,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               hasApiKey: !!initMsg.providerConfig.apiKey,
             } : 'MISSING!',
           });
+          setSystemLocation(initMsg.systemLocation ?? null);
           try {
             await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform);
 
@@ -2582,6 +2599,53 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
 async function main(): Promise<void> {
   log('Process started, session:', process.env.SESSION_ID);
   log('cwd:', process.cwd());
+
+  // Wire the conductor subsystem into the host's registries.
+  // This must run before any `PromptsRegistry.get('conductor')` lookup,
+  // and before `createBuiltinRegistry()` returns a registry whose
+  // canvas-orchestrator tools depend on the conductor's IPC bridge.
+  //
+  // Tool registration happens per-turn via `createBuiltinRegistry()`.
+  // The ESM conductor package is loaded here once and injected into
+  // `builtin.ts` so the hot path remains synchronous.
+  try {
+    const { PromptsRegistry } = await import('../prompts/PromptsRegistry.js');
+    // Import the agent's own PromptSystem type so the host's
+    // `PromptSystemFactory.create` can return the local class identity
+    // (TypeScript otherwise sees the conductor's `PromptSystem` and the
+    // agent's `PromptSystem` as two distinct classes because of the
+    // `protected` members and module path).
+    const { PromptSystem: AgentPromptSystem } = await import(
+      '../prompts/PromptSystem.js'
+    );
+    const conductor = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor') as {
+      CANVAS_ORCHESTRATOR_TOOLS: Tool[];
+      getCanvasOrchestratorExecutors: () => Record<string, ToolExecutor>;
+      registerConductor: typeof import('@duya/conductor')['registerConductor'];
+    };
+    setConductorToolProvider({
+      CANVAS_ORCHESTRATOR_TOOLS: conductor.CANVAS_ORCHESTRATOR_TOOLS,
+      getCanvasOrchestratorExecutors: conductor.getCanvasOrchestratorExecutors,
+    });
+    conductor.registerConductor({
+      prompt: {
+        registerPromptSystem: (name, factory) => {
+          PromptsRegistry.register(name, {
+            create: (profile) =>
+              factory(profile) as unknown as InstanceType<typeof AgentPromptSystem>,
+          });
+        },
+        registerOverlayPatch: (name, patch) => {
+          PromptsRegistry.registerOverlayPatch(name, patch);
+        },
+      },
+    });
+    log('[Agent-Process] Conductor subsystem registered');
+  } catch (err) {
+    // Conductor registration is best-effort at startup: if it fails the
+    // process must still be able to handle non-conductor sessions.
+    log('[Agent-Process] Conductor registration failed (non-fatal):', err);
+  }
 
   // Handle IPC messages from AgentProcessPool (cronjob, conductor, etc.)
   // Agent Server uses stdin/stdout, but AgentProcessPool uses IPC child.send()

@@ -13,12 +13,14 @@ import type {
 import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } from './loadAgentsDir.js'
 import { isBuiltInAgent } from './loadAgentsDir.js'
 import { duyaAgent } from '../../index.js'
+import { setMaxListeners } from 'node:events'
 import { resolveAgentTools } from './agentToolUtils.js'
 import { ToolRegistry } from '../registry.js'
 import { getPromptProfileForSubagentType } from '../../prompts/modes/index.js'
 import { PromptManager } from '../../prompts/PromptManager.js'
 import { appendMessages } from '../../session/db.js'
 import type { TokenUsage } from '../../types.js'
+import { logger } from '../../utils/logger.js'
 
 export interface RunAgentParams {
   agentDefinition: AgentDefinition
@@ -115,15 +117,21 @@ export async function* runAgent({
 }: RunAgentParams): RunAgentResult {
   const startTime = Date.now()
   const agentId = crypto.randomUUID()
+  const parentSessionId = toolUseContext.options.sessionId
+  const workingDirectory = toolUseContext.options.workingDirectory ?? process.cwd()
 
   // Resolve the agent's system prompt
   const systemPrompt = getAgentSystemPrompt(agentDefinition, toolUseContext)
 
-  // Log agent start
-  console.log(`[AgentTool] Starting agent ${agentDefinition.agentType} (${agentId})`)
-  if (description) {
-    console.log(`[AgentTool] Description: ${description}`)
-  }
+  logger.info('[SubAgent] runAgent starting', {
+    agentId,
+    agentType: agentDefinition.agentType,
+    agentFilename: agentDefinition.filename,
+    parentSessionId,
+    subAgentSessionId: sessionId,
+    isAsync,
+    hasDescription: Boolean(description),
+  }, 'SubAgent')
 
   // Resolve tools for this agent
   const { resolvedTools } = resolveAgentTools(agentDefinition, availableTools)
@@ -143,10 +151,27 @@ export async function* runAgent({
     })
     .join('\n\n')
 
+  logger.info('[SubAgent] runAgent configured', {
+    agentId,
+    agentType: agentDefinition.agentType,
+    model: agentModel,
+    maxTurns: agentMaxTurns,
+    promptLength: promptText.length,
+    resolvedToolCount: resolvedTools.length,
+    availableToolCount: availableTools.length,
+    workingDirectory,
+  }, 'SubAgent')
+
   // Get API configuration from parent context
   const apiKey = toolUseContext.options.apiKey || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY
   if (!apiKey) {
     const errorMsg = `[Agent ${agentDefinition.agentType}] Error: No API key available for sub-agent execution`
+    logger.error('[SubAgent] missing API key', undefined, {
+      agentId,
+      agentType: agentDefinition.agentType,
+      parentSessionId,
+      subAgentSessionId: sessionId,
+    }, 'SubAgent')
     yield {
       id: crypto.randomUUID(),
       role: 'assistant',
@@ -164,7 +189,7 @@ export async function* runAgent({
 
   // Create a PromptManager with the appropriate profile for this subagent
   const subAgentPromptManager = new PromptManager({
-    workingDirectory: process.cwd(),
+    workingDirectory,
     modelId: agentModel,
     promptProfile,
   })
@@ -177,7 +202,8 @@ export async function* runAgent({
     authStyle: toolUseContext.options.authStyle,
     provider: toolUseContext.options.provider,
     systemPrompt,
-    workingDirectory: process.cwd(),
+    workingDirectory,
+    sessionId,
     promptManager: subAgentPromptManager,
   })
 
@@ -193,6 +219,15 @@ export async function* runAgent({
   // Prevent recursive agent calls - exclude the Agent tool from sub-agents
   // to avoid infinite recursion where a sub-agent spawns another sub-agent
   toolsToUse = toolsToUse.filter(t => t.name !== 'Agent')
+
+  logger.info('[SubAgent] streamChat starting', {
+    agentId,
+    agentType: agentDefinition.agentType,
+    toolCount: toolsToUse.length,
+    toolNames: toolsToUse.slice(0, 20).map(tool => tool.name),
+    omittedToolCount: Math.max(0, toolsToUse.length - 20),
+    subAgentSessionId: sessionId,
+  }, 'SubAgent')
 
   const textParts: string[] = []
   const thinkingParts: string[] = []
@@ -222,15 +257,25 @@ export async function* runAgent({
     // would keep streaming into the void after the user cancels the parent turn.
     const subAgentAbort = new AbortController()
     const onParentAbort = () => {
-      console.log(`[AgentTool] Parent abort triggered for agent ${agentDefinition.agentType}, stopping sub-agent`)
+      logger.warn('[SubAgent] parent abort triggered', {
+        agentId,
+        agentType: agentDefinition.agentType,
+        parentSessionId,
+        subAgentSessionId: sessionId,
+      }, 'SubAgent')
       subAgentAbort.abort()
       try {
         subAgent.interrupt()
       } catch (err) {
-        console.warn('[AgentTool] subAgent.interrupt() threw:', err)
+        logger.warn('[SubAgent] subAgent.interrupt threw', { err }, 'SubAgent')
       }
     }
-    toolUseContext.abortController.signal.addEventListener('abort', onParentAbort)
+    try {
+      setMaxListeners(0, toolUseContext.abortController.signal)
+    } catch {
+      // Older runtimes may not support EventTarget max listener tuning.
+    }
+    toolUseContext.abortController.signal.addEventListener('abort', onParentAbort, { once: true })
 
     // Set up a heartbeat to report progress while the sub-agent is running
     // This prevents the UI from appearing "frozen" during long LLM calls
@@ -251,6 +296,7 @@ export async function* runAgent({
         toolRegistry: registry,
       })[Symbol.asyncIterator]()
 
+      let sawFirstEvent = false
       while (true) {
         const nextEventPromise = eventIterator.next()
         let stallTimer: ReturnType<typeof setTimeout> | null = null
@@ -272,7 +318,7 @@ export async function* runAgent({
           hasError = true
           errorMessage = stallMessage
           const now = Date.now()
-          console.error('[AgentTool] Sub-agent stalled', {
+          logger.error('[SubAgent] stalled waiting for stream event', undefined, {
             agentId,
             agentType: agentDefinition.agentType,
             elapsedMs: now - startTime,
@@ -280,7 +326,8 @@ export async function* runAgent({
             lastEventType,
             toolCalls,
             promptLength: promptText.length,
-          })
+            subAgentSessionId: sessionId,
+          }, 'SubAgent')
           textParts.push(`\n[Error during agent execution: ${stallMessage}]`)
           onProgress?.({ type: 'error', data: stallMessage, agentId })
           // Attempt to interrupt/cleanup to avoid orphaned stream tasks.
@@ -302,13 +349,27 @@ export async function* runAgent({
         }
 
         const event = nextEvent.value
+        if (!sawFirstEvent) {
+          sawFirstEvent = true
+          logger.info('[SubAgent] first stream event received', {
+            agentId,
+            agentType: agentDefinition.agentType,
+            eventType: event.type,
+            elapsedMs: Date.now() - startTime,
+            subAgentSessionId: sessionId,
+          }, 'SubAgent')
+        }
         lastEventType = event.type
         lastEventAt = Date.now()
         lastProgressTime = Date.now()
 
         // Check if parent has requested abort
         if (toolUseContext.abortController.signal.aborted) {
-          console.log(`[AgentTool] Aborting agent ${agentDefinition.agentType} due to parent abort`)
+          logger.warn('[SubAgent] aborting due to parent signal', {
+            agentId,
+            agentType: agentDefinition.agentType,
+            subAgentSessionId: sessionId,
+          }, 'SubAgent')
           break
         }
 
@@ -346,12 +407,13 @@ export async function* runAgent({
           const errorData = typeof event.data === 'string' ? event.data : JSON.stringify(event.data)
           errorMessage = errorData
           hasError = true
-          console.error('[AgentTool] Sub-agent error event', {
+          logger.error('[SubAgent] error event', undefined, {
             agentId,
             agentType: agentDefinition.agentType,
             error: errorData,
             toolCalls,
-          })
+            subAgentSessionId: sessionId,
+          }, 'SubAgent')
           textParts.push(`\n[Error: ${errorData}]`)
           onProgress?.({ type: 'error', data: errorData, agentId })
         }
@@ -365,14 +427,15 @@ export async function* runAgent({
     const errMsg = error instanceof Error ? error.message : 'Unknown error'
     errorMessage = errMsg
     hasError = true
-    console.error('[AgentTool] runAgent failed', {
+    logger.error('[SubAgent] runAgent failed', error as Error, {
       agentId,
       agentType: agentDefinition.agentType,
       error: errMsg,
       toolCalls,
       lastEventType,
       elapsedMs: Date.now() - startTime,
-    })
+      subAgentSessionId: sessionId,
+    }, 'SubAgent')
     textParts.push(`\n[Error during agent execution: ${errMsg}]`)
     onProgress?.({ type: 'error', data: errMsg, agentId })
   }
@@ -383,7 +446,15 @@ export async function* runAgent({
   }
 
   const duration = Date.now() - startTime
-  console.log(`[AgentTool] Agent ${agentDefinition.agentType} completed in ${duration}ms with ${toolCalls} tool calls`)
+  logger.info('[SubAgent] runAgent completed', {
+    agentId,
+    agentType: agentDefinition.agentType,
+    durationMs: duration,
+    toolCalls,
+    hasError,
+    lastEventType,
+    subAgentSessionId: sessionId,
+  }, 'SubAgent')
 
   const resultMetadata: Record<string, unknown> = {
     agentToolCallCount: toolCalls,
@@ -428,10 +499,16 @@ export async function* runAgent({
       try {
         const persistResult = await appendMessages(sessionId, allMessages)
         if (!persistResult.success) {
-          console.warn(`[AgentTool] Failed to persist sub-agent messages: count=${persistResult.count}`)
+          logger.warn('[SubAgent] failed to persist messages', {
+            subAgentSessionId: sessionId,
+            count: persistResult.count,
+          }, 'SubAgent')
         }
       } catch (err) {
-        console.warn('[AgentTool] Failed to persist sub-agent messages:', err)
+        logger.warn('[SubAgent] persist messages threw', {
+          subAgentSessionId: sessionId,
+          err,
+        }, 'SubAgent')
       }
     }
   }

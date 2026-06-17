@@ -34,6 +34,7 @@ import {
   resolveShellExecutionPlan,
   type ShellExecutionPlan,
 } from '../utils/shell/intelligence.js'
+import { logger } from '../utils/logger.js'
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -121,8 +122,6 @@ export interface TrackedTool {
   pendingProgress: Message[]
   elapsedSeconds: number
   error?: Error
-  background?: boolean
-  backgroundDone?: boolean
 
   // Enhanced fields
   stage: ProgressStage
@@ -298,6 +297,12 @@ function summarizeInputForLog(input: unknown): string {
 function isShellCommandToolName(toolName: string): boolean {
   const normalized = toolName.toLowerCase()
   return normalized === 'bash' || normalized === 'powershell'
+}
+
+function isAgentToolCall(toolName: string, input: Record<string, unknown> | undefined): boolean {
+  const normalized = toolName.toLowerCase()
+  if (normalized === 'agent' || normalized === 'subagent' || normalized === 'sub_agent') return true
+  return normalized === 'task' && (typeof input?.prompt === 'string' || typeof input?.subagent_type === 'string')
 }
 
 export function normalizeWorkerInput(
@@ -1247,14 +1252,12 @@ export class StreamingToolExecutor {
       }
 
       // For Agent tool, create a context with progress callback to stream sub-agent events
-      const isAgentTool = tool.block.name === 'Agent'
+      const toolInput = (tool.block.input ?? {}) as Record<string, unknown>
+      const isAgentTool = isAgentToolCall(tool.block.name, toolInput)
       const toolContext: ToolUseContext = isAgentTool
         ? {
             ...executionContext,
             reportAgentProgress: (event: AgentProgressEvent) => {
-              if (event.type === 'done') {
-                tool.backgroundDone = true
-              }
               // Convert sub-agent progress to tool progress messages
               const progressMsg = this.createAgentProgressMessage(tool, event)
               tool.pendingProgress.push(progressMsg)
@@ -1262,22 +1265,19 @@ export class StreamingToolExecutor {
                 this.progressAvailableResolve()
               }
             },
-            // For background sub-agents, intermediate events are streamed live
-            // via SSE from AgentTool itself (not buffered into pendingProgress —
-            // pendingProgress would only be drained on the next parent turn's
-            // `done` yield, which can be seconds or minutes later, leaving the
-            // UI stuck on "initializing agent"). The terminal `done` event
-            // still needs to flip backgroundDone so `getRemainingResults`
-            // exits; this hook does that without re-buffering the duplicate
-            // event into pendingProgress.
-            notifyBackgroundDone: () => {
-              tool.backgroundDone = true
-              if (this.progressAvailableResolve) {
-                this.progressAvailableResolve()
-              }
-            },
           }
         : executionContext
+
+      if (isAgentTool) {
+        logger.info('[SubAgent] executor invoking agent tool', {
+          toolUseId: tool.id,
+          toolName: tool.block.name,
+          subagentType: toolInput.subagent_type,
+          runInBackground: toolInput.run_in_background !== false,
+          parentSessionId: this.toolUseContext.options.sessionId,
+          promptLength: typeof toolInput.prompt === 'string' ? toolInput.prompt.length : 0,
+        }, 'SubAgent')
+      }
 
       // Execute with timeout AND abort support
       let result: ToolResult | null
@@ -1323,7 +1323,7 @@ export class StreamingToolExecutor {
               this.finalizeTool(tool, messages);
               return;
             }
-            // Retry failed (e.g. user dismissed with no answer) — fall
+            // Retry failed (e.g. user dismissed with no answer) 鈥?fall
             // through to the standard deny path below.
             messages.push(
               createErrorMessage(tool.id, `<tool_error>User did not provide an answer</tool_error>`)
@@ -1359,6 +1359,13 @@ export class StreamingToolExecutor {
       }
 
       if (result.error) {
+        if (isAgentTool) {
+          logger.warn('[SubAgent] executor agent tool returned error', {
+            toolUseId: tool.id,
+            toolName: tool.block.name,
+            result: typeof result.result === 'string' ? result.result.slice(0, 500) : result.result,
+          }, 'SubAgent')
+        }
         messages.push(
           createErrorMessage(
             tool.id,
@@ -1385,6 +1392,24 @@ export class StreamingToolExecutor {
         ? result.result
         : JSON.stringify(result.result)
 
+      if (isAgentTool) {
+        let parsedResult: Record<string, unknown> | null = null
+        try {
+          parsedResult = JSON.parse(resultContent) as Record<string, unknown>
+        } catch {
+          parsedResult = null
+        }
+        logger.info('[SubAgent] executor agent tool result', {
+          toolUseId: tool.id,
+          toolName: tool.block.name,
+          error: false,
+          background: parsedResult?.background === true,
+          taskId: parsedResult?.taskId,
+          subAgentSessionId: parsedResult?.sessionId,
+          resultLength: resultContent.length,
+        }, 'SubAgent')
+      }
+
       // Check if result indicates a permission is required
       // (legacy string-sentinel path, kept as a fallback for tools that have
       // not been migrated to throw PermissionRequiredError).
@@ -1407,14 +1432,6 @@ export class StreamingToolExecutor {
         tool_call_id: tool.id,
         duration_ms: Date.now() - startTime,
       })
-
-      const isBackground =
-        tool.block.name === 'Agent' &&
-        resultContent.includes('"background":true')
-      if (isBackground) {
-        tool.background = true
-        tool.backgroundDone = false
-      }
 
       this.finalizeTool(tool, messages)
 
@@ -1453,7 +1470,7 @@ export class StreamingToolExecutor {
                 return { error: `Tool not found: ${toolName}` }
               }
               // Convert ToolResult error format to what ToolRetryExecutor expects
-              // error?: boolean → error?: string
+              // error?: boolean 鈫?error?: string
               const errorStr = execResult.error ? String(execResult.result) : undefined
               return { result: execResult.result ?? undefined, error: errorStr }
             } catch (e) {
@@ -1760,9 +1777,6 @@ export class StreamingToolExecutor {
       if (tool.status === 'yielded') continue
 
       if ((tool.status === 'completed' || tool.status === 'failed' || tool.status === 'cancelled') && tool.results) {
-        if (tool.background && !tool.backgroundDone) {
-          continue
-        }
         tool.status = 'yielded'
 
         for (const message of tool.results) {
@@ -1786,13 +1800,6 @@ export class StreamingToolExecutor {
       // still-executing tools as 'cancelled' so getCompletedResults below
       // picks them up before the loop exits.
       if (this.siblingAbortController.signal.aborted) {
-        break
-      }
-
-      // If only background tools remain unfinished, exit the wait loop.
-      // Background sub-agents run asynchronously; results are delivered
-      // via BackgroundTaskRegistry and injected back into the main loop.
-      if (this.onlyBackgroundToolsRemain()) {
         break
       }
 
@@ -1849,19 +1856,6 @@ export class StreamingToolExecutor {
     }
   }
 
-  /**
-   * Returns true when all unfinished tools are background sub-agents
-   * that are still running. The executor should NOT block on them —
-   * results will be delivered asynchronously via BackgroundTaskRegistry.
-   */
-  private onlyBackgroundToolsRemain(): boolean {
-    for (const tool of this.tools) {
-      if (tool.background && !tool.backgroundDone) continue
-      if (tool.status !== 'yielded') return false
-    }
-    return true
-  }
-
   // ==========================================================================
   // STATUS HELPERS
   // ==========================================================================
@@ -1884,11 +1878,7 @@ export class StreamingToolExecutor {
   }
 
   private hasUnfinishedTools(): boolean {
-    return this.tools.some(
-      t =>
-        t.status !== 'yielded' ||
-        (t.background === true && !t.backgroundDone)
-    )
+    return this.tools.some(t => t.status !== 'yielded')
   }
 
   // ==========================================================================

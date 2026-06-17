@@ -3,9 +3,127 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#fefdfb" />
     <title>DUYA</title>
+    <script>
+      // Apply theme before React mounts to avoid a flash of wrong theme.
+      // Source of truth lives in the settings DB; this localStorage entry is a
+      // boot-time hint written by AppearanceSection and app-sidebar on every change.
+      (function () {
+        try {
+          var stored = window.localStorage.getItem("duya-theme");
+          var resolved =
+            stored === "light" || stored === "dark"
+              ? stored
+              : window.matchMedia &&
+                window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          document.documentElement.setAttribute("data-theme", resolved);
+        } catch (_) {
+          /* ignore */
+        }
+      })();
+    </script>
+    <style>
+      /* Anti-FOUC splash — shown before React mounts.
+         Visually identical to StartupLanding.tsx so the transition is seamless.
+         Removed by main.tsx once the React tree has rendered. */
+      #duya-boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #fefdfb;
+        color: #1a1a1a;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        transition: opacity 200ms ease-out;
+      }
+      #duya-boot-splash[data-fade-out] { opacity: 0; pointer-events: none; }
+      #duya-boot-splash[data-hidden] { display: none; }
+
+      .duya-boot-stack {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+      }
+      .duya-boot-logo {
+        width: 72px;
+        height: 72px;
+        border-radius: 16px;
+        box-shadow: 0 10px 28px rgba(124, 58, 237, 0.22);
+        animation: duya-boot-pulse 2.4s ease-in-out infinite;
+      }
+      .duya-boot-name {
+        font-family: "Windsor", "Georgia", "Times New Roman", serif;
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        line-height: 1;
+      }
+      .duya-boot-spinner {
+        width: 34px;
+        height: 34px;
+        position: relative;
+        margin-top: 10px;
+      }
+      .duya-boot-spinner::before,
+      .duya-boot-spinner::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 2.5px solid transparent;
+      }
+      .duya-boot-spinner::before {
+        border-top-color: #7c3aed;
+        border-right-color: #7c3aed;
+        animation: duya-boot-spin 0.9s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+        filter: drop-shadow(0 0 6px rgba(124, 58, 237, 0.5));
+      }
+      .duya-boot-spinner::after {
+        border-bottom-color: rgba(124, 58, 237, 0.25);
+        border-left-color: rgba(124, 58, 237, 0.25);
+        animation: duya-boot-spin 1.3s cubic-bezier(0.5, 0, 0.5, 1) infinite reverse;
+      }
+      @keyframes duya-boot-spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes duya-boot-pulse {
+        0%, 100% { transform: scale(1);    filter: brightness(1); }
+        50%      { transform: scale(1.04); filter: brightness(1.06); }
+      }
+
+      /* Splash follows the app theme, not the OS theme. The theme
+         resolution script in <head> runs synchronously *before* this
+         <style> block is applied, so `[data-theme]` is always set on
+         <html> by the time we paint. */
+      :root[data-theme="dark"] #duya-boot-splash {
+        background: #1e1e1e;
+        color: #f5f5f5;
+      }
+      :root[data-theme="dark"] .duya-boot-spinner::before {
+        border-top-color: #a78bfa;
+        border-right-color: #a78bfa;
+        filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.55));
+      }
+      :root[data-theme="dark"] .duya-boot-spinner::after {
+        border-bottom-color: rgba(167, 139, 250, 0.28);
+        border-left-color: rgba(167, 139, 250, 0.28);
+      }
+    </style>
   </head>
   <body>
+    <div id="duya-boot-splash" aria-hidden="true">
+      <div class="duya-boot-stack">
+        <img class="duya-boot-logo" src="/icon.png" alt="" />
+        <div class="duya-boot-name">duya</div>
+        <div class="duya-boot-spinner"></div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
