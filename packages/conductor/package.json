@@ -17,14 +17,10 @@
     "./ipc": {
       "types": "./dist/ipc.d.ts",
       "default": "./dist/ipc.js"
-    },
-    "./profile": {
-      "types": "./dist/profile/types.d.ts",
-      "default": "./dist/profile/types.js"
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --incremental",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit"
   },

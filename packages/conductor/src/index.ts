@@ -14,11 +14,15 @@
  * function exported from this module.
  */
 
-export type { ConductorSnapshot } from './profile/types.js';
-export type { ConductorCanvasSnapshot } from './profile/types.js';
+export type { ConductorSnapshot } from '@duya/agent/conductor/profile';
+export type { ConductorCanvasSnapshot } from './prompt/canvasSection.js';
 export type { ConductorIpcBridge, ConductorIpcRequest, ConductorIpcResponse } from './ipc.js';
 
-export { setConductorCanvasState, buildConductorCanvasSection } from './prompt/canvasSection.js';
+export {
+  setConductorCanvasState,
+  getConductorCanvasSnapshot,
+  buildConductorCanvasSection,
+} from './prompt/canvasSection.js';
 export { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from './tool/CanvasOrchestratorProfile.js';
 export { VIZ_SPEC_PROMPT, VIZ_SPEC_WORKED_EXAMPLES } from './prompt/vizSpec.js';
 export { ConductorPromptSystem } from './prompt/ConductorPromptSystem.js';
@@ -33,6 +37,7 @@ export type { SemanticEvent, SemanticEventType, PerceptionConfig } from './runti
 export {
   registerConductor,
   type ConductorRegistration,
+  type ConductorRegistrationHandle,
   type ConductorPromptRegistry,
   type ConductorToolRegistry,
 } from './register.js';

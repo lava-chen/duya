@@ -14,6 +14,38 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./prompts": {
+      "types": "./dist/prompts/index.d.ts",
+      "default": "./dist/prompts/index.js"
+    },
+    "./prompts/types": {
+      "types": "./dist/prompts/types.d.ts",
+      "default": "./dist/prompts/types.js"
+    },
+    "./prompts/modes": {
+      "types": "./dist/prompts/modes/index.d.ts",
+      "default": "./dist/prompts/modes/index.js"
+    },
+    "./prompts/modes/types": {
+      "types": "./dist/prompts/modes/types.d.ts",
+      "default": "./dist/prompts/modes/types.js"
+    },
+    "./tool/registry": {
+      "types": "./dist/tool/registry.d.ts",
+      "default": "./dist/tool/registry.js"
+    },
+    "./conductor/profile": {
+      "types": "./dist/conductor/ConductorProfile.d.ts",
+      "default": "./dist/conductor/ConductorProfile.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./utils/shellDetector": {
+      "types": "./dist/utils/shellDetector.d.ts",
+      "default": "./dist/utils/shellDetector.js"
+    },
     "./sdk": {
       "types": "./dist/sdk/index.d.ts",
       "default": "./dist/sdk/index.js"
@@ -32,7 +64,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --incremental",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest",

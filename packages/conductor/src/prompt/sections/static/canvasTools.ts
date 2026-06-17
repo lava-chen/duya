@@ -3,7 +3,7 @@
  * Detailed schema descriptions for all Canvas Orchestrator tools
  */
 
-import type { PromptContext } from '../../../types.js';
+import type { PromptContext } from '@duya/agent/prompts/types';
 
 const CANVAS_TOOL_DEFINITIONS: Record<string, string> = {
   canvas_create_element: `### canvas_create_element
