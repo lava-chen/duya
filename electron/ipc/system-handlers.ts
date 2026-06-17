@@ -345,4 +345,14 @@ export function registerSystemHandlers(): void {
     const agentPool = getAgentProcessPool();
     return agentPool.getInterruptedSessions();
   });
+
+  // System location — authoritative locale/timezone from the host machine.
+  // Used by the agent subprocess to build a locale-aware system prompt.
+  ipcMain.handle('system:get-location', () => {
+    return {
+      locale: app.getLocale(),
+      localeCountryCode: app.getLocaleCountryCode(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+  });
 }

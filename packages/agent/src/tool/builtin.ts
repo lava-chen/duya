@@ -38,12 +38,29 @@ import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
-import { CANVAS_ORCHESTRATOR_TOOLS, getCanvasOrchestratorExecutors } from '../conductor/CanvasOrchestratorProfile.js';
+// Conductor canvas tools are owned by `@duya/conductor`. The agent
+// process loads that ESM package once at async startup and injects the
+// tool provider here so `createBuiltinRegistry` can stay synchronous in
+// per-turn hot paths.
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
 import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
 import { ResearchMemory } from '../research-memory/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
+
+type ConductorToolProvider = {
+  CANVAS_ORCHESTRATOR_TOOLS: import('../types.js').Tool[];
+  getCanvasOrchestratorExecutors: () => Record<
+    string,
+    import('./registry.js').ToolExecutor
+  >;
+};
+
+let conductorToolProvider: ConductorToolProvider | null = null;
+
+export function setConductorToolProvider(provider: ConductorToolProvider | null): void {
+  conductorToolProvider = provider;
+}
 
 /**
  * BashTool instance
@@ -255,12 +272,14 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
     }
   );
 
-  // Canvas Orchestrator tools - generic element operations
-  const orchestratorExecutors = getCanvasOrchestratorExecutors();
-  for (const tool of CANVAS_ORCHESTRATOR_TOOLS) {
-    const executor = orchestratorExecutors[tool.name];
-    if (executor) {
-      registry.register(tool, executor);
+  // Canvas Orchestrator tools - generic element operations.
+  if (conductorToolProvider) {
+    const orchestratorExecutors = conductorToolProvider.getCanvasOrchestratorExecutors();
+    for (const tool of conductorToolProvider.CANVAS_ORCHESTRATOR_TOOLS) {
+      const executor = orchestratorExecutors[tool.name];
+      if (executor) {
+        registry.register(tool, executor);
+      }
     }
   }
 

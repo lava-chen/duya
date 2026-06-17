@@ -1694,7 +1694,11 @@ class StreamSessionManager {
 
   private handleAgentProgressEvent(sessionId: string, streamId: string, data: AgentProgressEvent | undefined): void {
     const s = this.sessions.get(sessionId);
-    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    // Background sub-agents can outlive the parent turn that spawned them.
+    // Do not gate these events on streamId, or late progress keeps the
+    // bottom sub-agent panel alive but never reaches message-local rows.
+    void streamId;
+    if (!s) return;
     if (!data) return;
 
     // The worker emits events with `agentEventType` and `agentSessionId` (the
@@ -1712,7 +1716,7 @@ class StreamSessionManager {
     const event: AgentProgressEvent = {
       ...data,
       type: (raw.type ?? raw.agentEventType) as AgentProgressEvent['type'],
-      sessionId: raw.sessionId ?? raw.agentSessionId,
+      sessionId: raw.agentSessionId ?? raw.sessionId,
       agentId: raw.agentId ?? data.agentId,
       agentType: raw.agentType ?? data.agentType,
       agentName: raw.agentName ?? data.agentName,

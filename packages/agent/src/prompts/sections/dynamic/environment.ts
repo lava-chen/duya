@@ -109,7 +109,7 @@ function getMarketingNameForModel(modelId: string): string | null {
   return null
 }
 
-function getCurrentDateTime(): string {
+function getCurrentDateTime(tzStr?: string): string {
   const now = new Date()
   const dateStr = now.toLocaleDateString('en-US', {
     year: 'numeric',
@@ -123,9 +123,9 @@ function getCurrentDateTime(): string {
     second: '2-digit',
     hour12: false,
   })
-  const tzStr = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const resolvedTz = tzStr ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   const tzOffset = now.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop() ?? ''
-  return `${dateStr}, ${timeStr} (${tzStr}, ${tzOffset})`
+  return `${dateStr}, ${timeStr} (${resolvedTz}, ${tzOffset})`
 }
 
 export async function getEnvironmentSection(ctx: PromptContext): Promise<string> {
@@ -160,7 +160,10 @@ export async function getEnvironmentSection(ctx: PromptContext): Promise<string>
     `Platform: ${ctx.platform}`,
     getShellInfoLine(ctx.shell, ctx.platform),
     `OS Version: ${unameSR}`,
-    `Current date and time: ${getCurrentDateTime()}`,
+    ctx.location
+      ? `Location: ${ctx.location.locale}${ctx.location.localeCountryCode ? ` (${ctx.location.localeCountryCode})` : ''}, timezone ${ctx.location.timezone}`
+      : null,
+    `Current date and time: ${getCurrentDateTime(ctx.location?.timezone)}`,
     modelDescription,
     knowledgeCutoffMessage,
     `Duya is available as a CLI in the terminal, desktop app (Mac/Windows).`,

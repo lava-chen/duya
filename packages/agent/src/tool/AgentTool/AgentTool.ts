@@ -4,7 +4,7 @@
  */
 
 import { BaseTool } from '../BaseTool.js';
-import type { ToolResult, ToolUseContext, MessageContent, Message } from '../../types.js';
+import type { ToolResult, ToolUseContext, MessageContent } from '../../types.js';
 import type {
   RenderedToolMessage,
   ToolInterruptBehavior,
@@ -13,10 +13,11 @@ import type { AgentDefinition } from './loadAgentsDir.js';
 import { getBuiltInAgents } from './builtInAgents.js';
 import { formatAgentLine, getPrompt } from './prompt.js';
 import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
-import { backgroundTaskRegistry, type BackgroundTaskResult } from './BackgroundTaskRegistry.js';
 import { sessionDb } from '../../ipc/db-client.js';
 import { sendEvent } from '../../process/worker-protocol.js';
 import { buildChatAgentProgressPayload, type AgentProgressPayloadMeta } from './agentLifecycleBridge.js';
+import { backgroundAgentLifecycle } from '../../lifecycle/BackgroundAgentLifecycle.js';
+import { logger } from '../../utils/logger.js';
 
 export { formatAgentLine }
 
@@ -60,6 +61,42 @@ const agentTypeAliases: Record<string, string> = {
   generalpurpose: 'general-purpose',
 }
 
+const BACKGROUND_SPAWN_TTL_MS = 10 * 60 * 1000;
+
+interface BackgroundSpawnRecord {
+  createdAt: number;
+  result: {
+    agentType: string;
+    resolvedAgentType: string;
+    description?: string;
+    content: string;
+    sessionId: string;
+    taskId: string;
+    agentId: string;
+    outputFilePath?: string;
+    background: true;
+  };
+}
+
+const recentBackgroundSpawns = new Map<string, BackgroundSpawnRecord>();
+
+function hashString(value: string): string {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = Math.imul(31, hash) + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function pruneRecentBackgroundSpawns(now: number): void {
+  for (const [key, record] of recentBackgroundSpawns) {
+    if (now - record.createdAt > BACKGROUND_SPAWN_TTL_MS) {
+      recentBackgroundSpawns.delete(key);
+    }
+  }
+}
+
 export class AgentTool extends BaseTool {
   readonly name = AGENT_TOOL_NAME;
   readonly description = 'Launch a new agent to handle complex, multi-step tasks autonomously.';
@@ -84,8 +121,8 @@ export class AgentTool extends BaseTool {
       },
       run_in_background: {
         type: 'boolean',
-        description: 'Whether to run the agent in the background',
-        default: false,
+        description: 'Whether to run the agent in the background. Defaults to true; pass false only when the caller must wait for the result before continuing.',
+        default: true,
       },
       isolation: {
         type: 'string',
@@ -137,6 +174,19 @@ export class AgentTool extends BaseTool {
       const requestedAgentType = agentInput.subagent_type || 'general-purpose';
       const normalizedRequested = requestedAgentType.trim().toLowerCase();
       const canonicalRequestedType = agentTypeAliases[normalizedRequested] || requestedAgentType;
+      const effectiveRunInBackground = agentInput.run_in_background !== false;
+      const parentSessionId = context.options.sessionId;
+
+      logger.info('[SubAgent] Agent tool invoked', {
+        requestedAgentType,
+        canonicalRequestedType,
+        requestedRunInBackground: agentInput.run_in_background,
+        effectiveRunInBackground,
+        parentSessionId: context.options.sessionId,
+        toolUseId: context.toolUseId,
+        promptLength: agentInput.prompt?.length ?? 0,
+        availableAgentTypes: agentDefinitions.map((def: AgentDefinition) => def.agentType),
+      }, 'SubAgent')
 
       const agentDefinition = agentDefinitions.find((def: AgentDefinition) => {
         if (def.agentType === canonicalRequestedType) return true;
@@ -144,6 +194,12 @@ export class AgentTool extends BaseTool {
       });
 
       if (!agentDefinition) {
+        logger.warn('[SubAgent] requested agent type not found', {
+          requestedAgentType,
+          canonicalRequestedType,
+          availableAgentTypes: agentDefinitions.map((def: AgentDefinition) => def.agentType),
+          parentSessionId: context.options.sessionId,
+        }, 'SubAgent')
         return {
           id: crypto.randomUUID(),
           name: this.name,
@@ -152,6 +208,33 @@ export class AgentTool extends BaseTool {
           }),
           error: true,
         };
+      }
+
+      const subAgentName = agentInput.name || agentDefinition.agentType;
+      if (effectiveRunInBackground && parentSessionId) {
+        const now = Date.now();
+        pruneRecentBackgroundSpawns(now);
+        const promptHash = hashString(agentInput.prompt.trim());
+        const spawnKeys = [
+          `${parentSessionId}:tool:${context.toolUseId}`,
+          `${parentSessionId}:semantic:${agentDefinition.agentType}:${subAgentName}:${promptHash}`,
+        ];
+        const existingSpawn = spawnKeys
+          .map((key) => recentBackgroundSpawns.get(key))
+          .find((record): record is BackgroundSpawnRecord => Boolean(record));
+        if (existingSpawn) {
+          logger.warn('[SubAgent] duplicate background spawn suppressed', {
+            parentSessionId,
+            toolUseId: context.toolUseId,
+            subAgentSessionId: existingSpawn.result.sessionId,
+            taskId: existingSpawn.result.taskId,
+          }, 'SubAgent')
+          return {
+            id: crypto.randomUUID(),
+            name: this.name,
+            result: JSON.stringify(existingSpawn.result),
+          };
+        }
       }
 
       const promptMessages = [
@@ -163,7 +246,6 @@ export class AgentTool extends BaseTool {
       ];
 
       const subAgentSessionId = crypto.randomUUID();
-      const subAgentName = agentInput.name || agentDefinition.agentType;
       try {
         await sessionDb.create({
           id: subAgentSessionId,
@@ -177,17 +259,27 @@ export class AgentTool extends BaseTool {
           agent_type: 'sub-agent',
           agent_name: subAgentName,
         });
+        logger.info('[SubAgent] DB session created', {
+          subAgentSessionId,
+          parentSessionId: context.options.sessionId,
+          agentType: agentDefinition.agentType,
+          agentName: subAgentName,
+        }, 'SubAgent')
       } catch (err) {
-        console.warn('[AgentTool] Failed to create sub-agent session in DB:', err);
+        logger.warn('[SubAgent] failed to create DB session', {
+          subAgentSessionId,
+          parentSessionId: context.options.sessionId,
+          agentType: agentDefinition.agentType,
+          err,
+        }, 'SubAgent')
       }
 
       // Shared helper: build a `chat:agent_progress` SSE payload for a
       // single sub-agent progress event. See agentLifecycleBridge for the
-      // full wire-format contract (router → SSE → renderer remap).
-      const parentSessionId = context.options.sessionId
+      // full wire-format contract (router -> SSE -> renderer remap).
       // taskId is declared here (synchronously, before payloadMeta) so the
       // closure below can capture it. For non-background invocations the
-      // value is unused — the executor's pendingProgress is the only sink.
+      // value is unused; the executor's pendingProgress is the only sink.
       const taskId = crypto.randomUUID()
       const payloadMeta: AgentProgressPayloadMeta = {
         parentSessionId: parentSessionId ?? '',
@@ -198,26 +290,22 @@ export class AgentTool extends BaseTool {
         agentDescription: agentInput.description || agentInput.name,
       }
 
-      // For background sub-agents, intermediate events (text, thinking,
-      // tool_use, tool_result) are emitted directly to SSE so the UI
-      // sees them live. The previous path forwarded them to
-      // context.reportAgentProgress, which buffered them into
-      // pendingProgress and only drained on the parent's next `done`
-      // yield — leaving the UI stuck on "initializing agent" for the
-      // entire duration of the sub-agent. Terminal events (`done`,
-      // `error`) are emitted via emitTerminalProgress below and also
-      // call context.notifyBackgroundDone to flip the executor's
-      // `backgroundDone` flag without re-buffering the duplicate.
+      // Background sub-agent progress is streamed directly to SSE while
+      // terminal result ownership lives in BackgroundAgentLifecycle.
       const emitLiveProgress = (event: AgentProgressEvent) => {
         if (!parentSessionId) return
         try {
           sendEvent(buildChatAgentProgressPayload(event, payloadMeta))
         } catch (err) {
-          console.warn('[AgentTool] Failed to emit live agent_progress:', err)
+          logger.warn('[SubAgent] failed to emit live agent_progress', {
+            taskId,
+            eventType: event.type,
+            err,
+          }, 'SubAgent')
         }
       }
 
-      const onProgress = agentInput.run_in_background
+      const onProgress = effectiveRunInBackground
         ? emitLiveProgress
         : context.reportAgentProgress
           ? (event: AgentProgressEvent) => {
@@ -231,18 +319,49 @@ export class AgentTool extends BaseTool {
             }
           : undefined;
 
-      if (agentInput.run_in_background) {
-        const startTime = Date.now()
-
-        backgroundTaskRegistry.register({
+      if (effectiveRunInBackground) {
+        const record = backgroundAgentLifecycle.register({
           taskId,
-          sessionId: subAgentSessionId,
+          parentSessionId: parentSessionId ?? '',
+          subAgentSessionId,
           agentType: agentDefinition.agentType,
-          agentName: agentInput.name,
-          status: 'running',
-          startedAt: Date.now(),
-          onProgress,
+          agentName: subAgentName,
+          description: agentInput.description || agentInput.name || subAgentName,
+          abortController: new AbortController(),
         })
+
+        logger.info('[SubAgent] background task registered', {
+          taskId,
+          parentSessionId,
+          subAgentSessionId,
+          agentType: agentDefinition.agentType,
+          agentName: subAgentName,
+          outputFilePath: record.outputFilePath,
+        }, 'SubAgent')
+
+        const backgroundResult: BackgroundSpawnRecord['result'] = {
+          agentType: requestedAgentType,
+          resolvedAgentType: agentDefinition.agentType,
+          description: agentInput.description || agentInput.name,
+          content: `[Agent launched in background: ${subAgentName}]`,
+          sessionId: subAgentSessionId,
+          taskId,
+          agentId: taskId,
+          outputFilePath: record.outputFilePath,
+          background: true,
+        };
+        if (parentSessionId) {
+          const spawnRecord: BackgroundSpawnRecord = {
+            createdAt: Date.now(),
+            result: backgroundResult,
+          };
+          const promptHash = hashString(agentInput.prompt.trim());
+          recentBackgroundSpawns.set(`${parentSessionId}:tool:${context.toolUseId}`, spawnRecord);
+          recentBackgroundSpawns.set(
+            `${parentSessionId}:semantic:${agentDefinition.agentType}:${subAgentName}:${promptHash}`,
+            spawnRecord
+          );
+        }
 
         // Emit a 'started' progress event synchronously so the UI can grab
         // subAgentSessionId at t=0 instead of waiting for the first real
@@ -251,7 +370,7 @@ export class AgentTool extends BaseTool {
           try {
             sendEvent(buildChatAgentProgressPayload({ type: 'started', agentId: taskId }, payloadMeta))
           } catch (err) {
-            console.warn('[AgentTool] Failed to emit spawn agent_progress:', err)
+            logger.warn('[SubAgent] failed to emit spawn agent_progress', { taskId, err }, 'SubAgent')
           }
         }
 
@@ -266,97 +385,41 @@ export class AgentTool extends BaseTool {
           description: agentInput.description || agentInput.name,
           onProgress,
           sessionId: subAgentSessionId,
-        });
+        }) as AsyncGenerator<unknown, void>;
 
-        (async () => {
-          if (!parentSessionId) return
-          const emitTerminalProgress = (event: AgentProgressEvent) => {
-            // Forward the sub-agent's terminal progress event directly to the
-            // worker stdout so router.ts can stream it to the parent SSE client.
-            // We do NOT call onProgress (which would re-buffer into
-            // pendingProgress) and we do NOT push to pendingProgress via
-            // reportAgentProgress — both would cause duplicate `done` events
-            // to fire (once now via SSE, once later when pendingProgress
-            // is drained by getRemainingResults). Instead, use the new
-            // notifyBackgroundDone hook which only flips the executor's
-            // `backgroundDone` flag and wakes the wait loop.
-            try {
-              sendEvent(buildChatAgentProgressPayload(event, payloadMeta))
-            } catch (err) {
-              console.warn('[AgentTool] Failed to emit terminal agent_progress:', err)
-            }
-            context.notifyBackgroundDone?.()
-          }
+        logger.info('[SubAgent] background run scheduled', {
+          taskId,
+          subAgentSessionId,
+          agentType: agentDefinition.agentType,
+        }, 'SubAgent')
 
+        void backgroundAgentLifecycle.run(taskId, agentGenerator).finally(async () => {
+          const snapshot = backgroundAgentLifecycle.getSnapshot(taskId)
+          logger.info('[SubAgent] background run finalized', {
+            taskId,
+            subAgentSessionId,
+            status: snapshot?.status,
+            error: snapshot?.error,
+          }, 'SubAgent')
           try {
-            let lastMessage: Message | undefined
-            for await (const message of agentGenerator) {
-              lastMessage = message
-            }
-            try {
-              await sessionDb.update(subAgentSessionId, {
-                status: 'completed',
-                updated_at: Date.now(),
-              })
-            } catch (err) {
-              console.warn('[AgentTool] Failed to update sub-agent session status:', err)
-            }
-
-            if (lastMessage) {
-              const content = Array.isArray(lastMessage.content)
-                ? lastMessage.content.filter(
-                    (b): b is { type: 'text'; text: string } =>
-                      b.type === 'text' && typeof (b as { text: string }).text === 'string'
-                  )
-                : typeof lastMessage.content === 'string'
-                  ? [{ type: 'text' as const, text: lastMessage.content }]
-                  : [{ type: 'text' as const, text: String(lastMessage.content) }]
-
-              const metadata = (lastMessage as { metadata?: Record<string, unknown> }).metadata || {}
-              const result: BackgroundTaskResult = {
-                content,
-                totalTokens: 0,
-                totalDurationMs: (metadata.agentDurationMs as number) || 0,
-                totalToolUseCount: (metadata.agentToolCallCount as number) || 0,
-              }
-              backgroundTaskRegistry.complete(taskId, result)
-            } else {
-              backgroundTaskRegistry.complete(taskId, {
-                content: [{ type: 'text', text: `[Agent ${agentDefinition.agentType}] completed with no output.` }],
-                totalTokens: 0,
-                totalDurationMs: Date.now() - startTime,
-                totalToolUseCount: 0,
-              })
-            }
-
-            emitTerminalProgress({
-              type: 'done',
-              duration: Date.now() - startTime,
-              agentId: taskId,
+            await sessionDb.update(subAgentSessionId, {
+              status: snapshot?.status === 'completed' ? 'completed' : 'error',
+              updated_at: Date.now(),
             })
           } catch (err) {
-            const errMsg = err instanceof Error ? err.message : 'Unknown error'
-            backgroundTaskRegistry.fail(taskId, errMsg)
-            emitTerminalProgress({
-              type: 'error',
-              data: errMsg,
-              agentId: taskId,
-            })
+            logger.warn('[SubAgent] failed to update session status', {
+              taskId,
+              subAgentSessionId,
+              err,
+            }, 'SubAgent')
           }
-        })();
+        })
+
 
         return {
           id: crypto.randomUUID(),
           name: this.name,
-          result: JSON.stringify({
-            agentType: requestedAgentType,
-            resolvedAgentType: agentDefinition.agentType,
-            description: agentInput.description || agentInput.name,
-            content: `[Agent launched in background: ${subAgentName}]`,
-            sessionId: subAgentSessionId,
-            taskId,
-            background: true,
-          }),
+          result: JSON.stringify(backgroundResult),
         };
       }
 
@@ -390,7 +453,10 @@ export class AgentTool extends BaseTool {
           updated_at: Date.now(),
         });
       } catch (err) {
-        console.warn('[AgentTool] Failed to update sub-agent session status:', err);
+        logger.warn('[SubAgent] failed to update foreground session status', {
+          subAgentSessionId,
+          err,
+        }, 'SubAgent')
       }
 
       let resultText = '';
@@ -442,6 +508,10 @@ export class AgentTool extends BaseTool {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error('[SubAgent] Agent tool execution failed', error as Error, {
+        message: errorMessage,
+        parentSessionId: context?.options.sessionId,
+      }, 'SubAgent')
       return {
         id: crypto.randomUUID(),
         name: this.name,

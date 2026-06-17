@@ -14,12 +14,16 @@ import { SettingsView } from "@/components/settings/SettingsView";
 import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
 import { FontProvider } from "@/contexts/FontContext";
+import { StartupLanding, type StartupLandingPhase } from "@/components/StartupLanding";
 import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, subscribeToDbPersisted, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages } from "@/lib/stream-session-manager";
 import { useSettings } from "@/hooks/useSettings";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
+
+/** Boot splash lifecycle. Re-exported from StartupLanding for convenience. */
+type BootSplashPhase = StartupLandingPhase;
 
 const ACTIVE_LIKE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 const isActiveLike = (phase: StreamPhase) => ACTIVE_LIKE_PHASES.includes(phase);
@@ -106,7 +110,7 @@ function mergeOptimisticMessagesForCompletedStream(
   ];
 }
 
-export function App() {
+export function App({ onReady }: { onReady?: () => void } = {}) {
   // Plan 203 L1: a single QueryClient per app. The L1 hooks
   // (`useProvidersQuery`, mutation hooks, `useActiveProviderId`,
   // `useConfigUpdateSubscription`) all rely on this provider.
@@ -135,14 +139,14 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <FontProvider>
-          <AppShellInner />
+          <AppShellInner onReady={onReady} />
         </FontProvider>
       </I18nProvider>
     </QueryClientProvider>
   );
 }
 
-function AppShellInner() {
+function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   const {
     currentView,
     activeThreadId,
@@ -151,6 +155,7 @@ function AppShellInner() {
     setCurrentView,
     addMessage,
     loadThreadMessages,
+    isHydrated,
   } = useConversationStore();
   const { settings } = useSettings();
   const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
@@ -159,6 +164,45 @@ function AppShellInner() {
   const [streamingSnapshot, setStreamingSnapshot] = useState<SessionStreamSnapshot | null>(null);
   const lastCancelTimeRef = useRef(0);
   const prevPhaseRef = useRef<StreamPhase>('idle');
+
+  // -------------------------------------------------------------------
+  // First-launch splash lifecycle.
+  //
+  // Show a branded overlay covering the window from "React mounted" to
+  // "active session's messages are in the store". Once we transition to
+  // 'fading' / 'hidden' the splash never returns within this run — session
+  // switches do NOT re-trigger it (per product decision: "仅首次启动").
+  //
+  // "Ready" means BOTH:
+  //   (a) `isHydrated` (zustand persist finished loading localStorage), and
+  //   (b) either no `activeThreadId` is restored, OR `messages[activeThreadId]`
+  //       has been set (even to an empty array — that's the post-load state).
+  // -------------------------------------------------------------------
+  const [bootPhase, setBootPhase] = useState<BootSplashPhase>("visible");
+  const [bootStatus, setBootStatus] = useState("Loading workspace\u2026");
+  const onReadyRef = useRef(onReady);
+  useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
+
+  // Derived booleans keep the effect from re-firing on every messages-map mutation.
+  const activeSessionLoaded =
+    !activeThreadId || messages[activeThreadId] !== undefined;
+
+  useEffect(() => {
+    if (bootPhase !== "visible") return;
+    if (!isHydrated) {
+      setBootStatus("Loading workspace\u2026");
+      return;
+    }
+    if (!activeSessionLoaded) {
+      setBootStatus("Preparing session\u2026");
+      return;
+    }
+    // Ready — start the 200ms fade-out, then unmount.
+    onReadyRef.current?.();
+    setBootPhase("fading");
+    const t = window.setTimeout(() => setBootPhase("hidden"), 220);
+    return () => window.clearTimeout(t);
+  }, [isHydrated, activeSessionLoaded, bootPhase]);
 
   useEffect(() => {
     if (!wikiAgentEnabled && currentView === 'memory') {
@@ -452,6 +496,9 @@ function AppShellInner() {
     <I18nProvider>
       <FontProvider>
         <AppShell>{renderView()}</AppShell>
+        {bootPhase !== "hidden" && (
+          <StartupLanding phase={bootPhase} status={bootStatus} />
+        )}
       </FontProvider>
     </I18nProvider>
   );

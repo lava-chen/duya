@@ -10,6 +10,7 @@
  */
 
 import type { PromptProfile } from './modes/types.js'
+import type { OverlayPatchConfig } from './modes/types.js'
 import type { PromptSystem } from './PromptSystem.js'
 import { DEFAULT_PROMPT_PROFILE } from './modes/index.js'
 
@@ -37,12 +38,44 @@ export function profileKey(profile: PromptProfile): string {
 export class PromptsRegistry {
   private static systems = new Map<string, PromptSystemFactory>()
   private static instances = new Map<string, PromptSystem>()
+  /**
+   * Runtime-registered overlay patches contributed by subsystems
+   * (e.g. `@duya/conductor`). These are looked up by `resolveOverlayPatch`
+   * in `./modes/index.ts` for any overlay name that is not part of the
+   * built-in `OVERLAY_SECTION_PATCHES` map.
+   */
+  private static overlayPatches = new Map<string, OverlayPatchConfig>()
 
   /**
    * Register a prompt system factory.
    */
   static register(name: string, factory: PromptSystemFactory): void {
     this.systems.set(name, factory)
+  }
+
+  /**
+   * Register a runtime overlay patch contributed by a subsystem
+   * (e.g. `@duya/conductor` registers its `'conductor'` overlay here).
+   * The agent itself never hard-codes subsystem overlays — the
+   * `PromptOverlay` union is intentionally open (`string & {}`) so
+   * subsystems can plug in without agent recompile.
+   */
+  static registerOverlayPatch(name: string, patch: OverlayPatchConfig): void {
+    this.overlayPatches.set(name, patch)
+  }
+
+  /**
+   * Get a previously registered overlay patch by name, or undefined.
+   */
+  static getOverlayPatch(name: string): OverlayPatchConfig | undefined {
+    return this.overlayPatches.get(name)
+  }
+
+  /**
+   * Get all runtime-registered overlay patch names.
+   */
+  static getRegisteredOverlayPatchNames(): string[] {
+    return Array.from(this.overlayPatches.keys())
   }
 
   /**
@@ -127,6 +160,7 @@ export class PromptsRegistry {
         this.instances.delete(key)
       }
     }
+    this.overlayPatches.delete(name)
     return this.systems.delete(name)
   }
 }

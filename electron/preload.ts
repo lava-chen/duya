@@ -103,7 +103,9 @@ export interface ThreadAPI {
   delete: (id: string) => Promise<boolean>
   listByParentId: (parentId: string) => Promise<unknown[]>
   getTasks: (sessionId: string) => Promise<unknown[]>
+  createTask: (data: Record<string, unknown>) => Promise<unknown>
   updateTask: (id: string, data: Record<string, unknown>) => Promise<unknown>
+  deleteTask: (id: string) => Promise<boolean>
 }
 
 export interface SessionAPI {
@@ -883,6 +885,13 @@ export interface ElectronAPI {
     getDefaultWorkspace: () => Promise<string>
     createProjectFolder: (projectName: string) => Promise<{ success: boolean; error: string; path: string }>
   }
+  system: {
+    getLocation: () => Promise<{
+      locale: string
+      localeCountryCode: string | null
+      timezone: string
+    }>
+  }
   agent: AgentAPI
   projects: {
     getRecentFolders: () => Promise<string[]>
@@ -1471,6 +1480,9 @@ const electronAPI: ElectronAPI = {
     getDefaultWorkspace: () => ipcRenderer.invoke('app:get-default-workspace'),
     createProjectFolder: (projectName: string) => ipcRenderer.invoke('app:create-project-folder', projectName),
   },
+  system: {
+    getLocation: () => ipcRenderer.invoke('system:get-location'),
+  },
   agent: {
     streamChat: (prompt, options) => ipcRenderer.invoke('agent:stream', { prompt, options }),
     interrupt: () => ipcRenderer.invoke('agent:interrupt'),
@@ -1580,7 +1592,9 @@ const electronAPI: ElectronAPI = {
     delete: (id: string) => ipcRenderer.invoke('db:session:delete', id),
     listByParentId: (parentId: string) => ipcRenderer.invoke('db:session:listByParentId', parentId),
     getTasks: (sessionId: string) => ipcRenderer.invoke('db:task:getBySession', sessionId),
+    createTask: (data: Record<string, unknown>) => ipcRenderer.invoke('db:task:create', data),
     updateTask: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:task:update', id, data),
+    deleteTask: (id: string) => ipcRenderer.invoke('db:task:delete', id),
   },
   session: {
     saveDraft: (sessionId: string, draft: string) => ipcRenderer.invoke('db:session:saveDraft', sessionId, draft),

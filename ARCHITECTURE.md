@@ -798,6 +798,10 @@ duya/
 │       └── gateway-communicator.ts # Gateway IPC 处理器
 │
 ├── packages/agent/src/
+│   ├── index.ts                  # Pure barrel: re-exports public API + `duyaAgent` from `./agent/DuyaAgent.js`
+│   ├── agent/                    # duyaAgent class implementation home
+│   │   ├── DuyaAgent.ts          # `duyaAgent` class (~1900 LoC) + module-level helpers used only by it
+│   │   └── helpers.ts            # `extractTextFromContent`, `collectRecentImageAttachments`
 │   ├── process/
 │   │   └── agent-process-entry.ts  # Agent Process 入口（ChildProcess 模式）
 │   ├── ipc/

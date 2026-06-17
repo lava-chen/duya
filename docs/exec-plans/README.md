@@ -125,6 +125,7 @@ Source: [problems-analysis.md](./problems-analysis.md) — 10 个首次测试问
 |------|-------------|----------|--------|
 | [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | 引导流程大修 | P0 | 待开始 |
 | [42-document-parser-service](./active/42-document-parser-service.md) | 文档解析服务 | P1 | Phase 1 待开始 |
+| [43-startup-landing](./active/43-startup-landing.md) | 首次启动品牌化 landing 页 — 覆盖 window 打开 → React mount → DB hydrate → session 渲染整个空白期，200ms 淡出，仅首次启动 | P1 | Phase 1 ✅ |
 | [44-skills-sync-fix](./active/44-skills-sync-fix.md) | Skills 同步修复 | P0 | In Progress |
 
 ### Wiki Agent — Persistent Knowledge Network
@@ -192,6 +193,7 @@ Moved here when finished. Each includes:
 | [98-cli-channel-cron-message](./completed/98-cli-channel-cron-message.md) | CLI Channel / Cron / Message | 2026-06-04 |
 | [99-cli-split-and-control-plane](./completed/99-cli-split-and-control-plane.md) | CLI Split & Control Plane | 2026-06-04 |
 | [102-duya-config-into-cli](./completed/102-duya-config-into-cli.md) | Merge `duya_config` into `duya_cli` — single control-plane entry | 2026-06-04 |
+| [211-duya-agent-refactor](./completed/211-duya-agent-refactor.md) | `packages/agent/src/index.ts` Code Quality Refactor — `index.ts` 2326→226 纯 barrel,`agent/DuyaAgent.ts` 实现家,`streamChat` 拆 5 helpers + `_dispatchMode`,`_activeMode: any`→`BaseMode \| null`,`compressHistory` `@deprecated`,`console.log`→`logger` | 2026-06-16 |
 
 ## Tech Debt
 

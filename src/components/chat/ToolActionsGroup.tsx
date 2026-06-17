@@ -162,7 +162,7 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    match: (n) => ['agent', 'task', 'subagent', 'sub_agent'].includes(n.toLowerCase()),
+    match: (n) => ['agent', 'subagent', 'sub_agent'].includes(n.toLowerCase()),
     icon: RobotIcon,
     labelKey: 'streaming.toolAction.label.agent',
     getSummary: (input) => {
@@ -230,6 +230,17 @@ type ToolStatus = 'running' | 'success' | 'error';
 function getStatus(tool: ToolAction): ToolStatus {
   if (tool.result === undefined) return 'running';
   return tool.isError ? 'error' : 'success';
+}
+
+function isLegacySubAgentToolAction(tool: ToolAction): boolean {
+  const lowerName = tool.name.toLowerCase();
+  if (lowerName !== 'task') return false;
+  const input = tool.input as Record<string, unknown> | undefined;
+  if (typeof input?.prompt === 'string' || typeof input?.subagent_type === 'string') {
+    return true;
+  }
+  const parsed = parseSubAgentToolResult(tool.result);
+  return Boolean(parsed?.sessionId || parsed?.background);
 }
 
 function StatusDot({ status }: { status: ToolStatus }) {
@@ -809,18 +820,18 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+            <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
               {/* Shell label */}
-              <div className="text-[11px] text-neutral-400 font-medium mb-1.5">{shellLabel}</div>
+              <div className="text-[11px] tool-card-muted font-medium mb-1.5">{shellLabel}</div>
 
               {/* Command with copy button */}
-              <div className="group relative font-mono text-[13px] text-neutral-200 leading-relaxed pr-7">
-                <span className="text-neutral-400 mr-1.5 select-none">$</span>
+              <div className="group relative font-mono text-[13px] tool-card-subtle leading-relaxed pr-7">
+                <span className="tool-card-muted mr-1.5 select-none">$</span>
                 <span className="break-all">{cmd}</span>
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); handleCopy(); }}
-                  className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-neutral-500 hover:text-neutral-300 hover:bg-white/5"
+                  className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded tool-card-faint hover:tool-card-subtle hover:bg-black/5 dark:hover:bg-white/5"
                   title="Copy command"
                 >
                   {copied ? <CheckCircleIcon size={14} className="text-green-500" /> : <CopyIcon size={14} />}
@@ -829,11 +840,11 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
 
               {/* Output */}
               {displayLines ? (
-                <div className="font-mono text-[12px] text-neutral-400 whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed mt-1.5">
+                <div className="font-mono text-[12px] tool-card-muted whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed mt-1.5">
                   {displayLines}
                 </div>
               ) : (
-                <div className="text-[12px] text-neutral-500 italic mt-1.5">No output</div>
+                <div className="text-[12px] tool-card-faint italic mt-1.5">No output</div>
               )}
 
               {/* Status badge - bottom right */}
@@ -949,22 +960,22 @@ function DuyaCliToolRow({ tool }: { tool: ToolAction }) {
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
-              <div className="font-mono text-[13px] text-neutral-200 leading-relaxed">
+            <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
+              <div className="font-mono text-[13px] tool-card-subtle leading-relaxed">
                 <span className="break-all">{cmd}</span>
               </div>
 
               {hasStdout && (
                 <>
-                  <div className="border-t border-white/10 mt-2 mb-1.5" />
-                  <div className="font-mono text-[12px] text-neutral-300 whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed">
+                  <div className="mt-2 mb-1.5" style={{ borderTop: '1px solid var(--tool-card-divider)' }} />
+                  <div className="font-mono text-[12px] tool-card-subtle whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed">
                     {stdout}
                   </div>
                 </>
               )}
 
               {!hasStdout && !isRunning && (
-                <div className="text-[12px] text-neutral-500 italic mt-2">No output</div>
+                <div className="text-[12px] tool-card-faint italic mt-2">No output</div>
               )}
 
               <div className="mt-1 flex justify-end">
@@ -1030,14 +1041,32 @@ function SubAgentToolRow({
   const toolUseCount = subAgentEvents.filter((e) => e.type === 'tool_use').length;
   const toolResultCount = subAgentEvents.filter((e) => e.type === 'tool_result').length;
   const unresolvedTools = Math.max(0, toolUseCount - toolResultCount);
+  const latestEvent = subAgentEvents[subAgentEvents.length - 1];
+  const liveStatusText = (() => {
+    if (!latestEvent) return null;
+    if (latestEvent.type === 'started') return 'Started';
+    if (latestEvent.type === 'thinking') return latestEvent.data || 'Thinking';
+    if (latestEvent.type === 'tool_use') return `Running ${latestEvent.toolName || 'tool'}`;
+    if (latestEvent.type === 'tool_result') return `Finished ${latestEvent.toolName || 'tool'}`;
+    if (latestEvent.type === 'text') return latestEvent.data || 'Writing';
+    if (latestEvent.type === 'done') return 'Completed';
+    if (latestEvent.type === 'error') return 'Failed';
+    return null;
+  })();
 
   // Build progress steps from events
   const steps = React.useMemo(() => {
     const result: Array<{ type: string; title: string; status: 'running' | 'done' | 'error' }> = [];
     for (const event of subAgentEvents) {
-      if (event.type === 'thinking') {
+      if (event.type === 'started') {
+        result.push({ type: 'started', title: 'Started', status: 'running' });
+      } else if (event.type === 'thinking') {
+        const started = result.find((s) => s.type === 'started' && s.status === 'running');
+        if (started) started.status = 'done';
         result.push({ type: 'thinking', title: 'Thinking', status: 'done' });
       } else if (event.type === 'tool_use') {
+        const started = result.find((s) => s.type === 'started' && s.status === 'running');
+        if (started) started.status = 'done';
         result.push({ type: 'tool', title: `Run ${event.toolName || 'Tool'}`, status: 'running' });
       } else if (event.type === 'tool_result') {
         // Mark last running tool as done
@@ -1079,7 +1108,7 @@ function SubAgentToolRow({
           className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
         />
         <RobotIcon size={14} className="shrink-0 text-muted-foreground" />
-        <span className="font-medium text-muted-foreground shrink-0">Agent</span>
+        <span className="font-medium text-muted-foreground shrink-0">Sub-agent</span>
         <span
           className={`font-mono truncate flex-1 text-left transition-colors ${
             hovered ? 'text-foreground' : 'text-muted-foreground/60'
@@ -1113,7 +1142,7 @@ function SubAgentToolRow({
             <div className="ml-4 mt-1 border-l-2 border-border/30 pl-3 py-2">
               {steps.length === 0 ? (
                 <div className="text-[11px] text-muted-foreground/60">
-                  {isRunning ? 'Initializing...' : 'Completed'}
+                  {liveStatusText || (isRunning ? 'Initializing...' : 'Completed')}
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -1135,22 +1164,22 @@ function SubAgentToolRow({
                 </div>
               )}
               {(parsedResult?.resolvedAgentType || parsedResult?.sessionId) && (
-                <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-neutral-500">
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] tool-card-faint">
                   {(parsedResult?.resolvedAgentType || parsedResult?.agentType) && (
-                    <span className="rounded-full border border-white/10 px-2 py-0.5">
+                    <span className="rounded-full border border-tool-card-divider px-2 py-0.5" style={{ borderColor: 'var(--tool-card-divider)' }}>
                       {parsedResult?.resolvedAgentType || parsedResult?.agentType}
                     </span>
                   )}
                   {parsedResult?.sessionId && (
-                    <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono">
+                    <span className="rounded-full border border-tool-card-divider px-2 py-0.5 font-mono" style={{ borderColor: 'var(--tool-card-divider)' }}>
                       {parsedResult.sessionId.slice(0, 8)}
                     </span>
                   )}
                 </div>
               )}
               {displayResult && (
-                <div className="mt-2 rounded-md bg-black/10 p-2">
-                  <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none message-content max-h-[160px] overflow-y-auto pr-1 text-[12px] text-neutral-300">
+                <div className="mt-2 rounded-md tool-card p-2">
+                  <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none message-content max-h-[160px] overflow-y-auto pr-1 text-[12px] tool-card-subtle">
                     {displayResult}
                   </MarkdownRenderer>
                 </div>
@@ -1288,7 +1317,7 @@ function ReadToolRow({ tool }: { tool: ToolAction }) {
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+            <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
               {renderedResult}
 
               {/* Status badge - bottom right */}
@@ -1406,9 +1435,9 @@ function AskUserQuestionResultRow({ tool }: { tool: ToolAction }) {
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+            <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
               {/* Tool label — same chrome as BashToolRow's "Shell"/"Bash" tag */}
-              <div className="text-[11px] text-neutral-400 font-medium mb-1.5">
+              <div className="text-[11px] tool-card-muted font-medium mb-1.5">
                 AskUserQuestion
               </div>
 
@@ -1416,16 +1445,16 @@ function AskUserQuestionResultRow({ tool }: { tool: ToolAction }) {
               {parsedAnswers.length > 0 ? (
                 <div className="space-y-1">
                   {parsedAnswers.map((pair, i) => (
-                    <div key={i} className="font-mono text-[12px] text-neutral-200 leading-relaxed">
-                      <span className="text-neutral-400 mr-1.5 select-none">›</span>
+                    <div key={i} className="font-mono text-[12px] tool-card-subtle leading-relaxed">
+                      <span className="tool-card-muted mr-1.5 select-none">›</span>
                       <span className="break-words">{pair.q}</span>
-                      <span className="text-neutral-500 mx-1.5">→</span>
+                      <span className="tool-card-faint mx-1.5">→</span>
                       <span className="text-emerald-400 break-words">{pair.a}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="font-mono text-[12px] text-neutral-300 whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed">
+                <div className="font-mono text-[12px] tool-card-subtle whitespace-pre-wrap break-all max-h-[150px] overflow-auto leading-relaxed">
                   {tool.result}
                 </div>
               )}
@@ -1549,17 +1578,17 @@ function MemoryEntryLine({ entry }: { entry: MemoryEntry }) {
             {entry.type}
           </span>
         )}
-        <span className="text-[12px] text-neutral-100 break-words flex-1 min-w-0">
+        <span className="text-[12px] tool-card-text break-words flex-1 min-w-0">
           {entry.summary || '(no summary)'}
         </span>
         {entry.timestamp && (
-          <span className="text-[10px] text-neutral-500 font-mono tabular-nums shrink-0">
+          <span className="text-[10px] tool-card-faint font-mono tabular-nums shrink-0">
             § {entry.timestamp}
           </span>
         )}
       </div>
       {content && (
-        <div className="text-[11px] text-neutral-400 mt-1 whitespace-pre-wrap break-words leading-relaxed">
+        <div className="text-[11px] tool-card-muted mt-1 whitespace-pre-wrap break-words leading-relaxed">
           {content.length > 240 ? content.slice(0, 237) + '…' : content}
         </div>
       )}
@@ -1642,11 +1671,11 @@ function MemoryToolRow({ tool }: { tool: ToolAction }) {
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+            <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
               {/* Card header — same chrome as BashToolRow's "Shell" tag */}
               <div className="flex items-baseline gap-2 mb-2">
-                <span className="text-[11px] text-neutral-400 font-medium">Memory</span>
-                <span className="text-[10px] text-neutral-500 font-mono">{subLabel}</span>
+                <span className="text-[11px] tool-card-muted font-medium">Memory</span>
+                <span className="text-[10px] tool-card-faint font-mono">{subLabel}</span>
               </div>
 
               {/* Body — dispatched by action */}
@@ -1657,12 +1686,12 @@ function MemoryToolRow({ tool }: { tool: ToolAction }) {
               ) : action === 'list' ? (
                 <>
                   {parsed?.usage && (
-                    <div className="text-[10px] text-neutral-500 font-mono mb-1.5">
+                    <div className="text-[10px] tool-card-faint font-mono mb-1.5">
                       {parsed.usage}
                     </div>
                   )}
                   {entryCount === 0 ? (
-                    <div className="text-[12px] text-neutral-500 italic">No memories</div>
+                    <div className="text-[12px] tool-card-faint italic">No memories</div>
                   ) : (
                     <div className="space-y-1 max-h-[260px] overflow-auto pr-1">
                       {(parsed?.entries ?? []).map((entry, i) => (
@@ -1674,40 +1703,40 @@ function MemoryToolRow({ tool }: { tool: ToolAction }) {
               ) : action === 'add' || action === 'replace' ? (
                 <div className="space-y-1.5">
                   {typeof inp.oldText === 'string' && inp.oldText && (
-                    <div className="text-[11px] text-neutral-500 leading-relaxed">
-                      <span className="text-neutral-600 mr-1.5 select-none">−</span>
+                    <div className="text-[11px] tool-card-faint leading-relaxed">
+                      <span className="tool-card-faint mr-1.5 select-none">−</span>
                       <span className="line-through break-words">{inp.oldText}</span>
                     </div>
                   )}
-                  <div className="text-[12px] text-neutral-100 leading-relaxed">
+                  <div className="text-[12px] tool-card-text leading-relaxed">
                     <span className="text-emerald-500 mr-1.5 select-none">+</span>
                     <span className="break-words">
                       {typeof inp.summary === 'string' && inp.summary ? inp.summary : '(no summary)'}
                     </span>
                   </div>
                   {typeof inp.content === 'string' && inp.content && (
-                    <div className="text-[11px] text-neutral-400 mt-1 whitespace-pre-wrap break-words leading-relaxed border-l-2 border-emerald-500/30 pl-2">
+                    <div className="text-[11px] tool-card-muted mt-1 whitespace-pre-wrap break-words leading-relaxed border-l-2 border-emerald-500/30 pl-2">
                       {inp.content}
                     </div>
                   )}
                   {parsed?.message && (
-                    <div className="text-[10px] text-neutral-500 mt-1">{parsed.message}</div>
+                    <div className="text-[10px] tool-card-faint mt-1">{parsed.message}</div>
                   )}
                 </div>
               ) : action === 'remove' ? (
                 <div className="space-y-1.5">
                   {typeof inp.oldText === 'string' && inp.oldText && (
-                    <div className="text-[11px] text-neutral-400 leading-relaxed">
+                    <div className="text-[11px] tool-card-muted leading-relaxed">
                       <span className="text-red-400 mr-1.5 select-none">−</span>
                       <span className="line-through break-words">{inp.oldText}</span>
                     </div>
                   )}
                   {parsed?.message && (
-                    <div className="text-[10px] text-neutral-500">{parsed.message}</div>
+                    <div className="text-[10px] tool-card-faint">{parsed.message}</div>
                   )}
                 </div>
               ) : (
-                <div className="font-mono text-[11px] text-neutral-400 whitespace-pre-wrap break-all max-h-[200px] overflow-auto">
+                <div className="font-mono text-[11px] tool-card-muted whitespace-pre-wrap break-all max-h-[200px] overflow-auto">
                   {tool.result}
                 </div>
               )}
@@ -1927,7 +1956,7 @@ function FileEditToolRow({ tool }: { tool: ToolAction }) {
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-0.5 my-0.5 rounded-lg bg-[#2d2d2d] p-1.5 relative">
+            <div className="mx-0.5 my-0.5 rounded-lg tool-card p-1.5 relative">
               <SimpleDiffViewer
                 oldContent={diffPayload.oldContent}
                 newContent={diffPayload.newContent}
@@ -1977,8 +2006,9 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
   const status = getStatus(tool);
   const isDuyaCli = ['duya_cli', 'duya-cli', 'duyacli'].includes(tool.name.toLowerCase());
   const isBash = !isDuyaCli && renderer.icon === TerminalIcon;
-  const isSubAgent = renderer.icon === RobotIcon;
   const lowerName = tool.name.toLowerCase();
+  const isLegacySubAgent = isLegacySubAgentToolAction(tool);
+  const isSubAgent = renderer.icon === RobotIcon || isLegacySubAgent;
   const isFileEdit = FILE_EDIT_TOOLS.has(lowerName) || FILE_CREATE_TOOLS.has(lowerName);
   const isRead = ['read', 'readfile', 'read_file'].includes(lowerName);
   const isAskUserQuestion = isAskUserQuestionTool(tool.name);
@@ -2094,7 +2124,7 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-1 my-1 rounded-lg bg-[#2d2d2d] p-3 relative">
+            <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
               {renderedResult}
 
               {/* Status badge - bottom right */}

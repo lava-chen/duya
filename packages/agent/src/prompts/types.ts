@@ -184,6 +184,12 @@ export interface PromptContext {
   sessionStartTime: number
   /** Language preference for responses */
   language?: string
+  /** System locale/timezone from the user's machine (via IPC) or subprocess fallback. */
+  location?: {
+    locale: string
+    localeCountryCode: string | null
+    timezone: string
+  }
   /** Whether this is a git worktree */
   isWorktree?: boolean
   /** Whether this is a non-interactive session */
