@@ -39,10 +39,14 @@ export interface AgentProfile {
   promptProfile?: PromptProfileOverride;
 
   /**
-   * Which prompt system to use: 'general', 'code', 'conductor', or 'research'.
-   * Defaults to 'general' if not specified.
+   * Which prompt system to use. Built-in values: 'general', 'code',
+   * 'research'. Subsystem values (e.g. 'conductor' from
+   * `@duya/conductor`) are registered at runtime via
+   * `PromptsRegistry.register()`; the type is open (string) so the
+   * agent typecheck does not need to be updated when a new system
+   * lands. Defaults to 'general' if not specified.
    */
-  promptSystem?: 'general' | 'code' | 'conductor' | 'research';
+  promptSystem?: 'general' | 'code' | 'research' | (string & {});
 
   /** Whether this profile is selectable by users in the UI */
   userVisible: boolean;
@@ -165,6 +169,47 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     promptProfile: {
       enableSections: ['generalTaskGuidance'],
       disableSections: ['taskHandling', 'widgetGuidelines'],
+    },
+    promptSystem: 'general',
+    userVisible: false,
+    isPreset: true,
+    isEnabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+  {
+    id: 'conductor-refine',
+    name: 'Conductor Refine',
+    description:
+      'Side-panel agent that iteratively refines a single Conductor widget’s data from a screenshot + user instruction. Returns strict JSON only — the renderer applies the result via widget.update_data.',
+    allowedTools: ['Read', 'vision_analyze'],
+    disallowedTools: [
+      'Agent',
+      'canvas_*',
+      'show_widget',
+      'file:write*',
+      'file:edit*',
+      'exec:*',
+      'browser:*',
+      'gateway:*',
+      'cron',
+      'duya:*',
+      'memory',
+      'SessionSearch',
+      'WebSearch',
+      'WebFetch',
+    ],
+    promptProfile: {
+      disableSections: [
+        'taskHandling',
+        'memory',
+        'skills',
+        'sessionGuidance',
+        'agentsMd',
+        'widgetGuidelines',
+        'visionGuidelines',
+        'actions',
+      ],
     },
     promptSystem: 'general',
     userVisible: false,

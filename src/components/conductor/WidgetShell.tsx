@@ -4,6 +4,8 @@ import type { ConductorWidget } from "@/types/conductor";
 import { useConductorStore } from "@/stores/conductor-store";
 import { executeAction } from "@/lib/conductor-ipc";
 import { widgetRegistry } from "@/conductor/widgets/registry";
+import { useRefineCaptureTarget } from "@/conductor/refine/useRefineCaptureTarget";
+import { RefineToolbarButton } from "@/conductor/refine/RefineToolbarButton";
 import { X, Warning, SpinnerGap, Robot } from "@phosphor-icons/react";
 
 interface WidgetShellProps {
@@ -12,6 +14,7 @@ interface WidgetShellProps {
 
 export function WidgetShell({ widget }: WidgetShellProps) {
   const { editMode, activeCanvasId, removeWidget, agentStatus } = useConductorStore();
+  const captureRef = useRefineCaptureTarget(widget.id);
 
   const WidgetContent = widgetRegistry.get(widget.type)?.component;
   const isAgentEditing = agentStatus === "streaming" || agentStatus === "tool_use" || agentStatus === "thinking";
@@ -43,7 +46,11 @@ export function WidgetShell({ widget }: WidgetShellProps) {
   };
 
   return (
-    <div className="flex flex-col h-full rounded-xl border border-[var(--border)] bg-[var(--main-bg)] overflow-hidden shadow-sm transition-all duration-300 hover:shadow-md group">
+    <div
+      ref={captureRef}
+      data-testid={`widget-shell-${widget.id}`}
+      className="flex flex-col h-full rounded-xl border border-[var(--border)] bg-[var(--main-bg)] overflow-hidden shadow-sm transition-all duration-300 hover:shadow-md group"
+    >
       <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)] flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           {isAgentEditing && widget.state === "agent-editing" ? (
@@ -63,16 +70,19 @@ export function WidgetShell({ widget }: WidgetShellProps) {
           )}
         </div>
         {editMode && (
-          <button
-            type="button"
-            onClick={handleDelete}
-            className="flex items-center justify-center w-5 h-5 rounded-md text-[var(--muted)] hover:bg-[var(--error-soft)] hover:text-[var(--error)] transition-colors"
-            style={{ opacity: 0 }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = "0")}
-          >
-            <X size={12} />
-          </button>
+          <div className="flex items-center gap-1">
+            <RefineToolbarButton widgetId={widget.id} />
+            <button
+              type="button"
+              onClick={handleDelete}
+              className="flex items-center justify-center w-5 h-5 rounded-md text-[var(--muted)] hover:bg-[var(--error-soft)] hover:text-[var(--error)] transition-colors"
+              style={{ opacity: 0 }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = "0")}
+            >
+              <X size={12} />
+            </button>
+          </div>
         )}
       </div>
       <div className="flex-1 min-h-0 overflow-auto p-3">

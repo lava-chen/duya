@@ -11,6 +11,7 @@ import { useConductorStore } from "@/stores/conductor-store";
 import { listCanvases, createCanvas, getSnapshot, executeAction } from "@/lib/conductor-ipc";
 import { registerAllElements } from "@/conductor/elements";
 import "@/conductor/widgets";
+import { RefinePanel } from "@/conductor/refine/RefinePanel";
 import type { CanvasPosition } from "@/types/conductor";
 
 export function ConductorView() {
@@ -160,6 +161,8 @@ export function ConductorView() {
         </div>
 
         {historyOpen && <HistoryPanel />}
+
+        <RefinePanel />
       </div>
     </div>
   );
