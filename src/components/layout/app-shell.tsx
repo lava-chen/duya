@@ -2,6 +2,7 @@
 
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
+import { TaskDrawer } from "@/components/layout/TaskDrawer";
 import { UpdateBadge } from "@/components/update/UpdateBadge";
 import { lazy, Suspense, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -145,6 +146,7 @@ function AppShellInner({ children }: AppShellProps) {
           </div>
           <PanelZone />
         </div>
+        <TaskDrawer />
       </div>
     </div>
   );

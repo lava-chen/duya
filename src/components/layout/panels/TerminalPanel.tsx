@@ -62,6 +62,10 @@ function applyInputToLine(current: string, data: string): { line: string; submit
   return { line, submitted };
 }
 
+function applyTerminalTheme(term: Terminal) {
+  term.options.theme = terminalTheme();
+}
+
 function terminalTheme() {
   const styles = getComputedStyle(document.documentElement);
   return {
@@ -202,10 +206,19 @@ export function TerminalPanel({ tab }: Props) {
     const resizeObserver = new ResizeObserver(() => fitAndResize());
     resizeObserver.observe(container);
 
+    const themeObserver = new MutationObserver(() => {
+      if (terminalRef.current) applyTerminalTheme(terminalRef.current);
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+
     return () => {
       dataDisposable.dispose();
       selectionDisposable.dispose();
       resizeObserver.disconnect();
+      themeObserver.disconnect();
       terminalRef.current = null;
       fitAddonRef.current = null;
       term.dispose();

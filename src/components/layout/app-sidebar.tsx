@@ -41,6 +41,34 @@ type ThemeMode = "light" | "dark";
 // Type-safe label keys
 type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor' | 'nav.memory';
 
+const CHILD_THREAD_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
+
+function getChildThreadDisplayKey(thread: Thread): string {
+  const displayName = thread.agentName || thread.title.replace(/^Sub:\s*/i, "");
+  return `${thread.parentId || ""}:${thread.agentType || ""}:${displayName.trim().toLowerCase()}`;
+}
+
+function addChildThread(childrenMap: Map<string, Thread[]>, thread: Thread): void {
+  if (!thread.parentId) return;
+
+  const siblings = childrenMap.get(thread.parentId) ?? [];
+  const threadKey = getChildThreadDisplayKey(thread);
+  const duplicateIndex = siblings.findIndex((existing) => {
+    if (getChildThreadDisplayKey(existing) !== threadKey) return false;
+    return Math.abs(existing.createdAt - thread.createdAt) <= CHILD_THREAD_DUPLICATE_WINDOW_MS;
+  });
+
+  if (duplicateIndex >= 0) {
+    if (thread.updatedAt >= siblings[duplicateIndex].updatedAt) {
+      siblings[duplicateIndex] = thread;
+    }
+  } else {
+    siblings.push(thread);
+  }
+
+  childrenMap.set(thread.parentId, siblings);
+}
+
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
   { view: 'conductor', labelKey: 'nav.conductor', icon: SquaresFourIcon },
   { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
@@ -99,8 +127,7 @@ interface AppSidebarProps {
 export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
   function AppSidebar({ isSettingsPage = false, style }, ref) {
     const { t } = useTranslation();
-    const { settings } = useSettings();
-    const [theme, setTheme] = useState<ThemeMode>("dark");
+    const { settings, loading, error, save } = useSettings();
     const [isLoading, setIsLoading] = useState(true);
     const [isInputDialogOpen, setIsInputDialogOpen] = useState(false);
     const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
@@ -122,6 +149,39 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const { openOrActivatePage } = usePanel();
     const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
+    const systemDark = useMemo(
+      () =>
+        typeof window !== "undefined" &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches,
+      []
+    );
+    const bootTheme: ThemeMode | undefined = useMemo(() => {
+      if (typeof window === "undefined") return undefined;
+      try {
+        const stored = window.localStorage.getItem("duya-theme");
+        if (stored === "light" || stored === "dark") return stored;
+      } catch {
+        /* ignore */
+      }
+      return undefined;
+    }, []);
+    // Settings are trustworthy only after a successful load. While loading
+    // (Electron IPC in flight) or when the IPC failed (dev browser without
+    // settings API), fall back to the boot script's localStorage hint or
+    // system preference so the app doesn't flash to the useSettings default.
+    const settingsLoaded = !loading && !error;
+    const settingsTheme = settingsLoaded && settings
+      ? (settings.theme as "light" | "dark" | "system" | undefined)
+      : undefined;
+    const resolvedTheme: ThemeMode =
+      settingsTheme === "light" || settingsTheme === "dark"
+        ? settingsTheme
+        : settingsTheme === "system"
+        ? systemDark
+          ? "dark"
+          : "light"
+        : bootTheme ?? (systemDark ? "dark" : "light");
+
     useEffect(() => {
       if (!wikiAgentEnabled && currentView === 'memory') {
         setCurrentView('home');
@@ -135,19 +195,29 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       }
     }, [isHydrated, loadFromDatabase]);
 
+    // Apply resolved theme to <html> and keep localStorage in sync as a boot-time hint.
     useEffect(() => {
-      const stored = window.localStorage.getItem("duya-theme");
-      const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      const resolvedTheme: ThemeMode =
-        stored === "light" || stored === "dark"
-          ? stored
-          : systemDark
-          ? "dark"
-          : "light";
-
-      setTheme(resolvedTheme);
       document.documentElement.setAttribute("data-theme", resolvedTheme);
-    }, []);
+      try {
+        window.localStorage.setItem("duya-theme", resolvedTheme);
+      } catch {
+        // localStorage may be unavailable; the boot script will fall back to system preference.
+      }
+    }, [resolvedTheme]);
+
+    // Keep "system" mode live: track OS-level preference changes.
+    useEffect(() => {
+      if (settingsTheme !== "system") return;
+      const mql = window.matchMedia("(prefers-color-scheme: dark)");
+      const onChange = () => {
+        document.documentElement.setAttribute(
+          "data-theme",
+          mql.matches ? "dark" : "light"
+        );
+      };
+      mql.addEventListener("change", onChange);
+      return () => mql.removeEventListener("change", onChange);
+    }, [settingsTheme]);
 
     // Initialize compact mode from settings on mount
     useEffect(() => {
@@ -167,12 +237,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     }, []);
 
     const toggleTheme = () => {
-      setTheme((prev) => {
-        const next = prev === "dark" ? "light" : "dark";
-        document.documentElement.setAttribute("data-theme", next);
-        window.localStorage.setItem("duya-theme", next);
-        return next;
-      });
+      void save({ theme: resolvedTheme === "dark" ? "light" : "dark" });
     };
 
     // Close project menu when clicking outside
@@ -251,10 +316,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       for (const thread of threads) {
         // Sub-agent threads are nested under their parent, not shown independently
         if (thread.parentId) {
-          if (!childrenMap.has(thread.parentId)) {
-            childrenMap.set(thread.parentId, []);
-          }
-          childrenMap.get(thread.parentId)!.push(thread);
+          addChildThread(childrenMap, thread);
           continue;
         }
         const key = thread.workingDirectory || "__no_project__";
@@ -262,11 +324,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           groups.set(key, []);
         }
         groups.get(key)!.push(thread);
-      }
-
-      // Debug logging
-      if (childrenMap.size > 0) {
-        console.log('[AppSidebar] threadChildren:', Array.from(childrenMap.entries()).map(([k, v]) => [k, v.length]));
       }
 
       const noProjectThreads = groups.get("__no_project__") || [];
@@ -515,7 +572,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             onClick={toggleTheme}
             aria-label="Toggle theme"
           >
-            {theme === "dark" ? (
+            {resolvedTheme === "dark" ? (
               <SunIcon size={16} weight="regular" />
             ) : (
               <MoonStarsIcon size={16} weight="regular" />

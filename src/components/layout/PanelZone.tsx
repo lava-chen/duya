@@ -7,6 +7,12 @@ import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } fr
 import { ResizeHandle } from "./ResizeHandle";
 import { SidebarRightIcon } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useTaskCount } from "@/hooks/useTaskCount";
+import {
+  setTaskDrawerOpen,
+  useTaskDrawerOpen,
+} from "./task-drawer-store";
+import { CheckSquareIcon } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
 
 const MIN_CHAT_WIDTH = 520;
@@ -37,6 +43,9 @@ export function PanelZone() {
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const threads = useConversationStore((s) => s.threads);
   const [resizing, setResizing] = useState(false);
+  const taskDrawerOpen = useTaskDrawerOpen();
+  const { pending, active } = useTaskCount();
+  const taskBadgeCount = pending + active;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
@@ -89,6 +98,22 @@ export function PanelZone() {
         aria-expanded={panelOpen}
       >
         <SidebarRightIcon size={16} stroke={1.75} />
+      </button>
+
+      <button
+        type="button"
+        className={`panel-edge-toggle panel-task-toggle${taskDrawerOpen ? " active" : ""}`}
+        onClick={() => setTaskDrawerOpen(!taskDrawerOpen)}
+        title="任务列表"
+        aria-label="任务列表"
+        aria-pressed={taskDrawerOpen}
+      >
+        <CheckSquareIcon size={16} weight="regular" />
+        {taskBadgeCount > 0 && (
+          <span className="panel-task-toggle-badge">
+            {taskBadgeCount > 99 ? "99+" : taskBadgeCount}
+          </span>
+        )}
       </button>
 
       {panelOpen && (

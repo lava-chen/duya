@@ -51,6 +51,14 @@ function formatTimeAgo(timestamp: number): string {
   return `${weeks}w`;
 }
 
+function getThreadDisplayTitle(thread: Thread): string {
+  if (thread.agentType !== "sub-agent") {
+    return thread.title || "New Thread";
+  }
+  const rawTitle = thread.agentName || thread.title || "Sub-agent";
+  return rawTitle.replace(/^Sub:\s*/i, "");
+}
+
 export function ThreadListItem({ thread, isActive, childrenThreads = [] }: ThreadListItemProps) {
   const { t } = useTranslation();
   const { setActiveThread, deleteThread, updateThreadTitle, expandedThreads, toggleThreadExpanded } = useConversationStore();
@@ -64,6 +72,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
   const buttonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const subAgents = useSubAgents(thread.id);
+  const displayTitle = getThreadDisplayTitle(thread);
 
   const hasChildren = childrenThreads.length > 0;
 
@@ -194,7 +203,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
         className={`thread-item${isActive ? " active" : ""}${thread.agentType === 'sub-agent' ? " sub-agent" : ""}${hasChildren ? " has-children" : ""}`}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        title={thread.title}
+        title={thread.agentType === "sub-agent" ? `Agent: ${displayTitle}` : thread.title}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         role="button"
@@ -240,7 +249,10 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
             {thread.agentType === 'sub-agent' && thread.agentName && (
               <span className="sub-agent-dot" style={{ color: getAgentColor(thread.agentName) }}>●</span>
             )}
-            <span className="thread-item-title">{thread.title || "New Thread"}</span>
+            {thread.agentType === "sub-agent" && (
+              <span className="thread-item-agent-label">Agent</span>
+            )}
+            <span className="thread-item-title">{displayTitle}</span>
           </>
         )}
 
