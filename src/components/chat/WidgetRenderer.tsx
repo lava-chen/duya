@@ -1,12 +1,12 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { buildReceiverSrcdoc, sanitizeForStreaming } from '@/lib/widget-sanitizer';
-import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from '@/lib/widget-css-bridge';
+import { buildReceiverSrcdoc, sanitizeForStreaming } from '@duya/conductor/renderer/elements/widget-sanitizer';
+import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from '@duya/conductor/renderer/elements/widget-css-bridge';
 import { CopyIcon, CheckIcon, DownloadSimpleIcon, SquaresFourIcon } from '@/components/icons';
-import { addChatWidgetToCanvas } from '@/lib/chat-widget-to-canvas';
+import { addChatWidgetToCanvas } from '@duya/conductor/renderer/ipc/chat-widget-to-canvas';
 import { usePanel } from '@/hooks/usePanel';
-import { useConductorStore } from '@/stores/conductor-store';
+import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
 import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
 
 interface WidgetRendererProps {

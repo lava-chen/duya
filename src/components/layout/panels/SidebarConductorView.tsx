@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { CanvasToolbar } from "@/components/conductor/CanvasToolbar";
-import { CanvasArea } from "@/components/conductor/CanvasArea";
-import { CanvasSelector } from "@/components/conductor/CanvasSelector";
-import { useConductorStore } from "@/stores/conductor-store";
-import { listCanvases, createCanvas, getSnapshot, executeAction } from "@/lib/conductor-ipc";
-import { registerAllElements } from "@/conductor/elements";
-import "@/conductor/widgets";
-import type { CanvasPosition } from "@/types/conductor";
+import { CanvasToolbar } from "@duya/conductor/renderer/components/CanvasToolbar";
+import { CanvasArea } from "@duya/conductor/renderer/components/CanvasArea";
+import { CanvasSelector } from "@duya/conductor/renderer/components/CanvasSelector";
+import { useConductorStore } from "@duya/conductor/renderer/stores/conductor-store";
+import { listCanvases, createCanvas, getSnapshot, executeAction } from "@duya/conductor/renderer/ipc/conductor-ipc";
+import { registerAllElements } from "@duya/conductor/renderer/elements";
+import "@duya/conductor/renderer/widgets";
+import type { CanvasPosition } from "@duya/conductor/renderer/types/conductor";
 import type { PageTab } from "./registry";
 
 export function SidebarConductorView({

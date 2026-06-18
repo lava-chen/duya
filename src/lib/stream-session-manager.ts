@@ -153,9 +153,41 @@ function looksLikeProviderModelFormat(model: string): boolean {
 
 // Get provider config for a specific model (which may be in "providerId:modelName" format)
 // This allows users to select different provider models from the UI
-async function getProviderConfigForModel(model: string | undefined): Promise<ProviderConfig | null> {
+async function getProviderConfigForModel(
+  model: string | undefined,
+  providerIdHint?: string,
+): Promise<ProviderConfig | null> {
   if (!model) {
     return getActiveProviderConfig();
+  }
+
+  // If the caller already resolved a providerId for this session (e.g.
+  // user picked a model belonging to a non-default provider), honor it
+  // before any heuristic format detection. Without this branch,
+  // `getProviderConfigById` would only run when model itself looks
+  // like "providerId:modelName", and a plain model id would silently
+  // fall through to the active provider — keeping the previous
+  // provider's API key/baseURL with the new model name, which
+  // manifests as the old provider's rate-limit error.
+  if (providerIdHint) {
+    const resolved = await getProviderConfigById(providerIdHint, model);
+    if (resolved) {
+      console.log('[stream-session-manager] Resolved provider config via providerIdHint:', {
+        provider: resolved.provider,
+        model: resolved.model,
+      });
+      return {
+        apiKey: resolved.apiKey,
+        baseURL: resolved.baseURL,
+        model: resolved.model,
+        provider: resolved.provider,
+        authStyle: 'api_key',
+      };
+    }
+    console.warn('[stream-session-manager] providerIdHint failed, falling back to format detection:', {
+      providerIdHint,
+      model,
+    });
   }
 
   // Check if model looks like "providerId:modelName" format
@@ -251,6 +283,22 @@ interface StartStreamParams {
   wikiAgentEnabled?: boolean;
   defaultWorkspaceDirectory?: string;
   securityScanEnabled?: boolean;
+  /**
+   * Session's provider ID (from the threads row). When set, the
+   * provider config is resolved by providerId instead of falling back
+   * to the active provider with a model-name override. This is the
+   * authoritative path after a model switch — without it, picking a
+   * model from a non-default provider still uses the active provider's
+   * API key/baseURL.
+   */
+  providerId?: string;
+  /**
+   * Anthropic thinking effort level (Low/Medium/High/Max). Forwarded
+   * to the agent worker so the LLM client can map it to a
+   * `thinking.budget_tokens` value in the request body. undefined/Auto
+   * means no extended thinking.
+   */
+  effort?: string;
 }
 
 interface StartStreamResult {
@@ -688,6 +736,8 @@ class StreamSessionManager {
     snapshot?: unknown;
     model?: string;
     language?: string;
+    visionModel?: string;
+    permissionMode?: string;
   }): string {
     const streamId = crypto.randomUUID();
     const state: ConductorSessionState = {
@@ -719,6 +769,8 @@ class StreamSessionManager {
         canvasId: params.canvasId,
         model: params.model,
         language: params.language,
+        visionModel: params.visionModel,
+        permissionMode: params.permissionMode,
       });
     }
 
@@ -1057,7 +1109,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, model, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled } = params;
+    const { sessionId, content, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled } = params;
 
     // Resolve workingDirectory from the thread store — sessionId IS the threadId
     let workingDirectory: string | undefined;
@@ -1152,7 +1204,7 @@ class StreamSessionManager {
     // Use Agent Server HTTP for streaming
     // Get provider config for agent initialization
     // If model is in "providerId:modelName" format, resolve the specific provider
-    const providerConfig = await getProviderConfigForModel(model);
+    const providerConfig = await getProviderConfigForModel(model, providerId);
     if (providerConfig) {
       console.log('[stream-session-manager] Using provider config:', { provider: providerConfig.provider, model: providerConfig.model });
     } else {
@@ -1211,7 +1263,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled },
+      { content, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, effort },
       nextGeneration
     );
 
@@ -1239,6 +1291,7 @@ class StreamSessionManager {
       wikiAgentEnabled?: boolean;
       defaultWorkspaceDirectory?: string;
       securityScanEnabled?: boolean;
+      effort?: string;
     },
     generation: number
   ): Promise<void> {
@@ -1497,6 +1550,7 @@ class StreamSessionManager {
         wikiAgentEnabled: params.wikiAgentEnabled,
         defaultWorkspaceDirectory: params.defaultWorkspaceDirectory,
         securityScanEnabled: params.securityScanEnabled,
+        effort: params.effort,
       });
     } catch (error) {
       console.error('[stream-session-manager] Agent Server error:', error);
@@ -3464,7 +3518,7 @@ export const getResearchSnapshot = (sessionId: string) =>
   streamSessionManager.getResearchSnapshot(sessionId);
 
 // Re-export conductor types and session manager methods
-export const startConductorStream = (params: { canvasId: string; content: string; snapshot?: unknown; model?: string; language?: string }) =>
+export const startConductorStream = (params: { canvasId: string; content: string; snapshot?: unknown; model?: string; language?: string; visionModel?: string; permissionMode?: string }) =>
   streamSessionManager.startConductorStream(params);
 
 export const stopConductorStream = (canvasId: string) =>

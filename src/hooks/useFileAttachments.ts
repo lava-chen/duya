@@ -266,6 +266,10 @@ export function useFileAttachments() {
     });
   }, [attachedFiles]);
 
+  const addAttachment = useCallback((attachment: FileAttachment) => {
+    setAttachedFiles((prev) => [...prev, attachment]);
+  }, []);
+
   const clearFiles = useCallback(() => {
     setAttachedFiles((prev) => {
       prev.forEach((file) => {
@@ -299,6 +303,7 @@ export function useFileAttachments() {
     parseErrors,
     isParsing,
     addFile,
+    addAttachment,
     removeFile,
     clearFiles,
     handleFileInput,

@@ -23,6 +23,7 @@ import { useStreamingContextUsage } from '@/hooks/useStreamingContextUsage';
 import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
+import { useMailboxStore } from '@/stores/mailbox-store';
 import type { FileAttachment } from '@/types/message';
 import { SubAgentPanel } from './SubAgentPanel';
 import { MailboxPanel } from './MailboxPanel';
@@ -44,7 +45,7 @@ interface ChatViewProps {
    * 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生.
    * 第一个参数 permissionMode 保留签名兼容 (App.handleSendMessage 还在声明), 但不使用.
    */
-  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string) => void;
+  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
   hasQueuedMessages?: boolean;
@@ -129,6 +130,7 @@ export function ChatView({
   const [permissionUpdatePending, setPermissionUpdatePending] = useState(false);
   const [agentMode, setAgentMode] = useState<AgentMode>('main');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
+  const [effort, setEffort] = useState<string | undefined>(undefined);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
   const [recapBanner, setRecapBanner] = useState<string | null>(null);
@@ -139,9 +141,11 @@ export function ChatView({
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);
   const setThreadWorkingDirectory = useConversationStore(s => s.setThreadWorkingDirectory);
+  const setThreadModel = useConversationStore(s => s.setThreadModel);
   const addProjectFolder = useConversationStore(s => s.addProjectFolder);
   const setActiveThread = useConversationStore(s => s.setActiveThread);
   const rewindToMessage = useConversationStore(s => s.rewindToMessage);
+  const sendMailbox = useMailboxStore(s => s.send);
 
   const selectedProject = useMemo(() => {
     const thread = storeThreads.find(t => t.id === sessionId);
@@ -347,23 +351,31 @@ export function ChatView({
   // Handle model change - persist to session AND global settings
   const handleModelChange = useCallback((model: string) => {
     setSessionModel(model);
-    // Save pure model name to session (parse UI format if needed)
+    // Save pure model name to session (parse UI format if needed).
+    // The store action re-syncs the row to the DB, so the call below
+    // covers what an inline updateThreadIPC used to do, plus the
+    // in-memory store update that App.handleSendMessage reads.
     if (sessionId) {
       const { modelName } = parseModelName(model);
-      updateThreadIPC(sessionId, { model: modelName }).catch(console.error);
+      setThreadModel(sessionId, modelName, sessionProviderId);
     }
     // Save to global settings for cross-session memory (keep UI format for display consistency)
     if (model) {
       saveSettings({ lastSelectedModel: model }).catch(console.error);
     }
-  }, [sessionId, saveSettings, parseModelName]);
+  }, [sessionId, saveSettings, parseModelName, setThreadModel, sessionProviderId]);
 
-  // Handle provider change - persist provider ID to session
+  // Handle provider change - persist provider ID to session.
+  // Mirror to the store so App.handleSendMessage reads the new
+  // providerId without an extra DB round-trip. Without this, the
+  // worker keeps using the previous provider's API key/baseURL even
+  // though the user just picked a different provider.
   const handleProviderChange = useCallback((providerId: string) => {
     if (sessionId && providerId) {
-      updateThreadIPC(sessionId, { providerId }).catch(console.error);
+      const { modelName } = parseModelName(sessionModel);
+      setThreadModel(sessionId, modelName, providerId);
     }
-  }, [sessionId]);
+  }, [sessionId, sessionModel, parseModelName, setThreadModel]);
 
   // Handle permission mode change - persist to session.
   // 改为 async + 设置 permissionUpdatePending, 防止用户切 mode 后立即发送, 出现 row 未落库就发消息的竞态.
@@ -432,11 +444,21 @@ export function ChatView({
       lastUserContentRef.current = content;
       lastFilesRef.current = files;
       lastOutputStyleRef.current = outputStyleConfig;
+      if (isStreaming) {
+        void sendMailbox({
+          sessionId,
+          content,
+          kind: 'followup',
+          submittedDuringRunId: sessionId,
+          attachments: files,
+        });
+        return;
+      }
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode);
+      onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort);
     },
-    [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]
+    [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort]
   );
 
   const handleStop = useCallback(() => {
@@ -448,9 +470,9 @@ export function ChatView({
     if (lastContent) {
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       // Use saved files and parsed docs for retry
-      onSendMessage(lastContent, permissionMode ?? undefined, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current);
+      onSendMessage(lastContent, permissionMode ?? undefined, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current, undefined, effort);
     }
-  }, [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId]);
+  }, [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId, effort]);
 
   const handleRewindToMessage = useCallback((messageId: string) => {
     if (isStreaming) return;
@@ -655,6 +677,8 @@ export function ChatView({
                     modelName={sessionModel}
                     onModelChange={handleModelChange}
                     onProviderChange={handleProviderChange}
+                    effort={effort}
+                    onEffortChange={setEffort}
                     permissionMode={permissionMode}
                     onPermissionModeChange={handlePermissionModeChange}
                     permissionUpdatePending={permissionUpdatePending}
@@ -764,8 +788,11 @@ export function ChatView({
               </div>
             )}
 
-            {/* Mailbox panel (Plan202) - shown above input during streaming */}
-            {isStreaming && <MailboxPanel sessionId={sessionId} />}
+            {isStreaming && (
+              <div className="max-w-[750px] mx-auto">
+                <MailboxPanel sessionId={sessionId} />
+              </div>
+            )}
 
             {isAskUserQuestionPending ? (
               <PermissionPrompt
@@ -786,6 +813,8 @@ export function ChatView({
                 modelName={sessionModel}
                 onModelChange={handleModelChange}
                 onProviderChange={handleProviderChange}
+                effort={effort}
+                onEffortChange={setEffort}
                 permissionMode={permissionMode}
                 onPermissionModeChange={handlePermissionModeChange}
                 permissionUpdatePending={permissionUpdatePending}

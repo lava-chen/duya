@@ -4,22 +4,23 @@
 import type { ComponentType } from "react";
 import {
   FolderIcon,
+  GlobeIcon,
   SquaresFourIcon,
   TerminalIcon,
-  GlobeIcon,
   type IconProps,
 } from "@phosphor-icons/react";
 import { FileTreePanel } from "./FileTreePanel";
 import { SidebarConductorView } from "./SidebarConductorView";
 import { ResearchActivityPanel } from "./ResearchActivityPanel";
 import { TerminalPanel } from "./TerminalPanel";
+import { BrowserPanel } from "./BrowserPanel";
 
 export type PageId = "files" | "conductor" | "research" | "terminal" | "browser";
 
 export interface PageTab {
-  id: string;                 // unique instance id (uuid)
-  pageId: PageId;             // page type from registry
-  title: string;              // display name in tab strip
+  id: string;
+  pageId: PageId;
+  title: string;
   params?: Record<string, unknown>;
 }
 
@@ -28,7 +29,7 @@ export interface PageDescriptor {
   label: string;
   icon: ComponentType<IconProps>;
   multiInstance: boolean;
-  available: boolean;         // shown in the picker; false = "未实现" hint
+  available: boolean;
   component: ComponentType<{ tab: PageTab; embedded: boolean }>;
 }
 
@@ -70,8 +71,8 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     label: "浏览器",
     icon: GlobeIcon,
     multiInstance: true,
-    available: false,
-    component: (() => null) as ComponentType<{ tab: PageTab; embedded: boolean }>,
+    available: true,
+    component: BrowserPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
 };
 

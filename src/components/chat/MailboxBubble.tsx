@@ -18,7 +18,7 @@
 'use client';
 
 import React, { useState, useCallback } from 'react';
-import { Pencil, Trash, DotsThree, Compass, X } from '@phosphor-icons/react';
+import { Pencil, Trash, DotsThree, ArrowBendDownRight, X } from '@phosphor-icons/react';
 import type { MailboxRow, MailboxKind } from '@/stores/mailbox-store';
 
 // =============================================================================
@@ -69,6 +69,7 @@ export function MailboxBubble({
   const [editContent, setEditContent] = useState(row.content);
   const isPending = row.status === 'pending';
   const isCancelled = row.status === 'cancelled';
+  const isGuided = row.source.endsWith(':guide');
 
   const handleSaveEdit = useCallback(() => {
     if (editContent.trim() && editContent !== row.content) {
@@ -150,16 +151,20 @@ export function MailboxBubble({
 
       {/* Per-row actions: guide / delete / more — always visible */}
       <div className="mailbox-bubble-actions">
-        {isPending && (
+        {isPending && !isGuided && (
           <button
             type="button"
             onClick={handleGuide}
-            className="mailbox-bubble-action"
+            className="mailbox-bubble-action mailbox-bubble-action--guide"
             title="Guide — let the agent absorb this message at the next checkpoint"
             aria-label="Guide"
           >
-            <Compass size={13} />
+            <ArrowBendDownRight size={13} />
+            <span>引导</span>
           </button>
+        )}
+        {isPending && isGuided && (
+          <span className="mailbox-bubble-guided">引导中</span>
         )}
         {isPending && (
           <button

@@ -114,6 +114,7 @@ interface ConversationState {
   rewindToMessage: (threadId: string, messageId: string) => Promise<void>;
   updateThreadTitle: (id: string, title: string) => void;
   setThreadWorkingDirectory: (id: string, workingDirectory: string, projectName: string) => void;
+  setThreadModel: (id: string, model: string, providerId?: string) => void;
   addProjectFolder: (workingDirectory: string) => Promise<ProjectGroup | null>;
   toggleProjectExpanded: (workingDirectory: string) => void;
   toggleThreadExpanded: (threadId: string) => void;
@@ -523,6 +524,31 @@ export const useConversationStore = create<ConversationState>()(
           threads: state.threads.map((t) =>
             t.id === id
               ? { ...t, workingDirectory, projectName, updatedAt: Date.now() }
+              : t
+          ),
+        }));
+
+        // Sync to database
+        const thread = get().threads.find((t) => t.id === id);
+        if (thread) {
+          get().syncThreadToDatabase(thread);
+        }
+      },
+
+      setThreadModel: (id, model, providerId) => {
+        set((state) => ({
+          threads: state.threads.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  model,
+                  // Only overwrite providerId when the caller supplies one
+                  // (e.g. the model picker knows the new provider). When
+                  // omitted we leave the existing providerId untouched so
+                  // a model-only reload from DB doesn't drop the binding.
+                  providerId: providerId ?? t.providerId,
+                  updatedAt: Date.now(),
+                }
               : t
           ),
         }));
