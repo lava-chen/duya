@@ -85,6 +85,7 @@ export class LLMClientWrapper implements LLMClient {
       temperature?: number;
       disableThinking?: boolean;
       signal?: AbortSignal;
+      effort?: string;
     }
   ): AsyncGenerator<SSEEvent, void, unknown> {
     yield* this.client.streamChat(messages, options);

@@ -65,6 +65,11 @@ export interface ChatStartCommand {
       imageChunks?: Array<{ base64: string; mediaType: string }>;
       cacheKey?: string;
     }>;
+    /**
+     * Anthropic thinking effort level. Mapped to
+     * `thinking.budget_tokens` by the LLM client.
+     */
+    effort?: string;
   };
 }
 
