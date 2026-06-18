@@ -53,7 +53,9 @@ export interface MailboxRow {
 export type MailboxBroadcastEventType =
   | 'mail:created'
   | 'mail:edited'
-  | 'mail:cancelled';
+  | 'mail:cancelled'
+  | 'mail:observed'
+  | 'mail:applied';
 
 export interface MailboxBroadcastEvent {
   type: MailboxBroadcastEventType;
@@ -125,6 +127,7 @@ interface MailboxState {
     constraintsJson?: string;
   }) => Promise<MailboxRow | null>;
   edit: (id: string, patch: { content?: string; kind?: MailboxKind }) => Promise<void>;
+  guide: (id: string) => Promise<void>;
   cancel: (id: string, reason?: string) => Promise<void>;
   list: (sessionId: string, opts?: { status?: MailboxStatus[]; limit?: number }) => Promise<void>;
 
@@ -251,6 +254,32 @@ export const useMailboxStore = create<MailboxState>()((set, get) => ({
     }
   },
 
+  guide: async (id) => {
+    const electronAPI = window.electronAPI;
+    if (!electronAPI?.mailbox?.guide) return;
+
+    const existing = Array.from(get().bySession.values())
+      .map(sessionMap => sessionMap.get(id))
+      .find((row): row is MailboxRow => Boolean(row));
+
+    if (existing && existing.status === 'pending') {
+      get()._upsertRow({ ...existing, source: 'ui:guide' });
+    }
+
+    try {
+      const result = await electronAPI.mailbox.guide(id);
+      if (result) {
+        const row = dbRowToMailboxRow(result as Record<string, unknown>);
+        get()._upsertRow(row);
+      }
+    } catch (error) {
+      if (existing) {
+        get()._upsertRow(existing);
+      }
+      console.error('[MailboxStore] guide failed:', error);
+    }
+  },
+
   cancel: async (id, reason) => {
     const electronAPI = window.electronAPI;
     if (!electronAPI?.mailbox) return;
@@ -259,7 +288,7 @@ export const useMailboxStore = create<MailboxState>()((set, get) => ({
       const result = await electronAPI.mailbox.cancel(id, reason);
       if (result) {
         const row = dbRowToMailboxRow(result as Record<string, unknown>);
-        get()._upsertRow(row);
+        get()._removeRow(row.sessionId, row.id);
       }
     } catch (error) {
       console.error('[MailboxStore] cancel failed:', error);
@@ -317,11 +346,13 @@ export const useMailboxStore = create<MailboxState>()((set, get) => ({
         break;
 
       case 'mail:edited':
+      case 'mail:observed':
+      case 'mail:applied':
         get()._upsertRow(row);
         break;
 
       case 'mail:cancelled':
-        get()._upsertRow(row);
+        get()._removeRow(row.sessionId, row.id);
         break;
     }
   },
@@ -363,29 +394,18 @@ let eventListenerRegistered = false;
 export function initMailboxEventListener(): () => void {
   if (eventListenerRegistered) return () => {};
 
-  // #region debug-point mailbox-list-handler (EV-4)
-  // H4: log whether this entry is reached. If the warning never appears,
-  // initMailboxEventListener is never called by app boot. If it appears
-  // but the onEvent subscription below stays empty (the existing code
-  // never calls electronAPI?.mailbox?.onEvent), H4 is confirmed:
-  // mailbox:event never reaches the renderer's applyEvent.
-  console.error('[mailbox-list-handler EV-4] initMailboxEventListener() entered');
-  // #endregion debug-point mailbox-list-handler
-
   const electronAPI = window.electronAPI;
-
-  // Listen for IPC events from MailboxBroadcaster
-  if (electronAPI) {
-    // Use the generic ipcRenderer listener pattern
-    const { ipcRenderer } = (window as unknown as { require?: (mod: string) => unknown }).require?.('electron') as { ipcRenderer?: { on: (ch: string, h: (...a: unknown[]) => void) => void; removeListener: (ch: string, h: (...a: unknown[]) => void) => void } } ?? {};
-
-    // Instead, we use a polling + event bridge approach.
-    // The store exposes applyEvent which the ChatView/App can call
-    // when it receives mailbox events from the preload.
+  if (!electronAPI?.mailbox?.onEvent) {
+    return () => {};
   }
 
   eventListenerRegistered = true;
+  const unsubscribe = electronAPI.mailbox.onEvent((event) => {
+    useMailboxStore.getState().applyEvent(event as MailboxBroadcastEvent);
+  });
+
   return () => {
+    unsubscribe?.();
     eventListenerRegistered = false;
   };
 }

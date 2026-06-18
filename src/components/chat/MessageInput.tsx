@@ -34,7 +34,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { AttachmentMenu } from './AttachmentMenu';
 import { ContextUsageRing } from './ContextUsageRing';
-import { RichTextInput, terminalReferenceToken } from './RichTextInput';
+import { RichTextInput, browserReferenceToken, terminalReferenceToken } from './RichTextInput';
 import type { Message } from '@/types/message';
 
 interface FileChip {
@@ -48,6 +48,17 @@ interface TerminalReferenceChip {
   shell: string;
   cwd: string;
   text: string;
+  createdAt: number;
+}
+
+interface BrowserReferenceChip {
+  id: string;
+  kind: 'element' | 'screenshot';
+  label: string;
+  title: string;
+  url: string;
+  content: string;
+  attachmentId?: string;
   createdAt: number;
 }
 
@@ -190,6 +201,7 @@ export function MessageInput({
   // File chips from file tree
   const [fileChips, setFileChips] = useState<FileChip[]>([]);
   const [terminalReferenceChips, setTerminalReferenceChips] = useState<TerminalReferenceChip[]>([]);
+  const [browserReferenceChips, setBrowserReferenceChips] = useState<BrowserReferenceChip[]>([]);
 
   // Badge state (for non-immediate commands like /compact)
   const [badge, setBadge] = useState<CommandBadge | null>(null);
@@ -210,7 +222,6 @@ export function MessageInput({
   const [mcpServers, setMcpServers] = useState<Array<{ name: string; description?: string; enabled?: boolean }>>([]);
   const [responseStyles, setResponseStyles] = useState<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>>([]);
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
-  const [thinkingEffort, setThinkingEffort] = useState<string | null>(null);
   const [sendMode, setSendMode] = useState<string | undefined>(undefined);
 
   // Drag-and-drop state — counter ref avoids flicker when crossing child boundaries
@@ -249,7 +260,7 @@ export function MessageInput({
   });
 
   // File attachments
-  const { attachedFiles, parseErrors, isParsing, addFile, removeFile, clearFiles, handleFileInput } = useFileAttachments();
+  const { attachedFiles, parseErrors, isParsing, addFile, addAttachment, removeFile, clearFiles, handleFileInput } = useFileAttachments();
 
   // Pasted content attachments
   const {
@@ -335,6 +346,79 @@ export function MessageInput({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inputValue.length]);
 
+  useEffect(() => {
+    const handleBrowserAddToInput = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        text?: string;
+        attachment?: FileAttachment;
+        reference?: {
+          kind: 'element' | 'screenshot';
+          label: string;
+          title: string;
+          url: string;
+          content: string;
+          attachmentId?: string;
+        };
+      }>;
+      const detail = customEvent.detail;
+      const attachment = detail?.attachment;
+      const reference = detail?.reference;
+
+      if (attachment) {
+        addAttachment(attachment);
+      }
+
+      if (reference) {
+        const id = crypto.randomUUID();
+        const token = browserReferenceToken(id);
+        const cursorPos = getEditableCursorPosition(textareaRef.current, inputValue.length);
+        setBrowserReferenceChips((prev) => [
+          ...prev,
+          {
+            id,
+            kind: reference.kind,
+            label: reference.label,
+            title: reference.title,
+            url: reference.url,
+            content: reference.content,
+            attachmentId: reference.attachmentId,
+            createdAt: Date.now(),
+          },
+        ]);
+        setInputValue((prev) => {
+          const before = prev.slice(0, cursorPos);
+          const after = prev.slice(cursorPos);
+          const spacerBefore = before && !before.endsWith('\n') ? '\n\n' : '';
+          const spacerAfter = after && !after.startsWith('\n') ? '\n\n' : '';
+          return `${before}${spacerBefore}${token}${spacerAfter}${after}`;
+        });
+      } else {
+        const text = detail?.text?.trim();
+        if (text) {
+          const cursorPos = getEditableCursorPosition(textareaRef.current, inputValue.length);
+          setInputValue((prev) => {
+            const before = prev.slice(0, cursorPos);
+            const after = prev.slice(cursorPos);
+            const spacerBefore = before && !before.endsWith('\n') ? '\n\n' : '';
+            const spacerAfter = after && !after.startsWith('\n') ? '\n\n' : '';
+            return `${before}${spacerBefore}${text}${spacerAfter}${after}`;
+          });
+        }
+      }
+
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustTextareaHeight();
+      });
+    };
+
+    window.addEventListener("browser-add-to-input", handleBrowserAddToInput as EventListener);
+    return () => {
+      window.removeEventListener("browser-add-to-input", handleBrowserAddToInput as EventListener);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addAttachment, inputValue.length]);
+
   const removeFileChip = useCallback((id: string) => {
     setFileChips((prev) => prev.filter((c) => c.id !== id));
     requestAnimationFrame(() => {
@@ -351,6 +435,19 @@ export function MessageInput({
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const removeBrowserReferenceChip = useCallback((id: string) => {
+    const attachmentId = browserReferenceChips.find((chip) => chip.id === id)?.attachmentId;
+    setBrowserReferenceChips((prev) => prev.filter((chip) => chip.id !== id));
+    setInputValue((prev) => prev.split(browserReferenceToken(id)).join(''));
+    if (attachmentId) {
+      removeFile(attachmentId);
+    }
+    requestAnimationFrame(() => {
+      adjustTextareaHeight();
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserReferenceChips, removeFile]);
 
   // Build content with file chip paths inserted
   // Append file paths at the end of the message
@@ -372,11 +469,17 @@ export function MessageInput({
       textWithReferences = textWithReferences.split(terminalReferenceToken(chip.id)).join(block);
     }
 
+    for (const chip of browserReferenceChips) {
+      textWithReferences = textWithReferences
+        .split(browserReferenceToken(chip.id))
+        .join(chip.content);
+    }
+
     if (additions.length === 0) return textWithReferences;
     const suffix = additions.join("\n\n");
     if (!textWithReferences.trim()) return suffix;
     return `${textWithReferences}\n\n${suffix}`;
-  }, [fileChips, terminalReferenceChips]);
+  }, [browserReferenceChips, fileChips, terminalReferenceChips]);
 
   // Sync model with prop
   // Also clean up double-quoted model names (legacy data cleanup)
@@ -797,9 +900,9 @@ export function MessageInput({
       const trimmedValue = inputValue.trim();
 
       // Check if we have any content to send (input, pasted content, files, file chips, or parsed docs)
-      const hasContent = trimmedValue || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0 || terminalReferenceChips.length > 0;
+      const hasContent = trimmedValue || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0 || terminalReferenceChips.length > 0 || browserReferenceChips.length > 0;
       if (!hasContent) return;
-      if (disabled || isStreaming) return;
+      if (disabled) return;
 
       // Block sending while document parsing is in progress — the parsed
       // text would be missing and the agent would see "Not Parsed" warnings.
@@ -841,6 +944,7 @@ export function MessageInput({
         setInputValue('');
         setFileChips([]);
         setTerminalReferenceChips([]);
+        setBrowserReferenceChips([]);
         clearPastedContents();
         clearFiles();
         onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode);
@@ -861,6 +965,7 @@ export function MessageInput({
           setInputValue('');
           setFileChips([]);
           setTerminalReferenceChips([]);
+          setBrowserReferenceChips([]);
           clearPastedContents();
           return;
         }
@@ -874,6 +979,7 @@ export function MessageInput({
         setInputValue('');
         setFileChips([]);
         setTerminalReferenceChips([]);
+        setBrowserReferenceChips([]);
         clearPastedContents();
         clearFiles();
         return;
@@ -894,13 +1000,14 @@ export function MessageInput({
       setInputValue('');
       setFileChips([]);
       setTerminalReferenceChips([]);
+      setBrowserReferenceChips([]);
       clearPastedContents();
       clearFiles();
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, terminalReferenceChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
+    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, terminalReferenceChips, browserReferenceChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
   );
 
   const handleKeyDown = useCallback(
@@ -934,13 +1041,13 @@ export function MessageInput({
       // Submit on Enter (without shift)
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        const hasContent = inputValue.trim() || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0 || terminalReferenceChips.length > 0;
-        if (!isStreaming && hasContent) {
+        const hasContent = inputValue.trim() || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0 || terminalReferenceChips.length > 0 || browserReferenceChips.length > 0;
+        if (hasContent) {
           handleSubmit({ preventDefault: () => {} } as FormEvent);
         }
       }
     },
-    [isStreaming, inputValue, hasPastedContents, attachedFiles, fileChips, terminalReferenceChips, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
+    [isStreaming, inputValue, hasPastedContents, attachedFiles, fileChips, terminalReferenceChips, browserReferenceChips, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
   );
 
   const handleStop = useCallback(() => {
@@ -998,7 +1105,7 @@ export function MessageInput({
         />
 
         <div
-          className={`rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''}`}
+          className={`relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''}`}
           style={{ backgroundColor: 'var(--surface)', boxShadow: 'inset 0 0 0 1px var(--border-color), 0 2px 8px rgba(0,0,0,0.08)' }}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
@@ -1100,6 +1207,8 @@ export function MessageInput({
             disabled={disabled}
             terminalReferenceChips={terminalReferenceChips}
             onRemoveTerminalReferenceChip={removeTerminalReferenceChip}
+            browserReferenceChips={browserReferenceChips}
+            onRemoveBrowserReferenceChip={removeBrowserReferenceChip}
           />
 
           {/* Command Badge */}
@@ -1189,11 +1298,11 @@ export function MessageInput({
                   // TODO: Navigate to style creation
                   console.log('Create style clicked');
                 }}
-                thinkingEffort={thinkingEffort}
+                thinkingEffort={selectedEffort ?? null}
                 onSelectThinkingEffort={(effort) => {
-                  setThinkingEffort(effort);
-                  // TODO: Apply thinking effort to the conversation
-                  console.log('Selected thinking effort:', effort);
+                  const newEffort = effort || undefined;
+                  setSelectedEffort(newEffort);
+                  onEffortChange?.(newEffort);
                 }}
                 modelSupportsEffort={true}
                 onRunResearchMode={() => {
@@ -1255,7 +1364,7 @@ export function MessageInput({
                   +{1}
                 </span>
               )}
-              {isStreaming && onStop ? (
+              {isStreaming && onStop && (
                 <button
                   type="button"
                   onClick={handleStop}
@@ -1264,18 +1373,17 @@ export function MessageInput({
                 >
                   <StopIcon size={16} />
                 </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={disabled || (!inputValue.trim() && !hasPastedContents && attachedFiles.length === 0 && fileChips.length === 0 && terminalReferenceChips.length === 0) || isStreaming}
-                  className="w-8 h-8 rounded-full text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-colors ml-1"
-                  style={{ backgroundColor: 'var(--send-btn)' }}
-                  onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--send-btn-hover)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'var(--send-btn)'; }}
-                >
-                  <ArrowUpIcon size={16} />
-                </button>
               )}
+              <button
+                type="submit"
+                disabled={disabled || (!inputValue.trim() && !hasPastedContents && attachedFiles.length === 0 && fileChips.length === 0 && terminalReferenceChips.length === 0 && browserReferenceChips.length === 0)}
+                className="w-8 h-8 rounded-full text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-colors ml-1"
+                style={{ backgroundColor: 'var(--send-btn)' }}
+                onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--send-btn-hover)'; }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'var(--send-btn)'; }}
+              >
+                <ArrowUpIcon size={16} />
+              </button>
             </div>
           </div>
         </div>

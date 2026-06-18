@@ -419,6 +419,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 key={item.view}
                 type="button"
                 onClick={handleNavClick}
+                data-testid={`nav-${item.view}`}
                 className={`sidebar-primary-link${isActive ? " active" : ""}`}
               >
                 <span className="nav-icon">

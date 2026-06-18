@@ -290,8 +290,38 @@ const CONTEXT_TOOLS = new Set([
   // 'web_search', // Disabled - use browser_tool instead
 ]);
 
+// Categorize context tools for a richer summary header.
+const FILE_READ_TOOLS = new Set(['read', 'readfile', 'read_file', 'read_multiple_files']);
+const DIRECTORY_BROWSE_TOOLS = new Set(['ls', 'glob']);
+const FILE_SEARCH_TOOLS = new Set(['grep', 'search', 'find_files', 'search_files']);
+
 function isContextTool(name: string): boolean {
   return CONTEXT_TOOLS.has(name.toLowerCase());
+}
+
+type ContextCategory = 'fileRead' | 'directoryBrowse' | 'fileSearch';
+
+function categorizeContextTool(name: string): ContextCategory | null {
+  const lower = name.toLowerCase();
+  if (FILE_READ_TOOLS.has(lower)) return 'fileRead';
+  if (DIRECTORY_BROWSE_TOOLS.has(lower)) return 'directoryBrowse';
+  if (FILE_SEARCH_TOOLS.has(lower)) return 'fileSearch';
+  return null;
+}
+
+interface ContextSummary {
+  fileRead: number;
+  directoryBrowse: number;
+  fileSearch: number;
+}
+
+function buildContextSummary(tools: ToolAction[]): ContextSummary {
+  const summary: ContextSummary = { fileRead: 0, directoryBrowse: 0, fileSearch: 0 };
+  for (const tool of tools) {
+    const category = categorizeContextTool(tool.name);
+    if (category) summary[category] += 1;
+  }
+  return summary;
 }
 
 // Browser tools (chrome / browser / browsertool / browser_tool).
@@ -508,10 +538,45 @@ function computeSegments(tools: ToolAction[]): Segment[] {
 }
 
 function ContextGroup({ tools }: { tools: ToolAction[] }) {
+  const { t, locale } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const hasRunning = tools.some((t) => t.result === undefined);
   const hasError = tools.some((t) => t.isError);
   const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
+  const summary = buildContextSummary(tools);
+
+  const parts: string[] = [];
+  if (summary.fileRead > 0) {
+    parts.push(
+      locale === 'zh'
+        ? `${t('streaming.toolAction.label.read')} ${summary.fileRead} 个文件`
+        : `Read ${summary.fileRead} file${summary.fileRead === 1 ? '' : 's'}`
+    );
+  }
+  if (summary.directoryBrowse > 0) {
+    parts.push(
+      locale === 'zh'
+        ? `浏览 ${summary.directoryBrowse} 个目录`
+        : `Browsed ${summary.directoryBrowse} director${summary.directoryBrowse === 1 ? 'y' : 'ies'}`
+    );
+  }
+  if (summary.fileSearch > 0) {
+    parts.push(
+      locale === 'zh'
+        ? `${t('streaming.toolAction.label.search')} ${summary.fileSearch} 次`
+        : `Searched ${summary.fileSearch} time${summary.fileSearch === 1 ? '' : 's'}`
+    );
+  }
+
+  const fallbackSummary =
+    locale === 'zh' ? `收集了 ${tools.length} 项上下文` : `Gathered ${tools.length} context items`;
+  const summaryText = parts.length > 0 ? parts.join(locale === 'zh' ? '，' : ', ') : fallbackSummary;
+
+  const headerText = hasRunning
+    ? locale === 'zh'
+      ? `收集中… (${tools.length})`
+      : `Gathering context (${tools.length})`
+    : summaryText;
 
   return (
     <div>
@@ -525,9 +590,7 @@ function ContextGroup({ tools }: { tools: ToolAction[] }) {
           size={10}
           className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
         />
-        <span className="font-medium text-muted-foreground">
-          {hasRunning ? `Gathering context (${tools.length})` : `Gathered context (${tools.length} files)`}
-        </span>
+        <span className="font-medium text-muted-foreground">{headerText}</span>
         <span className="ml-auto">
           <StatusDot status={groupStatus} />
         </span>

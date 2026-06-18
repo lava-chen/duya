@@ -14,9 +14,15 @@ export interface FileChipData {
 
 export const TERMINAL_REFERENCE_TOKEN_PREFIX = '\uE000terminal:';
 export const TERMINAL_REFERENCE_TOKEN_SUFFIX = '\uE000';
+export const BROWSER_REFERENCE_TOKEN_PREFIX = '\uE000browser:';
+export const BROWSER_REFERENCE_TOKEN_SUFFIX = '\uE000';
 
 export function terminalReferenceToken(id: string): string {
   return `${TERMINAL_REFERENCE_TOKEN_PREFIX}${id}${TERMINAL_REFERENCE_TOKEN_SUFFIX}`;
+}
+
+export function browserReferenceToken(id: string): string {
+  return `${BROWSER_REFERENCE_TOKEN_PREFIX}${id}${BROWSER_REFERENCE_TOKEN_SUFFIX}`;
 }
 
 export interface TerminalReferenceChipData {
@@ -24,6 +30,15 @@ export interface TerminalReferenceChipData {
   shell: string;
   cwd: string;
   text: string;
+}
+
+export interface BrowserReferenceChipData {
+  id: string;
+  kind: 'element' | 'screenshot';
+  label: string;
+  title: string;
+  url: string;
+  content: string;
 }
 
 interface RichTextInputProps {
@@ -37,6 +52,8 @@ interface RichTextInputProps {
   onRemoveFileChip?: (id: string) => void;
   terminalReferenceChips?: TerminalReferenceChipData[];
   onRemoveTerminalReferenceChip?: (id: string) => void;
+  browserReferenceChips?: BrowserReferenceChipData[];
+  onRemoveBrowserReferenceChip?: (id: string) => void;
 }
 
 function createFileChipElement(chip: FileChipData, onRemove?: (id: string) => void): HTMLSpanElement {
@@ -149,6 +166,62 @@ function createTerminalReferenceChipElement(
   return wrapper;
 }
 
+function createBrowserReferenceChipElement(
+  chip: BrowserReferenceChipData,
+  onRemove?: (id: string) => void,
+): HTMLSpanElement {
+  const wrapper = document.createElement('span');
+  wrapper.className = 'browser-reference-chip-wrapper';
+  wrapper.contentEditable = 'false';
+  wrapper.dataset.referenceId = chip.id;
+  wrapper.dataset.referenceToken = browserReferenceToken(chip.id);
+
+  const chipSpan = document.createElement('span');
+  chipSpan.className = 'browser-reference-chip browser-reference-chip-inline';
+  chipSpan.title = `${chip.title || chip.label}\n${chip.url}\n\n${chip.content}`;
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'browser-reference-chip-remove';
+  removeBtn.setAttribute('aria-label', 'Remove browser reference');
+  removeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+  removeBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onRemove?.(chip.id);
+  };
+
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'browser-reference-chip-icon';
+  iconSpan.innerHTML = chip.kind === 'screenshot'
+    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h2l1.5-2h5L16 5h2a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3"/></svg>'
+    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 7-6 2-2 6L5 3Z"/><path d="M13 12l5 5"/></svg>';
+
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'browser-reference-chip-label';
+  labelSpan.textContent = chip.kind === 'screenshot' ? 'Screenshot' : chip.label || 'Element';
+
+  const metaSpan = document.createElement('span');
+  metaSpan.className = 'browser-reference-chip-meta';
+  metaSpan.textContent = chip.title || labelFromUrl(chip.url);
+
+  chipSpan.appendChild(removeBtn);
+  chipSpan.appendChild(iconSpan);
+  chipSpan.appendChild(labelSpan);
+  chipSpan.appendChild(metaSpan);
+  wrapper.appendChild(chipSpan);
+  return wrapper;
+}
+
+function labelFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname || parsed.pathname || 'Page';
+  } catch {
+    return url || 'Page';
+  }
+}
+
 export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
   ({
     value,
@@ -161,12 +234,15 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
     onRemoveFileChip,
     terminalReferenceChips = [],
     onRemoveTerminalReferenceChip,
+    browserReferenceChips = [],
+    onRemoveBrowserReferenceChip,
   }, ref) => {
     const innerRef = useRef<HTMLDivElement>(null);
     const isComposing = useRef(false);
     const lastValue = useRef(value);
     const lastChips = useRef<FileChipData[]>([]);
     const lastTerminalChips = useRef<TerminalReferenceChipData[]>([]);
+    const lastBrowserChips = useRef<BrowserReferenceChipData[]>([]);
 
     // Sync forwarded ref
     useEffect(() => {
@@ -193,6 +269,9 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
           return '';
         }
         if (element.classList.contains('terminal-reference-chip-wrapper')) {
+          return element.dataset.referenceToken ?? '';
+        }
+        if (element.classList.contains('browser-reference-chip-wrapper')) {
           return element.dataset.referenceToken ?? '';
         }
         let text = '';
@@ -237,14 +316,16 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       el.innerHTML = '';
 
       const terminalById = new Map(terminalReferenceChips.map((chip) => [chip.id, chip]));
-      const tokenPattern = /\uE000terminal:([^\uE000]+)\uE000/g;
+      const browserById = new Map(browserReferenceChips.map((chip) => [chip.id, chip]));
+      const tokenPattern = /\uE000(terminal|browser):([^\uE000]+)\uE000/g;
       let cursor = 0;
+      let hasAppended = false;
 
       const appendText = (part: string) => {
         if (!part) return;
         const parsed = parseSlashCommand(text);
 
-        if (parsed && cursor === 0 && part === text) {
+        if (parsed && !hasAppended && part === text) {
           const { slashCommand, remainingText } = parsed;
           const slashSpan = document.createElement('span');
           slashSpan.textContent = slashCommand;
@@ -259,15 +340,28 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
         } else {
           el.appendChild(document.createTextNode(part));
         }
+        hasAppended = true;
       };
 
       let match: RegExpExecArray | null;
       while ((match = tokenPattern.exec(text))) {
         appendText(text.slice(cursor, match.index));
-        const chip = terminalById.get(match[1]);
-        if (chip) {
-          const chipEl = createTerminalReferenceChipElement(chip, onRemoveTerminalReferenceChip);
-          el.appendChild(chipEl);
+        const type = match[1];
+        const id = match[2];
+        if (type === 'terminal') {
+          const chip = terminalById.get(id);
+          if (chip) {
+            const chipEl = createTerminalReferenceChipElement(chip, onRemoveTerminalReferenceChip);
+            el.appendChild(chipEl);
+            hasAppended = true;
+          }
+        } else {
+          const chip = browserById.get(id);
+          if (chip) {
+            const chipEl = createBrowserReferenceChipElement(chip, onRemoveBrowserReferenceChip);
+            el.appendChild(chipEl);
+            hasAppended = true;
+          }
         }
         cursor = match.index + match[0].length;
       }
@@ -291,7 +385,7 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
-    }, [onRemoveFileChip, onRemoveTerminalReferenceChip, terminalReferenceChips]);
+    }, [browserReferenceChips, onRemoveBrowserReferenceChip, onRemoveFileChip, onRemoveTerminalReferenceChip, terminalReferenceChips]);
 
     // Update content when value or chips change externally
     useEffect(() => {
@@ -301,13 +395,17 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       const terminalChipsChanged =
         terminalReferenceChips.length !== lastTerminalChips.current.length ||
         terminalReferenceChips.some((chip, index) => chip.id !== lastTerminalChips.current[index]?.id);
+      const browserChipsChanged =
+        browserReferenceChips.length !== lastBrowserChips.current.length ||
+        browserReferenceChips.some((chip, index) => chip.id !== lastBrowserChips.current[index]?.id);
 
-      if (value !== lastValue.current || fileChips.length !== lastChips.current.length || terminalChipsChanged) {
+      if (value !== lastValue.current || fileChips.length !== lastChips.current.length || terminalChipsChanged || browserChipsChanged) {
         lastValue.current = value;
         lastTerminalChips.current = [...terminalReferenceChips];
+        lastBrowserChips.current = [...browserReferenceChips];
         buildContent(el, value, fileChips);
       }
-    }, [value, fileChips, terminalReferenceChips, buildContent]);
+    }, [value, fileChips, terminalReferenceChips, browserReferenceChips, buildContent]);
 
     const handleInput = useCallback(() => {
       const el = innerRef.current;

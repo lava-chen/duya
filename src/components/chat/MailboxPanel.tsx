@@ -44,7 +44,7 @@ interface MailboxPanelProps {
   rowsOverride?: MailboxRow[];
 }
 
-const VISIBLE_STATUSES: MailboxStatus[] = ["pending", "observed", "applied"];
+const VISIBLE_STATUSES: MailboxStatus[] = ["pending", "observed"];
 
 export function MailboxPanel({
   sessionId,
@@ -60,6 +60,7 @@ export function MailboxPanel({
   const list = useMailboxStore((state) => state.list);
   const cancel = useMailboxStore((state) => state.cancel);
   const edit = useMailboxStore((state) => state.edit);
+  const guide = useMailboxStore((state) => state.guide);
 
   // Initial load + refetch on session change
   useEffect(() => {
@@ -68,14 +69,9 @@ export function MailboxPanel({
 
   const visibleRows = useMemo(
     () =>
-      rows.filter(
-        (r) => VISIBLE_STATUSES.includes(r.status) || r.status === "cancelled",
-      ),
+      rows.filter((r) => VISIBLE_STATUSES.includes(r.status)),
     [rows],
   );
-
-  // Hide the panel entirely when there's nothing to show
-  if (visibleRows.length === 0) return null;
 
   const handleEdit = useCallback(
     (id: string, patch: { content?: string; kind?: MailboxKind }) => {
@@ -93,10 +89,13 @@ export function MailboxPanel({
 
   const handleGuide = useCallback(
     (row: MailboxRow) => {
+      void guide(row.id);
       onGuide?.(row);
     },
-    [onGuide],
+    [guide, onGuide],
   );
+
+  if (visibleRows.length === 0) return null;
 
   return (
     <div className="mailbox-panel-wrapper">

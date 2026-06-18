@@ -11,13 +11,8 @@ import {
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useConversationStore } from '@/stores/conversation-store';
-
-export interface ModelOption {
-  id: string;
-  display_name: string;
-  context_length?: number;
-  pricing?: { prompt: string; completion: string };
-}
+import type { ModelOption } from '@duya/conductor/renderer';
+export type { ModelOption } from '@duya/conductor/renderer';
 
 interface ModelSelectorProps {
   models: ModelOption[];

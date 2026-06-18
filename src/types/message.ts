@@ -37,6 +37,11 @@ export interface Message {
   isCompactSummary?: boolean;
   /** Number of messages that were compacted into this summary */
   compactedMessageCount?: number;
+  /** True if this message is a system-generated <task-notification> for a
+   * background subagent. The renderer hides it; the LLM still receives it
+   * (it carries the <result> body). Set by DuyaAgent when injecting the
+   * notification XML into the message array. */
+  isTaskNotification?: boolean;
 }
 
 export interface ToolUseInfo {

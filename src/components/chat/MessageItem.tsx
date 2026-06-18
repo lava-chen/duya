@@ -531,6 +531,19 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
   const isUser = message.role === 'user';
   const hasPastedContents = allPastedContents.length > 0;
 
+  // System-generated task-notification messages are injected as role:'user'
+  // for the LLM (LLM APIs have no native system role for this), but they
+  // carry raw <task-notification> XML that must not surface as a chat
+  // bubble for the human reader. Hide them. Detection prefers the typed
+  // metadata flag set by DuyaAgent; the string-prefix sniff is a fallback
+  // for messages that predate the metadata flag.
+  const isTaskNotification = message.isTaskNotification === true ||
+    (isUser && typeof message.content === 'string' &&
+     message.content.trimStart().startsWith('<task-notification>'));
+  if (isTaskNotification) {
+    return null;
+  }
+
   const displayText = useMemo(() => {
     if (!hasPastedContents) return mainText;
     let cleaned = mainText;

@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useConversationStore } from "@/stores/conversation-store";
+import { initMailboxEventListener } from "@/stores/mailbox-store";
 import { ChatView } from "@/components/chat/ChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
 import { SkillsView } from "@/components/skills/SkillsView";
 import { ChannelsView } from "@/components/bridge/ChannelsView";
 import { AutomationView } from "@/components/automation/AutomationView";
-import { ConductorView } from "@/components/conductor/ConductorView";
+import { ConductorView } from "@duya/conductor/renderer/components/ConductorView";
 import { MemoryView } from "@/components/memory/MemoryView";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { AppShell } from "@/components/layout/app-shell";
@@ -17,6 +18,7 @@ import { FontProvider } from "@/contexts/FontContext";
 import { StartupLanding, type StartupLandingPhase } from "@/components/StartupLanding";
 import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, subscribeToDbPersisted, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages } from "@/lib/stream-session-manager";
 import { useSettings } from "@/hooks/useSettings";
+import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
@@ -139,7 +141,9 @@ export function App({ onReady }: { onReady?: () => void } = {}) {
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <FontProvider>
-          <AppShellInner onReady={onReady} />
+          <ConductorHostProvider>
+            <AppShellInner onReady={onReady} />
+          </ConductorHostProvider>
         </FontProvider>
       </I18nProvider>
     </QueryClientProvider>
@@ -164,6 +168,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   const [streamingSnapshot, setStreamingSnapshot] = useState<SessionStreamSnapshot | null>(null);
   const lastCancelTimeRef = useRef(0);
   const prevPhaseRef = useRef<StreamPhase>('idle');
+
+  useEffect(() => initMailboxEventListener(), []);
 
   // -------------------------------------------------------------------
   // First-launch splash lifecycle.
@@ -325,11 +331,19 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       agentProfileId?: string | null,
       outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
       mode?: string,
+      effort?: string,
     ) => {
       if (!activeThreadId) return;
 
       // Strip markers before sending to API
       const plainContent = stripPastedContentMarkers(content);
+
+      // Resolve the thread's providerId so the worker uses the right
+      // API key/baseURL. Without this, picking a model from a
+      // non-default provider still uses the active provider's config
+      // and the user sees the active provider's rate-limit error.
+      const activeThread = useConversationStore.getState().threads.find((t) => t.id === activeThreadId);
+      const sessionProviderId = activeThread?.providerId;
 
       if (!canSend(activeThreadId)) {
         enqueueMessage(activeThreadId, {
@@ -343,6 +357,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           mode,
           titleGenerationModel: settings.titleGenerationModel,
           wikiAgentEnabled,
+          providerId: sessionProviderId,
+          effort,
         });
         return;
       }
@@ -382,6 +398,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         titleGenerationModel: settings.titleGenerationModel,
         wikiAgentEnabled,
         defaultWorkspaceDirectory: settings.workspaceDir,
+        providerId: sessionProviderId,
+        effort,
       });
 
       setToolTimeoutCallback(activeThreadId, (retryContent: string) => {
