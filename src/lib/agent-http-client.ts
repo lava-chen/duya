@@ -28,6 +28,12 @@ export interface ChatOptions {
   wikiAgentEnabled?: boolean;
   defaultWorkspaceDirectory?: string;
   securityScanEnabled?: boolean;
+  /**
+   * Anthropic thinking effort level. Forwarded to the agent worker so
+   * the LLM client can include `thinking.budget_tokens` in the request.
+   * undefined/Auto means no extended thinking.
+   */
+  effort?: string;
 }
 
 export interface AgentEvent {
@@ -121,6 +127,7 @@ export class AgentServerClient {
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
             wikiAgentEnabled: options?.wikiAgentEnabled,
             securityScanEnabled: options?.securityScanEnabled,
+            effort: options?.effort,
           },
           providerConfig: options?.providerConfig,
           workingDirectory: options?.workingDirectory,

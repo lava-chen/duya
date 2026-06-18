@@ -21,6 +21,7 @@ export interface LLMClient {
       temperature?: number;
       disableThinking?: boolean;
       signal?: AbortSignal;
+      effort?: string;
     }
   ): AsyncGenerator<SSEEvent, void, unknown>;
 

@@ -620,6 +620,7 @@ export class AnthropicClient implements LLMClient {
       temperature?: number;
       cacheRetention?: CacheRetention;
       signal?: AbortSignal;
+      effort?: string;
     }
   ): AsyncGenerator<SSEEvent, void, unknown> {
     logger.debug(`[AnthropicClient] streamChat started, model=${this.model}, isMiniMax=${this.isMiniMax}`);
@@ -661,14 +662,35 @@ export class AnthropicClient implements LLMClient {
     logger.debug(`[AnthropicClient] Creating stream with model=${this.model}`);
     let stream;
     try {
+      // Map UI effort level to Anthropic `thinking` field. Auto
+      // (undefined/empty) omits the field entirely so behavior matches
+      // pre-effort wiring. Clamp `budget_tokens` to `max_tokens - 1` to
+      // satisfy the API constraint `max_tokens > budget_tokens`.
+      const BUDGET_BY_EFFORT: Record<string, number> = {
+        low: 1024,
+        medium: 4096,
+        high: 16384,
+        max: 32000,
+      };
+      const maxTokens = options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+      const requestedBudget = options?.effort
+        ? BUDGET_BY_EFFORT[options.effort]
+        : undefined;
+      const budget = requestedBudget !== undefined
+        ? Math.min(requestedBudget, maxTokens - 1)
+        : undefined;
+      const thinking = budget !== undefined
+        ? { type: 'enabled' as const, budget_tokens: budget }
+        : undefined;
       stream = await this.client.messages.stream(
         {
           model: this.model,
-          max_tokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+          max_tokens: maxTokens,
           temperature: options?.temperature ?? 1,
           system: options?.systemPrompt || '',
           messages: anthropicMessages as MessageParam[],
           tools: tools?.length ? tools : undefined,
+          ...(thinking ? { thinking } : {}),
         }
       );
       logger.debug('Stream created successfully', undefined, 'AnthropicClient');

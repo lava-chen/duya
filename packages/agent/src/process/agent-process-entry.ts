@@ -185,6 +185,7 @@ interface ChatStartMessage {
     mode?: string;
     titleGenerationModel?: string;
     titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
+    effort?: string;
   };
 }
 

@@ -381,6 +381,12 @@ export interface ChatOptions {
   researchProjectId?: string;
   /** Enable wiki tools (wiki_search, wiki_read). Only effective when wiki agent experimental mode is enabled */
   wikiAgentEnabled?: boolean;
+  /**
+   * Anthropic thinking effort level (Low/Medium/High/Max).
+   * undefined/Auto omits the `thinking` field in the request.
+   * Mapped to `thinking.budget_tokens` by the Anthropic LLM client.
+   */
+  effort?: string;
 }
 
 // 会话信息
