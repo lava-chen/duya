@@ -2440,6 +2440,25 @@ export function registerMailboxHandlers(): void {
     return row;
   });
 
+  ipcMain.handle('mailbox:guide', (_event, data: { id: string }) => {
+    const database = getDb();
+    const existing = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id) as Record<string, unknown> | undefined;
+    if (!existing) return null;
+    if (existing.status !== 'pending') return null;
+
+    const source = String(existing.source ?? 'ui');
+    const guidedSource = source.endsWith(':guide') ? source : `${source}:guide`;
+    database.prepare(`
+      UPDATE agent_mailbox
+      SET source = @source
+      WHERE id = @id AND status = 'pending'
+    `).run({ id: data.id, source: guidedSource });
+
+    const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
+    emitMailEdited(row as Record<string, unknown>, existing.content as string);
+    return row;
+  });
+
   ipcMain.handle('mailbox:cancel', (_event, data: { id: string; reason?: string }) => {
     const database = getDb();
     const now = Date.now();

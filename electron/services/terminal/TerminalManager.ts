@@ -87,7 +87,12 @@ function loadNodePty(): typeof NodePty {
   if (nodePtyModule) return nodePtyModule;
   if (app.isPackaged) {
     const packageJson = path.join(process.resourcesPath, 'node-pty', 'package.json');
-    nodePtyModule = createRequire(packageJson)('./') as typeof NodePty;
+    if (fs.existsSync(packageJson)) {
+      nodePtyModule = createRequire(packageJson)('./') as typeof NodePty;
+    } else {
+      // Fall back to node_modules if packaged path doesn't exist (e.g., Playwright e2e)
+      nodePtyModule = require('node-pty') as typeof NodePty;
+    }
   } else {
     nodePtyModule = require('node-pty') as typeof NodePty;
   }

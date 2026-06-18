@@ -8,14 +8,9 @@ import type { PromptContext } from '@duya/agent/prompts/types';
 const CANVAS_TOOL_DEFINITIONS: Record<string, string> = {
   canvas_create_element: `### canvas_create_element
 Create any element on the canvas. Supports these kinds:
-- **diagram/svg** — Flowchart, architecture diagram, sequence diagram (Mermaid format)
-- **chart/bar**, **chart/line**, **chart/pie** — Data visualizations with chartType, labels, datasets
-- **content/card** — Information card with header, sections (key-value, text), footer
-- **content/rich-text** — Formatted text block (Markdown)
-- **content/image** — Image placeholder
-- **shape/rect**, **shape/circle** — Geometric shapes with fill, stroke, label
-- **shape/connector** — Connection lines between elements with sourceId and targetId
-- **app/mini-app** — Interactive mini-application with html, js, css
+- **native/sticky** — Sticky note with color (yellow, blue, green, pink, purple, gray)
+- **native/connector** — Connection line between two elements with sourceId and targetId
+- **native/mindmap** — Mind map with topic and branches
 - **widget/task-list**, **widget/note-pad**, **widget/pomodoro**, **widget/news-board** — Structured widgets
 
 Parameters: canvasId, kind, position {x, y, w, h, zIndex}, vizSpec (kind-specific), config`,
@@ -49,6 +44,28 @@ Parameters: canvasId, elementIds, columns?, gap?, cellWidth?, cellHeight?`,
 Read-only: get current canvas state with all elements, positions, and vizSpecs.
 
 Parameters: canvasId`,
+
+  canvas_capture: `### canvas_capture
+Capture a screenshot of the canvas for visual analysis. The result includes a PNG data URL and metadata (width, height, scope, timestamp).
+
+**When to use (be selective):**
+- After layout changes: verify visual alignment, spacing, overlap
+- After creating complex elements (diagrams, charts, rich-text): check rendering
+- When the user asks "how does it look?" or "is it aligned?"
+- Before reporting done on a visual task: confirm the composition
+
+**When NOT to use:**
+- Reading text content → use canvas_get_snapshot
+- Checking positions/sizes → use canvas_get_snapshot
+- Routine create/update/delete → JSON state is sufficient
+- Every turn → wastes tokens and context; use sparingly
+
+**Scopes:**
+- \`viewport\` (default): capture the user's current visible canvas area
+- \`element\`: capture a single element by elementId (pass elementId)
+- \`region\`: capture a rectangular area (pass region: {x, y, w, h} in screen pixels)
+
+Parameters: canvasId, scope ('viewport'|'element'|'region'), elementId?, region?`,
 };
 
 export function getCanvasToolsSection(context?: PromptContext): string {

@@ -1,13 +1,69 @@
 import { app } from 'electron';
 import * as path from 'path';
 import * as os from 'os';
+import * as fs from 'fs';
 import { initLogger, getLogger, LogComponent } from '../logging/logger';
 
 const logger = initLogger({ level: 'WARN' });
 
-export const isDev = !app.isPackaged;
+export const isTestMode = process.env.DUYA_TEST === '1';
+// app.isPackaged returns true when Playwright _electron launches the Electron
+// binary directly, even in dev. Treat test mode as dev so setupDevMode(),
+// getRendererUrl(), and other isDev-gated paths work correctly.
+export const isDev = !app.isPackaged || isTestMode;
 export const isPreviewMode = process.env.DUYA_PREVIEW_MODE === 'true';
 export const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
+
+// =============================================================================
+// Test Mode — activated by DUYA_TEST=1 env var.
+// See e2e/helpers.ts → launchDuya() for how Playwright drives this.
+// =============================================================================
+
+/**
+ * Parse --duya-namespace=<name> or --duya-namespace <name> from argv.
+ * Returns null if not present or invalid. Playwright passes args with
+ * `=` (e.g. `--duya-namespace=smoke`), while manual CLI use may pass
+ * them as two separate tokens — both forms are accepted.
+ */
+export function getTestNamespace(): string | null {
+  if (!isTestMode) return null;
+  // Form 1: --duya-namespace=value
+  for (const arg of process.argv) {
+    if (arg.startsWith('--duya-namespace=')) {
+      const ns = arg.slice('--duya-namespace='.length);
+      return ns && /^[a-zA-Z0-9_-]+$/.test(ns) ? ns : null;
+    }
+  }
+  // Form 2: --duya-namespace value (two separate tokens)
+  const idx = process.argv.indexOf('--duya-namespace');
+  if (idx >= 0 && idx + 1 < process.argv.length) {
+    const ns = process.argv[idx + 1];
+    return ns && /^[a-zA-Z0-9_-]+$/.test(ns) ? ns : null;
+  }
+  return null;
+}
+
+/**
+ * In test mode, override userData to a per-namespace subdirectory so each
+ * spec gets an isolated SQLite database, settings, and lockfile. Runs
+ * AFTER setupDevMode() so test isolation takes precedence over dev mode.
+ */
+export function setupTestMode(): void {
+  if (!isTestMode) return;
+  const ns = getTestNamespace();
+  if (!ns) return;
+  const baseUserData = app.getPath('userData');
+  const testUserData = path.join(baseUserData, 'test-namespaces', ns);
+  // Ensure the directory exists — app.setPath() does not create it, and
+  // initDatabaseFromBoot() will fail if the userData dir is missing.
+  fs.mkdirSync(testUserData, { recursive: true });
+  app.setPath('userData', testUserData);
+  getLogger().info(
+    `Test mode: isolated userData at ${testUserData}`,
+    undefined,
+    LogComponent.Main,
+  );
+}
 
 export function debugLog(...args: unknown[]): void {
   if (DEBUG_IPC) {
@@ -89,6 +145,17 @@ export function initGlobalErrorHandlers(): void {
 // =============================================================================
 
 export function acquireSingleInstanceLock(): boolean {
+  // Test mode: skip single-instance lock so Playwright can launch multiple
+  // isolated Electron processes (each with its own namespaced userData)
+  // without conflicting with a dev instance or a previous test run.
+  if (isTestMode) {
+    getLogger().info(
+      'Test mode: skipping single-instance lock',
+      undefined,
+      LogComponent.Main,
+    );
+    return true;
+  }
   const gotTheLock = app.requestSingleInstanceLock();
   if (!gotTheLock) {
     app.quit();

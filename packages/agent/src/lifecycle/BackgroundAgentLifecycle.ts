@@ -1,13 +1,14 @@
 import type { TaskRecord, TaskStatus } from './TaskState.js'
 import { ProgressTracker } from './ProgressTracker.js'
 import { OutputFileWriter } from './OutputFileWriter.js'
-import { NotificationQueue } from './NotificationQueue.js'
 import { CleanupRegistry } from './CleanupRegistry.js'
 import { applyProgressEvent, extractResultFromLastMessage } from '../tool/AgentTool/agentLifecycleBridge.js'
 import { sendEvent } from '../process/worker-protocol.js'
 import { logger } from '../utils/logger.js'
 import type { AgentProgressEvent } from '../tool/AgentTool/runAgent.js'
 import type { Message } from '../types.js'
+import { enqueuePendingNotification } from '../queue/index.js'
+import { buildTaskNotificationXml, DEFAULT_MAX_RESULT_CHARS, type BuildTaskNotificationInput } from './buildTaskNotification.js'
 
 export interface RegisterInput {
   taskId: string
@@ -23,6 +24,14 @@ export class BackgroundAgentLifecycle {
   private tasks = new Map<string, TaskRecord>()
   private drained = new Set<string>()
   private drainsByReason: ('completed' | 'killed' | 'failed')[] = ['completed', 'killed', 'failed']
+  /**
+   * Tasks whose terminal notification has already been emitted to the
+   * message queue. Prevents the completed + AbortError catch branches in
+   * run() from double-enqueueing the same task.
+   */
+  private notified = new Set<string>()
+  /** Inline cap on the <result> body of task-notification envelopes. */
+  private maxResultChars = DEFAULT_MAX_RESULT_CHARS
 
   register(input: RegisterInput): TaskRecord {
     if (this.tasks.has(input.taskId)) {
@@ -175,22 +184,71 @@ export class BackgroundAgentLifecycle {
           lastMessage = ev as Message
         }
       }
-      this.complete(taskId, extractResultFromLastMessage(lastMessage))
-      notificationQueue.enqueue(this.tasks.get(taskId)!)
+      const result = extractResultFromLastMessage(lastMessage)
+      this.complete(taskId, result)
+      this.enqueueTaskNotification(taskId, 'completed', {
+        finalMessage: extractFinalText(result),
+        totalToolUseCount: result.totalToolUseCount,
+        totalDurationMs: result.totalDurationMs,
+      })
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         logger.warn('[SubAgent] lifecycle aborted', { taskId, err }, 'SubAgent')
         this.kill(taskId, 'parent_abort')
-        notificationQueue.enqueue(this.tasks.get(taskId)!)
+        this.enqueueTaskNotification(taskId, 'killed', { error: 'parent_abort' })
       } else {
+        const message = (err as Error).message ?? 'Unknown error'
         logger.error('[SubAgent] lifecycle failed', err as Error, { taskId }, 'SubAgent')
-        this.fail(taskId, (err as Error).message ?? 'Unknown error')
-        notificationQueue.enqueue(this.tasks.get(taskId)!)
+        this.fail(taskId, message)
+        this.enqueueTaskNotification(taskId, 'failed', { error: message })
       }
     } finally {
       try { await OutputFileWriter.close(r.outputFilePath) } catch { /* ignore */ }
       for (const cb of r.subscribers) cb(r)
     }
+  }
+
+  /**
+   * Build a <task-notification> envelope and enqueue it via
+   * enqueuePendingNotification. Idempotent per taskId — repeat calls
+   * after the first are dropped. Mirrors claude-code's `notified` flag
+   * in LocalAgentTask.tsx:227-240.
+   */
+  private enqueueTaskNotification(
+    taskId: string,
+    status: 'completed' | 'failed' | 'killed',
+    extras: { finalMessage?: string; error?: string; totalToolUseCount?: number; totalDurationMs?: number }
+  ): void {
+    if (this.notified.has(taskId)) {
+      logger.debug('[SubAgent] task notification already enqueued, skipping', { taskId, status }, 'SubAgent')
+      return
+    }
+    const r = this.tasks.get(taskId)
+    if (!r) return
+    this.notified.add(taskId)
+    const input: BuildTaskNotificationInput = {
+      taskId,
+      status,
+      agentType: r.agentType,
+      agentName: r.agentName,
+      description: r.description,
+      outputFilePath: r.outputFilePath,
+      finalMessage: extras.finalMessage,
+      totalToolUseCount: extras.totalToolUseCount,
+      totalDurationMs: extras.totalDurationMs,
+      error: extras.error,
+      maxResultChars: this.maxResultChars,
+    }
+    enqueuePendingNotification(buildTaskNotificationXml(input), { taskId, status })
+  }
+
+  /**
+   * Override the inline cap on the <result> body of task-notification
+   * envelopes. Set to `0` to always emit an output-file pointer.
+   * Tests use this to make notifications deterministic.
+   */
+  setMaxResultChars(chars: number): void {
+    this.maxResultChars = chars
   }
 
   async killAll(reason: 'app_exit'): Promise<void> {
@@ -216,5 +274,10 @@ export function getBackgroundAgentLifecycle(): BackgroundAgentLifecycle {
 }
 
 export const backgroundAgentLifecycle = getBackgroundAgentLifecycle()
-export const notificationQueue = new NotificationQueue()
 export const cleanupRegistry = CleanupRegistry.install()
+
+function extractFinalText(result: NonNullable<TaskRecord['result']>): string {
+  return result.content
+    .map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
+    .join('\n')
+}

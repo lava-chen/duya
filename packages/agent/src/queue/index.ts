@@ -10,6 +10,8 @@ export {
   getCommandQueueSnapshot,
   getCommandQueueLength,
   subscribeToCommandQueue,
+  isPromptInputModeEditable,
+  isQueuedCommandEditable,
 } from './messageQueueManager.js'
 export type { QueuedCommand, QueuePriority } from './messageQueueManager.js'
 export { QueryGuard, queryGuard } from './QueryGuard.js'

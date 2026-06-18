@@ -35,6 +35,7 @@ import {
   hasCommandsInQueue,
   clearCommandQueue,
   getCommandQueueLength,
+  isQueuedCommandEditable,
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
@@ -140,6 +141,8 @@ interface ConductorInitMessage {
   systemPrompt?: string;
   workingDirectory?: string;
   language?: string;
+  visionConfig?: import('../types.js').VisionConfig;
+  permissionMode?: 'default' | 'auto' | 'bypass';
 }
 
 interface ConductorStartMessage {
@@ -148,6 +151,7 @@ interface ConductorStartMessage {
   prompt: string;
   snapshot?: ConductorSnapshot;
   language?: string;
+  permissionMode?: 'default' | 'auto' | 'bypass';
 }
 
 interface FileAttachment {
@@ -208,6 +212,8 @@ const visionTool = new VisionTool();
 const titleGeneratedBySession = new Map<string, string>();
 // Title generation model config (from settings)
 let titleGenerationModelConfig: { provider: string; apiKey: string; baseURL: string; model: string } | null = null;
+// Conductor permission mode (set on init from settings)
+let conductorPermissionMode: 'default' | 'auto' | 'bypass' = 'default';
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 const nativeImport = new Function('specifier', 'return import(specifier)') as
   <T>(specifier: string) => Promise<T>;
@@ -1168,16 +1174,22 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     console.error('[IMAGE-DETAIL] readFailedFiles:', [...readFailedFiles]);
 
     // Phase 2: Vision pre-analysis using the configured vision model.
-    // Uses the cached base64 data from Phase 1.
+    // Only run this for text-only main models. When the main model can
+    // consume image blocks natively, sending both the original image and a
+    // synthetic vision summary duplicates context and adds avoidable latency.
     let preAnalysisText = '';
     let visionAnalysisFailed = false;
     let visionAnalysisError: string | null = null;
     const failedVisionFiles = new Set<string>();
     const hasVisionAnalyzer = agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function';
-    if (imageFiles.length > 0 && hasVisionAnalyzer) {
+    const shouldUseVisionPreAnalysis = imageFiles.length > 0 && hasVisionAnalyzer && !modelIsMultimodal;
+    if (imageFiles.length > 0 && hasVisionAnalyzer && modelIsMultimodal) {
+      log('[Image-Processing] Skipping vision pre-analysis because main model accepts image input directly');
+    }
+    if (shouldUseVisionPreAnalysis) {
       sendI18nStatus('streaming.visionAnalyzingStart');
     }
-    if (imageFiles.length > 0 && hasVisionAnalyzer) {
+    if (shouldUseVisionPreAnalysis) {
       let analyzedCount = 0;
       for (const file of imageFiles) {
         const cached = imageDataCache.get(file.name);
@@ -1349,7 +1361,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       effectivePrompt = 'The user has attached file(s). Please analyze the attached files and provide a helpful response based on their contents.';
     }
 
-    if (imageFiles.length > 0 && hasVisionAnalyzer) {
+    if (shouldUseVisionPreAnalysis) {
       sendI18nStatus('streaming.visionPreprocessDone');
     }
 
@@ -1545,6 +1557,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       mode: msg.options?.mode,
       attachments: files,
       displayContent: msg.prompt, // Store original prompt without synthetic pre-analysis/attachment context
+      effort: msg.options?.effort,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
@@ -1853,7 +1866,16 @@ async function handleConductorInit(msg: ConductorInitMessage): Promise<void> {
     sessionId: msg.sessionId,
     workingDirectory: msg.workingDirectory,
     promptManager,
+    visionConfig: msg.visionConfig,
+    permissionMode: msg.permissionMode === 'bypass'
+      ? 'bypassPermissions'
+      : msg.permissionMode === 'auto'
+        ? 'dontAsk'
+        : 'default',
   });
+
+  // Persist permission mode for downstream turn decisions
+  conductorPermissionMode = msg.permissionMode ?? 'default';
 
   log('[Agent-Process] Conductor duyaAgent initialized for session:', msg.sessionId);
 }
@@ -1867,6 +1889,14 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
   if (msg.language) {
     (conductorAgent as unknown as { promptManager?: { updateOptions: (options: { language?: string }) => void } })
       .promptManager?.updateOptions({ language: msg.language });
+  }
+
+  // Refresh permission mode per-turn so the user can change the setting
+  // mid-session without restarting the agent process. The prompt section
+  // (actions.ts) reads this env var on every build.
+  if (msg.permissionMode) {
+    process.env.CONDUCTOR_PERMISSION_MODE = msg.permissionMode;
+    conductorPermissionMode = msg.permissionMode;
   }
 
   // Update canvas state snapshot for every message (not just init)
@@ -2378,9 +2408,13 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             clearCommandQueue();
             lastInterruptTime = 0;
           } else if (hasCommandsInQueue()) {
-            // First press while idle with queued messages: pop the front of the queue
+            // First press while idle with queued messages: pop the front of the queue.
+            // Filter to editable commands only — system-generated <task-notification>
+            // envelopes (mode='task-notification', isMeta=true) must NEVER leak into
+            // the user's input buffer via the interrupt-pop path. Mirrors
+            // claude-code's isQueuedCommandEditable guard in messageQueueManager.ts.
             const popped = dequeue<ChatStartMessage>(
-              (cmd: QueuedCommand<ChatStartMessage>) => cmd.agentId === undefined
+              (cmd: QueuedCommand<ChatStartMessage>) => cmd.agentId === undefined && isQueuedCommandEditable(cmd)
             );
             if (popped) {
               log('[Agent-Process] Interrupt popped queued command from queue, remaining:', getCommandQueueLength());

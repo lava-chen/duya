@@ -41,7 +41,7 @@ function getGatewayProcessPath(): string {
     const asarPath = path.join(process.resourcesPath, 'app.asar', 'dist-electron', 'gateway.js');
     if (fs.existsSync(asarPath)) return asarPath;
 
-    return bundled;
+    // Fall through to dev path if no packaged path exists (e.g., Playwright e2e)
   }
   return path.join(process.cwd(), 'packages', 'gateway', 'dist', 'index.js');
 }

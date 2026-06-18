@@ -6,6 +6,7 @@
 
 export type ExecutorAction =
   | 'canvas.snapshot'
+  | 'canvas.capture'
   | 'element.create'
   | 'element.update'
   | 'element.delete'

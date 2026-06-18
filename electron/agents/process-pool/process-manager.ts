@@ -44,7 +44,9 @@ export function getAgentProcessPath(): string {
     if (fs.existsSync(primary)) return primary;
 
     const fallback = path.join(process.resourcesPath, 'agent', 'dist', 'process', 'agent-process-entry.js');
-    return fallback;
+    if (fs.existsSync(fallback)) return fallback;
+
+    // Fall through to dev path if no packaged path exists (e.g., Playwright e2e)
   }
 
   const devBundle = path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
@@ -68,13 +70,15 @@ export function getAgentRuntimeCommand(
   };
 
   if (app.isPackaged) {
+    const packagedBetterSqlite3 = path.join(process.resourcesPath, 'better-sqlite3');
+    const usePackagedBetterSqlite3 = fs.existsSync(packagedBetterSqlite3);
     return {
       command: process.execPath,
       args: [agentPath],
       env: {
         ...env,
         ELECTRON_RUN_AS_NODE: '1',
-        DUYA_BETTER_SQLITE3_PATH: betterSqlite3Path || path.join(process.resourcesPath, 'better-sqlite3'),
+        DUYA_BETTER_SQLITE3_PATH: betterSqlite3Path || (usePackagedBetterSqlite3 ? packagedBetterSqlite3 : path.join(process.cwd(), 'node_modules', 'better-sqlite3')),
       },
     };
   }
