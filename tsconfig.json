@@ -16,10 +16,17 @@
     "paths": {
       "@/*": ["./src/*"],
       "@duya/agent": ["./packages/agent/dist"],
-      "@duya/agent/*": ["./packages/agent/dist/*"]
+      "@duya/agent/*": ["./packages/agent/dist/*"],
+      "@duya/conductor/renderer": ["./packages/conductor/src/renderer/index"],
+      "@duya/conductor/renderer/*": ["./packages/conductor/src/renderer/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "packages/conductor/src/renderer/**/*.ts",
+    "packages/conductor/src/renderer/**/*.tsx"
+  ],
   "exclude": [
     "node_modules",
     "electron/**",
