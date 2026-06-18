@@ -22,6 +22,7 @@
  *      shorter `busy_timeout`; injecting the handle keeps that open.
  */
 import type BetterSqlite3 from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import type { MailboxApplyMode, MailboxRow } from '../session/db.js';
 import { assertValidApply } from './assertValidApply.js';
 import type { CheckpointType } from './types.js';
@@ -107,9 +108,110 @@ export class MailboxService {
    * Phase B body: anchor pick → batch select → claim UPDATE → reclaim-cap
    * enforcement. See Plan 202 §6.2.
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   claimBatch(input: ClaimBatchInput): ClaimBatchResult {
-    throw new Error('MailboxService.claimBatch is not yet implemented (PR2 Phase B)');
+    const now = Date.now();
+    const limit = Math.max(1, Math.min(input.limit ?? 10, 25));
+    const txn = this.db.transaction((): ClaimBatchResult => {
+      const anchor = this.db.prepare(`
+        SELECT id, priority, created_at, status, claim_attempts
+        FROM agent_mailbox
+        WHERE session_id = @sessionId
+          AND (source LIKE '%:guide' OR kind IN ('stop', 'abort_and_replace'))
+          AND (
+            status = 'pending'
+            OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
+          )
+        ORDER BY priority ASC, created_at ASC
+        LIMIT 1
+      `).get({ sessionId: input.sessionId, now }) as Pick<MailboxRow, 'id' | 'priority' | 'created_at' | 'status' | 'claim_attempts'> | undefined;
+
+      if (!anchor) return { rows: [], claimTokens: [] };
+      if (anchor.status === 'observed' && anchor.claim_attempts >= this.options.maxClaimAttempts) {
+        this.db.prepare(`
+          UPDATE agent_mailbox
+          SET status = 'cancelled',
+              cancelled_at = @now,
+              cancelled_by = 'system:max_claim_attempts',
+              cancel_reason = 'max_claim_attempts_exceeded',
+              failure_reason = 'max_claim_attempts_exceeded'
+          WHERE id = @id AND status = 'observed'
+        `).run({ id: anchor.id, now });
+        return { rows: [], claimTokens: [] };
+      }
+
+      const rowsToClaim = this.db.prepare(`
+        SELECT *
+        FROM agent_mailbox
+        WHERE session_id = @sessionId
+          AND priority = @priority
+          AND created_at <= @windowEnd
+          AND (source LIKE '%:guide' OR kind IN ('stop', 'abort_and_replace'))
+          AND (
+            status = 'pending'
+            OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
+          )
+        ORDER BY priority ASC, created_at ASC
+        LIMIT @limit
+      `).all({
+        sessionId: input.sessionId,
+        priority: anchor.priority,
+        windowEnd: anchor.created_at + this.options.coalesceWindowMs,
+        now,
+        limit,
+      }) as MailboxRow[];
+
+      const rows: MailboxRow[] = [];
+      const claimTokens: string[] = [];
+      for (const row of rowsToClaim) {
+        if (row.status === 'observed' && row.claim_attempts >= this.options.maxClaimAttempts) {
+          this.db.prepare(`
+            UPDATE agent_mailbox
+            SET status = 'cancelled',
+                cancelled_at = @now,
+                cancelled_by = 'system:max_claim_attempts',
+                cancel_reason = 'max_claim_attempts_exceeded',
+                failure_reason = 'max_claim_attempts_exceeded'
+            WHERE id = @id AND status = 'observed'
+          `).run({ id: row.id, now });
+          continue;
+        }
+
+        const claimToken = randomUUID();
+        const result = this.db.prepare(`
+          UPDATE agent_mailbox
+          SET status = 'observed',
+              claim_token = @claimToken,
+              claim_expires_at = @claimExpiresAt,
+              observed_at = COALESCE(observed_at, @now),
+              observed_at_checkpoint = COALESCE(observed_at_checkpoint, @checkpoint),
+              observed_by_run_id = @runId,
+              edit_locked_at = COALESCE(edit_locked_at, @now),
+              claim_attempts = claim_attempts + CASE WHEN status = 'observed' THEN 1 ELSE 0 END,
+              last_claim_error = NULL
+          WHERE id = @id
+            AND (
+              status = 'pending'
+              OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
+            )
+        `).run({
+          id: row.id,
+          claimToken,
+          claimExpiresAt: now + this.options.leaseMs,
+          now,
+          checkpoint: input.checkpoint,
+          runId: input.runId,
+        });
+
+        if (result.changes > 0) {
+          rows.push(this.db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(row.id) as MailboxRow);
+          claimTokens.push(claimToken);
+        }
+      }
+
+      return { rows, claimTokens };
+    });
+
+    return txn();
   }
 
   // -------------------------------------------------------------------------
@@ -123,7 +225,6 @@ export class MailboxService {
    * resulting `messages` row (when `promote_to_user_message`) in the same
    * transaction. See Plan 202 §6.5.
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   apply(input: {
     id: string;
     claimToken: string;
@@ -132,10 +233,37 @@ export class MailboxService {
     summary: string;
     newUserMsgId?: string;
   }): MailboxRow {
-    // assertValidApply will be called once `input.checkpoint` and `input.mode`
-    // are bound. The stub is here so the public surface is stable.
-    void assertValidApply;
-    throw new Error('MailboxService.apply is not yet implemented (PR2 Phase C)');
+    assertValidApply(input.checkpoint, input.mode);
+    const now = Date.now();
+    const txn = this.db.transaction((): MailboxRow => {
+      const result = this.db.prepare(`
+        UPDATE agent_mailbox
+        SET status = 'applied',
+            apply_mode = @mode,
+            applied_at = @now,
+            applied_at_checkpoint = @checkpoint,
+            applied_summary = @summary,
+            resulting_user_msg_id = @newUserMsgId,
+            claim_expires_at = NULL
+        WHERE id = @id
+          AND status = 'observed'
+          AND claim_token = @claimToken
+      `).run({
+        id: input.id,
+        claimToken: input.claimToken,
+        mode: input.mode,
+        now,
+        checkpoint: input.checkpoint,
+        summary: input.summary,
+        newUserMsgId: input.newUserMsgId ?? null,
+      });
+
+      if (result.changes === 0) {
+        throw new Error('Mailbox apply failed: row is not observed or claim token is stale');
+      }
+      return this.db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(input.id) as MailboxRow;
+    });
+    return txn();
   }
 
   /**
@@ -143,9 +271,33 @@ export class MailboxService {
    * row in the same transaction. The original reaches `applied` (terminal);
    * the mirror is what the next checkpoint actually consumes.
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   defer(input: { id: string; claimToken: string; reason: string; checkpoint: CheckpointType }): void {
-    throw new Error('MailboxService.defer is not yet implemented (PR2 Phase C)');
+    const row = this.apply({
+      id: input.id,
+      claimToken: input.claimToken,
+      mode: 'deferred_to_next_turn',
+      checkpoint: input.checkpoint,
+      summary: input.reason,
+    });
+    this.db.prepare(`
+      INSERT INTO agent_mailbox (
+        id, session_id, submitted_during_run_id, content, kind, status,
+        priority, constraints_json, attachments_json, source, client_msg_id, created_at
+      ) VALUES (
+        @id, @sessionId, @runId, @content, @kind, 'pending',
+        @priority, @constraintsJson, @attachmentsJson, 'system', NULL, @createdAt
+      )
+    `).run({
+      id: randomUUID(),
+      sessionId: row.session_id,
+      runId: row.observed_by_run_id ?? row.submitted_during_run_id,
+      content: row.content,
+      kind: row.kind,
+      priority: row.priority,
+      constraintsJson: row.constraints_json,
+      attachmentsJson: row.attachments_json,
+      createdAt: Date.now(),
+    });
   }
 
   /**
@@ -153,8 +305,26 @@ export class MailboxService {
    * this path. Used for stale claims, invalid apply pre-conditions, or
    * `max_claim_attempts` reached.
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   cancelByAgent(input: { id: string; claimToken: string; reason: string }): void {
-    throw new Error('MailboxService.cancelByAgent is not yet implemented (PR2 Phase C)');
+    const result = this.db.prepare(`
+      UPDATE agent_mailbox
+      SET status = 'cancelled',
+          cancelled_at = @now,
+          cancelled_by = 'agent',
+          cancel_reason = @reason,
+          failure_reason = @reason,
+          claim_expires_at = NULL
+      WHERE id = @id
+        AND status = 'observed'
+        AND claim_token = @claimToken
+    `).run({
+      id: input.id,
+      claimToken: input.claimToken,
+      reason: input.reason,
+      now: Date.now(),
+    });
+    if (result.changes === 0) {
+      throw new Error('Mailbox cancel failed: row is not observed or claim token is stale');
+    }
   }
 }

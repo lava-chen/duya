@@ -16,20 +16,73 @@ import type {
   ExecutorRpcResponse,
 } from './executor-types';
 
+/**
+ * Function that requests a canvas screenshot from the renderer process.
+ * The main process injects this when constructing the proxy — it sends
+ * a message to the renderer via channelManager and resolves when the
+ * renderer responds via IPC.
+ */
+export type CanvasCaptureFn = (
+  canvasId: string,
+  scope: string,
+  elementId?: string,
+  region?: { x: number; y: number; w: number; h: number },
+) => Promise<{
+  pngBase64: string;
+  width: number;
+  height: number;
+  dataUrl: string;
+  scope: string;
+  capturedAt: string;
+}>;
+
 export class ConductorExecutorProxy {
   private dbService: ConductorDbService;
+  private captureFn: CanvasCaptureFn | null = null;
 
   constructor() {
     this.dbService = new ConductorDbService();
   }
 
-  execute(request: ExecutorRpcRequest): ExecutorRpcResponse {
+  /**
+   * Inject the renderer capture function. Called by main.ts after the
+   * renderer window is ready and channelManager is initialized.
+   */
+  setCaptureFn(fn: CanvasCaptureFn): void {
+    this.captureFn = fn;
+  }
+
+  async execute(request: ExecutorRpcRequest): Promise<ExecutorRpcResponse> {
     const { action, payload } = request;
 
     try {
       switch (action) {
         case 'canvas.snapshot':
           return this.dbService.getCanvasSnapshot(payload.canvasId as string);
+
+        case 'canvas.capture': {
+          if (!this.captureFn) {
+            return {
+              success: false,
+              error: {
+                code: 'CAPTURE_NOT_READY',
+                message: 'Canvas capture is not available (renderer not connected)',
+              },
+            };
+          }
+          const canvasId = payload.canvasId as string;
+          const scope = (payload.scope as string) || 'viewport';
+          const elementId = payload.elementId as string | undefined;
+          const region = payload.region as
+            | { x: number; y: number; w: number; h: number }
+            | undefined;
+
+          const captureResult = await this.captureFn(canvasId, scope, elementId, region);
+          return {
+            success: true,
+            result: captureResult,
+          };
+        }
 
         case 'element.create':
           return this.dbService.createElement(payload);

@@ -28,7 +28,7 @@ function getAgentServerPath(): string {
     const legacy = path.join(process.resourcesPath, 'agent-server.js');
     if (fs.existsSync(legacy)) return legacy;
 
-    return asarPath;
+    // Fall through to dev path if no packaged path exists (e.g., Playwright e2e)
   }
 
   return path.join(process.cwd(), 'dist-electron', 'agent-server.js');
@@ -36,7 +36,9 @@ function getAgentServerPath(): string {
 
 function resolveBetterSqlite3Path(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'better-sqlite3');
+    const packaged = path.join(process.resourcesPath, 'better-sqlite3');
+    if (fs.existsSync(packaged)) return packaged;
+    // Fall through to dev path if packaged path doesn't exist
   }
 
   return path.join(process.cwd(), 'node_modules', 'better-sqlite3');

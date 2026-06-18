@@ -6,9 +6,8 @@
  * consumers can import from a single entry point. The `duyaAgent`
  * class implementation lives in `./agent/DuyaAgent.ts`. Module-level
  * helpers (`extractTextFromContent`, `collectRecentImageAttachments`,
- * `buildBackgroundTaskNotification`, `buildAgentIdentityBlock`) live
- * alongside the class in `agent/DuyaAgent.ts` because they are only
- * used by it.
+ * `buildAgentIdentityBlock`) live alongside the class in
+ * `agent/DuyaAgent.ts` because they are only used by it.
  */
 
 import {

@@ -757,6 +757,9 @@ export const mailboxDb = {
   edit: (id: string, patch: { content?: string; kind?: string }) =>
     sendDbRequest('mailbox:edit', { id, ...patch }),
 
+  guide: (id: string) =>
+    sendDbRequest('mailbox:guide', { id }),
+
   cancel: (id: string, reason?: string) =>
     sendDbRequest('mailbox:cancel', { id, reason }),
 
@@ -765,6 +768,28 @@ export const mailboxDb = {
 
   listForSession: (sessionId: string) =>
     sendDbRequest('mailbox:listForSession', { sessionId }),
+
+  claimBatch: (input: {
+    sessionId: string;
+    runId: string;
+    checkpoint: string;
+    limit?: number;
+    leaseMs?: number;
+    coalesceWindowMs?: number;
+    maxClaimAttempts?: number;
+  }) => sendDbRequest('mailbox:claimBatch', input),
+
+  apply: (input: {
+    id: string;
+    claimToken: string;
+    mode: string;
+    checkpoint: string;
+    summary?: string;
+    resultingUserMsgId?: string;
+  }) => sendDbRequest('mailbox:apply', input),
+
+  cancelByAgent: (input: { id: string; claimToken: string; reason: string }) =>
+    sendDbRequest('mailbox:cancelByAgent', input),
 };
 
 // ==================== Automation Operations ====================

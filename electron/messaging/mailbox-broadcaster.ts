@@ -13,7 +13,9 @@ import { BrowserWindow } from 'electron';
 export type MailboxBroadcastEventType =
   | 'mail:created'
   | 'mail:edited'
-  | 'mail:cancelled';
+  | 'mail:cancelled'
+  | 'mail:observed'
+  | 'mail:applied';
 
 export interface MailboxBroadcastEvent {
   type: MailboxBroadcastEventType;
@@ -47,4 +49,12 @@ export function emitMailEdited(row: Record<string, unknown>, prevContent: string
 
 export function emitMailCancelled(row: Record<string, unknown>, reason?: string): void {
   broadcastMailboxEvent({ type: 'mail:cancelled', row, reason });
+}
+
+export function emitMailObserved(row: Record<string, unknown>): void {
+  broadcastMailboxEvent({ type: 'mail:observed', row });
+}
+
+export function emitMailApplied(row: Record<string, unknown>): void {
+  broadcastMailboxEvent({ type: 'mail:applied', row });
 }

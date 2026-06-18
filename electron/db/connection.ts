@@ -67,8 +67,15 @@ export function stopWalCheckpoint(): void {
 
 function loadBetterSqlite3(): typeof import('better-sqlite3') {
   const logger = getLogger();
-  if (app.isPackaged) {
-    const betterSqlite3Path = path.join(process.resourcesPath, 'better-sqlite3');
+  // app.isPackaged returns true when Playwright _electron launches the
+  // Electron binary directly, even in dev. Verify the resources/better-sqlite3
+  // directory actually exists before taking the packaged branch — otherwise
+  // fall back to require('better-sqlite3') from node_modules.
+  const packagedBetterSqlite3Path = path.join(process.resourcesPath, 'better-sqlite3');
+  const usePackagedPath = app.isPackaged && fs.existsSync(packagedBetterSqlite3Path);
+
+  if (usePackagedPath) {
+    const betterSqlite3Path = packagedBetterSqlite3Path;
     const nativeBindingPath = path.join(betterSqlite3Path, 'build', 'Release', 'better_sqlite3.node');
 
     logger.info('Loading better-sqlite3', { path: betterSqlite3Path, nativeBinding: nativeBindingPath }, LogComponent.DB);

@@ -50,7 +50,7 @@ import { getJsonSetting } from './db/queries/settings';
 // Core modules (refactored from inline code)
 // =============================================================================
 
-import { isDev, isPreviewMode, DEBUG_IPC, debugLog, setupDevMode, initGlobalErrorHandlers, acquireSingleInstanceLock, setupSecondInstanceHandler, logEnvironmentDiagnostic } from './core/bootstrap';
+import { isDev, isPreviewMode, DEBUG_IPC, debugLog, setupDevMode, setupTestMode, initGlobalErrorHandlers, acquireSingleInstanceLock, setupSecondInstanceHandler, logEnvironmentDiagnostic } from './core/bootstrap';
 import { getMainWindow, getIsQuitting, setIsQuitting, getIconPath, getRendererUrl, createWindow } from './core/window-manager';
 import { createSafeModeWindow, getSafeModeWindow } from './core/safe-mode';
 import { createTray } from './core/tray-manager';
@@ -66,6 +66,7 @@ const logger = initLogger({ level: 'WARN', console: true });
 
 // Dev mode isolated userData, error handlers, single instance lock
 setupDevMode();
+setupTestMode();
 initGlobalErrorHandlers();
 
 const gotTheLock = acquireSingleInstanceLock();
@@ -329,6 +330,59 @@ if (gotTheLock) {
     // Executor RPC handler - delegates to ConductorExecutorProxy
     const conductorExecutorProxy = new ConductorExecutorProxy();
 
+    // ── Canvas capture: main → renderer → main round-trip ───────────
+    // Pending capture requests keyed by requestId. The renderer responds
+    // via the `conductor:capture:response` IPC handler.
+    const pendingCaptures = new Map<
+      string,
+      {
+        resolve: (data: unknown) => void;
+        reject: (err: Error) => void;
+        timer: NodeJS.Timeout;
+      }
+    >();
+
+    ipcMain.handle('conductor:capture:response', (_event, data: Record<string, unknown>) => {
+      const requestId = data.requestId as string;
+      const pending = pendingCaptures.get(requestId);
+      if (!pending) return; // Stale response, ignore
+
+      pendingCaptures.delete(requestId);
+      clearTimeout(pending.timer);
+
+      if (data.error) {
+        pending.reject(new Error(String(data.error)));
+      } else {
+        pending.resolve(data.result);
+      }
+    });
+
+    // Inject the capture function into the proxy. When the agent calls
+    // `canvas.capture`, the proxy calls this function, which sends a
+    // request to the renderer via the conductor channel and waits for
+    // the renderer to respond via `conductor:capture:response` IPC.
+    conductorExecutorProxy.setCaptureFn(
+      (canvasId, scope, elementId?, region?) =>
+        new Promise((resolve, reject) => {
+          const requestId = randomUUID();
+          const timer = setTimeout(() => {
+            pendingCaptures.delete(requestId);
+            reject(new Error('Canvas capture timed out (30s)'));
+          }, 30000);
+
+          pendingCaptures.set(requestId, { resolve, reject, timer });
+
+          channelManager.sendToChannel('conductor', {
+            type: 'conductor:capture:request',
+            requestId,
+            canvasId,
+            scope,
+            elementId,
+            region,
+          });
+        }),
+    );
+
     const handleExecutorRpc = async (rpcMsg: Record<string, unknown>, sessionId: string) => {
       const request: ExecutorRpcRequest = {
         requestId: rpcMsg.requestId as string,
@@ -337,7 +391,7 @@ if (gotTheLock) {
         sessionId,
       };
 
-      const response = conductorExecutorProxy.execute(request);
+      const response = await conductorExecutorProxy.execute(request);
       agentPool.send(sessionId, {
         type: 'conductor:executor:rpc:response',
         ...response,
@@ -345,7 +399,16 @@ if (gotTheLock) {
     };
 
     const handleConductorMessage = async (data: unknown) => {
-      const msg = data as { type: string; sessionId?: string; prompt?: string; snapshot?: unknown; model?: string };
+      const msg = data as {
+        type: string;
+        sessionId?: string;
+        prompt?: string;
+        snapshot?: unknown;
+        model?: string;
+        visionModel?: string;
+        permissionMode?: 'default' | 'auto' | 'bypass';
+        language?: string;
+      };
       const interruptedSessions = new Set<string>();
 
       if (msg.type === 'conductor:agent:start' && msg.sessionId && msg.prompt) {
@@ -410,7 +473,54 @@ if (gotTheLock) {
 
             const llmProvider = toLLMProvider(targetProvider.providerType);
 
-            logger.info('Sending conductor:init to agent process', { sessionId: conductorSessionId, model: providerModel, provider: llmProvider }, LogComponent.Main);
+            // Resolve vision model: parse "[providerName] modelId" the same way
+            // as the primary model. Falls back to undefined (no vision) when
+            // the user has not picked a vision model or the parse fails.
+            let visionConfig: {
+              provider: string;
+              model: string;
+              baseURL: string;
+              apiKey: string;
+              enabled: boolean;
+            } | undefined;
+            if (msg.visionModel) {
+              const vmatch = msg.visionModel.match(/^\[(.+?)\]\s+(.+)$/);
+              if (vmatch) {
+                const vProviderName = vmatch[1];
+                const vModelId = vmatch[2];
+                const allProviders = configManager?.getAllProviders();
+                const vProvider = allProviders
+                  ? Object.values(allProviders).find((p) => p.name === vProviderName)
+                  : null;
+                if (vProvider) {
+                  visionConfig = {
+                    provider: vProvider.providerType,
+                    model: vModelId,
+                    baseURL: vProvider.baseUrl || '',
+                    apiKey: vProvider.apiKey,
+                    enabled: true,
+                  };
+                }
+              } else {
+                // Vision model referenced by bare id — assume the same provider
+                visionConfig = {
+                  provider: targetProvider.providerType,
+                  model: msg.visionModel,
+                  baseURL: targetProvider.baseUrl || '',
+                  apiKey: targetProvider.apiKey,
+                  enabled: true,
+                };
+              }
+            }
+
+            // Expose the permission mode to the prompt subsystem inside the
+            // agent process. actions.ts reads process.env.CONDUCTOR_PERMISSION_MODE
+            // and tailors the prompt section accordingly.
+            if (msg.permissionMode) {
+              process.env.CONDUCTOR_PERMISSION_MODE = msg.permissionMode;
+            }
+
+            logger.info('Sending conductor:init to agent process', { sessionId: conductorSessionId, model: providerModel, provider: llmProvider, hasVision: !!visionConfig, permissionMode: msg.permissionMode ?? 'default' }, LogComponent.Main);
             const conductorInitSent = agentPool.send(conductorSessionId, {
               type: 'conductor:init',
               sessionId: conductorSessionId,
@@ -424,6 +534,9 @@ if (gotTheLock) {
               snapshot: msg.snapshot,
               workingDirectory: '',
               systemPrompt: '',
+              visionConfig,
+              permissionMode: msg.permissionMode,
+              language: msg.language,
             });
 
             if (!conductorInitSent) {
@@ -469,6 +582,8 @@ if (gotTheLock) {
                 sessionId: conductorSessionId,
                 prompt: msg.prompt,
                 snapshot: msg.snapshot,
+                permissionMode: msg.permissionMode,
+                language: msg.language,
               });
             }).catch((err: Error) => {
               if (!interruptedSessions.has(conductorSessionId)) {
@@ -486,6 +601,8 @@ if (gotTheLock) {
               sessionId: conductorSessionId,
               prompt: msg.prompt,
               snapshot: msg.snapshot,
+              permissionMode: msg.permissionMode,
+              language: msg.language,
             });
           }
         } catch (err) {

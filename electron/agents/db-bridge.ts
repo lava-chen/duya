@@ -24,6 +24,50 @@ function debugLog(...args: unknown[]): void {
   }
 }
 
+const MAILBOX_PERMITTED_APPLY = new Set<string>([
+  'before_model_turn:promote_to_user_message',
+  'before_model_turn:runtime_instruction',
+  'before_model_turn:interrupt_signal',
+  'after_model_turn:runtime_instruction',
+  'after_model_turn:interrupt_signal',
+  'after_model_turn:deferred_to_next_turn',
+  'before_tool_call:tool_guard',
+  'before_tool_call:interrupt_signal',
+  'before_tool_call:runtime_instruction',
+  'after_tool_call:runtime_instruction',
+  'after_tool_call:tool_guard',
+  'after_tool_call:interrupt_signal',
+  'after_tool_call:deferred_to_next_turn',
+  'before_file_write:tool_guard',
+  'before_file_write:interrupt_signal',
+  'before_shell_command:tool_guard',
+  'before_shell_command:interrupt_signal',
+  'before_final_answer:promote_to_user_message',
+  'before_final_answer:runtime_instruction',
+  'before_final_answer:interrupt_signal',
+  'on_permission_request:permission_context',
+  'on_permission_request:interrupt_signal',
+  'on_error_recovery:runtime_instruction',
+  'on_error_recovery:interrupt_signal',
+  'on_error_recovery:deferred_to_next_turn',
+]);
+
+function assertMailboxApplyAllowed(checkpoint: string, mode: string): void {
+  if (!MAILBOX_PERMITTED_APPLY.has(`${checkpoint}:${mode}`)) {
+    throw new Error(`Mailbox apply(mode=${mode}) is not permitted at checkpoint=${checkpoint}`);
+  }
+}
+
+function emitMailboxEvent(name: 'emitMailObserved' | 'emitMailApplied' | 'emitMailCancelled', row: unknown, reason?: string): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const broadcaster = require('../messaging/mailbox-broadcaster');
+    broadcaster[name]?.(row as Record<string, unknown>, reason);
+  } catch {
+    // The agent DB bridge can run in test contexts without Electron windows.
+  }
+}
+
 /**
  * Get default model name based on provider type
  */
@@ -2290,6 +2334,27 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return row;
     }
 
+    case 'mailbox:guide': {
+      const existing = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id) as Record<string, unknown> | undefined;
+      if (!existing) return null;
+      if (existing.status !== 'pending') return null;
+
+      const source = String(existing.source ?? 'ui');
+      const guidedSource = source.endsWith(':guide') ? source : `${source}:guide`;
+      db.prepare(`
+        UPDATE agent_mailbox
+        SET source = @source
+        WHERE id = @id AND status = 'pending'
+      `).run({ id: p.id, source: guidedSource });
+
+      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
+      try {
+        const { emitMailEdited } = require('../messaging/mailbox-broadcaster');
+        emitMailEdited(row as Record<string, unknown>, existing.content as string);
+      } catch { /* broadcaster may not be available */ }
+      return row;
+    }
+
     case 'mailbox:cancel': {
       const now = Date.now();
       const reason = p.reason as string | undefined;
@@ -2327,6 +2392,194 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return db.prepare(
         'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at ASC'
       ).all(p.sessionId);
+
+    case 'mailbox:claimBatch': {
+      const now = Date.now();
+      const leaseMs = Math.max(1000, Number(p.leaseMs ?? 30000));
+      const coalesceWindowMs = Math.min(Math.max(0, Number(p.coalesceWindowMs ?? 1500)), 2000);
+      const limit = Math.max(1, Math.min(Number(p.limit ?? 10), 25));
+      const maxClaimAttempts = Math.max(1, Number(p.maxClaimAttempts ?? 5));
+      const sessionId = p.sessionId as string;
+      const runId = p.runId as string;
+      const checkpoint = p.checkpoint as string;
+
+      const claim = db.transaction(() => {
+        const anchor = db.prepare(`
+          SELECT id, priority, created_at, status, claim_attempts
+          FROM agent_mailbox
+          WHERE session_id = @sessionId
+            AND (source LIKE '%:guide' OR kind IN ('stop', 'abort_and_replace'))
+            AND (
+              status = 'pending'
+              OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
+            )
+          ORDER BY priority ASC, created_at ASC
+          LIMIT 1
+        `).get({ sessionId, now }) as Record<string, unknown> | undefined;
+
+        if (!anchor) return { rows: [], claimTokens: [] };
+
+        if (anchor.status === 'observed' && Number(anchor.claim_attempts ?? 0) >= maxClaimAttempts) {
+          db.prepare(`
+            UPDATE agent_mailbox
+            SET status = 'cancelled',
+                cancelled_at = @now,
+                cancelled_by = 'system:max_claim_attempts',
+                cancel_reason = 'max_claim_attempts_exceeded',
+                failure_reason = 'max_claim_attempts_exceeded'
+            WHERE id = @id AND status = 'observed'
+          `).run({ id: anchor.id, now });
+          const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(anchor.id);
+          emitMailboxEvent('emitMailCancelled', row, 'max_claim_attempts_exceeded');
+          return { rows: [], claimTokens: [] };
+        }
+
+        const windowEnd = Number(anchor.created_at) + coalesceWindowMs;
+        const candidates = db.prepare(`
+          SELECT *
+          FROM agent_mailbox
+          WHERE session_id = @sessionId
+            AND priority = @priority
+            AND created_at <= @windowEnd
+            AND (source LIKE '%:guide' OR kind IN ('stop', 'abort_and_replace'))
+            AND (
+              status = 'pending'
+              OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
+            )
+          ORDER BY priority ASC, created_at ASC
+          LIMIT @limit
+        `).all({
+          sessionId,
+          priority: anchor.priority,
+          windowEnd,
+          now,
+          limit,
+        }) as Record<string, unknown>[];
+
+        const rows: Record<string, unknown>[] = [];
+        const claimTokens: string[] = [];
+        for (const candidate of candidates) {
+          if (candidate.status === 'observed' && Number(candidate.claim_attempts ?? 0) >= maxClaimAttempts) {
+            db.prepare(`
+              UPDATE agent_mailbox
+              SET status = 'cancelled',
+                  cancelled_at = @now,
+                  cancelled_by = 'system:max_claim_attempts',
+                  cancel_reason = 'max_claim_attempts_exceeded',
+                  failure_reason = 'max_claim_attempts_exceeded'
+              WHERE id = @id AND status = 'observed'
+            `).run({ id: candidate.id, now });
+            const cancelled = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(candidate.id);
+            emitMailboxEvent('emitMailCancelled', cancelled, 'max_claim_attempts_exceeded');
+            continue;
+          }
+
+          const token = randomUUID();
+          const result = db.prepare(`
+            UPDATE agent_mailbox
+            SET status = 'observed',
+                claim_token = @token,
+                claim_expires_at = @expiresAt,
+                observed_at = COALESCE(observed_at, @now),
+                observed_at_checkpoint = COALESCE(observed_at_checkpoint, @checkpoint),
+                observed_by_run_id = @runId,
+                edit_locked_at = COALESCE(edit_locked_at, @now),
+                claim_attempts = claim_attempts + CASE WHEN status = 'observed' THEN 1 ELSE 0 END,
+                last_claim_error = NULL
+            WHERE id = @id
+              AND (
+                status = 'pending'
+                OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
+              )
+          `).run({
+            id: candidate.id,
+            token,
+            expiresAt: now + leaseMs,
+            now,
+            checkpoint,
+            runId,
+          });
+
+          if (result.changes > 0) {
+            const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(candidate.id) as Record<string, unknown>;
+            rows.push(row);
+            claimTokens.push(token);
+            emitMailboxEvent('emitMailObserved', row);
+          }
+        }
+
+        return { rows, claimTokens };
+      });
+
+      return claim();
+    }
+
+    case 'mailbox:apply': {
+      const now = Date.now();
+      const id = p.id as string;
+      const claimToken = p.claimToken as string;
+      const mode = p.mode as string;
+      const checkpoint = p.checkpoint as string;
+      assertMailboxApplyAllowed(checkpoint, mode);
+
+      const apply = db.transaction(() => {
+        const result = db.prepare(`
+          UPDATE agent_mailbox
+          SET status = 'applied',
+              apply_mode = @mode,
+              applied_at = @now,
+              applied_at_checkpoint = @checkpoint,
+              applied_summary = @summary,
+              resulting_user_msg_id = @resultingUserMsgId,
+              claim_expires_at = NULL
+          WHERE id = @id
+            AND status = 'observed'
+            AND claim_token = @claimToken
+        `).run({
+          id,
+          claimToken,
+          mode,
+          now,
+          checkpoint,
+          summary: (p.summary as string | undefined) ?? null,
+          resultingUserMsgId: (p.resultingUserMsgId as string | undefined) ?? null,
+        });
+
+        if (result.changes === 0) {
+          throw new Error('Mailbox apply failed: row is not observed or claim token is stale');
+        }
+        return db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(id);
+      });
+
+      const row = apply();
+      emitMailboxEvent('emitMailApplied', row);
+      return row;
+    }
+
+    case 'mailbox:cancelByAgent': {
+      const now = Date.now();
+      const result = db.prepare(`
+        UPDATE agent_mailbox
+        SET status = 'cancelled',
+            cancelled_at = @now,
+            cancelled_by = 'agent',
+            cancel_reason = @reason,
+            failure_reason = @reason,
+            claim_expires_at = NULL
+        WHERE id = @id
+          AND status = 'observed'
+          AND claim_token = @claimToken
+      `).run({
+        id: p.id,
+        claimToken: p.claimToken,
+        reason: (p.reason as string | undefined) ?? 'cancelled_by_agent',
+        now,
+      });
+      if (result.changes === 0) return null;
+      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
+      emitMailboxEvent('emitMailCancelled', row, p.reason as string | undefined);
+      return row;
+    }
 
     default:
       throw new Error(`Unknown DB action: ${action}`);

@@ -15,6 +15,12 @@ export interface QueuedCommand<T = unknown> {
   priority: QueuePriority
   agentId: string | undefined
   rawMessage: T
+  /**
+   * Marks commands that contain raw protocol XML (e.g. <task-notification>)
+   * which must not leak into the user's editable input buffer via UP/ESC
+   * recall. Mirrors claude-code's `isMeta` flag.
+   */
+  isMeta?: boolean
 }
 
 function comparePriority(a: QueuePriority, b: QueuePriority): number {
@@ -49,6 +55,7 @@ export function enqueuePendingNotification<T = unknown>(
     priority: 'later',
     agentId: undefined,
     rawMessage,
+    isMeta: true,
   })
   signal.emit()
 }
@@ -131,4 +138,23 @@ function findHighestPriorityIndex<T = unknown>(
     }
   }
   return bestIdx
+}
+
+// Editable mode helpers — distinguish user-editable input (prompts) from
+// system-generated protocol messages (task-notification) that must never
+// leak into the user's input buffer. Mirrors claude-code's split between
+// `isPromptInputModeEditable` and `isQueuedCommandEditable`.
+const NON_EDITABLE_MODES = new Set<QueuedCommand['mode']>(['task-notification'])
+
+export function isPromptInputModeEditable(mode: QueuedCommand['mode']): boolean {
+  return !NON_EDITABLE_MODES.has(mode)
+}
+
+/**
+ * Whether this queued command can be pulled into the input buffer via UP/ESC.
+ * System-generated commands (task-notifications) contain raw XML and must
+ * not leak into the user's input.
+ */
+export function isQueuedCommandEditable(cmd: QueuedCommand): boolean {
+  return isPromptInputModeEditable(cmd.mode) && !cmd.isMeta
 }

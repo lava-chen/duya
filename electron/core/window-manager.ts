@@ -2,7 +2,7 @@ import { app, BrowserWindow, shell, dialog, MessageChannelMain } from 'electron'
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
-import { isDev, isPreviewMode } from './bootstrap';
+import { isDev, isPreviewMode, isTestMode } from './bootstrap';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getChannelManager } from '../messaging/port-manager';
 import { getConfigManager } from '../config/manager';
@@ -140,6 +140,7 @@ export async function createWindow(
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
     },
   };
 
@@ -262,7 +263,7 @@ export async function createWindow(
     logger.info(`Loading URL: ${rendererUrl}`, undefined, 'Main');
     mainWindow.loadURL(rendererUrl);
 
-    if (isDev && !isPreviewMode) {
+    if (isDev && !isPreviewMode && !isTestMode) {
       mainWindow.webContents.openDevTools();
     }
   } catch (err) {

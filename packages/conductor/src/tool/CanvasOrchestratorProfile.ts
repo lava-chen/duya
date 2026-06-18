@@ -14,16 +14,10 @@ import type { ToolExecutor } from '@duya/agent/tool/registry';
 export const CANVAS_ORCHESTRATOR_TOOLS: Tool[] = [
   {
     name: 'canvas_create_element',
-    description: `Create a new element on the canvas. Supports any element kind.
-Available kinds:
-  - diagram/svg: Flowchart, architecture diagram, sequence diagram (Mermaid or SVG)
-  - chart/bar, chart/line, chart/pie: Data charts
-  - content/card: Information card with header, sections, footer
-  - content/rich-text: Formatted text block (Markdown)
-  - content/image: Image placeholder
-  - shape/rect, shape/circle: Geometric shapes
-  - shape/connector: Connection line between elements
-  - app/mini-app: Interactive mini-application (HTML/CSS/JS)
+    description: `Create a new element on the canvas. Supports a minimal set of element kinds:
+  - native/sticky: Sticky note with color
+  - native/connector: Connection line between two elements
+  - native/mindmap: Mind map with topic and branches
   - widget/task-list, widget/note-pad, widget/pomodoro, widget/news-board: Structured widgets`,
     input_schema: {
       type: 'object',
@@ -179,13 +173,76 @@ Available kinds:
       required: ['canvasId', 'elementIds'],
     },
   },
+
+  {
+    name: 'canvas_capture',
+    description: `Capture a screenshot of the canvas for visual analysis.
+
+Use ONLY when visual judgment is needed — for example:
+  - Verifying visual alignment, spacing, or overlap after layout changes
+  - Checking if a diagram, chart, or rich-text element renders correctly
+  - Inspecting color, contrast, or readability issues
+  - Confirming the overall composition looks right before reporting done
+
+Do NOT use canvas_capture for:
+  - Reading text content (use canvas_get_snapshot instead)
+  - Checking element positions or sizes (use canvas_get_snapshot)
+  - Routine operations where the JSON state is sufficient
+
+The screenshot is taken from the user's current viewport. If you need to
+inspect a specific element, use scope='element' with its elementId.
+
+The result includes a data URL (data:image/png;base64,...) and metadata.
+When you receive this result, describe what you see and reason about
+whether the canvas matches the user's intent.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'The canvas ID' },
+        scope: {
+          type: 'string',
+          enum: ['viewport', 'element', 'region'],
+          description: 'Capture scope: viewport (visible area), element (single element), or region (rectangle)',
+          default: 'viewport',
+        },
+        elementId: {
+          type: 'string',
+          description: 'When scope is "element", the element ID to capture',
+        },
+        region: {
+          type: 'object',
+          properties: {
+            x: { type: 'number' },
+            y: { type: 'number' },
+            w: { type: 'number' },
+            h: { type: 'number' },
+          },
+          description: 'When scope is "region", the rectangle in screen pixels relative to viewport',
+        },
+      },
+      required: ['canvasId', 'scope'],
+    },
+  },
 ];
 
 // ── IPC Request Helper ─────────────────────────────────────────────
 
 interface IpcRequestOptions {
   timeout?: number;
+  /** Number of retry attempts for transient failures. Default: 2. */
+  retries?: number;
 }
+
+/** Transient error codes that warrant a retry. */
+const RETRYABLE_ERRORS = new Set([
+  'IPC_TIMEOUT',
+  'INTERNAL',
+  'CAPTURE_NOT_READY',
+  'NO_IPC',
+]);
+
+/** Default retry delay in ms (used between attempts). */
+const RETRY_DELAY_MS = 500;
 
 async function ipcRequest<T = unknown>(
   context: ToolUseContext,
@@ -193,11 +250,59 @@ async function ipcRequest<T = unknown>(
   payload: unknown,
   options?: IpcRequestOptions
 ): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
-  if (context?.ipcRequest) {
-    return context.ipcRequest<T>('conductor:executor:rpc', { action, payload }, options);
+  if (!context?.ipcRequest) {
+    return { success: false, error: { code: 'NO_IPC', message: 'IPC not available' } };
   }
-  // Conductor always has ipcRequest set via conductorIpc in ChatOptions
-  return { success: false, error: { code: 'NO_IPC', message: 'IPC not available' } };
+
+  const maxRetries = options?.retries ?? 2;
+  let lastError: { code: string; message: string } | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await context.ipcRequest<T>(
+        'conductor:executor:rpc',
+        { action, payload },
+        options,
+      );
+
+      // Success — return immediately
+      if (response.success) {
+        return response;
+      }
+
+      // Non-retryable error — return immediately
+      const errorCode = response.error?.code || 'UNKNOWN';
+      if (!RETRYABLE_ERRORS.has(errorCode)) {
+        return response;
+      }
+
+      lastError = response.error ?? { code: errorCode, message: 'Unknown error' };
+
+      // If this was the last attempt, return the error
+      if (attempt === maxRetries) {
+        return response;
+      }
+
+      // Wait before retrying (exponential backoff: 500ms, 1000ms, ...)
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * Math.pow(2, attempt)));
+    } catch (err) {
+      lastError = {
+        code: 'IPC_EXCEPTION',
+        message: err instanceof Error ? err.message : String(err),
+      };
+
+      if (attempt === maxRetries) {
+        return { success: false, error: lastError };
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * Math.pow(2, attempt)));
+    }
+  }
+
+  return {
+    success: false,
+    error: lastError ?? { code: 'EXHAUSTED', message: 'Retries exhausted' },
+  };
 }
 
 // ── Executors ─────────────────────────────────────────────────────
@@ -407,6 +512,55 @@ const canvasLayoutGridExecutor: ToolExecutor = {
   },
 };
 
+const canvasCaptureExecutor: ToolExecutor = {
+  async execute(
+    input: Record<string, unknown>,
+    _workingDirectory?: string,
+    context?: ToolUseContext,
+  ): Promise<ToolResult> {
+    if (!context) {
+      return {
+        id: crypto.randomUUID(),
+        name: 'canvas_capture',
+        result: JSON.stringify({ success: false, error: { code: 'NO_CONTEXT', message: 'Tool execution context not available' } }),
+        error: true,
+      };
+    }
+
+    // The capture action routes through the main process, which forwards
+    // the request to the renderer (where the canvas DOM lives). The
+    // renderer uses html2canvas to capture the screenshot and returns
+    // the base64 PNG data.
+    const response = await ipcRequest(context, 'canvas.capture', {
+      canvasId: input.canvasId,
+      scope: input.scope || 'viewport',
+      elementId: input.elementId,
+      region: input.region,
+    }, { timeout: 30000 }); // 30s timeout — html2canvas can be slow on large canvases
+
+    if (!response.success) {
+      return {
+        id: crypto.randomUUID(),
+        name: 'canvas_capture',
+        result: JSON.stringify(response),
+        error: true,
+      };
+    }
+
+    // The response data contains: { pngBase64, width, height, dataUrl, scope, capturedAt }
+    // We return the full data so the agent can reason about the screenshot.
+    // The dataUrl is a data:image/png;base64,... string.
+    return {
+      id: crypto.randomUUID(),
+      name: 'canvas_capture',
+      result: JSON.stringify({
+        success: true,
+        data: response.data,
+      }),
+    };
+  },
+};
+
 export function getCanvasOrchestratorExecutors(): Record<string, ToolExecutor> {
   return {
     canvas_get_snapshot: canvasGetSnapshotExecutor,
@@ -416,5 +570,6 @@ export function getCanvasOrchestratorExecutors(): Record<string, ToolExecutor> {
     canvas_arrange_elements: canvasArrangeElementsExecutor,
     canvas_align: canvasAlignExecutor,
     canvas_layout_grid: canvasLayoutGridExecutor,
+    canvas_capture: canvasCaptureExecutor,
   };
 }

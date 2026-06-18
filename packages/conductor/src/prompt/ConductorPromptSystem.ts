@@ -24,6 +24,7 @@ import {
   getActionsSection,
   getToolUsageSection,
   getCanvasToolsSection,
+  getVisionUsageSection,
 } from './sections/static/index.js';
 
 // Dynamic sections
@@ -81,8 +82,10 @@ export class ConductorPromptSystem extends PromptSystem {
     return [
       kept('intro', () => getIntroSection(context)),
       kept('system', () => getSystemSection(context)),
+      kept('actions', () => getActionsSection(context)),
       kept('toolUsage', () => getToolUsageSection(context)),
       kept('canvasTools', () => getCanvasToolsSection(context)),
+      kept('visionUsage', () => getVisionUsageSection(context)),
     ].filter((s): s is PromptSection => s !== null);
   }
 

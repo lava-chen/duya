@@ -81,7 +81,7 @@ export interface AgentControlPortAPI {
 }
 
 export interface ConductorPortAPI {
-  startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string }) => void
+  startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string; language?: string; visionModel?: string; permissionMode?: string }) => void
   interruptAgent: () => void
   onStatePatch: (callback: (data: Record<string, unknown>) => void) => () => void
   onText: (callback: (data: { content: string; sessionId?: string }) => void) => () => void
@@ -93,6 +93,10 @@ export interface ConductorPortAPI {
   onDone: (callback: (data: { sessionId?: string }) => void) => () => void
   onPermission: (callback: (data: { request: { id: string; toolName: string; toolInput: Record<string, unknown> }; sessionId?: string }) => void) => () => void
   onDisconnected: (callback: (data: { sessionId?: string }) => void) => () => void
+  /** Listen for canvas capture requests from the agent (via main process). */
+  onCaptureRequest: (callback: (data: { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }) => void) => () => void
+  /** Send a capture response back to the main process (which forwards to the agent). */
+  sendCaptureResponse: (data: { requestId: string; result?: unknown; error?: string }) => void
 }
 
 export interface ThreadAPI {
@@ -645,6 +649,7 @@ export interface MailboxAPI {
     constraintsJson?: string;
   }) => Promise<unknown>;
   edit: (id: string, patch: { content?: string; kind?: string }) => Promise<unknown>;
+  guide: (id: string) => Promise<unknown>;
   cancel: (id: string, reason?: string) => Promise<unknown>;
   list: (sessionId: string, opts?: { status?: string[]; limit?: number }) => Promise<unknown[]>;
   listForSession: (sessionId: string) => Promise<unknown[]>;
@@ -1167,6 +1172,7 @@ ipcRenderer.on('conductor-port', (event) => {
   const [port] = event.ports
   if (port) {
     conductorPort = port
+    conductorPortReady = true;
     console.log('[preload] conductorPort assigned, time:', Date.now());
     port.onmessage = (e) => {
       console.log('[preload] conductorPort.onmessage:', e.data?.type, 'time:', Date.now());
@@ -1245,11 +1251,19 @@ function getConfigPortAPI(): ConfigPortAPI | null {
 }
 
 // Helper functions for conductorPort API
+let conductorPortReady = false;
 function getConductorPortAPI(): ConductorPortAPI | null {
   if (!conductorPort) {
-    console.warn('[preload] getConductorPortAPI: conductorPort is null');
+    // Only warn on the first poll: the renderer often calls this
+    // before the main process has finished wiring up the MessagePort
+    // (postMessage from did-finish-load is async). Logging on every
+    // call floods the console and buries real signal.
+    if (!conductorPortReady) {
+      console.warn('[preload] getConductorPortAPI: conductorPort is null (waiting for main to send the port)');
+    }
     return null;
   }
+  conductorPortReady = true;
 
   const registerHandler = (type: string, handler: (data: unknown) => void): () => void => {
     let handlers = conductorPortHandlers.get(type);
@@ -1267,7 +1281,7 @@ function getConductorPortAPI(): ConductorPortAPI | null {
   };
 
   return {
-    startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string }) => {
+    startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string; language?: string; visionModel?: string; permissionMode?: string }) => {
       const sessionId = data.canvasId ? `conductor-${data.canvasId}` : `conductor-${Date.now()}`;
       console.log('[preload] startAgent called:', { sessionId, contentLength: data.content?.length, canvasId: data.canvasId });
       if (!conductorPort) {
@@ -1281,6 +1295,9 @@ function getConductorPortAPI(): ConductorPortAPI | null {
         prompt: data.content,
         snapshot: data.snapshot,
         model: data.model,
+        language: data.language,
+        visionModel: data.visionModel,
+        permissionMode: data.permissionMode,
       });
       console.log('[preload] startAgent: message posted successfully');
     },
@@ -1316,6 +1333,12 @@ function getConductorPortAPI(): ConductorPortAPI | null {
     },
     onDisconnected: (callback: (data: { sessionId?: string }) => void) => {
       return registerHandler('conductor:disconnected', (data) => callback(data as { sessionId?: string }));
+    },
+    onCaptureRequest: (callback: (data: { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }) => void) => {
+      return registerHandler('conductor:capture:request', (data) => callback(data as { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }));
+    },
+    sendCaptureResponse: (data: { requestId: string; result?: unknown; error?: string }) => {
+      ipcRenderer.invoke('conductor:capture:response', data);
     },
   };
 }
@@ -1821,6 +1844,7 @@ const electronAPI: ElectronAPI = {
       return ipcRenderer.invoke('mailbox:send', { id, ...params });
     },
     edit: (id, patch) => ipcRenderer.invoke('mailbox:edit', { id, ...patch }),
+    guide: (id) => ipcRenderer.invoke('mailbox:guide', { id }),
     cancel: (id, reason) => ipcRenderer.invoke('mailbox:cancel', { id, reason }),
     list: (sessionId, opts) => ipcRenderer.invoke('mailbox:list', { sessionId, ...opts }),
     listForSession: (sessionId) => ipcRenderer.invoke('mailbox:listForSession', { sessionId }),

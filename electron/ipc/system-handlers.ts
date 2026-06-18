@@ -61,7 +61,7 @@ export function registerSystemHandlers(): void {
     }
     const allowed = isHttpUrl(url);
     if (!allowed) {
-      logger.warn(
+      getLogger().warn(
         'Rejected shell:open-external request for non-http(s) URL',
         { urlPreview: url.slice(0, 80) },
         LogComponent.Main,

@@ -1719,6 +1719,61 @@ const migrations: Migration[] = [
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_research_events_run_seq ON research_events(run_id, sequence)`);
     },
   },
+  {
+    id: 34,
+    name: 'prune_disabled_conductor_element_kinds',
+    migrate(db: BetterSqlite3Db): void {
+      // Canvas element kinds removed in the conductor experience overhaul.
+      // Keep only: native/sticky, native/connector, native/mindmap,
+      // widget/task-list, widget/note-pad, widget/pomodoro, widget/news-board.
+      const allowedKinds = [
+        'native/sticky',
+        'native/connector',
+        'native/mindmap',
+        'widget/task-list',
+        'widget/note-pad',
+        'widget/pomodoro',
+        'widget/news-board',
+      ];
+      const allowedNativeKinds = ['sticky', 'connector', 'mindmap'];
+
+      const placeholders = allowedKinds.map(() => '?').join(',');
+      const nativePlaceholders = allowedNativeKinds.map(() => '?').join(',');
+
+      // Drop elements whose kind is not in the allowlist. Also drop their
+      // mirrored widget rows and any actions that referenced them.
+      const elementIds = db
+        .prepare(
+          `SELECT id FROM conductor_elements
+           WHERE element_kind NOT IN (${placeholders})
+              OR (native_kind IS NOT NULL
+                  AND native_kind != ''
+                  AND native_kind NOT IN (${nativePlaceholders}))`
+        )
+        .all(...allowedKinds, ...allowedNativeKinds) as Array<{ id: string }>;
+
+      if (elementIds.length === 0) {
+        return;
+      }
+
+      const ids = elementIds.map((row) => row.id);
+      const idPlaceholders = ids.map(() => '?').join(',');
+      const txn = db.transaction(() => {
+        db.prepare(
+          `DELETE FROM conductor_widgets WHERE id IN (${idPlaceholders})`
+        ).run(...ids);
+        db.prepare(
+          `DELETE FROM conductor_actions
+           WHERE widget_id IN (${idPlaceholders})`
+        ).run(...ids);
+        db.prepare(
+          `DELETE FROM conductor_elements
+           WHERE id IN (${idPlaceholders})`
+        ).run(...ids);
+      });
+      txn();
+    },
+  },
 ];
 
 /**

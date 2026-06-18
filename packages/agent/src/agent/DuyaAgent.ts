@@ -45,8 +45,7 @@ import type { LLMClient, RetryConfig } from '../llm/index.js';
 import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapter.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
-import { backgroundAgentLifecycle, notificationQueue } from '../lifecycle/BackgroundAgentLifecycle.js';
-import type { TaskRecord } from '../lifecycle/TaskState.js';
+import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
 import { dequeueAllMatching, enqueuePendingNotification } from '../queue/index.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
@@ -57,9 +56,10 @@ import { getAgentProfileService } from '../agent-profile/AgentProfileService.js'
 import type { AgentProfile } from '../agent-profile/types.js';
 import { resolveAllowedTools } from '../agent-profile/ToolFilter.js';
 import { ResearchMemory } from '../research-memory/index.js';
-import { pluginDb } from '../ipc/db-client.js';
+import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
 import { buildResearchRunDB } from '../session/researchRunDb.js';
+import type { MailboxApplyMode, MailboxRow } from '../session/db.js';
 
 function extractTextFromContent(content: string | MessageContent[]): string {
   if (typeof content === 'string') return content
@@ -139,57 +139,6 @@ import type { AgentDefinition } from '../tool/AgentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
 import type { CompactOptions } from '../compact/types.js';
 
-function buildBackgroundTaskNotification(task: TaskRecord): string {
-  const status = task.status === 'completed'
-    ? 'completed'
-    : task.status === 'failed'
-      ? 'failed'
-      : 'killed'
-  const header = `[Background agent ${status}: ${task.agentName || task.agentType}]`
-
-  if (status === 'failed' || status === 'killed') {
-    return `${header}\n\n${status === 'killed' ? 'Reason' : 'Error'}: ${task.error || 'Unknown'}\nOutput file: ${task.outputFilePath}`
-  }
-
-  const contentText = task.result?.content
-    .map((b) => {
-      if (b.type === 'text' && typeof (b as { text: string }).text === 'string') {
-        return (b as { text: string }).text
-      }
-      return ''
-    })
-    .join('\n') || ''
-
-  const durationInfo = task.result?.totalDurationMs
-    ? ` (completed in ${(task.result.totalDurationMs / 1000).toFixed(1)}s`
-    : ''
-  const toolInfo = task.result?.totalToolUseCount
-    ? `, ${task.result.totalToolUseCount} tool calls`
-    : ''
-  const suffix = durationInfo || toolInfo ? `${durationInfo}${toolInfo})` : ''
-
-  const preview = contentText.length > 8000
-    ? contentText.slice(0, 8000) + '\n[... output truncated]'
-    : contentText
-
-  return `${header}${suffix}\n\nOutput file: ${task.outputFilePath}\n\n${preview}`
-}
-
-function drainBackgroundNotificationsForSession(parentSessionId?: string): TaskRecord[] {
-  const drained = notificationQueue.drain()
-  if (!parentSessionId) return drained
-
-  const matching: TaskRecord[] = []
-  for (const task of drained) {
-    if (task.parentSessionId === parentSessionId) {
-      matching.push(task)
-    } else {
-      notificationQueue.enqueue(task)
-    }
-  }
-  return matching
-}
-
 function hasRunningBackgroundTasksForSession(parentSessionId?: string): boolean {
   if (!parentSessionId) return false
   return backgroundAgentLifecycle.getAll().some(
@@ -199,13 +148,65 @@ function hasRunningBackgroundTasksForSession(parentSessionId?: string): boolean 
   )
 }
 
-async function waitForBackgroundNotifications(parentSessionId?: string): Promise<TaskRecord[]> {
+async function waitForBackgroundTaskNotifications(parentSessionId?: string): Promise<string[]> {
   while (hasRunningBackgroundTasksForSession(parentSessionId)) {
-    const completed = drainBackgroundNotificationsForSession(parentSessionId)
-    if (completed.length > 0) return completed
+    const drained = dequeueAllMatching(
+      (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
+    )
+    if (drained.length > 0) {
+      return drained.map((cmd) => cmd.value)
+    }
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
-  return drainBackgroundNotificationsForSession(parentSessionId)
+  return dequeueAllMatching(
+    (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
+  ).map((cmd) => cmd.value)
+}
+
+type RuntimeMailboxDecision =
+  | { action: 'continue' }
+  | { action: 'soft_stop'; summary: string }
+  | { action: 'hard_replace'; replacement: string };
+
+interface RuntimeMailboxClaim {
+  rows: MailboxRow[];
+  claimTokens: string[];
+}
+
+function isRuntimeMailboxMessage(message: Message): boolean {
+  return message.metadata?.mailboxRuntimeInstruction === true;
+}
+
+function persistableMessages(messages: Message[]): Message[] {
+  return messages.filter((message) => !isRuntimeMailboxMessage(message));
+}
+
+function formatMailboxRuntimeInstruction(rows: MailboxRow[]): string {
+  const lines = rows
+    .map((row, index) => {
+      const label = row.kind === 'constraint'
+        ? 'constraint'
+        : row.kind === 'correction'
+          ? 'correction'
+          : 'follow-up';
+      return `${index + 1}. (${label}) ${row.content.trim()}`;
+    })
+    .filter((line) => line.trim().length > 0);
+
+  return [
+    '<runtime-user-guidance>',
+    'The user sent the following instruction while you were already working.',
+    'Incorporate it into the current plan at the next safe point. Do not mention this wrapper.',
+    ...lines,
+    '</runtime-user-guidance>',
+  ].join('\n');
+}
+
+function chooseMailboxApplyMode(row: MailboxRow): MailboxApplyMode {
+  if (row.kind === 'stop' || row.kind === 'abort_and_replace') {
+    return 'interrupt_signal';
+  }
+  return 'runtime_instruction';
 }
 
 /**
@@ -671,6 +672,7 @@ export class duyaAgent {
     // All messages created in this call (including multi-turn) will share this seq_index
     // This allows the UI to group all related messages into a single "round"
     const seqIndex = Date.now();
+    const runId = crypto.randomUUID();
 
     // Track total elapsed time for the entire stream (including all turns and tool execution)
     const streamStartTime = Date.now();
@@ -810,6 +812,36 @@ export class duyaAgent {
         }
       }
 
+      const mailboxDecision = await this._claimMailboxBeforeModelTurn(runId, messages, seqIndex);
+      if (mailboxDecision.action === 'soft_stop') {
+        const stopMessage = mailboxDecision.summary || 'Stopped as requested.';
+        messages.push({
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: stopMessage,
+          timestamp: Date.now(),
+          duration_ms: Date.now() - streamStartTime,
+          seq_index: seqIndex,
+        });
+        this.messages = persistableMessages(messages);
+        this.sessionInfo.messageCount = this.messages.length;
+        this.sessionInfo.updatedAt = Date.now();
+        yield { type: 'text', data: stopMessage };
+        yield { type: 'done', reason: 'completed' };
+        return;
+      }
+      if (mailboxDecision.action === 'hard_replace') {
+        const replacement = mailboxDecision.replacement || 'The user replaced the previous instruction.';
+        messages.push({
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: `<runtime-user-replacement>\n${replacement}\n</runtime-user-replacement>`,
+          timestamp: Date.now(),
+          seq_index: seqIndex,
+          metadata: { mailboxRuntimeInstruction: true },
+        });
+      }
+
       try {
         // Stream from LLM with FULL message history
         logger.info(`[Agent] Turn ${turnCount}: Starting LLM stream, messages=${messages.length}, provider=${this.provider}`);
@@ -831,6 +863,7 @@ export class duyaAgent {
           maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
           temperature: options?.temperature ?? 1,
           signal: this.abortController.signal,
+          effort: options?.effort,
         });
         logger.info(`[Agent] Turn ${turnCount}: Stream generator created, starting iteration...`);
         for await (const event of streamGenerator) {
@@ -981,36 +1014,24 @@ export class duyaAgent {
               `[Agent] Turn ${turnCount}: getRemainingResults completed, toolResultMessageCount=${toolResultMessageCount}`
             );
 
-            // Check for completed background sub-agents and inject their results
-            const completedBackgroundTasks = drainBackgroundNotificationsForSession(this.sessionId)
-            if (completedBackgroundTasks.length > 0) {
-              for (const task of completedBackgroundTasks) {
-                const notificationText = buildBackgroundTaskNotification(task)
+            // Drain completed background sub-agents and inject their
+            // <task-notification> XML envelopes (claude-code protocol).
+            // metadata.isTaskNotification lets the renderer hide these
+            // from the chat UI without relying on a string-prefix sniff.
+            const completedNotificationXml = dequeueAllMatching(
+              (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
+            ).map((cmd) => cmd.value)
+            if (completedNotificationXml.length > 0) {
+              for (const xml of completedNotificationXml) {
                 messages.push({
                   id: crypto.randomUUID(),
                   role: 'user',
-                  content: notificationText,
+                  content: xml,
                   timestamp: Date.now(),
+                  metadata: { isTaskNotification: true },
                 })
               }
               needsFollowUp = true
-            }
-
-            // Mid-turn queue consumption: inject pending task notifications
-            // These may come from IPC or other async sources
-            const pendingNotifications = dequeueAllMatching<TaskRecord>(
-              (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
-            );
-            if (pendingNotifications.length > 0) {
-              for (const cmd of pendingNotifications) {
-                messages.push({
-                  id: crypto.randomUUID(),
-                  role: 'user',
-                  content: typeof cmd.value === 'string' ? cmd.value : String(cmd.value),
-                  timestamp: Date.now(),
-                });
-              }
-              needsFollowUp = true;
             }
 
             // Do NOT yield the LLM's 'done' event to the SSE client here.
@@ -1061,7 +1082,7 @@ export class duyaAgent {
         // Check max turns limit
         if (turnCount >= maxTurns) {
           // Update this.messages BEFORE yielding done event
-          this.messages = messages;
+          this.messages = persistableMessages(messages);
           this.sessionInfo.messageCount = this.messages.length;
           this.sessionInfo.updatedAt = Date.now();
 
@@ -1081,14 +1102,15 @@ export class duyaAgent {
         // If no tool_use blocks were emitted, we're done
         // Note: assistant message was already added in 'done' event handler
         if (!needsFollowUp) {
-          const completedBackgroundTasks = await waitForBackgroundNotifications(this.sessionId)
-          if (completedBackgroundTasks.length > 0) {
-            for (const task of completedBackgroundTasks) {
+          const completedNotificationXml = await waitForBackgroundTaskNotifications(this.sessionId)
+          if (completedNotificationXml.length > 0) {
+            for (const xml of completedNotificationXml) {
               messages.push({
                 id: crypto.randomUUID(),
                 role: 'user',
-                content: buildBackgroundTaskNotification(task),
+                content: xml,
                 timestamp: Date.now(),
+                metadata: { isTaskNotification: true },
               })
             }
             continue
@@ -1096,7 +1118,7 @@ export class duyaAgent {
 
           // Update this.messages BEFORE yielding done event
           // so API route can retrieve the final state
-          this.messages = messages;
+          this.messages = persistableMessages(messages);
           this.sessionInfo.messageCount = this.messages.length;
           this.sessionInfo.updatedAt = Date.now();
 
@@ -1165,7 +1187,7 @@ export class duyaAgent {
         }
 
         // Update this.messages BEFORE yielding error/done events
-        this.messages = messages;
+        this.messages = persistableMessages(messages);
         this.sessionInfo.messageCount = this.messages.length;
         this.sessionInfo.updatedAt = Date.now();
 
@@ -1216,7 +1238,7 @@ export class duyaAgent {
 
     // User interrupted - executor already created in current turn
     // Update this.messages BEFORE yielding done event
-    this.messages = messages;
+    this.messages = persistableMessages(messages);
     this.sessionInfo.messageCount = this.messages.length;
     this.sessionInfo.updatedAt = Date.now();
     yield { type: 'done', reason: 'aborted' };
@@ -1230,6 +1252,83 @@ export class duyaAgent {
   // each concern out so the main loop reads as orchestration rather than
   // implementation. Helpers are private; they are not part of the public
   // surface and may be reorganized freely.
+
+  private async _claimMailboxBeforeModelTurn(
+    runId: string,
+    messages: Message[],
+    seqIndex: number,
+  ): Promise<RuntimeMailboxDecision> {
+    if (!this.sessionId) {
+      return { action: 'continue' };
+    }
+
+    let claim: RuntimeMailboxClaim;
+    try {
+      claim = await mailboxDb.claimBatch({
+        sessionId: this.sessionId,
+        runId,
+        checkpoint: 'before_model_turn',
+        limit: 10,
+      }) as RuntimeMailboxClaim;
+    } catch (err) {
+      logger.warn(
+        `[AgentMailbox] before_model_turn claim failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return { action: 'continue' };
+    }
+
+    if (!claim.rows.length) {
+      return { action: 'continue' };
+    }
+
+    const applyRow = async (row: MailboxRow, index: number, summary: string): Promise<void> => {
+      const claimToken = claim.claimTokens[index];
+      if (!claimToken) return;
+      await mailboxDb.apply({
+        id: row.id,
+        claimToken,
+        mode: chooseMailboxApplyMode(row),
+        checkpoint: 'before_model_turn',
+        summary,
+      });
+    };
+
+    const abort = claim.rows.find((row) => row.kind === 'abort_and_replace');
+    if (abort) {
+      await applyRow(abort, claim.rows.indexOf(abort), 'hard replacement requested before model turn');
+      return { action: 'hard_replace', replacement: abort.content.trim() };
+    }
+
+    const stop = claim.rows.find((row) => row.kind === 'stop');
+    if (stop) {
+      await applyRow(stop, claim.rows.indexOf(stop), 'soft stop requested before model turn');
+      return { action: 'soft_stop', summary: stop.content.trim() || 'Stopped as requested.' };
+    }
+
+    const usableRows = claim.rows.filter((row) => row.content.trim().length > 0);
+    if (!usableRows.length) {
+      return { action: 'continue' };
+    }
+
+    for (const row of usableRows) {
+      await applyRow(row, claim.rows.indexOf(row), 'absorbed as runtime instruction before model turn');
+    }
+
+    messages.push({
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: formatMailboxRuntimeInstruction(usableRows),
+      timestamp: Date.now(),
+      seq_index: seqIndex,
+      metadata: {
+        mailboxRuntimeInstruction: true,
+        mailboxRowIds: usableRows.map((row) => row.id),
+      },
+    });
+
+    logger.info(`[AgentMailbox] absorbed ${usableRows.length} row(s) before model turn`);
+    return { action: 'continue' };
+  }
 
   /**
    * Resolve the agent profile requested by `options.agentProfileId`.
