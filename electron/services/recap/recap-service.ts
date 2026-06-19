@@ -61,6 +61,11 @@ export class RecapService {
 
   setActiveSession(sessionId: string): void {
     this.activeSessionId = sessionId;
+    // Register the session in the Main Process SessionManager so that
+    // lifecycle queries (getSession, updateSessionState) work. Without
+    // this, onInactivityTimeout() would always bail out because
+    // getSession() returns undefined for unregistered sessions.
+    this.getSessionManager().registerSession(sessionId);
   }
 
   getCachedRecap(): CachedRecap | null {

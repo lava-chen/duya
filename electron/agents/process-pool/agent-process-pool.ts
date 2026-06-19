@@ -398,7 +398,11 @@ export class AgentProcessPool {
     const proc = this.running.get(sessionId);
     if (!proc) return false;
 
-    this.router.send(sessionId, { type: 'chat:interrupt', sessionId });
+    // Use this.send() (which calls proc.child.send) — NOT this.router.send(),
+    // which doesn't exist on MessageRouter. MessageRouter only routes
+    // inbound messages FROM the child process to registered handlers;
+    // it has no outbound send capability.
+    this.send(sessionId, { type: 'chat:interrupt', sessionId });
     this.interruptedSessions.add(sessionId);
     return true;
   }
