@@ -63,5 +63,10 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    // Bind explicitly to IPv4 loopback so Electron (which resolves
+    // "localhost" to IPv6 first on some Windows hosts) can reach the
+    // dev server without falling back to a file:// error page. Set
+    // DUYA_VITE_HOST to override (e.g. "0.0.0.0" for LAN testing).
+    host: process.env.DUYA_VITE_HOST ?? '127.0.0.1',
   },
 });

@@ -52,11 +52,20 @@ export function setupTestMode(): void {
   if (!isTestMode) return;
   const ns = getTestNamespace();
   if (!ns) return;
-  const baseUserData = app.getPath('userData');
-  const testUserData = path.join(baseUserData, 'test-namespaces', ns);
-  // Ensure the directory exists — app.setPath() does not create it, and
-  // initDatabaseFromBoot() will fail if the userData dir is missing.
-  fs.mkdirSync(testUserData, { recursive: true });
+  // Honor an explicit override if the caller pre-created a writable
+  // directory (useful in restricted CI/sandbox environments where the
+  // default AppData path is blocked from new writes). The caller is
+  // responsible for ensuring the directory exists and is empty if a
+  // fresh DB is desired.
+  const overrideDir = process.env.DUYA_TEST_USER_DATA_DIR;
+  const testUserData = overrideDir
+    ? path.resolve(overrideDir)
+    : path.join(app.getPath('userData'), 'test-namespaces', ns);
+  if (!overrideDir) {
+    // Default path: ensure the directory exists. app.setPath() does not
+    // create it, and initDatabaseFromBoot() will fail otherwise.
+    fs.mkdirSync(testUserData, { recursive: true });
+  }
   app.setPath('userData', testUserData);
   getLogger().info(
     `Test mode: isolated userData at ${testUserData}`,
