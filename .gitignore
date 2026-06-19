@@ -81,6 +81,13 @@ duyaUI.pen
 .playwright-mcp/
 .e2e-userdata/
 
+# Scratch debug / probe scripts (do not commit)
+scripts/_probe-*.mjs
+scripts/_probe-*.js
+scripts/_scratch-*.mjs
+scripts/_scratch-*.js
+test-results/
+
 # Docs (keep only product-specs and release-notes)
 docs/*/
 !docs/product-specs/
