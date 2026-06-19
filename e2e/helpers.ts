@@ -32,18 +32,50 @@ export interface DuyaApp {
 
 /**
  * Launch DUYA Electron app in test mode and wait for the first window.
+ *
+ * Per-namespace isolation is achieved by setting DUYA_TEST_USER_DATA_DIR
+ * to a project-local directory (one subdir per namespace). This avoids
+ * relying on `app.getPath('userData')` which on Windows is
+ * `%APPDATA%\duya\duya-dev\test-namespaces\<ns>` and can be blocked by
+ * restricted write sandboxes (Trae, locked-down CI runners). The chosen
+ * path lives under the repo's e2e/ folder so it shares the same trust
+ * boundary as the rest of the workspace.
  */
 export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
+  const fs = await import('node:fs');
+  const pathMod = await import('node:path');
+  // .e2e-userdata/<ns> — git-ignored implicitly (no tracked file uses
+  // this path; if the repo wants to be explicit, add to .gitignore).
+  const userDataRoot = pathMod.resolve(__dirname, '..', '.e2e-userdata', opts.namespace);
+  fs.mkdirSync(userDataRoot, { recursive: true });
+
   const app = await electron.launch({
-    args: ['.', `--duya-namespace=${opts.namespace}`],
+    args: [
+      '.',
+      `--duya-namespace=${opts.namespace}`,
+      `--user-data-dir=${userDataRoot}`,
+    ],
     cwd: path.resolve(__dirname, '..'),
     env: {
       ...process.env,
       DUYA_TEST: '1',
       DUYA_MOCK_EXTERNAL: (opts.mockExternal ?? []).join(','),
+      DUYA_TEST_USER_DATA_DIR: userDataRoot,
       // Suppress noisy logs during tests
       LOG_LEVEL: 'WARN',
     },
+  });
+
+  // Forward Electron main-process stdout/stderr so launch failures show
+  // up in the Playwright test log. Without this we just see a useless
+  // "Target page, context or browser has been closed".
+  app.process().stdout?.on('data', (chunk: Buffer) => {
+    const s = chunk.toString();
+    if (s.trim()) process.stdout.write(`[electron:${opts.namespace}] ${s}`);
+  });
+  app.process().stderr?.on('data', (chunk: Buffer) => {
+    const s = chunk.toString();
+    if (s.trim()) process.stderr.write(`[electron:${opts.namespace}] ${s}`);
   });
 
   try {

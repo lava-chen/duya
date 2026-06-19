@@ -210,6 +210,34 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     return () => window.clearTimeout(t);
   }, [isHydrated, activeSessionLoaded, bootPhase]);
 
+  // Splash watchdog: if hydration never resolves (e.g. persisted state
+  // references a thread whose messages never load, or the IPC call
+  // hangs), the boot splash would block the entire UI forever. After
+  // a generous timeout we force the splash to dismiss so the user can
+  // still navigate. The app remains functional — the deferred work
+  // (loading messages, fetching thread list) continues in the
+  // background and is reflected as data arrives.
+  useEffect(() => {
+    if (bootPhase !== "visible") return;
+    const FALLBACK_MS = 5_000;
+    const t = window.setTimeout(() => {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[boot] splash watchdog: force-dismissing after",
+        FALLBACK_MS,
+        "ms (isHydrated=",
+        isHydrated,
+        ", activeSessionLoaded=",
+        activeSessionLoaded,
+        ")",
+      );
+      onReadyRef.current?.();
+      setBootPhase("fading");
+      window.setTimeout(() => setBootPhase("hidden"), 220);
+    }, FALLBACK_MS);
+    return () => window.clearTimeout(t);
+  }, [bootPhase, isHydrated, activeSessionLoaded]);
+
   useEffect(() => {
     if (!wikiAgentEnabled && currentView === 'memory') {
       setCurrentView('home');
