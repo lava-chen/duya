@@ -1228,7 +1228,7 @@ function handleGetChat(
   const lastEventIdHeader = req.headers['last-event-id'];
   const lastEventId = typeof lastEventIdHeader === 'string' ? parseInt(lastEventIdHeader, 10) || 0 : 0;
 
-  httpLogger.info('SSE reconnection', { sessionId, lastEventId });
+  httpLogger.info('SSE reconnection', { sessionId, lastEventId, serverLastEventId: session.lastEventId });
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -1238,7 +1238,37 @@ function handleGetChat(
     'X-Accel-Buffering': 'no',
   });
 
-  let seqNum = 0;
+  // Replay buffered events the client missed (events with eventId > lastEventId).
+  // The event buffer is populated by the main chat path (handlePostChat) via
+  // sessionManager.recordEvent(). This covers events that were emitted between
+  // the client disconnect and reconnect.
+  const missedEvents = sessionManager.getEventsSince(sessionId, lastEventId);
+  for (const record of missedEvents) {
+    if (record.eventType === 'done') {
+      res.write(`event: done\nid: ${record.eventId}\ndata: ${JSON.stringify(record.data)}\n\n`);
+      res.end();
+      return;
+    }
+    if (record.eventType === 'error') {
+      res.write(`event: error\nid: ${record.eventId}\ndata: ${JSON.stringify(record.data)}\n\n`);
+      res.end();
+      return;
+    }
+    res.write(`event: ${record.eventType}\nid: ${record.eventId}\ndata: ${JSON.stringify(record.data)}\n\n`);
+  }
+
+  // If replay already delivered a terminal event, stop here.
+  const lastMissed = missedEvents[missedEvents.length - 1];
+  if (lastMissed && (lastMissed.eventType === 'done' || lastMissed.eventType === 'error')) {
+    return;
+  }
+
+  // Start the live-stream counter from the server's last known event ID so
+  // new events from stdout get IDs that continue the sequence correctly.
+  // Previously this was `let seqNum = 0` which caused the `seqNum <= lastEventId`
+  // skip check to drop events with wrong IDs — the local counter never matched
+  // the global event ID space.
+  let seqNum = session.lastEventId;
   let doneReceived = false;
   let reconnectBuffer = '';
 
@@ -1279,7 +1309,6 @@ function handleGetChat(
         const eventType = event.type || 'unknown';
 
         seqNum++;
-        if (seqNum <= lastEventId) continue;
 
         if (eventType === 'chat:done') {
           res.write(`event: done\nid: ${seqNum}\ndata: ${JSON.stringify(event)}\n\n`);

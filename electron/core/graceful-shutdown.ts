@@ -90,12 +90,16 @@ export async function performGracefulShutdown(): Promise<void> {
   try {
     await stopBrowserDaemon();
     logger.info('Browser Daemon stopped', undefined, 'Main');
-  } catch {}
+  } catch (err) {
+    logger.error('Error stopping Browser Daemon', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
 
   // 6.5 Stop automation scheduler
   try {
     getAutomationScheduler()?.shutdown();
-  } catch {}
+  } catch (err) {
+    logger.error('Error shutting down automation scheduler', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
 
   // 6.55 Stop document parser
   try {
@@ -103,22 +107,30 @@ export async function performGracefulShutdown(): Promise<void> {
     if (docParser) {
       await docParser.stop();
     }
-  } catch {}
+  } catch (err) {
+    logger.error('Error stopping document parser', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
 
   // 6.6 Cleanup updater
   try {
     cleanupUpdater();
-  } catch {}
+  } catch (err) {
+    logger.error('Error cleaning up updater', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
 
   // 7. Shutdown config manager
   try {
     getConfigManager().shutdown();
-  } catch {}
+  } catch (err) {
+    logger.error('Error shutting down config manager', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
 
   // 7.5 Stop WAL checkpoint scheduler
   try {
     stopWalCheckpoint();
-  } catch {}
+  } catch (err) {
+    logger.error('Error stopping WAL checkpoint scheduler', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
 
   // 8. Close database connection (last step)
   try {

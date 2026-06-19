@@ -43,7 +43,8 @@ class SessionManager {
       model: options.model || '',
       workingDirectory: options.workingDirectory || '',
     };
-
+    this.sessions.set(sessionId, info);
+    return info;
   }
 
   unregisterSession(sessionId: string): boolean {

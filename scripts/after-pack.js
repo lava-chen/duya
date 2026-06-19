@@ -66,6 +66,7 @@ module.exports = async function afterPack(context) {
     console.log('[afterPack] Prebuilt better-sqlite3 binary already exists, skipping rebuild');
   } else {
     console.log('[afterPack] No prebuilt binary found, attempting rebuild...');
+    let rebuildSucceeded = false;
     try {
       const rebuildCmd = `npx electron-rebuild -f -o better-sqlite3 -v ${electronVersion} -a ${archName}`;
       console.log(`[afterPack] Running: ${rebuildCmd}`);
@@ -75,6 +76,7 @@ module.exports = async function afterPack(context) {
         timeout: 300000,
       });
       console.log('[afterPack] Electron ABI rebuild completed successfully');
+      rebuildSucceeded = true;
     } catch (err) {
       console.error('[afterPack] Failed to rebuild better-sqlite3 for Electron ABI:', err.message);
       try {
@@ -87,10 +89,22 @@ module.exports = async function afterPack(context) {
           force: true,
         });
         console.log('[afterPack] Rebuild via @electron/rebuild API succeeded');
+        rebuildSucceeded = true;
       } catch (err2) {
         console.error('[afterPack] @electron/rebuild API also failed:', err2.message);
-        console.warn('[afterPack] WARNING: Could not rebuild better-sqlite3. If the prebuilt binary is available in resources, the app may still work.');
       }
+    }
+
+    if (!rebuildSucceeded) {
+      // FAIL THE BUILD — a packaged app without a working better-sqlite3
+      // native module will crash at runtime when the agent or main process
+      // tries to open the SQLite database. Silent failure here leads to
+      // broken releases that pass CI but crash on first user interaction.
+      throw new Error(
+        '[afterPack] FATAL: Could not rebuild better-sqlite3 for Electron ABI. ' +
+        'Both npx electron-rebuild and @electron/rebuild API failed. ' +
+        'The packaged app would crash at runtime when opening the database.'
+      );
     }
 
     const rebuiltSource = path.join(
@@ -107,8 +121,27 @@ module.exports = async function afterPack(context) {
       const targetNode = path.join(targetDir, 'better_sqlite3.node');
       fs.copyFileSync(rebuiltSource, targetNode);
       console.log(`[afterPack] Copied rebuilt .node to ${targetNode}`);
+    } else {
+      throw new Error(
+        `[afterPack] FATAL: Rebuild reported success but .node file not found at ${rebuiltSource}. ` +
+        'The native module may not have been compiled correctly.'
+      );
     }
   }
+
+  // Verify better-sqlite3 native module exists in the packaged output.
+  // AGENTS.md pre-release checklist requires:
+  //   release/win-unpacked/resources/better-sqlite3/build/Release/better_sqlite3.node
+  const packagedNativeModule = path.join(
+    appOutDir, 'resources', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'
+  );
+  if (!fs.existsSync(packagedNativeModule)) {
+    throw new Error(
+      `[afterPack] FATAL: better_sqlite3.node not found at ${packagedNativeModule}. ` +
+      'The packaged app cannot open its SQLite database without this native module.'
+    );
+  }
+  console.log(`[afterPack] Verified better_sqlite3.node at ${packagedNativeModule}`);
 
   // Step 2: Copy bindings dependencies to extraResources better-sqlite3
   // The better-sqlite3 package needs bindings to load the native addon
@@ -144,11 +177,25 @@ module.exports = async function afterPack(context) {
   console.log('[afterPack] Step 3: Verifying agent-bundle...');
   const agentBundlePath = path.join(appOutDir, 'resources', 'agent-bundle', 'agent-process-entry.js');
   if (!fs.existsSync(agentBundlePath)) {
-    console.warn(`[afterPack] WARNING: agent-bundle not found at ${agentBundlePath}`);
-  } else {
-    const stats = fs.statSync(agentBundlePath);
-    console.log(`[afterPack] Agent bundle verified: ${agentBundlePath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+    throw new Error(
+      `[afterPack] FATAL: agent-process-entry.js not found at ${agentBundlePath}. ` +
+      'Run `npm run bundle:agent` before packaging. The agent core cannot start without this entry file.'
+    );
   }
+  const agentBundleStats = fs.statSync(agentBundlePath);
+  console.log(`[afterPack] Agent bundle verified: ${agentBundlePath} (${(agentBundleStats.size / 1024 / 1024).toFixed(2)} MB)`);
+
+  // Verify BashWorker.js exists — AGENTS.md pre-release checklist requires:
+  //   release/win-unpacked/resources/agent-bundle/BashTool/BashWorker.js
+  const bashWorkerPath = path.join(appOutDir, 'resources', 'agent-bundle', 'BashTool', 'BashWorker.js');
+  if (!fs.existsSync(bashWorkerPath)) {
+    throw new Error(
+      `[afterPack] FATAL: BashWorker.js not found at ${bashWorkerPath}. ` +
+      'The Bash tool cannot execute commands without this worker file. ' +
+      'Run `npm run bundle:agent` before packaging.'
+    );
+  }
+  console.log(`[afterPack] BashWorker.js verified at ${bashWorkerPath}`);
 
   // Step 4: Copy playwright package to agent-bundle node_modules
   // Playwright is marked as external in esbuild config, so it needs to be available at runtime

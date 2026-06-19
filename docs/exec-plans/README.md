@@ -97,6 +97,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — 离开回来后自动显示会话摘要 | P1 | Planning |
 | [95-external-agent-import](./active/95-external-agent-import.md) | External Agent Workspace Import — 从 Claude Code / Codex 导入项目上下文、记忆、技能 | P1 | Phase 1 ✅ |
 | [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like 运行时追加指令 (`agent_mailbox` + 9 checkpoint + soft interrupt + claim/lease) — PR1 数据层 / PR2 接入 `before_model_turn` / PR3 final / PR4 permission / PR5 tool guard | P0 | Planning |
+| [212-subagent-task-notification](./active/212-subagent-task-notification.md) | SubAgent Task-Notification Channel (claude-code-haha alignment) — `<task-notification>` XML envelope + `messageQueueManager.mode='task-notification'` + `notified` idempotency, UI 隐藏系统消息 | P1 | Implementation complete |
+| [214-agent-core-audit](./active/214-agent-core-audit.md) | Agent Core Audit — full read-only audit of agent runtime, IPC, renderer, DB, lifecycle, packaging. Phased: Phase 1 audit done, Phase 2 gated by user. | P0 | Phase 1 ✅ (audit only), Phase 2 ⏳ awaiting confirmation |
 
 ### Canvas V2 Whimsical 风格重设计
 
