@@ -9,6 +9,14 @@ release/
 build/
 *.tsbuildinfo
 
+# In-place TypeScript emit (src/*.d.ts, src/*.js when tsc is run with emit on)
+src/**/*.d.ts
+src/**/*.d.ts.map
+src/**/*.js
+src/**/*.js.map
+!src/**/*.stories.tsx
+!src/**/*.stories.ts
+
 # Storybook
 .storybook/
 storybook-static/
