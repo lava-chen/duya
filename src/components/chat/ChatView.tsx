@@ -37,6 +37,8 @@ import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
 import { RecapBanner } from './RecapBanner';
 import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
+import { TaskDrawer } from '@/components/layout/TaskDrawer';
+import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
 
 interface ChatViewProps {
   sessionId: string;
@@ -137,6 +139,7 @@ export function ChatView({
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
+  const taskDrawerOpen = useTaskDrawerOpen();
 
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);
@@ -566,7 +569,7 @@ export function ChatView({
   }, []);
 
   return (
-    <div className="chat-view flex flex-col flex-1 min-h-0 relative">
+    <div className={`chat-view flex flex-col flex-1 min-h-0 relative${taskDrawerOpen ? ' task-card-open' : ''}`}>
       {activeThread && <ChatHeader thread={activeThread} />}
 
       {/* Back to parent button when viewing a sub-agent */}
@@ -651,6 +654,8 @@ export function ChatView({
         );
       })()}
 
+      <div className="chat-body-row">
+        <div className="chat-main-column">
       <div className="flex-1 min-h-0">
         {messages.length === 0 && !isStreaming ? (
           /* Empty state with SessionSelector and centered input */
@@ -858,6 +863,9 @@ export function ChatView({
           </div>
         </div>
       )}
+        </div>
+        <TaskDrawer />
+      </div>
 
       <InputDialog
         isOpen={isNameProjectDialogOpen}

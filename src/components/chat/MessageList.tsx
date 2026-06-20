@@ -399,7 +399,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
 
   return (
-    <div ref={containerRef} className="h-full overflow-y-auto scrollbar-thin pb-32">
+    <div ref={containerRef} className="message-list-scroll h-full overflow-y-auto scrollbar-thin pb-32">
       {hasMore && (
         <div className="flex justify-center p-4">
           <button

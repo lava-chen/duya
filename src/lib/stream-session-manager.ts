@@ -1499,9 +1499,14 @@ class StreamSessionManager {
           //     agentId, agentType, agentName, agentDescription, agentSessionId,
           //     data?, toolName?, toolInput?, toolResult?, duration? }
           // The SSE client already stripped the chat:* prefix to produce
-          // `eventType = 'agent_progress'`, so `event` here is the flat object
-          // itself (not wrapped in `{ type, data }`). Remap to AgentProgressEvent.
-          this.handleAgentProgressEvent(sessionId, streamId, event as unknown as AgentProgressEvent);
+          // AgentHTTPClient normalizes SSE into `{ type, data }`, where
+          // `data` contains the flat worker payload. Older callers passed the
+          // flat object directly, so handle both shapes.
+          this.handleAgentProgressEvent(
+            sessionId,
+            streamId,
+            (event.data ?? event) as unknown as AgentProgressEvent,
+          );
           break;
 
         case 'skill_review_started':
@@ -1758,7 +1763,11 @@ class StreamSessionManager {
     // The worker emits events with `agentEventType` and `agentSessionId` (the
     // sub-agent's session). The AgentProgressEvent shape used by hooks expects
     // `type` and `sessionId`. Remap defensively so either shape works.
-    const raw = data as AgentProgressEvent & {
+    const nested = (data as { data?: unknown }).data;
+    const rawData = nested && typeof nested === 'object'
+      ? nested as AgentProgressEvent
+      : data;
+    const raw = rawData as AgentProgressEvent & {
       agentEventType?: AgentProgressEvent['type'];
       agentSessionId?: string;
       agentId?: string;
@@ -1766,16 +1775,21 @@ class StreamSessionManager {
       agentName?: string;
       agentDescription?: string;
     };
+    const rawType = raw.type as string | undefined;
+    const eventType = raw.agentEventType
+      ?? (rawType === 'agent_progress' || rawType === 'chat:agent_progress'
+        ? undefined
+        : raw.type);
 
     const event: AgentProgressEvent = {
-      ...data,
-      type: (raw.type ?? raw.agentEventType) as AgentProgressEvent['type'],
+      ...rawData,
+      type: eventType as AgentProgressEvent['type'],
       sessionId: raw.agentSessionId ?? raw.sessionId,
-      agentId: raw.agentId ?? data.agentId,
-      agentType: raw.agentType ?? data.agentType,
-      agentName: raw.agentName ?? data.agentName,
-      agentDescription: raw.agentDescription ?? data.agentDescription,
-      receivedAt: data.receivedAt ?? Date.now(),
+      agentId: raw.agentId,
+      agentType: raw.agentType,
+      agentName: raw.agentName,
+      agentDescription: raw.agentDescription,
+      receivedAt: raw.receivedAt ?? Date.now(),
     };
 
     s.agentProgressEvents = [...s.agentProgressEvents, event];
