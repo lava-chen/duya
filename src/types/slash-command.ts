@@ -4,6 +4,8 @@ export interface PopoverItem {
   label: string;
   value: string;
   description?: string;
+  /** Optional English counterpart to `description` for bilingual display. */
+  descriptionEn?: string;
   icon?: React.ComponentType<{ size?: number; className?: string }>;
   builtIn?: boolean;
   immediate?: boolean;

@@ -111,10 +111,6 @@ const en = {
   'streaming.toolAction.edited': 'Edited',
   'streaming.toolAction.created': 'Created',
   'streaming.toolAction.openFile': 'Open in default editor',
-  'streaming.toolAction.usedBrowser': 'Used browser',
-  'streaming.toolAction.usedBrowserCount': 'Used browser ({count})',
-  'streaming.toolAction.showRawOutput': 'Show raw tool output',
-  'streaming.toolAction.browserGroupRaw': 'Browser group raw output ({count})',
   'streaming.toolAction.fallbackTitle': 'Limited Mode: Browser Extension Not Installed',
   'streaming.toolAction.fallbackDesc':
     'Running in fallback mode. Interactive features like clicking, typing, and JavaScript execution are unavailable. Install the DUYA Browser Bridge extension for full functionality.',
@@ -122,6 +118,9 @@ const en = {
   'streaming.toolAction.noSnapshot': 'No snapshot returned',
   'streaming.toolAction.copy': 'Copy',
   'streaming.toolAction.close': 'Close',
+  // History-list label shown before the command in BashToolRow header.
+  'streaming.toolAction.ranCommand': 'Ran',
+  'streaming.toolAction.continued': 'Running for {duration}',
   // Verb label shown next to the tool icon (e.g. "Edit / 编辑").
   // Falls back to the verb in the verb key above for the legacy edit/create flows.
   'streaming.toolAction.label.cli': 'CLI',
@@ -137,6 +136,31 @@ const en = {
   'streaming.toolAction.label.memoryAdd': 'Saved',
   'streaming.toolAction.label.memoryReplace': 'Updated',
   'streaming.toolAction.label.memoryRemove': 'Removed',
+  // Generic tool group summary (≥2 consecutive tools collapsed into one row).
+  // {count} = number of tool calls in that category within the group.
+  // Each category gets its own singular + plural template so headers
+  // read naturally for every count, e.g. "Read 1 file" → "Read 5 files",
+  // "Launched 1 agent" → "Launched 3 agents". The `andMore` tail kicks
+  // in when the group spans more than 3 distinct categories.
+  'streaming.toolAction.groupSummary.commands.one': 'Ran 1 command',
+  'streaming.toolAction.groupSummary.commands.other': 'Ran {count} commands',
+  'streaming.toolAction.groupSummary.editFiles.one': 'Edited 1 file',
+  'streaming.toolAction.groupSummary.editFiles.other': 'Edited {count} files',
+  'streaming.toolAction.groupSummary.readFiles.one': 'Read 1 file',
+  'streaming.toolAction.groupSummary.readFiles.other': 'Read {count} files',
+  'streaming.toolAction.groupSummary.search.one': 'Searched 1 time',
+  'streaming.toolAction.groupSummary.search.other': 'Searched {count} times',
+  'streaming.toolAction.groupSummary.browser.one': 'Used browser 1 time',
+  'streaming.toolAction.groupSummary.browser.other': 'Used browser {count} times',
+  'streaming.toolAction.groupSummary.agent.one': 'Launched 1 agent',
+  'streaming.toolAction.groupSummary.agent.other': 'Launched {count} agents',
+  'streaming.toolAction.groupSummary.ask.one': 'Asked 1 question',
+  'streaming.toolAction.groupSummary.ask.other': 'Asked {count} questions',
+  'streaming.toolAction.groupSummary.memory.one': 'Used memory 1 time',
+  'streaming.toolAction.groupSummary.memory.other': 'Used memory {count} times',
+  'streaming.toolAction.groupSummary.tools.one': 'Used 1 tool',
+  'streaming.toolAction.groupSummary.tools.other': 'Used {count} tools',
+  'streaming.toolAction.groupSummary.andMore': '+{count} more',
 
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',
