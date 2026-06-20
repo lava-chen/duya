@@ -35,8 +35,17 @@ export default defineConfig({
     hookTimeout: 10000,
   },
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+    // Mirror vite.config.ts: prefer `.ts` over `.js` so test runs pick
+    // up the latest source instead of stale committed `.js` artifacts.
+    extensions: ['.mjs', '.mts', '.ts', '.tsx', '.js', '.jsx', '.json'],
+    alias: [
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+      // Mirror vite.config.ts aliases so vitest can resolve
+      // `@duya/conductor/renderer/*` to the package's source tree. Without
+      // these the test environment errors out when any imported file
+      // transitively pulls in WidgetRenderer / ConductorView / etc.
+      { find: /^@duya\/conductor\/renderer\/(.*)$/, replacement: path.resolve(__dirname, './packages/conductor/src/renderer/') + '/$1' },
+      { find: '@duya/conductor/renderer', replacement: path.resolve(__dirname, './packages/conductor/src/renderer/index') },
+    ],
   },
 })
