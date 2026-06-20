@@ -9,7 +9,10 @@ release/
 build/
 *.tsbuildinfo
 
-# In-place TypeScript emit (src/*.d.ts, src/*.js when tsc is run with emit on)
+# In-place TypeScript emit (when tsc is invoked with emit on, .d.ts and
+# .js appear next to their .ts / .tsx sources). Track emit outputs by
+# filename pattern rather than path so genuine hand-written .d.ts
+# files (e.g. src/global.d.ts, src/vite-env.d.ts) stay tracked.
 src/**/*.d.ts
 src/**/*.d.ts.map
 src/**/*.js
