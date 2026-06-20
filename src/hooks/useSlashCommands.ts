@@ -192,7 +192,10 @@ export function useSlashCommands(opts: {
             .map((skill) => ({
               label: `/${skill.name}`,
               value: `/${skill.name}`,
-              description: skill.description,
+              // Coerce to string — some skill files contain non-string `description`
+              // values (arrays/objects), which would crash filterItems() later.
+              description:
+                typeof skill.description === 'string' ? skill.description : '',
               kind: 'agent_skill' as const,
               installedSource: skill.source === 'project' ? 'agents' : 'claude',
               source: (skill.source as 'global' | 'project' | 'plugin' | 'installed' | 'sdk') || undefined,

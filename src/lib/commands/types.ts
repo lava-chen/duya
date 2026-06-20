@@ -32,8 +32,14 @@ export interface CommandDef {
   name: string;
   /** Alternative names: ["reset"] */
   aliases?: readonly string[];
-  /** Human-readable description */
+  /** Short English label shown in menus (e.g. "New session") */
+  label?: string;
+  /** Short Chinese label shown in menus (e.g. "新建会话") */
+  labelZh?: string;
+  /** Human-readable description (primary locale) */
   description: string;
+  /** Optional Chinese description used when the menu is rendered in zh-CN. */
+  descriptionZh?: string;
   /** Category for grouping */
   category: CommandCategory;
   /** Argument placeholder shown in help: "<prompt>", "[model]" */

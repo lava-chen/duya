@@ -54,6 +54,8 @@ export interface Message {
   subAgentId: string | null
   attachments: FileAttachment[] | null
   createdAt: number
+  /** User-facing prompt (with pasted-content markers) for user messages. */
+  displayContent?: string | ContentBlock[]
 }
 
 export interface Provider {
@@ -165,6 +167,8 @@ interface DbMessage {
   sub_agent_id: string | null
   attachments: string | null
   created_at: number
+  /** User-facing prompt (with pasted-content markers) for user messages. */
+  display_content: string | null
 }
 
 // Backend returns camelCase (via maskProvider in agent-communicator.ts)
@@ -281,6 +285,12 @@ function dbMessageToMessage(db: DbMessage): Message {
     subAgentId: db.sub_agent_id,
     attachments,
     createdAt: db.created_at,
+    // Surface the user-facing prompt (with pasted-content markers).
+    // Falls back to `content` for legacy rows that pre-date the
+    // `display_content` column — those rows had the prompt stored in
+    // `content` directly.
+    displayContent: db.display_content
+      ?? (typeof content === 'string' ? content : undefined),
   }
 }
 

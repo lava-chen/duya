@@ -113,10 +113,6 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.edited': '已编辑',
   'streaming.toolAction.created': '已创建',
   'streaming.toolAction.openFile': '在默认编辑器中打开',
-  'streaming.toolAction.usedBrowser': '已使用 浏览器',
-  'streaming.toolAction.usedBrowserCount': '已使用 浏览器 ({count})',
-  'streaming.toolAction.showRawOutput': '显示原始工具调用输出',
-  'streaming.toolAction.browserGroupRaw': '浏览器原始输出 ({count})',
   'streaming.toolAction.fallbackTitle': '受限模式：未安装浏览器扩展',
   'streaming.toolAction.fallbackDesc':
     '正在以 fallback 模式运行。点击、输入、JavaScript 执行等交互功能不可用。安装 DUYA Browser Bridge 扩展以获得完整体验。',
@@ -124,6 +120,9 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.noSnapshot': '没有可显示的快照',
   'streaming.toolAction.copy': '复制',
   'streaming.toolAction.close': '关闭',
+  // History-list label shown before the command in BashToolRow header.
+  'streaming.toolAction.ranCommand': '已运行',
+  'streaming.toolAction.continued': '已持续 {duration}',
   // Verb label shown next to the tool icon (e.g. "Edit / 编辑").
   // Falls back to the verb in the verb key above for the legacy edit/create flows.
   'streaming.toolAction.label.cli': 'CLI',
@@ -139,6 +138,31 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.label.memoryAdd': '已添加',
   'streaming.toolAction.label.memoryReplace': '已更新',
   'streaming.toolAction.label.memoryRemove': '已删除',
+  // Generic tool group summary (≥2 consecutive tools collapsed into one row).
+  // {count} = number of tool calls in that category within the group.
+  // Each category gets its own singular + plural template so headers
+  // read naturally for every count, e.g. "已读取 1 个文件" stays the
+  // same shape for "已读取 5 个文件" (zh doesn't inflect). The `andMore`
+  // tail kicks in when the group spans more than 3 distinct categories.
+  'streaming.toolAction.groupSummary.commands.one': '已运行 1 次命令',
+  'streaming.toolAction.groupSummary.commands.other': '已运行 {count} 次命令',
+  'streaming.toolAction.groupSummary.editFiles.one': '已编辑 1 个文件',
+  'streaming.toolAction.groupSummary.editFiles.other': '已编辑 {count} 个文件',
+  'streaming.toolAction.groupSummary.readFiles.one': '已读取 1 个文件',
+  'streaming.toolAction.groupSummary.readFiles.other': '已读取 {count} 个文件',
+  'streaming.toolAction.groupSummary.search.one': '搜索 1 次',
+  'streaming.toolAction.groupSummary.search.other': '搜索 {count} 次',
+  'streaming.toolAction.groupSummary.browser.one': '已使用浏览器 1 次',
+  'streaming.toolAction.groupSummary.browser.other': '已使用浏览器 {count} 次',
+  'streaming.toolAction.groupSummary.agent.one': '启动了 1 个 agent',
+  'streaming.toolAction.groupSummary.agent.other': '启动了 {count} 个 agent',
+  'streaming.toolAction.groupSummary.ask.one': '已询问 1 个问题',
+  'streaming.toolAction.groupSummary.ask.other': '已询问 {count} 个问题',
+  'streaming.toolAction.groupSummary.memory.one': '已使用记忆 1 次',
+  'streaming.toolAction.groupSummary.memory.other': '已使用记忆 {count} 次',
+  'streaming.toolAction.groupSummary.tools.one': '已使用 1 个工具',
+  'streaming.toolAction.groupSummary.tools.other': '已使用 {count} 个工具',
+  'streaming.toolAction.groupSummary.andMore': '其他 {count} 项',
 
   'permission.allow': '允许',
   'permission.deny': '拒绝',

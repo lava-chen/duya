@@ -4,6 +4,7 @@ export interface ParsedSubAgentToolResult {
   description?: string;
   content?: string;
   sessionId?: string;
+  agentId?: string;
   taskId?: string;
   background?: boolean;
   error?: string;
@@ -28,6 +29,7 @@ export function parseSubAgentToolResult(result: string | null | undefined): Pars
       description: optionalString(parsed.description),
       content: optionalString(parsed.content),
       sessionId: optionalString(parsed.sessionId),
+      agentId: optionalString(parsed.agentId),
       taskId: optionalString(parsed.taskId),
       background: parsed.background === true,
       error: optionalString(parsed.error),

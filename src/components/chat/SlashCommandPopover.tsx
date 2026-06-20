@@ -5,12 +5,10 @@
 import { useCallback } from 'react';
 import type { PopoverItem, PopoverMode } from '@/types/slash-command';
 import {
-  TerminalIcon,
   QuestionIcon,
   EraserIcon,
   ChartLineIcon,
   BrainIcon,
-  GlobeSimpleIcon,
   ClockCounterClockwiseIcon,
 } from '@/components/icons';
 
@@ -94,26 +92,81 @@ export function SlashCommandPopover({
   );
 
   const renderItem = (item: PopoverItem, idx: number) => {
-    const IconComponent = item.icon || (item.builtIn ? TerminalIcon : GlobeSimpleIcon);
+    const IconComponent = item.icon;
     const isSelected = idx === selectedIndex;
+    // Bilingual built-ins: `label` = primary title (CN),
+    // `description` = secondary CN, `descriptionEn` = secondary EN.
+    // Custom skills: only `description` is set (single language).
+    const primary = item.label;
+    const secondary = item.builtIn
+      ? [item.description, item.descriptionEn].filter(Boolean).join(' · ')
+      : item.description;
+    const hasSecondary = Boolean(secondary);
 
     return (
       <div
         key={`${idx}-${item.value}`}
-        className="flex items-center gap-3 px-3 py-2 cursor-pointer text-sm transition-colors"
-        style={{
-          backgroundColor: isSelected ? 'var(--accent-soft)' : 'transparent',
-          color: isSelected ? 'var(--accent)' : 'var(--text)',
-        }}
+        role="option"
+        aria-selected={isSelected}
         onClick={() => onInsertItem(item)}
         onMouseEnter={() => onSetSelectedIndex(idx)}
         ref={isSelected ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+        className="command-menu-row flex items-center gap-2 px-2.5 cursor-pointer select-none"
+        style={{
+          minHeight: hasSecondary ? 42 : 26,
+          borderRadius: 8,
+          backgroundColor: isSelected ? 'var(--command-menu-selected)' : 'transparent',
+          color: 'var(--text)',
+        }}
       >
-        <IconComponent size={16} style={{ color: 'var(--muted)' }} />
-        <span className="font-mono text-xs truncate">{item.label}</span>
-        {item.description && (
-          <span className="text-xs truncate max-w-[200px]" style={{ color: 'var(--muted)' }}>
-            {item.description}
+        {IconComponent ? (
+          <span
+            style={{
+              color: 'var(--muted)',
+              flexShrink: 0,
+              display: 'inline-flex',
+              alignSelf: 'center',
+            }}
+          >
+            <IconComponent size={14} />
+          </span>
+        ) : (
+          <span
+            className="font-mono"
+            style={{
+              color: 'var(--muted)',
+              flexShrink: 0,
+              width: 14,
+              textAlign: 'center',
+              fontSize: 11,
+              alignSelf: 'center',
+            }}
+          >
+            &gt;_
+          </span>
+        )}
+        <div className="flex-1 min-w-0 flex flex-col" style={{ gap: 2 }}>
+          <span
+            className="truncate"
+            style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', lineHeight: '15px' }}
+          >
+            {primary}
+          </span>
+          {secondary && (
+            <span
+              className="truncate"
+              style={{ fontSize: 11, color: 'var(--command-menu-muted)', lineHeight: '14px' }}
+            >
+              {secondary}
+            </span>
+          )}
+        </div>
+        {item.value && item.builtIn && (
+          <span
+            className="truncate font-mono self-center"
+            style={{ color: 'var(--command-menu-muted)', fontSize: 11, opacity: 0.55 }}
+          >
+            {item.value}
           </span>
         )}
       </div>
@@ -124,56 +177,26 @@ export function SlashCommandPopover({
   if (allDisplayedItems.length === 0) return null;
 
   return (
-    <div ref={popoverRef} className="absolute bottom-full left-0 mb-2 w-full max-w-2xl z-50">
+    <div
+      ref={popoverRef}
+      className="absolute bottom-full left-0 z-50"
+      style={{ marginBottom: 8, width: '100%', maxWidth: 920 }}
+    >
       <div
-        className="border rounded-xl shadow-lg overflow-hidden"
-        style={{ backgroundColor: 'var(--main-bg)', borderColor: 'var(--border)' }}
+        className="command-menu-popover overflow-y-auto"
+        style={{
+          backgroundColor: 'var(--command-menu-bg)',
+          border: '1px solid var(--command-menu-border)',
+          borderRadius: 12,
+          boxShadow: '0 6px 18px rgba(0, 0, 0, 0.32), 0 1px 4px rgba(0, 0, 0, 0.18)',
+          padding: 4,
+          // Cap to ~9 rows (built-in two-line ≈ 42px each) + padding;
+          // rest scrolls inside.
+          maxHeight: 42 * 9 + 8,
+        }}
       >
-        {/* Search header */}
-        {popoverMode === 'skill' && (
-          <div className="px-3 py-2" style={{ borderBottom: '1px solid var(--border)' }}>
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={popoverFilter}
-              onChange={(e) => handleFilterChange(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Filter commands..."
-              className="w-full px-3 py-1.5 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/50"
-              style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--border)' }}
-              autoFocus
-            />
-          </div>
-        )}
-
-        {/* Command list */}
-        <div className="max-h-48 overflow-y-auto">
+        <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
           {filteredItems.map((item, i) => renderItem(item, i))}
-        </div>
-
-        {/* Footer hint */}
-        <div
-          className="px-3 py-2 text-xs"
-          style={{ borderTop: '1px solid var(--border)', color: 'var(--muted)' }}
-        >
-          <span className="mr-4">
-            <kbd
-              className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ backgroundColor: 'var(--surface)' }}
-            >↑↓</kbd> navigate
-          </span>
-          <span className="mr-4">
-            <kbd
-              className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ backgroundColor: 'var(--surface)' }}
-            >Enter</kbd> select
-          </span>
-          <span>
-            <kbd
-              className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ backgroundColor: 'var(--surface)' }}
-            >Esc</kbd> close
-          </span>
         </div>
       </div>
     </div>
