@@ -194,7 +194,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     const newTab: PageTab = {
       id,
       pageId,
-      title: defaultTitle(pageId),
+      title: typeof params?.title === "string" ? params.title : defaultTitle(pageId),
       params,
     };
     setTabs((prev) => [...prev, newTab]);
@@ -220,6 +220,23 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     },
     [openPanel]
   );
+
+  useEffect(() => {
+    const handleOpenBrowserPanel = (event: Event) => {
+      const detail = (event as CustomEvent<{ url?: string; title?: string }>).detail;
+      const url = typeof detail?.url === "string" ? detail.url : "";
+      if (!url.trim()) return;
+      openOrActivatePage("browser", {
+        url,
+        title: typeof detail?.title === "string" ? detail.title : undefined,
+      });
+    };
+
+    window.addEventListener("duya:open-browser-panel", handleOpenBrowserPanel as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-browser-panel", handleOpenBrowserPanel as EventListener);
+    };
+  }, [openOrActivatePage]);
 
   const closePanel = useCallback<PanelContextValue["closePanel"]>((tabId) => {
     setTabs((prev) => {

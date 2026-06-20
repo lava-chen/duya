@@ -399,6 +399,11 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         id: userMsgId,
         role: "user",
         content,
+        // `displayContent` is the user-facing prompt (with
+        // pasted-content markers). It mirrors `content` here, but
+        // the dedicated field keeps the renderer honest if the
+        // message ever gets replaced with the LLM-facing payload.
+        displayContent: content,
         timestamp: now,
         attachments: files,
       };
