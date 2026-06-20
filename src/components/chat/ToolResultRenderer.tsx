@@ -574,11 +574,11 @@ const browserRenderer: ToolResultRenderer = {
     return lowerName === 'browser' || lowerName === 'browsertool';
   },
   render: () => {
-    // Browser tools are rendered by `BrowserGroup` (which can collapse
-    // consecutive browser actions into a single toggle and show the
-    // snapshot / compactSnapshot content instead of raw JSON). This
-    // renderer is kept only as a canRender flag so legacy callers
-    // don't try to JSON-dump a browser result.
+    // Browser tools are rendered by the generic Group inside
+    // `ToolActionsGroup` (which collapses consecutive browser actions
+    // into one toggle and shows the snapshot / compactSnapshot content
+    // instead of raw JSON). This renderer is kept only as a canRender
+    // flag so legacy callers don't try to JSON-dump a browser result.
     return null;
   },
 };

@@ -15,6 +15,8 @@ export interface BuiltInCommand {
   label: string;
   value: string;
   description: string;
+  /** Optional English counterpart to `description` for bilingual display. */
+  descriptionEn?: string;
   immediate?: boolean;
   builtIn: boolean;
   kind?: 'slash_command' | 'agent_command' | 'agent_skill' | 'sdk_command' | 'cli_tool';
@@ -25,23 +27,36 @@ export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
   ...getCommandsForPlatform('app')
     .filter((cmd) => cmd.category === 'info' || cmd.name === 'clear')
     .map((cmd) => ({
-      label: `/${cmd.name}`,
+      // Primary label is the Chinese labelZh when present, else English label,
+      // else fallback to "/<name>". The English label is also exposed as
+      // descriptionEn so the popover can render a bilingual two-line item.
+      label: pickLabel(cmd),
       value: `/${cmd.name}`,
-      description: cmd.description,
+      description: cmd.descriptionZh ?? cmd.description,
+      descriptionEn: cmd.labelZh ? cmd.description : undefined,
       immediate: true,
       builtIn: true,
     })),
   // Session commands that need badge mode
-  { label: '/compact', value: '/compact', description: 'Compress conversation context to save tokens', builtIn: true, kind: 'agent_command' as const },
-  { label: '/memory', value: '/memory', description: 'View or manage session memory', builtIn: true, kind: 'agent_command' as const },
-  { label: '/export', value: '/export', description: 'Export conversation to markdown/json/html', builtIn: true, kind: 'agent_command' as const },
+  { label: pickLabelByName('compact'), value: '/compact', description: '压缩对话上下文以节省 token', descriptionEn: 'Compress conversation context to save tokens', builtIn: true, kind: 'agent_command' as const },
+  { label: pickLabelByName('memory'), value: '/memory', description: '查看或管理会话记忆', descriptionEn: 'View or manage session memory', builtIn: true, kind: 'agent_command' as const },
+  { label: pickLabelByName('export'), value: '/export', description: '将会话导出为 markdown/json/html', descriptionEn: 'Export conversation to markdown/json/html', builtIn: true, kind: 'agent_command' as const },
   // Skill commands
-  { label: '/review', value: '/review', description: 'Review code changes with detailed feedback', builtIn: true, kind: 'agent_skill' as const },
-  { label: '/simplify', value: '/simplify', description: 'Simplify and refactor complex code', builtIn: true, kind: 'agent_skill' as const },
-  { label: '/doctor', value: '/doctor', description: 'Diagnose project issues and suggest fixes', builtIn: true, kind: 'agent_skill' as const },
-  { label: '/commit', value: '/commit', description: 'Generate smart Git commit messages', builtIn: true, kind: 'agent_skill' as const },
-  { label: '/plan', value: '/plan', description: 'Enter planning mode for complex tasks', builtIn: true, kind: 'agent_skill' as const },
+  { label: pickLabelByName('review'), value: '/review', description: '审查代码变更并给出详细反馈', descriptionEn: 'Review code changes with detailed feedback', builtIn: true, kind: 'agent_skill' as const },
+  { label: pickLabelByName('simplify'), value: '/simplify', description: '简化并重构复杂的代码', descriptionEn: 'Simplify and refactor complex code', builtIn: true, kind: 'agent_skill' as const },
+  { label: pickLabelByName('doctor'), value: '/doctor', description: '诊断项目问题并给出修复建议', descriptionEn: 'Diagnose project issues and suggest fixes', builtIn: true, kind: 'agent_skill' as const },
+  { label: pickLabelByName('commit'), value: '/commit', description: '智能生成 Git 提交信息', descriptionEn: 'Generate smart Git commit messages', builtIn: true, kind: 'agent_skill' as const },
+  { label: pickLabelByName('plan'), value: '/plan', description: '为复杂任务进入规划模式', descriptionEn: 'Enter planning mode for complex tasks', builtIn: true, kind: 'agent_skill' as const },
 ];
+
+function pickLabel(cmd: { labelZh?: string; label?: string; name: string }): string {
+  return cmd.labelZh?.trim() || cmd.label?.trim() || `/${cmd.name}`;
+}
+
+function pickLabelByName(name: string): string {
+  const cmd = getCommandsForPlatform('app').find((c) => c.name === name);
+  return cmd ? pickLabel(cmd) : `/${name}`;
+}
 
 /**
  * Detects popover trigger from input text and cursor position.
@@ -83,7 +98,7 @@ export function filterItems(items: PopoverItem[], filter: string): PopoverItem[]
   return items.filter(
     (item) =>
       item.label.toLowerCase().includes(q) ||
-      (item.description || '').toLowerCase().includes(q),
+      String(item.description ?? '').toLowerCase().includes(q),
   );
 }
 

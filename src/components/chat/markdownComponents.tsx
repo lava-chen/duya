@@ -1,5 +1,30 @@
 import React from 'react';
 import { CodeBlock } from './CodeBlock';
+import { openLocalFileTarget, isLikelyLocalFileReference } from '@/lib/chat-file-links';
+import { useConversationStore } from '@/stores/conversation-store';
+
+function MarkdownAnchor({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const activeThreadId = useConversationStore((s) => s.activeThreadId);
+  const threads = useConversationStore((s) => s.threads);
+  const cwd = threads.find((thread) => thread.id === activeThreadId)?.workingDirectory;
+  const isLocalFile = typeof href === 'string' && isLikelyLocalFileReference(href);
+
+  return (
+    <a
+      href={href}
+      className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors"
+      target={isLocalFile ? undefined : '_blank'}
+      rel={isLocalFile ? undefined : 'noopener noreferrer'}
+      onClick={(event) => {
+        if (!href || !isLocalFile) return;
+        event.preventDefault();
+        openLocalFileTarget(href, cwd);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
 
 export const markdownComponents = {
   h1: ({ children }: { children?: React.ReactNode }) => (
@@ -23,11 +48,7 @@ export const markdownComponents = {
   li: ({ children }: { children?: React.ReactNode }) => (
     <li className="text-[15px] text-foreground leading-[1.65] pl-1">{children}</li>
   ),
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a href={href} className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors" target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
+  a: MarkdownAnchor,
   code: ({ children, className, ...props }: { children?: React.ReactNode; className?: string }) => {
     const match = /language-(\w+)/.exec(className || '');
     const raw = String(children ?? '');

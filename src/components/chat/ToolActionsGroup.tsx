@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, createElement } from 'react';
+import React, { useState, useCallback, useEffect, useRef, createElement } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Icon } from '@phosphor-icons/react';
 import {
@@ -284,44 +284,130 @@ function StatusDot({ status }: { status: ToolStatus }) {
   );
 }
 
-const CONTEXT_TOOLS = new Set([
-  'read', 'readfile', 'read_file', 'read_multiple_files',
-  'glob', 'grep', 'ls', 'search', 'find_files', 'search_files',
-  // 'web_search', // Disabled - use browser_tool instead
-]);
+// =============================================================================
+// Group summary — collapses ≥2 consecutive tool calls into a single row.
+// Each tool's category is derived from its registry icon, so we never need
+// a separate "context" / "browser" branch in the segmenter.
+// =============================================================================
 
-// Categorize context tools for a richer summary header.
-const FILE_READ_TOOLS = new Set(['read', 'readfile', 'read_file', 'read_multiple_files']);
-const DIRECTORY_BROWSE_TOOLS = new Set(['ls', 'glob']);
-const FILE_SEARCH_TOOLS = new Set(['grep', 'search', 'find_files', 'search_files']);
+// When a group spans more than this many distinct categories, the
+// header is truncated to N parts and a "+N more" tail covers the rest.
+const MAX_PARTS_BEFORE_TRUNCATE = 3;
 
-function isContextTool(name: string): boolean {
-  return CONTEXT_TOOLS.has(name.toLowerCase());
+// Base i18n key for each category. The renderer picks the singular
+// (`.one`) or plural (`.other`) variant based on the count. zh doesn't
+// inflect so the two variants happen to be identical, but keeping them
+// separate makes en reads naturally ("Ran 1 command" vs "Ran 5 commands").
+type SummaryCategoryKey =
+  | 'commands'
+  | 'editFiles'
+  | 'readFiles'
+  | 'search'
+  | 'browser'
+  | 'agent'
+  | 'ask'
+  | 'memory'
+  | 'tools';
+
+interface SummaryPart {
+  count: number;
+  categoryKey: SummaryCategoryKey;
 }
 
-type ContextCategory = 'fileRead' | 'directoryBrowse' | 'fileSearch';
-
-function categorizeContextTool(name: string): ContextCategory | null {
-  const lower = name.toLowerCase();
-  if (FILE_READ_TOOLS.has(lower)) return 'fileRead';
-  if (DIRECTORY_BROWSE_TOOLS.has(lower)) return 'directoryBrowse';
-  if (FILE_SEARCH_TOOLS.has(lower)) return 'fileSearch';
-  return null;
+function templateKeyFor(categoryKey: SummaryCategoryKey, count: number): string {
+  const variant = count === 1 ? 'one' : 'other';
+  return `streaming.toolAction.groupSummary.${categoryKey}.${variant}`;
 }
 
-interface ContextSummary {
-  fileRead: number;
-  directoryBrowse: number;
-  fileSearch: number;
-}
-
-function buildContextSummary(tools: ToolAction[]): ContextSummary {
-  const summary: ContextSummary = { fileRead: 0, directoryBrowse: 0, fileSearch: 0 };
+function buildGroupSummary(
+  tools: ToolAction[],
+  t: (key: import('@/i18n').TranslationKey, params?: Record<string, string | number>) => string,
+  locale: string,
+): string {
+  const counts = new Map<SummaryCategoryKey, SummaryPart>();
   for (const tool of tools) {
-    const category = categorizeContextTool(tool.name);
-    if (category) summary[category] += 1;
+    const part = classifyToolForSummary(tool);
+    if (!part) continue;
+    const existing = counts.get(part.categoryKey);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      counts.set(part.categoryKey, { count: 1, categoryKey: part.categoryKey });
+    }
   }
-  return summary;
+
+  // Preserve a stable order so the header doesn't shuffle when streaming
+  // updates reorder the inner tools. Order matches the category table in
+  // the plan: commands → edit → read → search → browser → agent → ask →
+  // memory → catch-all tools.
+  const order: SummaryCategoryKey[] = [
+    'commands',
+    'editFiles',
+    'readFiles',
+    'search',
+    'browser',
+    'agent',
+    'ask',
+    'memory',
+    'tools',
+  ];
+  const parts: SummaryPart[] = [];
+  for (const key of order) {
+    const p = counts.get(key);
+    if (p) parts.push(p);
+  }
+
+  if (parts.length === 0) {
+    return locale === 'zh'
+      ? `执行了 ${tools.length} 项操作`
+      : `${tools.length} actions`;
+  }
+
+  const renderedParts = parts.map((p) =>
+    t(templateKeyFor(p.categoryKey, p.count) as import('@/i18n').TranslationKey, { count: p.count }),
+  );
+
+  if (renderedParts.length > MAX_PARTS_BEFORE_TRUNCATE) {
+    const head = renderedParts.slice(0, MAX_PARTS_BEFORE_TRUNCATE);
+    const remaining = renderedParts.length - MAX_PARTS_BEFORE_TRUNCATE;
+    const sep = locale === 'zh' ? '，' : ', ';
+    return `${head.join(sep)}${sep}${t('streaming.toolAction.groupSummary.andMore', { count: remaining })}`;
+  }
+
+  const sep = locale === 'zh' ? '，' : ', ';
+  return renderedParts.join(sep);
+}
+
+// Map one tool call to a summary part. Returns null if the tool doesn't
+// contribute to the summary (no tool should hit this — the registry
+// catch-all maps to `tools`).
+function classifyToolForSummary(tool: ToolAction): SummaryPart | null {
+  const name = tool.name.toLowerCase();
+  if (['shell', 'bash', 'execute', 'run', 'execute_command', 'run_command', 'duya_cli', 'duya-cli', 'duyacli', 'powershell'].includes(name)) {
+    return { count: 1, categoryKey: 'commands' };
+  }
+  if (['edit', 'edit_file', 'str_replace_editor', 'write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(name)) {
+    return { count: 1, categoryKey: 'editFiles' };
+  }
+  if (['read', 'readfile', 'read_file', 'read_multiple_files'].includes(name)) {
+    return { count: 1, categoryKey: 'readFiles' };
+  }
+  if (['search', 'glob', 'grep', 'find_files', 'search_files', 'ls'].includes(name)) {
+    return { count: 1, categoryKey: 'search' };
+  }
+  if (isBrowserTool(name)) {
+    return { count: 1, categoryKey: 'browser' };
+  }
+  if (['agent', 'subagent', 'sub_agent'].includes(name)) {
+    return { count: 1, categoryKey: 'agent' };
+  }
+  if (name === 'askuserquestion') {
+    return { count: 1, categoryKey: 'ask' };
+  }
+  if (name === 'memory') {
+    return { count: 1, categoryKey: 'memory' };
+  }
+  return { count: 1, categoryKey: 'tools' };
 }
 
 // Browser tools (chrome / browser / browsertool / browser_tool).
@@ -339,7 +425,7 @@ function isBrowserTool(name: string): boolean {
   // as one base tool with an `operation` parameter, but they may also
   // expose it as a family of namespaced tools. Treating any name
   // starting with "browser_" as a browser tool keeps every consecutive
-  // call inside the same BrowserGroup instead of leaking the last one
+  // call inside the same generic Group instead of leaking the last one
   // out as a standalone row.
   if (lower.startsWith('browser_') || lower.startsWith('browser-')) {
     return true;
@@ -355,42 +441,6 @@ const ASK_USER_QUESTION_TOOLS = new Set(['askuserquestion']);
 
 function isAskUserQuestionTool(name: string): boolean {
   return ASK_USER_QUESTION_TOOLS.has(name.toLowerCase());
-}
-
-// Try to extract a snapshot-style field from a browser tool's result JSON.
-// Returns the snapshot text or `null` if none is present.
-export function extractBrowserSnapshot(result: string | undefined): string | null {
-  if (!result) return null;
-  try {
-    const data = JSON.parse(result);
-    if (typeof data?.compactSnapshot === 'string' && data.compactSnapshot.trim()) {
-      return data.compactSnapshot;
-    }
-    if (typeof data?.snapshot === 'string' && data.snapshot.trim()) {
-      return data.snapshot;
-    }
-    if (typeof data?.content === 'string' && data.content.trim()) {
-      return data.content;
-    }
-  } catch {
-    // not JSON — ignore
-  }
-  return null;
-}
-
-// Pull a human-friendly title for one browser action. Falls back to the
-// operation name, the URL, or the tool name.
-export function getBrowserActionTitle(input: unknown, toolName: string): string {
-  const inp = (input || {}) as Record<string, unknown>;
-  if (typeof inp.title === 'string' && inp.title.trim()) return inp.title.trim();
-  if (typeof inp.description === 'string' && inp.description.trim()) return inp.description.trim();
-  const op = inp.operation;
-  if (typeof op === 'string' && op.trim()) {
-    const opName = op.replace(/_/g, ' ');
-    return opName.charAt(0).toUpperCase() + opName.slice(1);
-  }
-  if (typeof inp.url === 'string' && inp.url.trim()) return inp.url;
-  return toolName || 'Browser action';
 }
 
 // Detect if the browser tool is running in fallback mode (extension not
@@ -483,175 +533,131 @@ function computeFileEditStats(tool: ToolAction): FileEditStats {
 }
 
 type Segment =
-  | { kind: 'context'; tools: ToolAction[] }
-  | { kind: 'browser'; tools: ToolAction[] }
-  | { kind: 'single'; tool: ToolAction };
+  | { kind: 'group';  tools: ToolAction[] }   // ≥2 consecutive tools → Group
+  | { kind: 'single'; tool:  ToolAction  };  // isolated tool → ToolActionRow
 
-function computeSegments(tools: ToolAction[]): Segment[] {
+function computeSegments(actions: ActionItem[]): Segment[] {
   const segments: Segment[] = [];
-  let contextBuffer: ToolAction[] = [];
-  let browserBuffer: ToolAction[] = [];
+  let run: ToolAction[] = [];
 
-  const flushContext = () => {
-    if (contextBuffer.length >= 3) {
-      segments.push({ kind: 'context', tools: contextBuffer });
+  const flush = () => {
+    if (run.length === 0) return;
+    if (run.length >= 2) {
+      segments.push({ kind: 'group', tools: run });
     } else {
-      for (const t of contextBuffer) {
-        segments.push({ kind: 'single', tool: t });
-      }
+      segments.push({ kind: 'single', tool: run[0] });
     }
-    contextBuffer = [];
+    run = [];
   };
 
-  const flushBrowser = () => {
-    // Only collapse into a BrowserGroup when there are 2+ consecutive
-    // browser actions. A single browser call has no reason to render
-    // behind a "已使用 浏览器" header — the standalone ToolActionRow
-    // already shows the icon + label + summary, which is exactly what
-    // a single browser call should look like.
-    if (browserBuffer.length >= 2) {
-      segments.push({ kind: 'browser', tools: browserBuffer });
+  // Consecutive tool calls collapse into a single group; any non-tool
+  // action (thinking / text / widget) **breaks the run**. This matches
+  // what the user expects visually: a stretch of 6 tool calls followed
+  // by an explanatory text block, followed by 3 more tool calls, should
+  // render as [Group(6), TextRow, Group(3)] — not [Group(9), TextRow].
+  for (const action of actions) {
+    if (action.kind === 'tool') {
+      run.push(action.tool);
     } else {
-      for (const t of browserBuffer) {
-        segments.push({ kind: 'single', tool: t });
-      }
-    }
-    browserBuffer = [];
-  };
-
-  for (const tool of tools) {
-    if (isBrowserTool(tool.name)) {
-      flushContext();
-      browserBuffer.push(tool);
-    } else if (isContextTool(tool.name)) {
-      flushBrowser();
-      contextBuffer.push(tool);
-    } else {
-      flushContext();
-      flushBrowser();
-      segments.push({ kind: 'single', tool });
+      flush();
     }
   }
-  flushContext();
-  flushBrowser();
+  flush();
   return segments;
 }
 
-function ContextGroup({ tools }: { tools: ToolAction[] }) {
+// =============================================================================
+// Group — generic single-line toggle for ≥2 consecutive tool calls.
+// Header summarizes the group by category (commands / files / times / etc.),
+// the expanded body lists each tool via the existing ToolActionRow. The
+// browser-fallback banner appears only when the group contains a browser
+// tool running in fallback mode.
+// =============================================================================
+
+function Group({
+  tools,
+  flat,
+  streamingToolOutput,
+  agentProgressEvents,
+}: {
+  tools: ToolAction[];
+  flat?: boolean;
+  streamingToolOutput?: string;
+  agentProgressEvents?: AgentProgressEventWithMeta[];
+}) {
   const { t, locale } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const hasRunning = tools.some((t) => t.result === undefined);
-  const hasError = tools.some((t) => t.isError);
+
+  const hasRunning = tools.some((tool) => tool.result === undefined);
+  const hasError = tools.some((tool) => tool.isError);
   const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
-  const summary = buildContextSummary(tools);
+  const summaryText = buildGroupSummary(tools, t, locale);
 
-  const parts: string[] = [];
-  if (summary.fileRead > 0) {
-    parts.push(
-      locale === 'zh'
-        ? `${t('streaming.toolAction.label.read')} ${summary.fileRead} 个文件`
-        : `Read ${summary.fileRead} file${summary.fileRead === 1 ? '' : 's'}`
-    );
-  }
-  if (summary.directoryBrowse > 0) {
-    parts.push(
-      locale === 'zh'
-        ? `浏览 ${summary.directoryBrowse} 个目录`
-        : `Browsed ${summary.directoryBrowse} director${summary.directoryBrowse === 1 ? 'y' : 'ies'}`
-    );
-  }
-  if (summary.fileSearch > 0) {
-    parts.push(
-      locale === 'zh'
-        ? `${t('streaming.toolAction.label.search')} ${summary.fileSearch} 次`
-        : `Searched ${summary.fileSearch} time${summary.fileSearch === 1 ? '' : 's'}`
-    );
-  }
+  const containsBrowser = tools.some((tool) => isBrowserTool(tool.name));
+  const showBrowserFallback = containsBrowser && isBrowserFallbackMode(tools);
+  const lastRunningTool = tools.find((tool) => tool.result === undefined);
 
-  const fallbackSummary =
-    locale === 'zh' ? `收集了 ${tools.length} 项上下文` : `Gathered ${tools.length} context items`;
-  const summaryText = parts.length > 0 ? parts.join(locale === 'zh' ? '，' : ', ') : fallbackSummary;
+  // Re-render with a stable key based on the first tool's id so that
+  // streaming updates (more tools added to the group) don't unmount the
+  // whole subtree and re-trigger animations. Falls back to length when
+  // ids are missing (e.g. legacy fixtures).
+  const groupKey = `grp-${tools[0]?.id ?? 0}-${tools.length}`;
 
-  const headerText = hasRunning
-    ? locale === 'zh'
-      ? `收集中… (${tools.length})`
-      : `Gathering context (${tools.length})`
-    : summaryText;
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
-      >
-        <MagnifyingGlassIcon size={14} className="shrink-0 text-muted-foreground" />
-        <CaretRightIcon
-          size={10}
-          className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
-        />
-        <span className="font-medium text-muted-foreground">{headerText}</span>
-        <span className="ml-auto">
-          <StatusDot status={groupStatus} />
-        </span>
-      </button>
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0 }}
-            animate={{ height: 'auto' }}
-            exit={{ height: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{ overflow: 'hidden' }}
-          >
-            <div className="ml-4 border-l-2 border-border/30 pl-2">
-              {tools.map((tool, i) => (
-                <ToolActionRow key={tool.id || `ctx-${i}`} tool={tool} />
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+  const header = (
+    <button
+      type="button"
+      onClick={() => setExpanded((prev) => !prev)}
+      className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
+    >
+      <CaretRightIcon
+        size={10}
+        className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+      />
+      <WrenchIcon size={14} className="shrink-0 text-muted-foreground" />
+      <span className="font-medium text-muted-foreground">{summaryText}</span>
+      <span className="ml-auto">
+        <StatusDot status={groupStatus} />
+      </span>
+    </button>
   );
-}
 
-// =============================================================================
-// BrowserGroup — collapses consecutive browser actions into a single
-// "已使用 浏览器" toggle. The expanded body lists each browser action
-// using the same `ToolActionRow` component used for standalone browser
-// actions outside the group, so the inside / outside UI stays identical
-// (icon, label, summary, status, expandable detail).
-// =============================================================================
-
-export function BrowserGroup({ tools }: { tools: ToolAction[] }) {
-  const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
-
-  const hasRunning = tools.some((t) => t.result === undefined);
-  const hasError = tools.some((t) => t.isError);
-  const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
+  if (flat) {
+    // In `flat` mode the group sits directly under the action list with
+    // no chrome border; show the expanded body inline so the user can
+    // see all tools at a glance (this matches the previous flat-mode
+    // behavior for ContextGroup / BrowserGroup).
+    return (
+      <div key={groupKey} className="tool-group">
+        {header}
+        <div className="tool-group-body ml-4 border-l-2 border-border/30 pl-2">
+          {showBrowserFallback && (
+            <div className="tool-group-fallback">
+              <span className="font-medium text-[11px] text-amber-500">
+                {t('streaming.toolAction.fallbackTitle')}
+              </span>
+              <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                {t('streaming.toolAction.fallbackDesc')}
+              </p>
+            </div>
+          )}
+          {tools.map((tool, i) => (
+            <ToolActionRow
+              key={tool.id || `g-${i}`}
+              tool={tool}
+              streamingToolOutput={
+                lastRunningTool?.id === tool.id ? streamingToolOutput : undefined
+              }
+              agentProgressEvents={agentProgressEvents}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="browser-group">
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
-      >
-        <CaretRightIcon
-          size={10}
-          className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
-        />
-        <span className="font-medium text-muted-foreground">
-          {tools.length === 1
-            ? t('streaming.toolAction.usedBrowser')
-            : t('streaming.toolAction.usedBrowserCount', { count: tools.length })}
-        </span>
-        <span className="ml-auto">
-          <StatusDot status={groupStatus} />
-        </span>
-      </button>
+    <div key={groupKey} className="tool-group">
+      {header}
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div
@@ -661,9 +667,9 @@ export function BrowserGroup({ tools }: { tools: ToolAction[] }) {
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="browser-group-body">
-              {isBrowserFallbackMode(tools) && (
-                <div className="browser-group-fallback">
+            <div className="tool-group-body ml-4 border-l-2 border-border/30 pl-2">
+              {showBrowserFallback && (
+                <div className="tool-group-fallback">
                   <span className="font-medium text-[11px] text-amber-500">
                     {t('streaming.toolAction.fallbackTitle')}
                   </span>
@@ -673,7 +679,14 @@ export function BrowserGroup({ tools }: { tools: ToolAction[] }) {
                 </div>
               )}
               {tools.map((tool, i) => (
-                <ToolActionRow key={tool.id || `brw-${i}`} tool={tool} />
+                <ToolActionRow
+                  key={tool.id || `g-${i}`}
+                  tool={tool}
+                  streamingToolOutput={
+                    lastRunningTool?.id === tool.id ? streamingToolOutput : undefined
+                  }
+                  agentProgressEvents={agentProgressEvents}
+                />
               ))}
             </div>
           </motion.div>
@@ -799,16 +812,35 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const rawCmd = (tool.input as Record<string, unknown>)?.command || '';
   const cmd = typeof rawCmd === 'string' ? rawCmd : JSON.stringify(rawCmd);
   const isRunning = tool.result === undefined;
   const outputText = isRunning ? streamingToolOutput : tool.result;
-  const hasOutput = !!outputText && outputText.trim().length > 0;
   const status = getStatus(tool);
-  const lineCount = outputText ? outputText.split('\n').length : 0;
   // Distinguish shell tool vs bash tool: shellTool -> "Shell", bashTool -> "Bash".
   const shellLabel = tool.name.toLowerCase() === 'shell' ? 'Shell' : 'Bash';
+
+  // Wall-clock moment we first saw this tool_use block in the stream.
+  // The ref is set once on mount and never reset, so the live tick
+  // counts up from "we started watching this command" rather than the
+  // current render. The few hundred ms drift between actual tool start
+  // and React mount is invisible at the second-resolution display.
+  const startedAtRef = useRef<number>(Date.now());
+  // Live tick — while the tool is still running, recompute elapsed ms
+  // every second so the header's "已持续 2s" label updates in real time.
+  // When the result lands the backend-supplied `tool.durationMs` takes
+  // over and the interval is torn down.
+  const [liveDurationMs, setLiveDurationMs] = useState<number>(
+    () => Date.now() - startedAtRef.current,
+  );
+  useEffect(() => {
+    if (!isRunning) return undefined;
+    const tick = () => setLiveDurationMs(Date.now() - startedAtRef.current);
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [isRunning]);
 
   const handleCopy = async () => {
     try {
@@ -820,22 +852,14 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
     }
   };
 
-  // "Ran command / 已运行命令" — bilingual. For running tools we
-  // fall back to the generic "working" / "运行中" label.
-  const separator = locale === 'zh' ? '，' : ', ';
-  const baseLabel = isRunning
-    ? t('streaming.workingFor')
-    : locale === 'zh'
-      ? '已运行命令'
-      : 'Ran command';
-  const durationStr = formatDuration(tool.durationMs ?? 0);
-  // For zh: "已运行命令，耗时 2s" — uses the existing i18n key.
-  // For en: "Ran command, 2s" — no verb repetition.
-  const ranLabelFull = durationStr
-    ? locale === 'zh'
-      ? `${baseLabel}${separator}${t('streaming.actions.workedFor', { duration: durationStr })}`
-      : `${baseLabel}${separator}${durationStr}`
-    : baseLabel;
+  // History-list label: zh "已运行 <command> ··· 已持续 2s"
+  //                   en "Ran <command> ··· Running for 2s"
+  const ranLabel = t('streaming.toolAction.ranCommand');
+  const continuedLabel = isRunning
+    ? t('streaming.toolAction.continued', { duration: formatDuration(liveDurationMs) })
+    : tool.durationMs != null && tool.durationMs > 0
+      ? t('streaming.toolAction.continued', { duration: formatDuration(tool.durationMs) })
+      : '';
 
   const displayLines = (() => {
     if (!outputText) return null;
@@ -857,22 +881,25 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
         onClick={() => setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
+        className="flex w-full items-center gap-2 px-2 py-0.5 min-h-[24px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
       >
-        <TerminalIcon size={14} className="shrink-0 text-muted-foreground" />
+        <span className="text-muted-foreground/60 font-mono shrink-0">
+          {ranLabel}
+        </span>
         <span
           className={`font-mono truncate flex-1 text-left transition-colors ${
-            hovered ? 'text-foreground' : 'text-muted-foreground/60'
+            hovered ? 'text-foreground' : 'text-muted-foreground/90'
           }`}
+          title={cmd}
         >
-          {expanded ? ranLabelFull : cmd}
+          {cmd}
         </span>
-        {!expanded && !isRunning && hasOutput && (
-          <span className="text-[10px] text-muted-foreground/40 tabular-nums">
-            {lineCount} lines
+        {continuedLabel && (
+          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
+            {continuedLabel}
           </span>
         )}
-        {!expanded && <StatusDot status={status} />}
+        <StatusDot status={status} />
       </button>
       <AnimatePresence initial={false}>
         {expanded && (
@@ -1094,13 +1121,13 @@ function SubAgentToolRow({
       const filteredBySession = events.filter((event) => event.sessionId === sessionId);
       if (filteredBySession.length > 0) return filteredBySession;
     }
-    const taskId = parsedResult?.taskId;
-    if (taskId) {
-      const filteredByTask = events.filter((event) => event.agentId === taskId);
+    const agentId = parsedResult?.agentId || parsedResult?.taskId;
+    if (agentId) {
+      const filteredByTask = events.filter((event) => event.agentId === agentId);
       if (filteredByTask.length > 0) return filteredByTask;
     }
     return events;
-  }, [agentProgressEvents, parsedResult?.sessionId, parsedResult?.taskId]);
+  }, [agentProgressEvents, parsedResult?.sessionId, parsedResult?.agentId, parsedResult?.taskId]);
   const toolUseCount = subAgentEvents.filter((e) => e.type === 'tool_use').length;
   const toolResultCount = subAgentEvents.filter((e) => e.type === 'tool_result').length;
   const unresolvedTools = Math.max(0, toolUseCount - toolResultCount);
@@ -2305,11 +2332,16 @@ function renderFlatActions(
           toolIdx++;
           segIdx++;
         } else {
-          if (seg.kind === 'context') {
-            out.push(<ContextGroup key={`group-${toolIdx}`} tools={seg.tools} />);
-            toolIdx += seg.tools.length;
-          } else if (seg.kind === 'browser') {
-            out.push(<BrowserGroup key={`group-${toolIdx}`} tools={seg.tools} />);
+          if (seg.kind === 'group') {
+            out.push(
+              <Group
+                key={`group-${toolIdx}`}
+                tools={seg.tools}
+                flat
+                streamingToolOutput={streamingToolOutput}
+                agentProgressEvents={agentProgressEvents}
+              />,
+            );
             toolIdx += seg.tools.length;
           } else {
             // single fallback (shouldn't reach here)
@@ -2322,10 +2354,7 @@ function renderFlatActions(
           // tool actions in `actions` so they aren't re-rendered as
           // standalone rows. Non-tool actions encountered in between are
           // still rendered in their original position.
-          const groupSize =
-            seg.kind === 'context' || seg.kind === 'browser'
-              ? seg.tools.length
-              : 1;
+          const groupSize = seg.kind === 'group' ? seg.tools.length : 1;
           let toolsToSkip = groupSize - 1;
           while (toolsToSkip > 0 && i + 1 < actions.length) {
             i++;
@@ -2456,15 +2485,14 @@ export function ToolActionsGroup({
 
   const lastRunningTool = getLastRunningToolAction(actions);
 
-  // Pre-group consecutive browser/context tools so the renderer can show
-  // a single toggle per group instead of one toggle per action.
-  const toolActions = React.useMemo(
-    () => actions.filter((a): a is Extract<ActionItem, { kind: 'tool' }> => a.kind === 'tool'),
-    [actions],
-  );
+  // Pre-group consecutive tool calls into a single Group, but break
+  // the run at any non-tool action (text / thinking / widget) so the
+  // final layout reads as [Group(6), TextRow, Group(3)] rather than
+  // collapsing the full stream into one mega-group. See
+  // `computeSegments` for the boundary rule.
   const segments = React.useMemo(
-    () => computeSegments(toolActions.map((a) => a.tool)),
-    [toolActions],
+    () => computeSegments(actions),
+    [actions],
   );
   // Map each segment back to the matching action indices (for keys).
   const segmentActionKeys = React.useMemo(() => {
@@ -2494,16 +2522,19 @@ export function ToolActionsGroup({
         />
       );
     }
-    if (seg.kind === 'context') {
-      return <ContextGroup key={keys.join('-')} tools={seg.tools} />;
-    }
-    // browser
-    return <BrowserGroup key={keys.join('-')} tools={seg.tools} />;
+    return (
+      <Group
+        key={keys.join('-')}
+        tools={seg.tools}
+        streamingToolOutput={streamingToolOutput}
+        agentProgressEvents={agentProgressEvents}
+      />
+    );
   };
 
   // For the indented body, we want to preserve the original action order
   // (thinking → tool → text → widget …). Walk `actions` and emit either
-  // a grouped render unit (context/browser) or the original action item.
+  // a grouped render unit (≥2 tool calls) or the original action item.
   const renderOrderedBody = () => {
     const out: React.ReactNode[] = [];
     let toolIdx = 0;
@@ -2520,7 +2551,7 @@ export function ToolActionsGroup({
             out.push(renderSegment(seg, [`tool-${toolIdx}`]));
             toolIdx++;
             segIdx++;
-          } else if (seg.kind === 'context' || seg.kind === 'browser') {
+          } else if (seg.kind === 'group') {
             // group segment
             out.push(
               renderSegment(

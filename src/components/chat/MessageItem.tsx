@@ -4,7 +4,15 @@ import React, { useState, useMemo } from 'react';
 import type { Message, ToolUseInfo, ToolResultInfo } from '@/types';
 import { ToolActionsGroup, pairTools, type ActionItem, type ToolAction } from './ToolActionsGroup';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { CopyIcon, CheckIcon, NotePencilIcon, ArrowCounterClockwiseIcon } from '@/components/icons';
+import {
+  CopyIcon,
+  CheckIcon,
+  NotePencilIcon,
+  ArrowCounterClockwiseIcon,
+  FileTextIcon,
+  ExternalLinkIcon,
+  CaretDownIcon,
+} from '@/components/icons';
 import { FileAttachmentCard } from './FileAttachmentCard';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
@@ -16,6 +24,13 @@ import { CompactSummary } from './CompactSummary';
 import { useConversationStore } from '@/stores/conversation-store';
 import type { FileAttachment } from '@/types/message';
 import { useTranslation } from '@/hooks/useTranslation';
+import { calculateDiff } from '@/components/diff/SimpleDiffViewer';
+import {
+  fileKindLabel,
+  fileNameFromPath,
+  isDeliverableFile,
+  openLocalFileTarget,
+} from '@/lib/chat-file-links';
 
 function formatMessageTime(timestamp: number, t: (key: import('@/i18n').TranslationKey, params?: Record<string, string | number>) => string, locale: 'en' | 'zh' = 'en'): string {
   const date = new Date(timestamp);
@@ -238,32 +253,246 @@ function InterleavedContent({ actions, sourceMessageId }: { actions: ActionItem[
   );
 }
 
-interface DiffSummaryProps {
-  files: { name: string; path: string }[];
+interface FileChangeSummary {
+  path: string;
+  name: string;
+  additions: number;
+  removals: number;
+  kind: 'edit' | 'create';
 }
 
-function DiffSummary({ files }: DiffSummaryProps) {
-  const [open, setOpen] = useState(false);
+interface ArtifactSummary {
+  path: string;
+  name: string;
+  kindLabel: string;
+}
+
+function getToolInputPath(input: unknown): string {
+  const inp = input as Record<string, unknown> | undefined;
+  const rawPath = inp?.file_path || inp?.path || inp?.filePath || '';
+  return typeof rawPath === 'string' ? rawPath : '';
+}
+
+function parseEditResultForSummary(result: string): { oldContent: string; newContent: string } | null {
+  const changedMatch = result.match(/Changed:\n([\s\S]+?)\n\nTo:\n([\s\S]+)$/);
+  if (changedMatch) {
+    return {
+      oldContent: changedMatch[1] || '',
+      newContent: changedMatch[2] || '',
+    };
+  }
+
+  try {
+    const data = JSON.parse(result);
+    if (typeof data?.content === 'string') {
+      return {
+        oldContent: typeof data.previous_content === 'string' ? data.previous_content : '',
+        newContent: data.content,
+      };
+    }
+    if (typeof data?.old_string === 'string' || typeof data?.new_string === 'string') {
+      return {
+        oldContent: typeof data.old_string === 'string' ? data.old_string : '',
+        newContent: typeof data.new_string === 'string' ? data.new_string : '',
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function computeToolFileChange(tool: ToolAction): FileChangeSummary | null {
+  const path = getToolInputPath(tool.input);
+  if (!path || tool.isError) return null;
+
+  const input = tool.input as Record<string, unknown> | undefined;
+  const lowerName = tool.name.toLowerCase();
+  const isCreate = ['write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(lowerName);
+  let additions = 0;
+  let removals = 0;
+
+  if (tool.result) {
+    const parsed = parseEditResultForSummary(tool.result);
+    if (parsed) {
+      const stats = calculateDiff(parsed.oldContent, parsed.newContent).stats;
+      additions = stats.additions;
+      removals = stats.removals;
+    }
+  } else if (typeof input?.old_string === 'string' && typeof input?.new_string === 'string') {
+    const stats = calculateDiff(input.old_string, input.new_string).stats;
+    additions = stats.additions;
+    removals = stats.removals;
+  } else if (typeof input?.content === 'string') {
+    additions = input.content.split('\n').filter(line => line !== '').length;
+  }
+
+  return {
+    path,
+    name: fileNameFromPath(path),
+    additions,
+    removals,
+    kind: isCreate ? 'create' : 'edit',
+  };
+}
+
+function buildFileChangeSummaries(tools: ToolAction[]): FileChangeSummary[] {
+  const summaries = new Map<string, FileChangeSummary>();
+
+  for (const tool of tools) {
+    const lowerName = tool.name.toLowerCase();
+    const isFileChangeTool = [
+      'edit', 'edit_file', 'str_replace_editor',
+      'write', 'writefile', 'write_file', 'create_file', 'createfile',
+    ].includes(lowerName);
+    if (!isFileChangeTool) continue;
+
+    const change = computeToolFileChange(tool);
+    if (!change) continue;
+
+    const existing = summaries.get(change.path);
+    if (existing) {
+      existing.additions += change.additions;
+      existing.removals += change.removals;
+      if (existing.kind !== 'create') existing.kind = change.kind;
+    } else {
+      summaries.set(change.path, change);
+    }
+  }
+
+  return Array.from(summaries.values());
+}
+
+function buildArtifactSummaries(changes: FileChangeSummary[]): ArtifactSummary[] {
+  return changes
+    .filter(change => change.kind === 'create' && isDeliverableFile(change.path))
+    .map(change => ({
+      path: change.path,
+      name: change.name,
+      kindLabel: fileKindLabel(change.path),
+    }));
+}
+
+function ArtifactCard({ artifact, cwd }: { artifact: ArtifactSummary; cwd?: string | null }) {
   return (
-    <div className="mt-1">
+    <button
+      type="button"
+      className="group flex w-full items-center gap-3 rounded-lg border border-border/70 bg-surface/70 px-4 py-3 text-left transition-colors hover:border-accent/40 hover:bg-surface-hover"
+      onClick={() => openLocalFileTarget(artifact.path, cwd)}
+      title={artifact.path}
+    >
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-soft text-accent">
+        <FileTextIcon size={20} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold text-foreground">{artifact.name}</span>
+        <span className="block text-xs text-muted-foreground">{artifact.kindLabel}</span>
+      </span>
+      <ExternalLinkIcon size={16} className="shrink-0 text-muted-foreground/50 transition-colors group-hover:text-accent" />
+    </button>
+  );
+}
+
+function EditSummaryCard({ changes, cwd }: { changes: FileChangeSummary[]; cwd?: string | null }) {
+  const [open, setOpen] = useState(false);
+  const { locale } = useTranslation();
+  const reviewLabel = locale === 'zh' ? '审查' : 'Review';
+  const editedLabel = locale === 'zh' ? `已编辑 ${changes.length} 个文件` : `Edited ${changes.length} file${changes.length > 1 ? 's' : ''}`;
+  const visible = open ? changes : changes.slice(0, 3);
+  const totals = changes.reduce(
+    (acc, change) => ({
+      additions: acc.additions + change.additions,
+      removals: acc.removals + change.removals,
+    }),
+    { additions: 0, removals: 0 },
+  );
+
+  return (
+    <div className="rounded-lg border border-border/70 bg-surface/70 overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen(prev => !prev)}
-        className="flex items-center gap-1.5 text-[11px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-hover"
       >
-        <NotePencilIcon size={10} className="shrink-0" />
-        <span>Modified {files.length} file{files.length > 1 ? 's' : ''}</span>
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <NotePencilIcon size={20} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-foreground">
+            {editedLabel}
+          </span>
+          <span className="flex items-center gap-2 text-xs font-mono">
+            <span className="text-green-500">+{totals.additions}</span>
+            <span className="text-red-500">-{totals.removals}</span>
+          </span>
+        </span>
+        <span className="rounded-md border border-border/60 px-2.5 py-1 text-xs font-medium text-foreground">
+          {reviewLabel}
+        </span>
+        <CaretDownIcon
+          size={16}
+          className={`shrink-0 text-muted-foreground/60 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
       </button>
-      {open && (
-        <div className="ml-3 mt-0.5 space-y-0.5">
-          {files.map(f => (
-            <div key={f.path} className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground/40">
-              <NotePencilIcon size={10} className="shrink-0" />
-              <span className="truncate" title={f.path}>{f.name}</span>
-            </div>
-          ))}
+      <div className="border-t border-border/60">
+        {visible.map(change => (
+          <button
+            type="button"
+            key={change.path}
+            className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors hover:bg-surface-hover"
+            onClick={() => openLocalFileTarget(change.path, cwd)}
+            title={change.path}
+          >
+            <span className="min-w-0 flex-1 truncate text-foreground">{change.path}</span>
+            <span className="shrink-0 font-mono text-xs text-green-500">+{change.additions}</span>
+            <span className="shrink-0 font-mono text-xs text-red-500">-{change.removals}</span>
+          </button>
+        ))}
+        {!open && changes.length > visible.length && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="flex w-full items-center gap-1 px-4 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
+          >
+            {locale === 'zh'
+              ? `再显示 ${changes.length - visible.length} 个文件`
+              : `Show ${changes.length - visible.length} more file${changes.length - visible.length > 1 ? 's' : ''}`}
+            <CaretDownIcon size={12} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MessageSummaryCards({
+  artifacts,
+  changes,
+  cwd,
+}: {
+  artifacts: ArtifactSummary[];
+  changes: FileChangeSummary[];
+  cwd?: string | null;
+}) {
+  const { locale } = useTranslation();
+  if (artifacts.length === 0 && changes.length === 0) return null;
+
+  return (
+    <div className="mt-4 w-[min(100%,48rem)] space-y-3">
+      {artifacts.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-sm font-semibold text-foreground">
+            {locale === 'zh' ? '产物汇总' : 'Artifacts'}
+          </div>
+          <div className="space-y-2">
+            {artifacts.map(artifact => (
+              <ArtifactCard key={artifact.path} artifact={artifact} cwd={cwd} />
+            ))}
+          </div>
         </div>
       )}
+      {changes.length > 0 && <EditSummaryCard changes={changes} cwd={cwd} />}
     </div>
   );
 }
@@ -372,6 +601,9 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
 
   const { t, locale } = useTranslation();
   const isSubAgentSession = !!useConversationStore(s => s.parentSessionId);
+  const activeThreadId = useConversationStore(s => s.activeThreadId);
+  const threads = useConversationStore(s => s.threads);
+  const workingDirectory = threads.find(thread => thread.id === activeThreadId)?.workingDirectory;
 
   // Build tool result map for quick lookup
   const toolResultMap = useMemo(() => {
@@ -544,12 +776,25 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
     return null;
   }
 
+  // Strip any pasted full content that may have leaked into the
+  // main text. Only run when the LLM-facing combined content is
+  // actually being parsed (i.e. the first paste sits at the head
+  // of the string, followed by a `\n\n` separator that joins it
+  // to the user's typed text). Otherwise the parser has already
+  // produced a clean text, and a naive substring match could
+  // accidentally eat user-typed text that happens to start with
+  // a pasted fragment.
   const displayText = useMemo(() => {
     if (!hasPastedContents) return mainText;
     let cleaned = mainText;
     for (const pasted of allPastedContents) {
-      if (cleaned.includes(pasted.fullContent)) {
-        cleaned = cleaned.replace(pasted.fullContent, '').trim();
+      if (cleaned === pasted.fullContent) {
+        return '';
+      }
+      if (cleaned.startsWith(pasted.fullContent + '\n\n')) {
+        cleaned = cleaned.slice(pasted.fullContent.length).trimStart();
+      } else if (cleaned.endsWith('\n\n' + pasted.fullContent)) {
+        cleaned = cleaned.slice(0, cleaned.length - pasted.fullContent.length).trimEnd();
       }
     }
     return cleaned;
@@ -700,17 +945,8 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
     return tools;
   }, [actions]);
 
-  const WRITE_TOOLS = new Set(['write', 'edit', 'writefile', 'write_file', 'create_file', 'createfile', 'str_replace_editor']);
-  const modifiedFiles = allTools
-    .filter(t => WRITE_TOOLS.has(t.name.toLowerCase()) && !t.isError)
-    .map(t => {
-      const inp = t.input as Record<string, unknown> | undefined;
-      const filePath = (inp?.file_path || inp?.path || inp?.filePath || '') as string;
-      const parts = filePath.split('/');
-      return { path: filePath, name: parts[parts.length - 1] || filePath };
-    })
-    .filter(f => f.path);
-  const uniqueModified = [...new Map(modifiedFiles.map(f => [f.path, f])).values()];
+  const fileChangeSummaries = buildFileChangeSummaries(allTools);
+  const artifactSummaries = buildArtifactSummaries(fileChangeSummaries);
 
   const hasActions = actions.length > 0;
   const hasWidgets = actions.some(a => a.kind === 'widget');
@@ -749,7 +985,11 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
           </>
         )}
 
-        {uniqueModified.length > 0 && <DiffSummary files={uniqueModified} />}
+        <MessageSummaryCards
+          artifacts={artifactSummaries}
+          changes={fileChangeSummaries}
+          cwd={workingDirectory}
+        />
 
         <div className="flex items-center gap-2 mt-3">
           <span className="text-[11px] text-muted-foreground/60 tabular-nums">

@@ -175,7 +175,7 @@ export function SubAgentPanel({ sessionId, onOpenSubAgent }: SubAgentPanelProps)
               className={`sub-agent-caret ${expanded ? 'rotate-90' : ''}`}
             />
             <span className="sub-agent-header-title">
-              {agents.length} 个后台智能体
+              {agents.length} 个子智能体
               {agents.length > 1 && ' （使用 @ 标记智能体）'}
             </span>
           </button>

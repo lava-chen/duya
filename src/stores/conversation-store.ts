@@ -14,6 +14,7 @@ import {
   getActiveProviderIPC,
   updateThreadIPC,
   truncateMessagesAfterIPC,
+  type Message as IpcMessage,
 } from '@/lib/ipc-client';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { registerLoadedMessages } from '@/lib/stream-session-manager';
@@ -165,6 +166,34 @@ function notifyThreadsChanged() {
       channel.postMessage({ type: 'THREADS_CHANGED', timestamp: Date.now() });
     }
   }
+}
+
+function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
+  return messages.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    displayContent: m.displayContent ?? undefined,
+    name: m.name ?? undefined,
+    tool_call_id: m.toolCallId ?? undefined,
+    timestamp: m.createdAt,
+    tokenUsage: m.tokenUsage
+      ? (typeof m.tokenUsage === 'string'
+          ? JSON.parse(m.tokenUsage)
+          : m.tokenUsage)
+      : undefined,
+    msgType: (m.msgType || undefined) as Message['msgType'],
+    thinking: m.thinking ?? undefined,
+    toolName: m.toolName ?? undefined,
+    toolInput: m.toolInput ?? undefined,
+    parentToolCallId: m.parentToolCallId ?? undefined,
+    vizSpec: m.vizSpec ?? undefined,
+    status: m.status ?? undefined,
+    seqIndex: m.seqIndex ?? undefined,
+    durationMs: m.durationMs ?? undefined,
+    subAgentId: m.subAgentId ?? undefined,
+    attachments: m.attachments ?? undefined,
+  }));
 }
 
 export const useConversationStore = create<ConversationState>()(
@@ -343,11 +372,12 @@ export const useConversationStore = create<ConversationState>()(
         updates.lastSyncAt = 0;
         set(updates);
 
-        // Load messages for this thread from database
-        get().loadThreadMessages(id);
-
-        // Always reload from DB to ensure we have latest data including sub-agents
-        get().loadFromDatabase();
+        // Refresh thread metadata first, then force-load the selected
+        // session's transcript. Keeping this ordered avoids a race where
+        // the broad DB refresh overwrites the active session messages with
+        // an empty/stale map after loadThreadMessages has already finished.
+        await get().loadFromDatabase();
+        await get().loadThreadMessages(id, { force: true });
         console.log(`[Store] setActiveThread DONE: ${id.slice(0, 8)}, total=${(performance.now() - startTime).toFixed(1)}ms`);
       },
 
@@ -383,31 +413,14 @@ export const useConversationStore = create<ConversationState>()(
           const data = await getThreadIPC(threadId);
           console.log(`[Store] getThreadIPC DONE: ${threadId.slice(0, 8)}, messages=${data?.messages?.length ?? 0}, elapsed=${(performance.now() - dbStart).toFixed(1)}ms`);
           if (data) {
-            // Convert IPC messages to store's expected format (timestamp instead of createdAt)
-            const messages: Message[] = (data.messages || []).map((m) => ({
-              id: m.id,
-              role: m.role,
-              content: m.content,
-              name: m.name ?? undefined,
-              tool_call_id: m.toolCallId ?? undefined,
-              timestamp: m.createdAt,
-              tokenUsage: m.tokenUsage
-                ? (typeof m.tokenUsage === 'string'
-                    ? JSON.parse(m.tokenUsage)
-                    : m.tokenUsage)
-                : undefined,
-              msgType: (m.msgType || undefined) as Message['msgType'],
-              thinking: m.thinking ?? undefined,
-              toolName: m.toolName ?? undefined,
-              toolInput: m.toolInput ?? undefined,
-              parentToolCallId: m.parentToolCallId ?? undefined,
-              vizSpec: m.vizSpec ?? undefined,
-              status: m.status ?? undefined,
-              seqIndex: m.seqIndex ?? undefined,
-              durationMs: m.durationMs ?? undefined,
-              subAgentId: m.subAgentId ?? undefined,
-              attachments: m.attachments ?? undefined,
-            }));
+            const messages = mapIpcMessagesToStore(data.messages || []);
+            const currentMessages = get().messages[threadId] ?? [];
+            if (messages.length === 0 && currentMessages.length > 0) {
+              console.warn(
+                `[Store] loadThreadMessages preserved local messages because DB returned empty: ${threadId.slice(0, 8)}, local=${currentMessages.length}`,
+              );
+              return;
+            }
             const threadData = data.thread;
             const mapEnd = performance.now();
             console.log(`[Store] messages MAPPED: ${threadId.slice(0, 8)}, count=${messages.length}, elapsed=${(mapEnd - dbStart).toFixed(1)}ms`);
@@ -645,35 +658,18 @@ export const useConversationStore = create<ConversationState>()(
             (a, b) => b.updatedAt - a.updatedAt
           );
 
-          // Load messages for each thread (convert to store's expected format)
-          const messages: Record<string, Message[]> = {};
-          for (const thread of mergedThreads) {
-            const threadData = await getThreadIPC(thread.id);
+          // Preserve loaded transcripts during broad metadata refreshes.
+          // Loading every thread's full transcript here made session
+          // switches slow and could overwrite the active session with an
+          // empty/stale map. Only hydrate the active session when needed;
+          // individual navigation still calls loadThreadMessages().
+          const messages: Record<string, Message[]> = { ...get().messages };
+          const activeThreadId = get().activeThreadId;
+          if (activeThreadId && dbThreadIds.has(activeThreadId) && messages[activeThreadId] === undefined) {
+            const threadData = await getThreadIPC(activeThreadId);
             if (threadData) {
-              messages[thread.id] = (threadData.messages || []).map((m) => ({
-                id: m.id,
-                role: m.role,
-                content: m.content,
-                name: m.name ?? undefined,
-                tool_call_id: m.toolCallId ?? undefined,
-                timestamp: m.createdAt,
-                tokenUsage: m.tokenUsage
-                  ? (typeof m.tokenUsage === 'string'
-                      ? JSON.parse(m.tokenUsage)
-                      : m.tokenUsage)
-                  : undefined,
-                msgType: (m.msgType || undefined) as Message['msgType'],
-                thinking: m.thinking ?? undefined,
-                toolName: m.toolName ?? undefined,
-                toolInput: m.toolInput ?? undefined,
-                parentToolCallId: m.parentToolCallId ?? undefined,
-                vizSpec: m.vizSpec ?? undefined,
-                status: m.status ?? undefined,
-                seqIndex: m.seqIndex ?? undefined,
-                durationMs: m.durationMs ?? undefined,
-                subAgentId: m.subAgentId ?? undefined,
-                attachments: m.attachments ?? undefined,
-              }));
+              messages[activeThreadId] = mapIpcMessagesToStore(threadData.messages || []);
+              registerLoadedMessages(activeThreadId, threadData.messages);
             }
           }
 
