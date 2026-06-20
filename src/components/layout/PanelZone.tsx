@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePanel } from "@/hooks/usePanel";
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
@@ -34,6 +34,7 @@ export function PanelZone() {
   const {
     panelOpen,
     panelWidth,
+    setPanelOpen,
     setPanelWidth,
     togglePanel,
     openOrActivatePage,
@@ -41,19 +42,31 @@ export function PanelZone() {
     activeTabId,
   } = usePanel();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
+  const currentView = useConversationStore((s) => s.currentView);
   const threads = useConversationStore((s) => s.threads);
   const [resizing, setResizing] = useState(false);
+  const resizeStartWidthRef = useRef(panelWidth);
   const taskDrawerOpen = useTaskDrawerOpen();
   const { pending, active } = useTaskCount();
   const taskBadgeCount = pending + active;
+  const isSessionView = currentView === "chat" && !!activeThreadId;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  const activePanelMinWidth = activeTab
+    ? getPageDescriptor(activeTab.pageId).minWidth
+    : 340;
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const cwd = activeThread?.workingDirectory ?? undefined;
   const zoneStyle = {
     "--panel-zone-width": `${panelWidth}px`,
     "--panel-content-width": `${panelWidth}px`,
   } as CSSProperties;
+
+  useEffect(() => {
+    if (isSessionView) return;
+    if (taskDrawerOpen) setTaskDrawerOpen(false);
+    if (panelOpen) setPanelOpen(false);
+  }, [isSessionView, panelOpen, setPanelOpen, taskDrawerOpen]);
 
   const paramsFor = useCallback(
     (pageId: PageId): Record<string, unknown> | undefined => {
@@ -74,52 +87,66 @@ export function PanelZone() {
 
   const handleResize = useCallback(
     (delta: number) => {
-      const nextWidth = panelWidth - delta;
+      const nextWidth = resizeStartWidthRef.current - delta;
       const main = document.querySelector(".app-main-wrapper");
       const mainWidth = main?.getBoundingClientRect().width ?? MIN_CHAT_WIDTH;
-      const availableWidth = mainWidth + panelWidth;
-      const maxWidthForChat = Math.max(220, availableWidth - MIN_CHAT_WIDTH);
-      setPanelWidth(Math.min(nextWidth, maxWidthForChat));
+      const availableWidth = mainWidth + resizeStartWidthRef.current;
+      const maxWidthForChat = Math.max(activePanelMinWidth, availableWidth - MIN_CHAT_WIDTH);
+      setPanelWidth(Math.max(activePanelMinWidth, Math.min(nextWidth, maxWidthForChat)));
     },
-    [panelWidth, setPanelWidth]
+    [activePanelMinWidth, setPanelWidth]
   );
+
+  useEffect(() => {
+    if (panelOpen && panelWidth < activePanelMinWidth) {
+      setPanelWidth(activePanelMinWidth);
+    }
+  }, [activePanelMinWidth, panelOpen, panelWidth, setPanelWidth]);
 
   return (
     <div
       className={`panel-zone ${panelOpen ? "panel-zone-open" : "panel-zone-closed"}${resizing ? " panel-zone-resizing" : ""}`}
       style={zoneStyle}
     >
-      <button
-        type="button"
-        className={`panel-edge-toggle${panelOpen ? " active" : ""}`}
-        onClick={togglePanel}
-        title={panelOpen ? "收起侧栏" : "打开侧栏"}
-        aria-label={panelOpen ? "收起侧栏" : "打开侧栏"}
-        aria-expanded={panelOpen}
-      >
-        <SidebarRightIcon size={16} stroke={1.75} />
-      </button>
+      {isSessionView && (
+        <>
+          <button
+            type="button"
+            className={`panel-edge-toggle${panelOpen ? " active" : ""}`}
+            onClick={togglePanel}
+            title={panelOpen ? "收起侧栏" : "打开侧栏"}
+            aria-label={panelOpen ? "收起侧栏" : "打开侧栏"}
+            aria-expanded={panelOpen}
+          >
+            <SidebarRightIcon size={16} stroke={1.75} />
+          </button>
 
-      <button
-        type="button"
-        className={`panel-edge-toggle panel-task-toggle${taskDrawerOpen ? " active" : ""}`}
-        onClick={() => setTaskDrawerOpen(!taskDrawerOpen)}
-        title="任务列表"
-        aria-label="任务列表"
-        aria-pressed={taskDrawerOpen}
-      >
-        <CheckSquareIcon size={16} weight="regular" />
-        {taskBadgeCount > 0 && (
-          <span className="panel-task-toggle-badge">
-            {taskBadgeCount > 99 ? "99+" : taskBadgeCount}
-          </span>
-        )}
-      </button>
+          <button
+            type="button"
+            className={`panel-edge-toggle panel-task-toggle${taskDrawerOpen ? " active" : ""}`}
+            onClick={() => setTaskDrawerOpen(!taskDrawerOpen)}
+            title="任务列表"
+            aria-label="任务列表"
+            aria-pressed={taskDrawerOpen}
+            data-testid="task-card-trigger"
+          >
+            <CheckSquareIcon size={16} weight="regular" />
+            {taskBadgeCount > 0 && (
+              <span className="panel-task-toggle-badge">
+                {taskBadgeCount > 99 ? "99+" : taskBadgeCount}
+              </span>
+            )}
+          </button>
+        </>
+      )}
 
       {panelOpen && (
         <ResizeHandle
           side="left"
-          onResizeStart={() => setResizing(true)}
+          onResizeStart={() => {
+            resizeStartWidthRef.current = panelWidth;
+            setResizing(true);
+          }}
           onResize={handleResize}
           onResizeEnd={() => setResizing(false)}
         />

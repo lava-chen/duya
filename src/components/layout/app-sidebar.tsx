@@ -69,6 +69,10 @@ function addChildThread(childrenMap: Map<string, Thread[]>, thread: Thread): voi
   childrenMap.set(thread.parentId, siblings);
 }
 
+function isOrphanSubAgentThread(thread: Thread): boolean {
+  return thread.agentType === "sub-agent" && !thread.parentId;
+}
+
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
   { view: 'conductor', labelKey: 'nav.conductor', icon: SquaresFourIcon },
   { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
@@ -314,6 +318,13 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       const childrenMap = new Map<string, Thread[]>();
 
       for (const thread of threads) {
+        // Sub-agent sessions without a parent are malformed/orphaned. Do not
+        // render them as top-level project chats; otherwise the sidebar shows
+        // agent children that do not belong to any visible session.
+        if (isOrphanSubAgentThread(thread)) {
+          continue;
+        }
+
         // Sub-agent threads are nested under their parent, not shown independently
         if (thread.parentId) {
           addChildThread(childrenMap, thread);
@@ -499,7 +510,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             <div className="project-list">
               {projectGroups.map((project) => {
                 const projectThreads = threads.filter(
-                  (t) => t.workingDirectory === project.workingDirectory && !t.parentId
+                  (t) => t.workingDirectory === project.workingDirectory && !t.parentId && !isOrphanSubAgentThread(t)
                 );
                 return (
                   <ProjectGroupItem

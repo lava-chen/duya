@@ -450,7 +450,6 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           }}
           src={initialUrl}
           partition={BROWSER_PARTITION}
-          allowpopups={false}
         />
       </div>
     </div>

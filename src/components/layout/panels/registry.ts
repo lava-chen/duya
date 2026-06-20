@@ -30,6 +30,7 @@ export interface PageDescriptor {
   icon: ComponentType<IconProps>;
   multiInstance: boolean;
   available: boolean;
+  minWidth: number;
   component: ComponentType<{ tab: PageTab; embedded: boolean }>;
 }
 
@@ -40,6 +41,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     icon: FolderIcon,
     multiInstance: true,
     available: true,
+    minWidth: 300,
     component: FileTreePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   conductor: {
@@ -48,6 +50,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     icon: SquaresFourIcon,
     multiInstance: true,
     available: true,
+    minWidth: 420,
     component: SidebarConductorView as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   research: {
@@ -56,6 +59,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     icon: GlobeIcon,
     multiInstance: false,
     available: true,
+    minWidth: 320,
     component: ResearchActivityPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   terminal: {
@@ -64,6 +68,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     icon: TerminalIcon,
     multiInstance: true,
     available: true,
+    minWidth: 320,
     component: TerminalPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   browser: {
@@ -72,6 +77,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     icon: GlobeIcon,
     multiInstance: true,
     available: true,
+    minWidth: 460,
     component: BrowserPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
 };
