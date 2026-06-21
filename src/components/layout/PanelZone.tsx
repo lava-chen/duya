@@ -7,17 +7,20 @@ import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } fr
 import { ResizeHandle } from "./ResizeHandle";
 import { SidebarRightIcon } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
-import { useTaskCount } from "@/hooks/useTaskCount";
 import {
   setTaskDrawerOpen,
   useTaskDrawerOpen,
 } from "./task-drawer-store";
-import { CheckSquareIcon } from "@phosphor-icons/react";
+import { ArrowsInSimple, ArrowsOutSimple } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
 
 const MIN_CHAT_WIDTH = 520;
 
-const EMPTY_LAUNCHER_ORDER: PageId[] = ["research", "terminal", "browser", "files", "conductor"];
+// `office` and `research` are passive surfaces — they are opened by
+// events (`duya:open-office-panel`) or by `ResearchModePanel` once a
+// research session is running, so they are intentionally absent from
+// both this launcher and the add-page menu.
+const EMPTY_LAUNCHER_ORDER: PageId[] = ["terminal", "browser", "files", "conductor"];
 
 function shortcutFor(id: PageId): string | null {
   switch (id) {
@@ -40,6 +43,8 @@ export function PanelZone() {
     openOrActivatePage,
     tabs,
     activeTabId,
+    workspaceExpanded,
+    setWorkspaceExpanded,
   } = usePanel();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const currentView = useConversationStore((s) => s.currentView);
@@ -47,8 +52,6 @@ export function PanelZone() {
   const [resizing, setResizing] = useState(false);
   const resizeStartWidthRef = useRef(panelWidth);
   const taskDrawerOpen = useTaskDrawerOpen();
-  const { pending, active } = useTaskCount();
-  const taskBadgeCount = pending + active;
   const isSessionView = currentView === "chat" && !!activeThreadId;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
@@ -73,6 +76,7 @@ export function PanelZone() {
       if (!cwd) return undefined;
       if (pageId === "terminal") return { cwd };
       if (pageId === "files") return { workingDirectory: cwd };
+      if (pageId === "office") return { workingDirectory: cwd };
       return undefined;
     },
     [cwd]
@@ -105,7 +109,7 @@ export function PanelZone() {
 
   return (
     <div
-      className={`panel-zone ${panelOpen ? "panel-zone-open" : "panel-zone-closed"}${resizing ? " panel-zone-resizing" : ""}`}
+      className={`panel-zone ${panelOpen ? "panel-zone-open" : "panel-zone-closed"}${workspaceExpanded ? " panel-zone-expanded" : ""}${resizing ? " panel-zone-resizing" : ""}`}
       style={zoneStyle}
     >
       {isSessionView && (
@@ -121,26 +125,24 @@ export function PanelZone() {
             <SidebarRightIcon size={16} stroke={1.75} />
           </button>
 
-          <button
-            type="button"
-            className={`panel-edge-toggle panel-task-toggle${taskDrawerOpen ? " active" : ""}`}
-            onClick={() => setTaskDrawerOpen(!taskDrawerOpen)}
-            title="任务列表"
-            aria-label="任务列表"
-            aria-pressed={taskDrawerOpen}
-            data-testid="task-card-trigger"
-          >
-            <CheckSquareIcon size={16} weight="regular" />
-            {taskBadgeCount > 0 && (
-              <span className="panel-task-toggle-badge">
-                {taskBadgeCount > 99 ? "99+" : taskBadgeCount}
-              </span>
-            )}
-          </button>
+          {panelOpen && activeTab && (
+            <button
+              type="button"
+              className="panel-edge-toggle panel-expand-toggle"
+              onClick={() => setWorkspaceExpanded(!workspaceExpanded)}
+              title={workspaceExpanded ? "收起面板" : "展开面板"}
+              aria-label={workspaceExpanded ? "收起面板" : "展开面板"}
+              data-testid="workspace-expand"
+            >
+              {workspaceExpanded
+                ? <ArrowsInSimple size={16} weight="regular" />
+                : <ArrowsOutSimple size={16} weight="regular" />}
+            </button>
+          )}
         </>
       )}
 
-      {panelOpen && (
+      {panelOpen && !workspaceExpanded && (
         <ResizeHandle
           side="left"
           onResizeStart={() => {
@@ -154,7 +156,7 @@ export function PanelZone() {
 
       <div
         className="sidebar-panel-inner"
-        style={{ width: panelWidth }}
+        style={{ width: workspaceExpanded ? "100%" : panelWidth }}
         aria-hidden={!panelOpen}
       >
         {tabs.length > 0 && <PanelHeader />}

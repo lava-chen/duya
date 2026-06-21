@@ -461,6 +461,21 @@ export interface FileTreeNode {
 
 export interface FilesAPI {
   browse: (dirPath: string, maxDepth?: number) => Promise<{ success: boolean; error?: string; tree: FileTreeNode[] }>
+  preview: (targetPath: string, rootPath: string) => Promise<{
+    success: boolean
+    error?: string
+    kind?: 'text' | 'image' | 'pdf' | 'unsupported'
+    name?: string
+    path?: string
+    size?: number
+    modifiedAt?: number
+    extension?: string
+    content?: string
+    data?: string
+    mediaType?: string
+    truncated?: boolean
+    tooLarge?: boolean
+  }>
   delete: (targetPath: string) => Promise<{ success: boolean; error?: string }>
   rename: (targetPath: string, newName: string) => Promise<{ success: boolean; error?: string; newPath?: string }>
 }
@@ -857,6 +872,8 @@ export interface ElectronAPI {
   }
   dialog: {
     openFolder: (options?: { defaultPath?: string; title?: string }) =>
+      Promise<{ canceled: boolean; filePaths: string[] }>
+    openOfficeFiles: (options?: { defaultPath?: string; title?: string }) =>
       Promise<{ canceled: boolean; filePaths: string[] }>
   }
   shell: {
@@ -1458,6 +1475,7 @@ const electronAPI: ElectronAPI = {
   },
   dialog: {
     openFolder: (options) => ipcRenderer.invoke('dialog:open-folder', options),
+    openOfficeFiles: (options) => ipcRenderer.invoke('dialog:open-office-files', options),
   },
   shell: {
     openPath: (folderPath) => ipcRenderer.invoke('shell:open-path', folderPath),
@@ -1761,6 +1779,7 @@ const electronAPI: ElectronAPI = {
   },
   files: {
     browse: (dirPath: string, maxDepth?: number) => ipcRenderer.invoke('files:browse', dirPath, maxDepth),
+    preview: (targetPath: string, rootPath: string) => ipcRenderer.invoke('files:preview', targetPath, rootPath),
     delete: (targetPath: string) => ipcRenderer.invoke('files:delete', targetPath),
     rename: (targetPath: string, newName: string) => ipcRenderer.invoke('files:rename', targetPath, newName),
   },

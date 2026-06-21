@@ -15,6 +15,11 @@ export interface PanelContextValue {
   panelWidth: number;
   setPanelWidth: (width: number) => void;
 
+  workspaceExpanded: boolean;
+  setWorkspaceExpanded: (expanded: boolean) => void;
+  workspaceTreeOpen: boolean;
+  setWorkspaceTreeOpen: (open: boolean) => void;
+
   panelView: PanelView;
   setPanelView: (view: PanelView) => void;
 
@@ -42,6 +47,8 @@ interface PersistedPanelState {
   activeTabId: string | null;
   panelOpen: boolean;
   panelView: PanelView;
+  workspaceExpanded: boolean;
+  workspaceTreeOpen: boolean;
 }
 
 function emptyPanelState(): PersistedPanelState {
@@ -50,6 +57,8 @@ function emptyPanelState(): PersistedPanelState {
     activeTabId: null,
     panelOpen: false,
     panelView: "picker",
+    workspaceExpanded: false,
+    workspaceTreeOpen: true,
   };
 }
 
@@ -92,6 +101,8 @@ function loadPersistedState(sessionKey: string): PersistedPanelState | null {
           : null,
       panelOpen: !!parsed.panelOpen,
       panelView: parsed.panelView === "picker" ? "picker" : "content",
+      workspaceExpanded: parsed.workspaceExpanded === true,
+      workspaceTreeOpen: parsed.workspaceTreeOpen !== false,
     };
   } catch {
     return null;
@@ -120,6 +131,10 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       return `files::${(params?.workingDirectory as string | undefined) ?? ""}`;
     case "conductor":
       return `conductor::${(params?.canvasId as string | undefined) ?? "__active__"}`;
+    case "office":
+      return `office::${(params?.filePath as string | undefined) ?? "__picker__"}`;
+    case "preview":
+      return `preview::${(params?.filePath as string | undefined) ?? "__picker__"}`;
     default:
       return `${pageId}::${JSON.stringify(params ?? {})}`;
   }
@@ -142,12 +157,14 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   const [panelOpen, setPanelOpen] = useState<boolean>(initial.panelOpen);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [panelView, setPanelView] = useState<PanelView>(initial.panelView);
+  const [workspaceExpanded, setWorkspaceExpandedState] = useState(initial.workspaceExpanded);
+  const [workspaceTreeOpen, setWorkspaceTreeOpen] = useState(initial.workspaceTreeOpen);
   const [tabs, setTabs] = useState<PageTab[]>(initial.tabs);
   const [activeTabId, setActiveTabId] = useState<string | null>(initial.activeTabId);
 
   const currentSessionKeyRef = useRef(sessionKey);
   const panelStateRef = useRef<PersistedPanelState>(initial);
-  panelStateRef.current = { tabs, activeTabId, panelOpen, panelView };
+  panelStateRef.current = { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen };
 
   const tabsRef = useRef<PageTab[]>(tabs);
   useEffect(() => {
@@ -158,8 +175,8 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   // `panelWidth` is intentionally excluded — it's a transient UI
   // affordance, not part of the panel "contents".
   useEffect(() => {
-    savePersistedState(currentSessionKeyRef.current, { tabs, activeTabId, panelOpen, panelView });
-  }, [tabs, activeTabId, panelOpen, panelView]);
+    savePersistedState(currentSessionKeyRef.current, { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen });
+  }, [tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen]);
 
   useEffect(() => {
     const previousSessionKey = currentSessionKeyRef.current;
@@ -173,7 +190,17 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setActiveTabId(next.activeTabId);
     setPanelOpen(next.panelOpen);
     setPanelView(next.panelView);
+    setWorkspaceExpandedState(next.workspaceExpanded);
+    setWorkspaceTreeOpen(next.workspaceTreeOpen);
   }, [sessionKey]);
+
+  const setWorkspaceExpanded = useCallback((expanded: boolean) => {
+    setWorkspaceExpandedState(expanded);
+    if (expanded) {
+      setPanelOpen(true);
+      setPanelView("content");
+    }
+  }, []);
 
   const togglePanel = useCallback(() => {
     setPanelOpen((prev) => {
@@ -238,6 +265,44 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     };
   }, [openOrActivatePage]);
 
+  useEffect(() => {
+    const handleOpenFilePreview = (event: Event) => {
+      const detail = (event as CustomEvent<{ filePath?: string; workingDirectory?: string }>).detail;
+      const filePath = typeof detail?.filePath === "string" ? detail.filePath : "";
+      const workingDirectory = typeof detail?.workingDirectory === "string" ? detail.workingDirectory : "";
+      if (!filePath.trim() || !workingDirectory.trim()) return;
+      openOrActivatePage("preview", {
+        filePath,
+        workingDirectory,
+        title: filePath.split(/[/\\]/).pop() || "预览",
+      });
+    };
+
+    window.addEventListener("duya:open-file-preview-panel", handleOpenFilePreview as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-file-preview-panel", handleOpenFilePreview as EventListener);
+    };
+  }, [openOrActivatePage]);
+
+  useEffect(() => {
+    const handleOpenOfficePanel = (event: Event) => {
+      const detail = (event as CustomEvent<{ filePath?: string; workingDirectory?: string }>).detail;
+      const filePath = typeof detail?.filePath === "string" ? detail.filePath : "";
+      const workingDirectory = typeof detail?.workingDirectory === "string" ? detail.workingDirectory : "";
+      if (!filePath.trim()) return;
+      openOrActivatePage("office", {
+        filePath,
+        workingDirectory,
+        title: filePath.split(/[/\\]/).pop() || "Office",
+      });
+    };
+
+    window.addEventListener("duya:open-office-panel", handleOpenOfficePanel as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-office-panel", handleOpenOfficePanel as EventListener);
+    };
+  }, [openOrActivatePage]);
+
   const closePanel = useCallback<PanelContextValue["closePanel"]>((tabId) => {
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === tabId);
@@ -256,6 +321,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       if (next.length === 0) {
         setPanelView("picker");
         setPanelOpen(false);
+        setWorkspaceExpandedState(false);
       }
       return next;
     });
@@ -298,6 +364,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       togglePanel,
       panelWidth,
       setPanelWidth: handleSetWidth,
+      workspaceExpanded,
+      setWorkspaceExpanded,
+      workspaceTreeOpen,
+      setWorkspaceTreeOpen,
       panelView,
       setPanelView,
       tabs,
@@ -313,6 +383,9 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       togglePanel,
       panelWidth,
       handleSetWidth,
+      workspaceExpanded,
+      setWorkspaceExpanded,
+      workspaceTreeOpen,
       panelView,
       tabs,
       activeTabId,
@@ -342,6 +415,8 @@ function defaultTitle(pageId: PageId): string {
     case "research": return "审查";
     case "terminal": return "终端";
     case "browser": return "浏览器";
+    case "office": return "Office";
+    case "preview": return "预览";
     default: return pageId;
   }
 }
