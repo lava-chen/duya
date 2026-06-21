@@ -19,7 +19,7 @@ function getPreviewType(attachment: FileAttachment): PreviewType {
   const ext = attachment.name.split('.').pop()?.toLowerCase() || '';
   if (attachment.type.startsWith('image/')) return 'image';
   if (ext === 'pdf') return 'pdf';
-  if (['doc', 'docx'].includes(ext)) return 'doc';
+  if (['doc', 'docx', 'pptx', 'xlsx'].includes(ext)) return 'doc';
   if (['txt', 'md', 'json', 'js', 'ts', 'tsx', 'jsx', 'html', 'css', 'py', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'rb', 'php', 'swift', 'kt', 'scala', 'r', 'm', 'sql', 'yaml', 'yml', 'xml', 'sh', 'bash', 'zsh', 'ps1', 'vim', 'lua', 'perl', 'dart', 'elm', 'haskell', 'clojure', 'erlang', 'elixir', 'ocaml', 'fsharp', 'groovy', 'julia', 'matlab', 'sas', 'stata', 'spss', 'lisp', 'scheme', 'racket', 'fortran', 'cobol', 'pascal', 'delphi', 'ada', 'vhdl', 'verilog', 'systemverilog', 'tcl', 'awk', 'sed', 'makefile', 'dockerfile', 'nginx', 'apache', 'ini', 'cfg', 'conf', 'properties', 'gradle', 'maven', 'cmake', 'bazel', 'buck', 'podfile', 'gemfile', 'cargo', 'composer', 'package', 'webpack', 'rollup', 'vite', 'esbuild', 'babel', 'eslint', 'prettier', 'stylelint', 'postcss', 'tailwind', 'sass', 'less', 'stylus', 'graphql', 'protobuf', 'thrift', 'grpc', 'openapi', 'swagger', 'postman', 'insomnia', 'hoppscotch', 'bruno', 'k6', 'artillery', 'locust', 'jmeter', 'gatling', 'cypress', 'playwright', 'selenium', 'webdriver', 'puppeteer', 'cheerio', 'jsdom', 'enzyme', 'testing-library', 'jest', 'vitest', 'mocha', 'chai', 'sinon', 'nyc', 'istanbul', 'c8', 'codecov', 'coveralls', 'sonarqube', 'codeclimate', 'codacy', 'deepsource', 'snyk', 'dependabot', 'renovate', 'greenkeeper', 'semantic-release', 'standard-version', 'commitlint', 'husky', 'lint-staged', 'pre-commit', 'tox', 'nox', 'poetry', 'pipenv', 'conda', 'mamba', 'virtualenv', 'pyenv', 'rbenv', 'rvm', 'nvm', 'fnm', 'volta', 'asdf', 'sdkman', 'jenv', 'gvm', 'rustup', 'cargo', 'stack', 'ghc', 'cabal', 'opam', 'esy', 'dune', 'mix', 'hex', 'rebar', 'erlang.mk', 'rabbitmq', 'kafka', 'redis', 'memcached', 'mongodb', 'postgres', 'mysql', 'sqlite', 'mariadb', 'cockroachdb', 'cassandra', 'dynamodb', 'firebase', 'supabase', 'prisma', 'sequelize', 'typeorm', 'mongoose', 'sqlalchemy', 'peewee', 'tortoise', 'pony', 'datasette', 'metabase', 'redash', 'superset', 'grafana', 'prometheus', 'influxdb', 'timescaledb', 'clickhouse', 'elasticsearch', 'solr', 'meilisearch', 'algolia', 'typesense', 'sonic', 'quickwit', 'tantivy', 'bleve', 'bluge', 'zinc', 'meili', 'manticore', 'sphinx', 'redisearch', 'arangodb', 'neo4j', 'orientdb', 'janusgraph', 'tigergraph', 'dgraph', 'cayley', 'gaffer', 'accumulo', 'hbase', 'bigtable', 'couchdb', 'pouchdb', 'rxdb', 'watermelondb', 'realm', 'objectbox', 'isar', 'hive', 'sembast', 'floor', 'moor', 'drift', 'sqlflite', 'sqflite', 'hive_ce', 'objectbox_sync', 'realm_flex', 'atlas', 'cosmos', 'dynamodb', 'firestore', 'bigquery', 'snowflake', 'redshift', 'synapse', 'databricks', 'dbt', 'fivetran', 'airbyte', 'meltano', 'prefect', 'dagster', 'kestra', 'temporal', 'cadence', 'conductor', 'zeebe', 'camunda', 'activiti', 'flowable', 'bonita', 'jBPM', 'drools', 'optaplanner', 'timefold', 'or-tools', 'gurobi', 'cplex', 'xpress', 'mosek', 'scip', 'cbc', 'glpk', 'lpsolve', 'highs', 'ipopt', 'knitro', 'baron', 'octeract', 'couenne', 'bonmin', 'shot', 'mindtpy', 'dice', 'deco', 'decogo', 'shot', 'alphaecp', 'sbb', 'dicopt', 'minlp', 'miqp', 'miqcp', 'mpec', 'nlp', 'qp', 'qcqp', 'socp', 'sdp', 'milp', 'lp', 'mip', 'cp', 'csp', 'sat', 'smt', 'maxsat', 'pb', 'qbf', 'fol', 'hol', 'z3', 'cvc', 'yices', 'mathsat', 'verit', 'opensmt', 'smtinterpol', 'alt-ergo', 'gappa', 'why3', 'frama-c', 'astree', 'polyspace', 'code sonar', 'coverity', 'klocwork', 'understand', 'source insight', 'sourcetrail', 'codeql', 'semgrep', 'bandit', 'safety', 'pip-audit', 'npm audit', 'yarn audit', 'pnpm audit', 'cargo audit', 'go audit', 'bundle audit', 'gem audit', 'pipenv check', 'poetry check', 'conda audit', 'snyk test', 'snyk code', 'snyk container', 'snyk iac', 'checkov', 'tfsec', 'terrascan', 'kics', 'semgrep', 'codacy', 'deepsource', 'codeclimate', 'sonarcloud', 'sonarqube', 'coveralls', 'codecov', 'codeconv', 'scrutinizer', 'insight.io', 'deepscan', 'jshint', 'jscs', 'jslint', 'eslint', 'tslint', 'stylelint', 'prettier', 'black', 'yapf', 'autopep8', 'isort', 'flake8', 'pylint', 'mypy', 'pyright', 'pytype', 'bandit', 'prospector', 'radon', 'xenon', 'vulture', 'pydocstyle', 'darglint', 'interrogate', 'mkdocstrings', 'sphinx', 'pdoc', 'pydoctor', 'doxygen', 'javadoc', 'jsdoc', 'typedoc', 'esdoc', 'documentation.js', 'api-extractor', 'api-documenter', 'tsc', 'swc', 'esbuild', 'rollup', 'webpack', 'parcel', 'vite', 'snowpack', 'wmr', 'microbundle', 'tsup', 'unbuild', 'mkdist', 'bumpp', 'changelogithub', 'changesets', 'semantic-release', 'standard-version', 'commitizen', 'commitlint', 'husky', 'lint-staged', 'pre-commit', 'tox', 'nox', 'poetry', 'pipenv', 'conda', 'mamba', 'virtualenv', 'pyenv', 'rbenv', 'rvm', 'nvm', 'fnm', 'volta', 'asdf', 'sdkman', 'jenv', 'gvm', 'rustup', 'cargo', 'stack', 'ghc', 'cabal', 'opam', 'esy', 'dune', 'mix', 'hex', 'rebar', 'erlang.mk'].includes(ext)) return 'code';
   if (['txt', 'md'].includes(ext)) return 'text';
   return 'unknown';
@@ -99,13 +99,29 @@ function PdfPreview({ attachment }: { attachment: FileAttachment }) {
   );
 }
 
-function DocPreview({ attachment }: { attachment: FileAttachment }) {
+function DocPreview({ attachment, onClose }: { attachment: FileAttachment; onClose: () => void }) {
+  const canOpenInOffice = !!attachment.path && /\.(docx|pptx|xlsx)$/i.test(attachment.path);
+
+  const openInOffice = () => {
+    if (!attachment.path) return;
+    window.dispatchEvent(new CustomEvent('duya:open-office-panel', {
+      detail: { filePath: attachment.path },
+    }));
+    onClose();
+  };
+
   return (
     <div className="attachment-preview-doc-wrapper">
       <div className="attachment-preview-doc-header">
         <span className="attachment-preview-doc-filename">{attachment.name}</span>
       </div>
       <div className="attachment-preview-doc-content">
+        {canOpenInOffice && (
+          <button type="button" className="attachment-preview-pdf-open-btn" onClick={openInOffice}>
+            <DownloadIcon size={14} />
+            <span>Open in DUYA Office</span>
+          </button>
+        )}
         {attachment.text ? (
           <pre className="attachment-preview-doc-text">{attachment.text}</pre>
         ) : attachment.thumbnail ? (
@@ -222,7 +238,7 @@ export function AttachmentPreviewModal({ attachment, pastedContent, onClose }: A
             <PdfPreview attachment={attachment} />
           )}
           {previewType === 'doc' && attachment && (
-            <DocPreview attachment={attachment} />
+            <DocPreview attachment={attachment} onClose={onClose} />
           )}
           {previewType === 'code' && attachment && (
             <CodePreview

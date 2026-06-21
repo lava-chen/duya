@@ -1105,7 +1105,7 @@ export function MessageInput({
         />
 
         <div
-          className={`relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''}`}
+          className={`message-input-surface relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''}`}
           style={{ backgroundColor: 'var(--surface)', boxShadow: 'inset 0 0 0 1px var(--border-color), 0 2px 8px rgba(0,0,0,0.08)' }}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
