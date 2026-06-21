@@ -5,7 +5,7 @@ import { PaperPlaneTilt, Stop, SpinnerGap, Robot, Wrench, Warning, CheckCircle, 
 import { useConductorStore } from "..//stores/conductor-store";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { executeAction } from "..//ipc/conductor-ipc";
-import { useConductorStream, useConductorStreamControl } from "@/hooks/useConductorStream";
+import { useConductorStream, useConductorStreamControl } from "../hooks/useConductorStream";
 import type { ConductorEvent } from "@/lib/stream-session-manager";
 
 export function ConductorComposer() {
