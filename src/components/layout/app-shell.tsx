@@ -3,10 +3,11 @@
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { UpdateBadge } from "@/components/update/UpdateBadge";
-import { lazy, Suspense, useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { lazy, Suspense, useState, useCallback, useRef, useEffect, type CSSProperties } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
+import { TaskDrawerToggle } from "@/components/layout/TaskDrawerToggle";
 
 // Custom event for triggering onboarding reset
 const RESET_ONBOARDING_EVENT = "duya:reset-onboarding";
@@ -26,7 +27,7 @@ function AppShellInner({ children }: AppShellProps) {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
   const { currentView, isHydrated } = useConversationStore();
-  const { panelOpen, tabs, activeTabId, setPanelOpen } = usePanel();
+  const { panelOpen, tabs, activeTabId, setPanelOpen, workspaceExpanded } = usePanel();
 
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
@@ -114,7 +115,13 @@ function AppShellInner({ children }: AppShellProps) {
   const isResearchOpen = panelOpen && activePageId === 'research';
 
   return (
-    <div className="app-shell-root" data-conductor-open={isConductorOpen ? "true" : undefined} data-research-open={isResearchOpen ? "true" : undefined}>
+    <div
+      className="app-shell-root"
+      data-conductor-open={isConductorOpen ? "true" : undefined}
+      data-research-open={isResearchOpen ? "true" : undefined}
+      data-panel-expanded={workspaceExpanded ? "true" : undefined}
+      style={{ "--app-sidebar-width": `${sidebarWidth + 4}px` } as CSSProperties}
+    >
       {showOnboarding && (
         <Suspense fallback={null}>
           <OnboardingFlow
@@ -133,17 +140,20 @@ function AppShellInner({ children }: AppShellProps) {
           <div className="sidebar-resizer" onMouseDown={handleMouseDown}>
             <div className="sidebar-resizer-handle" />
           </div>
-          <div className="app-main-wrapper">
-            <div className="app-main">
-              <div className="app-main-inner">
-                <main className="app-content">{children}</main>
+          <div className="app-workspace-row">
+            <div className="app-main-wrapper">
+              <div className="app-main">
+                <div className="app-main-inner">
+                  <main className="app-content">{children}</main>
+                </div>
+              </div>
+              <div className="app-status-bar">
+                <UpdateBadge />
               </div>
             </div>
-            <div className="app-status-bar">
-              <UpdateBadge />
-            </div>
+            <PanelZone />
+            <TaskDrawerToggle />
           </div>
-          <PanelZone />
         </div>
       </div>
     </div>

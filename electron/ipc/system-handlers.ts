@@ -44,6 +44,21 @@ export function registerSystemHandlers(): void {
     return { canceled: result.canceled, filePaths: result.filePaths };
   });
 
+  ipcMain.handle('dialog:open-office-files', async (_event, options?: { defaultPath?: string; title?: string }) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) return { canceled: true, filePaths: [] };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options?.title || 'Open Office files',
+      defaultPath: options?.defaultPath || undefined,
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Office files', extensions: ['docx', 'pptx', 'xlsx'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    return { canceled: result.canceled, filePaths: result.filePaths };
+  });
+
   // Shell handlers
   ipcMain.handle('shell:open-path', async (_event, folderPath: string) => {
     if (typeof folderPath !== 'string' || folderPath.length === 0 || folderPath.length > 4096) {

@@ -4,6 +4,7 @@
 import type { ComponentType } from "react";
 import {
   FolderIcon,
+  FileText,
   GlobeIcon,
   SquaresFourIcon,
   TerminalIcon,
@@ -14,8 +15,10 @@ import { SidebarConductorView } from "./SidebarConductorView";
 import { ResearchActivityPanel } from "./ResearchActivityPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
+import { OfficePanel } from "./OfficePanel";
+import { FilePreviewPanel } from "./FilePreviewPanel";
 
-export type PageId = "files" | "conductor" | "research" | "terminal" | "browser";
+export type PageId = "files" | "preview" | "conductor" | "research" | "terminal" | "browser" | "office";
 
 export interface PageTab {
   id: string;
@@ -43,6 +46,15 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     available: true,
     minWidth: 300,
     component: FileTreePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  preview: {
+    id: "preview",
+    label: "预览",
+    icon: FileText,
+    multiInstance: true,
+    available: true,
+    minWidth: 520,
+    component: FilePreviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   conductor: {
     id: "conductor",
@@ -79,6 +91,15 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     available: true,
     minWidth: 460,
     component: BrowserPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  office: {
+    id: "office",
+    label: "Office",
+    icon: FileText,
+    multiInstance: true,
+    available: true,
+    minWidth: 520,
+    component: OfficePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
 };
 
