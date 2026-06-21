@@ -80,6 +80,7 @@ export class NodeFileParser {
         docx: 'jszip',
         pdf: 'pdf-parse',
         pptx: 'jszip',
+        xlsx: 'jszip',
         txt: 'built-in',
         image: 'jimp',
       },

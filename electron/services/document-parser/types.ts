@@ -113,6 +113,6 @@ export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 export const PARSE_TIMEOUT = 120000; // 120 seconds
 export const MAX_CONCURRENT = 2;
 
-export const SUPPORTED_EXTENSIONS = ['.docx', '.pdf', '.pptx', '.txt', '.md'];
+export const SUPPORTED_EXTENSIONS = ['.docx', '.pdf', '.pptx', '.xlsx', '.txt', '.md'];
 
 export const PDF_CONFIDENCE_THRESHOLD = 100; // avg chars per page below this triggers vision fallback

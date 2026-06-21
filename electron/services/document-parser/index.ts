@@ -80,6 +80,7 @@ export class DocumentParserService {
           docx: caps.parsers.docx,
           pdf: caps.parsers.pdf,
           pptx: caps.parsers.pptx,
+          xlsx: caps.parsers.xlsx,
           txt: caps.parsers.txt,
         },
         // Kept for backward compatibility; always null on the main path
