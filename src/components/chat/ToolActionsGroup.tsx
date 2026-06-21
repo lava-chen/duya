@@ -179,6 +179,27 @@ const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
+    // AgentStatus tool — query/wait for background sub-agents
+    // launched by the Agent tool. Shares the RobotIcon + agent
+    // verb with the Agent row so both read naturally as "agent
+    // operations" in the chrome.
+    match: (n) => n.toLowerCase() === 'agentstatus',
+    icon: RobotIcon,
+    labelKey: 'streaming.toolAction.label.agent',
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const action = typeof inp.action === 'string' ? inp.action : '';
+      const id =
+        typeof inp.agent_id === 'string'
+          ? inp.agent_id
+          : typeof inp.agent_ids === 'string'
+            ? inp.agent_ids
+            : '';
+      if (id) return `${action} ${id.slice(0, 16)}`;
+      return action || 'AgentStatus';
+    },
+  },
+  {
     match: (n) => isBrowserTool(n),
     icon: ChromeIcon,
     labelKey: 'streaming.toolAction.label.browser',
@@ -307,6 +328,7 @@ type SummaryCategoryKey =
   | 'agent'
   | 'ask'
   | 'memory'
+  | 'skill'
   | 'tools';
 
 interface SummaryPart {
@@ -349,6 +371,7 @@ function buildGroupSummary(
     'agent',
     'ask',
     'memory',
+    'skill',
     'tools',
   ];
   const parts: SummaryPart[] = [];
@@ -398,7 +421,7 @@ function classifyToolForSummary(tool: ToolAction): SummaryPart | null {
   if (isBrowserTool(name)) {
     return { count: 1, categoryKey: 'browser' };
   }
-  if (['agent', 'subagent', 'sub_agent'].includes(name)) {
+  if (['agent', 'subagent', 'sub_agent', 'agentstatus'].includes(name)) {
     return { count: 1, categoryKey: 'agent' };
   }
   if (name === 'askuserquestion') {
@@ -406,6 +429,9 @@ function classifyToolForSummary(tool: ToolAction): SummaryPart | null {
   }
   if (name === 'memory') {
     return { count: 1, categoryKey: 'memory' };
+  }
+  if (name === 'skill') {
+    return { count: 1, categoryKey: 'skill' };
   }
   return { count: 1, categoryKey: 'tools' };
 }
@@ -574,6 +600,127 @@ function computeSegments(actions: ActionItem[]): Segment[] {
 // tool running in fallback mode.
 // =============================================================================
 
+// =============================================================================
+// ActionRowChrome — the shared single-line chrome for every action row
+// and group header. Lays out `[verb] [summary] [duration?] [StatusDot]`,
+// drops the old leading icon, and reveals the toggle caret only when
+// the row is hovered (or already expanded). One component, one shape;
+// rows that need extra affordances (e.g. FileEditToolRow's "click the
+// filename to open in editor") wrap the summary children with their
+// own buttons inside the chrome.
+// =============================================================================
+
+interface ActionRowChromeProps {
+  status: ToolStatus;
+  /** Per-state verb translation key. Falls back to the literal empty
+   *  string when undefined — useful for the Group header, whose
+   *  summary text is already a complete sentence. */
+  verbKey?: import('@/i18n').TranslationKey;
+  canExpand: boolean;
+  expanded: boolean;
+  hovered: boolean;
+  durationMs?: number | null;
+  /** Extra classes appended to the button. Use sparingly — prefer
+   *  keeping the chrome uniform across rows. */
+  buttonClassName?: string;
+  /** Wraps the entire row click area. When omitted the chrome is
+   *  inert (no click handler). */
+  onClick?: () => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  /** Optional right-side slot for row-specific affordances that
+   *  shouldn't disturb the duration / StatusDot tail (e.g. the
+   *  FileEditToolRow's +N/-M stats). */
+  rightSlot?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+function ActionRowChrome({
+  status,
+  verbKey,
+  canExpand,
+  expanded,
+  hovered,
+  durationMs,
+  buttonClassName,
+  onClick,
+  onMouseEnter,
+  onMouseLeave,
+  rightSlot,
+  children,
+}: ActionRowChromeProps) {
+  const { t } = useTranslation();
+  const verb = verbKey ? t(verbKey) : null;
+  const showCaret = canExpand && (expanded || hovered);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      // Flex `gap-2` is intentionally absent: when the leading caret is
+        // collapsed (no hover, not expanded), we want the verb to sit
+        // flush against the row's left edge so the chrome aligns with
+        // the surrounding text. The caret's motion.span animates its
+        // own `marginRight` to push siblings only when it's visible.
+      className={
+        'flex w-full items-center px-2 py-0.5 min-h-6 text-sm hover:bg-muted/30 rounded-sm transition-colors ' +
+        (buttonClassName ?? '')
+      }
+    >
+      <AnimatePresence initial={false}>
+        {canExpand && (
+          <motion.span
+            key="caret"
+            aria-hidden="true"
+            initial={{ width: 0, opacity: 0, marginRight: 0 }}
+            animate={{
+              width: showCaret ? 10 : 0,
+              opacity: showCaret ? 1 : 0,
+              marginRight: showCaret ? 8 : 0,
+            }}
+            exit={{ width: 0, opacity: 0, marginRight: 0 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+              flexShrink: 0,
+            }}
+          >
+            <CaretRightIcon
+              size={10}
+              className={`text-muted-foreground/60 transition-transform duration-200 ${
+                expanded ? 'rotate-90' : ''
+              }`}
+            />
+          </motion.span>
+        )}
+      </AnimatePresence>
+      {verb && (
+        <span className="font-medium text-muted-foreground/80 shrink-0 mr-2">{verb}</span>
+      )}
+      <span
+        className={`font-mono truncate flex-1 text-left transition-colors ${
+          hovered ? 'text-foreground' : 'text-muted-foreground/90'
+        }`}
+      >
+        {children}
+      </span>
+      {rightSlot}
+      {durationMs != null && durationMs > 0 && (
+        <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono ml-2">
+          {formatDuration(durationMs)}
+        </span>
+      )}
+      <span className="ml-2">
+        <StatusDot status={status} />
+      </span>
+    </button>
+  );
+}
+
 function Group({
   tools,
   flat,
@@ -587,6 +734,7 @@ function Group({
 }) {
   const { t, locale } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   const hasRunning = tools.some((tool) => tool.result === undefined);
   const hasError = tools.some((tool) => tool.isError);
@@ -603,22 +751,23 @@ function Group({
   // ids are missing (e.g. legacy fixtures).
   const groupKey = `grp-${tools[0]?.id ?? 0}-${tools.length}`;
 
+  // Group header hides the caret until hover, just like single rows.
+  // No leading icon, no verb prefix — the summary text itself is a
+  // complete sentence (e.g. "已运行 3 次命令，编辑 1 个文件") that
+  // stands on its own.
   const header = (
-    <button
-      type="button"
+    <ActionRowChrome
+      status={groupStatus}
+      verbKey={undefined}
+      canExpand
+      expanded={expanded}
+      hovered={hovered}
       onClick={() => setExpanded((prev) => !prev)}
-      className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      <CaretRightIcon
-        size={10}
-        className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
-      />
-      <WrenchIcon size={14} className="shrink-0 text-muted-foreground" />
-      <span className="font-medium text-muted-foreground">{summaryText}</span>
-      <span className="ml-auto">
-        <StatusDot status={groupStatus} />
-      </span>
-    </button>
+      {summaryText}
+    </ActionRowChrome>
   );
 
   if (flat) {
@@ -627,9 +776,9 @@ function Group({
     // see all tools at a glance (this matches the previous flat-mode
     // behavior for ContextGroup / BrowserGroup).
     return (
-      <div key={groupKey} className="tool-group">
+      <div key={groupKey} className="tool-group mt-1.5">
         {header}
-        <div className="tool-group-body ml-4 border-l-2 border-border/30 pl-2">
+        <div className="tool-group-body">
           {showBrowserFallback && (
             <div className="tool-group-fallback">
               <span className="font-medium text-[11px] text-amber-500">
@@ -656,7 +805,7 @@ function Group({
   }
 
   return (
-    <div key={groupKey} className="tool-group">
+    <div key={groupKey} className="tool-group mt-1.5">
       {header}
       <AnimatePresence initial={false}>
         {expanded && (
@@ -667,7 +816,7 @@ function Group({
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="tool-group-body ml-4 border-l-2 border-border/30 pl-2">
+            <div className="tool-group-body">
               {showBrowserFallback && (
                 <div className="tool-group-fallback">
                   <span className="font-medium text-[11px] text-amber-500">
@@ -812,7 +961,6 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const { t } = useTranslation();
   const rawCmd = (tool.input as Record<string, unknown>)?.command || '';
   const cmd = typeof rawCmd === 'string' ? rawCmd : JSON.stringify(rawCmd);
   const isRunning = tool.result === undefined;
@@ -852,14 +1000,19 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
     }
   };
 
-  // History-list label: zh "已运行 <command> ··· 已持续 2s"
-  //                   en "Ran <command> ··· Running for 2s"
-  const ranLabel = t('streaming.toolAction.ranCommand');
-  const continuedLabel = isRunning
-    ? t('streaming.toolAction.continued', { duration: formatDuration(liveDurationMs) })
-    : tool.durationMs != null && tool.durationMs > 0
-      ? t('streaming.toolAction.continued', { duration: formatDuration(tool.durationMs) })
-      : '';
+  // Per-state verb: "正在运行…" while the tool is alive, "已运行"
+  // once it returns. Error state falls back to a generic failure
+  // label — bash doesn't carry a domain-specific error verb.
+  const verbKey =
+    status === 'running' ? 'streaming.toolAction.running.bash'
+    : status === 'error' ? 'streaming.toolAction.error.bash'
+    : 'streaming.toolAction.ranCommand';
+
+  // Live duration while running, otherwise the backend-supplied
+  // duration (BashToolRow is the only row that ticks on its own).
+  const displayDurationMs = isRunning
+    ? liveDurationMs
+    : tool.durationMs ?? null;
 
   const displayLines = (() => {
     if (!outputText) return null;
@@ -876,31 +1029,19 @@ function BashToolRow({ tool, streamingToolOutput }: { tool: ToolAction; streamin
 
   return (
     <div>
-      <button
-        type="button"
+      <ActionRowChrome
+        status={status}
+        verbKey={verbKey as import('@/i18n').TranslationKey}
+        canExpand
+        expanded={expanded}
+        hovered={hovered}
+        durationMs={displayDurationMs}
         onClick={() => setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="flex w-full items-center gap-2 px-2 py-0.5 min-h-[24px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
       >
-        <span className="text-muted-foreground/60 font-mono shrink-0">
-          {ranLabel}
-        </span>
-        <span
-          className={`font-mono truncate flex-1 text-left transition-colors ${
-            hovered ? 'text-foreground' : 'text-muted-foreground/90'
-          }`}
-          title={cmd}
-        >
-          {cmd}
-        </span>
-        {continuedLabel && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
-            {continuedLabel}
-          </span>
-        )}
-        <StatusDot status={status} />
-      </button>
+        <span title={cmd}>{cmd}</span>
+      </ActionRowChrome>
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div
@@ -994,7 +1135,6 @@ function parseDuyaCliResult(result: string | undefined): DuyaCliResult | null {
 function DuyaCliToolRow({ tool }: { tool: ToolAction }) {
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const { locale } = useTranslation();
   const status = getStatus(tool);
   const hasResult = tool.result !== undefined && tool.result !== '';
 
@@ -1010,37 +1150,33 @@ function DuyaCliToolRow({ tool }: { tool: ToolAction }) {
   // if isError flag is missing. stderr is intentionally hidden from the
   // card — the failure is conveyed through the bottom-right badge instead.
   const isError = tool.isError || okFlag === false || (exitCode !== undefined && exitCode !== 0);
+  // The chrome picks its own status dot, so we override the status
+  // field when the duya result implies an error that the `isError`
+  // flag missed.
+  const rowStatus: ToolStatus = isError ? 'error' : status;
+
+  const verbKey =
+    rowStatus === 'running' ? 'streaming.toolAction.running.cli'
+    : rowStatus === 'error' ? 'streaming.toolAction.error.cli'
+    : 'streaming.toolAction.done.cli';
+
   const hasStdout = !!stdout && stdout.trim().length > 0;
 
   return (
     <div>
-      <button
-        type="button"
+      <ActionRowChrome
+        status={rowStatus}
+        verbKey={verbKey as import('@/i18n').TranslationKey}
+        canExpand
+        expanded={expanded}
+        hovered={hovered}
+        durationMs={tool.durationMs}
         onClick={() => setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
       >
-        <TerminalIcon size={14} className="shrink-0 text-muted-foreground" />
-        {locale === 'zh' ? (
-          <span className="text-muted-foreground shrink-0">执行</span>
-        ) : (
-          <span className="text-muted-foreground shrink-0">Run</span>
-        )}
-        <span
-          className={`font-mono truncate flex-1 text-left transition-colors ${
-            hovered ? 'text-foreground' : 'text-muted-foreground/60'
-          }`}
-        >
-          {cmd}
-        </span>
-        {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
-            {formatDuration(tool.durationMs)}
-          </span>
-        )}
-        {!expanded && <StatusDot status={isError ? 'error' : status} />}
-      </button>
+        {cmd}
+      </ActionRowChrome>
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div
@@ -1184,41 +1320,41 @@ function SubAgentToolRow({
     return result;
   }, [isError, parsedResult?.background, subAgentEvents, tool.result]);
 
+  // Right-slot tail: tool count + pending count live between the
+  // summary and the duration so the chrome's verb + summary + status
+  // dot remain in their expected positions.
+  const subagentRightSlot = (
+    <>
+      {toolUseCount > 0 && (
+        <span className="text-muted-foreground/60 text-[10px]">({toolUseCount} tools)</span>
+      )}
+      {unresolvedTools > 0 && (
+        <span className="text-amber-500 text-[10px]">{unresolvedTools} pending</span>
+      )}
+    </>
+  );
+
+  const verbKey =
+    status === 'running' ? 'streaming.toolAction.running.agent'
+    : status === 'error' ? 'streaming.toolAction.error.agent'
+    : 'streaming.toolAction.done.agent';
+
   return (
     <div>
-      <button
-        type="button"
+      <ActionRowChrome
+        status={status}
+        verbKey={verbKey as import('@/i18n').TranslationKey}
+        canExpand
+        expanded={expanded}
+        hovered={hovered}
+        durationMs={tool.durationMs}
         onClick={() => setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors"
+        rightSlot={subagentRightSlot}
       >
-        <CaretRightIcon
-          size={10}
-          className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
-        />
-        <RobotIcon size={14} className="shrink-0 text-muted-foreground" />
-        <span className="font-medium text-muted-foreground shrink-0">Sub-agent</span>
-        <span
-          className={`font-mono truncate flex-1 text-left transition-colors ${
-            hovered ? 'text-foreground' : 'text-muted-foreground/60'
-          }`}
-        >
-          {summary}
-        </span>
-        {toolUseCount > 0 && (
-          <span className="text-muted-foreground/60 text-[10px]">({toolUseCount} tools)</span>
-        )}
-        {unresolvedTools > 0 && (
-          <span className="text-amber-500 text-[10px]">{unresolvedTools} pending</span>
-        )}
-        {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
-            {formatDuration(tool.durationMs)}
-          </span>
-        )}
-        <StatusDot status={status} />
-      </button>
+        {summary}
+      </ActionRowChrome>
 
       <AnimatePresence initial={false}>
         {expanded && (
@@ -1356,47 +1492,34 @@ function ReadToolRow({ tool }: { tool: ToolAction }) {
 
   const renderedResult = hasResult ? renderToolResult(toolInfo, resultInfo) : null;
 
+  const verbKey =
+    status === 'running' ? 'streaming.toolAction.running.read'
+    : status === 'error' ? 'streaming.toolAction.error.read'
+    : 'streaming.toolAction.done.read';
+
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => hasResult && setExpanded(prev => !prev)}
+      <ActionRowChrome
+        status={status}
+        verbKey={verbKey as import('@/i18n').TranslationKey}
+        canExpand={hasResult}
+        expanded={expanded}
+        hovered={hovered}
+        durationMs={tool.durationMs}
+        onClick={() => hasResult && setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors ${hasResult ? 'cursor-pointer' : 'cursor-default'}`}
+        buttonClassName={hasResult ? 'cursor-pointer' : 'cursor-default'}
+        rightSlot={
+          lineRange ? (
+            <span className="text-[11px] text-muted-foreground/50 tabular-nums shrink-0 font-mono">
+              L{lineRange.start}-{lineRange.end}
+            </span>
+          ) : null
+        }
       >
-        {hasResult && (
-          <CaretRightIcon
-            size={10}
-            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
-          />
-        )}
-
-        <FileIcon size={14} className="shrink-0 text-muted-foreground" />
-
-        <span
-          className={`font-mono truncate flex-1 text-left transition-colors ${
-            hovered ? 'text-foreground' : 'text-muted-foreground/60'
-          }`}
-        >
-          {fileName}
-        </span>
-
-        {/* Line range info - replaces duplicate file path */}
-        {lineRange && (
-          <span className="text-[11px] text-muted-foreground/50 tabular-nums shrink-0 font-mono">
-            L{lineRange.start}-{lineRange.end}
-          </span>
-        )}
-
-        {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
-            {formatDuration(tool.durationMs)}
-          </span>
-        )}
-
-        <StatusDot status={status} />
-      </button>
+        {fileName}
+      </ActionRowChrome>
 
       <AnimatePresence initial={false}>
         {expanded && hasResult && renderedResult && (
@@ -1477,47 +1600,31 @@ function AskUserQuestionResultRow({ tool }: { tool: ToolAction }) {
     return out;
   })();
 
+  const hasResult = tool.result !== undefined;
+  const verbKey =
+    status === 'running' ? 'streaming.toolAction.running.ask'
+    : status === 'error' ? 'streaming.toolAction.error.ask'
+    : 'streaming.toolAction.done.ask';
+
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => tool.result !== undefined && setExpanded((prev) => !prev)}
+      <ActionRowChrome
+        status={status}
+        verbKey={verbKey as import('@/i18n').TranslationKey}
+        canExpand={hasResult}
+        expanded={expanded}
+        hovered={hovered}
+        durationMs={tool.durationMs}
+        onClick={() => hasResult && setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs rounded-sm transition-colors ${
-          tool.result !== undefined ? 'hover:bg-muted/30 cursor-pointer' : 'cursor-default'
-        }`}
+        buttonClassName={hasResult ? 'hover:bg-muted/30 cursor-pointer' : 'cursor-default'}
       >
-        {tool.result !== undefined && (
-          <CaretRightIcon
-            size={10}
-            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${
-              expanded ? 'rotate-90' : ''
-            }`}
-          />
-        )}
-
-        <QuestionIcon size={14} className="shrink-0 text-muted-foreground" />
-
-        <span
-          className={`font-mono truncate flex-1 text-left transition-colors ${
-            hovered ? 'text-foreground' : 'text-muted-foreground/60'
-          }`}
-        >
-          {summary}
-        </span>
-
-        {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
-            {formatDuration(tool.durationMs)}
-          </span>
-        )}
-
-        <StatusDot status={status} />
-      </button>
+        {summary}
+      </ActionRowChrome>
 
       <AnimatePresence initial={false}>
-        {expanded && tool.result !== undefined && (
+        {expanded && hasResult && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
@@ -1716,41 +1823,36 @@ function MemoryToolRow({ tool }: { tool: ToolAction }) {
   // Sub-label inside the card header (e.g. "global · memory").
   const subLabel = target === 'project' ? 'project' : `global · ${subtarget}`;
 
+  // The chrome picks its own status dot, so we override the status
+  // field when the parsed result implies an error that `isError`
+  // missed (matches the prior ad-hoc `isError ? 'error' : status`
+  // pattern that used to live at the bottom of the button).
+  const rowStatus: ToolStatus = isError ? 'error' : status;
+  // Running state verb has a dedicated key. Once finished, fall back
+  // to the action-specific verb (Saved / Read / Updated / Removed).
+  const chromeVerbKey =
+    rowStatus === 'running'
+      ? 'streaming.toolAction.running.memory'
+      : rowStatus === 'error'
+        ? 'streaming.toolAction.error.memory'
+        : verbKey;
+
   return (
     <div>
-      <button
-        type="button"
+      <ActionRowChrome
+        status={rowStatus}
+        verbKey={chromeVerbKey as import('@/i18n').TranslationKey}
+        canExpand={hasResult}
+        expanded={expanded}
+        hovered={hovered}
+        durationMs={tool.durationMs}
         onClick={() => hasResult && setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs rounded-sm transition-colors ${
-          hasResult ? 'hover:bg-muted/30 cursor-pointer' : 'cursor-default'
-        }`}
+        buttonClassName={hasResult ? 'hover:bg-muted/30 cursor-pointer' : 'cursor-default'}
       >
-        {hasResult && (
-          <CaretRightIcon
-            size={10}
-            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${
-              expanded ? 'rotate-90' : ''
-            }`}
-          />
-        )}
-        <BrainIcon size={14} className="shrink-0 text-muted-foreground" />
-        <span className="font-medium text-muted-foreground shrink-0">{verb}</span>
-        <span
-          className={`font-mono truncate flex-1 text-left transition-colors ${
-            hovered ? 'text-foreground' : 'text-muted-foreground/60'
-          }`}
-        >
-          {summary}
-        </span>
-        {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
-            {formatDuration(tool.durationMs)}
-          </span>
-        )}
-        <StatusDot status={isError ? 'error' : status} />
-      </button>
+        {summary}
+      </ActionRowChrome>
 
       <AnimatePresence initial={false}>
         {expanded && hasResult && (
@@ -1895,8 +1997,9 @@ function StatNumber({ value, tone }: { value: number; tone: 'add' | 'remove' }) 
  * stays visible (and updating) throughout streaming.
  */
 function FileEditToolRow({ tool }: { tool: ToolAction }) {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const [fileHovered, setFileHovered] = useState(false);
   const filePath = getFilePath(tool.input);
   const fileName = filePath.split(/[/\\]/).pop() || filePath;
@@ -1908,8 +2011,16 @@ function FileEditToolRow({ tool }: { tool: ToolAction }) {
   const isCreate = kind === 'create';
 
   // Verb shown next to the icon. "已编辑"/"Edited" vs "已创建"/"Created".
-  const verbKey = isCreate ? 'streaming.toolAction.created' : 'streaming.toolAction.edited';
-  const verb = t(verbKey as Parameters<typeof t>[0]);
+  // Verb follows the row's status: "正在编辑…" while running, "已编辑"
+  // once done, "编辑失败" on error. The create/edit distinction still
+  // matters for the *default* verb (editing vs creating) so we pick
+  // the right key from the action kind.
+  const verbKey =
+    status === 'running'
+      ? (isCreate ? 'streaming.toolAction.running.create' : 'streaming.toolAction.running.edit')
+      : status === 'error'
+        ? (isCreate ? 'streaming.toolAction.error.create' : 'streaming.toolAction.error.edit')
+        : (isCreate ? 'streaming.toolAction.created' : 'streaming.toolAction.edited');
   const openFileTitle = t('streaming.toolAction.openFile');
 
   // Open the file in the system default editor.
@@ -1961,81 +2072,60 @@ function FileEditToolRow({ tool }: { tool: ToolAction }) {
 
   const canExpand = diffPayload !== null;
 
+  // Right-side slot: live +N -M git-style stats. Hidden before the
+  // agent commits to the edit so the row stays quiet.
+  const statsSlot = (
+    <div className="ml-auto flex items-center gap-1.5 shrink-0 text-[11px] min-h-[14px]">
+      {stats.additions > 0 || stats.removals > 0 ? (
+        <>
+          <StatNumber value={stats.additions} tone="add" />
+          <StatNumber value={stats.removals} tone="remove" />
+        </>
+      ) : status === 'running' ? (
+        <span className="text-muted-foreground/40 font-mono tabular-nums">…</span>
+      ) : null}
+    </div>
+  );
+
   return (
     <div>
-      <div
-        role="button"
-        tabIndex={canExpand ? 0 : -1}
+      <ActionRowChrome
+        status={status}
+        verbKey={verbKey as import('@/i18n').TranslationKey}
+        canExpand={canExpand}
+        expanded={expanded}
+        hovered={hovered}
+        durationMs={tool.durationMs}
         onClick={() => canExpand && setExpanded((prev) => !prev)}
-        onKeyDown={(e) => {
-          if (!canExpand) return;
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            setExpanded((prev) => !prev);
-          }
-        }}
-        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs rounded-sm transition-colors group ${
-          canExpand ? 'cursor-pointer hover:bg-muted/30' : 'cursor-default'
-        }`}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        buttonClassName={canExpand ? 'cursor-pointer' : 'cursor-default'}
+        rightSlot={statsSlot}
       >
-        {canExpand && (
-          <CaretRightIcon
-            size={10}
-            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${
-              expanded ? 'rotate-90' : ''
-            }`}
-          />
-        )}
-
-        <NotePencilIcon size={14} className="shrink-0 text-muted-foreground" />
-
-        {/* Action verb — 已编辑 / 已创建 / Edited / Created */}
-        <span className="font-medium text-muted-foreground/80 shrink-0">
-          {isCreate && status === 'running' ? (
-            <Shimmer duration={1.5}>{verb}</Shimmer>
-          ) : (
-            verb
-          )}
-        </span>
-
-        {/* Blue clickable filename — opens in system default editor */}
-        <button
-          type="button"
+        {/* Blue clickable filename — opens in system default editor. We
+            can't nest a <button> inside the chrome's outer <button>
+            (HTML disallows it), so use a <span> with onClick +
+            stopPropagation. */}
+        <span
+          role="button"
+          tabIndex={0}
           onClick={handleOpenFile}
-          onMouseEnter={() => setFileHovered(true)}
-          onMouseLeave={() => setFileHovered(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleOpenFile(e as unknown as React.MouseEvent);
+            }
+          }}
           title={filePath ? `${openFileTitle}\n${filePath}` : openFileTitle}
-          className={`font-mono truncate min-w-0 max-w-full text-left transition-colors ${
+          className={`font-mono truncate min-w-0 max-w-full text-left transition-colors cursor-pointer ${
             fileHovered
               ? 'text-blue-500 underline underline-offset-2'
               : 'text-blue-500/90 hover:text-blue-500'
           }`}
         >
           {fileName}
-        </button>
-
-        {/* Live git-style +N -M stats. Only render the counter chrome
-            once at least one of the numbers is > 0 — keeps the row
-            visually quiet before the agent commits to the edit. */}
-        <div className="ml-auto flex items-center gap-1.5 shrink-0 text-[11px] min-h-[14px]">
-          {stats.additions > 0 || stats.removals > 0 ? (
-            <>
-              <StatNumber value={stats.additions} tone="add" />
-              <StatNumber value={stats.removals} tone="remove" />
-            </>
-          ) : status === 'running' ? (
-            <span className="text-muted-foreground/40 font-mono tabular-nums">…</span>
-          ) : null}
-        </div>
-
-        {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
-            {formatDuration(tool.durationMs)}
-          </span>
-        )}
-
-        <StatusDot status={status} />
-      </div>
+        </span>
+      </ActionRowChrome>
 
       <AnimatePresence initial={false}>
         {expanded && canExpand && diffPayload && (
@@ -2091,14 +2181,32 @@ interface ToolActionRowProps {
 function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolActionRowProps) {
   const { t } = useTranslation();
   const renderer = getRenderer(tool.name);
-  const summary = renderer.getSummary(tool.input, tool.name);
+  // Skill tools pass through the catch-all renderer whose getSummary
+  // dumps the input JSON. Override with the skill name so the chrome
+  // shows a clean label like "news-investigator" instead of
+  // `{"skill":"news-investigator"}`.
+  const isSkillTool = tool.name.toLowerCase() === 'skill';
+  const skillName = isSkillTool
+    ? (() => {
+        const inp = tool.input as Record<string, unknown> | undefined;
+        const name = inp?.skill ?? inp?.name;
+        return typeof name === 'string' && name.trim() ? name.trim() : 'skill';
+      })()
+    : null;
+  const summary = isSkillTool && skillName
+    ? skillName
+    : renderer.getSummary(tool.input, tool.name);
   const filePath = getFilePath(tool.input);
   const status = getStatus(tool);
   const isDuyaCli = ['duya_cli', 'duya-cli', 'duyacli'].includes(tool.name.toLowerCase());
   const isBash = !isDuyaCli && renderer.icon === TerminalIcon;
   const lowerName = tool.name.toLowerCase();
   const isLegacySubAgent = isLegacySubAgentToolAction(tool);
-  const isSubAgent = renderer.icon === RobotIcon || isLegacySubAgent;
+  // AgentStatus is a query tool, not a sub-agent launch — it has
+  // no per-event stream to render, so route it to the generic
+  // ToolActionRow instead of SubAgentToolRow.
+  const isAgentStatus = lowerName === 'agentstatus';
+  const isSubAgent = !isAgentStatus && (renderer.icon === RobotIcon || isLegacySubAgent);
   const isFileEdit = FILE_EDIT_TOOLS.has(lowerName) || FILE_CREATE_TOOLS.has(lowerName);
   const isRead = ['read', 'readfile', 'read_file'].includes(lowerName);
   const isAskUserQuestion = isAskUserQuestionTool(tool.name);
@@ -2153,57 +2261,45 @@ function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolA
   const canExpand = hasResult && renderedResult !== null;
   const [hovered, setHovered] = useState(false);
 
-  // Resolve the verb label (e.g. "已编辑" / "Edited") through i18n.
-  // The registry stores a key rather than a string because hooks can't
-  // run at module top level, so the translation is resolved here at
-  // render time. Falls back to the key string when the entry is null
-  // (e.g. shell/bash that show the command itself as the label).
-  const label = renderer.labelKey ? t(renderer.labelKey) : null;
+  // Resolve the verb label through i18n. While running we use a
+  // generic "Running…" label; once finished, the registry's noun
+  // label (e.g. "Search", "Browser", "CLI") doubles as the past-tense
+  // verb. Errors fall through to a generic "Failed" label so this
+  // catch-all still reads naturally when the registry didn't supply a
+  // dedicated row. Skill tools get dedicated verbs instead of dumping
+  // the raw `{"skill":"name"}` JSON.
+  const verbKey =
+    isSkillTool
+      ? (status === 'running' ? 'streaming.toolAction.running.skill'
+      : status === 'error' ? 'streaming.toolAction.error.skill'
+      : 'streaming.toolAction.done.skill')
+      : status === 'running' ? 'streaming.toolAction.running.search'
+      : status === 'error' ? 'streaming.toolAction.error.search'
+      : renderer.labelKey ?? undefined;
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => canExpand && setExpanded(prev => !prev)}
+      <ActionRowChrome
+        status={status}
+        verbKey={verbKey as import('@/i18n').TranslationKey | undefined}
+        canExpand={canExpand}
+        expanded={expanded}
+        hovered={hovered}
+        durationMs={tool.durationMs}
+        onClick={() => canExpand && setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className={`flex w-full items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors ${canExpand ? 'cursor-pointer' : 'cursor-default'}`}
+        buttonClassName={canExpand ? 'cursor-pointer' : 'cursor-default'}
+        rightSlot={
+          filePath ? (
+            <span className="text-muted-foreground/40 text-[11px] font-mono truncate max-w-[200px] hidden sm:inline">
+              {truncatePath(filePath)}
+            </span>
+          ) : null
+        }
       >
-        {canExpand && (
-          <CaretRightIcon
-            size={10}
-            className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
-          />
-        )}
-
-        {createElement(renderer.icon, { size: 14, className: 'shrink-0 text-muted-foreground' })}
-
-        {label && (
-          <span className="font-medium text-muted-foreground shrink-0">{label}</span>
-        )}
-
-        <span
-          className={`font-mono truncate flex-1 text-left transition-colors ${
-            hovered ? 'text-foreground' : 'text-muted-foreground/60'
-          }`}
-        >
-          {summary}
-        </span>
-
-        {filePath && (
-          <span className="text-muted-foreground/40 text-[11px] font-mono truncate max-w-[200px] hidden sm:inline">
-            {truncatePath(filePath)}
-          </span>
-        )}
-
-        {tool.durationMs != null && tool.durationMs > 0 && (
-          <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">
-            {formatDuration(tool.durationMs)}
-          </span>
-        )}
-
-        <StatusDot status={status} />
-      </button>
+        {summary}
+      </ActionRowChrome>
 
       <AnimatePresence initial={false}>
         {expanded && canExpand && (
@@ -2592,7 +2688,7 @@ export function ToolActionsGroup({
   if (flat) {
     return (
       <div className="w-[min(100%,48rem)]">
-        <div className="border-l-2 border-border/50 pl-2 ml-1.5">
+        <div className="border-l-2 border-border/50">
           {/* For flat mode, interleave non-tool actions with the grouped
               tool segments so the visual order is preserved. */}
           {renderFlatActions(actions, segments, segmentActionKeys, isStreaming, streamingToolOutput, agentProgressEvents)}
@@ -2667,7 +2763,7 @@ export function ToolActionsGroup({
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.12, ease: 'easeOut' }}
             >
-              <div className="ml-1.5 mt-0.5 border-l-2 border-border/50 pl-2">
+              <div className="mt-0.5 border-l-2 border-border/50">
                 {renderOrderedBody()}
               </div>
             </motion.div>
