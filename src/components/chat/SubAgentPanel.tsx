@@ -95,6 +95,19 @@ export function useAgents(sessionId: string): SubAgentInfo[] {
 
   return useMemo(() => {
     const groups = groupEventsByAgent(events);
+    // DEBUG: log group keys and counts to diagnose duplicate panel rows
+    if (typeof window !== 'undefined') {
+      const keys = [...groups.keys()];
+      const dupKeys = keys.filter((k, i) => keys.indexOf(k) !== i);
+      console.debug('[SubAgentPanel] useAgents groups', {
+        sessionId,
+        eventsTotal: events.length,
+        groupCount: groups.size,
+        keys,
+        dupKeys,
+        eventAgentIds: events.map((e) => e.agentId ?? '(none)'),
+      });
+    }
     const agents: SubAgentInfo[] = [];
     let index = 0;
 

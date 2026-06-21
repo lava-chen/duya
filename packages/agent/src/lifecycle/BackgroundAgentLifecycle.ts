@@ -162,24 +162,13 @@ export class BackgroundAgentLifecycle {
             hasData: ev.data !== undefined,
             toolName: ev.toolName,
           }, 'SubAgent')
+          // applyProgressEvent calls `onProgress` (which the AgentTool wires
+          // to emitLiveProgress → sendEvent) and updates the progress snapshot.
+          // We must NOT send a second chat:agent_progress event here — that
+          // duplicates the SSE payload and the renderer's SubAgentPanel
+          // showed every progress event twice (manifesting as 6 panel rows
+          // for 3 spawned sub-agents, one per emit path).
           await applyProgressEvent({ record: r, onProgress }, ev)
-          // Forward as SSE chat:agent_progress (canonical schema)
-          try {
-            sendEvent({
-              type: 'chat:agent_progress',
-              sessionId: r.parentSessionId,
-              agentEventType: ev.type,
-              agentId: r.taskId,
-              agentType: r.agentType,
-              agentName: r.agentName,
-              agentDescription: r.description,
-              agentSessionId: r.subAgentSessionId,
-              ...(ev.duration !== undefined ? { duration: ev.duration } : {}),
-              ...(ev.data !== undefined ? { data: ev.data } : {}),
-            })
-          } catch (err) {
-            logger.warn('sendEvent chat:agent_progress failed', { taskId, err })
-          }
         } else {
           lastMessage = ev as Message
         }
