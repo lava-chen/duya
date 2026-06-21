@@ -12,6 +12,7 @@ describe('ParserRegistry', () => {
     expect(getParser('.md')).not.toBeNull();
     expect(getParser('.docx')).not.toBeNull();
     expect(getParser('.pptx')).not.toBeNull();
+    expect(getParser('.xlsx')).not.toBeNull();
     expect(getParser('.pdf')).not.toBeNull();
     expect(getParser('.png')).not.toBeNull();
     expect(getParser('.jpg')).not.toBeNull();
@@ -36,6 +37,7 @@ describe('ParserRegistry', () => {
     const exts = listSupportedExtensions();
     expect(exts).toContain('.pdf');
     expect(exts).toContain('.docx');
+    expect(exts).toContain('.xlsx');
     expect(exts).toContain('.txt');
     expect(exts.length).toBe(Object.keys(REGISTRY).length);
   });

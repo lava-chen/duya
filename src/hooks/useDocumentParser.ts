@@ -29,7 +29,7 @@ export interface Capabilities {
   version: string;
 }
 
-const SUPPORTED_EXTENSIONS = ['.docx', '.doc', '.pdf', '.pptx', '.txt', '.md'];
+const SUPPORTED_EXTENSIONS = ['.docx', '.doc', '.pdf', '.pptx', '.xlsx', '.txt', '.md'];
 
 export function isDocumentFile(filename: string): boolean {
   const ext = '.' + filename.split('.').pop()?.toLowerCase();

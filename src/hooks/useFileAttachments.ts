@@ -26,7 +26,7 @@ export interface FileAttachment {
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB target for images after compression
-const DOCUMENT_EXTS = new Set(['.docx', '.doc', '.pdf', '.pptx', '.txt', '.md']);
+const DOCUMENT_EXTS = new Set(['.docx', '.doc', '.pdf', '.pptx', '.xlsx', '.txt', '.md']);
 
 function isDocumentFile(filename: string): boolean {
   const ext = '.' + filename.split('.').pop()?.toLowerCase();
