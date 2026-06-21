@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { MagicWand, PaperPlaneTilt, SpinnerGap, X } from "@phosphor-icons/react";
-import { useConductorStreamControl } from "@/hooks/useConductorStream";
+import { useConductorStreamControl } from "../hooks/useConductorStream";
 import { buildObjectAgentPrompt } from "../agent/object-agent-prompt";
 import { useConductorStore } from "../stores/conductor-store";
 import type { CanvasElement } from "../types/conductor";
