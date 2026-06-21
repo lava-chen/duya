@@ -923,6 +923,42 @@ duya/
 - [electron_multi_agent_architecture.svg](./docs/design-docs/electron_multi_agent_architecture.svg) - 架构图（目标架构）
 - [bridge-design](./docs/design-docs/bridge-design.md) - Bridge 组件详细设计
 
+## Office Workspace
+
+The chat side panel includes an `office` page for local DOCX, PPTX, and XLSX
+files. It reuses the session-scoped `PanelProvider` tab model and opens files
+from either the project file tree or a filtered Electron dialog.
+
+- Renderer: `src/components/layout/panels/OfficePanel.tsx`
+- IPC: `dialog:open-office-files` and the existing `parser:*` handlers
+- Parser: `packages/agent/src/file-parser/`, including the XLSX OOXML parser
+- Chat bridge: selected content dispatches existing file and text reference
+  events, so MessageInput attaches the source path and structural locator
+- Write path: the Agent edits the local file through existing tools and
+  permission review; structured OOXML patch/backup APIs are deferred to Phase 2
+
+## File Preview Workspace
+
+The session panel is a generic expandable surface: any active sidebar page can
+cover the chat canvas while the normal `MessageInput` remains above it as a
+floating layer. File and Office previews are master/detail surfaces with the
+read-only preview and collapsible project tree kept in one panel. `PanelProvider`
+persists expanded state, tree visibility, preview tabs, and the active tab per
+session.
+
+- Shell: `src/components/layout/PanelZone.tsx`
+- File split: `src/components/layout/panels/PanelFileTreeSplit.tsx`
+- Preview page: `src/components/layout/panels/FilePreviewPanel.tsx`
+- Project tree: `FileTreePanel` resolves relative tree entries against the
+  session working directory and opens either `preview` or `office` tabs
+- Preview IPC: `files:preview(targetPath, rootPath)` resolves real paths and
+  rejects targets outside the project root, truncates text at 1 MB, and caps
+  image/PDF payloads at 12 MB
+- Supported inline previews: Markdown, text/code, images, and PDF; DOCX, PPTX,
+  and XLSX continue through the Office workspace
+- Chat bridge: files and selected preview text reuse the existing
+  `file-tree-add-to-input` and `browser-add-to-input` events
+
 ## Automation (CronJob) Phase 1
 
 DUYA now includes a Phase 1 CronJob foundation in Electron Main Process:
