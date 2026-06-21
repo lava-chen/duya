@@ -201,6 +201,7 @@ describe('runAgent', () => {
         toolUseContext: mockContext,
         isAsync: false,
         availableTools: [],
+        agentId: 'test-agent-id',
       };
 
       const result = await runAgentSync(params);
@@ -240,6 +241,7 @@ describe('runAgent', () => {
         toolUseContext: mockContext,
         isAsync: false,
         availableTools: [],
+        agentId: 'test-agent-id',
       };
 
       const result = await runAgentSync(params);
