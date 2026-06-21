@@ -32,6 +32,14 @@ export interface RunAgentParams {
   availableTools: Tool[]
   description?: string
   /**
+   * Stable identifier the caller (e.g. AgentTool) hands out for this
+   * sub-agent. It is attached to every progress event so the renderer
+   * can group events from a single sub-agent into one panel row. Must
+   * be provided by the caller — generating a new UUID here would split
+   * the agent into multiple rows in the UI.
+   */
+  agentId: string
+  /**
    * Optional callback to report progress during agent execution.
    * Called whenever the sub-agent produces text, thinking, or tool_use events.
    */
@@ -112,11 +120,11 @@ export async function* runAgent({
   maxTurns,
   availableTools,
   description,
+  agentId,
   onProgress,
   sessionId,
 }: RunAgentParams): RunAgentResult {
   const startTime = Date.now()
-  const agentId = crypto.randomUUID()
   const parentSessionId = toolUseContext.options.sessionId
   const workingDirectory = toolUseContext.options.workingDirectory ?? process.cwd()
 

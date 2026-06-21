@@ -383,6 +383,7 @@ export class AgentTool extends BaseTool {
           maxTurns: agentInput.maxTurns,
           availableTools: context.options.tools,
           description: agentInput.description || agentInput.name,
+          agentId: taskId,
           onProgress,
           sessionId: subAgentSessionId,
         }) as AsyncGenerator<unknown, void>;
@@ -432,6 +433,7 @@ export class AgentTool extends BaseTool {
         maxTurns: agentInput.maxTurns,
         availableTools: context.options.tools,
         description: agentInput.description || agentInput.name,
+        agentId: taskId,
         onProgress,
         sessionId: subAgentSessionId,
       });
