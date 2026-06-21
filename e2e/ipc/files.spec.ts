@@ -121,3 +121,37 @@ test('files:rename rejects when target name already exists', async () => {
   expect(result.success).toBe(false);
   expect(result.error).toBeTruthy();
 });
+
+test('files:preview reads text through the real preload and main-process IPC', async () => {
+  app = await launchDuya({ namespace: 'files-preview-text' });
+  const filePath = path.join(sandboxDir, 'preview.md');
+  fs.writeFileSync(filePath, '# Preview\n\nHello from IPC.', 'utf8');
+
+  const result = await invokeApi<{
+    success: boolean;
+    kind?: string;
+    content?: string;
+    extension?: string;
+  }>(app.page, 'files.preview', filePath, sandboxDir);
+
+  expect(result).toMatchObject({ success: true, kind: 'text', extension: 'md' });
+  expect(result.content).toContain('Hello from IPC.');
+});
+
+test('files:preview blocks files outside the declared project root', async () => {
+  app = await launchDuya({ namespace: 'files-preview-scope' });
+  const projectDir = path.join(sandboxDir, 'project');
+  const outsideFile = path.join(sandboxDir, 'outside.txt');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(outsideFile, 'secret', 'utf8');
+
+  const result = await invokeApi<{ success: boolean; error?: string }>(
+    app.page,
+    'files.preview',
+    outsideFile,
+    projectDir,
+  );
+
+  expect(result.success).toBe(false);
+  expect(result.error).toContain('outside the project directory');
+});
