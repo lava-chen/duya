@@ -71,6 +71,9 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [108-cli-channel-list-and-help](./active/108-cli-channel-list-and-help.md) | CLI Channel list / channel --help bugfix — merge `channel_bindings` into `duya channel list`; wire `--help` / `help` for every descriptor-driven top-level command | P0 | Planning |
 | [101-plugin-system-cleanup](./completed/101-plugin-system-cleanup.md) | Plugin System Cleanup & Runtime Wiring — 死代码清理 (`runtimeFactories` / `plugins/literature` / `PermissionService` override) + 接入路径修正 + capabilityCounts 派生 | P1 | Complete |
 
+| [215-office-workspace](./active/215-office-workspace.md) | Office side-panel workspace for DOCX/PPTX/XLSX preview, selection context, and Agent-driven edits | P1 | Phase 1 complete; Phase 2 pending |
+| [216-file-preview-workspace](./active/216-file-preview-workspace.md) | Expanded read-only file preview workspace with tabs, project tree, and persistent composer | P1 | Implementation complete; visual smoke environment-blocked |
+
 ### Infrastructure & Architecture Plans
 
 | Plan | Description | Priority | Status |
