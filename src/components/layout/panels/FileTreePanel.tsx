@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useDeferredValue, useEffect, useRef, useMemo } from "react";
 import {
   ArrowsClockwise,
   MagnifyingGlass,
@@ -18,6 +18,14 @@ import {
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { PageTab } from "./registry";
+import { usePanel } from "@/hooks/usePanel";
+
+function resolveTreePath(workingDirectory: string | null | undefined, treePath: string): string {
+  if (!workingDirectory || /^(?:[A-Za-z]:[\\/]|[/\\]{2}|\/)/.test(treePath)) return treePath;
+  const separator = workingDirectory.includes("\\") ? "\\" : "/";
+  const normalized = treePath.replace(/[\\/]/g, separator);
+  return `${workingDirectory.replace(/[\\/]$/, "")}${separator}${normalized}`;
+}
 
 function containsMatch(node: FileTreeNode, query: string): boolean {
   const q = query.toLowerCase();
@@ -45,7 +53,10 @@ function FileTreeContent({
   nodes: FileTreeNode[];
   searchQuery: string;
 }) {
-  const filtered = searchQuery ? filterTree(nodes, searchQuery) : nodes;
+  const filtered = useMemo(
+    () => searchQuery ? filterTree(nodes, searchQuery) : nodes,
+    [nodes, searchQuery],
+  );
   return <RenderTreeNodes nodes={filtered} />;
 }
 
@@ -199,14 +210,17 @@ function ContextMenu({
   );
 }
 
-export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
+export function FileTreePanel({ tab, embedded }: { tab?: PageTab; embedded?: boolean }) {
   const { activeThreadId, threads } = useConversationStore();
   const { t } = useTranslation();
+  const { openOrActivatePage } = usePanel();
 
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const [selectedPath, setSelectedPath] = useState<string | undefined>();
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -261,17 +275,21 @@ export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     fetchTree();
   }, [fetchTree]);
 
-  const handleOpenFile = useCallback(async (path: string) => {
-    try {
-      if (window.electronAPI?.shell?.openPath) {
-        await window.electronAPI.shell.openPath(path);
-      } else {
-        window.open(`file://${path}`, "_blank");
-      }
-    } catch (e) {
-      // File open failed - ignore
+  const handleOpenFile = useCallback((treePath: string) => {
+    const filePath = resolveTreePath(workingDirectory, treePath);
+    setSelectedPath(treePath);
+    if (/\.(docx|pptx|xlsx)$/i.test(filePath)) {
+      window.dispatchEvent(new CustomEvent("duya:open-office-panel", {
+        detail: { filePath, workingDirectory },
+      }));
+      return;
     }
-  }, []);
+    openOrActivatePage("preview", {
+      filePath,
+      workingDirectory,
+      title: filePath.split(/[/\\]/).pop() || "预览",
+    });
+  }, [openOrActivatePage, workingDirectory]);
 
   const handleContextMenu = useCallback(
     (path: string, type: "file" | "directory", event: React.MouseEvent) => {
@@ -305,7 +323,7 @@ export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
   const handleRenameSubmit = useCallback(
     async (path: string, newName: string) => {
       try {
-        const result = await window.electronAPI.files.rename(path, newName);
+        const result = await window.electronAPI.files.rename(resolveTreePath(workingDirectory, path), newName);
         if (result.success) {
           await fetchTree();
         }
@@ -316,7 +334,7 @@ export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
         setRenamingName(undefined);
       }
     },
-    [fetchTree]
+    [fetchTree, workingDirectory]
   );
 
   const handleRenameCancel = useCallback(() => {
@@ -329,7 +347,7 @@ export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       const name = path.split(/[/\\]/).pop() || "";
       if (!window.confirm(`Delete "${name}"?`)) return;
       try {
-        const result = await window.electronAPI.files.delete(path);
+        const result = await window.electronAPI.files.delete(resolveTreePath(workingDirectory, path));
         if (result.success) {
           await fetchTree();
         }
@@ -337,18 +355,17 @@ export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
         // Delete failed - ignore
       }
     },
-    [fetchTree]
+    [fetchTree, workingDirectory]
   );
 
   const handleCopyAbsolutePath = useCallback((path: string) => {
-    navigator.clipboard.writeText(path).catch(() => {});
-  }, []);
+    navigator.clipboard.writeText(resolveTreePath(workingDirectory, path)).catch(() => {});
+  }, [workingDirectory]);
 
   const handleCopyRelativePath = useCallback(
     (path: string) => {
       if (workingDirectory) {
-        const relativePath = path.replace(workingDirectory, "").replace(/^[\\/]/, "");
-        navigator.clipboard.writeText(relativePath).catch(() => {});
+        navigator.clipboard.writeText(path.replace(workingDirectory, "").replace(/^[\\/]/, "")).catch(() => {});
       }
     },
     [workingDirectory]
@@ -356,36 +373,38 @@ export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
 
   const handleAddToInput = useCallback((path: string) => {
     const event = new CustomEvent("file-tree-add-to-input", {
-      detail: { path },
+      detail: { path: resolveTreePath(workingDirectory, path) },
     });
     window.dispatchEvent(event);
-  }, []);
+  }, [workingDirectory]);
 
   const defaultExpanded = useMemo(() => new Set<string>(), []);
 
   return (
     <div className="file-tree-panel-embedded">
-      <div className="file-tree-search-row">
-        <div className="file-tree-search">
-          <MagnifyingGlass size={12} className="file-tree-search-icon" />
-          <input
-            type="text"
-            placeholder={t("fileTree.filterFiles")}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="file-tree-search-input"
-          />
+      {!embedded && (
+        <div className="file-tree-search-row">
+          <div className="file-tree-search">
+            <MagnifyingGlass size={12} className="file-tree-search-icon" />
+            <input
+              type="text"
+              placeholder={t("fileTree.filterFiles")}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="file-tree-search-input"
+            />
+          </div>
+          <button
+            type="button"
+            className="file-tree-refresh-btn"
+            onClick={fetchTree}
+            aria-label={t("fileTree.refresh")}
+            disabled={loading}
+          >
+            <ArrowsClockwise size={12} className={loading ? "animate-spin" : ""} />
+          </button>
         </div>
-        <button
-          type="button"
-          className="file-tree-refresh-btn"
-          onClick={fetchTree}
-          aria-label={t("fileTree.refresh")}
-          disabled={loading}
-        >
-          <ArrowsClockwise size={12} className={loading ? "animate-spin" : ""} />
-        </button>
-      </div>
+      )}
       <div className="file-tree-panel-body">
         {loading && tree.length === 0 ? (
           <div className="file-tree-loading">
@@ -405,6 +424,7 @@ export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
         ) : (
           <FileTree
             defaultExpanded={defaultExpanded}
+            selectedPath={selectedPath}
             onOpenFile={handleOpenFile}
             onContextMenu={handleContextMenu}
             workingDirectory={workingDirectory || undefined}
@@ -413,7 +433,7 @@ export function FileTreePanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
             onRenameSubmit={handleRenameSubmit}
             onRenameCancel={handleRenameCancel}
           >
-            <FileTreeContent nodes={tree} searchQuery={searchQuery} />
+            <FileTreeContent nodes={tree} searchQuery={deferredSearchQuery} />
           </FileTree>
         )}
       </div>

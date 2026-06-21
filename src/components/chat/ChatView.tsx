@@ -3,6 +3,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { Message } from '@/types';
 import { MessageList, type MessageListRef } from './MessageList';
@@ -39,6 +40,7 @@ import { RecapBanner } from './RecapBanner';
 import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
+import { usePanel } from '@/hooks/usePanel';
 
 interface ChatViewProps {
   sessionId: string;
@@ -51,6 +53,22 @@ interface ChatViewProps {
   onInterrupt?: () => void;
   isStreaming?: boolean;
   hasQueuedMessages?: boolean;
+}
+
+function WorkspaceComposerLayer({
+  expanded,
+  children,
+}: {
+  expanded: boolean;
+  children: React.ReactNode;
+}) {
+  const [host, setHost] = useState<Element | null>(null);
+
+  useEffect(() => {
+    setHost(expanded ? document.querySelector('.app-workspace-row') : null);
+  }, [expanded]);
+
+  return expanded && host ? createPortal(children, host) : children;
 }
 
 /**
@@ -140,6 +158,7 @@ export function ChatView({
   const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
   const taskDrawerOpen = useTaskDrawerOpen();
+  const { workspaceExpanded } = usePanel();
 
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);
@@ -569,8 +588,8 @@ export function ChatView({
   }, []);
 
   return (
-    <div className={`chat-view flex flex-col flex-1 min-h-0 relative${taskDrawerOpen ? ' task-card-open' : ''}`}>
-      {activeThread && <ChatHeader thread={activeThread} />}
+    <div className={`chat-view flex flex-col flex-1 min-h-0 relative${taskDrawerOpen ? ' task-card-open' : ''}${workspaceExpanded ? ' panel-expanded' : ''}`}>
+      {!workspaceExpanded && activeThread && <ChatHeader thread={activeThread} />}
 
       {/* Back to parent button when viewing a sub-agent */}
       {(() => {
@@ -669,7 +688,8 @@ export function ChatView({
                 onSelectThread={handleSelectThread}
               >
                 {/* Input between selector and recent threads */}
-                <div className="w-full welcome-message-input">
+                <WorkspaceComposerLayer expanded={workspaceExpanded}>
+                <div className={`w-full welcome-message-input workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
                   <SkillReviewIndicator sessionId={sessionId} />
                   <MessageInput
                     onSend={handleSend}
@@ -711,6 +731,7 @@ export function ChatView({
                     />
                   </div>
                 </div>
+                </WorkspaceComposerLayer>
               </SessionSelector>
             </div>
           </div>
@@ -738,7 +759,8 @@ export function ChatView({
 
       {/* Normal input at bottom - only show when there are messages */}
       {(messages.length > 0 || isStreaming) && (
-        <div className="p-4 pt-0">
+        <WorkspaceComposerLayer expanded={workspaceExpanded}>
+        <div className={`p-4 pt-0 chat-composer-shell workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
           <div className="max-w-[800px] mx-auto">
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
@@ -756,47 +778,41 @@ export function ChatView({
               </div>
             )}
 
-            {/* Sub-agent panel - above input, slightly narrower than input */}
-            <div className="max-w-[750px] mx-auto">
-              <SubAgentPanel
-                sessionId={sessionId}
-                onOpenSubAgent={async (_agentName, agentSessionId) => {
-                  console.log('[ChatView] onOpenSubAgent called:', agentSessionId?.slice(0, 8));
-                  if (agentSessionId) {
-                    useConversationStore.getState().setActiveThread(agentSessionId);
-                  } else {
-                    console.log('[ChatView] No agentSessionId, trying fallback...');
-                    try {
-                      const children = await listThreadsByParentIdIPC(sessionId);
-                      console.log('[ChatView] listThreadsByParentIdIPC children:', children.length);
-                      const fallback = children.find(c => c.agentType === 'sub-agent');
-                      if (fallback) {
-                        console.log('[ChatView] Using fallback:', fallback.id.slice(0, 8));
-                        useConversationStore.getState().setActiveThread(fallback.id);
-                      }
-                    } catch (err) {
-                      console.error('[ChatView] Failed to open sub-agent:', err);
+            {/* Sub-agent panel - aligned to input width so it tracks the input box on resize */}
+            <SubAgentPanel
+              sessionId={sessionId}
+              onOpenSubAgent={async (_agentName, agentSessionId) => {
+                console.log('[ChatView] onOpenSubAgent called:', agentSessionId?.slice(0, 8));
+                if (agentSessionId) {
+                  useConversationStore.getState().setActiveThread(agentSessionId);
+                } else {
+                  console.log('[ChatView] No agentSessionId, trying fallback...');
+                  try {
+                    const children = await listThreadsByParentIdIPC(sessionId);
+                    console.log('[ChatView] listThreadsByParentIdIPC children:', children.length);
+                    const fallback = children.find(c => c.agentType === 'sub-agent');
+                    if (fallback) {
+                      console.log('[ChatView] Using fallback:', fallback.id.slice(0, 8));
+                      useConversationStore.getState().setActiveThread(fallback.id);
                     }
+                  } catch (err) {
+                    console.error('[ChatView] Failed to open sub-agent:', err);
                   }
-                }}
-              />
-            </div>
+                }
+              }}
+            />
 
             {!isAskUserQuestionPending && (
-              <div className="max-w-[750px] mx-auto">
-                <PermissionPrompt
-                  pendingPermission={pendingPermission}
-                  permissionResolved={permissionResolved}
-                  onPermissionResponse={respondToPermission}
-                  permissionProfile={permissionProfile}
-                />
-              </div>
+              <PermissionPrompt
+                pendingPermission={pendingPermission}
+                permissionResolved={permissionResolved}
+                onPermissionResponse={respondToPermission}
+                permissionProfile={permissionProfile}
+              />
             )}
 
             {isStreaming && (
-              <div className="max-w-[750px] mx-auto">
-                <MailboxPanel sessionId={sessionId} />
-              </div>
+              <MailboxPanel sessionId={sessionId} />
             )}
 
             {isAskUserQuestionPending ? (
@@ -862,9 +878,10 @@ export function ChatView({
             </div>
           </div>
         </div>
+        </WorkspaceComposerLayer>
       )}
         </div>
-        <TaskDrawer />
+        {!workspaceExpanded && <TaskDrawer />}
       </div>
 
       <InputDialog
