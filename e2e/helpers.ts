@@ -23,6 +23,8 @@ export interface LaunchOptions {
    * Currently informational; add handler-side short-circuits as needed.
    */
   mockExternal?: string[];
+  /** Load the already-built dist/ renderer instead of a Vite dev server. */
+  previewMode?: boolean;
 }
 
 export interface DuyaApp {
@@ -61,6 +63,11 @@ export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
       DUYA_TEST: '1',
       DUYA_MOCK_EXTERNAL: (opts.mockExternal ?? []).join(','),
       DUYA_TEST_USER_DATA_DIR: userDataRoot,
+      DUYA_PREVIEW_MODE: opts.previewMode ? 'true' : 'false',
+      // Bind the browser bridge daemon to an ephemeral port. A developer may
+      // already have DUYA running on the default 19825; IPC E2E must not stop
+      // or contend with that live instance before creating its first window.
+      DUYA_DAEMON_PORT: '0',
       // Suppress noisy logs during tests
       LOG_LEVEL: 'WARN',
     },
@@ -79,7 +86,16 @@ export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
   });
 
   try {
-    const page = await app.firstWindow();
+    // Electron can create its BrowserWindow during the short gap between
+    // `_electron.launch()` resolving and `firstWindow()` subscribing. Poll
+    // the observed window list so this race cannot wait for a second window.
+    const deadline = Date.now() + 30_000;
+    let page = app.windows()[0];
+    while (!page && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      page = app.windows()[0];
+    }
+    if (!page) throw new Error('Electron did not create a BrowserWindow within 30 seconds');
     // Wait for the renderer to finish loading AND the preload-exposed
     // window.electronAPI to be available. domcontentloaded alone is not
     // enough — the contextBridge injection happens after the DOM event.
