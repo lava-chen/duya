@@ -7,7 +7,7 @@ import { TOOL_NAMES } from '../../../types.js'
 
 export function getSessionGuidanceSection(ctx: PromptContext): string | null {
   const hasAskUserQuestion = ctx.enabledTools.has(TOOL_NAMES.ASK_USER_QUESTION)
-  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.AGENT)
+  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT)
   const hasSkills = ctx.enabledTools.has(TOOL_NAMES.SKILL)
   const isNonInteractiveSession = ctx.isNonInteractiveSession ?? false
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
@@ -31,13 +31,13 @@ export function getSessionGuidanceSection(ctx: PromptContext): string | null {
       : `If you need the user to run a shell command themselves, suggest they type \`! <command>\` in the prompt.`,
     hasAgentTool
       ? isForkSubagentEnabled
-        ? `Calling ${TOOL_NAMES.AGENT} without a subagent_type creates a fork, which runs in the background.`
-        : `Use the ${TOOL_NAMES.AGENT} tool with specialized agents when the task at hand matches the agent's description.`
+        ? `Calling ${TOOL_NAMES.SUBAGENT} without a subagent_type creates a fork, which runs in the background.`
+        : `Use the ${TOOL_NAMES.SUBAGENT} tool with specialized agents when the task at hand matches the agent's description.`
       : null,
     ...(hasAgentTool && !isForkSubagentEnabled
       ? [
           `For simple searches use ${searchTools} directly.`,
-          `For broader exploration, use ${TOOL_NAMES.AGENT} with subagent_type="Explore".`,
+          `For broader exploration, use ${TOOL_NAMES.SUBAGENT} with subagent_type="Explore".`,
         ]
       : []),
     hasSkills

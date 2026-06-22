@@ -10,7 +10,7 @@ export function getToolUsageSection(
   ctx: PromptContext,
   toolContributions: ToolPromptContribution[],
 ): string {
-  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.AGENT)
+  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT)
   const hasTaskTool = ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
   const isReplModeEnabled = ctx.isReplModeEnabled ?? false
