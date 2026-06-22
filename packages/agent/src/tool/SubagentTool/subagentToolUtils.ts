@@ -1,9 +1,10 @@
 /**
- * AgentTool utilities
+ * SubagentTool utilities
  */
 
 import type { Tool } from '../../types.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
+import { SUBAGENT_TOOL_NAME } from './constants.js'
 
 export type ResolvedAgentTools = {
   hasWildcard: boolean
@@ -74,9 +75,9 @@ export function resolveAgentTools(
   let allowedAgentTypes: string[] | undefined
 
   for (const toolSpec of agentTools ?? []) {
-    // Special case: Agent tool carries allowedAgentTypes metadata in its spec
-    if (toolSpec === AGENT_TOOL_NAME) {
-      // For now, skip agent tool resolution
+    // Special case: SubagentTool carries allowedAgentTypes metadata in its spec
+    if (toolSpec === SUBAGENT_TOOL_NAME) {
+      // For now, skip subagent tool resolution
       validTools.push(toolSpec)
       continue
     }
@@ -101,5 +102,3 @@ export function resolveAgentTools(
     allowedAgentTypes,
   }
 }
-
-export const AGENT_TOOL_NAME = 'Agent'

@@ -31,7 +31,7 @@ export async function resumeAgentBackground({
 
   const description = `(resumed)`
 
-  console.log(`[AgentTool] Resuming agent ${agentId}`)
+  console.log(`[SubagentTool] Resuming agent ${agentId}`)
 
   return {
     agentId,

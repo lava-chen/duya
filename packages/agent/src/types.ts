@@ -3,7 +3,7 @@
  */
 
 // Import AgentDefinition from loadAgentsDir for unified access
-import type { AgentDefinition } from './tool/AgentTool/loadAgentsDir.js';
+import type { AgentDefinition } from './tool/SubagentTool/loadAgentsDir.js';
 import type { PermissionMode } from './permissions/types.js';
 
 // 消息角色

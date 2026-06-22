@@ -1,4 +1,4 @@
-import { AGENT_TOOL_NAME } from '../constants.js'
+import { SUBAGENT_TOOL_NAME } from '../constants.js'
 import type { BuiltInAgentDefinition } from '../loadAgentsDir.js'
 import { EXPLORE_AGENT } from './exploreAgent.js'
 
@@ -68,7 +68,7 @@ export const PLAN_AGENT: BuiltInAgentDefinition = {
   whenToUse:
     'Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs.',
   disallowedTools: [
-    AGENT_TOOL_NAME,
+    SUBAGENT_TOOL_NAME,
     FILE_EDIT_TOOL_NAME,
     FILE_WRITE_TOOL_NAME,
   ],

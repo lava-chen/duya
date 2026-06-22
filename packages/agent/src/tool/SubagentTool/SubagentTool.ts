@@ -1,5 +1,12 @@
 /**
- * AgentTool - Tool for spawning sub-agents
+ * SubagentTool - Tool for spawning sub-agents
+ *
+ * Internally renamed from `AgentTool` to `SubagentTool` so the LLM
+ * sees clearer intent ("this spawns a sub-agent, not a top-level
+ * agent loop"). The wire name remains `'Agent'` for backward compat
+ * with existing session history and saved permission rules — see
+ * `SUBAGENT_TOOL_NAME` in `./constants.ts`.
+ *
  * Enhanced: extends BaseTool with full Tool interface
  */
 
@@ -15,16 +22,15 @@ import { formatAgentLine, getPrompt } from './prompt.js';
 import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
 import { sessionDb } from '../../ipc/db-client.js';
 import { sendEvent } from '../../process/worker-protocol.js';
-import { buildChatAgentProgressPayload, type AgentProgressPayloadMeta } from './agentLifecycleBridge.js';
+import { buildChatAgentProgressPayload, type AgentProgressPayloadMeta } from './subagentLifecycleBridge.js';
 import { backgroundAgentLifecycle } from '../../lifecycle/BackgroundAgentLifecycle.js';
 import { logger } from '../../utils/logger.js';
+import { SUBAGENT_TOOL_NAME } from './constants.js';
 
 export { formatAgentLine }
+export { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME, VERIFICATION_AGENT_TYPE, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
 
-export const AGENT_TOOL_NAME = 'Agent'
-export const LEGACY_AGENT_TOOL_NAME = 'Task'
-
-export interface AgentToolInput {
+export interface SubagentToolInput {
   name?: string
   description?: string
   subagent_type?: string
@@ -34,7 +40,7 @@ export interface AgentToolInput {
   model?: string
 }
 
-export interface AgentToolResult {
+export interface SubagentToolResult {
   agentId: string
   agentType: string
   content: Array<{ type: 'text'; text: string }>
@@ -97,8 +103,8 @@ function pruneRecentBackgroundSpawns(now: number): void {
   }
 }
 
-export class AgentTool extends BaseTool {
-  readonly name = AGENT_TOOL_NAME;
+export class SubagentTool extends BaseTool {
+  readonly name = SUBAGENT_TOOL_NAME;
   readonly description = 'Launch a new agent to handle complex, multi-step tasks autonomously.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
@@ -594,10 +600,10 @@ export class AgentTool extends BaseTool {
   }
 }
 
-export const agentTool = new AgentTool();
+export const subagentTool = new SubagentTool();
 
-export function getAgentToolDefinition(): { name: string; description: string; input_schema: Record<string, unknown> } {
-  return agentTool.toTool();
+export function getSubagentToolDefinition(): { name: string; description: string; input_schema: Record<string, unknown> } {
+  return subagentTool.toTool();
 }
 
 export function getAgentDefinitions(): AgentDefinition[] {

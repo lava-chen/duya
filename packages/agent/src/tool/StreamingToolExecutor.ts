@@ -299,7 +299,7 @@ function isShellCommandToolName(toolName: string): boolean {
   return normalized === 'bash' || normalized === 'powershell'
 }
 
-function isAgentToolCall(toolName: string, input: Record<string, unknown> | undefined): boolean {
+function isSubagentToolCall(toolName: string, input: Record<string, unknown> | undefined): boolean {
   const normalized = toolName.toLowerCase()
   if (normalized === 'agent' || normalized === 'subagent' || normalized === 'sub_agent') return true
   return normalized === 'task' && (typeof input?.prompt === 'string' || typeof input?.subagent_type === 'string')
@@ -1251,10 +1251,10 @@ export class StreamingToolExecutor {
         toolUseId: tool.id,
       }
 
-      // For Agent tool, create a context with progress callback to stream sub-agent events
+      // For SubagentTool, create a context with progress callback to stream sub-agent events
       const toolInput = (tool.block.input ?? {}) as Record<string, unknown>
-      const isAgentTool = isAgentToolCall(tool.block.name, toolInput)
-      const toolContext: ToolUseContext = isAgentTool
+      const isSubagentTool = isSubagentToolCall(tool.block.name, toolInput)
+      const toolContext: ToolUseContext = isSubagentTool
         ? {
             ...executionContext,
             reportAgentProgress: (event: AgentProgressEvent) => {
@@ -1268,7 +1268,7 @@ export class StreamingToolExecutor {
           }
         : executionContext
 
-      if (isAgentTool) {
+      if (isSubagentTool) {
         logger.info('[SubAgent] executor invoking agent tool', {
           toolUseId: tool.id,
           toolName: tool.block.name,
@@ -1359,7 +1359,7 @@ export class StreamingToolExecutor {
       }
 
       if (result.error) {
-        if (isAgentTool) {
+        if (isSubagentTool) {
           logger.warn('[SubAgent] executor agent tool returned error', {
             toolUseId: tool.id,
             toolName: tool.block.name,
@@ -1392,7 +1392,7 @@ export class StreamingToolExecutor {
         ? result.result
         : JSON.stringify(result.result)
 
-      if (isAgentTool) {
+      if (isSubagentTool) {
         let parsedResult: Record<string, unknown> | null = null
         try {
           parsedResult = JSON.parse(resultContent) as Record<string, unknown>

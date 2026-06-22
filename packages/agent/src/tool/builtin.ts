@@ -13,7 +13,7 @@ import { WriteTool } from './WriteTool/WriteTool.js';
 import { GrepTool } from './GrepTool/GrepTool.js';
 import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 import { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
-import { agentTool } from './AgentTool/index.js';
+import { subagentTool } from './SubagentTool/index.js';
 import { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
 import { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
@@ -132,8 +132,8 @@ export function createBuiltinRegistry(
   const globToolInstance = new GlobTool();
   registry.register(globToolInstance.toTool(), globToolInstance);
 
-  // AgentTool - for spawning sub-agents
-  registry.register(agentTool.toTool(), agentTool);
+  // SubagentTool - for spawning sub-agents
+  registry.register(subagentTool.toTool(), subagentTool);
 
   // Team tools - for multi-agent team coordination
   registry.register(teamCreateTool, teamCreateTool);
@@ -295,8 +295,8 @@ export { WriteTool } from './WriteTool/WriteTool.js';
 export { GrepTool } from './GrepTool/GrepTool.js';
 export { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 export { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
-export { getAgentToolDefinition, getAgentDefinitions, getPrompt } from './AgentTool/index.js';
-export type { AgentDefinition, AgentToolInput, AgentToolResult } from './AgentTool/index.js';
+export { getSubagentToolDefinition, getAgentDefinitions, getPrompt } from './SubagentTool/index.js';
+export type { AgentDefinition, SubagentToolInput, SubagentToolResult } from './SubagentTool/index.js';
 export { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
 export { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 

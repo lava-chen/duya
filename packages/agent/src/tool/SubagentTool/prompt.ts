@@ -1,10 +1,10 @@
 /**
- * AgentTool Prompt
+ * SubagentTool Prompt
  */
 
 import type { AgentDefinition } from './loadAgentsDir.js'
-import { AGENT_TOOL_NAME } from './constants.js'
-import { formatAgentLineForPrompt } from './AgentTool.js'
+import { SUBAGENT_TOOL_NAME } from './constants.js'
+import { formatAgentLineForPrompt } from './SubagentTool.js'
 
 // Tool name imports from duya
 const FILE_READ_TOOL_NAME = 'Read'
@@ -57,7 +57,7 @@ function isPrime(n) {
 <commentary>
 Since a significant piece of code was written and the task was completed, now use the test-runner agent to run the tests
 </commentary>
-assistant: Uses the ${AGENT_TOOL_NAME} tool to launch a test-runner agent
+assistant: Uses the ${SUBAGENT_TOOL_NAME} tool to launch a test-runner agent
 </example>
 
 <example>
@@ -65,7 +65,7 @@ user: "Hello"
 <commentary>
 Since the user is greeting, use the greeting-responder agent to respond with a friendly joke
 </commentary>
-assistant: "I'm going to use the ${AGENT_TOOL_NAME} tool to launch the greeting-responder agent"
+assistant: "I'm going to use the ${SUBAGENT_TOOL_NAME} tool to launch the greeting-responder agent"
 </example>
 `
 
@@ -75,11 +75,11 @@ ${effectiveAgents.map(agent => formatAgentLineForPrompt(agent)).join('\n')}`
   // Shared core prompt used by both coordinator and non-coordinator modes
   const shared = `Launch a new agent to handle complex, multi-step tasks autonomously.
 
-The ${AGENT_TOOL_NAME} tool launches specialized agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
+The ${SUBAGENT_TOOL_NAME} tool launches specialized agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
 
 ${agentListSection}
 
-When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used.`
+When using the ${SUBAGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used.`
 
   // Coordinator mode gets the slim prompt -- the coordinator system prompt
   // already covers usage notes, examples, and when-not-to-use guidance.
@@ -88,10 +88,10 @@ When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type parameter to sel
   }
 
   const whenNotToUseSection = `
-When NOT to use the ${AGENT_TOOL_NAME} tool:
-- If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${GLOB_TOOL_NAME} instead of the ${AGENT_TOOL_NAME} tool, to find the match more quickly
+When NOT to use the ${SUBAGENT_TOOL_NAME} tool:
+- If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${GLOB_TOOL_NAME} instead of the ${SUBAGENT_TOOL_NAME} tool, to find the match more quickly
 - If you are searching for a specific class definition like "class Foo", use ${GREP_TOOL_NAME} instead, to find the match more quickly
-- If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead of the ${AGENT_TOOL_NAME} tool, to find the match more quickly
+- If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead of the ${SUBAGENT_TOOL_NAME} tool, to find the match more quickly
 - Other tasks that are not related to the agent descriptions above
 `
 
@@ -101,13 +101,13 @@ ${whenNotToUseSection}
 
 Usage notes:
 - Always include a short description (3-5 words) summarizing what the agent will do
-- Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks
+- Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple ${SUBAGENT_TOOL_NAME} tool use content blocks
 - Agents run in the background by default. The tool returns immediately and you continue working — you will be automatically notified when it completes. Do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
 - Foreground vs background: pass \`run_in_background: false\` only when you truly need the agent's result before the next step. Use the default background mode for independent or parallel work.
 - To continue a previously spawned agent, use ${SEND_MESSAGE_TOOL_NAME} with the agent's ID or name as the \`to\` field. The agent resumes with its full context preserved. Each Agent invocation starts fresh — provide a complete task description.
 - The agent's outputs should generally be trusted
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent
-- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks.
+- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${SUBAGENT_TOOL_NAME} tool use content blocks.
 - You can optionally set \`isolation: "worktree"\` to run the agent in a temporary git worktree, giving it an isolated copy of the repository. The worktree is automatically cleaned up if the agent makes no changes; if changes are made, the worktree path and branch are returned in the result.${writingThePromptSection}
 
 ${currentExamples}`
