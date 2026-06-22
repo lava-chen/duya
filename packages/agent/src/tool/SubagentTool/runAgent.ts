@@ -14,7 +14,7 @@ import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } f
 import { isBuiltInAgent } from './loadAgentsDir.js'
 import { duyaAgent } from '../../index.js'
 import { setMaxListeners } from 'node:events'
-import { resolveAgentTools } from './agentToolUtils.js'
+import { resolveAgentTools } from './subagentToolUtils.js'
 import { ToolRegistry } from '../registry.js'
 import { getPromptProfileForSubagentType } from '../../prompts/modes/index.js'
 import { PromptManager } from '../../prompts/PromptManager.js'
@@ -32,7 +32,7 @@ export interface RunAgentParams {
   availableTools: Tool[]
   description?: string
   /**
-   * Stable identifier the caller (e.g. AgentTool) hands out for this
+   * Stable identifier the caller (e.g. SubagentTool) hands out for this
    * sub-agent. It is attached to every progress event so the renderer
    * can group events from a single sub-agent into one panel row. Must
    * be provided by the caller — generating a new UUID here would split

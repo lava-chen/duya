@@ -126,7 +126,7 @@ export interface AgentThinkingEvent {
   content: string;
 }
 
-export interface AgentToolUseEvent {
+export interface SubagentToolUseEvent {
   type: 'chat:tool_use';
   sessionId: string;
   id: string;
@@ -134,7 +134,7 @@ export interface AgentToolUseEvent {
   input: unknown;
 }
 
-export interface AgentToolResultEvent {
+export interface SubagentToolResultEvent {
   type: 'chat:tool_result';
   sessionId: string;
   id: string;
@@ -143,7 +143,7 @@ export interface AgentToolResultEvent {
   duration_ms?: number;
 }
 
-export interface AgentToolProgressEvent {
+export interface SubagentToolProgressEvent {
   type: 'chat:tool_progress';
   sessionId: string;
   toolUseId: string;
@@ -289,9 +289,9 @@ export type WorkerEvent =
   | CheckpointEvent
   | AgentTextEvent
   | AgentThinkingEvent
-  | AgentToolUseEvent
-  | AgentToolResultEvent
-  | AgentToolProgressEvent
+  | SubagentToolUseEvent
+  | SubagentToolResultEvent
+  | SubagentToolProgressEvent
   | AgentPermissionEvent
   | AgentContextUsageEvent
   | AgentDoneEvent

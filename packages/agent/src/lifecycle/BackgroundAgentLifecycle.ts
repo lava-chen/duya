@@ -2,10 +2,10 @@ import type { TaskRecord, TaskStatus } from './TaskState.js'
 import { ProgressTracker } from './ProgressTracker.js'
 import { OutputFileWriter } from './OutputFileWriter.js'
 import { CleanupRegistry } from './CleanupRegistry.js'
-import { applyProgressEvent, extractResultFromLastMessage } from '../tool/AgentTool/agentLifecycleBridge.js'
+import { applyProgressEvent, extractResultFromLastMessage } from '../tool/SubagentTool/subagentLifecycleBridge.js'
 import { sendEvent } from '../process/worker-protocol.js'
 import { logger } from '../utils/logger.js'
-import type { AgentProgressEvent } from '../tool/AgentTool/runAgent.js'
+import type { AgentProgressEvent } from '../tool/SubagentTool/runAgent.js'
 import type { Message } from '../types.js'
 import { enqueuePendingNotification } from '../queue/index.js'
 import { buildTaskNotificationXml, DEFAULT_MAX_RESULT_CHARS, type BuildTaskNotificationInput } from './buildTaskNotification.js'
@@ -162,7 +162,7 @@ export class BackgroundAgentLifecycle {
             hasData: ev.data !== undefined,
             toolName: ev.toolName,
           }, 'SubAgent')
-          // applyProgressEvent calls `onProgress` (which the AgentTool wires
+          // applyProgressEvent calls `onProgress` (which the SubagentTool wires
           // to emitLiveProgress → sendEvent) and updates the progress snapshot.
           // We must NOT send a second chat:agent_progress event here — that
           // duplicates the SSE payload and the renderer's SubAgentPanel

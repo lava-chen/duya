@@ -1,4 +1,4 @@
-import { AGENT_TOOL_NAME } from '../constants.js'
+import { SUBAGENT_TOOL_NAME } from '../constants.js'
 import type { BuiltInAgentDefinition } from '../loadAgentsDir.js'
 
 // Tool name imports from duya
@@ -54,7 +54,7 @@ export const EXPLORE_AGENT: BuiltInAgentDefinition = {
   agentType: 'Explore',
   whenToUse: EXPLORE_WHEN_TO_USE,
   disallowedTools: [
-    AGENT_TOOL_NAME,
+    SUBAGENT_TOOL_NAME,
     FILE_EDIT_TOOL_NAME,
     FILE_WRITE_TOOL_NAME,
   ],

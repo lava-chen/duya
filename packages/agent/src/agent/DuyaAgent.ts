@@ -135,7 +135,7 @@ import '../modes/research-mode/index.js';
 
 import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
-import type { AgentDefinition } from '../tool/AgentTool/index.js';
+import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
 import type { CompactOptions } from '../compact/types.js';
 
@@ -1365,12 +1365,12 @@ export class duyaAgent {
    * `registry` and the loaded `agentDefinitions`, because the main
    * loop needs all three: `tools` for the LLM, `registry` to construct
    * the `StreamingToolExecutor`, and `agentDefinitions` to populate
-   * `ToolUseContext.options.agentDefinitions` (so the AgentTool can
+   * `ToolUseContext.options.agentDefinitions` (so the SubagentTool can
    * validate sub-agent invocations).
    *
    * The built-in registry is loaded with a dynamic `import()` rather
    * than a static one to break the load-time cycle through
-   * `tool/AgentTool/runAgent.ts:15` (`import { duyaAgent }`). See Plan 211
+   * `tool/SubagentTool/runAgent.ts:15` (`import { duyaAgent }`). See Plan 211
    * Phase D for the full explanation.
    */
   private async _resolveTools(
@@ -1443,14 +1443,14 @@ export class duyaAgent {
 
     logger.info(`[Agent] streamChat: Loaded ${tools.length} tools`);
 
-    // Agent definitions (sub-agents) are loaded separately for the AgentTool
+    // Agent definitions (sub-agents) are loaded separately for the SubagentTool
     // to register as `task` calls. They are not part of the `tools` array
     // returned to the LLM — they live behind the tool's own validation.
     logger.info(`[Agent] streamChat: Loading agent definitions...`);
     // Dynamic import breaks the load-time cycle through
-    // `tool/AgentTool/runAgent.ts:15` (`import { duyaAgent }`). See Plan 211
+    // `tool/SubagentTool/runAgent.ts:15` (`import { duyaAgent }`). See Plan 211
     // Phase D for the full explanation.
-    const { getAgentDefinitions } = await import('../tool/AgentTool/index.js');
+    const { getAgentDefinitions } = await import('../tool/SubagentTool/index.js');
     const agentDefinitions = getAgentDefinitions();
     logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
 

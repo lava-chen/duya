@@ -1,4 +1,4 @@
-import { AGENT_TOOL_NAME } from '../constants.js'
+import { SUBAGENT_TOOL_NAME } from '../constants.js'
 import type { BuiltInAgentDefinition } from '../loadAgentsDir.js'
 import type { ToolUseContext } from '../../../types.js'
 
@@ -114,7 +114,7 @@ export const RESEARCH_AGENT: BuiltInAgentDefinition = {
   agentType: 'Research',
   whenToUse: RESEARCH_WHEN_TO_USE,
   disallowedTools: [
-    AGENT_TOOL_NAME,
+    SUBAGENT_TOOL_NAME,
     SKILL_MANAGE_TOOL_NAME,
     DUYA_INFO_TOOL_NAME,
     DUYA_HEALTH_TOOL_NAME,
