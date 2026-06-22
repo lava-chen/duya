@@ -25,7 +25,7 @@ export const TOOL_NAMES = {
   EDIT: 'Edit',
   GLOB: 'Glob',
   GREP: 'Grep',
-  AGENT: 'Agent',
+  SUBAGENT: 'Agent', // wire name kept as 'Agent' for backward compat — see packages/agent/src/tool/SubagentTool/constants.ts
   SKILL: 'Skill',
   TASK: 'Task', // Unified task tool with actions: create, get, list, update, output, stop
   TODO_WRITE: 'TodoWrite',

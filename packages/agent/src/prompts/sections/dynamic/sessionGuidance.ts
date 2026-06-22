@@ -12,8 +12,8 @@ function getAgentToolSection(ctx: PromptContext): string {
   const isForkSubagentEnabled = ctx.isForkSubagentEnabled ?? false
 
   return isForkSubagentEnabled
-    ? `Calling ${TOOL_NAMES.AGENT} without a subagent_type creates a fork, which runs in the background and keeps its tool output out of your context — so you can keep chatting with the user while it works. Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won't need again. **If you ARE the fork** — execute directly; do not re-delegate.`
-    : `Use the ${TOOL_NAMES.AGENT} tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.`
+    ? `Calling ${TOOL_NAMES.SUBAGENT} without a subagent_type creates a fork, which runs in the background and keeps its tool output out of your context — so you can keep chatting with the user while it works. Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won't need again. **If you ARE the fork** — execute directly; do not re-delegate.`
+    : `Use the ${TOOL_NAMES.SUBAGENT} tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.`
 }
 
 function getDiscoverSkillsGuidance(ctx: PromptContext): string | null {
@@ -28,17 +28,17 @@ function getDiscoverSkillsGuidance(ctx: PromptContext): string | null {
 
 function getVerificationAgentSection(ctx: PromptContext): string | null {
   const isVerificationAgentEnabled = ctx.isVerificationAgentEnabled ?? false
-  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.AGENT)
+  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT)
 
   if (isVerificationAgentEnabled && hasAgentTool) {
-    return `The contract: when non-trivial implementation happens on your turn, independent adversarial verification must happen before you report completion — regardless of who did the implementing (you directly, a fork you spawned, or a subagent). You are the one reporting to the user; you own the gate. Non-trivial means: 3+ file edits, backend/API changes, or infrastructure changes. Spawn the ${TOOL_NAMES.AGENT} tool with subagent_type="${VERIFICATION_AGENT_TYPE}". Your own checks, caveats, and a fork's self-checks do NOT substitute — only the verifier assigns a verdict; you cannot self-assign PARTIAL. Pass the original user request, all files changed (by anyone), the approach, and the plan file path if applicable. Flag concerns if you have them but do NOT share test results or claim things work. On FAIL: fix, resume the verifier with its findings plus your fix, repeat until PASS. On PASS: spot-check it — re-run 2-3 commands from its report, confirm every PASS has a Command run block with output that matches your re-run. If any PASS lacks a command block or diverges, resume the verifier with the specifics. On PARTIAL (from the verifier): report what passed and what could not be verified.`
+    return `The contract: when non-trivial implementation happens on your turn, independent adversarial verification must happen before you report completion — regardless of who did the implementing (you directly, a fork you spawned, or a subagent). You are the one reporting to the user; you own the gate. Non-trivial means: 3+ file edits, backend/API changes, or infrastructure changes. Spawn the ${TOOL_NAMES.SUBAGENT} tool with subagent_type="${VERIFICATION_AGENT_TYPE}". Your own checks, caveats, and a fork's self-checks do NOT substitute — only the verifier assigns a verdict; you cannot self-assign PARTIAL. Pass the original user request, all files changed (by anyone), the approach, and the plan file path if applicable. Flag concerns if you have them but do NOT share test results or claim things work. On FAIL: fix, resume the verifier with its findings plus your fix, repeat until PASS. On PASS: spot-check it — re-run 2-3 commands from its report, confirm every PASS has a Command run block with output that matches your re-run. If any PASS lacks a command block or diverges, resume the verifier with the specifics. On PARTIAL (from the verifier): report what passed and what could not be verified.`
   }
   return null
 }
 
 export function getSessionGuidanceSection(ctx: PromptContext): string | null {
   const hasAskUserQuestion = ctx.enabledTools.has(TOOL_NAMES.ASK_USER_QUESTION)
-  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.AGENT)
+  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT)
   const hasSkills = ctx.enabledTools.has(TOOL_NAMES.SKILL)
   const isNonInteractiveSession = ctx.isNonInteractiveSession ?? false
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
@@ -64,7 +64,7 @@ export function getSessionGuidanceSection(ctx: PromptContext): string | null {
     ...(hasAgentTool && !isForkSubagentEnabled
       ? [
           `For simple, directed codebase searches (e.g. for a specific file/class/function) use ${searchTools} directly.`,
-      `For broader codebase exploration and deep research, use the ${TOOL_NAMES.AGENT} tool with subagent_type="Explore" (or "explore"). This is slower than using ${searchTools} directly, so use this only when a simple, directed search proves to be insufficient or when your task will clearly require more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
+      `For broader codebase exploration and deep research, use the ${TOOL_NAMES.SUBAGENT} tool with subagent_type="Explore" (or "explore"). This is slower than using ${searchTools} directly, so use this only when a simple, directed search proves to be insufficient or when your task will clearly require more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
         ]
       : []),
     hasSkills
