@@ -70,11 +70,10 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
   const isBash = !isDuyaCli && renderer.icon === TerminalIcon;
   const lowerName = tool.name.toLowerCase();
   const isLegacySubAgent = isLegacySubAgentToolAction(tool);
-  // AgentStatus is a query tool, not a sub-agent launch — it has
-  // no per-event stream to render, so route it to the generic
-  // ToolActionRow instead of SubAgentToolRow.
-  const isAgentStatus = lowerName === 'agentstatus';
-  const isSubAgent = !isAgentStatus && (renderer.icon === RobotIcon || isLegacySubAgent);
+  // AgentStatus used to route here as a separate path, but the tool
+  // was removed in P0-γ. Subagent routing now solely relies on icon
+  // + legacy alias detection.
+  const isSubAgent = renderer.icon === RobotIcon || isLegacySubAgent;
   const isFileEdit = FILE_EDIT_TOOLS.has(lowerName) || FILE_CREATE_TOOLS.has(lowerName);
   const isRead = ['read', 'readfile', 'read_file'].includes(lowerName);
   const isAskUserQuestion = isAskUserQuestionTool(tool.name);

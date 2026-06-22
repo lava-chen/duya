@@ -112,7 +112,7 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   if (isBrowserTool(name)) {
     return { count: 1, categoryKey: 'browser' };
   }
-  if (['agent', 'subagent', 'sub_agent', 'agentstatus'].includes(name)) {
+  if (['agent', 'subagent', 'sub_agent'].includes(name)) {
     return { count: 1, categoryKey: 'agent' };
   }
   if (name === 'askuserquestion') {
