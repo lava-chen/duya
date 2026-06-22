@@ -132,27 +132,6 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    // AgentStatus tool — query/wait for background sub-agents
-    // launched by the Agent tool. Shares the RobotIcon + agent
-    // verb with the Agent row so both read naturally as "agent
-    // operations" in the chrome.
-    match: (n) => n.toLowerCase() === 'agentstatus',
-    icon: RobotIcon,
-    labelKey: 'streaming.toolAction.label.agent',
-    getSummary: (input) => {
-      const inp = (input || {}) as Record<string, unknown>;
-      const action = typeof inp.action === 'string' ? inp.action : '';
-      const id =
-        typeof inp.agent_id === 'string'
-          ? inp.agent_id
-          : typeof inp.agent_ids === 'string'
-            ? inp.agent_ids
-            : '';
-      if (id) return `${action} ${id.slice(0, 16)}`;
-      return action || 'AgentStatus';
-    },
-  },
-  {
     match: (n) => isBrowserTool(n),
     icon: ChromeIcon,
     labelKey: 'streaming.toolAction.label.browser',
