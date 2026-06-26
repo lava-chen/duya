@@ -13,10 +13,9 @@ import {
   PaperclipIcon,
 } from '@/components/icons';
 import { Select } from 'antd';
-import type { CommandBadge, CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
+import type { CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
 import { FileAttachment } from '@/types/message';
 import {
-  dispatchBadge,
   buildCliAppend,
   resolveDirectSlash,
   filterItems,
@@ -203,8 +202,6 @@ export function MessageInput({
   const [terminalReferenceChips, setTerminalReferenceChips] = useState<TerminalReferenceChip[]>([]);
   const [browserReferenceChips, setBrowserReferenceChips] = useState<BrowserReferenceChip[]>([]);
 
-  // Badge state (for non-immediate commands like /compact)
-  const [badge, setBadge] = useState<CommandBadge | null>(null);
   // CLI badge state (for AI-requested CLI tools)
   const [cliBadge, setCliBadge] = useState<CliBadge | null>(null);
 
@@ -254,8 +251,6 @@ export function MessageInput({
     setSelectedIndex,
     setTriggerPos,
     closePopover,
-    onCommand,
-    setBadge,
     sessionId,
   });
 
@@ -268,7 +263,6 @@ export function MessageInput({
     removePastedContent,
     clearPastedContents,
     handlePaste,
-    getCombinedContent,
     getCombinedContentWithMarkers,
     hasPastedContents,
   } = usePastedContent();
@@ -925,9 +919,6 @@ export function MessageInput({
 
       // Get combined content with markers for storage/display
       const contentWithMarkers = getCombinedContentWithMarkers(contentWithChips);
-      // Get plain content for API
-      const plainContent = getCombinedContent(contentWithChips);
-
       // Build output style config from selected style
       const outputStyleConfig = selectedStyleId
         ? responseStyles.find(s => s.id === selectedStyleId)
@@ -935,25 +926,6 @@ export function MessageInput({
       const styleOpts = outputStyleConfig
         ? { name: outputStyleConfig.name, prompt: outputStyleConfig.prompt, keepCodingInstructions: outputStyleConfig.keepCodingInstructions }
         : null;
-
-      // If badge is active, dispatch badge content
-      if (badge) {
-        const { prompt, displayLabel } = dispatchBadge(badge, plainContent);
-        setBadge(null);
-        clearDraft();
-        setInputValue('');
-        setFileChips([]);
-        setTerminalReferenceChips([]);
-        setBrowserReferenceChips([]);
-        clearPastedContents();
-        clearFiles();
-        onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode);
-        setSendMode(undefined);
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto';
-        }
-        return;
-      }
 
       // Check for direct slash commands
       const slashResult = resolveDirectSlash(trimmedValue);
@@ -969,6 +941,17 @@ export function MessageInput({
           clearPastedContents();
           return;
         }
+        if (cmd === '/recap') {
+          onCommand?.(cmd);
+          clearDraft();
+          setInputValue('');
+          setFileChips([]);
+          setTerminalReferenceChips([]);
+          setBrowserReferenceChips([]);
+          clearPastedContents();
+          clearFiles();
+          return;
+        }
         const result = onExecuteCommand?.(cmd);
         if (result) {
           // Show command result as a message
@@ -982,11 +965,6 @@ export function MessageInput({
         setBrowserReferenceChips([]);
         clearPastedContents();
         clearFiles();
-        return;
-      } else if (slashResult.action === 'set_badge') {
-        clearDraft();
-        setBadge(slashResult.badge);
-        setInputValue('');
         return;
       }
 
@@ -1007,7 +985,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, isParsing, badge, cliBadge, attachedFiles, hasPastedContents, fileChips, terminalReferenceChips, browserReferenceChips, buildContentWithChips, getCombinedContent, getCombinedContentWithMarkers, clearPastedContents, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
+    [inputValue, disabled, isStreaming, isParsing, cliBadge, attachedFiles, hasPastedContents, fileChips, terminalReferenceChips, browserReferenceChips, buildContentWithChips, getCombinedContentWithMarkers, clearPastedContents, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
   );
 
   const handleKeyDown = useCallback(
@@ -1053,11 +1031,6 @@ export function MessageInput({
   const handleStop = useCallback(() => {
     onStop?.();
   }, [onStop]);
-
-  // Remove badge handler
-  const handleRemoveBadge = useCallback(() => {
-    setBadge(null);
-  }, []);
 
   // Remove CLI badge handler
   const handleRemoveCliBadge = useCallback(() => {
@@ -1203,29 +1176,13 @@ export function MessageInput({
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePasteEvent}
-            placeholder={badge ? t('messageInput.addDetails') : cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
+            placeholder={cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
             disabled={disabled}
             terminalReferenceChips={terminalReferenceChips}
             onRemoveTerminalReferenceChip={removeTerminalReferenceChip}
             browserReferenceChips={browserReferenceChips}
             onRemoveBrowserReferenceChip={removeBrowserReferenceChip}
           />
-
-          {/* Command Badge */}
-          {badge && (
-            <div className="mt-2 flex items-center gap-2">
-              <span className="px-2 py-0.5 bg-primary/10 text-primary rounded text-xs">
-                {badge.label}
-              </span>
-              <button
-                type="button"
-                onClick={handleRemoveBadge}
-                className="w-4 h-4 rounded-full bg-gray-700 flex items-center justify-center hover:bg-gray-600 transition-colors"
-              >
-                <XIcon size={10} />
-              </button>
-            </div>
-          )}
 
           {/* CLI Badge */}
           {cliBadge && (

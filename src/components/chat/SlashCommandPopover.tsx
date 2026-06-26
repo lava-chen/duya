@@ -3,6 +3,7 @@
 'use client';
 
 import { useCallback } from 'react';
+import { useTranslation } from '@/hooks/useTranslation';
 import type { PopoverItem, PopoverMode } from '@/types/slash-command';
 import {
   QuestionIcon,
@@ -10,6 +11,7 @@ import {
   ChartLineIcon,
   BrainIcon,
   ClockCounterClockwiseIcon,
+  CubeIcon,
 } from '@/components/icons';
 
 interface SlashCommandPopoverProps {
@@ -56,6 +58,7 @@ export function SlashCommandPopover({
   onClosePopover,
   onFocusTextarea,
 }: SlashCommandPopoverProps) {
+  const { t } = useTranslation();
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'ArrowDown') {
@@ -92,7 +95,7 @@ export function SlashCommandPopover({
   );
 
   const renderItem = (item: PopoverItem, idx: number) => {
-    const IconComponent = item.icon;
+    const IconComponent = item.icon ?? (item.group === 'skills' ? CubeIcon : undefined);
     const isSelected = idx === selectedIndex;
     // Bilingual built-ins: `label` = primary title (CN),
     // `description` = secondary CN, `descriptionEn` = secondary EN.
@@ -176,6 +179,28 @@ export function SlashCommandPopover({
   if (!popoverMode || popoverMode === 'cli') return null;
   if (allDisplayedItems.length === 0) return null;
 
+  const settingsItems = filteredItems
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.group !== 'skills');
+  const skillItems = filteredItems
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.group === 'skills');
+
+  const renderSection = (
+    label: string,
+    entries: Array<{ item: PopoverItem; index: number }>,
+  ) => entries.length > 0 && (
+    <section>
+      <div
+        className="px-2.5 pb-1 pt-2 text-[11px] font-medium"
+        style={{ color: 'var(--command-menu-muted)' }}
+      >
+        {label}
+      </div>
+      {entries.map(({ item, index }) => renderItem(item, index))}
+    </section>
+  );
+
   return (
     <div
       ref={popoverRef}
@@ -196,7 +221,8 @@ export function SlashCommandPopover({
         }}
       >
         <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-          {filteredItems.map((item, i) => renderItem(item, i))}
+          {renderSection(t('common.settings'), settingsItems)}
+          {renderSection(t('settings.skills'), skillItems)}
         </div>
       </div>
     </div>
