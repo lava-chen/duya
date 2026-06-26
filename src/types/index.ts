@@ -4,7 +4,6 @@ export * from './message';
 export * from './stream';
 export * from './slash-command';
 export * from './automation';
-export * from './canvas-node';
 
 // Extended thread type with project support
 export interface Thread {

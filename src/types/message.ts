@@ -42,6 +42,12 @@ export interface Message {
    * (it carries the <result> body). Set by DuyaAgent when injecting the
    * notification XML into the message array. */
   isTaskNotification?: boolean;
+  /** Renderer-only metadata. Never persisted to the DB; the value lives in
+   * the Zustand conversation store and is lost on reload. P2-β sets
+   * `interrupted: true` here when App.tsx.handleInterrupt (Esc /
+   * chat:interrupt) cuts the stream mid-flight, so the chrome can
+   * surface a "Stopped" badge on the partial assistant message. */
+  metadata?: { interrupted?: boolean; [key: string]: unknown };
 }
 
 export interface ToolUseInfo {

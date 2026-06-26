@@ -5583,6 +5583,19 @@ html.compact .panel-zone {
   z-index: 10;
 }
 
+/* Composer-attached panels should read as controls growing out of the input,
+   not as a second full-width composer. A percentage keeps the relationship
+   intact when the composer narrows in split and expanded workspace layouts. */
+:where(
+  .sub-agent-panel-wrapper,
+  .permission-prompt-wrapper,
+  .mailbox-panel-wrapper,
+  .streaming-input-bar-wrapper
+) {
+  width: 76%;
+  margin-inline: auto;
+}
+
 /* Panel with rounded top, flat bottom */
 .sub-agent-panel {
   border-radius: 0.75rem 0.75rem 0 0;
@@ -7082,6 +7095,50 @@ html[data-theme="light"] .ask-question-option.selected {
   text-align: center;
   color: rgba(255, 255, 255, 0.6);
   font-size: 12px;
+}
+
+/* ============================================
+   Inline Markdown Images (assistant messages)
+   ============================================ */
+
+.markdown-image-button {
+  display: block;
+  margin: 8px 0;
+  padding: 0;
+  border: 1px solid hsl(var(--border) / 0.6);
+  border-radius: 8px;
+  background: transparent;
+  cursor: zoom-in;
+  overflow: hidden;
+  transition: border-color 120ms ease, transform 120ms ease;
+  max-width: 520px;
+}
+
+.markdown-image-button:hover {
+  border-color: hsl(var(--foreground) / 0.3);
+}
+
+.markdown-image-button:active {
+  transform: scale(0.99);
+}
+
+.markdown-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 480px;
+  object-fit: contain;
+  background: hsl(var(--muted) / 0.4);
+}
+
+.markdown-image-caption {
+  display: block;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  border-top: 1px solid hsl(var(--border) / 0.5);
+  text-align: left;
+  word-break: break-word;
 }
 
 /* ============================================

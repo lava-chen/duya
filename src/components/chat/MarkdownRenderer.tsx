@@ -27,13 +27,32 @@ export function preprocessMarkdownBold(text: string): string {
   });
 }
 
+// Convert bare image URLs (https://.../*.jpg|png|gif|webp|bmp|svg) that are
+// NOT already inside a markdown image/link into `![](url)` so the renderer
+// displays them. This lets the assistant drop a plain image link and still
+// get an inline thumbnail.
+const BARE_IMAGE_URL_RE =
+  /(?<![(<!\[]\s*)(https?:\/\/[^\s<>()"']+\.(?:jpg|jpeg|png|gif|webp|bmp|svg)(?:\?[^\s<>()"']*)?)/gi;
+
+export function preprocessBareImageLinks(text: string): string {
+  return text.replace(BARE_IMAGE_URL_RE, (match, url, offset, full) => {
+    // Skip if this URL is the destination of an existing markdown image/link.
+    // Look back a few chars for `](` or `![`.
+    const lookback = full.slice(Math.max(0, offset - 3), offset);
+    if (lookback.includes('](') || lookback.endsWith('![')) {
+      return match;
+    }
+    return `![](${url})`;
+  });
+}
+
 interface MarkdownRendererProps {
   children: string;
   className?: string;
 }
 
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className }) => {
-  const processed = preprocessMarkdownBold(children);
+  const processed = preprocessBareImageLinks(preprocessMarkdownBold(children));
 
   return (
     <div className={className || 'prose prose-sm dark:prose-invert max-w-none message-content'}>

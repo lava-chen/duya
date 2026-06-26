@@ -94,6 +94,14 @@ const en = {
   'streaming.denied': 'Denied',
   'streaming.workingFor': 'Working for',
   'streaming.tools': 'tools',
+  // P2-β: surfaces the "Stopped" badge on an assistant message that
+  // App.tsx.handleInterrupt (Esc / chat:interrupt) marked as
+  // metadata.interrupted = true. The tooltip explains how the message
+  // got into this state; rolledBack is reserved for future use when
+  // the partial assistant message is fully removed from the thread.
+  'streaming.interrupted': 'Stopped',
+  'streaming.interruptedTooltip': 'Interrupted by user (Esc)',
+  'streaming.rolledBack': 'Message rolled back',
   'streaming.done': 'Done',
   'streaming.runningLonger': 'Running longer than usual',
   'streaming.toolMayStuck': 'Tool may be stuck',

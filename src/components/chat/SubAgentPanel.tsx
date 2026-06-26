@@ -27,6 +27,8 @@ interface SubAgentPanelProps {
   onOpenSubAgent?: (agentName: string, agentSessionId?: string) => void;
 }
 
+const AUTO_DISMISS_DELAY_MS = 5000;
+
 const AGENT_NAME_COLORS = [
   { name: 'Archimedes', color: '#3b82f6' },
   { name: 'Avicenna', color: '#f97316' },
@@ -149,6 +151,13 @@ export function SubAgentPanel({ sessionId, onOpenSubAgent }: SubAgentPanelProps)
   const hasRunningAgents = agents.some(a => a.status === 'running');
   const allCompleted = agents.length > 0 && agents.every(a => a.status === 'completed' || a.status === 'error');
 
+  // A panel instance can survive a session switch. Reset its local lifecycle
+  // so completed agents from the previous session do not hide new work.
+  useEffect(() => {
+    setExpanded(true);
+    setDismissed(false);
+  }, [sessionId]);
+
   // Auto-expand when new agents start running
   useEffect(() => {
     if (hasRunningAgents && isActive) {
@@ -157,16 +166,18 @@ export function SubAgentPanel({ sessionId, onOpenSubAgent }: SubAgentPanelProps)
     }
   }, [hasRunningAgents, isActive]);
 
-  // Auto-dismiss when all agents completed and stream is done
+  // Collapse as soon as every agent reaches a terminal state, then leave the
+  // compact completion summary visible briefly before removing the panel.
   useEffect(() => {
-    if (allCompleted && !isActive && !dismissed) {
-      // Keep panel visible for a few seconds then allow dismissal
-      const timer = setTimeout(() => {
-        // Panel stays visible but can be collapsed
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [allCompleted, isActive, dismissed]);
+    if (!allCompleted) return;
+
+    setExpanded(false);
+    const timer = setTimeout(() => {
+      setDismissed(true);
+    }, AUTO_DISMISS_DELAY_MS);
+
+    return () => clearTimeout(timer);
+  }, [allCompleted]);
 
   // Don't render if no agents or manually dismissed
   if (agents.length === 0) return null;

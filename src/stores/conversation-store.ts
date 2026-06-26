@@ -113,6 +113,10 @@ interface ConversationState {
   addMessage: (threadId: string, message: Message, options?: { persist?: boolean }) => void;
   clearMessages: (threadId: string) => void;
   rewindToMessage: (threadId: string, messageId: string) => Promise<void>;
+  /** P2-β: flag a message as interrupted (Esc / chat:interrupt). Local-only
+   *  (does not persist to DB) — the original assistant message stays in the
+   *  thread; the UI shows a "Stopped" badge via metadata.interrupted. */
+  markMessageInterrupted: (threadId: string, messageId: string) => void;
   updateThreadTitle: (id: string, title: string) => void;
   setThreadWorkingDirectory: (id: string, workingDirectory: string, projectName: string) => void;
   setThreadModel: (id: string, model: string, providerId?: string) => void;
@@ -516,6 +520,21 @@ export const useConversationStore = create<ConversationState>()(
           messages: { ...state.messages, [threadId]: [] },
         }));
         await get().loadThreadMessages(threadId);
+      },
+
+      markMessageInterrupted: (threadId, messageId) => {
+        set((state) => {
+          const threadMessages = state.messages[threadId];
+          if (!threadMessages) return state;
+          const updatedMessages = threadMessages.map((m) =>
+            m.id === messageId
+              ? { ...m, metadata: { ...m.metadata, interrupted: true } }
+              : m
+          );
+          return {
+            messages: { ...state.messages, [threadId]: updatedMessages },
+          };
+        });
       },
 
       updateThreadTitle: (id, title) => {
