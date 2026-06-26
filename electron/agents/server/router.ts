@@ -608,6 +608,7 @@ function handlePostChatSSE(
           sessionManager.updateLastEventId(sessionId, seqNum);
           sessionManager.recordEvent(sessionId, 'error', sseEvent as unknown, seqNum);
           const errData = sseEvent.data as { message?: string } | undefined;
+          sessionManager.failSession(sessionId, errData?.message || 'Unknown error', true);
           httpLogger.error('Chat error from worker', errData?.message ? new Error(errData.message) : undefined, { sessionId });
           res.write(`event: error\nid: ${seqNum}\ndata: ${JSON.stringify(sseEvent)}\n\n`);
           doneReceived = true;
@@ -629,6 +630,7 @@ function handlePostChatSSE(
   child.stdout!.on('data', onData);
 
   child.on('error', (err: Error) => {
+    sessionManager.failSession(sessionId, err.message, true);
     httpLogger.error('Worker error', err, { sessionId });
     if (!doneReceived && res.writable) {
       res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', data: { message: err.message } })}\n\n`);
@@ -640,6 +642,7 @@ function handlePostChatSSE(
   child.on('exit', () => {
     child.stdout?.removeListener('data', onData);
     if (!doneReceived && res.writable) {
+      sessionManager.failSession(sessionId, 'Worker exited before completing the chat', true);
       doneReceived = true;
       res.end();
     }
@@ -1323,10 +1326,12 @@ function handleGetChat(
           // renderer dispatches through the same `case 'error'` path used
           // by every other chat:* event, and can show tailored banners for
           // provider error codes (rate_limit_error, usage_limit_exceeded).
+          const errorMessage = event.message || 'Unknown error';
+          sessionManager.failSession(sessionId, errorMessage, true);
           res.write(`event: error\nid: ${seqNum}\ndata: ${JSON.stringify({
             type: 'error',
             data: {
-              message: event.message || 'Unknown error',
+              message: errorMessage,
               code: event.code,
             },
           })}\n\n`);
@@ -1348,6 +1353,7 @@ function handleGetChat(
 
   child.on('exit', () => {
     if (!doneReceived && res.writable) {
+      sessionManager.failSession(sessionId, 'Worker exited before completing the chat', true);
       doneReceived = true;
       res.end();
     }

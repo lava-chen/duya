@@ -80,6 +80,16 @@ export class SessionManager {
     sessionLogger.error('Session error', undefined, { sessionId: id, message, retryable });
   }
 
+  failSession(id: string, message: string, retryable?: boolean): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+
+    this.setError(id, message, retryable);
+    if (session.state === SessionState.STREAMING || session.state === SessionState.COMPLETING) {
+      this.transitionState(id, SessionState.ERROR);
+    }
+  }
+
   setDoneData(id: string, doneData: unknown): void {
     const session = this.sessions.get(id);
     if (!session) return;
