@@ -61,6 +61,9 @@ coverage/
 *.test.tsx
 *.spec.ts
 *.spec.tsx
+!src/lib/message-input-logic.spec.ts
+!src/components/chat/RichTextInput.test.tsx
+!src/components/chat/SubAgentPanel.test.tsx
 # Untrack unit-test source for these packages.
 !packages/agent/tests/**/*.test.ts
 !packages/agent/tests/**/*.test.tsx
@@ -70,6 +73,7 @@ coverage/
 !packages/plugin-core/tests/**/*.test.tsx
 !packages/plugin-core/tests/**/*.spec.ts
 !packages/plugin-core/tests/**/*.spec.tsx
+!electron/**/*.test.ts
 # E2E specs (Playwright) live in e2e/ and MUST be tracked — they are
 # integration tests, not scratch. Without this exception the broad
 # *.spec.ts rule above silently strips them from version control.
