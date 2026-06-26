@@ -129,7 +129,7 @@ export interface ConductorSSEEvent {
 const VALID_TRANSITIONS: Record<SessionState, SessionState[]> = {
   [SessionState.IDLE]: [SessionState.STREAMING],
   [SessionState.STREAMING]: [SessionState.COMPLETING, SessionState.COMPLETED, SessionState.CRASHED, SessionState.ERROR],
-  [SessionState.COMPLETING]: [SessionState.COMPLETED, SessionState.CRASHED],
+  [SessionState.COMPLETING]: [SessionState.COMPLETED, SessionState.CRASHED, SessionState.ERROR],
   [SessionState.CRASHED]: [SessionState.IDLE],
   [SessionState.ERROR]: [SessionState.IDLE],
   [SessionState.COMPLETED]: [SessionState.STREAMING],
