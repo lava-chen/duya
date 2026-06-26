@@ -307,7 +307,9 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
           textNodes.push(node as Text);
         }
         const currentText = textNodes.map(n => n.textContent).join('');
-        if (currentText === text) return; // No change needed
+        const hasSlashHighlight = Boolean(el.querySelector('[data-slash-command]'));
+        const needsSlashHighlight = Boolean(parseSlashCommand(text));
+        if (currentText === text && hasSlashHighlight === needsSlashHighlight) return;
       }
 
       lastChips.current = [...chips];
@@ -328,6 +330,7 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
         if (parsed && !hasAppended && part === text) {
           const { slashCommand, remainingText } = parsed;
           const slashSpan = document.createElement('span');
+          slashSpan.dataset.slashCommand = 'true';
           slashSpan.textContent = slashCommand;
           slashSpan.style.color = 'var(--accent)';
           el.appendChild(slashSpan);
@@ -414,7 +417,10 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       const text = extractText(el);
       lastValue.current = text;
       onChange(text);
-    }, [onChange, extractText]);
+      if (parseSlashCommand(text)) {
+        buildContent(el, text, fileChips);
+      }
+    }, [buildContent, fileChips, onChange, extractText]);
 
     const handleCompositionStart = useCallback(() => {
       isComposing.current = true;
@@ -435,6 +441,8 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
         ref={innerRef}
         className="w-full bg-transparent px-2 pt-2 pb-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none min-h-[56px] max-h-[150px] overflow-y-auto empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground"
         contentEditable={!disabled}
+        role="textbox"
+        aria-multiline="true"
         suppressContentEditableWarning
         data-placeholder={placeholder || ''}
         onInput={handleInput}

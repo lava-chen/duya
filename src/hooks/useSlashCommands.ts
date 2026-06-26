@@ -1,7 +1,7 @@
 // useSlashCommands.ts - Hook for slash command detection and handling
 
 import { useCallback, useMemo } from 'react';
-import type { PopoverItem, PopoverMode, CommandBadge } from '@/types/slash-command';
+import type { PopoverItem, PopoverMode } from '@/types/slash-command';
 import { detectPopoverTrigger, resolveItemSelection } from '@/lib/message-input-logic';
 import { getCommandsForPlatform } from '@/lib/commands';
 import {
@@ -100,8 +100,6 @@ export function useSlashCommands(opts: {
   setSelectedIndex: React.Dispatch<React.SetStateAction<number>>;
   setTriggerPos: (pos: number | null) => void;
   closePopover: () => void;
-  onCommand?: (command: string) => void;
-  setBadge: (badge: CommandBadge | null) => void;
   sessionId?: string;
 }): UseSlashCommandsReturn {
   const {
@@ -117,8 +115,6 @@ export function useSlashCommands(opts: {
     setSelectedIndex,
     setTriggerPos,
     closePopover,
-    onCommand,
-    setBadge,
     sessionId,
   } = opts;
 
@@ -132,6 +128,7 @@ export function useSlashCommands(opts: {
       icon: CATEGORY_ICONS[cmd.category] ?? Terminal,
       builtIn: true,
       kind: 'slash_command' as const,
+      group: cmd.category === 'tools' ? 'skills' as const : 'settings' as const,
     }));
   }, []);
 
@@ -143,19 +140,16 @@ export function useSlashCommands(opts: {
       const result = resolveItemSelection(item, popoverMode, triggerPos, inputValue, popoverFilter);
 
       switch (result.action) {
-        case 'immediate_command':
-          if (onCommand) {
-            setInputValue('');
-            closePopover();
-            onCommand(result.commandValue!);
-          }
-          return;
-
-        case 'set_badge':
-          setBadge(result.badge!);
-          setInputValue('');
+        case 'insert_slash_command':
+          setInputValue(result.newInputValue!);
           closePopover();
-          setTimeout(() => textareaRef.current?.focus(), 0);
+          requestAnimationFrame(() => {
+            const textarea = textareaRef.current;
+            if (!textarea) return;
+            textarea.focus();
+            const commandEnd = triggerPos + (result.commandValue?.length ?? 0) + 1;
+            setCursorPosition(textarea, commandEnd);
+          });
           return;
 
         case 'insert_file_mention':
@@ -165,7 +159,7 @@ export function useSlashCommands(opts: {
           return;
       }
     },
-    [triggerPos, popoverMode, closePopover, onCommand, inputValue, popoverFilter, textareaRef, setInputValue, setBadge],
+    [triggerPos, popoverMode, closePopover, inputValue, popoverFilter, textareaRef, setInputValue],
   );
 
   // Fetch skills for / command (registry commands + enabled agent skills)
@@ -197,6 +191,7 @@ export function useSlashCommands(opts: {
               description:
                 typeof skill.description === 'string' ? skill.description : '',
               kind: 'agent_skill' as const,
+              group: 'skills' as const,
               installedSource: skill.source === 'project' ? 'agents' : 'claude',
               source: (skill.source as 'global' | 'project' | 'plugin' | 'installed' | 'sdk') || undefined,
             }));

@@ -112,22 +112,15 @@ export function resolveItemSelection(
   inputValue: string,
   popoverFilter: string,
 ): InsertResult {
-  // Immediate built-in commands
-  if (item.builtIn && item.immediate) {
-    return { action: 'immediate_command', commandValue: item.value };
-  }
-
-  // Non-immediate commands: show as badge
   if (popoverMode === 'skill') {
+    const before = inputValue.slice(0, triggerPos);
+    const cursorEnd = triggerPos + popoverFilter.length + 1;
+    const after = inputValue.slice(cursorEnd);
+    const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
     return {
-      action: 'set_badge',
-      badge: {
-        command: item.value,
-        label: item.label,
-        description: item.description || '',
-        kind: item.kind || 'slash_command',
-        installedSource: item.installedSource,
-      },
+      action: 'insert_slash_command',
+      commandValue: item.value,
+      newInputValue: `${before}${item.value}${needsTrailingSpace ? ' ' : ''}${after}`,
     };
   }
 
@@ -198,7 +191,7 @@ export function resolveKeyAction(
 /**
  * Direct slash command detection — when user types "/command" in input and submits.
  */
-export function resolveDirectSlash(content: string): { action: 'immediate_command'; commandValue: string } | { action: 'set_badge'; badge: CommandBadge } | { action: 'not_slash' } {
+export function resolveDirectSlash(content: string): { action: 'immediate_command'; commandValue: string } | { action: 'not_slash' } {
   if (!content.startsWith('/')) return { action: 'not_slash' };
 
   const cmd = BUILT_IN_COMMANDS.find((c) => c.value === content);
@@ -206,29 +199,7 @@ export function resolveDirectSlash(content: string): { action: 'immediate_comman
     if (cmd.immediate) {
       return { action: 'immediate_command', commandValue: content };
     }
-    return {
-      action: 'set_badge',
-      badge: {
-        command: cmd.value,
-        label: cmd.label,
-        description: cmd.description || '',
-        kind: (cmd.kind || 'slash_command') as CommandBadge['kind'],
-      },
-    };
-  }
-
-  // Unknown slash command - treat as badge
-  const skillName = content.slice(1);
-  if (skillName) {
-    return {
-      action: 'set_badge',
-      badge: {
-        command: content,
-        label: skillName,
-        description: '',
-        kind: 'slash_command',
-      },
-    };
+    return { action: 'not_slash' };
   }
 
   return { action: 'not_slash' };

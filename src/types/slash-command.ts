@@ -12,6 +12,7 @@ export interface PopoverItem {
   kind?: 'slash_command' | 'agent_command' | 'agent_skill' | 'sdk_command' | 'cli_tool';
   installedSource?: 'agents' | 'claude';
   source?: 'global' | 'project' | 'plugin' | 'installed' | 'sdk';
+  group?: 'settings' | 'skills';
 }
 
 export type PopoverMode = 'skill' | 'file' | 'cli' | null;
@@ -30,9 +31,8 @@ export interface CliBadge {
 }
 
 export interface InsertResult {
-  action: 'immediate_command' | 'set_badge' | 'insert_file_mention';
+  action: 'insert_slash_command' | 'insert_file_mention';
   commandValue?: string;
-  badge?: CommandBadge;
   newInputValue?: string;
 }
 
