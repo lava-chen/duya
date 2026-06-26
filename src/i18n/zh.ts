@@ -96,6 +96,10 @@ const zh: Record<TranslationKey, string> = {
   'streaming.denied': '已拒绝',
   'streaming.workingFor': '运行中',
   'streaming.tools': '个工具',
+  // P2-β：Esc 中断 LLM 流时，partial assistant message 上显示的「已停止」徽章
+  'streaming.interrupted': '已停止',
+  'streaming.interruptedTooltip': '已中断（按 Esc）',
+  'streaming.rolledBack': '消息已回滚',
   'streaming.done': '完成',
   'streaming.runningLonger': '运行时间比平时长',
   'streaming.toolMayStuck': '工具可能卡住了',

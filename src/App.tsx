@@ -160,6 +160,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     addMessage,
     loadThreadMessages,
     isHydrated,
+    markMessageInterrupted,
   } = useConversationStore();
   const { settings } = useSettings();
   const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
@@ -468,6 +469,20 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     const now = Date.now();
 
     if (isStreaming) {
+      // P2-β: flag the partial assistant message as interrupted so the
+      // chrome shows a "Stopped" badge. Find the most recent assistant
+      // message in this thread and write metadata.interrupted = true
+      // (local-only — does not persist to DB).
+      const threadMessages = messages[activeThreadId];
+      if (threadMessages && threadMessages.length > 0) {
+        for (let i = threadMessages.length - 1; i >= 0; i--) {
+          const m = threadMessages[i];
+          if (m.role === 'assistant') {
+            markMessageInterrupted(activeThreadId, m.id);
+            break;
+          }
+        }
+      }
       stopStream(activeThreadId, 'Interrupted by user');
       void interruptChat(activeThreadId);
       lastCancelTimeRef.current = now;
@@ -483,7 +498,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
 
     // First press while idle: no-op
     lastCancelTimeRef.current = now;
-  }, [activeThreadId, isStreaming]);
+  }, [activeThreadId, isStreaming, messages, markMessageInterrupted]);
 
   const threadMessages = activeThreadId ? (messages[activeThreadId] ?? []) : [];
   const chatEverMountedRef = useRef(false);

@@ -487,6 +487,31 @@ export function ChatView({
     onInterrupt?.();
   }, [onInterrupt]);
 
+  // P2-β: global Esc shortcut to interrupt the current stream. Fires
+  // only when the chat is actively streaming and the focus is not
+  // inside an input / textarea / contenteditable (so we don't steal
+  // Esc from the popover inside MessageInput, and don't fight the
+  // browser's native Escape behavior in editable fields).
+  useEffect(() => {
+    if (!isStreaming) return undefined;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      handleStop();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isStreaming, handleStop]);
+
   const handleRetry = useCallback(() => {
     const lastContent = lastUserContentRef.current;
     if (lastContent) {

@@ -762,6 +762,10 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
 
   const isUser = message.role === 'user';
   const hasPastedContents = allPastedContents.length > 0;
+  // P2-β: surface the "Stopped" badge when App.tsx.handleInterrupt
+  // (Esc / chat:interrupt) marked this message as interrupted. The
+  // flag is local-only — never persisted to DB.
+  const isInterrupted = !isUser && message.metadata?.interrupted === true;
 
   // System-generated task-notification messages are injected as role:'user'
   // for the LLM (LLM APIs have no native system role for this), but they
@@ -992,6 +996,15 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
         />
 
         <div className="flex items-center gap-2 mt-3">
+          {isInterrupted && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-amber-500"
+              title={t('streaming.interruptedTooltip')}
+            >
+              <span aria-hidden="true">⏹</span>
+              <span>{t('streaming.interrupted')}</span>
+            </span>
+          )}
           <span className="text-[11px] text-muted-foreground/60 tabular-nums">
             {formatMessageTime(message.timestamp, t, locale)}
           </span>

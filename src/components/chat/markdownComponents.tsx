@@ -1,7 +1,40 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { CodeBlock } from './CodeBlock';
 import { openLocalFileTarget, isLikelyLocalFileReference } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
+import { ImagePreviewModal } from './ImagePreviewModal';
+
+// Clickable inline image: renders as a thumbnail in the message stream and
+// opens the existing lightbox modal on click. External https/http URLs load
+// directly via the Electron renderer (no proxy, no download).
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const [open, setOpen] = useState(false);
+  if (!src) return null;
+  const altText = alt ?? '';
+
+  return (
+    <>
+      <button
+        type="button"
+        className="markdown-image-button"
+        onClick={() => setOpen(true)}
+        aria-label={`Enlarge image: ${altText}`}
+      >
+        <img src={src} alt={altText} className="markdown-image" loading="lazy" />
+        {altText && (
+          <span className="markdown-image-caption">{altText}</span>
+        )}
+      </button>
+      {open && (
+        <ImagePreviewModal
+          src={src}
+          alt={altText || 'image'}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
 
 function MarkdownAnchor({ href, children }: { href?: string; children?: React.ReactNode }) {
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
@@ -49,6 +82,7 @@ export const markdownComponents = {
     <li className="text-[15px] text-foreground leading-[1.65] pl-1">{children}</li>
   ),
   a: MarkdownAnchor,
+  img: MarkdownImage,
   code: ({ children, className, ...props }: { children?: React.ReactNode; className?: string }) => {
     const match = /language-(\w+)/.exec(className || '');
     const raw = String(children ?? '');
