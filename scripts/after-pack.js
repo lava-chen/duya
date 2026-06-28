@@ -177,8 +177,29 @@ module.exports = async function afterPack(context) {
   console.log('[afterPack] Step 3: Verifying agent-bundle...');
   const agentBundlePath = path.join(appOutDir, 'resources', 'agent-bundle', 'agent-process-entry.js');
   if (!fs.existsSync(agentBundlePath)) {
+    // Diagnose: was the source bundle present in the workspace at all?
+    // extraResources copies from packages/agent/bundle/ → release/<platform>/resources/agent-bundle/.
+    // If the source is missing, electron-builder silently skips the copy and
+    // emits a 'file source doesn't exist' warning — that is the most common
+    // reason this FATAL fires after a successful-looking `npm run electron:build`.
+    const sourceBundleDir = path.join(projectDir, 'packages', 'agent', 'bundle');
+    const sourceBundleEntry = path.join(sourceBundleDir, 'agent-process-entry.js');
+    let sourceDiagnostic = 'not present';
+    if (fs.existsSync(sourceBundleEntry)) {
+      const stats = fs.statSync(sourceBundleEntry);
+      sourceDiagnostic = `present (${(stats.size / 1024 / 1024).toFixed(2)} MB)`;
+    } else if (fs.existsSync(sourceBundleDir)) {
+      sourceDiagnostic = `directory exists, entry missing — dir contents: ${fs.readdirSync(sourceBundleDir).join(', ')}`;
+    }
+    let packagedResourcesDiagnostic = 'missing';
+    const packagedResourcesDir = path.join(appOutDir, 'resources');
+    if (fs.existsSync(packagedResourcesDir)) {
+      packagedResourcesDiagnostic = `present — subdirs: ${fs.readdirSync(packagedResourcesDir).join(', ')}`;
+    }
     throw new Error(
-      `[afterPack] FATAL: agent-process-entry.js not found at ${agentBundlePath}. ` +
+      `[afterPack] FATAL: agent-process-entry.js not found at ${agentBundlePath}.\n` +
+      `  Source packages/agent/bundle/agent-process-entry.js: ${sourceDiagnostic}\n` +
+      `  ${packagedResourcesDir}: ${packagedResourcesDiagnostic}\n` +
       'Run `npm run bundle:agent` before packaging. The agent core cannot start without this entry file.'
     );
   }
