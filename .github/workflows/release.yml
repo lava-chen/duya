@@ -59,6 +59,23 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: npm run electron:build
 
+      - name: Verify agent-bundle
+        # after-pack.js (scripts/after-pack.js) requires
+        # packages/agent/bundle/agent-process-entry.js to exist before it
+        # will sign-off the build. macOS arm64 runners have OOM'd inside
+        # `npm run bundle:agent` historically; catch the failure here
+        # with a clear error rather than letting electron-builder fail
+        # in afterPack with a confusing "agent-bundle missing" message.
+        run: |
+          if [ ! -f packages/agent/bundle/agent-process-entry.js ]; then
+            echo "::error::agent-process-entry.js missing after npm run electron:build"
+            echo "::group::packages/agent/bundle contents"
+            ls -la packages/agent/bundle/ 2>&1 || echo "(directory does not exist)"
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "agent-bundle present: $(du -h packages/agent/bundle/agent-process-entry.js | cut -f1)"
+
       - name: Build and Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
