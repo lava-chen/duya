@@ -465,18 +465,23 @@ describe('Agent Process Entry', () => {
       expect(result[0].id).toBe('u1');
     });
 
-    it('removes orphan tool_result only when there are also unmatched tool_uses', () => {
-      // validateMessageHistory only enters the cleanup pass when
-      // there are unmatched tool_uses. Orphan tool_results alone
-      // won't trigger cleanup - the function returns early.
+    it('removes orphan tool_result even when there are no unmatched tool_uses', () => {
+      // validateMessageHistory is now symmetric with toAnthropicMessages:
+      // it cleans orphan tool_results independently of unmatched tool_uses.
+      // Previously this function returned early when there were no
+      // unmatched tool_uses, leaving truly orphan tool_results in place
+      // and relying on toAnthropicMessages to strip them later. That
+      // asymmetry made the load-from-DB path harder to reason about and
+      // is no longer needed.
       const messages: Message[] = [
         { id: 'u1', role: 'user', content: 'Hello', timestamp: 1 },
         { id: 'tr1', role: 'tool', content: 'result', timestamp: 2, tool_call_id: 'orphan-result' },
       ];
 
       const result = validateMessageHistory(messages);
-      // Orphan results are only removed in second pass when there are unmatched tool_uses
-      expect(result).toHaveLength(2);
+      // Orphan tool_result is removed even with no other unmatched tool_use.
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('u1');
     });
 
     it('removes orphan tool_result when also has unmatched tool_use', () => {
