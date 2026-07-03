@@ -1386,7 +1386,12 @@ function getAgentPortAPI(): AgentControlPortAPI | null {
       return registerAgentPortHandler('chat:thinking', (data) => callback((data as { content: string }).content, (data as { sessionId?: string }).sessionId))
     },
     onToolUse: (callback: (data: { id: string; name: string; input: unknown }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:tool_use', (data) => callback(data as { id: string; name: string; input: unknown }, (data as { sessionId?: string }).sessionId))
+      const cleanupStarted = registerAgentPortHandler('chat:tool_use_started', (data) => callback(data as { id: string; name: string; input: unknown }, (data as { sessionId?: string }).sessionId))
+      const cleanupUse = registerAgentPortHandler('chat:tool_use', (data) => callback(data as { id: string; name: string; input: unknown }, (data as { sessionId?: string }).sessionId))
+      return () => {
+        cleanupStarted()
+        cleanupUse()
+      }
     },
     onToolResult: (callback: (data: { id: string; result: unknown; error?: string; duration_ms?: number }, sessionId?: string) => void) => {
       return registerAgentPortHandler('chat:tool_result', (data) => callback(data as { id: string; result: unknown; error?: string; duration_ms?: number }, (data as { sessionId?: string }).sessionId))

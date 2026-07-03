@@ -142,7 +142,9 @@ export const messageDb = {
     id: string;
     session_id: string;
     role: string;
-    content: string;
+    content: unknown;
+    display_content?: string | null;
+    displayContent?: unknown;
     name?: string;
     tool_call_id?: string;
     token_usage?: string;

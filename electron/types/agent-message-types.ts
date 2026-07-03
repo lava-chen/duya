@@ -29,6 +29,7 @@ export interface PermissionDecision {
 export type AgentToRendererMessage =
   | { type: 'chat:text'; content: string }
   | { type: 'chat:thinking'; content: string }
+  | { type: 'chat:tool_use_started'; id: string; name: string; input: unknown }
   | { type: 'chat:tool_use'; id: string; name: string; input: unknown }
   | { type: 'chat:tool_result'; id: string; result: unknown; error?: string; duration_ms?: number }
   | { type: 'chat:tool_progress'; toolUseId: string; percent: number; stage: string }

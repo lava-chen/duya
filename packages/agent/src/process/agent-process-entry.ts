@@ -182,6 +182,7 @@ interface ChatStartMessage {
     files?: FileAttachment[];
     agentProfileId?: string | null;
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
+    displayContent?: string;
     mode?: string;
     titleGenerationModel?: string;
     titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
@@ -444,6 +445,9 @@ function messageRowToMessage(
     id: row.id,
     role: row.role,
     content,
+    displayContent: row.display_content && row.display_content.length > 0
+      ? row.display_content
+      : undefined,
     name: row.name || undefined,
     tool_call_id: toolCallId,
     timestamp: row.created_at,
@@ -459,6 +463,16 @@ function messageRowToMessage(
     sub_agent_id: row.sub_agent_id || undefined,
     attachments: parsedAttachments,
   };
+}
+
+function applyRequestDisplayContent(messages: readonly Message[], displayContent?: string): void {
+  if (!displayContent || displayContent.length === 0) {
+    return;
+  }
+  const userMessage = messages.find((item) => item.role === 'user');
+  if (userMessage && !userMessage.displayContent) {
+    userMessage.displayContent = displayContent;
+  }
 }
 
 // ============================================================================
@@ -784,6 +798,8 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       return { type: 'chat:text', content: event.data as string };
     case 'thinking':
       return { type: 'chat:thinking', content: event.data as string };
+    case 'tool_use_started':
+      return { type: 'chat:tool_use_started', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, input: (event.data as { input?: unknown }).input };
     case 'tool_use':
       return { type: 'chat:tool_use', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, input: (event.data as { input?: unknown }).input };
     case 'tool_result':
@@ -1557,7 +1573,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       outputStyleConfig: msg.options?.outputStyleConfig,
       mode: msg.options?.mode,
       attachments: files,
-      displayContent: msg.prompt, // Store original prompt without synthetic pre-analysis/attachment context
+      displayContent: msg.options?.displayContent,
       effort: msg.options?.effort,
     });
 
@@ -1601,6 +1617,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         lastIncrementalSave = Date.now();
         const currentMessages = agent.getMessages();
         const newMessages = currentMessages.slice(existingMessageCount);
+        applyRequestDisplayContent(newMessages, msg.options?.displayContent);
         if (newMessages.length > 0) {
           incrementalSaveQueue.trigger(newMessages).then(result => {
             debugLog('incremental save', { success: result.success, messageCount: newMessages.length });
@@ -1668,6 +1685,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
       try {
         const newMessages = agentMessages.slice(existingMessageCount);
+        applyRequestDisplayContent(newMessages, msg.options?.displayContent);
         log(`[Agent-Process] Appending ${newMessages.length} new messages to DB for session ${msg.sessionId} (${agentMessages.length} total)`);
         const result = await appendMessages(msg.sessionId, newMessages);
         log(`[Agent-Process] DB persist result: success=${result.success}, count=${result.count}`);
@@ -1828,6 +1846,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       code = 'rate_limit_error';
     } else if (errType === APIErrorType.USAGE_LIMIT) {
       code = 'usage_limit_exceeded';
+    } else if (errType === APIErrorType.PROVIDER_SAFETY_FILTER) {
+      code = 'provider_safety_filter';
     }
     sendToMain({
       type: 'chat:error',

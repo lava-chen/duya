@@ -20,7 +20,9 @@ export interface AddMessageInput {
   id: string;
   session_id: string;
   role: string;
-  content: string;
+  content: unknown;
+  display_content?: string | null;
+  displayContent?: unknown;
   name?: string;
   tool_call_id?: string;
   token_usage?: string;
@@ -42,6 +44,7 @@ export interface MessageRow {
   session_id: string;
   role: string;
   content: string;
+  display_content: string | null;
   name: string | null;
   tool_call_id: string | null;
   token_usage: string | null;
@@ -60,17 +63,39 @@ export interface MessageRow {
 }
 
 const INSERT_MESSAGE_SQL = `
-  INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-  VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
+  INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+  VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
 `;
+
+function serializeMessageContent(value: unknown, role?: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value) && role === 'user') {
+    const textBlocks = value.filter(
+      (block: unknown) => (block as Record<string, unknown>).type === 'text',
+    );
+    return textBlocks.length > 0
+      ? textBlocks.map((block: unknown) => (block as Record<string, string>).text || '').join('\n')
+      : JSON.stringify(value);
+  }
+  return JSON.stringify(value);
+}
+
+function serializeDisplayContent(value: unknown, role?: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  return serializeMessageContent(value, role);
+}
 
 export function addMessage(data: AddMessageInput): MessageRow {
   const now = Date.now();
+  const content = serializeMessageContent(data.content, data.role);
+  const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, data.role);
   db().prepare(INSERT_MESSAGE_SQL).run({
     id: data.id,
     session_id: data.session_id,
     role: data.role,
-    content: data.content,
+    content,
+    display_content: displayContent,
     name: data.name ?? null,
     tool_call_id: data.tool_call_id ?? null,
     token_usage: data.token_usage ?? null,
@@ -95,7 +120,8 @@ export function addMessage(data: AddMessageInput): MessageRow {
     id: data.id,
     session_id: data.session_id,
     role: data.role,
-    content: data.content,
+    content,
+    display_content: displayContent,
     name: data.name ?? null,
     tool_call_id: data.tool_call_id ?? null,
     token_usage: data.token_usage ?? null,
@@ -322,7 +348,12 @@ export function replaceMessages(
         let toolName: string | null = (msg.tool_name as string) || null;
         let toolInput: string | null = (msg.tool_input as string) || null;
         let parentToolCallId: string | null = (msg.parent_tool_call_id as string) || null;
-        let contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+        const roleValue = typeof msg.role === 'string' && msg.role.length > 0 ? msg.role : 'assistant';
+        let contentStr = serializeMessageContent(msg.content, roleValue);
+        const displayContent = serializeDisplayContent(
+          msg.displayContent ?? msg.display_content,
+          roleValue,
+        );
 
         if (!msg.msg_type && Array.isArray(msg.content)) {
           const blocks = msg.content as Array<{ type: string; thinking?: string; name?: string; input?: unknown; tool_use_id?: string }>;
@@ -336,7 +367,7 @@ export function replaceMessages(
             toolName = blocks[0].name || null;
             toolInput = blocks[0].input ? JSON.stringify(blocks[0].input) : null;
             contentStr = toolInput || '';
-          } else if (msg.role === 'tool') {
+          } else if (roleValue === 'tool') {
             msgType = 'tool_result';
             parentToolCallId = (msg.tool_call_id as string) || null;
           } else {
@@ -344,7 +375,7 @@ export function replaceMessages(
             if (thinkingBlock) thinking = thinkingBlock.thinking || null;
           }
         } else if (!msg.msg_type && typeof msg.content === 'string') {
-          if (msg.role === 'tool') {
+          if (roleValue === 'tool') {
             msgType = 'tool_result';
             parentToolCallId = (msg.tool_call_id as string) || null;
           }
@@ -357,8 +388,9 @@ export function replaceMessages(
         stmt.bind({
           id: (msg.id as string) || randomUUID(),
           session_id: sessionId,
-          role: msg.role as string,
+          role: roleValue,
           content: contentStr,
+          display_content: displayContent,
           name: (msg.name as string) || null,
           tool_call_id: (msg.tool_call_id as string) || null,
           token_usage: (msg.token_usage as string) || null,

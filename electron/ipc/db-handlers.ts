@@ -44,6 +44,25 @@ export {
 } from '../db/index';
 export type { DbInitResult, DatabaseStats } from '../db/index';
 
+function serializeMessageContent(value: unknown, role?: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value) && role === 'user') {
+    const textBlocks = value.filter(
+      (b: unknown) => (b as Record<string, unknown>).type === 'text'
+    );
+    return textBlocks.length > 0
+      ? textBlocks.map((b: unknown) => (b as Record<string, string>).text || '').join('\n')
+      : JSON.stringify(value);
+  }
+  return JSON.stringify(value);
+}
+
+function serializeDisplayContent(value: unknown, role?: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  return serializeMessageContent(value, role);
+}
+
 // ============================================================
 // IPC Handlers Registration
 // ============================================================
@@ -221,6 +240,8 @@ export function registerDbHandlers(): void {
     session_id: string;
     role: string;
     content: string;
+    display_content?: string | null;
+    displayContent?: unknown;
     name?: string;
     tool_call_id?: string;
     token_usage?: string;
@@ -238,14 +259,16 @@ export function registerDbHandlers(): void {
   }) => {
     const now = Date.now();
     const database = getDb();
+    const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, data.role);
     database.prepare(`
-      INSERT OR REPLACE INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-      VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
+      INSERT OR REPLACE INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+      VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
     `).run({
       id: data.id,
       session_id: data.session_id,
       role: data.role,
       content: data.content,
+      display_content: displayContent,
       name: data.name ?? null,
       tool_call_id: data.tool_call_id ?? null,
       token_usage: data.token_usage ?? null,
@@ -348,8 +371,8 @@ export function registerDbHandlers(): void {
         database.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
         const stmt = database.prepare(`
-          INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-          VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
+          INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+          VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
         `);
 
         for (const rawMsg of messages) {
@@ -359,16 +382,15 @@ export function registerDbHandlers(): void {
           let toolName: string | null = (msg.tool_name as string) || null;
           let toolInput: string | null = (msg.tool_input as string) || null;
           let parentToolCallId: string | null = (msg.parent_tool_call_id as string) || null;
-          // Use displayContent for DB when set (original prompt without synthetic doc context)
-          const effectiveContent = msg.displayContent !== undefined ? msg.displayContent : msg.content;
-          let contentStr = typeof effectiveContent === 'string' ? effectiveContent : JSON.stringify(effectiveContent);
+          let contentStr = serializeMessageContent(msg.content, msg.role);
+          const displayContentStr = serializeDisplayContent(msg.displayContent ?? msg.display_content, msg.role);
 
           // For user messages with image content blocks,
           // extract only the text blocks for DB storage. Image data lives in
           // message_attachments table and should not be stored in content.
           // Assistant messages (thinking, tool_use) keep their full structure.
-          if (msg.role === 'user' && Array.isArray(effectiveContent)) {
-            const textBlocks = effectiveContent.filter(
+          if (msg.role === 'user' && Array.isArray(msg.content)) {
+            const textBlocks = msg.content.filter(
               (b: unknown) => (b as Record<string, unknown>).type === 'text'
             );
             if (textBlocks.length > 0) {
@@ -413,6 +435,7 @@ export function registerDbHandlers(): void {
             session_id: sessionId,
             role: msg.role as string,
             content: contentStr,
+            display_content: displayContentStr,
             name: (msg.name as string) || null,
             tool_call_id: (msg.tool_call_id as string) || null,
             token_usage: (msg.token_usage as string) || null,

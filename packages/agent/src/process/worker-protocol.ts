@@ -57,6 +57,7 @@ export interface ChatStartCommand {
     }>;
     agentProfileId?: string | null;
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
+    displayContent?: string;
     parsedDocs?: Array<{
       filename: string;
       charCount: number;
@@ -128,6 +129,14 @@ export interface AgentThinkingEvent {
 
 export interface SubagentToolUseEvent {
   type: 'chat:tool_use';
+  sessionId: string;
+  id: string;
+  name: string;
+  input: unknown;
+}
+
+export interface SubagentToolUseStartedEvent {
+  type: 'chat:tool_use_started';
   sessionId: string;
   id: string;
   name: string;
@@ -289,6 +298,7 @@ export type WorkerEvent =
   | CheckpointEvent
   | AgentTextEvent
   | AgentThinkingEvent
+  | SubagentToolUseStartedEvent
   | SubagentToolUseEvent
   | SubagentToolResultEvent
   | SubagentToolProgressEvent
