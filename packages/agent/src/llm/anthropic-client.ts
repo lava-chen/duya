@@ -730,7 +730,10 @@ export class AnthropicClient implements LLMClient {
             input: {},
           };
           toolStartTimes.set(event.content_block.id, Date.now());
-          // Don't yield tool_use here - wait until content_block_stop when input is complete
+          yield {
+            type: 'tool_use_started',
+            data: currentToolUse,
+          };
         } else if (event.content_block.type === 'text') {
           textContentSinceLastTool = '';
           thinkBuffer = '';

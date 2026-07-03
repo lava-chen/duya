@@ -4,6 +4,7 @@
  */
 
 import { ToolRegistry } from './registry.js';
+import type { ToolUseContext } from '../types.js';
 
 // Import all tools
 import { BashTool } from './BashTool/BashTool.js';
@@ -43,6 +44,7 @@ import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.j
 // tool provider here so `createBuiltinRegistry` can stay synchronous in
 // per-turn hot paths.
 import { moduleTool } from './ModuleTool/ModuleTool.js';
+import { runVisualSelfReview } from './WidgetRenderer/runVisualSelfReview.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
 import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
 import { ResearchMemory } from '../research-memory/index.js';
@@ -262,11 +264,31 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
       },
     },
     {
-      execute: async (input: Record<string, unknown>) => {
+      execute: async (input: Record<string, unknown>, _wd?: string, context?: ToolUseContext) => {
+        const widgetCode = input.widget_code as string;
+
+        // Sync pass-through — immediately return widget_code so the existing
+        // stream → vizSpec → MessageItem pipeline renders unchanged.
+        // The visual self-review is fired as a pendingExtraResult and yields
+        // a second tool_result after the headless render + vision call.
+        const reviewPromise = runVisualSelfReview(widgetCode ?? '', context);
+
+        // Catch any error inside the deferred pipeline so the executor never
+        // sees an unhandled rejection. The agent gets a soft-degrade message
+        // instead of the tool_use hanging on a hung promise.
+        const safePromise = reviewPromise.then(
+          (text) => ({ result: text, is_error: false }),
+          (err: unknown) => ({
+            result: `Visual self-review failed unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+            is_error: true,
+          }),
+        );
+
         return {
           id: crypto.randomUUID(),
           name: 'show_widget',
-          result: JSON.stringify({ widget_code: input.widget_code }),
+          result: JSON.stringify({ widget_code: widgetCode }),
+          pendingExtraResult: safePromise,
         };
       },
     }

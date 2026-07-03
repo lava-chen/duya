@@ -454,7 +454,7 @@ export class OpenAIClient implements LLMClient {
     const stream = await this.client.chat.completions.create(requestParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
 
     // Track multiple tool calls by index (OpenAI streams tool_calls with index)
-    const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
+    const toolCallsMap = new Map<number, { id: string; name: string; arguments: string; started: boolean }>();
     // For parsing MiniMax <think> tags embedded in text
     let thinkBuffer = '';
     let isInThinkTag = false;
@@ -565,19 +565,46 @@ export class OpenAIClient implements LLMClient {
       if (delta.tool_calls) {
         for (const toolCall of delta.tool_calls) {
           const idx = toolCall.index ?? 0;
+          let entry = toolCallsMap.get(idx);
 
           if (toolCall.function?.name) {
-            // First chunk for this tool call: has id and function.name
-            toolCallsMap.set(idx, {
-              id: toolCall.id || crypto.randomUUID(),
-              name: toolCall.function.name,
-              arguments: '',
-            });
+            if (!entry) {
+              entry = {
+                id: toolCall.id || crypto.randomUUID(),
+                name: toolCall.function.name,
+                arguments: '',
+                started: false,
+              };
+              toolCallsMap.set(idx, entry);
+            } else {
+              entry.name = entry.name || toolCall.function.name;
+              if (toolCall.id) entry.id = toolCall.id;
+            }
+
+            if (!entry.started) {
+              entry.started = true;
+              yield {
+                type: 'tool_use_started',
+                data: {
+                  id: entry.id,
+                  name: entry.name,
+                  input: {},
+                },
+              };
+            }
           }
 
           // Accumulate arguments
           if (toolCall.function?.arguments) {
-            const entry = toolCallsMap.get(idx);
+            if (!entry) {
+              entry = {
+                id: toolCall.id || crypto.randomUUID(),
+                name: '',
+                arguments: '',
+                started: false,
+              };
+              toolCallsMap.set(idx, entry);
+            }
             if (entry) {
               entry.arguments += toolCall.function.arguments;
             }

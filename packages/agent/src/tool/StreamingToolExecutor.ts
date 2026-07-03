@@ -460,6 +460,14 @@ export class StreamingToolExecutor {
   private totalOutputBytes = 0
   private memoryWarningCallback?: (currentMB: number, thresholdMB: number) => void
 
+  // Deferred second results. Populated by `executeTool` when a ToolResult
+  // carries a `pendingExtraResult`; drained by `getRemainingResults` after
+  // the main results have been yielded. Map keyed by tool_use_id.
+  private readonly pendingExtraResults = new Map<
+    string,
+    { toolName: string; promise: Promise<{ result: string; is_error?: boolean }> }
+  >()
+
   // WeakRef cleanup support
   private readonly toolWeakRefs = new Set<WeakRef<TrackedTool>>()
 
@@ -1433,6 +1441,16 @@ export class StreamingToolExecutor {
         duration_ms: Date.now() - startTime,
       })
 
+      // Capture deferred extra result (e.g. visual self-review from
+      // show_widget). The executor will await and yield this as a second
+      // tool_result so the LLM gets both messages with the same tool_use_id.
+      if (result.pendingExtraResult) {
+        this.pendingExtraResults.set(tool.id, {
+          toolName: tool.block.name,
+          promise: result.pendingExtraResult,
+        })
+      }
+
       this.finalizeTool(tool, messages)
 
     } catch (error) {
@@ -1854,11 +1872,59 @@ export class StreamingToolExecutor {
     for (const result of this.getCompletedResults()) {
       yield result
     }
+
+    // Drain pending extra results (e.g. show_widget's visual self-review).
+    // Each one becomes a synthetic tool_result message + executor yield,
+    // keeping the existing SSE tool_result pipeline intact.
+    if (this.pendingExtraResults.size > 0) {
+      yield* this.drainPendingExtraResults()
+    }
   }
 
   // ==========================================================================
   // STATUS HELPERS
   // ==========================================================================
+
+  /**
+   * Drain the pendingExtraResults map. Each entry's promise is awaited
+   * (race against a 30s safety cap to prevent an indefinitely hung vision
+   * call from pinning the turn). The resolved payload is wrapped as a
+   * `Message` with role='tool' and re-uses the original tool_use_id, so
+   * the LLM history correctly sees it as a second tool_result for the
+   * same tool_use block.
+   */
+  private async *drainPendingExtraResults(): AsyncGenerator<MessageUpdate, void> {
+    const SAFETY_CAP_MS = 30_000;
+
+    // Take a snapshot — pop entries as we go to avoid mutation during yield.
+    const entries = Array.from(this.pendingExtraResults.entries());
+    this.pendingExtraResults.clear();
+
+    for (const [toolUseId, { toolName, promise }] of entries) {
+      const result = await Promise.race([
+        promise,
+        new Promise<{ result: string; is_error?: boolean }>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                result: `[${toolName}] deferred result timed out after ${SAFETY_CAP_MS}ms`,
+                is_error: true,
+              }),
+            SAFETY_CAP_MS,
+          ),
+        ),
+      ]);
+
+      yield {
+        message: {
+          role: 'tool' as const,
+          content: result.result,
+          tool_call_id: toolUseId,
+          status: result.is_error ? 'error' : 'done',
+        },
+      };
+    }
+  }
 
   private hasPendingProgress(): boolean {
     return this.tools.some(t => t.pendingProgress.length > 0)
