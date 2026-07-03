@@ -47,5 +47,15 @@ Incorrect (will fail):
 - \`<img src="file:///C:/Users/...">\`
 
 Images embedded this way are interactive: users can click any image to open a full-screen preview lightbox.
+
+## Visual self-review (automatic)
+After every \`show_widget\` call, the platform automatically renders your widget headlessly and asks the configured vision model to critique it. The critique arrives as a second \`tool_result\` block with the same tool_call_id — it does NOT block streaming, so the widget still appears instantly for the user.
+
+You will see one of three messages in the second tool_result:
+- A concrete critique ("text overlaps node X", "legend is missing", "the title is cut off") → fix the issue and call \`show_widget\` again with the corrected widget_code
+- "Looks good — no obvious issues" → the widget passed review, proceed with your next sentence
+- "Visual self-review skipped: …" → the user has not configured a vision model in Settings > Vision Model, or the headless render failed; proceed without self-review (do NOT keep retrying the same widget_code)
+
+The self-review is best-effort and never replaces user judgment — treat its findings as a second pair of eyes, not ground truth.
 </widget-capability>`;
 }

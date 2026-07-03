@@ -71,8 +71,8 @@ export interface Message {
   sub_agent_id?: string;
   /** File attachments (name, type, url, size, text, imageChunks, etc.) */
   attachments?: FileAttachment[];
-  /** Original user message used when prompt includes synthetic context (doc text).
-   *  When set, replaceMessages will use displayContent for the DB instead of content. */
+  /** User-facing rendering content. Persistence keeps this in display_content
+   *  without replacing the model-facing content. */
   displayContent?: string | MessageContent[];
   /** True if this message is a compact boundary marker (separates old/new content) */
   isCompactBoundary?: boolean;
@@ -165,6 +165,19 @@ export interface ToolResult {
   error?: boolean;
   duration_ms?: number;
   metadata?: ToolResultMetadata;
+  /**
+   * Optional deferred second result. When present, StreamingToolExecutor
+   * keeps a reference and, after the main result has been delivered, awaits
+   * this promise and yields a synthetic second tool_result so downstream
+   * consumers (LLM, SSE channel, DB) see both results with the same
+   * `tool_call_id`.
+   *
+   * Used by `show_widget`'s visual self-review: the agent gets the
+   * widget_code immediately (main result), then a text critique from the
+   * vision model a few seconds later (extra result). See
+   * `WidgetRenderer/runVisualSelfReview.ts`.
+   */
+  pendingExtraResult?: Promise<{ result: string; is_error?: boolean }>;
 }
 
 export interface ToolResultMetadata {
@@ -182,6 +195,7 @@ export interface ToolResultMetadata {
 // SSE 事件类型
 export type SSEEvent =
   | { type: 'text'; data: string }
+  | { type: 'tool_use_started'; data: ToolUse }
   | { type: 'tool_use'; data: ToolUse }
   | { type: 'tool_result'; data: ToolResult }
   | { type: 'tool_progress'; data: { toolName: string; elapsedSeconds: number } }

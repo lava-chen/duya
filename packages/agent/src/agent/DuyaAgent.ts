@@ -43,6 +43,7 @@ import { microCleanupMessages } from '../compact/microCompactCleanup.js';
 import { createLLMClient, createRetryableLLMClient, inferProvider, isMiniMaxURL, LLMClientWrapper } from '../llm/index.js';
 import type { LLMClient, RetryConfig } from '../llm/index.js';
 import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapter.js';
+import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
@@ -687,11 +688,10 @@ export class duyaAgent {
         // Check if the last message is already a user message with the same content
         // This prevents duplicates when messages are pre-loaded from DB before streamChat is called
         const lastMessage = messages[messages.length - 1];
-        // Use displayContent for comparison when available (original prompt without synthetic context)
-        // For MessageContent[] prompts, extract text blocks for comparison
-        const rawCompareContent = options?.displayContent ?? (typeof prompt === 'string' ? prompt : Array.isArray(prompt) ? prompt : '');
-        const compareContent = typeof rawCompareContent === 'string'
-          ? rawCompareContent
+        // Compare the model-facing prompt. UI marker content is persisted
+        // separately as displayContent and must not replace content.
+        const compareContent = typeof prompt === 'string'
+          ? prompt
           : (Array.isArray(prompt)
               ? prompt.filter((b: unknown) => (b as Record<string, unknown>).type === 'text')
                   .map((b: unknown) => (b as Record<string, string>).text || '')
@@ -706,15 +706,17 @@ export class duyaAgent {
                   .map(b => b.text || '')
                   .join('')
               : '');
+        const normalizedLastMessageContent = stripPastedContentMarkers(lastMessageContent).trim();
+        const normalizedCompareContent = stripPastedContentMarkers(compareContent).trim();
         const isDuplicate = lastMessage &&
           lastMessage.role === 'user' &&
-          (lastMessageContent === compareContent ||
+          (normalizedLastMessageContent === normalizedCompareContent ||
             lastMessageContent.trim() === compareContent.trim());
 
-        const displayContent = options?.displayContent;
-        const persistedPromptContent = (displayContent !== undefined
-          ? displayContent
-          : prompt) as string | MessageContent[];
+        const displayContent = options?.displayContent && options.displayContent.length > 0
+          ? options.displayContent
+          : undefined;
+        const persistedPromptContent = prompt as string | MessageContent[];
 
         if (!isDuplicate) {
           const userMessage = {
@@ -732,10 +734,10 @@ export class duyaAgent {
           lastMessage.seq_index = seqIndex;
           runtimePromptMessageId = lastMessage.id ?? null;
           const newAttachments = (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments;
+          lastMessage.content = persistedPromptContent;
+          lastMessage.displayContent = displayContent;
           if (newAttachments && newAttachments.length > 0) {
             lastMessage.attachments = newAttachments;
-            lastMessage.content = persistedPromptContent;
-            lastMessage.displayContent = displayContent !== undefined ? displayContent : undefined;
           }
         }
       }
@@ -874,7 +876,10 @@ export class duyaAgent {
             logger.debug(`[Agent] LLM event ${llmEventCount}: type=${event.type}`);
           }
 
-          if (event.type === 'tool_use') {
+          if (event.type === 'tool_use_started') {
+            yield event;
+
+          } else if (event.type === 'tool_use') {
             toolCallCountThisTurn++;
 
             // Track skill_manage usage for self-improvement

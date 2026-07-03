@@ -17,6 +17,14 @@
     "./ipc": {
       "types": "./dist/ipc.d.ts",
       "default": "./dist/ipc.js"
+    },
+    "./elements/widget-sanitizer": {
+      "types": "./dist/elements/widget-sanitizer.d.ts",
+      "default": "./dist/elements/widget-sanitizer.js"
+    },
+    "./elements/widget-css-bridge": {
+      "types": "./dist/elements/widget-css-bridge.d.ts",
+      "default": "./dist/elements/widget-css-bridge.js"
     }
   },
   "scripts": {
