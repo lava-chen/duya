@@ -24,6 +24,25 @@ function debugLog(...args: unknown[]): void {
   }
 }
 
+function serializeMessageContent(value: unknown, role?: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value) && role === 'user') {
+    const textBlocks = value.filter(
+      (b: unknown) => (b as Record<string, unknown>).type === 'text'
+    );
+    return textBlocks.length > 0
+      ? textBlocks.map((b: unknown) => (b as Record<string, string>).text || '').join('\n')
+      : JSON.stringify(value);
+  }
+  return JSON.stringify(value);
+}
+
+function serializeDisplayContent(value: unknown, role?: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  return serializeMessageContent(value, role);
+}
+
 const MAILBOX_PERMITTED_APPLY = new Set<string>([
   'before_model_turn:promote_to_user_message',
   'before_model_turn:runtime_instruction',
@@ -285,15 +304,17 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       const attachments = p.attachments
         ? (typeof p.attachments === 'string' ? p.attachments : JSON.stringify(p.attachments))
         : null;
+      const displayContent = p.display_content ?? serializeDisplayContent(p.displayContent, p.role);
 
       db.prepare(`
-        INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-        VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
+        INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+        VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
       `).run({
         id: p.id,
         session_id: p.session_id,
         role: p.role,
-        content: p.content,
+        content: serializeMessageContent(p.content, p.role),
+        display_content: displayContent,
         name: p.name ?? null,
         tool_call_id: p.tool_call_id ?? null,
         token_usage: p.token_usage ?? null,
@@ -351,11 +372,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       const insertStmt = db.prepare(`
         INSERT OR IGNORE INTO messages (
           id, session_id, role, content, name, tool_call_id,
+          display_content,
           token_usage, msg_type, thinking, tool_name, tool_input,
           parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id,
           attachments, created_at
         ) VALUES (
           @id, @session_id, @role, @content, @name, @tool_call_id,
+          @display_content,
           @token_usage, @msg_type, @thinking, @tool_name, @tool_input,
           @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id,
           @attachments, @created_at
@@ -370,7 +393,11 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           }
 
           const effectiveContent = msg.content;
-          let contentStr: string;
+          let contentStr = serializeMessageContent(effectiveContent, msg.role);
+          const displayContentStr = serializeDisplayContent(
+            (msg as Record<string, unknown>).displayContent ?? (msg as Record<string, unknown>).display_content,
+            msg.role,
+          );
           let msgType = msg.msg_type || 'text';
           let thinking: string | null = msg.thinking || null;
           let toolName: string | null = msg.tool_name || null;
@@ -384,21 +411,6 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
             if (msg.tool_call_id && !(msg as Record<string, unknown>).parent_tool_call_id) {
               (msg as Record<string, unknown>).parent_tool_call_id = msg.tool_call_id;
             }
-          }
-
-          if (typeof effectiveContent === 'string') {
-            contentStr = effectiveContent;
-          } else if (effectiveContent === null || effectiveContent === undefined) {
-            contentStr = '';
-          } else if (Array.isArray(effectiveContent) && msg.role === 'user') {
-            const textBlocks = effectiveContent.filter(
-              (b: unknown) => (b as Record<string, unknown>).type === 'text'
-            );
-            contentStr = textBlocks.length > 0
-              ? textBlocks.map((b: unknown) => (b as Record<string, string>).text || '').join('\n')
-              : JSON.stringify(effectiveContent);
-          } else {
-            contentStr = JSON.stringify(effectiveContent);
           }
 
           // Derive msg_type from content blocks for assistant messages
@@ -432,11 +444,12 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           }
 
           try {
-            insertStmt.run({
+            const insertResult = insertStmt.run({
               id: msg.id,
               session_id: sessionId,
               role: msg.role,
               content: contentStr,
+              display_content: displayContentStr,
               name: msg.name || null,
               tool_call_id: msg.tool_call_id || null,
               token_usage: msg.token_usage ? JSON.stringify(msg.token_usage) : null,
@@ -453,6 +466,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
               attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
               created_at: msg.timestamp || msg.created_at || now,
             });
+            if (displayContentStr && insertResult.changes === 0) {
+              db.prepare(`
+                UPDATE messages
+                SET display_content = COALESCE(NULLIF(display_content, ''), ?)
+                WHERE id = ? AND session_id = ?
+              `).run(displayContentStr, msg.id, sessionId);
+            }
             count++;
           } catch (insertErr) {
             getLogger().error('message:append insert failed', insertErr instanceof Error ? insertErr : new Error(String(insertErr)), { msgId: msg.id, sessionId }, LogComponent.AgentCommunicator);
@@ -514,33 +534,20 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
           const stmt = db.prepare(`
-            INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-            VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
+            INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+            VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
           `);
 
           for (let i = 0; i < messages.length; i++) {
             const msg = messages[i] as Record<string, unknown>;
 
-            let contentValue: string;
-            // Use displayContent for DB when set (original prompt without synthetic doc context)
-            const effectiveContent = msg.displayContent !== undefined ? msg.displayContent : msg.content;
-            if (typeof effectiveContent === 'string') {
-              contentValue = effectiveContent;
-            } else if (effectiveContent === null || effectiveContent === undefined) {
-              contentValue = '';
-            } else if (Array.isArray(effectiveContent) && (msg as Record<string, unknown>).role === 'user') {
-              const textBlocks = effectiveContent.filter(
-                (b: unknown) => (b as Record<string, unknown>).type === 'text'
-              );
-              contentValue = textBlocks.length > 0
-                ? textBlocks.map((b: unknown) => (b as Record<string, string>).text || '').join('\n')
-                : JSON.stringify(effectiveContent);
-            } else {
-              contentValue = JSON.stringify(effectiveContent);
-            }
-
             const roleValue = typeof msg.role === 'string' && msg.role.length > 0 ? msg.role : 'assistant';
             const idValue = typeof msg.id === 'string' && msg.id.length > 0 ? msg.id : randomUUID();
+            let contentValue = serializeMessageContent(msg.content, roleValue);
+            const displayContentValue = serializeDisplayContent(
+              msg.displayContent ?? msg.display_content,
+              roleValue,
+            );
 
             let msgType = (msg.msg_type as string) || 'text';
             let thinking: string | null = (msg.thinking as string) || null;
@@ -588,6 +595,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
               session_id: sessionId,
               role: roleValue,
               content: contentValue,
+              display_content: displayContentValue,
               name: msg.name || null,
               tool_call_id: msg.tool_call_id || null,
               token_usage: (msg.token_usage as string) || null,

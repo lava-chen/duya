@@ -80,6 +80,7 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       session_id TEXT NOT NULL,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
+      display_content TEXT,
       name TEXT,
       tool_call_id TEXT,
       token_usage TEXT,
@@ -1772,6 +1773,18 @@ const migrations: Migration[] = [
         ).run(...ids);
       });
       txn();
+    },
+  },
+  {
+    id: 35,
+    name: 'add_display_content_to_messages',
+    migrate(db: BetterSqlite3Db): void {
+      const tableInfo = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
+      const columns = tableInfo.map(col => col.name);
+      if (!columns.includes('display_content')) {
+        db.exec(`ALTER TABLE messages ADD COLUMN display_content TEXT`);
+      }
+      db.exec(`UPDATE messages SET display_content = NULL WHERE display_content = ''`);
     },
   },
 ];

@@ -39,6 +39,25 @@ function getIpcClient(): typeof ipcClient {
   return ipcClient;
 }
 
+function serializeMessageContent(value: unknown, role?: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value) && role === 'user') {
+    const textBlocks = value.filter(
+      (block: unknown) => (block as Record<string, unknown>).type === 'text',
+    );
+    return textBlocks.length > 0
+      ? textBlocks.map((block: unknown) => (block as Record<string, string>).text || '').join('\n')
+      : JSON.stringify(value);
+  }
+  return JSON.stringify(value);
+}
+
+function serializeDisplayContent(value: unknown, role?: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  return serializeMessageContent(value, role);
+}
+
 // ============================================================
 // Types
 // ============================================================
@@ -74,6 +93,7 @@ export interface MessageRow {
   session_id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  display_content: string | null;
   name: string | null;
   tool_call_id: string | null;
   token_usage: string | null;
@@ -134,7 +154,9 @@ export interface CreateMessageData {
   id: string;
   session_id: string;
   role: string;
-  content: string;
+  content: unknown;
+  display_content?: string | null;
+  displayContent?: unknown;
   name?: string;
   tool_call_id?: string;
   token_usage?: string;
@@ -466,6 +488,7 @@ function initializeSchema(db: BetterSqlite3.Database): void {
       session_id TEXT NOT NULL,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
+      display_content TEXT,
       name TEXT,
       tool_call_id TEXT,
       token_usage TEXT,
@@ -619,7 +642,7 @@ function initializeSchema(db: BetterSqlite3.Database): void {
     logger.error('Migration failed: adding agent profile columns to chat_sessions', error instanceof Error ? error : undefined, undefined, 'DB');
   }
 
-  // Schema migration: Add name, tool_call_id columns to messages table
+  // Schema migration: Add name, tool_call_id, display_content columns to messages table
   try {
     const tableInfo = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
     const columns = tableInfo.map(c => c.name);
@@ -631,6 +654,11 @@ function initializeSchema(db: BetterSqlite3.Database): void {
       db.exec(`ALTER TABLE messages ADD COLUMN tool_call_id TEXT`);
       logger.info('Migration: Added tool_call_id column to messages', undefined, 'DB');
     }
+    if (!columns.includes('display_content')) {
+      db.exec(`ALTER TABLE messages ADD COLUMN display_content TEXT`);
+      logger.info('Migration: Added display_content column to messages', undefined, 'DB');
+    }
+    db.exec(`UPDATE messages SET display_content = NULL WHERE display_content = ''`);
   } catch (error) {
     logger.error('Migration failed: adding columns to messages', error instanceof Error ? error : undefined, undefined, 'DB');
   }
@@ -1233,17 +1261,20 @@ export function addMessage(data: CreateMessageData): MessageRow {
 
   const db = getDb();
   const now = Date.now();
+  const content = serializeMessageContent(data.content, data.role);
+  const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, data.role);
 
   const stmt = db.prepare(`
-    INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-    VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
+    INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+    VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
   `);
 
   stmt.run({
     id: data.id,
     session_id: data.session_id,
     role: data.role,
-    content: data.content,
+    content,
+    display_content: displayContent,
     name: data.name ?? null,
     tool_call_id: data.tool_call_id ?? null,
     token_usage: data.token_usage ?? null,
@@ -1271,7 +1302,8 @@ export function addMessage(data: CreateMessageData): MessageRow {
     id: data.id,
     session_id: data.session_id,
     role: data.role as 'user' | 'assistant' | 'system' | 'tool',
-    content: data.content,
+    content,
+    display_content: displayContent,
     name: data.name ?? null,
     tool_call_id: data.tool_call_id ?? null,
     token_usage: data.token_usage ?? null,
@@ -2004,8 +2036,8 @@ export async function replaceMessages(
       db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
       const stmt = db.prepare(`
-        INSERT INTO messages (id, session_id, role, content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-        VALUES (@id, @session_id, @role, @content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
+        INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+        VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
       `);
 
       for (const msg of messages) {
@@ -2016,12 +2048,8 @@ export async function replaceMessages(
         let parentToolCallId: string | null = msg.parent_tool_call_id || null;
         let vizSpec: string | null = msg.viz_spec || null;
         const effectiveContent = msg.content;
-        let contentStr: string;
-        if (typeof effectiveContent === 'string') {
-          contentStr = effectiveContent;
-        } else {
-          contentStr = JSON.stringify(effectiveContent);
-        }
+        let contentStr = serializeMessageContent(effectiveContent, msg.role);
+        const displayContent = serializeDisplayContent(msg.displayContent, msg.role);
 
         // For user messages with image content blocks,
         // extract only the text blocks for DB storage. Image data lives in
@@ -2082,6 +2110,7 @@ export async function replaceMessages(
           session_id: sessionId,
           role: msg.role,
           content: contentStr,
+          display_content: displayContent,
           name: msg.name || null,
           tool_call_id: msg.tool_call_id || null,
           token_usage: (msg as unknown as Record<string, unknown>).token_usage as string || null,
@@ -2153,11 +2182,13 @@ export async function appendMessages(
     const insertStmt = db.prepare(`
       INSERT OR IGNORE INTO messages (
         id, session_id, role, content, name, tool_call_id,
+        display_content,
         token_usage, msg_type, thinking, tool_name, tool_input,
         parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id,
         attachments, created_at
       ) VALUES (
         @id, @session_id, @role, @content, @name, @tool_call_id,
+        @display_content,
         @token_usage, @msg_type, @thinking, @tool_name, @tool_input,
         @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id,
         @attachments, @created_at
@@ -2172,12 +2203,8 @@ export async function appendMessages(
         }
 
         const effectiveContent = msg.content;
-        let contentStr: string;
-        if (typeof effectiveContent === 'string') {
-          contentStr = effectiveContent;
-        } else {
-          contentStr = JSON.stringify(effectiveContent);
-        }
+        let contentStr = serializeMessageContent(effectiveContent, msg.role);
+        const displayContent = serializeDisplayContent(msg.displayContent, msg.role);
 
         // For user messages with image content blocks, extract only text.
         if (msg.role === 'user' && Array.isArray(effectiveContent)) {
@@ -2236,11 +2263,12 @@ export async function appendMessages(
         }
 
         try {
-          insertStmt.run({
+          const insertResult = insertStmt.run({
             id: msg.id,
             session_id: sessionId,
             role: msg.role,
             content: contentStr,
+            display_content: displayContent,
             name: msg.name || null,
             tool_call_id: msg.tool_call_id || null,
             token_usage: (msg as unknown as Record<string, unknown>).token_usage
@@ -2261,6 +2289,13 @@ export async function appendMessages(
               : null,
             created_at: msg.timestamp || now,
           });
+          if (displayContent && insertResult.changes === 0) {
+            db.prepare(`
+              UPDATE messages
+              SET display_content = COALESCE(NULLIF(display_content, ''), ?)
+              WHERE id = ? AND session_id = ?
+            `).run(displayContent, msg.id, sessionId);
+          }
           count++;
         } catch (insertErr) {
           logger.error('Insert message failed in appendMessages', insertErr instanceof Error ? insertErr : new Error(String(insertErr)), { msgId: msg.id, role: msg.role, sessionId }, 'DB');

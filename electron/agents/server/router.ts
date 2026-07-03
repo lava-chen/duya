@@ -45,6 +45,7 @@ function mapEventType(eventType: string): string {
   if (eventType === 'chat:error') return 'error';
   if (eventType === 'chat:text') return 'text';
   if (eventType === 'chat:thinking') return 'thinking';
+  if (eventType === 'chat:tool_use_started') return 'tool_use_started';
   if (eventType === 'chat:tool_use') return 'tool_use';
   if (eventType === 'chat:tool_result') return 'tool_result';
   if (eventType === 'chat:tool_progress') return 'tool_progress';
@@ -419,6 +420,11 @@ function handlePostChatSSE(
           sseEvent = {
             type: msgType.replace('chat:', ''), // 'text' or 'thinking'
             data: { content: event.data || event.content },
+          };
+        } else if (msgType === 'chat:tool_use_started') {
+          sseEvent = {
+            type: 'tool_use_started',
+            data: { id: event.id, name: event.name, input: event.input },
           };
         } else if (msgType === 'chat:tool_use') {
           sseEvent = {

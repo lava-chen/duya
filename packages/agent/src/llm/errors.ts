@@ -31,6 +31,7 @@ export enum APIErrorType {
 
   // Usage / quota errors
   USAGE_LIMIT = 'usage_limit',
+  PROVIDER_SAFETY_FILTER = 'provider_safety_filter',
 
   // Other
   UNKNOWN = 'unknown',
@@ -239,6 +240,14 @@ export function classifyError(error: unknown): APIErrorType {
     if (msg.includes('prompt_too_long') || msg.includes('prompt is too long')) {
       return APIErrorType.PROMPT_TOO_LONG;
     }
+    if (
+      msg.includes('new_sensitive') ||
+      msg.includes('output new_sensitive') ||
+      msg.includes('sensitive content') ||
+      msg.includes('content policy')
+    ) {
+      return APIErrorType.PROVIDER_SAFETY_FILTER;
+    }
   }
 
   // Classify by HTTP status code
@@ -390,6 +399,8 @@ export function formatErrorForDisplay(error: unknown): string {
     case APIErrorType.CONTEXT_LENGTH_EXCEEDED:
     case APIErrorType.PROMPT_TOO_LONG:
       return 'The conversation is too long. Please start a new session or compact the history.';
+    case APIErrorType.PROVIDER_SAFETY_FILTER:
+      return 'The model provider stopped the response because its safety filter flagged newly generated output. Previous tool work and files are kept; you can continue with a safer wording or switch models.';
     case APIErrorType.ABORTED:
       return 'Request was cancelled.';
     default:
@@ -408,6 +419,8 @@ export function createErrorEvent(error: unknown): SSEEvent {
     code = 'rate_limit_error';
   } else if (llmError.type === APIErrorType.USAGE_LIMIT) {
     code = 'usage_limit_exceeded';
+  } else if (llmError.type === APIErrorType.PROVIDER_SAFETY_FILTER) {
+    code = 'provider_safety_filter';
   }
 
   return {
