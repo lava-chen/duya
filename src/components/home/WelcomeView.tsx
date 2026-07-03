@@ -11,7 +11,7 @@ import type { FileAttachment } from "@/types/message";
 
 interface WelcomeViewProps {
   onSelectThread: (threadId: string) => void;
-  onSendMessage?: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null) => void;
+  onSendMessage?: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string) => void;
 }
 
 export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps) {

@@ -35,6 +35,7 @@ import { AttachmentMenu } from './AttachmentMenu';
 import { ContextUsageRing } from './ContextUsageRing';
 import { RichTextInput, browserReferenceToken, terminalReferenceToken } from './RichTextInput';
 import type { Message } from '@/types/message';
+import { serializeBrowserReferenceForDisplay } from '@/lib/browser-reference-display';
 
 interface FileChip {
   id: string;
@@ -82,6 +83,7 @@ interface MessageInputProps {
     files?: FileAttachment[],
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
     mode?: string,
+    displayContent?: string,
   ) => void;
   onCommand?: (command: string) => void;
   onStop?: () => void;
@@ -473,6 +475,42 @@ export function MessageInput({
     const suffix = additions.join("\n\n");
     if (!textWithReferences.trim()) return suffix;
     return `${textWithReferences}\n\n${suffix}`;
+  }, [browserReferenceChips, fileChips, terminalReferenceChips]);
+
+  const buildDisplayContentWithChips = useCallback((textValue: string): string => {
+    const additions: string[] = [];
+    let displayValue = textValue;
+
+    if (fileChips.length > 0) {
+      additions.push(fileChips.map((chip) => chip.path).join('\n'));
+    }
+
+    for (const chip of terminalReferenceChips) {
+      const block = [
+        `Terminal reference (${chip.shell}, ${chip.cwd}):`,
+        "```text",
+        chip.text,
+        "```",
+      ].join("\n");
+      displayValue = displayValue.split(terminalReferenceToken(chip.id)).join(block);
+    }
+
+    for (const chip of browserReferenceChips) {
+      displayValue = displayValue
+        .split(browserReferenceToken(chip.id))
+        .join(serializeBrowserReferenceForDisplay({
+          kind: chip.kind,
+          label: chip.label,
+          title: chip.title,
+          url: chip.url,
+          content: chip.content,
+        }));
+    }
+
+    if (additions.length === 0) return displayValue;
+    const suffix = additions.join("\n\n");
+    if (!displayValue.trim()) return suffix;
+    return `${displayValue}\n\n${suffix}`;
   }, [browserReferenceChips, fileChips, terminalReferenceChips]);
 
   // Sync model with prop
@@ -916,6 +954,7 @@ export function MessageInput({
 
       // Build content with file chip paths
       const contentWithChips = buildContentWithChips(trimmedValue);
+      const displayContentWithChips = buildDisplayContentWithChips(trimmedValue);
 
       // Get combined content with markers for storage/display
       const contentWithMarkers = getCombinedContentWithMarkers(contentWithChips);
@@ -973,7 +1012,7 @@ export function MessageInput({
       if (cliBadge) setCliBadge(null);
 
       clearDraft();
-      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode);
+      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode, displayContentWithChips);
       setSendMode(undefined);
       setInputValue('');
       setFileChips([]);
@@ -985,7 +1024,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, isParsing, cliBadge, attachedFiles, hasPastedContents, fileChips, terminalReferenceChips, browserReferenceChips, buildContentWithChips, getCombinedContentWithMarkers, clearPastedContents, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
+    [inputValue, disabled, isStreaming, isParsing, cliBadge, attachedFiles, hasPastedContents, fileChips, terminalReferenceChips, browserReferenceChips, buildContentWithChips, buildDisplayContentWithChips, getCombinedContentWithMarkers, clearPastedContents, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
   );
 
   const handleKeyDown = useCallback(

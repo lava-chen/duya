@@ -35,6 +35,28 @@ export const FILE_CREATE_TOOLS = new Set([
 export const ASK_USER_QUESTION_TOOLS = new Set(['askuserquestion']);
 
 /**
+ * Module tool — loads design specification READMEs as markdown.
+ * Single canonical name (`read_module`) registered on the agent side
+ * (see MODULE_TOOL_NAME in packages/agent/src/tool/ModuleTool).
+ */
+export const MODULE_TOOLS = new Set(['read_module']);
+
+/**
+ * Task tool — manages an internal task list with action subcommands
+ * (`create` / `get` / `list` / `update` / `output` / `stop`). Single
+ * canonical name (`task`) registered on the agent side (see
+ * TASK_TOOL_NAME in packages/agent/src/tool/TaskTool).
+ */
+export const TASK_TOOLS = new Set(['task']);
+
+/** Action values the TaskTool accepts (must mirror the input_schema in
+ *  packages/agent/src/tool/TaskTool/TaskTool.ts). Used by
+ *  `isTaskToolAction` to disambiguate from legacy `task` tool calls
+ *  that were actually subagent dispatches (they never carry an
+ *  `action` field). */
+const TASK_ACTIONS = new Set(['create', 'get', 'list', 'update', 'output', 'stop']);
+
+/**
  * Browser tools (chrome / browser / browsertool / browser_tool).
  * Consecutive browser actions are collapsed into a single "已使用 浏览器"
  * group rather than rendered as a wall of JSON dumps.
@@ -59,6 +81,20 @@ export function isAskUserQuestionTool(name: string): boolean {
   return ASK_USER_QUESTION_TOOLS.has(name.toLowerCase());
 }
 
+export function isModuleTool(name: string): boolean {
+  return MODULE_TOOLS.has(name.toLowerCase());
+}
+
+/** Returns true only when the tool *input* looks like a TaskTool call.
+ *  This is more specific than `name === 'task'` because the legacy
+ *  subagent dispatcher also used the `task` tool name. We must NOT
+ *  claim a legacy `task` payload (which carries `prompt` /
+ *  `subagent_type` and no `action`) for the task list. */
+export function isTaskToolAction(input: unknown): boolean {
+  const mod = (input as Record<string, unknown> | undefined)?.action;
+  return typeof mod === 'string' && TASK_ACTIONS.has(mod);
+}
+
 /**
  * Legacy `task` tool sometimes carries subagent-shaped input or result;
  * detect that so the router can dispatch it through SubAgentToolRow
@@ -69,6 +105,11 @@ export function isAskUserQuestionTool(name: string): boolean {
 export function isLegacySubAgentToolAction(tool: ToolAction): boolean {
   const lowerName = tool.name.toLowerCase();
   if (lowerName !== 'task') return false;
+  // The TaskTool now owns the `task` name and carries `input.action`.
+  // A legacy subagent payload never had an `action` field, so a
+  // present-and-valid `action` means this is the new TaskTool and we
+  // must NOT claim it for SubAgentToolRow.
+  if (isTaskToolAction(tool.input)) return false;
   const input = tool.input as Record<string, unknown> | undefined;
   if (typeof input?.prompt === 'string' || typeof input?.subagent_type === 'string') {
     return true;
@@ -123,6 +164,12 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   }
   if (name === 'skill') {
     return { count: 1, categoryKey: 'skill' };
+  }
+  if (name === 'task' && isTaskToolAction(tool.input)) {
+    return { count: 1, categoryKey: 'tasks' };
+  }
+  if (isModuleTool(name)) {
+    return { count: 1, categoryKey: 'module' };
   }
   return { count: 1, categoryKey: 'tools' };
 }

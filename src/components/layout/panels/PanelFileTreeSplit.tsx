@@ -2,7 +2,7 @@
 
 import { SidebarSimple } from "@phosphor-icons/react";
 import { useMemo, type ReactNode } from "react";
-import { usePanel } from "@/hooks/usePanel";
+import { useOptionalPanel } from "@/hooks/usePanel";
 import { FileTreePanel } from "./FileTreePanel";
 import type { PageTab } from "./registry";
 
@@ -13,7 +13,8 @@ export function PanelFileTreeSplit({
   workingDirectory: string;
   children: ReactNode;
 }) {
-  const { workspaceTreeOpen, setWorkspaceTreeOpen } = usePanel();
+  const panel = useOptionalPanel();
+  const workspaceTreeOpen = panel?.workspaceTreeOpen ?? true;
   const treeTab = useMemo<PageTab>(() => ({
     id: `integrated-files:${workingDirectory}`,
     pageId: "files",
@@ -37,12 +38,13 @@ export function PanelFileTreeSplit({
 }
 
 export function PanelFileTreeToggle() {
-  const { workspaceTreeOpen, setWorkspaceTreeOpen } = usePanel();
+  const panel = useOptionalPanel();
+  const workspaceTreeOpen = panel?.workspaceTreeOpen ?? true;
   return (
     <button
       type="button"
       className={workspaceTreeOpen ? "active" : undefined}
-      onClick={() => setWorkspaceTreeOpen(!workspaceTreeOpen)}
+      onClick={() => panel?.setWorkspaceTreeOpen(!workspaceTreeOpen)}
       title={workspaceTreeOpen ? "收起文件树" : "展开文件树"}
       aria-label={workspaceTreeOpen ? "收起文件树" : "展开文件树"}
       aria-pressed={workspaceTreeOpen}

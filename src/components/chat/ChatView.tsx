@@ -49,7 +49,7 @@ interface ChatViewProps {
    * 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生.
    * 第一个参数 permissionMode 保留签名兼容 (App.handleSendMessage 还在声明), 但不使用.
    */
-  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string) => void;
+  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
   hasQueuedMessages?: boolean;
@@ -462,7 +462,7 @@ export function ChatView({
   }, [sessionId, parentSessionId, loadThreadMessages]);
 
   const handleSend = useCallback(
-    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string) => {
+    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, displayContent?: string) => {
       lastUserContentRef.current = content;
       lastFilesRef.current = files;
       lastOutputStyleRef.current = outputStyleConfig;
@@ -478,7 +478,7 @@ export function ChatView({
       }
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort);
+      onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent);
     },
     [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort]
   );
@@ -663,16 +663,21 @@ export function ChatView({
       {(phase === 'error' || (streamingError && phase !== 'aborted')) && (() => {
         const isRateLimit = streamingError?.code === 'rate_limit_error';
         const isUsageLimit = streamingError?.code === 'usage_limit_exceeded';
+        const isProviderSafetyFilter = streamingError?.code === 'provider_safety_filter';
         const bannerTitle = isRateLimit
           ? t('error.rateLimitTitle')
           : isUsageLimit
             ? t('error.usageLimitTitle')
-            : 'Agent Error';
+            : isProviderSafetyFilter
+              ? 'Provider safety filter stopped the response'
+              : 'Agent Error';
         const bannerMessage = isRateLimit
           ? t('error.rateLimitMessage')
           : isUsageLimit
             ? t('error.usageLimitMessage')
-            : streamingError?.message || 'The agent process encountered an error. You can retry with the same session.';
+            : isProviderSafetyFilter
+              ? 'The model provider blocked the final generated output. DUYA keeps previous tool work and file edits; continue in this session with a narrower request or switch models.'
+              : streamingError?.message || 'The agent process encountered an error. You can retry with the same session.';
         return (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
           <div className="flex flex-col gap-2 px-4 py-3 bg-red-500/90 text-white text-sm rounded-lg shadow-lg backdrop-blur-sm max-w-md">
@@ -786,7 +791,7 @@ export function ChatView({
       {(messages.length > 0 || isStreaming) && (
         <WorkspaceComposerLayer expanded={workspaceExpanded}>
         <div className={`p-4 pt-0 chat-composer-shell workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
-          <div className="max-w-[800px] mx-auto">
+          <div className="max-w-[800px] mx-auto chat-composer-inner">
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
               <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-44px' }}>

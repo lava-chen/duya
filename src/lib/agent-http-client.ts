@@ -12,6 +12,7 @@ export interface ChatOptions {
   maxTokens?: number;
   systemPrompt?: string;
   language?: string;
+  displayContent?: string;
   /**
    * 显式单次 override (trusted caller only). 类型: agent internal mode.
    * 普通 send payload **不**携带; worker 从 session row.permission_profile 派生默认 mode.
@@ -122,6 +123,7 @@ export class AgentServerClient {
             files: options?.files,
             agentProfileId: options?.agentProfileId,
             outputStyleConfig: options?.outputStyleConfig,
+            displayContent: options?.displayContent,
             mode: options?.mode,
             titleGenerationModel: options?.titleGenerationModel,
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
@@ -264,6 +266,7 @@ export class AgentServerClient {
                   files: options?.files,
                   agentProfileId: options?.agentProfileId,
                   outputStyleConfig: options?.outputStyleConfig,
+                  displayContent: options?.displayContent,
                   mode: options?.mode,
                   titleGenerationModel: options?.titleGenerationModel,
                   titleGenerationModelConfig: options?.titleGenerationModelConfig,

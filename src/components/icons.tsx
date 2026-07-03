@@ -99,6 +99,8 @@ import {
   ArrowCounterClockwiseIcon,
   TestTubeIcon,
   UsersThreeIcon,
+  BookOpenIcon,
+  ListChecksIcon,
 } from "@phosphor-icons/react";
 
 // Tabler Icons - Agent icons & Channel icons
@@ -221,6 +223,8 @@ export {
   // Plan 204 — provider actions icons
   TestTubeIcon,
   UsersThreeIcon,
+  BookOpenIcon,
+  ListChecksIcon,
 };
 
 // Aliases for backward compatibility

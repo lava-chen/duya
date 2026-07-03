@@ -331,6 +331,13 @@ export class AgentSSEClient {
       case 'thinking':
         this.dispatch('thinking', { content: (eventObj.content as string) || '' });
         break;
+      case 'tool_use_started':
+        this.dispatch('tool_use_started', {
+          id: eventObj.id as string,
+          name: eventObj.name as string,
+          input: eventObj.input,
+        });
+        break;
       case 'tool_use':
         this.dispatch('tool_use', {
           id: eventObj.id as string,
@@ -440,6 +447,7 @@ export class AgentSSEClient {
       case 'thinking':
         this.options.onThinking?.((obj.content as string) || '');
         break;
+      case 'tool_use_started':
       case 'tool_use':
         this.options.onToolUse?.({
           id: obj.id as string,

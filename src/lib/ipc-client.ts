@@ -289,8 +289,9 @@ function dbMessageToMessage(db: DbMessage): Message {
     // Falls back to `content` for legacy rows that pre-date the
     // `display_content` column — those rows had the prompt stored in
     // `content` directly.
-    displayContent: db.display_content
-      ?? (typeof content === 'string' ? content : undefined),
+    displayContent: db.display_content && db.display_content.length > 0
+      ? db.display_content
+      : (typeof content === 'string' ? content : undefined),
   }
 }
 

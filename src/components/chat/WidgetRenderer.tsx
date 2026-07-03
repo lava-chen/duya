@@ -5,7 +5,7 @@ import { buildReceiverSrcdoc, sanitizeForStreaming } from '@duya/conductor/rende
 import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from '@duya/conductor/renderer/elements/widget-css-bridge';
 import { CopyIcon, CheckIcon, DownloadSimpleIcon, SquaresFourIcon } from '@/components/icons';
 import { addChatWidgetToCanvas } from '@duya/conductor/renderer/ipc/chat-widget-to-canvas';
-import { usePanel } from '@/hooks/usePanel';
+import { useOptionalPanel } from '@/hooks/usePanel';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
 import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
 
@@ -77,7 +77,7 @@ function WidgetActions({
   const [addError, setAddError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { openOrActivatePage } = usePanel();
+  const panel = useOptionalPanel();
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -125,7 +125,7 @@ function WidgetActions({
       setTimeout(() => setAdded(false), 2000);
 
       // Open sidebar panel and switch to conductor tab
-      openOrActivatePage('conductor');
+      panel?.openOrActivatePage('conductor');
 
       // Center on the newly added element after the panel opens
       requestAnimationFrame(() => {

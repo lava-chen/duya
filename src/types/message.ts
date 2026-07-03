@@ -84,6 +84,7 @@ export type StreamPhase =
   | 'idle'
   | 'starting'
   | 'streaming'
+  | 'tool_use'
   | 'awaiting_permission'
   | 'persisting'
   | 'completed'

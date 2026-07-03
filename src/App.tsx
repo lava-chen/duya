@@ -361,6 +361,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
       mode?: string,
       effort?: string,
+      displayContent?: string,
     ) => {
       if (!activeThreadId) return;
 
@@ -404,7 +405,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         // pasted-content markers). It mirrors `content` here, but
         // the dedicated field keeps the renderer honest if the
         // message ever gets replaced with the LLM-facing payload.
-        displayContent: content,
+        displayContent: displayContent ?? content,
         timestamp: now,
         attachments: files,
       };
@@ -422,6 +423,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       void startStream({
         sessionId: activeThreadId,
         content: plainContent,
+        displayContent: displayContent ?? content,
         language: settings.agentLanguage,
         // 不再携带 permissionMode; worker 从 session row 派生.
         model,

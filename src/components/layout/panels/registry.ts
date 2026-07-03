@@ -34,6 +34,7 @@ export interface PageDescriptor {
   multiInstance: boolean;
   available: boolean;
   minWidth: number;
+  preferredWidth?: number;
   component: ComponentType<{ tab: PageTab; embedded: boolean }>;
 }
 
@@ -90,6 +91,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 460,
+    preferredWidth: 920,
     component: BrowserPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   office: {

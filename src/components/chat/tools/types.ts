@@ -56,6 +56,8 @@ export type SummaryCategoryKey =
   | 'ask'
   | 'memory'
   | 'skill'
+  | 'module'
+  | 'tasks'
   | 'tools';
 
 /**

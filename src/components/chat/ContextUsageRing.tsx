@@ -37,13 +37,14 @@ export function ContextUsageRing({
   isCompacting = false,
 }: ContextUsageRingProps) {
   const usage = useContextUsage(messages, modelName, contextWindow);
-  const breakdown = useContextBreakdown(
-    messages,
-    usage,
-    typeof window !== 'undefined' && window.innerWidth < 480,
-  );
   const [hovered, setHovered] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const shouldBuildBreakdown = hovered || detailsOpen;
+  const breakdown = useContextBreakdown(
+    shouldBuildBreakdown ? messages : [],
+    shouldBuildBreakdown ? usage : { ...usage, hasData: false },
+    typeof window !== 'undefined' && window.innerWidth < 480,
+  );
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelHide = () => {

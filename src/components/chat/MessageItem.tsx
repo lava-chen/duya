@@ -29,8 +29,14 @@ import {
   fileKindLabel,
   fileNameFromPath,
   isDeliverableFile,
+  openLocalArtifactTarget,
   openLocalFileTarget,
 } from '@/lib/chat-file-links';
+import {
+  browserReferenceDisplaySummary,
+  parseBrowserReferenceDisplayContent,
+  type BrowserReferenceDisplayData,
+} from '@/lib/browser-reference-display';
 
 function formatMessageTime(timestamp: number, t: (key: import('@/i18n').TranslationKey, params?: Record<string, string | number>) => string, locale: 'en' | 'zh' = 'en'): string {
   const date = new Date(timestamp);
@@ -379,7 +385,7 @@ function ArtifactCard({ artifact, cwd }: { artifact: ArtifactSummary; cwd?: stri
     <button
       type="button"
       className="group flex w-full items-center gap-3 rounded-lg border border-border/70 bg-surface/70 px-4 py-3 text-left transition-colors hover:border-accent/40 hover:bg-surface-hover"
-      onClick={() => openLocalFileTarget(artifact.path, cwd)}
+      onClick={() => openLocalArtifactTarget(artifact.path, cwd)}
       title={artifact.path}
     >
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-soft text-accent">
@@ -390,6 +396,74 @@ function ArtifactCard({ artifact, cwd }: { artifact: ArtifactSummary; cwd?: stri
         <span className="block text-xs text-muted-foreground">{artifact.kindLabel}</span>
       </span>
       <ExternalLinkIcon size={16} className="shrink-0 text-muted-foreground/50 transition-colors group-hover:text-accent" />
+    </button>
+  );
+}
+
+function openBrowserReferenceInPanel(reference: BrowserReferenceDisplayData): void {
+  window.dispatchEvent(new CustomEvent('duya:open-browser-panel', {
+    detail: { url: reference.url },
+  }));
+}
+
+function browserReferenceField(reference: BrowserReferenceDisplayData, field: string): string {
+  const match = reference.content.match(new RegExp(`^- ${field}:\\s*(.+)$`, 'm'));
+  return match?.[1]?.trim() ?? '';
+}
+
+function cleanBrowserReferenceLabel(label: string): string {
+  return label
+    .replace(/\.__duya_browser_pick_hover__/g, '')
+    .replace(/\.__duya_[\w-]+__/g, '')
+    .replace(/__duya_[\w-]+__/g, '')
+    .replace(/\.+$/g, '')
+    .trim();
+}
+
+function truncateBrowserReferenceText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function BrowserReferenceCard({ reference }: { reference: BrowserReferenceDisplayData }) {
+  const selectedText = browserReferenceField(reference, 'Text');
+  const selector = browserReferenceField(reference, 'Selector');
+  const label = cleanBrowserReferenceLabel(reference.label);
+  const pageTitle = reference.title || reference.url;
+  const headline = reference.kind === 'screenshot'
+    ? 'Browser screenshot'
+    : (selectedText ? truncateBrowserReferenceText(selectedText, 56) : 'Selected UI element');
+  const meta = reference.kind === 'screenshot'
+    ? pageTitle
+    : [pageTitle, label].filter(Boolean).join(' · ');
+
+  return (
+    <button
+      type="button"
+      className="browser-reference-card"
+      onClick={() => openBrowserReferenceInPanel(reference)}
+      title={reference.url}
+    >
+      <span className="browser-reference-card-mark" aria-hidden="true">
+        {reference.kind === 'screenshot' ? 'IMG' : 'UI'}
+      </span>
+      <span className="browser-reference-card-body">
+        <span className="browser-reference-card-kicker">
+          {reference.kind === 'screenshot' ? 'Screenshot reference' : 'UI element reference'}
+        </span>
+        <span className="browser-reference-card-title">
+          {headline}
+        </span>
+        <span className="browser-reference-card-meta">
+          {meta}
+        </span>
+        {reference.kind === 'element' && selector && (
+          <span className="browser-reference-card-selector">{selector}</span>
+        )}
+      </span>
+      <span className="browser-reference-card-open" aria-hidden="true">
+        <ExternalLinkIcon size={14} />
+      </span>
     </button>
   );
 }
@@ -492,7 +566,7 @@ function MessageSummaryCards({
           </div>
         </div>
       )}
-      {changes.length > 0 && <EditSummaryCard changes={changes} cwd={cwd} />}
+      {/* Edited-files summary intentionally hidden for now. */}
     </div>
   );
 }
@@ -593,7 +667,42 @@ function sortMessagesByOrder(messages: Message[]): Message[] {
   });
 }
 
-export function MessageItem({ message, toolResults = [], onToolResult, mergedMessages = [], onRewindToMessage }: MessageItemProps) {
+function toolResultsEqual(a: ToolResultInfo[] = [], b: ToolResultInfo[] = []): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      left.tool_use_id !== right.tool_use_id
+      || left.content !== right.content
+      || left.is_error !== right.is_error
+      || left.duration_ms !== right.duration_ms
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function messagesEqual(a: Message[] = [], b: Message[] = []): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+function messageItemPropsEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
+  return prev.message === next.message
+    && toolResultsEqual(prev.toolResults, next.toolResults)
+    && messagesEqual(prev.mergedMessages, next.mergedMessages)
+    && prev.onToolResult === next.onToolResult
+    && prev.onRewindToMessage === next.onRewindToMessage;
+}
+
+function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], onRewindToMessage }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
   // Preview modal state
   const [previewAttachment, setPreviewAttachment] = useState<FileAttachment | null>(null);
@@ -618,7 +727,7 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
   // For user messages with displayContent, render the original prompt
   // instead of the full assembled context (pre-analysis + attachment text)
   const { text: mainText, pastedContents } = useMemo(() => {
-    const displaySource = message.role === 'user' && message.displayContent !== undefined
+    const displaySource = message.role === 'user' && message.displayContent !== undefined && !(typeof message.displayContent === 'string' && message.displayContent.length === 0)
       ? message.displayContent
       : message.content;
     const parsed = parseMessageContent(displaySource, message.msgType);
@@ -726,8 +835,18 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
     try {
       let copyContent: string;
       if (message.role === 'user') {
-        const source = message.displayContent !== undefined ? message.displayContent : message.content;
-        copyContent = typeof source === 'string' ? source : extractMarkdownFromBlocks(source);
+        const source = message.displayContent !== undefined && !(typeof message.displayContent === 'string' && message.displayContent.length === 0)
+          ? message.displayContent
+          : message.content;
+        if (typeof source === 'string') {
+          const parsed = parseBrowserReferenceDisplayContent(source);
+          copyContent = [
+            parsed.text,
+            ...parsed.references.map(browserReferenceDisplaySummary),
+          ].filter(Boolean).join('\n\n');
+        } else {
+          copyContent = extractMarkdownFromBlocks(source);
+        }
       } else {
         // Assistant: prefer the visible final text. If a round is still in
         // progress (no finalText yet), fall back to joining the text blocks
@@ -803,6 +922,13 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
     }
     return cleaned;
   }, [mainText, allPastedContents, hasPastedContents]);
+
+  const userBrowserReferences = useMemo(() => {
+    if (!isUser || !displayText) {
+      return { text: displayText, references: [] as BrowserReferenceDisplayData[] };
+    }
+    return parseBrowserReferenceDisplayContent(displayText);
+  }, [displayText, isUser]);
 
   const hasAttachments = message.attachments && message.attachments.length > 0;
   const imageAttachments = message.attachments?.filter(a => a.type.startsWith('image/')) || [];
@@ -897,12 +1023,22 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
               ))}
             </div>
           )}
-          {displayText && (
+          {userBrowserReferences.references.length > 0 && (
+            <div className="flex w-full flex-col gap-2 mb-2">
+              {userBrowserReferences.references.map((reference, index) => (
+                <BrowserReferenceCard
+                  key={`${reference.kind}-${reference.url}-${index}`}
+                  reference={reference}
+                />
+              ))}
+            </div>
+          )}
+          {userBrowserReferences.text && (
           <div
             className="rounded-2xl rounded-tr-sm px-4 py-2.5"
             style={{ backgroundColor: 'rgba(0, 0, 0, 0.06)' }}
           >
-            <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text)' }}>{displayText}</p>
+            <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text)' }}>{userBrowserReferences.text}</p>
           </div>
           )}
           <div className="flex justify-end items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1020,3 +1156,5 @@ export function MessageItem({ message, toolResults = [], onToolResult, mergedMes
     </div>
   );
 }
+
+export const MessageItem = React.memo(MessageItemComponent, messageItemPropsEqual);
