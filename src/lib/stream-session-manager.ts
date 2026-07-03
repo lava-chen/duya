@@ -238,6 +238,11 @@ export interface StreamingError {
   code: string | null;
 }
 
+interface StreamErrorEventData {
+  message?: string;
+  code?: string;
+}
+
 interface PersistEvent {
   success: boolean;
   reason?: string;
@@ -264,6 +269,7 @@ export interface FileAttachment {
 interface StartStreamParams {
   sessionId: string;
   content: string;
+  displayContent?: string;
   model?: string;
   maxTokens?: number;
   systemPrompt?: string;
@@ -606,6 +612,50 @@ function buildSnapshot(state: SessionState): SessionStreamSnapshot {
     toolTimeoutInfo: state.toolTimeoutInfo,
     toolProgressInfo: state.toolProgressInfo,
     dbPersisted: state.dbPersisted,
+  };
+}
+
+function extractNestedProviderErrorMessage(message: string): string | null {
+  let current = message.trim();
+  for (let depth = 0; depth < 3; depth++) {
+    if (!current.startsWith('{')) break;
+    try {
+      const parsed = JSON.parse(current) as {
+        error?: { message?: string };
+        data?: { message?: string };
+        message?: string;
+      };
+      const next = parsed.error?.message || parsed.data?.message || parsed.message;
+      if (!next || next === current) break;
+      current = next.trim();
+    } catch {
+      break;
+    }
+  }
+  return current && current !== message ? current : null;
+}
+
+function normalizeStreamError(data: StreamErrorEventData | undefined): StreamingError {
+  const rawMessage = data?.message || 'Unknown error';
+  const nestedMessage = extractNestedProviderErrorMessage(rawMessage);
+  const providerMessage = nestedMessage || rawMessage;
+  const providerLower = providerMessage.toLowerCase();
+  const code = data?.code || (
+    providerLower.includes('new_sensitive') || providerLower.includes('output new_sensitive')
+      ? 'provider_safety_filter'
+      : null
+  );
+
+  if (code === 'provider_safety_filter') {
+    return {
+      code,
+      message: 'The model provider stopped the final response because its safety filter flagged newly generated output. Previous tool work and file edits are kept; continue with a narrower request or switch models.',
+    };
+  }
+
+  return {
+    code,
+    message: nestedMessage || rawMessage,
   };
 }
 
@@ -1109,7 +1159,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled } = params;
+    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled } = params;
 
     // Resolve workingDirectory from the thread store — sessionId IS the threadId
     let workingDirectory: string | undefined;
@@ -1263,7 +1313,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, effort },
+      { content, displayContent, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, effort },
       nextGeneration
     );
 
@@ -1275,6 +1325,7 @@ class StreamSessionManager {
     streamId: string,
     params: {
       content: string;
+      displayContent?: string;
       model?: string;
       maxTokens?: number;
       systemPrompt?: string;
@@ -1333,6 +1384,7 @@ class StreamSessionManager {
           );
           break;
 
+        case 'tool_use_started':
         case 'tool_use':
           if (event.name) {
             this.handleToolUseEvent(sessionId, streamId, {
@@ -1364,7 +1416,7 @@ class StreamSessionManager {
           // server normalizes it to `error` today but we keep this branch as
           // a defensive fallback so rate-limit/usage-limit errors still
           // surface in the UI if the server ever forwards the raw name.
-          this.handleErrorEvent(sessionId, streamId, event.data as { message?: string; code?: string } | undefined);
+          this.handleErrorEvent(sessionId, streamId, event.data as StreamErrorEventData | undefined);
           break;
 
         case 'stream:end':
@@ -1547,6 +1599,7 @@ class StreamSessionManager {
         files: params.files,
         agentProfileId: params.agentProfileId,
         outputStyleConfig: params.outputStyleConfig,
+        displayContent: params.displayContent,
         mode: params.mode,
         titleGenerationModel: params.titleGenerationModel,
         titleGenerationModelConfig: params.titleGenerationModelConfig,
@@ -1590,7 +1643,7 @@ class StreamSessionManager {
         this.handleTextEvent(state.sessionId, streamId, data.content);
       } else if (normalizedType === 'thinking' && typeof data.content === 'string') {
         this.handleThinkingEvent(state.sessionId, streamId, data.content);
-      } else if (normalizedType === 'tool_use' && data.name) {
+      } else if ((normalizedType === 'tool_use_started' || normalizedType === 'tool_use') && data.name) {
         this.handleToolUseEvent(state.sessionId, streamId, {
           id: (data.id as string) || crypto.randomUUID(),
           name: data.name as string,
@@ -1710,6 +1763,20 @@ class StreamSessionManager {
       name: toolUse.name,
       input: toolUse.input as Record<string, unknown>,
     };
+    const existingIndex = s.toolUses.findIndex((existing) => existing.id === toolUse.id);
+    if (existingIndex !== -1) {
+      s.toolUses = s.toolUses.map((existing, index) => index === existingIndex ? info : existing);
+      s.streamingEvents = s.streamingEvents.map((event) => {
+        if (event.type === 'tool_use' && event.toolUse.id === toolUse.id) {
+          return { ...event, toolUse: info };
+        }
+        return event;
+      });
+      this.notifyToolListeners(sessionId);
+      this.notifyStreamingEventsListeners(sessionId);
+      this.resetIdleTimeout(sessionId);
+      return;
+    }
     s.toolUses = [...s.toolUses, info];
     s.streamingEvents = [...s.streamingEvents, { type: 'tool_use', toolUse: info, timestamp: Date.now() }];
     if (toolUse.name === 'show_widget') {
@@ -1731,8 +1798,8 @@ class StreamSessionManager {
   private handleToolResultEvent(sessionId: string, streamId: string, result: { tool_use_id: string; content: string; is_error: boolean; duration_ms?: number }): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
-    // Skip if this tool_result was already loaded from DB on page refresh
-    if (s.loadedToolResultIds.has(result.tool_use_id)) return;
+    const existingResultIndex = s.toolResults.findIndex((existing) => existing.tool_use_id === result.tool_use_id);
+    if (s.loadedToolResultIds.has(result.tool_use_id) && existingResultIndex !== -1) return;
     // B8: same rationale as handleToolUseEvent — do not touch
     // pendingPermissionRequest or phase during the user's decision window.
     if (s.phase === 'awaiting_permission') {
@@ -1744,8 +1811,16 @@ class StreamSessionManager {
       is_error: result.is_error,
       duration_ms: result.duration_ms,
     };
-    s.toolResults = [...s.toolResults, info];
+    if (existingResultIndex !== -1) {
+      s.toolResults = s.toolResults.map((existing, index) => index === existingResultIndex ? info : existing);
+    } else {
+      s.toolResults = [...s.toolResults, info];
+    }
     s.streamingEvents = [...s.streamingEvents, { type: 'tool_result', toolResult: info, timestamp: Date.now() }];
+    if (s.phase === 'tool_use') {
+      s.phase = 'streaming';
+      this.notifyPhaseListeners(sessionId, s.phase);
+    }
     this.notifyToolListeners(sessionId);
     this.notifyStreamingEventsListeners(sessionId);
     this.resetIdleTimeout(sessionId);
@@ -2444,13 +2519,15 @@ class StreamSessionManager {
     });
   }
 
-  private handleErrorEvent(sessionId: string, streamId: string, data: { message?: string; code?: string } | undefined): void {
+  private handleErrorEvent(sessionId: string, streamId: string, data: StreamErrorEventData | undefined): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    this.flushPendingText(sessionId, streamId);
+    const normalizedError = normalizeStreamError(data);
     s.phase = 'error';
     s.statusText = undefined;
-    s.error = data?.message || 'Unknown error';
-    s.errorCode = data?.code || null;
+    s.error = normalizedError.message;
+    s.errorCode = normalizedError.code;
     s.completedAt = Date.now();
     this.notifyPhaseListeners(sessionId, s.phase);
     this.notifyStatusTextListeners(sessionId, s.statusText);

@@ -1,7 +1,8 @@
 // FileEditToolRow — handles the `edit` / `write` / `create_file` tool
 // family. The collapsed chrome shows:
-//   - a blue clickable filename (opens in the system default editor
-//     via window.electronAPI.shell.openPath), and
+//   - a blue clickable filename (.html/.htm → DUYA's side-panel browser,
+//     .doc/.docx/.ppt/.pptx/.xls/.xlsx → DUYA's side-panel Office viewer,
+//     everything else → system default editor via shell.openPath), and
 //   - live `+N -M` git-style stats in the right slot. Stats are
 //     computed from `input` as soon as the tool_use arrives, then
 //     recomputed from the authoritative `result` once the tool
@@ -24,6 +25,8 @@ import { SimpleDiffViewer, calculateDiff } from '@/components/diff/SimpleDiffVie
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus, getFilePath } from '../registry';
 import { FILE_CREATE_TOOLS, FILE_EDIT_TOOLS } from '../classify';
+import { openLocalFileTarget } from '@/lib/chat-file-links';
+import { useConversationStore } from '@/stores/conversation-store';
 import type { ToolAction, FileEditStats } from '../types';
 
 interface FileEditToolRowProps {
@@ -141,11 +144,15 @@ function StatNumber({ value, tone }: { value: number; tone: 'add' | 'remove' }) 
 
 export function FileEditToolRow({ tool }: FileEditToolRowProps) {
   const { t } = useTranslation();
+  const activeThreadId = useConversationStore((s) => s.activeThreadId);
+  const threads = useConversationStore((s) => s.threads);
+  const activeThread = activeThreadId ? threads.find((th) => th.id === activeThreadId) : undefined;
+  const cwd = activeThread?.workingDirectory ?? undefined;
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [fileHovered, setFileHovered] = useState(false);
   const filePath = getFilePath(tool.input);
-  const fileName = filePath.split(/[/\\]/).pop() || filePath;
+  const fileName = filePath ? (filePath.split(/[/\\]/).pop() || filePath) : 'file';
   const status = getStatus(tool);
   const hasResult = tool.result !== undefined && tool.result !== '';
 
@@ -166,20 +173,22 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
         : (isCreate ? 'streaming.toolAction.created' : 'streaming.toolAction.edited');
   const openFileTitle = t('streaming.toolAction.openFile');
 
-  // Open the file in the system default editor.
-  // shell.openPath delegates to `start` / `open` / `xdg-open` per OS.
+  // Open the file. Delegates to openLocalFileTarget which routes:
+  //   - .html / .htm → DUYA's side-panel browser (duya:open-browser-panel)
+  //   - .doc / .docx / .ppt / .pptx / .xls / .xlsx → DUYA's side-panel
+  //     Office viewer (duya:open-office-panel)
+  //   - everything else → system default editor via shell.openPath
+  // The helper also resolves relative paths against the current
+  // thread's working directory, so a bare "tank-battle.html" becomes
+  // E:\projects\duya\tank-battle.html instead of https://tank-battle.html/.
   const handleOpenFile = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
       e.preventDefault();
       if (!filePath) return;
-      if (window.electronAPI?.shell?.openPath) {
-        void window.electronAPI.shell.openPath(filePath);
-      } else if (typeof window !== 'undefined') {
-        window.open(`file://${filePath}`, '_blank');
-      }
+      openLocalFileTarget(filePath, cwd);
     },
-    [filePath],
+    [filePath, cwd],
   );
 
   // Diff payload for the expanded card. We use the same source as the

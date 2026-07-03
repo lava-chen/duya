@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CodeBlock } from './CodeBlock';
-import { openLocalFileTarget, isLikelyLocalFileReference } from '@/lib/chat-file-links';
+import { openLocalFileTarget, isLikelyLocalFileReference, isLocalhostUrl } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
 
@@ -41,6 +41,27 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
   const threads = useConversationStore((s) => s.threads);
   const cwd = threads.find((thread) => thread.id === activeThreadId)?.workingDirectory;
   const isLocalFile = typeof href === 'string' && isLikelyLocalFileReference(href);
+  // Localhost URLs (e.g. `http://localhost:8000/`) flow into the
+  // side-panel browser instead of an external tab. External http(s)
+  // keeps the default target=_blank behaviour.
+  const isLocalServer = typeof href === 'string' && isLocalhostUrl(href);
+
+  if (isLocalServer && href) {
+    return (
+      <button
+        type="button"
+        className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors font-mono text-[13.5px] bg-blue-500/5 hover:bg-blue-500/10 px-1 py-0.5 rounded border border-blue-500/20 cursor-pointer"
+        onClick={() => {
+          window.dispatchEvent(new CustomEvent('duya:open-browser-panel', {
+            detail: { url: href },
+          }));
+        }}
+        title={`Open in DUYA browser: ${href}`}
+      >
+        {children}
+      </button>
+    );
+  }
 
   return (
     <a

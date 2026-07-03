@@ -2,9 +2,9 @@
 //
 // Counts each tool by its coarse-grained category (`commands` /
 // `editFiles` / `readFiles` / `search` / `browser` / `agent` / `ask` /
-// `memory` / `skill` / catch-all `tools`), looks up the matching
-// singular/plural i18n template, and joins the rendered parts in a
-// stable order. When the group has more than MAX_PARTS_BEFORE_TRUNCATE
+// `memory` / `skill` / `module` / `tasks` / catch-all `tools`), looks
+// up the matching singular/plural i18n template, and joins the
+// rendered parts in a stable order. When the group has more than MAX_PARTS_BEFORE_TRUNCATE
 // distinct categories, head parts are rendered verbatim and the rest
 // are folded into a "+N more" tail.
 //
@@ -51,7 +51,7 @@ export function buildGroupSummary(
   // Preserve a stable order so the header doesn't shuffle when streaming
   // updates reorder the inner tools. Order matches the category table in
   // the plan: commands → edit → read → search → browser → agent → ask →
-  // memory → catch-all tools.
+// memory → skill → module → tasks → catch-all tools.
   const order: SummaryCategoryKey[] = [
     'commands',
     'editFiles',
@@ -62,6 +62,8 @@ export function buildGroupSummary(
     'ask',
     'memory',
     'skill',
+    'module',
+    'tasks',
     'tools',
   ];
   const parts: SummaryPart[] = [];

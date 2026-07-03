@@ -22,7 +22,7 @@
     "build:cli-bundle": "node scripts/build-cli-bundle.mjs",
     "rebuild:agent": "npm run build:agent && npm run bundle:agent",
     "preview": "vite preview",
-    "electron:dev": "node scripts/build-electron.mjs && concurrently -k \"vite --port 3000 --strictPort\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:dev": "npm run bundle:agent && node scripts/build-electron.mjs && concurrently -k \"vite --port 3000 --strictPort\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "npm run build:agent && npm run bundle:agent && npm run build:cli-bundle && npm run build:gateway && npm run bundle:gateway && vite build && node scripts/build-electron.mjs",
     "electron:pack": "npm run electron:build && electron-builder --config electron-builder.yml",
     "electron:verify:packaged": "node scripts/verify-packaged-parity.mjs",

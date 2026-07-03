@@ -150,17 +150,34 @@ function elementPickerScript(): string {
       borderRadius: s.borderRadius
     };
   }
+  function publicClassNames(el) {
+    if (!el || !el.classList) return [];
+    return Array.from(el.classList).filter(function(name) {
+      return name !== '__duya_browser_pick_hover__' && name.indexOf('__duya_') !== 0;
+    });
+  }
+  function sanitizedOpeningTag(el) {
+    try {
+      const clone = el.cloneNode(false);
+      if (clone && clone.classList) {
+        Array.from(clone.classList).forEach(function(name) {
+          if (name === '__duya_browser_pick_hover__' || name.indexOf('__duya_') === 0) {
+            clone.classList.remove(name);
+          }
+        });
+      }
+      const match = String(clone.outerHTML || '').replace(/\\s+/g, ' ').match(/^<[^>]+>/);
+      return match ? match[0] : '';
+    } catch (_) {
+      return '';
+    }
+  }
   function snapshotFor(el) {
     const rect = el.getBoundingClientRect();
     const tag = el.tagName ? el.tagName.toLowerCase() : 'element';
-    const cls = typeof el.className === 'string' && el.className.trim()
-      ? '.' + el.className.trim().split(/\\s+/).slice(0, 2).join('.')
-      : '';
-    let htmlHint = '';
-    try {
-      const match = String(el.outerHTML || '').replace(/\\s+/g, ' ').match(/^<[^>]+>/);
-      htmlHint = match ? match[0] : '';
-    } catch (_) {}
+    const classNames = publicClassNames(el);
+    const cls = classNames.length ? '.' + classNames.slice(0, 2).join('.') : '';
+    const htmlHint = sanitizedOpeningTag(el);
     return {
       selector: selectorFor(el),
       label: tag + cls,

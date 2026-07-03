@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { isPageId, type PageId, type PageTab } from "@/components/layout/panels/registry";
+import { getPageDescriptor, isPageId, type PageId, type PageTab } from "@/components/layout/panels/registry";
 import { useConversationStore } from "@/stores/conversation-store";
 
 export type { PageId, PageTab } from "@/components/layout/panels/registry";
@@ -217,6 +217,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const openPanel = useCallback<PanelContextValue["openPanel"]>((pageId, params) => {
+    const preferredWidth = getPageDescriptor(pageId).preferredWidth;
+    if (preferredWidth) {
+      handleSetWidth(preferredWidth);
+    }
     const id = genId();
     const newTab: PageTab = {
       id,
@@ -229,7 +233,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setPanelOpen(true);
     setPanelView("content");
     return id;
-  }, []);
+  }, [handleSetWidth]);
 
   const openOrActivatePage = useCallback<PanelContextValue["openOrActivatePage"]>(
     (pageId, params) => {
@@ -238,6 +242,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
         (t) => t.pageId === pageId && dedupKey(t.pageId, t.params) === key
       );
       if (existing) {
+        const preferredWidth = getPageDescriptor(pageId).preferredWidth;
+        if (preferredWidth) {
+          handleSetWidth(preferredWidth);
+        }
         setActiveTabId(existing.id);
         setPanelOpen(true);
         setPanelView("content");
@@ -245,7 +253,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       }
       return openPanel(pageId, params);
     },
-    [openPanel]
+    [handleSetWidth, openPanel]
   );
 
   useEffect(() => {
@@ -406,6 +414,10 @@ export function usePanel(): PanelContextValue {
     throw new Error("usePanel must be used within a PanelProvider");
   }
   return ctx;
+}
+
+export function useOptionalPanel(): PanelContextValue | null {
+  return useContext(PanelContext);
 }
 
 function defaultTitle(pageId: PageId): string {

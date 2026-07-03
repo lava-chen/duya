@@ -519,6 +519,158 @@ a {
   text-decoration: none;
 }
 
+.chat-message-navigator {
+  position: sticky;
+  top: 150px;
+  z-index: 18;
+  width: 28px;
+  height: 0;
+  margin-left: 16px;
+  overflow: visible;
+}
+
+.chat-message-navigator-rail {
+  display: none;
+}
+
+.chat-message-navigator-dot {
+  position: relative;
+  display: block;
+  width: 28px;
+  height: 8px;
+  margin: 3px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.46;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.chat-message-navigator-dot:hover,
+.chat-message-navigator-dot.active {
+  opacity: 1;
+}
+
+.chat-message-navigator-dot.active {
+  transform: translateX(1px);
+}
+
+.chat-message-navigator-mark {
+  position: absolute;
+  left: 5px;
+  top: 3px;
+  width: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  transition: width 150ms ease, background 150ms ease;
+}
+
+.chat-message-navigator-dot:hover .chat-message-navigator-mark,
+.chat-message-navigator-dot.active .chat-message-navigator-mark {
+  width: 16px;
+  background: color-mix(in srgb, var(--text) 72%, transparent);
+}
+
+.chat-message-navigator-card {
+  position: absolute;
+  left: 34px;
+  top: 50%;
+  width: min(320px, 44vw);
+  transform: translateY(-50%) translateX(-6px) scale(0.985);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #fff 4%, transparent), transparent 46%),
+    color-mix(in srgb, var(--surface-solid) 92%, #222);
+  color: var(--text);
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    visibility 150ms ease;
+}
+
+:root[data-theme="dark"] .chat-message-navigator-card {
+  border-color: rgba(255, 255, 255, 0.09);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 48%),
+    #2f2f2f;
+}
+
+.chat-message-navigator-dot:hover .chat-message-navigator-card,
+.chat-message-navigator-dot:focus-visible .chat-message-navigator-card {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) translateX(0) scale(1);
+}
+
+.chat-message-navigator-title,
+.chat-message-navigator-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+.chat-message-navigator-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.42;
+  -webkit-line-clamp: 2;
+}
+
+.chat-message-navigator-text {
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 12px;
+  line-height: 1.42;
+  -webkit-line-clamp: 2;
+}
+
+.chat-message-navigator-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 3px;
+}
+
+.chat-message-navigator-file {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface-hover) 88%, transparent);
+  color: color-mix(in srgb, var(--muted) 72%, var(--text));
+  font-family: 'Fira Mono', monospace;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.chat-message-navigator-file-more {
+  max-width: none;
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+}
+
+@media (max-width: 1120px) {
+  .chat-message-navigator {
+    display: none;
+  }
+}
+
 .app-shell-root {
   height: 100vh;
   padding: 0;
@@ -5590,7 +5742,8 @@ html.compact .panel-zone {
   .sub-agent-panel-wrapper,
   .permission-prompt-wrapper,
   .mailbox-panel-wrapper,
-  .streaming-input-bar-wrapper
+  .streaming-input-bar-wrapper,
+  .chat-composer-inner
 ) {
   width: 76%;
   margin-inline: auto;
@@ -10346,6 +10499,115 @@ html[data-message-font-size="large"] .prose h3 {
   color: var(--muted);
 }
 
+.browser-reference-card {
+  width: min(100%, 430px);
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, var(--accent));
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 42%),
+    color-mix(in srgb, var(--surface) 82%, var(--main-bg));
+  color: var(--foreground);
+  text-align: left;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--foreground) 5%, transparent) inset;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.browser-reference-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 46%),
+    color-mix(in srgb, var(--surface-hover) 72%, var(--main-bg));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent),
+    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+  transform: translateY(-1px);
+}
+
+.browser-reference-card-mark {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.browser-reference-card-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.browser-reference-card-kicker {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.browser-reference-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.browser-reference-card-meta,
+.browser-reference-card-selector {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.browser-reference-card-selector {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 3px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-family: 'Fira Mono', monospace;
+}
+
+.browser-reference-card-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.7;
+  transition: color 150ms ease, opacity 150ms ease, transform 150ms ease;
+}
+
+.browser-reference-card:hover .browser-reference-card-open {
+  color: var(--accent);
+  opacity: 1;
+  transform: translate(1px, -1px);
+}
+
 /* ============================================================
    Conductor — Apple-native visual system
    ============================================================ */
@@ -10852,7 +11114,8 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .chat-view.panel-expanded .chat-composer-shell.workspace-floating-composer > div {
-  width: min(800px, 100%);
+  width: 76%;
+  max-width: 800px;
   margin: 0;
   pointer-events: auto;
 }
@@ -10886,7 +11149,8 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .chat-composer-shell.workspace-floating-composer-expanded > div {
-  width: min(800px, 100%);
+  width: 76%;
+  max-width: 800px;
   margin: 0;
   pointer-events: auto;
 }

@@ -14,9 +14,12 @@ import {
   RobotIcon,
   ChromeIcon,
   QuestionIcon,
+  BookOpenIcon,
+  ListChecksIcon,
 } from '@/components/icons';
 import {
   isBrowserTool,
+  isModuleTool,
 } from './classify';
 import type { ToolAction, ToolRendererDef } from './types';
 
@@ -158,6 +161,55 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
       const firstQ = (inp.questions as Array<{ question?: string }> | undefined)?.[0];
       const q = firstQ?.question || '';
       return q ? (q.length > 60 ? q.slice(0, 57) + '...' : q) : 'question';
+    },
+  },
+  {
+    // ModuleTool — loads design specification READMEs. The summary
+    // parses `input.module` (string or array) and lists the modules
+    // instead of dumping the raw JSON. The expanded body is rendered by
+    // ModuleToolRow.
+    match: (n) => isModuleTool(n),
+    icon: BookOpenIcon,
+    labelKey: null,
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const mod = inp.module;
+      const parts = Array.isArray(mod)
+        ? mod.filter((s): s is string => typeof s === 'string' && s.length > 0)
+        : typeof mod === 'string' && mod.length > 0 ? [mod] : [];
+      if (parts.length === 0) return 'module';
+      return parts.join(' + ');
+    },
+  },
+  {
+    // TaskTool — manages an internal task list. The summary renders
+    // per-action wording so the chrome reads as natural language
+    // ("已创建 设计杂志风页面结构") instead of the raw JSON dump
+    // ("task {\"action\":\"create\", ...}"). Each task gets routed to
+    // TaskToolRow which auto-opens the TaskDrawer on create / complete.
+    match: (n) => n.toLowerCase() === 'task',
+    icon: ListChecksIcon,
+    labelKey: null,
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const action = typeof inp.action === 'string' ? inp.action : '';
+      const subject = typeof inp.subject === 'string' ? inp.subject.trim() : '';
+      const taskId = typeof inp.taskId === 'string' ? inp.taskId.trim() : '';
+      const status = typeof inp.status === 'string' ? inp.status : '';
+      switch (action) {
+        case 'create':
+          return subject || 'task';
+        case 'update':
+        case 'get':
+        case 'stop':
+          return taskId ? `task #${taskId}` : 'task';
+        case 'list':
+          return 'tasks';
+        case 'output':
+          return taskId ? `task #${taskId} output` : 'task output';
+        default:
+          return 'task';
+      }
     },
   },
   {
