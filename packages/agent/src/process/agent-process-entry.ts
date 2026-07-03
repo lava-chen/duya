@@ -524,17 +524,32 @@ function validateMessageHistory(messages: Message[]): Message[] {
     }
   }
 
-  if (unmatchedToolUseIds.size === 0) {
+  // Find tool_results without matching tool_uses — symmetric with
+  // toAnthropicMessages' bidirectional cleanup. Previously this
+  // function returned early when there were no unmatched tool_uses,
+  // leaving truly orphan tool_results in place to be handled (or
+  // missed) downstream. We now drop them in this pass too, so the
+  // load-from-DB path keeps the message history in a state that the
+  // Anthropic converter can handle without surprises.
+  const orphanToolResultIds = new Set<string>();
+  for (const id of toolResultIds) {
+    if (!toolUseIds.has(id)) {
+      orphanToolResultIds.add(id);
+    }
+  }
+
+  if (unmatchedToolUseIds.size === 0 && orphanToolResultIds.size === 0) {
     return messages;
   }
 
-  log(`[Agent-Process] Found ${unmatchedToolUseIds.size} incomplete tool call(s) in history, cleaning up`);
+  log(`[Agent-Process] Cleaning history: ${unmatchedToolUseIds.size} unmatched tool_use(s), ${orphanToolResultIds.size} orphan tool_result(s)`);
 
-  // Filter out messages with unmatched tool_uses
+  // Filter out messages with unmatched tool_uses or orphan tool_results
   const cleanedMessages: Message[] = [];
   for (const msg of messages) {
-    // Skip tool_result messages that don't have a matching tool_use
-    if (msg.role === 'tool' && msg.tool_call_id && !toolUseIds.has(msg.tool_call_id)) {
+    // Drop truly orphan tool_result messages (tool_call_id has no
+    // matching tool_use anywhere in the history).
+    if (msg.role === 'tool' && msg.tool_call_id && orphanToolResultIds.has(msg.tool_call_id)) {
       log(`[Agent-Process] Removing orphan tool_result: ${msg.tool_call_id}`);
       continue;
     }
@@ -545,12 +560,23 @@ function validateMessageHistory(messages: Message[]): Message[] {
       continue;
     }
 
-    // For assistant messages with tool_use blocks, remove unmatched tool_use blocks
+    // For assistant messages with mixed content, drop unmatched
+    // tool_use blocks (incomplete calls) AND orphan tool_result
+    // blocks (their tool_use is gone). Keep the rest of the message
+    // intact — same convention used by toAnthropicMessages: a text
+    // block is preserved even when its sibling tool blocks are
+    // stripped.
     if (Array.isArray(msg.content)) {
       const filteredContent = msg.content.filter((block) => {
         if (block.type === 'tool_use' && 'id' in block && typeof block.id === 'string') {
           if (unmatchedToolUseIds.has(block.id)) {
             log(`[Agent-Process] Removing tool_use block from assistant message: ${block.id}`);
+            return false;
+          }
+        }
+        if (block.type === 'tool_result' && 'tool_use_id' in block && typeof block.tool_use_id === 'string') {
+          if (orphanToolResultIds.has(block.tool_use_id)) {
+            log(`[Agent-Process] Removing orphan tool_result block from assistant message: ${block.tool_use_id}`);
             return false;
           }
         }
@@ -809,6 +835,7 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
         result: (event.data as { result: string }).result,
         error: (event.data as { error?: boolean }).error,
         duration_ms: (event.data as { duration_ms?: number }).duration_ms,
+        metadata: (event.data as { metadata?: unknown }).metadata,
       };
     case 'tool_progress':
       return { type: 'chat:tool_progress', toolUseId: (event.data as { toolName: string }).toolName, percent: 0, stage: `${event.data}` };
@@ -1773,7 +1800,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       log(`[Agent-Process] Agent LLM config: provider=${agent.provider}, model=${agent.model}, baseURL=${agent.baseURL}`);
     }
 
-    log(`[Agent-Process] Title generation model config: ${JSON.stringify(titleGenerationModelConfig)}`);
+    log(`[Agent-Process] Title generation model config: ${
+      titleGenerationModelConfig
+        ? JSON.stringify({
+            provider: titleGenerationModelConfig.provider,
+            baseURL: titleGenerationModelConfig.baseURL,
+            model: titleGenerationModelConfig.model,
+            hasApiKey: Boolean(titleGenerationModelConfig.apiKey),
+          })
+        : 'null'
+    }`);
 
     if (shouldGenerate) {
       void (async () => {

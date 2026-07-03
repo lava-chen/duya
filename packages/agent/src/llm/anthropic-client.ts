@@ -21,18 +21,34 @@ import { isCDNImageUrl } from '../utils/urlSafety.js';
 /** Valid ID characters for Anthropic API: alphanumeric, underscore, hyphen */
 const VALID_ID_REGEX = /[^a-zA-Z0-9_-]/g;
 const THINKING_TYPES = new Set(['thinking', 'redacted_thinking']);
+const MINIMAX_DEFAULT_CONTEXT_WINDOW = 204_800;
+const MINIMAX_M3_CONTEXT_WINDOW = 1_000_000;
 
 /**
  * Sanitize a tool call ID for the Anthropic API.
  * Anthropic requires IDs matching [a-zA-Z0-9_-]. Replace invalid
- * characters with underscores and ensure non-empty.
+ * characters with underscores. If the result is empty (which happens
+ * when the source ID is missing, empty, or contains only invalid
+ * characters), synthesize a deterministic unique ID so that two
+ * different empty IDs never collapse to the same string.
+ *
+ * The `synthCounter` is an in-process counter that disambiguates
+ * synthetic IDs across the same conversion pass. Callers should
+ * monotonically increase it (e.g. ++counter) for each empty-ID block
+ * they encounter — the resulting `tool_synth_<n>` value is unique
+ * per call and stable across re-runs on the same input.
  */
-function sanitizeToolId(toolId: string): string {
-  if (!toolId) {
-    return 'tool_0';
+function sanitizeToolId(toolId: string, synthCounter: number): string {
+  const cleaned = (toolId || '').replace(VALID_ID_REGEX, '_');
+  if (cleaned) {
+    return cleaned;
   }
-  const sanitized = toolId.replace(VALID_ID_REGEX, '_');
-  return sanitized || 'tool_0';
+  // Empty / missing / entirely-invalid ID. Synthesize a unique one so
+  // that two parallel tool calls with empty IDs don't collide on the
+  // same string (which would trigger Anthropic 2013 "tool call result
+  // does not follow tool call" because two tool_use_id values would
+  // point at the same logical call).
+  return `tool_synth_${synthCounter.toString(36)}`;
 }
 
 /**
@@ -64,6 +80,38 @@ function isMiniMaxEndpoint(baseURL?: string): boolean {
     normalized.startsWith('https://api.minimax.io/anthropic') ||
     normalized.startsWith('https://api.minimaxi.com/anthropic')
   );
+}
+
+export function getMiniMaxAnthropicMaxTokens(model: string, configuredContextWindow?: number): number {
+  if (typeof configuredContextWindow === 'number' && configuredContextWindow > 0) {
+    return configuredContextWindow;
+  }
+
+  const normalizedModel = model.trim().toLowerCase();
+  if (normalizedModel === 'minimax-m3') {
+    return MINIMAX_M3_CONTEXT_WINDOW;
+  }
+  if (normalizedModel.startsWith('minimax-m')) {
+    return MINIMAX_DEFAULT_CONTEXT_WINDOW;
+  }
+
+  return MINIMAX_DEFAULT_CONTEXT_WINDOW;
+}
+
+export function extractAnthropicThinkingDelta(delta: unknown): string {
+  if (!delta || typeof delta !== 'object') {
+    return '';
+  }
+
+  const record = delta as Record<string, unknown>;
+  const value =
+    record.thinking ??
+    record.reasoning_content ??
+    record.reasoning ??
+    record.text ??
+    record.content;
+
+  return typeof value === 'string' ? value : '';
 }
 
 /**
@@ -306,13 +354,19 @@ function handleThinkingBlocks(
  * @param baseURL - The API base URL (used to detect third-party endpoints)
  */
 function toAnthropicMessages(messages: Message[], baseURL?: string): MessageParam[] {
-  // Step 1: Convert all messages to Anthropic format, sanitizing tool IDs
+  // Step 1: Convert all messages to Anthropic format, sanitizing tool IDs.
+  //
+  // We thread a per-conversion-pass counter so that any empty/invalid
+  // tool_use or tool_result ID resolves to a unique synthetic string
+  // (e.g. `tool_synth_1`, `tool_synth_2`, ...) rather than collapsing
+  // to a fixed placeholder. See sanitizeToolId() for details.
   const converted: Array<{
     originalRole: string;
     toolCallIds: string[];
     toolResultIds: string[];
     param: MessageParam;
   }> = [];
+  let synthCounter = 0;
 
   for (const msg of messages) {
     if (msg.role === 'system') {
@@ -334,21 +388,31 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
     } else if (msg.role === 'assistant') {
       const convertedContent = convertContentToAnthropic(msg.content) as MessageParam['content'];
       const toolCallIds: string[] = [];
+      // Per-message counter so two empty IDs in the SAME assistant
+      // message still get unique synth IDs.
+      let assistantSynthCounter = 0;
       if (Array.isArray(convertedContent)) {
         for (const block of convertedContent) {
           if (typeof block === 'object' && block !== null && (block as { type?: string }).type === 'tool_use') {
             const id = (block as { id?: string }).id;
-            if (typeof id === 'string' && id) {
-              toolCallIds.push(sanitizeToolId(id));
-            }
+            // Always push a sanitized ID, even for empty strings, so
+            // toolCallIds.length matches the actual number of tool_use
+            // blocks in the assistant message.
+            toolCallIds.push(sanitizeToolId(typeof id === 'string' ? id : '', assistantSynthCounter++));
           }
         }
       }
-      // Sanitize tool_use IDs within the content blocks
+      // Sanitize tool_use IDs within the content blocks. We re-derive
+      // the counter from the same source so the IDs emitted here line
+      // up with the IDs collected above.
+      let contentSynthCounter = 0;
       const sanitizedContent = Array.isArray(convertedContent)
         ? convertedContent.map(block => {
             if (typeof block === 'object' && block !== null && (block as { type?: string }).type === 'tool_use') {
-              return { ...block, id: sanitizeToolId((block as { id?: string }).id || '') } as ContentBlockParam;
+              return {
+                ...block,
+                id: sanitizeToolId(((block as { id?: string }).id) || '', contentSynthCounter++),
+              } as ContentBlockParam;
             }
             return block;
           })
@@ -366,7 +430,7 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
       const toolContent = typeof msg.content === 'string'
         ? msg.content
         : JSON.stringify(msg.content);
-      const toolUseId = sanitizeToolId(msg.tool_call_id || '');
+      const toolUseId = sanitizeToolId(msg.tool_call_id || '', synthCounter++);
       converted.push({
         originalRole: 'tool',
         toolCallIds: [],
@@ -383,52 +447,67 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
     }
   }
 
-  // Step 2: Build the result with bidirectional orphan cleanup
-  // Hermes-style: collect all tool_use IDs from tool_results first,
-  // then remove tool_uses without matching results.
-  const result: MessageParam[] = [];
-  const removedToolUseIds = new Set<string>();
-
-  // First pass: identify orphaned tool_uses (tool_use without following tool_result)
-  for (let i = 0; i < converted.length; i++) {
-    const entry = converted[i];
-    if (entry.originalRole === 'assistant' && entry.toolCallIds.length > 0) {
-      const nextEntry = converted[i + 1];
-      if (!nextEntry || nextEntry.originalRole !== 'tool' || nextEntry.toolResultIds.length === 0) {
-        // tool_use not immediately followed by tool_result
-        for (const id of entry.toolCallIds) {
-          removedToolUseIds.add(id);
-        }
-        if (entry.toolCallIds.length > 0) {
-          logger.warn(`[toAnthropicMessages] Assistant at index ${i} has tool_use(s) but next message is not a tool_result`);
-        }
-      }
-    }
+  // Step 2: Bidirectional orphan cleanup using GLOBAL id matching.
+  //
+  // Previous version required `tool_use` to be IMMEDIATELY followed by
+  // a `tool` message — but Anthropic's actual rule is that each
+  // tool_result.tool_use_id just needs to match SOME tool_use.id
+  // somewhere in the prior history. The strict-adjacency check
+  // wrongly stripped perfectly valid tool_use blocks whenever an
+  // intervening user message (e.g. a <task-notification> from a
+  // background sub-agent) was inserted between them, and it also
+  // discarded the message body even when text content survived.
+  //
+  // The new approach: collect every tool_use.id and every
+  // tool_result.tool_use_id across the whole converted[] array, then
+  // drop only the truly-orphan blocks (those whose id has no match on
+  // the other side). When a message becomes empty because ALL of its
+  // tool blocks were orphans, we replace the empty content with a
+  // single text placeholder so adjacent text on either side survives.
+  const seenToolUseIds = new Set<string>();
+  const seenToolResultIds = new Set<string>();
+  for (const entry of converted) {
+    for (const id of entry.toolCallIds) seenToolUseIds.add(id);
+    for (const id of entry.toolResultIds) seenToolResultIds.add(id);
   }
 
-  // Second pass: build final result with orphan removal
+  const result: MessageParam[] = [];
+  let orphanToolUseRemoved = 0;
+  let orphanToolResultRemoved = 0;
+  let orphanAssistantMessageReplaced = 0;
+  let orphanToolResultMessageReplaced = 0;
+
   for (let i = 0; i < converted.length; i++) {
     const entry = converted[i];
 
     if (entry.originalRole === 'tool') {
-      // Skip tool_result messages where ALL referenced tool_uses were removed
-      const validResultIds = entry.toolResultIds.filter(id => !removedToolUseIds.has(id));
-      if (validResultIds.length === 0) {
-        logger.warn(`[toAnthropicMessages] Removing orphan tool_result message at index ${i}`);
-        continue;
-      }
-      // Filter content to only include valid tool_results
+      // Drop only the tool_result blocks whose tool_use_id is a true
+      // orphan (no matching tool_use exists anywhere in the history).
       if (Array.isArray(entry.param.content)) {
-        const filteredContent = entry.param.content.filter((block) => {
+        const filteredContent = (entry.param.content as ContentBlockParam[]).filter((block) => {
           if (typeof block !== 'object' || block === null) return true;
           if ((block as { type?: string }).type !== 'tool_result') return true;
           const toolUseId = (block as { tool_use_id?: string }).tool_use_id || '';
-          return !removedToolUseIds.has(toolUseId) && validResultIds.includes(toolUseId);
+          // Keep the block if there is at least one matching tool_use
+          // somewhere in the prior history.
+          if (seenToolUseIds.has(toolUseId)) return true;
+          orphanToolResultRemoved++;
+          return false;
         });
         if (filteredContent.length === 0) {
+          // No tool_results survived. Replace the message body with a
+          // single text placeholder so the message itself isn't lost
+          // (and so any text we had to attach to it doesn't disappear
+          // with it). Mirrors stripOrphanToolResults' convention.
+          orphanToolResultMessageReplaced++;
+          logger.warn(`[toAnthropicMessages] Replacing tool message at index ${i} — all tool_result blocks were orphans`);
+          result.push({
+            role: 'user',
+            content: [{ type: 'text', text: '(orphaned tool result removed)' } as ContentBlockParam],
+          });
           continue;
         }
-        result.push({ role: 'user', content: filteredContent as ContentBlockParam[] });
+        result.push({ role: 'user', content: filteredContent });
       } else {
         result.push(entry.param);
       }
@@ -436,19 +515,29 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
     }
 
     if (entry.originalRole === 'assistant') {
-      // Remove invalid tool_use blocks from assistant messages
-      if (entry.toolCallIds.some(id => removedToolUseIds.has(id)) && Array.isArray(entry.param.content)) {
-        const filteredContent = entry.param.content.filter((block) => {
+      // Drop only the tool_use blocks whose id is a true orphan (no
+      // matching tool_result exists anywhere in the history).
+      if (entry.toolCallIds.length > 0 && Array.isArray(entry.param.content)) {
+        const filteredContent = (entry.param.content as ContentBlockParam[]).filter((block) => {
           if (typeof block !== 'object' || block === null) return true;
           if ((block as { type?: string }).type !== 'tool_use') return true;
           const id = (block as { id?: string }).id || '';
-          return !removedToolUseIds.has(id);
+          if (seenToolResultIds.has(id)) return true;
+          orphanToolUseRemoved++;
+          return false;
         });
         if (filteredContent.length === 0) {
-          logger.warn(`[toAnthropicMessages] Removing empty assistant message at index ${i}`);
+          // All blocks were orphan tool_use. Replace with a text
+          // placeholder so the message itself is preserved.
+          orphanAssistantMessageReplaced++;
+          logger.warn(`[toAnthropicMessages] Replacing assistant message at index ${i} — all tool_use blocks were orphans`);
+          result.push({
+            role: 'assistant',
+            content: [{ type: 'text', text: '(tool call removed)' } as ContentBlockParam],
+          });
           continue;
         }
-        result.push({ role: 'assistant', content: filteredContent as ContentBlockParam[] });
+        result.push({ role: 'assistant', content: filteredContent });
       } else {
         result.push(entry.param);
       }
@@ -458,7 +547,19 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
     result.push(entry.param);
   }
 
-  // Step 3: Strip orphaned tool_results (no matching tool_use)
+  if (orphanToolUseRemoved > 0 || orphanToolResultRemoved > 0) {
+    logger.warn(
+      `[toAnthropicMessages] Dropped ${orphanToolUseRemoved} orphan tool_use block(s) and ` +
+        `${orphanToolResultRemoved} orphan tool_result block(s) ` +
+        `(replaced ${orphanAssistantMessageReplaced} assistant / ${orphanToolResultMessageReplaced} tool messages with text placeholders)`
+    );
+  }
+
+  // Step 3: Strip orphaned tool_results (no matching tool_use). This is
+  // now mostly redundant with the bidirectional cleanup above, but
+  // stripOrphanToolResults still runs as a final safety net — it
+  // operates on the post-cleanup result and guards against any edge
+  // case the per-entry pass missed.
   const strippedResults = stripOrphanToolResults(result);
 
   // Step 4: Merge consecutive same-role messages
@@ -617,6 +718,7 @@ export class AnthropicClient implements LLMClient {
       systemPrompt?: string;
       tools?: Tool[];
       maxTokens?: number;
+      contextWindow?: number;
       temperature?: number;
       cacheRetention?: CacheRetention;
       signal?: AbortSignal;
@@ -672,7 +774,9 @@ export class AnthropicClient implements LLMClient {
         high: 16384,
         max: 32000,
       };
-      const maxTokens = options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+      const maxTokens = this.isMiniMax
+        ? getMiniMaxAnthropicMaxTokens(this.model, options?.contextWindow)
+        : options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
       const requestedBudget = options?.effort
         ? BUDGET_BY_EFFORT[options.effort]
         : undefined;
@@ -813,9 +917,7 @@ export class AnthropicClient implements LLMClient {
           }
         } else if (event.delta.type === 'thinking_delta') {
           // MiniMax thinking delta - accumulate and yield incremental content
-          const thinkingDelta = typeof event.delta.thinking === 'string'
-            ? event.delta.thinking
-            : JSON.stringify(event.delta.thinking);
+          const thinkingDelta = extractAnthropicThinkingDelta(event.delta);
           thinkingContent += thinkingDelta;
           yield {
             type: 'thinking',
@@ -927,7 +1029,9 @@ export class AnthropicClient implements LLMClient {
     const response = await this.client.messages.create(
       {
         model: this.model,
-        max_tokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+        max_tokens: this.isMiniMax
+          ? getMiniMaxAnthropicMaxTokens(this.model)
+          : options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
         temperature: options?.temperature ?? 0,
         system: options?.systemPrompt || '',
         messages: anthropicMessages as MessageParam[],
