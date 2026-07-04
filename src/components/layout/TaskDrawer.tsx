@@ -6,6 +6,7 @@ import {
   CaretRightIcon,
   CheckIcon,
   CircleIcon,
+  ClockCounterClockwiseIcon,
   SpinnerIcon,
   TrashIcon,
   ArrowCounterClockwiseIcon,
@@ -13,6 +14,7 @@ import {
 } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
 import { setTaskDrawerOpen, useTaskDrawerOpen } from "./task-drawer-store";
+import { useRecap, clearRecap } from "./recap-store";
 
 interface Task {
   id: string;
@@ -82,8 +84,19 @@ export function TaskDrawer() {
   const onClose = useCallback(() => setTaskDrawerOpen(false), []);
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
   const { tasks, setTasks, loading, fetchTasks } = useTaskList(open ? activeThreadId : null);
+  const recap = useRecap();
 
   const [collapsed, setCollapsed] = useState(false);
+
+  // Recap auto-dismiss: 10s after arrival, clear the store so the block
+  // disappears. Re-arms whenever a new recap arrives (receivedAt change).
+  useEffect(() => {
+    if (!recap.text || !recap.receivedAt) return;
+    const timer = setTimeout(() => {
+      clearRecap();
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [recap.text, recap.receivedAt]);
 
   useEffect(() => {
     if (!open) return;
@@ -166,6 +179,13 @@ export function TaskDrawer() {
               onToggleCollapsed={() => setCollapsed((value) => !value)}
               onClose={onClose}
             />
+
+            {recap.text && (
+              <RecapBlock
+                text={recap.text}
+                onDismiss={() => clearRecap()}
+              />
+            )}
 
             <div className="task-card-list">
               {!collapsed && (
@@ -284,6 +304,29 @@ function TaskRow({
           <TrashIcon size={11} />
         </button>
       </div>
+    </div>
+  );
+}
+
+function RecapBlock({ text, onDismiss }: { text: string; onDismiss: () => void }) {
+  return (
+    <div className="task-card-recap">
+      <ClockCounterClockwiseIcon
+        size={12}
+        className="task-card-recap-icon shrink-0"
+      />
+      <div className="task-card-recap-text" title={text}>
+        {text}
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="task-card-recap-close"
+        title="Dismiss recap"
+        aria-label="Dismiss recap"
+      >
+        <XIcon size={11} />
+      </button>
     </div>
   );
 }
