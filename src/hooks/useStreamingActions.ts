@@ -41,6 +41,9 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
             result: resultEvent?.toolResult.content,
             isError: resultEvent?.toolResult.is_error,
             durationMs: resultEvent?.toolResult.duration_ms,
+            // Forward tool result metadata so dedicated row components
+            // (ScreenshotToolRow, VisionToolRow) can render previews.
+            metadata: resultEvent?.toolResult.metadata,
           },
         });
         break;

@@ -31,7 +31,7 @@ export type AgentToRendererMessage =
   | { type: 'chat:thinking'; content: string }
   | { type: 'chat:tool_use_started'; id: string; name: string; input: unknown }
   | { type: 'chat:tool_use'; id: string; name: string; input: unknown }
-  | { type: 'chat:tool_result'; id: string; result: unknown; error?: string; duration_ms?: number }
+  | { type: 'chat:tool_result'; id: string; result: unknown; error?: string; duration_ms?: number; metadata?: unknown }
   | { type: 'chat:tool_progress'; toolUseId: string; percent: number; stage: string }
   | { type: 'chat:tool_output'; toolUseId: string; stream: 'stdout' | 'stderr'; data: string }
   | { type: 'chat:agent_progress'; agentEventType: string; data?: string; toolName?: string; toolInput?: Record<string, unknown>; toolResult?: string; duration?: number; agentId?: string; agentType?: string; agentName?: string; agentDescription?: string; sessionId?: string; agentSessionId?: string }
