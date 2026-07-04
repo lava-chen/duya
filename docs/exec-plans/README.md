@@ -103,6 +103,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like 运行时追加指令 (`agent_mailbox` + 9 checkpoint + soft interrupt + claim/lease) — PR1 数据层 / PR2 接入 `before_model_turn` / PR3 final / PR4 permission / PR5 tool guard | P0 | Planning |
 | [212-subagent-task-notification](./active/212-subagent-task-notification.md) | SubAgent Task-Notification Channel (claude-code-haha alignment) — `<task-notification>` XML envelope + `messageQueueManager.mode='task-notification'` + `notified` idempotency, UI 隐藏系统消息 | P1 | Implementation complete |
 | [214-agent-core-audit](./active/214-agent-core-audit.md) | Agent Core Audit — full read-only audit of agent runtime, IPC, renderer, DB, lifecycle, packaging. Phased: Phase 1 audit done, Phase 2 gated by user. | P0 | Phase 1 ✅ (audit only), Phase 2 ⏳ awaiting confirmation |
+| [222-interagent-message-session](./active/222-interagent-message-session.md) | Inter-Agent Communication — MessageSession tool for cross-session agent Q&A with cycle detection and timeout | P1 | Phase 1-9 ✅ |
 
 ### Canvas V2 Whimsical 风格重设计
 
@@ -117,6 +118,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [74-canvas-v2-agent-integration](./active/74-conductor-canvas-v2-agent-integration.md) | Phase 7-8: Agent 工具 + Image + 主题 + 轻量外壳 | P0 | 70, 71, 72, 73 |
 
 | [81-mindmap-interaction-correction](./active/81-mindmap-interaction-correction.md) | Follow-up: root move + subtree reorder + draft node flow | P0 | 73 |
+| [223-conductor-canvas-style-and-group](./active/223-conductor-canvas-style-and-group.md) | Post-mindmap: sticky/connector 样式扩展(shape/border/stroke) + Group 元素松散绑定 + 4 个 group tool + 属性面板 | P1 | 71, 72, 73 |
 ### Compact System Fix Plans
 
 | Plan | Description | Priority | Status |
