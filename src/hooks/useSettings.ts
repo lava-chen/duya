@@ -13,7 +13,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     defaultModel: "",
     lastSelectedModel: "",
     mcpServers: [],
-    permissionMode: "default",
+    permissionMode: "auto",
     sandboxEnabled: true,
     theme: "dark",
     locale: "en",
@@ -53,8 +53,8 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     agentLanguage: undefined,
     // Security settings
     securityScanEnabled: true,
-    cronPermissionMode: "default",
-    gatewayPermissionMode: "default",
+    cronPermissionMode: "auto",
+    gatewayPermissionMode: "auto",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
   };
@@ -199,7 +199,7 @@ export function useSettings(): {
     defaultModel: "",
     lastSelectedModel: "",
     mcpServers: [],
-    permissionMode: "default",
+    permissionMode: "auto",
     sandboxEnabled: true,
     theme: "dark",
     locale: "en",
@@ -239,8 +239,8 @@ export function useSettings(): {
     agentLanguage: undefined,
     // Security settings
     securityScanEnabled: true,
-    cronPermissionMode: "default",
-    gatewayPermissionMode: "default",
+    cronPermissionMode: "auto",
+    gatewayPermissionMode: "auto",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
   });
