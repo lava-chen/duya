@@ -21,8 +21,15 @@ import { isCDNImageUrl } from '../utils/urlSafety.js';
 /** Valid ID characters for Anthropic API: alphanumeric, underscore, hyphen */
 const VALID_ID_REGEX = /[^a-zA-Z0-9_-]/g;
 const THINKING_TYPES = new Set(['thinking', 'redacted_thinking']);
-const MINIMAX_DEFAULT_CONTEXT_WINDOW = 204_800;
-const MINIMAX_M3_CONTEXT_WINDOW = 1_000_000;
+// MiniMax Anthropic-compatible endpoint: `max_tokens` is the OUTPUT token
+// ceiling, NOT the total context window. Docs list MiniMax-M3 total
+// (input+output) context = 1,000,000, but the API rejects
+// `max_tokens > 524288` with:
+//   `invalid params, model[MiniMax-M3] does not support max tokens > 524288`
+// So the output ceiling is 524288. Other M-series models advertise 204800
+// total context, which is also their max_tokens ceiling.
+const MINIMAX_DEFAULT_MAX_TOKENS = 204_800;
+const MINIMAX_M3_MAX_TOKENS = 524_288;
 
 /**
  * Sanitize a tool call ID for the Anthropic API.
@@ -82,20 +89,20 @@ function isMiniMaxEndpoint(baseURL?: string): boolean {
   );
 }
 
-export function getMiniMaxAnthropicMaxTokens(model: string, configuredContextWindow?: number): number {
-  if (typeof configuredContextWindow === 'number' && configuredContextWindow > 0) {
-    return configuredContextWindow;
+export function getMiniMaxAnthropicMaxTokens(model: string, configuredMaxTokens?: number): number {
+  if (typeof configuredMaxTokens === 'number' && configuredMaxTokens > 0) {
+    return configuredMaxTokens;
   }
 
   const normalizedModel = model.trim().toLowerCase();
   if (normalizedModel === 'minimax-m3') {
-    return MINIMAX_M3_CONTEXT_WINDOW;
+    return MINIMAX_M3_MAX_TOKENS;
   }
   if (normalizedModel.startsWith('minimax-m')) {
-    return MINIMAX_DEFAULT_CONTEXT_WINDOW;
+    return MINIMAX_DEFAULT_MAX_TOKENS;
   }
 
-  return MINIMAX_DEFAULT_CONTEXT_WINDOW;
+  return MINIMAX_DEFAULT_MAX_TOKENS;
 }
 
 export function extractAnthropicThinkingDelta(delta: unknown): string {
@@ -777,15 +784,24 @@ export class AnthropicClient implements LLMClient {
       const maxTokens = this.isMiniMax
         ? getMiniMaxAnthropicMaxTokens(this.model, options?.contextWindow)
         : options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
-      const requestedBudget = options?.effort
-        ? BUDGET_BY_EFFORT[options.effort]
-        : undefined;
-      const budget = requestedBudget !== undefined
-        ? Math.min(requestedBudget, maxTokens - 1)
-        : undefined;
-      const thinking = budget !== undefined
-        ? { type: 'enabled' as const, budget_tokens: budget }
-        : undefined;
+      const effort = options?.effort;
+      const hasEffort = typeof effort === 'string' && effort.length > 0;
+
+      // MiniMax M3 thinking only accepts `adaptive` / `disabled` shapes.
+      // `enabled + budget_tokens` is rejected. effort=auto omits thinking
+      // so M3 stays on its documented default (thinking off).
+      // See https://platform.minimaxi.com/docs/api-reference/text-anthropic-api#thinking-控制
+      const thinking = this.isMiniMax
+        ? (hasEffort ? { type: 'adaptive' as const } : undefined)
+        : (() => {
+            const requestedBudget = hasEffort && effort ? BUDGET_BY_EFFORT[effort] : undefined;
+            const budget = requestedBudget !== undefined
+              ? Math.min(requestedBudget, maxTokens - 1)
+              : undefined;
+            return budget !== undefined
+              ? { type: 'enabled' as const, budget_tokens: budget }
+              : undefined;
+          })();
       stream = await this.client.messages.stream(
         {
           model: this.model,
