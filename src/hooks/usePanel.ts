@@ -36,8 +36,9 @@ export interface PanelContextValue {
 export const PanelContext = createContext<PanelContextValue | null>(null);
 
 const MIN_PANEL_WIDTH = 220;
-const MAX_PANEL_WIDTH = 960;
+const MAX_PANEL_WIDTH = 1120;
 const DEFAULT_PANEL_WIDTH = 340;
+const MIN_CHAT_WIDTH = 680;
 
 const PANEL_STORAGE_PREFIX = "duya:panel:v2:";
 const HOME_PANEL_KEY = "__home__";
@@ -140,6 +141,20 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
   }
 }
 
+function clampPanelWidth(width: number): number {
+  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
+}
+
+function preferredPanelWidth(width: number, minWidth: number): number {
+  const clamped = clampPanelWidth(width);
+  if (typeof document === "undefined") return clamped;
+
+  const workspace = document.querySelector(".app-workspace-row");
+  const workspaceWidth = workspace?.getBoundingClientRect().width ?? window.innerWidth;
+  const maxWithChat = Math.max(minWidth, workspaceWidth - MIN_CHAT_WIDTH);
+  return Math.max(minWidth, Math.min(clamped, maxWithChat));
+}
+
 export function PanelProvider({ children }: { children: React.ReactNode }) {
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const sessionKey = activeThreadId ?? HOME_PANEL_KEY;
@@ -202,6 +217,14 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const applyPageLayout = useCallback((pageId: PageId) => {
+    const descriptor = getPageDescriptor(pageId);
+    setPanelWidth(preferredPanelWidth(descriptor.preferredWidth, descriptor.minWidth));
+    setWorkspaceExpandedState(descriptor.defaultExpanded);
+    setPanelOpen(true);
+    setPanelView("content");
+  }, []);
+
   const togglePanel = useCallback(() => {
     setPanelOpen((prev) => {
       const next = !prev;
@@ -213,14 +236,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const handleSetWidth = useCallback((width: number) => {
-    setPanelWidth(Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width)));
+    setPanelWidth(clampPanelWidth(width));
   }, []);
 
   const openPanel = useCallback<PanelContextValue["openPanel"]>((pageId, params) => {
-    const preferredWidth = getPageDescriptor(pageId).preferredWidth;
-    if (preferredWidth) {
-      handleSetWidth(preferredWidth);
-    }
     const id = genId();
     const newTab: PageTab = {
       id,
@@ -230,10 +249,9 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(id);
-    setPanelOpen(true);
-    setPanelView("content");
+    applyPageLayout(pageId);
     return id;
-  }, [handleSetWidth]);
+  }, [applyPageLayout]);
 
   const openOrActivatePage = useCallback<PanelContextValue["openOrActivatePage"]>(
     (pageId, params) => {
@@ -242,18 +260,13 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
         (t) => t.pageId === pageId && dedupKey(t.pageId, t.params) === key
       );
       if (existing) {
-        const preferredWidth = getPageDescriptor(pageId).preferredWidth;
-        if (preferredWidth) {
-          handleSetWidth(preferredWidth);
-        }
         setActiveTabId(existing.id);
-        setPanelOpen(true);
-        setPanelView("content");
+        applyPageLayout(pageId);
         return existing.id;
       }
       return openPanel(pageId, params);
     },
-    [handleSetWidth, openPanel]
+    [applyPageLayout, openPanel]
   );
 
   useEffect(() => {
@@ -336,10 +349,15 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const activateTab = useCallback<PanelContextValue["activateTab"]>((tabId) => {
+    const tab = tabsRef.current.find((t) => t.id === tabId);
     setActiveTabId(tabId);
-    setPanelOpen(true);
-    setPanelView("content");
-  }, []);
+    if (tab) {
+      applyPageLayout(tab.pageId);
+    } else {
+      setPanelOpen(true);
+      setPanelView("content");
+    }
+  }, [applyPageLayout]);
 
   const reorderTabs = useCallback<PanelContextValue["reorderTabs"]>(
     (fromId, toId, position) => {
@@ -414,10 +432,6 @@ export function usePanel(): PanelContextValue {
     throw new Error("usePanel must be used within a PanelProvider");
   }
   return ctx;
-}
-
-export function useOptionalPanel(): PanelContextValue | null {
-  return useContext(PanelContext);
 }
 
 function defaultTitle(pageId: PageId): string {

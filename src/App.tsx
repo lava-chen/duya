@@ -365,7 +365,11 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     ) => {
       if (!activeThreadId) return;
 
-      // Strip markers before sending to API
+      // Plan 220 Phase 5: markers are gone from the write path, so
+      // `content` is already plain. The legacy `stripPastedContentMarkers`
+      // helper would no-op on the new format; we keep the call as a
+      // defensive layer for any inline `content` that might still slip
+      // a marker through (e.g. a unit test that constructs one).
       const plainContent = stripPastedContentMarkers(content);
 
       // Resolve the thread's providerId so the worker uses the right
@@ -401,11 +405,10 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         id: userMsgId,
         role: "user",
         content,
-        // `displayContent` is the user-facing prompt (with
-        // pasted-content markers). It mirrors `content` here, but
-        // the dedicated field keeps the renderer honest if the
-        // message ever gets replaced with the LLM-facing payload.
-        displayContent: displayContent ?? content,
+        // Plan 220 Phase 5: with markers gone, `displayContent` is
+        // equivalent to `content`. Persist the same value in both
+        // columns for back-compat reads of historical rows.
+        displayContent: content,
         timestamp: now,
         attachments: files,
       };
@@ -423,7 +426,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       void startStream({
         sessionId: activeThreadId,
         content: plainContent,
-        displayContent: displayContent ?? content,
+        displayContent: content,
         language: settings.agentLanguage,
         // 不再携带 permissionMode; worker 从 session row 派生.
         model,

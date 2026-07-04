@@ -61,6 +61,7 @@ export interface ToolResultInfo {
   content: string;
   is_error?: boolean;
   duration_ms?: number | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TokenUsage {
@@ -121,8 +122,53 @@ export interface SessionStreamSnapshot {
   dbPersisted?: { success: boolean; reason?: string; generation: number; messageCount: number; streamId?: string; timestamp?: number };
 }
 
+/**
+ * Plan 220: FileAttachment gains a `kind` discriminator and an optional
+ * `previewText` field. The kind-specific payload lives under `metadata`
+ * and is itself a discriminated union so renderers can switch on `kind`
+ * and have TS narrow `metadata` automatically.
+ */
+export type AttachmentKind =
+  | 'file'           // PDF / DOCX / XLSX / PPTX / TXT / MD
+  | 'image'          // image/*
+  | 'pasted-text'    // long text pasted into the input
+  | 'terminal-ref'   // selected text from a terminal panel
+  | 'browser-ref'    // browser element or screenshot reference
+  | 'file-tree-ref'; // path from the project file tree
+
+// Per-kind metadata shapes. Empty for kinds that don't need them yet.
+export interface FileAttachmentMetadata {}
+export interface PastedTextMetadata {
+  timestamp: number;
+}
+export interface TerminalRefMetadata {
+  shell: string;
+  cwd: string;
+  createdAt: number;
+}
+export interface BrowserRefMetadata {
+  url: string;
+  elementKind: 'element' | 'screenshot';
+  attachmentId?: string;
+  title?: string;
+}
+export interface FileTreeRefMetadata {}
+
+export type AttachmentMetadata =
+  | FileAttachmentMetadata
+  | PastedTextMetadata
+  | TerminalRefMetadata
+  | BrowserRefMetadata
+  | FileTreeRefMetadata;
+
 export interface FileAttachment {
   id: string;
+  /**
+   * Discriminator. Optional for backward compat: existing code paths that
+   * construct FileAttachment without an explicit kind default to 'file'
+   * at the consumption sites. New code paths should always set this.
+   */
+  kind?: AttachmentKind;
   name: string;
   type: string;
   /** URL can be: data URL (images), absolute file path, or empty for placeholder */
@@ -140,4 +186,11 @@ export interface FileAttachment {
   thumbnail?: string;
   /** Base64 data URL for image display (used when url is a file path) */
   displayUrl?: string;
+  /**
+   * UI preview text. Required for non-file kinds (paste, terminal, browser,
+   * file-tree). Optional for file/image kinds where `name` already serves.
+   */
+  previewText?: string;
+  /** Kind-specific payload. See AttachmentMetadata. */
+  metadata?: AttachmentMetadata;
 }

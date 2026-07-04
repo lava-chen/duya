@@ -55,9 +55,8 @@ export function PanelZone() {
   const isSessionView = currentView === "chat" && !!activeThreadId;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
-  const activePanelMinWidth = activeTab
-    ? getPageDescriptor(activeTab.pageId).minWidth
-    : 340;
+  const activeDescriptor = activeTab ? getPageDescriptor(activeTab.pageId) : null;
+  const activePanelMinWidth = activeDescriptor?.minWidth ?? 340;
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const cwd = activeThread?.workingDirectory ?? undefined;
   const zoneStyle = {
@@ -110,6 +109,7 @@ export function PanelZone() {
   return (
     <div
       className={`panel-zone ${panelOpen ? "panel-zone-open" : "panel-zone-closed"}${workspaceExpanded ? " panel-zone-expanded" : ""}${resizing ? " panel-zone-resizing" : ""}`}
+      data-page-id={activeTab?.pageId ?? "none"}
       style={zoneStyle}
     >
       {isSessionView && (
