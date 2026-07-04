@@ -1,10 +1,20 @@
 // ToolActionsGroup — top-level chat-tool chrome.
 //
-// Mounts the action stream, runs the segmenter, and dispatches each
-// segment to the right row file (or a Group for ≥2 consecutive tool
-// calls). All row / chrome / group / helper code lives under
-// `./tools/...` so this file stays focused on the mount + state
-// machine.
+// Two render paths share the same `actions` input:
+//
+//   1. `isStreaming === true`  → `StreamingActionsBody`
+//      Flat, no chrome, no border, no summary row. thinking / tool /
+//      text stream out like ordinary chat prose. Group headers still
+//      wrap ≥2 consecutive tool calls but render collapsed by default,
+//      so the visual noise during a working round is just the text
+//      itself.
+//
+//   2. `isStreaming === false` → collapsible summary + bordered body
+//      After the round finishes, the work artifacts get boxed behind a
+//      one-line summary ("5 tools · Worked for 12s") that defaults to
+//      collapsed. Click to expand. The collapsed default means a new
+//      round always starts from a clean, quiet state — no expansion
+//      state leaks between rounds.
 //
 // Public API (preserved for backward compatibility):
 //   - `ToolActionsGroup` — main React component
@@ -16,19 +26,16 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CaretRightIcon } from '@/components/icons';
-import { Shimmer } from './Shimmer';
 import type { ToolUseInfo, ToolResultInfo } from '@/types';
 import { useTranslation } from '@/hooks/useTranslation';
-import { getRenderer } from './tools/registry';
 import { computeSegments } from './tools/segments';
 import {
   renderFlatActions,
   renderOrderedBody,
-  computeSummaryFromActions,
   getLastRunningToolAction,
   computeSegmentActionKeys,
 } from './tools/flatRenderer';
-import { DurationSummaryText } from './tools/hooks/useTopLevelChrome';
+import { formatDuration } from './tools/hooks/useTopLevelChrome';
 import type { ToolAction, ActionItem } from './tools/types';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 
@@ -77,8 +84,17 @@ export function ToolActionsGroup({
   const hasRunningTool = actions.some(
     (a) => a.kind === 'tool' && a.tool.result === undefined
   );
-  const [userExpandedState, setUserExpandedState] = useState<boolean | null>(null);
-  const expanded = userExpandedState !== null ? userExpandedState : (hasRunningTool || isStreaming);
+  // Always start collapsed once the round is done. We deliberately do
+  // NOT remember a previous expansion via `userExpandedState` here —
+  // a new round deserves a fresh, quiet state, and there's no user
+  // expectation that one round's expansion leaks into the next.
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
+  // During streaming the body is rendered without a summary row, so
+  // `expanded` is only meaningful for the collapsed-mode chrome. When
+  // a round is mid-flight, force expanded so the body code-path stays
+  // consistent (no one ever sees the summary, but the underlying
+  // segmenter / renderOrderedBody output is the same).
+  const expanded = userExpanded ?? (hasRunningTool || isStreaming);
 
   if (actions.length === 0) return null;
 
@@ -88,7 +104,7 @@ export function ToolActionsGroup({
 
   if (flat) {
     return (
-      <div className="w-[min(100%,48rem)]">
+      <div className="w-full">
         <div className="border-l-2 border-border/50">
           {/* For flat mode, interleave non-tool actions with the grouped
               tool segments so the visual order is preserved. */}
@@ -97,11 +113,6 @@ export function ToolActionsGroup({
       </div>
     );
   }
-
-  const summaryParts = computeSummaryFromActions(actions, isStreaming, t);
-  const runningDesc = lastRunningTool
-    ? getRenderer(lastRunningTool.name).getSummary(lastRunningTool.input, lastRunningTool.name)
-    : '';
 
   const totalDurationMs = React.useMemo(() => {
     // Prefer the explicit total duration (full response time) when provided.
@@ -118,30 +129,47 @@ export function ToolActionsGroup({
     return total;
   }, [actions, totalDurationMsProp]);
 
+  // During the working phase we drop the entire chrome — no summary
+  // button, no left border, no expand affordance. thinking / text /
+  // tool rows stream out as plain prose. Group headers still wrap
+  // runs of ≥2 tool calls but render collapsed by default.
+  if (isStreaming) {
+    return (
+      <div className="w-full">
+        <StreamingActionsBody
+          actions={actions}
+          segments={segments}
+          lastRunningTool={lastRunningTool}
+          streamingToolOutput={streamingToolOutput}
+          agentProgressEvents={agentProgressEvents}
+          isStreaming={isStreaming}
+        />
+      </div>
+    );
+  }
+
+  const toolCount = actions.reduce(
+    (n, a) => (a.kind === 'tool' ? n + 1 : n),
+    0,
+  );
+  const hasDuration = totalDurationMs > 0;
+  const collapsedSummary = t('streaming.actions.completed', { count: toolCount }) +
+    (hasDuration ? ` · ${t('streaming.actions.workedFor', { duration: formatDuration(totalDurationMs) })}` : '');
+
   const handleToggle = () => {
-    setUserExpandedState((prev) => prev !== null ? !prev : !expanded);
+    setUserExpanded((prev) => prev !== null ? !prev : !expanded);
   };
 
   return (
-    <div className="w-[min(100%,48rem)]">
+    <div className="w-full">
       <button
         type="button"
         onClick={handleToggle}
         className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
       >
         <span className="text-muted-foreground/60 truncate">
-          {summaryParts.join(' · ')}
-          <DurationSummaryText
-            totalDurationMs={totalDurationMs}
-            liveStartedAt={isStreaming ? liveStartedAt : null}
-          />
+          {collapsedSummary}
         </span>
-
-        {runningDesc && (
-          <span className="text-muted-foreground/40 text-[11px] font-mono truncate max-w-[40%]">
-            {hasRunningTool ? <Shimmer duration={1.5}>{runningDesc}</Shimmer> : runningDesc}
-          </span>
-        )}
 
         <CaretRightIcon
           size={12}
@@ -171,6 +199,36 @@ export function ToolActionsGroup({
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+/**
+ * StreamingActionsBody — the un-chromed body used while the agent is
+ * still working. It renders the same `renderOrderedBody` output the
+ * collapsed-mode chrome would render when expanded, but with no
+ * summary row above and no left border wrapping it. Group headers
+ * inside still default to collapsed, so a stream of tool calls reads
+ * as quiet "ran N tools" hint rows with the chat prose around them.
+ */
+function StreamingActionsBody({
+  actions,
+  segments,
+  lastRunningTool,
+  streamingToolOutput,
+  agentProgressEvents,
+  isStreaming,
+}: {
+  actions: ActionItem[];
+  segments: ReturnType<typeof computeSegments>;
+  lastRunningTool: ToolAction | undefined;
+  streamingToolOutput?: string;
+  agentProgressEvents?: AgentProgressEventWithMeta[];
+  isStreaming: boolean;
+}) {
+  return (
+    <div className="flex flex-col">
+      {renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming)}
     </div>
   );
 }
