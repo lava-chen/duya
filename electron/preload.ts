@@ -954,6 +954,7 @@ export interface ElectronAPI {
     action: (request: Record<string, unknown>) => Promise<unknown>
     undo: (canvasId: string) => Promise<unknown>
     redo: (canvasId: string) => Promise<unknown>
+    uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) => Promise<unknown>
   }
   thread: ThreadAPI
   session: SessionAPI
@@ -1631,6 +1632,8 @@ const electronAPI: ElectronAPI = {
     action: (request: Record<string, unknown>) => ipcRenderer.invoke('conductor:action', request),
     undo: (canvasId: string) => ipcRenderer.invoke('conductor:undo', canvasId),
     redo: (canvasId: string) => ipcRenderer.invoke('conductor:redo', canvasId),
+    uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) =>
+      ipcRenderer.invoke('conductor:asset:upload', payload),
   },
   thread: {
     list: () => ipcRenderer.invoke('db:session:list'),

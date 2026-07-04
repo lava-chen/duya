@@ -14,7 +14,7 @@ const stroke = {
 };
 
 export const ELEMENT_ICONS: Record<
-  "sticky" | "connector" | "mindmap" | "select",
+  "sticky" | "connector" | "media" | "select",
   ReactNode
 > = {
   sticky: (
@@ -34,12 +34,12 @@ export const ELEMENT_ICONS: Record<
     </svg>
   ),
 
-  mindmap: (
+  media: (
     <svg viewBox="0 0 24 24" fill="none" style={iconStyle}>
-      <rect x="4" y="9" width="7" height="6" rx="2.1" fill="currentColor" fillOpacity="0.14" {...stroke} />
-      <path d="M11 12h3.8M14.8 7.8v8.2" {...stroke} />
-      <rect x="15" y="5" width="5" height="4" rx="1.6" fill="currentColor" fillOpacity="0.14" {...stroke} />
-      <rect x="15" y="15" width="5" height="4" rx="1.6" fill="currentColor" fillOpacity="0.14" {...stroke} />
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5" fill="currentColor" fillOpacity="0.13" {...stroke} />
+      <circle cx="8.5" cy="10" r="1.6" fill="currentColor" fillOpacity="0.5" />
+      <path d="M4 17l4.2-4.2a1.6 1.6 0 0 1 2.3 0L14 16.3" {...stroke} />
+      <path d="M13.5 15.5l2.3-2.3a1.6 1.6 0 0 1 2.3 0L20.5 15.5" {...stroke} />
     </svg>
   ),
 

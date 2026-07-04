@@ -1,6 +1,6 @@
 /**
  * Canvas element vizSpec reference strings.
- * Minimal set: sticky, connector, mindmap, and 4 widget kinds.
+ * Minimal set: sticky, connector, image, file, and 4 widget kinds.
  */
 
 export const VIZ_SPEC_PROMPT = `
@@ -10,7 +10,8 @@ The conductor canvas supports a minimal element set:
 
 - **native/sticky** — Sticky note
 - **native/connector** — Connection line between elements
-- **native/mindmap** — Mind map
+- **native/image** — Image element (assetId or url)
+- **native/file** — File attachment element (assetId, fileName, mimeType)
 - **widget/task-list** — Structured task list widget
 - **widget/note-pad** — Plain-text note pad widget
 - **widget/pomodoro** — Pomodoro timer widget
@@ -42,18 +43,31 @@ vizSpec format:
 }
 \`\`\`
 
-### native/mindmap — Mind Maps
+### native/image — Image Elements
 
-Use for: brainstorming, topic decomposition, hierarchical thinking.
+Use for: embedding pictures, screenshots, diagrams on the canvas.
 
 vizSpec format:
 \`\`\`json
 {
-  "topic": "Q3 Launch Plan",
-  "branches": [
-    { "id": "b1", "text": "Marketing", "color": "blue" },
-    { "id": "b2", "text": "Engineering", "color": "green" }
-  ]
+  "assetId": "asset-uuid",
+  "url": "duya-file:///path/to/image.png",
+  "fileName": "screenshot.png",
+  "objectFit": "contain"
+}
+\`\`\`
+
+### native/file — File Attachments
+
+Use for: attaching PDFs, documents, or other binary files to the canvas.
+
+vizSpec format:
+\`\`\`json
+{
+  "assetId": "asset-uuid",
+  "fileName": "spec.pdf",
+  "mimeType": "application/pdf",
+  "size": 102400
 }
 \`\`\`
 
@@ -69,25 +83,7 @@ vizSpec format:
 export const VIZ_SPEC_WORKED_EXAMPLES = `
 ## Worked Examples
 
-### Example 1: Project Mind Map
-User: "Help me plan the Q3 launch with a mind map"
-Response: I'll create a mind map with the launch topics and branches.
-
-Tool call: canvas_create_element
-{
-  "canvasId": "canvas-1",
-  "kind": "native/mindmap",
-  "position": { "x": 0, "y": 0, "w": 8, "h": 6 },
-  "vizSpec": {
-    "topic": "Q3 Launch",
-    "branches": [
-      { "id": "b1", "text": "Marketing", "color": "blue" },
-      { "id": "b2", "text": "Engineering", "color": "green" }
-    ]
-  }
-}
-
-### Example 2: Task List with Connections
+### Example 1: Task List with Connections
 User: "Add a task list and connect it to a sticky note"
 Response: I'll add a task list widget and a sticky note, then connect them.
 
@@ -95,7 +91,7 @@ Tool call: canvas_create_element (widget/task-list)
 Tool call: canvas_create_element (native/sticky)
 Tool call: canvas_create_element (native/connector, sourceId=task-list-id, targetId=sticky-id)
 
-### Example 3: Reorganize Canvas Layout
+### Example 2: Reorganize Canvas Layout
 User: "Organize this messy canvas into a clean layout"
 Response: I'll reorganize the elements into a clean grid layout.
 

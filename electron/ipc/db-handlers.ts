@@ -30,6 +30,7 @@ import {
 } from '../db/index';
 import type { DbInitResult, DatabaseStats } from '../db/index';
 import { emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
+import { uploadAsset as conductorUploadAsset } from '../conductor/asset-service';
 
 // Re-export lifecycle functions for backward compatibility
 export {
@@ -2234,6 +2235,14 @@ export function registerConductorHandlers(): void {
 
     txn();
     return { success: true, actionId: undoneAction.id, patch };
+  });
+
+  ipcMain.handle('conductor:asset:upload', (_event, payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) => {
+    const { canvasId, buffer, fileName, mimeType } = payload;
+    if (!canvasId || !buffer || !fileName) {
+      throw new Error('canvasId, buffer, and fileName are required');
+    }
+    return conductorUploadAsset(canvasId, buffer, fileName, mimeType);
   });
 
   dbLogger.info('Conductor handlers registered', undefined, LogComponent.DB);

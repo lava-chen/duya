@@ -3,7 +3,7 @@
 import React, { useCallback, useRef, useState, useEffect } from "react";
 import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
-import { createNativeElement } from "..//ipc/conductor-ipc";
+import { createNativeElement, uploadAsset } from "..//ipc/conductor-ipc";
 import { FreeformLayer } from "./FreeformLayer";
 import { WidgetLayer } from "./WidgetLayer";
 import { ConnectorOverlay } from "./ConnectorOverlay";
@@ -37,7 +37,8 @@ function snapToGrid(value: number, grid = SNAP_GRID): number {
 
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
   sticky: { w: 3, h: 3, zIndex: 0 },
-  mindmap: { w: 8, h: 6, zIndex: 0 },
+  image: { w: 5, h: 4, zIndex: 0 },
+  file: { w: 4, h: 3, zIndex: 0 },
 };
 
 export const canvasTransformState = { panX: 0, panY: 0, zoom: 1 };
@@ -373,6 +374,35 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       setUiError(`Create ${type} failed: ${err instanceof Error ? err.message : err}`);
     }
   }, [activeCanvasId, setActiveTool, setUiError]);
+
+  const dropFileAt = useCallback(async (file: File, canvasX: number, canvasY: number) => {
+    if (!activeCanvasId) return;
+    try {
+      const asset = await uploadAsset(activeCanvasId, file);
+      const def = NATIVE_DEFAULTS[asset.kind] || { w: 4, h: 3, zIndex: 0 };
+      const pxW = def.w * GRID_PX;
+      const pxH = def.h * GRID_PX;
+      const position: CanvasPosition = {
+        x: snapToGrid(canvasX - pxW / 2),
+        y: snapToGrid(canvasY - pxH / 2),
+        w: def.w,
+        h: def.h,
+        zIndex: def.zIndex,
+        rotation: 0,
+      };
+      const extra: Record<string, unknown> = {
+        assetId: asset.assetId,
+        url: asset.url,
+        fileName: asset.fileName,
+        mimeType: asset.mimeType,
+        size: asset.size,
+      };
+      await createNativeElement(activeCanvasId, asset.kind, position, extra);
+      setUiError(null);
+    } catch (err) {
+      setUiError(`Upload media failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }, [activeCanvasId, setUiError]);
 
   useEffect(() => {
     const flushDragFrame = () => {
@@ -896,7 +926,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       v: "select",
       n: "sticky",
       c: "connector",
-      m: "mindmap",
     };
     const tool = toolMap[e.key.toLowerCase()];
     if (tool) {
@@ -920,7 +949,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   }, [setHostCursor]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes("application/x-conductor-tool")) {
+    if (
+      e.dataTransfer.types.includes("application/x-conductor-tool") ||
+      e.dataTransfer.types.includes("Files")
+    ) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
     }
@@ -928,18 +960,29 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     const toolType = e.dataTransfer.getData("application/x-conductor-tool");
-    if (!toolType) return;
+    if (toolType) {
+      e.preventDefault();
+      const extra = (() => {
+        try {
+          return JSON.parse(e.dataTransfer.getData("application/x-conductor-extra") || "{}") as Record<string, unknown>;
+        } catch {
+          return {};
+        }
+      })();
+      const canvas = clientToCanvas(e.clientX, e.clientY);
+      void createElementAt(toolType, extra, canvas.x, canvas.y);
+      return;
+    }
+
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
     e.preventDefault();
-    const extra = (() => {
-      try {
-        return JSON.parse(e.dataTransfer.getData("application/x-conductor-extra") || "{}") as Record<string, unknown>;
-      } catch {
-        return {};
-      }
-    })();
     const canvas = clientToCanvas(e.clientX, e.clientY);
-    void createElementAt(toolType, extra, canvas.x, canvas.y);
-  }, [clientToCanvas, createElementAt]);
+    files.forEach((file, i) => {
+      const offset = i * 24;
+      void dropFileAt(file, canvas.x + offset, canvas.y + offset);
+    });
+  }, [clientToCanvas, createElementAt, dropFileAt]);
 
   useEffect(() => {
     const host = viewportRef.current;

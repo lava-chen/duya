@@ -1794,6 +1794,42 @@ const migrations: Migration[] = [
       db.exec(`UPDATE messages SET display_content = NULL WHERE display_content = ''`);
     },
   },
+  {
+    id: 36,
+    name: 'prune_conductor_mindmap_elements',
+    migrate(db: BetterSqlite3Db): void {
+      // Mind map elements are removed in the conductor toolbar simplification.
+      // Drop any native/mindmap elements along with their mirrored widget rows
+      // and action-log entries so stale data does not linger on the canvas.
+      const mindmapIds = db
+        .prepare(
+          `SELECT id FROM conductor_elements
+           WHERE element_kind = 'native/mindmap' OR native_kind = 'mindmap'`
+        )
+        .all() as Array<{ id: string }>;
+
+      if (mindmapIds.length === 0) {
+        return;
+      }
+
+      const ids = mindmapIds.map((row) => row.id);
+      const idPlaceholders = ids.map(() => '?').join(',');
+      const txn = db.transaction(() => {
+        db.prepare(
+          `DELETE FROM conductor_widgets WHERE id IN (${idPlaceholders})`
+        ).run(...ids);
+        db.prepare(
+          `DELETE FROM conductor_actions
+           WHERE widget_id IN (${idPlaceholders})`
+        ).run(...ids);
+        db.prepare(
+          `DELETE FROM conductor_elements
+           WHERE id IN (${idPlaceholders})`
+        ).run(...ids);
+      });
+      txn();
+    },
+  },
 ];
 
 /**

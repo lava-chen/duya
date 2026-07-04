@@ -35,6 +35,14 @@ export interface PageDescriptor {
   available: boolean;
   minWidth: number;
   preferredWidth?: number;
+  /**
+   * Fraction of the workspace row this page should claim when opened.
+   * When set, the panel ignores `MIN_CHAT_WIDTH` (chat width is
+   * `workspace * (1 - ratio)`) and the desired width is
+   * `workspace * ratio`. Mutually exclusive with `preferredWidth` —
+   * the ratio wins when both are present.
+   */
+  widthRatio?: number;
   defaultExpanded: boolean;
   component: ComponentType<{ tab: PageTab; embedded: boolean }>;
 }
@@ -69,7 +77,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 420,
-    preferredWidth: 560,
+    widthRatio: 0.6,
     defaultExpanded: false,
     component: SidebarConductorView as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },

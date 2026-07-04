@@ -29,6 +29,7 @@ export interface PanelContextValue {
   openPanel: (pageId: PageId, params?: Record<string, unknown>) => string;
   closePanel: (tabId: string) => void;
   activateTab: (tabId: string) => void;
+  updateTabTitle: (tabId: string, title: string) => void;
   openOrActivatePage: (pageId: PageId, params?: Record<string, unknown>) => string;
   reorderTabs: (fromId: string, toId: string, position: "before" | "after") => void;
 }
@@ -164,14 +165,36 @@ function getWorkspaceWidth(): number {
   return workspace?.getBoundingClientRect().width ?? window.innerWidth;
 }
 
-function preferredPanelWidth(width: number | undefined, minWidth: number): number {
+function preferredPanelWidth(
+  width: number | undefined,
+  minWidth: number,
+  widthRatio?: number,
+): number {
   // Undefined preferred width falls back to the page's minimum, so we never
   // propagate NaN into setPanelWidth (CSS would silently drop `NaNpx`).
   const fallback = clampPanelWidth(minWidth);
-  const desired = clampPanelWidth(typeof width === "number" && Number.isFinite(width) ? width : minWidth);
   const workspaceWidth = getWorkspaceWidth();
+
+  let desired: number;
+  if (typeof widthRatio === "number" && Number.isFinite(widthRatio) && widthRatio > 0) {
+    // Ratio-driven sizing: panel claims `widthRatio` of the workspace and
+    // the chat column gets the rest. Ignore `width` so callers can't
+    // accidentally pass a fixed pixel value and override the ratio.
+    desired = clampPanelWidth(workspaceWidth * widthRatio);
+  } else {
+    desired = clampPanelWidth(typeof width === "number" && Number.isFinite(width) ? width : minWidth);
+  }
+
   const maxByRatio = workspaceWidth * MAX_PANEL_RATIO;
-  const maxWithChat = Math.max(minWidth, workspaceWidth - MIN_CHAT_WIDTH);
+  // When a page declares `widthRatio`, the chat column width is derived
+  // from the ratio itself, so the chat-minimum cap is meaningless and
+  // would actually fight the ratio (e.g. ratio=0.6 on a 1180px workspace
+  // wants panel=708, but `MIN_CHAT_WIDTH=680` would clamp to 500).
+  const maxWithChat =
+    typeof widthRatio === "number" && Number.isFinite(widthRatio) && widthRatio > 0
+      ? Number.POSITIVE_INFINITY
+      : Math.max(minWidth, workspaceWidth - MIN_CHAT_WIDTH);
+
   // The tightest of: page minimum, ratio cap, chat-minimum cap.
   const upperBound = Math.min(maxByRatio, maxWithChat);
   return Math.max(fallback, Math.min(desired, upperBound));
@@ -252,7 +275,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
   const applyPageLayout = useCallback((pageId: PageId) => {
     const descriptor = getPageDescriptor(pageId);
-    const nextWidth = preferredPanelWidth(descriptor.preferredWidth, descriptor.minWidth);
+    const nextWidth = preferredPanelWidth(descriptor.preferredWidth, descriptor.minWidth, descriptor.widthRatio);
     setPanelWidth(nextWidth);
     setWorkspaceExpandedState(descriptor.defaultExpanded);
     setPanelOpen(true);
@@ -443,6 +466,16 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     }
   }, [applyPageLayout]);
 
+  const updateTabTitle = useCallback<PanelContextValue["updateTabTitle"]>((tabId, title) => {
+    const nextTitle = title.trim();
+    if (!nextTitle) return;
+    setTabs((prev) => prev.map((tab) => (
+      tab.id === tabId && tab.title !== nextTitle
+        ? { ...tab, title: nextTitle }
+        : tab
+    )));
+  }, []);
+
   const reorderTabs = useCallback<PanelContextValue["reorderTabs"]>(
     (fromId, toId, position) => {
       setTabs((prev) => {
@@ -485,6 +518,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       openPanel,
       closePanel,
       activateTab,
+      updateTabTitle,
       openOrActivatePage,
       reorderTabs,
     }),
@@ -502,6 +536,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       openPanel,
       closePanel,
       activateTab,
+      updateTabTitle,
       openOrActivatePage,
       reorderTabs,
     ]

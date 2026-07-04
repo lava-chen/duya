@@ -4,7 +4,8 @@ import React from "react";
 import type { CanvasElement } from "../..//types/conductor";
 import { StickyElement } from "./StickyElement";
 import { ConnectorElement } from "./ConnectorElement";
-import { MindMapElement } from "./MindMapElement";
+import { ImageElement } from "./ImageElement";
+import { FileElement } from "./FileElement";
 import { NativeChrome } from "./NativeChrome";
 
 interface NativeElementRendererProps {
@@ -24,7 +25,8 @@ function UnknownNativeElement({ nodeType }: { nodeType: string }) {
 const elementMap: Record<string, React.ComponentType<{ element: CanvasElement }>> = {
   sticky: StickyElement,
   connector: ConnectorElement,
-  mindmap: MindMapElement,
+  image: ImageElement,
+  file: FileElement,
 };
 
 export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({
@@ -42,7 +44,11 @@ export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({
     );
   }
 
-  if (element.elementKind === "native/sticky") {
+  if (
+    element.elementKind === "native/sticky" ||
+    element.elementKind === "native/image" ||
+    element.elementKind === "native/file"
+  ) {
     return (
       <NativeChrome element={element} onPositionChange={onPositionChange}>
         <Component element={element} />

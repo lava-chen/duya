@@ -310,6 +310,9 @@ if (gotTheLock) {
           '.svg': 'image/svg+xml',
           '.webp': 'image/webp',
           '.bmp': 'image/bmp',
+          '.pdf': 'application/pdf',
+          '.txt': 'text/plain',
+          '.md': 'text/markdown',
         };
         const mimeType = mimeTypes[ext] || 'application/octet-stream';
 

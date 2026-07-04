@@ -1,6 +1,15 @@
 import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot } from "..//types/conductor";
 import type { ConnectorEndpoint } from "..//types/canvas-node";
 
+export interface UploadedAsset {
+  assetId: string;
+  url: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  kind: 'image' | 'file';
+}
+
 function getConductorAPI() {
   const conductor = (window as any).electronAPI?.conductor;
   if (!conductor) {
@@ -31,6 +40,9 @@ function getConductorAPI() {
 
     redo: (canvasId: string): Promise<{ success: boolean; actionId?: number; patch?: Record<string, unknown> }> =>
       conductor.redo(canvasId),
+
+    uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }): Promise<UploadedAsset> =>
+      conductor.uploadAsset(payload),
   };
 }
 
@@ -188,6 +200,13 @@ export async function reparentElement(
     canvasId,
     parentId,
   });
+}
+
+export async function uploadAsset(canvasId: string, file: File): Promise<UploadedAsset> {
+  const api = getConductorAPI();
+  if (!api) throw new Error("IPC not available");
+  const buffer = await file.arrayBuffer();
+  return api.uploadAsset({ canvasId, buffer, fileName: file.name, mimeType: file.type });
 }
 
 export { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot };

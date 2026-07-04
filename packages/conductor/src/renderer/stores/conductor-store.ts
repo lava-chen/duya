@@ -31,7 +31,6 @@ interface ConductorState {
   canUndo: boolean;
   canRedo: boolean;
   actions: ConductorAction[];
-  historyOpen: boolean;
   actorFilter: Actor | "all";
   widgetFilter: string | null;
   agentStatus: AgentStreamStatus;
@@ -102,9 +101,6 @@ interface ConductorState {
   connectBridge: (canvasId: string) => void;
   disconnectBridge: () => void;
 
-  // Edit mode
-  toggleEditMode: () => void;
-
   // Undo/Redo
   undo: () => Promise<void>;
   redo: () => Promise<void>;
@@ -113,7 +109,6 @@ interface ConductorState {
 
   // History
   setActions: (actions: ConductorAction[]) => void;
-  toggleHistory: () => void;
   setActorFilter: (actor: Actor | "all") => void;
   setWidgetFilter: (widgetId: string | null) => void;
 
@@ -153,7 +148,6 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   canUndo: false,
   canRedo: false,
   actions: [],
-  historyOpen: false,
   actorFilter: "all",
   widgetFilter: null,
   agentStatus: "idle",
@@ -459,16 +453,6 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
     ConductorBridge.disconnect();
   },
 
-  toggleEditMode: () =>
-    set((state) => {
-      const nextEditMode = !state.editMode;
-      return {
-        editMode: nextEditMode,
-        uiStatus: nextEditMode ? "editing" : "idle",
-        syncStatusText: "",
-      };
-    }),
-
   undo: async () => {
     const { activeCanvasId, actions } = get();
     if (!activeCanvasId) return;
@@ -530,8 +514,6 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   setUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo }),
 
   setActions: (actions) => set({ actions }),
-
-  toggleHistory: () => set((state) => ({ historyOpen: !state.historyOpen })),
 
   setActorFilter: (actorFilter) => set({ actorFilter }),
 

@@ -17,7 +17,8 @@ export const CANVAS_ORCHESTRATOR_TOOLS: Tool[] = [
     description: `Create a new element on the canvas. Supports a minimal set of element kinds:
   - native/sticky: Sticky note with color
   - native/connector: Connection line between two elements
-  - native/mindmap: Mind map with topic and branches
+  - native/image: Image element
+  - native/file: File attachment element
   - widget/task-list, widget/note-pad, widget/pomodoro, widget/news-board: Structured widgets`,
     input_schema: {
       type: 'object',

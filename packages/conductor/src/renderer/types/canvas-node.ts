@@ -3,10 +3,10 @@ export const NodeType = {
   shape: 'shape',
   text: 'text',
   connector: 'connector',
-  mindmap: 'mindmap',
   section: 'section',
   frame: 'frame',
   image: 'image',
+  file: 'file',
 } as const;
 export type NodeType = (typeof NodeType)[keyof typeof NodeType];
 
@@ -74,22 +74,6 @@ export interface StickyContent {
   width?: number;
 }
 
-export interface MindMapTreeNode {
-  id: string;
-  text: string;
-  children: MindMapTreeNode[];
-  collapsed?: boolean;
-}
-
-export interface MindMapContent {
-  rootNode: MindMapTreeNode;
-  layoutDirection: 'right' | 'left' | 'both' | 'tree';
-  branchColors?: string[];
-  _computed?: {
-    layout?: Array<{ id: string; x: number; y: number }>;
-  };
-}
-
 export interface SectionContent {
   title?: string;
   background?: string;
@@ -104,8 +88,17 @@ export interface FrameContent {
 export interface ImageContent {
   assetId?: string;
   url?: string;
+  fileName?: string;
   objectFit?: 'fill' | 'contain' | 'cover' | 'none';
   alt?: string;
+}
+
+export interface FileContent {
+  assetId?: string;
+  fileName: string;
+  mimeType?: string;
+  size?: number;
+  url?: string;
 }
 
 export type NodeContent =
@@ -113,7 +106,7 @@ export type NodeContent =
   | { kind: 'shape' } & ShapeContent
   | { kind: 'text' } & TextContent
   | { kind: 'connector' } & ConnectorContent
-  | { kind: 'mindmap' } & MindMapContent
   | { kind: 'section' } & SectionContent
   | { kind: 'frame' } & FrameContent
-  | { kind: 'image' } & ImageContent;
+  | { kind: 'image' } & ImageContent
+  | { kind: 'file' } & FileContent;

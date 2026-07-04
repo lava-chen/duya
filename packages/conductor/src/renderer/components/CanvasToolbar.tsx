@@ -2,12 +2,12 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useConductorStore } from "..//stores/conductor-store";
-import * as Icons from "@phosphor-icons/react";
 import { ELEMENT_ICONS } from "./toolbar/element-icons";
+import { uploadAsset } from "..//ipc/conductor-ipc";
 
 type ToolId =
   | "select" | "sticky"
-  | "connector" | "mindmap";
+  | "connector" | "media";
 
 interface Tool {
   id: ToolId;
@@ -22,7 +22,7 @@ const TOOLS: Tool[] = [
   { id: "select", icon: ELEMENT_ICONS.select, label: "Select", shortcut: "V", group: 0 },
   { id: "sticky", icon: ELEMENT_ICONS.sticky, label: "Sticky note", shortcut: "N", group: 1, hasSubmenu: true },
   { id: "connector", icon: ELEMENT_ICONS.connector, label: "Connector", shortcut: "C", group: 1 },
-  { id: "mindmap", icon: ELEMENT_ICONS.mindmap, label: "Mind Map", shortcut: "M", group: 1 },
+  { id: "media", icon: ELEMENT_ICONS.media, label: "Media", shortcut: "M", group: 1 },
 ];
 
 const STICKY_COLORS = [
@@ -157,10 +157,10 @@ function ToolButton({ tool, isActive, isSubmenuOpen, onClick, onDragStart }: Too
       <ToolbarTooltip label={tool.label} shortcut={tool.shortcut}>
         <button
           type="button"
-          draggable={tool.id !== "connector" && tool.id !== "select"}
+          draggable={tool.id !== "connector" && tool.id !== "select" && tool.id !== "media"}
           onClick={(e) => onClick(tool, e)}
           onDragStart={(e) => {
-            if (tool.id === "connector" || tool.id === "select") {
+            if (tool.id === "connector" || tool.id === "select" || tool.id === "media") {
               e.preventDefault();
               return;
             }
@@ -178,11 +178,11 @@ function ToolButton({ tool, isActive, isSubmenuOpen, onClick, onDragStart }: Too
 export function CanvasToolbar() {
   const activeTool = useConductorStore((s) => s.activeTool);
   const setActiveTool = useConductorStore((s) => s.setActiveTool);
-  const editMode = useConductorStore((s) => s.editMode);
-  const toggleEditMode = useConductorStore((s) => s.toggleEditMode);
-  const toggleHistory = useConductorStore((s) => s.toggleHistory);
+  const activeCanvasId = useConductorStore((s) => s.activeCanvasId);
+  const setUiError = useConductorStore((s) => s.setUiError);
 
   const barRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [openSubmenu, setOpenSubmenu] = useState<ToolId | null>(null);
   const [submenuAnchorY, setSubmenuAnchorY] = useState(0);
 
@@ -195,6 +195,23 @@ export function CanvasToolbar() {
     setActiveTool(createToolValue(type, extra));
     setOpenSubmenu(null);
   }, [setActiveTool]);
+
+  const handleMediaFile = useCallback(async (file: File) => {
+    if (!activeCanvasId) return;
+    try {
+      const asset = await uploadAsset(activeCanvasId, file);
+      const extra: Record<string, unknown> = {
+        assetId: asset.assetId,
+        url: asset.url,
+        fileName: asset.fileName,
+        mimeType: asset.mimeType,
+        size: asset.size,
+      };
+      setActiveTool(createToolValue(asset.kind, extra));
+    } catch (err) {
+      setUiError(`Upload media failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }, [activeCanvasId, setActiveTool, setUiError]);
 
   const handleClick = useCallback((tool: Tool, e: React.MouseEvent) => {
     if (tool.hasSubmenu) {
@@ -217,6 +234,11 @@ export function CanvasToolbar() {
 
     if (tool.id === "select") {
       setActiveTool(null);
+      return;
+    }
+
+    if (tool.id === "media") {
+      fileInputRef.current?.click();
       return;
     }
 
@@ -262,28 +284,6 @@ export function CanvasToolbar() {
         </div>
       ))}
 
-      <div className="w-7 h-px my-2.5" style={{ background: "var(--conductor-border)" }} />
-
-      <button
-        type="button"
-        onClick={toggleHistory}
-        className="conductor-tool-button"
-        title="History"
-      >
-        <Icons.ClockCounterClockwise size={20} />
-      </button>
-
-      <div className="w-7 h-px my-2.5" style={{ background: "var(--conductor-border)" }} />
-
-      <button
-        type="button"
-        onClick={toggleEditMode}
-        className={`conductor-tool-button ${editMode ? "active" : ""}`}
-        title={editMode ? "View mode" : "Edit mode"}
-      >
-        {editMode ? <Icons.PencilSimple size={20} /> : <Icons.Eye size={20} />}
-      </button>
-
       {openSubmenu && (
         <Submenu
           toolId={openSubmenu}
@@ -292,6 +292,20 @@ export function CanvasToolbar() {
           onClose={() => setOpenSubmenu(null)}
         />
       )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,application/pdf,.pdf,.doc,.docx,.txt,.md"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            void handleMediaFile(file);
+          }
+          e.target.value = "";
+        }}
+      />
     </div>
   );
 }
