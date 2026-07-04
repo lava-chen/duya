@@ -23,6 +23,7 @@ import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getConfigManager } from '../config/manager';
 import { isHttpUrl } from './url-safety';
+import { ensureWindowWidth } from '../core/window-manager';
 export { isHttpUrl } from './url-safety';
 
 export function registerSystemHandlers(): void {
@@ -369,5 +370,15 @@ export function registerSystemHandlers(): void {
       localeCountryCode: app.getLocaleCountryCode(),
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
+  });
+
+  // Window sizing — grow the main window to fit a freshly-opened side panel
+  // so the chat column stays readable. Only grows (never shrinks) and is
+  // clamped to the display work area.
+  ipcMain.handle('window:ensure-width', (_event, targetWidth: number) => {
+    if (typeof targetWidth !== 'number' || !Number.isFinite(targetWidth) || targetWidth <= 0) {
+      return { width: 0, changed: false };
+    }
+    return ensureWindowWidth(Math.round(targetWidth));
   });
 }

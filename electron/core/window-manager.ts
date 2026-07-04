@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, dialog, MessageChannelMain } from 'electron';
+import { app, BrowserWindow, shell, dialog, MessageChannelMain, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -281,4 +281,32 @@ export async function createWindow(
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+/**
+ * Grow the main window to at least `targetWidth` pixels so a freshly-opened
+ * side panel doesn't overlap the chat column. The window is anchored at its
+ * top-left corner and only the width is adjusted; the height is untouched.
+ * The target is clamped to the current display's work area and to the
+ * window's `minWidth`/screen-edge constraints. No-op if the window is already
+ * wide enough, minimized, full-screen, or unresizable.
+ */
+export function ensureWindowWidth(targetWidth: number): { width: number; changed: boolean } {
+  if (!mainWindow || mainWindow.isDestroyed()) return { width: 0, changed: false };
+  if (mainWindow.isMinimized() || mainWindow.isFullScreen()) return { width: 0, changed: false };
+  if (!mainWindow.isResizable()) return { width: 0, changed: false };
+
+  const bounds = mainWindow.getBounds();
+  const minWidth = mainWindow.getMinimumSize().width || 0;
+  const workArea = screen.getPrimaryDisplay().workArea;
+  // Leave 16px of slack so the window doesn't kiss the right edge of the
+  // display taskbar; some Windows setups snap on edge contact.
+  const ceiling = workArea.width - 16;
+  const desired = Math.max(minWidth, Math.min(targetWidth, ceiling));
+  if (bounds.width >= desired) return { width: bounds.width, changed: false };
+
+  const nextX = Math.max(workArea.x, bounds.x);
+  const nextY = bounds.y;
+  mainWindow.setBounds({ x: nextX, y: nextY, width: desired, height: bounds.height });
+  return { width: desired, changed: true };
 }

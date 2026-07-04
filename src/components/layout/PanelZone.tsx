@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePanel } from "@/hooks/usePanel";
+import { MAX_PANEL_RATIO, MIN_PANEL_WIDTH, usePanel } from "@/hooks/usePanel";
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
 import { ResizeHandle } from "./ResizeHandle";
@@ -14,7 +14,7 @@ import {
 import { ArrowsInSimple, ArrowsOutSimple } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
 
-const MIN_CHAT_WIDTH = 520;
+const MIN_CHAT_WIDTH = 680;
 
 // `office` and `research` are passive surfaces — they are opened by
 // events (`duya:open-office-panel`) or by `ResearchModePanel` once a
@@ -91,11 +91,13 @@ export function PanelZone() {
   const handleResize = useCallback(
     (delta: number) => {
       const nextWidth = resizeStartWidthRef.current - delta;
-      const main = document.querySelector(".app-main-wrapper");
-      const mainWidth = main?.getBoundingClientRect().width ?? MIN_CHAT_WIDTH;
-      const availableWidth = mainWidth + resizeStartWidthRef.current;
-      const maxWidthForChat = Math.max(activePanelMinWidth, availableWidth - MIN_CHAT_WIDTH);
-      setPanelWidth(Math.max(activePanelMinWidth, Math.min(nextWidth, maxWidthForChat)));
+      const workspace = document.querySelector(".app-workspace-row");
+      const workspaceWidth = workspace?.getBoundingClientRect().width ?? window.innerWidth;
+      const maxByRatio = workspaceWidth * MAX_PANEL_RATIO;
+      const maxWithChat = Math.max(activePanelMinWidth, workspaceWidth - MIN_CHAT_WIDTH);
+      const upperBound = Math.min(maxByRatio, maxWithChat);
+      const lowerBound = Math.max(MIN_PANEL_WIDTH, activePanelMinWidth);
+      setPanelWidth(Math.max(lowerBound, Math.min(nextWidth, upperBound)));
     },
     [activePanelMinWidth, setPanelWidth]
   );

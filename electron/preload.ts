@@ -906,6 +906,7 @@ export interface ElectronAPI {
     quit: () => Promise<void>
     getDefaultWorkspace: () => Promise<string>
     createProjectFolder: (projectName: string) => Promise<{ success: boolean; error: string; path: string }>
+    ensureWindowWidth: (targetWidth: number) => Promise<{ width: number; changed: boolean }>
   }
   system: {
     getLocation: () => Promise<{
@@ -1525,6 +1526,7 @@ const electronAPI: ElectronAPI = {
     quit: () => ipcRenderer.invoke('app:quit'),
     getDefaultWorkspace: () => ipcRenderer.invoke('app:get-default-workspace'),
     createProjectFolder: (projectName: string) => ipcRenderer.invoke('app:create-project-folder', projectName),
+    ensureWindowWidth: (targetWidth: number) => ipcRenderer.invoke('window:ensure-width', targetWidth),
   },
   system: {
     getLocation: () => ipcRenderer.invoke('system:get-location'),
