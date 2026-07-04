@@ -9,6 +9,7 @@ export class WorkerManager {
   private workers = new Map<string, ChildProcess>();
   private sessionManager: SessionManager;
   private onWorkerCrash: ((sessionId: string) => void) | null = null;
+  private onWorkerMessage: ((sessionId: string, msg: Record<string, unknown>) => void) | null = null;
 
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
@@ -16,6 +17,10 @@ export class WorkerManager {
 
   setCrashHandler(handler: (sessionId: string) => void): void {
     this.onWorkerCrash = handler;
+  }
+
+  setMessageHandler(handler: (sessionId: string, msg: Record<string, unknown>) => void): void {
+    this.onWorkerMessage = handler;
   }
 
   spawnWorker(sessionId: string): ChildProcess {
@@ -117,6 +122,18 @@ export class WorkerManager {
       } else {
         // Unknown format - log as info to avoid false ERROR alerts
         workerLogger.info('Worker stderr', { sessionId, pid: workerPid, message: line });
+      }
+    });
+
+    child.on('message', (msg: Record<string, unknown>) => {
+      // db:request and conductor:executor:rpc are handled by the per-request
+      // handlers in router.ts (they forward to main process). All other
+      // messages go to the centralized handler (used by InteragentRouter).
+      if (msg.type === 'db:request' || msg.type === 'conductor:executor:rpc') {
+        return;
+      }
+      if (this.onWorkerMessage) {
+        this.onWorkerMessage(sessionId, msg);
       }
     });
 
