@@ -36,7 +36,7 @@ import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
-import { RecapBanner } from './RecapBanner';
+import { setRecap } from '@/components/layout/recap-store';
 import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
@@ -153,7 +153,6 @@ export function ChatView({
   const [effort, setEffort] = useState<string | undefined>(undefined);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
-  const [recapBanner, setRecapBanner] = useState<string | null>(null);
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
@@ -552,7 +551,7 @@ export function ChatView({
     if (command === '/recap' && sessionId) {
       const result = await window.electronAPI?.recap.request(sessionId);
       if (result?.success && result.recap) {
-        setRecapBanner(result.recap);
+        setRecap({ text: result.recap, receivedAt: Date.now(), sessionId });
       }
     }
   }, [sessionId]);
@@ -565,7 +564,11 @@ export function ChatView({
   useEffect(() => {
     const cleanup = window.electronAPI?.recap.onRecapResult((data) => {
       if (data.recap) {
-        setRecapBanner(data.recap);
+        setRecap({
+          text: data.recap,
+          receivedAt: data.timestamp,
+          sessionId: data.sessionId,
+        });
       }
     });
     return () => {
@@ -647,16 +650,6 @@ export function ChatView({
           message={wikiActivityMessage.text}
           error={wikiActivityMessage.error}
         />
-      )}
-
-      {/* Recap banner */}
-      {recapBanner && (
-        <div className="max-w-[800px] mx-auto px-4 pt-3">
-          <RecapBanner
-            recap={recapBanner}
-            onDismiss={() => setRecapBanner(null)}
-          />
-        </div>
       )}
 
       {/* Agent error banner with retry */}
