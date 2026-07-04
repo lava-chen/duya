@@ -253,6 +253,7 @@ export function pairTools(
       result: result?.content,
       isError: result?.is_error,
       durationMs: result?.duration_ms,
+      metadata: result?.metadata,
     });
   }
 
@@ -265,6 +266,7 @@ export function pairTools(
         result: r.content,
         isError: r.is_error,
         durationMs: r.duration_ms,
+        metadata: r.metadata,
       });
     }
   }

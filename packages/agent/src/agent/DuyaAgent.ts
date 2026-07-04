@@ -1010,6 +1010,9 @@ export class duyaAgent {
                       result: toolResultContent,
                       error: toolResultError,
                       duration_ms: result.message.duration_ms,
+                      // Forward tool-result metadata so renderer ToolResultInfo
+                      // can surface previews (browser screenshot / vision_analyze).
+                      metadata: result.message.metadata,
                     },
                   };
                 }
