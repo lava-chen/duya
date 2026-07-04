@@ -293,7 +293,12 @@ export const StreamingMessage = React.memo(function StreamingMessage({
  
   return (
     <div data-message-id="streaming" className="py-4 px-4">
-      <div className={hasWidgetActions ? 'max-w-[95%]' : 'max-w-[90%] lg:max-w-[85%]'}>
+      {/* Streaming prose / tool rows track the message-list width so they
+          align with the input box and with already-finished messages.
+          Widgets get a slightly wider ceiling because viz components
+          (charts, tables) are often wider than prose and benefit from
+          using more of the chat area. */}
+      <div className={hasWidgetActions ? 'max-w-[95%]' : 'w-full'}>
         <StreamingTools
           actions={actions}
           isStreaming={isStreaming}

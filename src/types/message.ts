@@ -152,7 +152,20 @@ export interface BrowserRefMetadata {
   attachmentId?: string;
   title?: string;
 }
-export interface FileTreeRefMetadata {}
+export interface FileTreeRefMetadata {
+  /**
+   * Plan 220: optional 1-indexed line range for selected text inside
+   * the file. When both are set, the card displays `name:L{lineStart}-L{lineEnd}`.
+   */
+  lineStart?: number;
+  lineEnd?: number;
+  /**
+   * Optional selected text. The model sees this in the attachment
+   * payload, but the card UI shows just the file path + line range
+   * (the previewText comes from the file content snippet).
+   */
+  selectedText?: string;
+}
 
 export type AttachmentMetadata =
   | FileAttachmentMetadata

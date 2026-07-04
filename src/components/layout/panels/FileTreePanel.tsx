@@ -17,8 +17,8 @@ import {
 } from "@/components/file-tree";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
-import type { PageTab } from "./registry";
-import { usePanel } from "@/hooks/usePanel";
+import type { PageId, PageTab } from "./registry";
+import { useOptionalPanel } from "@/hooks/usePanel";
 
 function resolveTreePath(workingDirectory: string | null | undefined, treePath: string): string {
   if (!workingDirectory || /^(?:[A-Za-z]:[\\/]|[/\\]{2}|\/)/.test(treePath)) return treePath;
@@ -213,7 +213,24 @@ function ContextMenu({
 export function FileTreePanel({ tab, embedded }: { tab?: PageTab; embedded?: boolean }) {
   const { activeThreadId, threads } = useConversationStore();
   const { t } = useTranslation();
-  const { openOrActivatePage } = usePanel();
+  // Plan 220: when this component is embedded inside FilePreviewPanel
+  // it is rendered outside the PanelProvider tree, so usePanel() would
+  // throw. useOptionalPanel returns null in that case, and the file
+  // preview open falls through to the global `duya:open-page` event
+  // dispatcher (the App-level event handler picks it up).
+  const panel = useOptionalPanel();
+  const openOrActivatePage = useCallback(
+    (pageId: PageId, params?: Record<string, unknown>) => {
+      if (panel) {
+        panel.openOrActivatePage(pageId, params);
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("duya:open-page", {
+        detail: { pageId, params },
+      }));
+    },
+    [panel],
+  );
 
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
@@ -284,12 +301,22 @@ export function FileTreePanel({ tab, embedded }: { tab?: PageTab; embedded?: boo
       }));
       return;
     }
+    // Plan 220: in embedded mode (rendered inside FilePreviewPanel
+    // without a PanelProvider), fall through to a `duya:open-file`
+    // event so the parent preview panel can switch its current file
+    // instead of trying to open a new tab.
+    if (embedded) {
+      window.dispatchEvent(new CustomEvent("duya:open-file", {
+        detail: { filePath, workingDirectory },
+      }));
+      return;
+    }
     openOrActivatePage("preview", {
       filePath,
       workingDirectory,
       title: filePath.split(/[/\\]/).pop() || "预览",
     });
-  }, [openOrActivatePage, workingDirectory]);
+  }, [openOrActivatePage, workingDirectory, embedded]);
 
   const handleContextMenu = useCallback(
     (path: string, type: "file" | "directory", event: React.MouseEvent) => {

@@ -35,6 +35,7 @@ export interface PageDescriptor {
   available: boolean;
   minWidth: number;
   preferredWidth?: number;
+  defaultExpanded: boolean;
   component: ComponentType<{ tab: PageTab; embedded: boolean }>;
 }
 
@@ -46,6 +47,8 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 300,
+    preferredWidth: 320,
+    defaultExpanded: false,
     component: FileTreePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   preview: {
@@ -55,6 +58,8 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 520,
+    preferredWidth: 760,
+    defaultExpanded: false,
     component: FilePreviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   conductor: {
@@ -64,6 +69,8 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 420,
+    preferredWidth: 560,
+    defaultExpanded: false,
     component: SidebarConductorView as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   research: {
@@ -73,6 +80,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: false,
     available: true,
     minWidth: 320,
+    defaultExpanded: false,
     component: ResearchActivityPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   terminal: {
@@ -82,6 +90,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 320,
+    defaultExpanded: false,
     component: TerminalPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   browser: {
@@ -91,7 +100,8 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 460,
-    preferredWidth: 920,
+    preferredWidth: 760,
+    defaultExpanded: false,
     component: BrowserPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   office: {
@@ -101,6 +111,8 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 520,
+    preferredWidth: 760,
+    defaultExpanded: false,
     component: OfficePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
 };

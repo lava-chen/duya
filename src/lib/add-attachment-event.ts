@@ -49,7 +49,7 @@ export type AddAttachmentDetail =
       reference: BrowserReferencePayload;
       attachment?: FileAttachment;
     }
-  | { kind: 'file-tree-ref'; path: string };
+  | { kind: 'file-tree-ref'; path: string; lineStart?: number; lineEnd?: number; selectedText?: string };
 
 export const ADD_ATTACHMENT_EVENT = 'duya:add-attachment';
 

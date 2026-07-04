@@ -24,7 +24,7 @@
 'use client';
 
 import React from 'react';
-import { FileIcon, XIcon } from '@/components/icons';
+import { DocumentTextIcon, FileIcon, FolderIcon, GlobeIcon, TerminalIcon, XIcon } from '@/components/icons';
 import type { FileAttachment } from '@/types/message';
 import { FileAttachmentCard } from './FileAttachmentCard';
 
@@ -35,11 +35,11 @@ export interface AttachmentBarProps {
   onPreview?: (att: FileAttachment) => void;
 }
 
-function buildLabel(att: FileAttachment): string {
-  if (att.previewText) return att.previewText;
-  return att.name;
-}
-
+// Reference card for all non-file/image kinds: pasted-text, terminal-ref,
+// browser-ref, file-tree-ref. Mirrors the pre-Plan-220 pasted-content
+// card visual (160px wide, 4-line line-clamp preview, label chip at the
+// bottom, top-right X in input mode). The kind is distinguished by the
+// icon + label text at the bottom of the card.
 function AttachmentChipCard({
   att,
   mode,
@@ -51,56 +51,68 @@ function AttachmentChipCard({
   onRemove?: (id: string) => void;
   onPreview?: (att: FileAttachment) => void;
 }) {
-  const label = buildLabel(att);
-  const kindLabel = (() => {
+  const preview = att.previewText || att.name;
+  const { kindLabel, Icon } = (() => {
     switch (att.kind) {
       case 'pasted-text':
-        return 'PASTED';
+        return { kindLabel: 'PASTED', Icon: DocumentTextIcon };
       case 'terminal-ref':
-        return 'TERMINAL';
+        return { kindLabel: 'TERMINAL', Icon: TerminalIcon };
       case 'browser-ref':
-        return (att.metadata as { elementKind?: string } | undefined)?.elementKind === 'screenshot'
-          ? 'BROWSER SHOT'
-          : 'BROWSER';
+        return {
+          kindLabel:
+            (att.metadata as { elementKind?: string } | undefined)?.elementKind === 'screenshot'
+              ? 'BROWSER SHOT'
+              : 'BROWSER',
+          Icon: GlobeIcon,
+        };
       case 'file-tree-ref':
-        return 'FILE TREE';
+        return { kindLabel: 'FILE TREE', Icon: FileIcon };
       default:
-        return att.kind?.toUpperCase() ?? 'ATTACHMENT';
+        return { kindLabel: att.kind?.toUpperCase() ?? 'ATTACHMENT', Icon: FolderIcon };
     }
   })();
+  const handleActivate = () => onPreview?.(att);
 
   if (mode === 'history') {
     return (
-      <button
-        type="button"
+      <div
         data-attachment-id={att.id}
-        className="attachment-chip attachment-chip--history"
-        onClick={() => onPreview?.(att)}
+        className="message-pasted-content-item cursor-pointer hover:border-accent-soft hover:bg-surface-hover transition-all"
+        onClick={handleActivate}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') handleActivate();
+        }}
       >
-        <span className="attachment-chip-label">{label}</span>
-        <span className="attachment-chip-kind">{kindLabel}</span>
-      </button>
+        <div className="message-pasted-content-preview">{preview}</div>
+        <div className="message-pasted-content-label">
+          <Icon size={10} />
+          <span>{kindLabel}</span>
+        </div>
+      </div>
     );
   }
 
   return (
     <div
       data-attachment-id={att.id}
-      className="attachment-chip attachment-chip--input"
+      className="pasted-content-attachment"
     >
       <button
         type="button"
-        className="attachment-chip-remove"
+        className="pasted-content-remove"
         onClick={() => onRemove?.(att.id)}
         aria-label="Remove attachment"
       >
         <XIcon size={10} />
       </button>
-      {att.kind === 'file-tree-ref' ? (
-        <FileIcon size={12} />
-      ) : null}
-      <span className="attachment-chip-label">{label}</span>
-      <span className="attachment-chip-kind">{kindLabel}</span>
+      <div className="pasted-content-preview">{preview}</div>
+      <div className="pasted-content-label">
+        <Icon size={10} />
+        <span>{kindLabel}</span>
+      </div>
     </div>
   );
 }
@@ -114,10 +126,13 @@ export function AttachmentBar({
   if (attachments.length === 0) return null;
 
   // Separate kinds into two render tracks:
-  //  - file / image use FileAttachmentCard (existing visual treatment)
-  //  - everything else uses the lightweight chip
+  //  - file uses FileAttachmentCard (existing visual treatment)
+  //  - image kind is hidden: file preview / chat bubble already shows
+  //    the image, so the 104x104 thumbnail in the input is redundant
+  //    (Plan 220 user feedback: drop image card entirely)
+  //  - everything else uses the unified reference card
   const fileKindAttachments = attachments.filter(
-    (a) => a.kind === 'file' || a.kind === 'image',
+    (a) => a.kind === 'file',
   );
   const chipAttachments = attachments.filter(
     (a) => a.kind !== 'file' && a.kind !== 'image',
@@ -142,7 +157,7 @@ export function AttachmentBar({
         </div>
       )}
       {chipAttachments.length > 0 && (
-        <div className="attachment-bar-chips flex flex-wrap gap-1.5 mb-2">
+        <div className="pasted-content-list">
           {chipAttachments.map((att) => (
             <AttachmentChipCard
               key={att.id}

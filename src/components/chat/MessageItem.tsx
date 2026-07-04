@@ -14,6 +14,7 @@ import {
   CaretDownIcon,
 } from '@/components/icons';
 import { FileAttachmentCard } from './FileAttachmentCard';
+import { AttachmentBar } from './AttachmentBar';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
 import { decodeMessageAttachments } from '@/lib/decode-message-attachments';
@@ -731,7 +732,7 @@ function MessageItemComponent({ message, toolResults = [], onToolResult, mergedM
 // `content` are promoted to typed attachments and stripped from the
 // returned text. New messages never hit this path because the write
 // side no longer emits markers.
-const { text: mainText, pastedContents } = useMemo(() => {
+const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     const displaySource =
       message.role === 'user' &&
       message.displayContent !== undefined &&
@@ -751,6 +752,12 @@ const { text: mainText, pastedContents } = useMemo(() => {
           preview: a.previewText ?? '',
           fullContent: a.text ?? '',
         })),
+      // Plan 220: all non-file/image kinds (pasted-text, terminal-ref,
+      // browser-ref, file-tree-ref) render through AttachmentBar in
+      // history mode for visual consistency with the input view.
+      refAttachments: decoded.attachments.filter(
+        (a) => a.kind !== 'file' && a.kind !== 'image',
+      ),
     };
   }, [message.content, message.displayContent, message.msgType, message.role]);
 
@@ -885,6 +892,23 @@ const { text: mainText, pastedContents } = useMemo(() => {
     setPreviewPastedContent(null);
   };
 
+  // Plan 220: unified preview handler for all ref attachment kinds
+  // (pasted-text, terminal-ref, browser-ref, file-tree-ref). Pastes
+  // route through the pasted-content preview modal; other kinds route
+  // through the attachment preview modal.
+  const handleOpenRefPreview = (att: FileAttachment) => {
+    if (att.kind === 'pasted-text') {
+      setPreviewPastedContent({
+        id: att.id,
+        content: att.text ?? '',
+        preview: att.previewText ?? att.name,
+      });
+      setPreviewAttachment(null);
+    } else {
+      handleOpenAttachmentPreview(att);
+    }
+  };
+
   const handleOpenPastedPreview = (content: PastedContentInfo) => {
     setPreviewPastedContent({ id: content.id, content: content.fullContent, preview: content.preview });
     setPreviewAttachment(null);
@@ -992,33 +1016,26 @@ const { text: mainText, pastedContents } = useMemo(() => {
               ))}
             </div>
           )}
-          {/* Image Attachments - Above message bubble */}
-          {imageAttachments.length > 0 && (
+          {/* Image attachments are not rendered as a card here — the
+              chat bubble / file preview already surfaces the image.
+              Plan 220 user feedback: drop image card entirely. */}
+          {/* Plan 220: Unified reference attachment cards (pasted-text,
+              terminal-ref, browser-ref, file-tree-ref). Replaces the
+              bespoke pasted-content list and BrowserReferenceCard. */}
+          {refAttachments.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">
-              {imageAttachments.map((attachment) => (
-                <div
-                  key={attachment.id}
-                  className="relative group/image cursor-pointer"
-                  onClick={() => handleOpenAttachmentPreview(attachment)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenAttachmentPreview(attachment); }}
-                >
-                  <img
-                    src={attachment.displayUrl || attachment.url}
-                    alt={attachment.name}
-                    className="max-w-[200px] max-h-[150px] rounded-lg object-cover border border-border/50 hover:border-accent/50 transition-colors"
-                    loading="lazy"
-                  />
-                  <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[10px] px-2 py-0.5 rounded-b-lg opacity-0 group-hover/image:opacity-100 transition-opacity truncate">
-                    {attachment.name}
-                  </div>
-                </div>
-              ))}
+              <AttachmentBar
+                attachments={refAttachments}
+                mode="history"
+                onPreview={handleOpenRefPreview}
+              />
             </div>
           )}
-          {/* Pasted Content Attachments - Above message bubble */}
-          {hasPastedContents && (
+          {/* Legacy pasted-content cards (from markers in old messages).
+              Kept as a fallback for allPastedContents that didn't make
+              it through decodeMessageAttachments (e.g. merged messages
+              from compacted history). */}
+          {hasPastedContents && refAttachments.length === 0 && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">
               {allPastedContents.map((content) => (
                 <div
@@ -1039,7 +1056,8 @@ const { text: mainText, pastedContents } = useMemo(() => {
               ))}
             </div>
           )}
-          {userBrowserReferences.references.length > 0 && (
+          {/* Legacy browser-ref cards (from markers in old messages). */}
+          {userBrowserReferences.references.length > 0 && refAttachments.length === 0 && (
             <div className="flex w-full flex-col gap-2 mb-2">
               {userBrowserReferences.references.map((reference, index) => (
                 <BrowserReferenceCard

@@ -34,6 +34,9 @@ interface SelectionContext {
   text: string;
   x: number;
   y: number;
+  /** Plan 220: 1-indexed line range within the preview text. */
+  lineStart?: number;
+  lineEnd?: number;
 }
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
@@ -45,10 +48,17 @@ function formatSize(bytes = 0): string {
 }
 
 export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
-  const filePath = typeof tab.params?.filePath === "string" ? tab.params.filePath : "";
-  const workingDirectory = typeof tab.params?.workingDirectory === "string"
+  const propFilePath = typeof tab.params?.filePath === "string" ? tab.params.filePath : "";
+  const propWorkingDirectory = typeof tab.params?.workingDirectory === "string"
     ? tab.params.workingDirectory
     : "";
+  // Plan 220: when an embedded FileTreePanel dispatches `duya:open-file`,
+  // we override the prop with a local override so the preview can
+  // switch files without re-routing through the PanelProvider.
+  const [filePathOverride, setFilePathOverride] = useState<string | null>(null);
+  const [workingDirOverride, setWorkingDirOverride] = useState<string | null>(null);
+  const filePath = filePathOverride ?? propFilePath;
+  const workingDirectory = workingDirOverride ?? propWorkingDirectory;
   const canvasRef = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -72,10 +82,45 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     void loadPreview();
   }, [loadPreview]);
 
-  const addFileToInput = useCallback(() => {
-    if (!filePath) return;
-    window.dispatchEvent(new CustomEvent("file-tree-add-to-input", { detail: { path: filePath } }));
+  // Plan 220: listen for `duya:open-file` from an embedded
+  // FileTreePanel (which is rendered outside the PanelProvider
+  // tree) so that double-clicking a different file in the tree
+  // switches the preview's current file instead of trying to open
+  // a new tab.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ filePath: string; workingDirectory?: string }>).detail;
+      if (detail?.filePath && detail.filePath !== filePath) {
+        setFilePathOverride(detail.filePath);
+        if (detail.workingDirectory) {
+          setWorkingDirOverride(detail.workingDirectory);
+        }
+      }
+    };
+    window.addEventListener('duya:open-file', handler as EventListener);
+    return () => window.removeEventListener('duya:open-file', handler as EventListener);
   }, [filePath]);
+
+  const addFileToInput = useCallback(
+    (selectionContext?: Pick<SelectionContext, "lineStart" | "lineEnd" | "text">) => {
+      if (!filePath) return;
+      // Plan 220: when the user has a selection in the preview, attach
+      // the file with the selection's line range so the file-tree-ref
+      // card shows e.g. "main.py:L2-L10". Without a selection this
+      // falls back to a plain file reference.
+      const detail: {
+        path: string;
+        lineStart?: number;
+        lineEnd?: number;
+        selectedText?: string;
+      } = { path: filePath };
+      if (selectionContext?.lineStart != null) detail.lineStart = selectionContext.lineStart;
+      if (selectionContext?.lineEnd != null) detail.lineEnd = selectionContext.lineEnd;
+      if (selectionContext?.text) detail.selectedText = selectionContext.text;
+      window.dispatchEvent(new CustomEvent("file-tree-add-to-input", { detail }));
+    },
+    [filePath],
+  );
 
   const captureSelection = useCallback(() => {
     const nativeSelection = window.getSelection();
@@ -91,24 +136,77 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       return;
     }
     const canvasRect = canvas.getBoundingClientRect();
+
+    // Plan 220: compute 1-indexed line range from the selection.
+    // We do this by walking up from the anchor/focus to the
+    // <pre><code> container and computing the character offset of
+    // each endpoint against the raw preview content. The preview
+    // is rendered as a single text node, so the offset relative to
+    // that text node is the offset into `preview.content`.
+    let lineStart: number | undefined;
+    let lineEnd: number | undefined;
+    if (preview?.content) {
+      const offsetOfNode = (node: Node, offset: number): number => {
+        // Find the <code> ancestor that holds the raw text.
+        const codeEl =
+          node.nodeType === Node.ELEMENT_NODE
+            ? (node as Element).closest('code, pre')
+            : node.parentElement?.closest('code, pre');
+        if (!codeEl) return -1;
+        // Compute character offset from start of codeEl.
+        const walker = document.createTreeWalker(codeEl, NodeFilter.SHOW_TEXT);
+        let total = 0;
+        let current: Node | null = walker.nextNode();
+        while (current) {
+          if (current === node) return total + offset;
+          total += current.textContent?.length ?? 0;
+          current = walker.nextNode();
+        }
+        return total;
+      };
+      const startOff = offsetOfNode(
+        nativeSelection?.anchorNode as Node,
+        nativeSelection?.anchorOffset ?? 0,
+      );
+      const endOff = offsetOfNode(
+        nativeSelection?.focusNode as Node,
+        nativeSelection?.focusOffset ?? 0,
+      );
+      if (startOff >= 0 && endOff >= 0) {
+        const [a, b] = startOff <= endOff ? [startOff, endOff] : [endOff, startOff];
+        const before = preview.content.slice(0, a);
+        const inside = preview.content.slice(a, b);
+        lineStart = before.split('\n').length;
+        lineEnd = before.split('\n').length + Math.max(0, inside.split('\n').length - 1);
+        if (lineEnd < lineStart) lineEnd = lineStart;
+      }
+    }
+
     setSelection({
       text: text.slice(0, 8_000),
       x: canvas.scrollLeft + Math.min(canvasRect.width - 138, Math.max(12, rect.left - canvasRect.left + rect.width / 2 - 62)),
       y: canvas.scrollTop + Math.max(12, rect.bottom - canvasRect.top + 10),
+      lineStart,
+      lineEnd,
     });
-  }, []);
+  }, [preview?.content]);
 
   const askDuya = useCallback(() => {
     if (!selection || !filePath) return;
-    addFileToInput();
-    window.dispatchEvent(new CustomEvent("browser-add-to-input", {
+    // Plan 220: askDuya from a file preview attaches the FILE
+    // (file-tree-ref card visible to the user, displaying
+    // `name:L{lineStart}-L{lineEnd}`) and injects a hidden context
+    // prompt that the LLM will see but the user does NOT see in the
+    // input box. The user keeps a clean inputValue to type their
+    // actual question. The hidden prompt is cleared on the next send.
+    addFileToInput(selection);
+    window.dispatchEvent(new CustomEvent("duya:set-hidden-prompt", {
       detail: {
-        text: [
+        value: [
           `请基于文件中的这段选中内容回答或修改：`,
           `文件：${filePath}`,
           "选中内容：",
           selection.text,
-          "\n我的要求：",
         ].join("\n"),
       },
     }));
@@ -144,7 +242,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           {preview?.size !== undefined && <small>{formatSize(preview.size)}</small>}
         </div>
         <div className="file-preview-actions">
-          <button type="button" onClick={addFileToInput} title="添加到输入框" aria-label="添加到输入框">
+          <button type="button" onClick={() => addFileToInput()} title="添加到输入框" aria-label="添加到输入框">
             <Plus size={15} />
           </button>
           <button type="button" onClick={() => void loadPreview()} title="重新加载" aria-label="重新加载">

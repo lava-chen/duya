@@ -13,6 +13,8 @@ export interface PopoverItem {
   installedSource?: 'agents' | 'claude';
   source?: 'global' | 'project' | 'plugin' | 'installed' | 'sdk';
   group?: 'settings' | 'skills';
+  /** Absolute path to the skill directory (SKILL.md parent). Only set for agent_skill items. */
+  skillRoot?: string;
 }
 
 export type PopoverMode = 'skill' | 'file' | 'cli' | null;

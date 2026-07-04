@@ -35,10 +35,23 @@ export interface PanelContextValue {
 
 export const PanelContext = createContext<PanelContextValue | null>(null);
 
-const MIN_PANEL_WIDTH = 220;
+const MIN_PANEL_WIDTH = 300;
+// Hard ceiling keeps the panel from eating the main column on extra-wide
+// windows. The real cap is the workspace ratio (see `MAX_PANEL_RATIO`).
 const MAX_PANEL_WIDTH = 1120;
 const DEFAULT_PANEL_WIDTH = 340;
 const MIN_CHAT_WIDTH = 680;
+// The panel must not exceed this share of the workspace. Keeps the
+// chat column readable on both 1280px and 4K windows.
+const MAX_PANEL_RATIO = 0.6;
+// Space the side panel cannot claim: left sidebar (~260) + minimum main
+// column (680) + a few pixels of chrome. Used to grow the Electron window
+// so the panel can sit beside the chat instead of overlapping it.
+const MIN_MAIN_COLUMNS = 944;
+
+// Re-export the layout constants for siblings (e.g. PanelZone) that need
+// the same caps when computing drag-resize bounds.
+export { MIN_PANEL_WIDTH, MAX_PANEL_WIDTH, MAX_PANEL_RATIO, MIN_CHAT_WIDTH, MIN_MAIN_COLUMNS };
 
 const PANEL_STORAGE_PREFIX = "duya:panel:v2:";
 const HOME_PANEL_KEY = "__home__";
@@ -145,14 +158,34 @@ function clampPanelWidth(width: number): number {
   return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
 }
 
-function preferredPanelWidth(width: number, minWidth: number): number {
-  const clamped = clampPanelWidth(width);
-  if (typeof document === "undefined") return clamped;
-
+function getWorkspaceWidth(): number {
+  if (typeof document === "undefined") return window.innerWidth ?? 0;
   const workspace = document.querySelector(".app-workspace-row");
-  const workspaceWidth = workspace?.getBoundingClientRect().width ?? window.innerWidth;
+  return workspace?.getBoundingClientRect().width ?? window.innerWidth;
+}
+
+function preferredPanelWidth(width: number | undefined, minWidth: number): number {
+  // Undefined preferred width falls back to the page's minimum, so we never
+  // propagate NaN into setPanelWidth (CSS would silently drop `NaNpx`).
+  const fallback = clampPanelWidth(minWidth);
+  const desired = clampPanelWidth(typeof width === "number" && Number.isFinite(width) ? width : minWidth);
+  const workspaceWidth = getWorkspaceWidth();
+  const maxByRatio = workspaceWidth * MAX_PANEL_RATIO;
   const maxWithChat = Math.max(minWidth, workspaceWidth - MIN_CHAT_WIDTH);
-  return Math.max(minWidth, Math.min(clamped, maxWithChat));
+  // The tightest of: page minimum, ratio cap, chat-minimum cap.
+  const upperBound = Math.min(maxByRatio, maxWithChat);
+  return Math.max(fallback, Math.min(desired, upperBound));
+}
+
+// Ask the Electron main process to widen the window so the panel fits
+// beside the chat column. No-op outside Electron (Vite dev, browser).
+// Only grows — never shrinks — so manual resizing is never overridden.
+function growWindowForPanel(panelWidth: number): void {
+  if (typeof window === "undefined") return;
+  const api = (window as unknown as { electronAPI?: { app?: { ensureWindowWidth?: (w: number) => Promise<unknown> } } }).electronAPI;
+  if (!api?.app?.ensureWindowWidth) return;
+  const target = panelWidth + MIN_MAIN_COLUMNS;
+  void api.app.ensureWindowWidth(target).catch(() => {});
 }
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
@@ -219,10 +252,12 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
   const applyPageLayout = useCallback((pageId: PageId) => {
     const descriptor = getPageDescriptor(pageId);
-    setPanelWidth(preferredPanelWidth(descriptor.preferredWidth, descriptor.minWidth));
+    const nextWidth = preferredPanelWidth(descriptor.preferredWidth, descriptor.minWidth);
+    setPanelWidth(nextWidth);
     setWorkspaceExpandedState(descriptor.defaultExpanded);
     setPanelOpen(true);
     setPanelView("content");
+    growWindowForPanel(nextWidth);
   }, []);
 
   const togglePanel = useCallback(() => {
@@ -304,6 +339,55 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("duya:open-file-preview-panel", handleOpenFilePreview as EventListener);
     };
   }, [openOrActivatePage]);
+
+  useEffect(() => {
+    const handleOpenSkillPreview = async (event: Event) => {
+      const detail = (event as CustomEvent<{ skillName?: string }>).detail;
+      const skillName = typeof detail?.skillName === "string" ? detail.skillName : "";
+      if (!skillName.trim()) return;
+
+      const api = (window as unknown as {
+        electronAPI?: {
+          skills?: {
+            list: () => Promise<{ success?: boolean; skills?: unknown[]; error?: string }>;
+          };
+        };
+      }).electronAPI;
+      if (!api?.skills?.list) return;
+
+      try {
+        const result = await api.skills.list();
+        if (!result.success || !Array.isArray(result.skills)) return;
+
+        const skill = result.skills.find((s): s is { name: string; skillRoot: string } => {
+          const maybe = s as Record<string, unknown> | undefined;
+          return (
+            maybe != null &&
+            typeof maybe.name === "string" &&
+            maybe.name === skillName &&
+            typeof maybe.skillRoot === "string" &&
+            maybe.skillRoot.length > 0
+          );
+        });
+        if (!skill) return;
+
+        const filePath = `${skill.skillRoot.replace(/[\\/]+$/, "")}/SKILL.md`;
+        window.dispatchEvent(new CustomEvent("duya:open-file-preview-panel", {
+          detail: {
+            filePath,
+            workingDirectory: skill.skillRoot,
+          },
+        }));
+      } catch {
+        // Ignore skill lookup failures.
+      }
+    };
+
+    window.addEventListener("duya:open-skill-preview", handleOpenSkillPreview as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-skill-preview", handleOpenSkillPreview as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     const handleOpenOfficePanel = (event: Event) => {
@@ -432,6 +516,16 @@ export function usePanel(): PanelContextValue {
     throw new Error("usePanel must be used within a PanelProvider");
   }
   return ctx;
+}
+
+/**
+ * Non-throwing variant of {@link usePanel}. Returns `null` when no
+ * `PanelProvider` is mounted above the consumer, instead of throwing.
+ * Useful for components that are rendered both inside and outside the
+ * panel subtree (e.g. integrated file tree used standalone).
+ */
+export function useOptionalPanel(): PanelContextValue | null {
+  return useContext(PanelContext);
 }
 
 function defaultTitle(pageId: PageId): string {

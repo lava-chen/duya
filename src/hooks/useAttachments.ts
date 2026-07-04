@@ -19,6 +19,7 @@ import type { FileAttachment } from '@/types/message';
 import type {
   AttachmentKind,
   AttachmentMetadata,
+  FileTreeRefMetadata,
 } from '@/types/message';
 import {
   compressImage,
@@ -206,13 +207,31 @@ export function makeBrowserRefAttachment(input: {
 
 /**
  * Create a FileTreeRefAttachment from a path in the project file tree.
+ *
+ * If `lineStart`/`lineEnd` are provided, the card's `previewText`
+ * becomes `name:L{lineStart}-L{lineEnd}` (e.g. `main.py:L2-L10`) so
+ * the user sees both the file and the selection range in the
+ * attachment card. The selected text itself is stored in metadata
+ * for the model but not surfaced in the card preview.
  */
 export function makeFileTreeRefAttachment(input: {
   id?: string;
   path: string;
+  lineStart?: number;
+  lineEnd?: number;
+  selectedText?: string;
 }): FileAttachment {
   const id = input.id ?? crypto.randomUUID();
   const name = input.path.split(/[/\\]/).pop() || input.path;
+  const { lineStart, lineEnd, selectedText } = input;
+  const rangeLabel =
+    lineStart != null && lineEnd != null
+      ? `${name}:L${lineStart}-L${lineEnd}`
+      : name;
+  const metadata: Record<string, unknown> = {};
+  if (lineStart != null) metadata.lineStart = lineStart;
+  if (lineEnd != null) metadata.lineEnd = lineEnd;
+  if (selectedText != null) metadata.selectedText = selectedText;
   return {
     id,
     kind: 'file-tree-ref',
@@ -221,7 +240,10 @@ export function makeFileTreeRefAttachment(input: {
     url: '',
     size: 0,
     path: input.path,
-    previewText: name,
+    previewText: rangeLabel,
+    metadata: Object.keys(metadata).length > 0
+      ? (metadata as FileTreeRefMetadata)
+      : undefined,
   };
 }
 
@@ -425,11 +447,29 @@ export function useAttachments(): UseAttachmentsApi {
         .map((a) => a.text ?? '');
       if (browsers.length > 0) parts.push(browsers.join('\n\n'));
 
-      // 4. File-tree paths.
+      // 4. File-tree paths. When a line range or selected text is
+      // attached, surface that context to the model so it can answer
+      // about the specific selection without re-reading the file.
       const paths = state.attachments
         .filter((a) => a.kind === 'file-tree-ref' && a.path)
-        .map((a) => a.path as string);
-      if (paths.length > 0) parts.push(paths.join('\n'));
+        .map((a) => {
+          const meta = a.metadata as
+            | { lineStart?: number; lineEnd?: number; selectedText?: string }
+            | undefined;
+          if (meta?.selectedText && meta.lineStart != null && meta.lineEnd != null) {
+            return [
+              `File: ${a.path} (lines ${meta.lineStart}-${meta.lineEnd})`,
+              '```text',
+              meta.selectedText,
+              '```',
+            ].join('\n');
+          }
+          if (meta?.selectedText) {
+            return [`File: ${a.path}`, '```text', meta.selectedText, '```'].join('\n');
+          }
+          return a.path as string;
+        });
+      if (paths.length > 0) parts.push(paths.join('\n\n'));
 
       // 5. User's typed input.
       const trimmedInput = inputText.trim();
