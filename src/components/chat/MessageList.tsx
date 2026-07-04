@@ -874,7 +874,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
       <div
         ref={innerRef}
-        className={`flex flex-col max-w-(--chat-column-width) mx-auto px-4 ${isInitialLoading ? 'invisible' : ''}`}
+        className={`flex flex-col max-w-[800px] mx-auto w-full px-4 ${isInitialLoading ? 'invisible' : ''}`}
       >
         {groupedMessages.map((group, index) => (
           <LazyMessageRow

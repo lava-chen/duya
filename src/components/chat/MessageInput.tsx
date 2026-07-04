@@ -20,7 +20,7 @@ import {
 } from '@/lib/message-input-logic';
 import { ModelSelector, type ModelOption } from './ModelSelector';
 import { PermissionModeSelector, type PermissionMode } from './PermissionModeSelector';
-import { useAttachments } from '@/hooks/useAttachments';
+import { useAttachments, makeFileTreeRefAttachment } from '@/hooks/useAttachments';
 import { AttachmentBar } from './AttachmentBar';
 import {
   dispatchAddAttachment,
@@ -152,6 +152,12 @@ export function MessageInput({
 }: MessageInputProps) {
   const { t } = useTranslation();
   const [inputValue, setInputValue] = useState('');
+  // Plan 220: hidden prompt prefix that panels inject via
+  // `duya:set-hidden-prompt`. Sent to the LLM ahead of `inputValue`
+  // but invisible to the user — keeps the input box showing only what
+  // the user actually typed, while still routing auto-generated
+  // context (e.g. file selection) to the model.
+  const [hiddenPrompt, setHiddenPrompt] = useState<string>('');
   // Clean up double-quoted model names in initial value (legacy data cleanup)
   const cleanInitialModel = (modelName || '').replace(/^"|"$/g, '');
   const [selectedModel, setSelectedModel] = useState<string>(cleanInitialModel);
@@ -261,21 +267,28 @@ export function MessageInput({
           break;
         }
         case 'file-tree-ref': {
-          // Skip if a chip for this path is already attached.
+          // Skip if a chip for this exact path + range is already
+          // attached. Plan 220: range-scoped refs (with lineStart/
+          // lineEnd) are deduplicated independently from path-only
+          // refs, so a user can attach both the file and a selection.
           const already = attachments.some(
-            (a) => a.kind === 'file-tree-ref' && a.path === detail.path,
+            (a) =>
+              a.kind === 'file-tree-ref' &&
+              a.path === detail.path &&
+              (a.metadata as { lineStart?: number; lineEnd?: number } | undefined)
+                ?.lineStart === detail.lineStart &&
+              (a.metadata as { lineStart?: number; lineEnd?: number } | undefined)
+                ?.lineEnd === detail.lineEnd,
           );
           if (already) break;
-          addAttachment({
-            id: crypto.randomUUID(),
-            kind: 'file-tree-ref',
-            name: detail.path.split(/[/\\]/).pop() || detail.path,
-            type: 'text/plain',
-            url: '',
-            size: 0,
-            path: detail.path,
-            previewText: detail.path.split(/[/\\]/).pop() || detail.path,
-          });
+          addAttachment(
+            makeFileTreeRefAttachment({
+              path: detail.path,
+              lineStart: detail.lineStart,
+              lineEnd: detail.lineEnd,
+              selectedText: detail.selectedText,
+            }),
+          );
           break;
         }
         case 'terminal-ref': {
@@ -363,9 +376,20 @@ export function MessageInput({
     // Legacy alias listeners: re-dispatch under the new event name so
     // existing panels keep working without modification.
     const legacyFileTree = (e: Event) => {
-      const detail = (e as CustomEvent<{ path: string }>).detail;
+      const detail = (e as CustomEvent<{
+        path: string;
+        lineStart?: number;
+        lineEnd?: number;
+        selectedText?: string;
+      }>).detail;
       if (detail?.path) {
-        dispatchAddAttachment({ kind: 'file-tree-ref', path: detail.path });
+        dispatchAddAttachment({
+          kind: 'file-tree-ref',
+          path: detail.path,
+          lineStart: detail.lineStart,
+          lineEnd: detail.lineEnd,
+          selectedText: detail.selectedText,
+        });
       }
     };
     const legacyTerminal = (e: Event) => {
@@ -424,20 +448,47 @@ export function MessageInput({
     window.addEventListener('terminal-add-to-input', legacyTerminal as EventListener);
     window.addEventListener('browser-add-to-input', legacyBrowser as EventListener);
 
+    // Plan 220: `duya:set-hidden-prompt` lets panels inject a context
+    // prefix that the LLM will see ahead of the user's typed input,
+    // but the user themselves does NOT see in the input box. The
+    // prompt is cleared on the next send (so the next message starts
+    // fresh) and is appended by `buildModelContent` during submit.
+    const handleSetHiddenPrompt = (e: Event) => {
+      const detail = (e as CustomEvent<{ value: string }>).detail;
+      if (typeof detail?.value === 'string') {
+        setHiddenPrompt(detail.value);
+        requestAnimationFrame(() => {
+          textareaRef.current?.focus();
+          adjustTextareaHeight();
+        });
+      }
+    };
+    window.addEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
+
     return () => {
       window.removeEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
       window.removeEventListener('file-tree-add-to-input', legacyFileTree as EventListener);
       window.removeEventListener('terminal-add-to-input', legacyTerminal as EventListener);
       window.removeEventListener('browser-add-to-input', legacyBrowser as EventListener);
+      window.removeEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachments]);
 
-  // Build content with attachments baked in. The hook's `buildModelContent`
-  // already handles all 5 kinds; we just call it.
+  // Build content with attachments + hidden prompt baked in. The
+  // `hiddenPrompt` is the auto-injected context that the LLM should
+  // see but the user does NOT (it stays out of the inputValue they
+  // edit). `buildModelContent` from the hook handles the 5 attachment
+  // kinds; we prepend the hidden prompt here.
   const buildContentWithChips = useCallback(
-    (textValue: string): string => buildModelContent(textValue),
-    [buildModelContent],
+    (textValue: string): string => {
+      const base = buildModelContent(textValue);
+      if (hiddenPrompt && hiddenPrompt.trim()) {
+        return `${hiddenPrompt}\n\n${base}`;
+      }
+      return base;
+    },
+    [buildModelContent, hiddenPrompt],
   );
 
   const buildDisplayContentWithChips = useCallback(
@@ -890,10 +941,15 @@ export function MessageInput({
       };
 
       // Build content + display content from the unified hook.
-      // Markers are gone (Plan 220 Phase 3), so the model-facing and the
-      // UI-facing content are equivalent.
+      // `modelContent` is sent to the LLM and includes attachment text
+      // (pasted-text, terminal-ref, browser-ref, file-tree-ref bodies
+      // joined ahead of the user's input).
+      // `displayContent` is the pure user-typed text — attachment text
+      // is carried by the attachment objects themselves (persisted to
+      // `message.attachments`), so the rendered message body should NOT
+      // duplicate it. Otherwise the card AND the full text both show.
       const modelContent = buildContentWithChips(trimmedValue);
-      const displayContentWithChips = buildDisplayContentWithChips(trimmedValue);
+      const displayContentForUser = trimmedValue;
 
       // Build output style config from selected style
       const outputStyleConfig = selectedStyleId
@@ -903,13 +959,12 @@ export function MessageInput({
         ? { name: outputStyleConfig.name, prompt: outputStyleConfig.prompt, keepCodingInstructions: outputStyleConfig.keepCodingInstructions }
         : null;
 
-      // Files are a subset of attachments (kind=file or kind=image). The
-      // rest (pasted-text, terminal-ref, browser-ref, file-tree-ref) is
-      // baked into `content` via `buildContentWithChips` and is NOT
-      // passed to the file upload pipeline.
-      const fileAttachments = attachments.filter(
-        (a) => a.kind === 'file' || a.kind === 'image',
-      );
+      // All attachment kinds are persisted to `message.attachments` for
+      // UI rendering (cards in history view). The worker (startStream)
+      // filters to file/image kinds internally when building LLM content
+      // blocks — pasted-text/terminal-ref/browser-ref/file-tree-ref are
+      // already baked into `modelContent` via `buildContentWithChips`.
+      const allAttachments = attachments.length > 0 ? attachments : undefined;
 
       // Check for direct slash commands
       const slashResult = resolveDirectSlash(trimmedValue);
@@ -932,11 +987,12 @@ export function MessageInput({
         const result = onExecuteCommand?.(cmd);
         if (result) {
           // Show command result as a message
-          onSend(result.content, fileAttachments.length > 0 ? fileAttachments : undefined, styleOpts, sendMode);
+          onSend(result.content, allAttachments, styleOpts, sendMode);
           setSendMode(undefined);
         }
         clearDraft();
         setInputValue('');
+        setHiddenPrompt('');
         clearAttachments();
         return;
       }
@@ -946,15 +1002,16 @@ export function MessageInput({
       if (cliBadge) setCliBadge(null);
 
       clearDraft();
-      onSend(modelContent, fileAttachments.length > 0 ? fileAttachments : undefined, styleOpts, sendMode, displayContentWithChips);
+      onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser);
       setSendMode(undefined);
       setInputValue('');
+      setHiddenPrompt('');
       clearAttachments();
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, buildDisplayContentWithChips, clearAttachments, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
   );
 
   const handleKeyDown = useCallback(

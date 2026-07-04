@@ -118,8 +118,13 @@ export const markdownComponents = {
 
       return (
         <code
-          className="px-[0.35rem] py-[0.15rem] rounded-[4px] text-[13.5px] font-normal text-[#b487e0] dark:text-[#a87ad6]"  
-          style={{ fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}
+          className="px-[0.35rem] py-[0.15rem] rounded-[4px] text-[13.5px] font-normal text-[#b487e0] dark:text-[#a87ad6]"
+          style={{
+            fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            overflowWrap: 'anywhere',
+          }}
           {...props}
         >
           {textContent}

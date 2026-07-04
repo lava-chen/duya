@@ -459,6 +459,18 @@ body {
   border: 1px solid #d4d4d3 !important;
 }
 
+/* Allow long inline code (paths, identifiers) to wrap inside the message
+ * column instead of overflowing. Block code (inside <pre>) keeps its
+ * horizontal scroll behaviour via the .code-block-wrapper rule below. */
+.message-content :not(pre) > code,
+.prose :not(pre) > code,
+.prose-sm :not(pre) > code {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  max-width: 100%;
+}
+
 /* Keep dark theme inline code background as before */
 [data-theme="dark"] .prose code,
 [data-theme="dark"] .prose-sm code,
@@ -3499,7 +3511,10 @@ a {
   padding: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 0.625rem;
+  /* Plan 220: match the input box's `rounded-3xl` (1.5rem = 24px)
+     exactly. Earlier 28px was slightly larger and read as more
+     curved than the wider input surface. */
+  border-radius: 1.5rem;
   transition: all 0.2s ease;
 }
 
@@ -3515,7 +3530,10 @@ a {
   width: 1.25rem;
   height: 1.25rem;
   border: none;
-  border-radius: 0.25rem;
+  /* Plan 220: circular close button. The wider 28px card radius
+     needs a circular X to feel visually balanced — a 4px rounded
+     button reads as a stray shape on a 28px-rounded card. */
+  border-radius: 9999px;
   background: transparent;
   color: var(--muted);
   display: flex;
@@ -3566,8 +3584,14 @@ a {
   color: var(--muted);
   padding: 0.25rem 0.5rem;
   background: var(--chip);
-  border-radius: 0.25rem;
+  border-radius: 0.5rem;
   align-self: flex-start;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.25rem;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* ========================================
@@ -3967,7 +3991,9 @@ a {
   padding: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 0.625rem;
+  /* Plan 220: match the input box's `rounded-3xl` (1.5rem = 24px)
+     exactly so the card curvature aligns with the input curvature. */
+  border-radius: 1.5rem;
   text-align: left;
 }
 
@@ -3992,8 +4018,14 @@ a {
   color: var(--muted);
   padding: 0.25rem 0.5rem;
   background: var(--chip);
-  border-radius: 0.25rem;
+  border-radius: 0.5rem;
   align-self: flex-start;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.25rem;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* ============================================
@@ -5737,13 +5769,14 @@ html.compact .panel-zone {
 
 /* Composer-attached panels should read as controls growing out of the input,
    not as a second full-width composer. A percentage keeps the relationship
-   intact when the composer narrows in split and expanded workspace layouts. */
+   intact when the composer narrows in split and expanded workspace layouts.
+   The composer itself is excluded so its width tracks the message column
+   (max-w-[800px] mx-auto in the component) instead of staying at 76%. */
 :where(
   .sub-agent-panel-wrapper,
   .permission-prompt-wrapper,
   .mailbox-panel-wrapper,
-  .streaming-input-bar-wrapper,
-  .chat-composer-inner
+  .streaming-input-bar-wrapper
 ) {
   width: 76%;
   margin-inline: auto;
@@ -9298,6 +9331,56 @@ html[data-message-font-size="large"] .prose h3 {
   color: #ef4444;
 }
 
+.task-card-recap {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-left: 2px solid var(--accent);
+}
+
+.task-card-recap-icon {
+  margin-top: 2px;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.task-card-recap-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.task-card-recap-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.task-card-recap-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
 @container (max-width: 1464px) {
   .chat-view.task-card-open .message-list-scroll,
   .chat-view.task-card-open .chat-main-column > .p-4 {
@@ -11212,7 +11295,7 @@ html[data-message-font-size="large"] .prose h3 {
   }
 }
 
-@container (max-width: 1100px) {
+@container (max-width: 980px) {
   .panel-zone-open:not(.panel-zone-expanded) {
     position: absolute;
     z-index: 40;

@@ -5,11 +5,17 @@
 // <AttachmentBar> above the editor and don't live inside the text
 // stream. The DOM-mutation machinery that used to reconcile chip tokens
 // is gone.
+//
+// Skill slash commands (`/docx`, `/commit`) are rendered as a blue bold
+// inline chip with a leading cube icon. Clicking the chip opens the
+// skill's SKILL.md in the side-panel preview. The chip is only rendered
+// when the input value is exactly `/<skill-name>` (with optional trailing
+// whitespace) so it doesn't interfere with typing arguments.
 
 'use client';
 
 import React, { useRef, useEffect, forwardRef, useCallback } from 'react';
-import { parseSlashCommand } from '@/lib/message-input-logic';
+import { parseSlashCommand, parseSkillToken } from '@/lib/message-input-logic';
 
 interface RichTextInputProps {
   value: string;
@@ -18,6 +24,45 @@ interface RichTextInputProps {
   onPaste: (e: React.ClipboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
   disabled?: boolean;
+}
+
+function dispatchOpenSkillPreview(skillName: string): void {
+  window.dispatchEvent(new CustomEvent('duya:open-skill-preview', {
+    detail: { skillName },
+  }));
+}
+
+function createSkillChip(skillName: string): HTMLSpanElement {
+  const chip = document.createElement('span');
+  chip.className = 'inline-flex items-center gap-1';
+  chip.style.color = '#3b82f6';
+  chip.style.fontWeight = '700';
+  chip.style.cursor = 'pointer';
+  chip.style.userSelect = 'none';
+  chip.dataset.skillChip = skillName;
+  chip.title = `Open ${skillName} skill source`;
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 256 256');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('fill', 'currentColor');
+  svg.style.flexShrink = '0';
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M223.7 73.4l-88-48a8.3 8.3 0 0 0-7.4 0l-88 48A8.1 8.1 0 0 0 36 80.2v95.6a8.1 8.1 0 0 0 4.3 7.2l88 48a8.3 8.3 0 0 0 7.4 0l88-48a8.1 8.1 0 0 0 4.3-7.2V80.2a8.1 8.1 0 0 0-4.3-6.8zM128 121.8 47.5 78 128 34.1 208.5 78z');
+  svg.appendChild(path);
+  chip.appendChild(svg);
+
+  const label = document.createElement('span');
+  label.textContent = skillName;
+  chip.appendChild(label);
+
+  chip.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dispatchOpenSkillPreview(skillName);
+  });
+  return chip;
 }
 
 export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
@@ -42,12 +87,21 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       }
     }, [ref]);
 
-    // Build content with optional slash-command highlight span.
+    // Build content with optional slash-command highlight span or skill chip.
     const buildContent = useCallback((el: HTMLDivElement, text: string) => {
-      const parsed = parseSlashCommand(text);
+      const skillToken = parseSkillToken(text);
+      const slashParsed = parseSlashCommand(text);
       el.innerHTML = '';
-      if (parsed) {
-        const { slashCommand, remainingText } = parsed;
+
+      if (skillToken) {
+        const chip = createSkillChip(skillToken.skillName);
+        el.appendChild(chip);
+        const trailing = text.slice(text.trim().length);
+        if (trailing) {
+          el.appendChild(document.createTextNode(trailing));
+        }
+      } else if (slashParsed) {
+        const { slashCommand, remainingText } = slashParsed;
         const slashSpan = document.createElement('span');
         slashSpan.dataset.slashCommand = 'true';
         slashSpan.textContent = slashCommand;
@@ -123,6 +177,7 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
         onCompositionEnd={handleCompositionEnd}
         style={{
           wordBreak: 'break-word',
+          overflowWrap: 'anywhere',
           whiteSpace: 'pre-wrap',
         }}
       />

@@ -308,6 +308,7 @@ export function registerSkillsHandlers(): void {
                   platforms,
                   content: markdownContent,
                   frontmatter,
+                  skillRoot: skillPath,
                   security: { verdict, findings, scanned: true },
                 });
                 loadedNames.add(skillEntry);
@@ -351,6 +352,7 @@ export function registerSkillsHandlers(): void {
                 platforms,
                 content: markdownContent,
                 frontmatter,
+                skillRoot: entryPath,
                 security: { verdict: verdict2, findings: findings2, scanned: true },
               });
               loadedNames.add(entry);

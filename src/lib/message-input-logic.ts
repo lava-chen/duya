@@ -304,6 +304,23 @@ export function parseSlashCommand(input: string): { slashCommand: string; remain
   };
 }
 
+const SKILL_TOKEN_RE = /^\/(\S+)$/;
+
+/**
+ * Parse a single slash-command token at the start of the input.
+ * Returns the skill name if the input is exactly `/<name>` (with optional
+ * trailing whitespace), otherwise null. Used by RichTextInput to render
+ * the skill chip.
+ */
+export function parseSkillToken(input: string): { skillName: string } | null {
+  const trimmed = input.trim();
+  const match = trimmed.match(SKILL_TOKEN_RE);
+  if (!match) return null;
+  const skillName = match[1];
+  if (!skillName) return null;
+  return { skillName };
+}
+
 /**
  * Resolve badge action to determine what to do when a badge is submitted.
  */

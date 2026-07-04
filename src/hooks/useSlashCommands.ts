@@ -181,6 +181,7 @@ export function useSlashCommands(opts: {
             userInvocable?: boolean;
             isHidden?: boolean;
             enabled?: boolean;
+            skillRoot?: string;
           }>)
             .filter((s) => s.userInvocable !== false && !s.isHidden && s.enabled !== false)
             .map((skill) => ({
@@ -194,6 +195,7 @@ export function useSlashCommands(opts: {
               group: 'skills' as const,
               installedSource: skill.source === 'project' ? 'agents' : 'claude',
               source: (skill.source as 'global' | 'project' | 'plugin' | 'installed' | 'sdk') || undefined,
+              skillRoot: typeof skill.skillRoot === 'string' ? skill.skillRoot : undefined,
             }));
           return [...builtIns, ...skillItems];
         }
