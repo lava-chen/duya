@@ -28,9 +28,34 @@ export function isHtmlFile(filePath: string): boolean {
 }
 
 const OFFICE_EXTENSIONS = new Set(['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']);
+// Files that should open in DUYA's read-only side-panel preview workspace.
+// Aligns with the Electron `TEXT_EXTENSIONS` allow-list in
+// `electron/ipc/files-handlers.ts` so any source file the backend can render
+// as text also routes through the preview panel when clicked from a chat
+// tool row, a markdown autolink, or the EditSummaryCard "Review" list.
+//
+// HTML/HTM is intentionally absent — those route to the side-panel browser
+// (and that branch fires first in `openLocalArtifactTarget`). XML is also
+// absent because the preview backend treats XML as a separate kind, not
+// text, and rendering it through the plain-text preview produces noise.
 const SIDEBAR_PREVIEW_EXTENSIONS = new Set([
-  '.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.csv',
+  '.md', '.markdown', '.txt', '.json', '.jsonc', '.yaml', '.yml', '.csv',
   '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+  // Web / scripting
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.css', '.scss', '.sass', '.less',
+  // Systems / compiled
+  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.kts', '.swift',
+  '.cs', '.c', '.cc', '.cpp', '.cxx', '.h', '.hpp',
+  // Shell / SQL
+  '.sh', '.bash', '.zsh', '.fish', '.sql',
+  // Build / config (filenames like Dockerfile / .gitignore are matched by
+  // the backend by name — see electron TEXT_EXTENSIONS — but the frontend
+  // extension lookup can't cheaply express that without a name→ext map.
+  // Covering the most common extension-bearing paths here.)
+  '.toml', '.ini', '.cfg', '.conf', '.env',
+  '.vue', '.svelte', '.astro', '.graphql', '.gql', '.proto',
+  '.log', '.lock',
 ]);
 
 /** Office docs that should open in DUYA's side-panel Office viewer. */

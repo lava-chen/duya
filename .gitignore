@@ -62,8 +62,10 @@ coverage/
 *.spec.ts
 *.spec.tsx
 !src/lib/message-input-logic.spec.ts
+!src/lib/chat-file-links.test.ts
 !src/components/chat/RichTextInput.test.tsx
 !src/components/chat/SubAgentPanel.test.tsx
+!src/components/chat/__tests__/FileEditToolRow.test.tsx
 # Untrack unit-test source for these packages.
 !packages/agent/tests/**/*.test.ts
 !packages/agent/tests/**/*.test.tsx
