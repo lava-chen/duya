@@ -47,8 +47,8 @@ def main():
     )
     parser.add_argument(
         "--author",
-        default="Claude",
-        help="Author name for redlining validation (default: Claude)",
+        default="Duya",
+        help="Author name for redlining validation (default: Duya)",
     )
     args = parser.parse_args()
 
