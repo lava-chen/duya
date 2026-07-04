@@ -21,6 +21,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
+import type { AgentPermissionMode } from "@/lib/permission-profile";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
 
@@ -29,6 +30,13 @@ type BootSplashPhase = StartupLandingPhase;
 
 const ACTIVE_LIKE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 const isActiveLike = (phase: StreamPhase) => ACTIVE_LIKE_PHASES.includes(phase);
+
+function permissionModeToAgentOverride(mode: PermissionMode | undefined): AgentPermissionMode | undefined {
+  if (mode === 'bypass') return 'bypassPermissions';
+  if (mode === 'auto') return 'auto';
+  if (mode === 'ask') return 'default';
+  return undefined;
+}
 
 function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
   const messages: Message[] = [];
@@ -350,11 +358,11 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   }, [setActiveThread]);
 
   const handleSendMessage = useCallback(
-    // 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生默认 mode.
-    // uiPermissionMode 参数保留签名兼容 (ChatView 还在传), 但不使用.
+    // The session row remains the durable default, but this current turn also
+    // carries the UI mode as a trusted override to avoid DB write/read races.
     (
       content: string,
-      _uiPermissionMode?: PermissionMode,
+      uiPermissionMode?: PermissionMode,
       model?: string,
       files?: FileAttachment[],
       agentProfileId?: string | null,
@@ -378,12 +386,15 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       // and the user sees the active provider's rate-limit error.
       const activeThread = useConversationStore.getState().threads.find((t) => t.id === activeThreadId);
       const sessionProviderId = activeThread?.providerId;
+      const permissionModeOverride = permissionModeToAgentOverride(uiPermissionMode);
 
       if (!canSend(activeThreadId)) {
         enqueueMessage(activeThreadId, {
           sessionId: activeThreadId,
           content: plainContent,
-          // 不再携带 permissionMode; worker 从 session row 派生.
+          displayContent,
+          permissionModeOverride,
+          // Keep the durable profile in the session row; this is only a per-turn override.
           model,
           files,
           agentProfileId,
@@ -405,10 +416,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         id: userMsgId,
         role: "user",
         content,
-        // Plan 220 Phase 5: with markers gone, `displayContent` is
-        // equivalent to `content`. Persist the same value in both
-        // columns for back-compat reads of historical rows.
-        displayContent: content,
+        displayContent,
         timestamp: now,
         attachments: files,
       };
@@ -426,9 +434,10 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       void startStream({
         sessionId: activeThreadId,
         content: plainContent,
-        displayContent: content,
+        displayContent,
         language: settings.agentLanguage,
-        // 不再携带 permissionMode; worker 从 session row 派生.
+        permissionModeOverride,
+        // Keep the durable profile in the session row; this is only a per-turn override.
         model,
         files,
         agentProfileId,
@@ -458,6 +467,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           sessionId: activeThreadId,
           content: plainRetryContent,
           language: settings.agentLanguage,
+          permissionModeOverride,
           model,
           agentProfileId,
           titleGenerationModel: settings.titleGenerationModel,
