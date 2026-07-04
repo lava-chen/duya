@@ -9,6 +9,7 @@ import { DEFAULT_MAX_OUTPUT_TOKENS } from '../types.js';
 import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseContent, ToolResultContent, TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
+import { extractToolInputPreview, hasToolInputPreview } from './tool-input-preview.js';
 
 /**
  * Parse message content that may be stored as a stringified JSON array in the DB.
@@ -454,7 +455,7 @@ export class OpenAIClient implements LLMClient {
     const stream = await this.client.chat.completions.create(requestParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
 
     // Track multiple tool calls by index (OpenAI streams tool_calls with index)
-    const toolCallsMap = new Map<number, { id: string; name: string; arguments: string; started: boolean }>();
+    const toolCallsMap = new Map<number, { id: string; name: string; arguments: string; started: boolean; previewSignature: string }>();
     // For parsing MiniMax <think> tags embedded in text
     let thinkBuffer = '';
     let isInThinkTag = false;
@@ -574,6 +575,7 @@ export class OpenAIClient implements LLMClient {
                 name: toolCall.function.name,
                 arguments: '',
                 started: false,
+                previewSignature: '',
               };
               toolCallsMap.set(idx, entry);
             } else {
@@ -592,6 +594,24 @@ export class OpenAIClient implements LLMClient {
                 },
               };
             }
+
+            if (entry.arguments) {
+              const previewInput = extractToolInputPreview(entry.arguments);
+              if (hasToolInputPreview(previewInput)) {
+                const previewSignature = JSON.stringify(previewInput);
+                if (previewSignature !== entry.previewSignature) {
+                  entry.previewSignature = previewSignature;
+                  yield {
+                    type: 'tool_use_started',
+                    data: {
+                      id: entry.id,
+                      name: entry.name,
+                      input: previewInput,
+                    },
+                  };
+                }
+              }
+            }
           }
 
           // Accumulate arguments
@@ -602,11 +622,29 @@ export class OpenAIClient implements LLMClient {
                 name: '',
                 arguments: '',
                 started: false,
+                previewSignature: '',
               };
               toolCallsMap.set(idx, entry);
             }
             if (entry) {
               entry.arguments += toolCall.function.arguments;
+              if (entry.started && entry.name) {
+                const previewInput = extractToolInputPreview(entry.arguments);
+                if (hasToolInputPreview(previewInput)) {
+                  const previewSignature = JSON.stringify(previewInput);
+                  if (previewSignature !== entry.previewSignature) {
+                    entry.previewSignature = previewSignature;
+                    yield {
+                      type: 'tool_use_started',
+                      data: {
+                        id: entry.id,
+                        name: entry.name,
+                        input: previewInput,
+                      },
+                    };
+                  }
+                }
+              }
             }
           }
         }

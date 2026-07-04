@@ -12,6 +12,7 @@ import { checkCacheEligibility, applyCacheControl, type CacheRetention } from '.
 import { normalizeUsage, type NormalizedUsage } from './usage.js';
 import { CacheMonitor } from '../observability/cache-monitor.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
+import { extractToolInputPreview, hasToolInputPreview } from './tool-input-preview.js';
 
 
 // =============================================================================
@@ -824,6 +825,7 @@ export class AnthropicClient implements LLMClient {
 
     let currentToolUse: { id: string; name: string; input: Record<string, unknown> } | null = null;
     let toolResultContent = '';
+    let lastToolPreviewSignature = '';
     let textContentSinceLastTool = '';
     let thinkingContent = '';  // Accumulates thinking content from MiniMax blocks
     let toolStartTimes = new Map<string, number>();
@@ -849,6 +851,8 @@ export class AnthropicClient implements LLMClient {
             name: event.content_block.name,
             input: {},
           };
+          toolResultContent = '';
+          lastToolPreviewSignature = '';
           toolStartTimes.set(event.content_block.id, Date.now());
           yield {
             type: 'tool_use_started',
@@ -945,6 +949,20 @@ export class AnthropicClient implements LLMClient {
             ? event.delta.partial_json
             : JSON.stringify(event.delta.partial_json);
           toolResultContent += partialJson;
+          const previewInput = extractToolInputPreview(toolResultContent);
+          if (hasToolInputPreview(previewInput)) {
+            const previewSignature = JSON.stringify(previewInput);
+            if (previewSignature !== lastToolPreviewSignature) {
+              lastToolPreviewSignature = previewSignature;
+              yield {
+                type: 'tool_use_started',
+                data: {
+                  ...currentToolUse,
+                  input: previewInput,
+                },
+              };
+            }
+          }
         }
       } else if (event.type === 'content_block_stop') {
         if (currentToolUse) {
@@ -982,6 +1000,7 @@ export class AnthropicClient implements LLMClient {
           toolStartTimes.delete(currentToolUse.id);
           currentToolUse = null;
           toolResultContent = '';
+          lastToolPreviewSignature = '';
         }
       } else if (event.type === 'message_delta') {
         // Extract usage information from message_delta event
