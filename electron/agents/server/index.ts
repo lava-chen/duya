@@ -3,8 +3,9 @@ import { SessionManager } from './session-store';
 import { WorkerManager } from './worker-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { ConductorService } from './conductor-service';
-import { logger, httpLogger, sessionLogger } from './logger';
+import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps } from './router';
+import { InteragentRouter } from './interagent-router';
 
 const PORT = 0;
 const HOST = '127.0.0.1';
@@ -79,6 +80,40 @@ function dbRequest(action: string, payload: Record<string, unknown>): Promise<un
 }
 
 const conductorService = new ConductorService(workerManager, dbRequest);
+
+const interagentRouter = new InteragentRouter({
+  workerManager,
+  sessionManager,
+  dbRequest,
+});
+
+workerManager.setMessageHandler((sessionId, msg) => {
+  if (msg.type === 'interagent:invoke') {
+    // Fire and forget — errors are handled internally and sent as chat:error
+    void interagentRouter.handleInvoke({
+      id: msg.id as string,
+      callerSessionId: msg.callerSessionId as string,
+      callerAgentName: msg.callerAgentName as string,
+      targetSessionId: msg.targetSessionId as string,
+      message: msg.message as string,
+      mode: msg.mode as 'minimal' | 'full',
+      timeout: msg.timeout as number,
+    }).catch((err) => {
+      workerLogger.error('Interagent invoke failed', err instanceof Error ? err : new Error(String(err)), { invokeId: msg.id as string });
+      // Send synthetic error to caller
+      workerManager.sendCommand(msg.callerSessionId as string, {
+        type: 'interagent:event',
+        id: msg.id as string,
+        event: {
+          type: 'chat:error',
+          sessionId: msg.targetSessionId as string,
+          message: `interagent invoke failed: ${err instanceof Error ? err.message : String(err)}`,
+          code: 'invoke_failed',
+        },
+      });
+    });
+  }
+});
 
 let isShuttingDown = false;
 const activeConnections = new Set<http.ServerResponse>();
