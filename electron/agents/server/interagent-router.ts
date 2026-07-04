@@ -140,10 +140,153 @@ export class InteragentRouter {
   }
 
   private async spawnAndDriveTarget(params: InvokeParams): Promise<void> {
-    // Implementation in Task 3.3 — lazy spawn, append message, chat:start,
-    // subscribe to stdout events, forward to caller.
-    // For now this is a stub that will be filled in.
-    void params;
+    const { id, callerSessionId, callerAgentName, targetSessionId, message, mode } = params;
+
+    // 1. Load target session row + provider config from DB (via main process)
+    const sessionRow = await this.deps.dbRequest('session:get', { sessionId: targetSessionId }) as {
+      id: string; model: string; systemPrompt: string; workingDirectory: string;
+      providerId: string; agentProfileId: string | null; permissionProfile: string;
+    } | null;
+    if (!sessionRow) {
+      this.sendEventToCaller(callerSessionId, id, {
+        type: 'chat:error', sessionId: targetSessionId,
+        message: 'target session not found in DB', code: 'target_not_found',
+      });
+      this.cleanup(id);
+      return;
+    }
+
+    const providerConfig = await this.deps.dbRequest('provider:get', { providerId: sessionRow.providerId }) as Record<string, unknown>;
+    if (!providerConfig) {
+      this.sendEventToCaller(callerSessionId, id, {
+        type: 'chat:error', sessionId: targetSessionId,
+        message: 'provider config not found', code: 'provider_missing',
+      });
+      this.cleanup(id);
+      return;
+    }
+
+    // 2. Spawn target worker
+    this.deps.workerManager.spawnWorker(targetSessionId);
+
+    // 3. Send init command
+    const initCommand: Record<string, unknown> = {
+      type: 'init',
+      sessionId: targetSessionId,
+      providerConfig,
+      workingDirectory: sessionRow.workingDirectory || undefined,
+      systemPrompt: sessionRow.systemPrompt || undefined,
+    };
+    this.deps.workerManager.sendCommand(targetSessionId, initCommand);
+
+    // 4. Wait for ready (reuse the stdout-scanning pattern from router.ts waitForReady)
+    await this.waitForReady(targetSessionId);
+
+    // 5. Append caller's message to target session
+    await this.deps.dbRequest('message:append', {
+      sessionId: targetSessionId,
+      message: {
+        role: 'user',
+        content: message,
+        metadata: {
+          caller_session_id: callerSessionId,
+          caller_agent_name: callerAgentName,
+          interagent: true,
+        },
+      },
+    });
+
+    // 6. Send chat:start with mode-based toolset filtering
+    const chatStartCommand: Record<string, unknown> = {
+      type: 'chat:start',
+      sessionId: targetSessionId,
+      id: `interagent-${id}`,
+      prompt: message,
+      options: {
+        permissionModeOverride: mode === 'minimal' ? 'bypassPermissions' : undefined,
+        ...(mode === 'minimal' ? { allowedTools: MINIMAL_ALLOWED_TOOLS } : {}),
+      },
+    };
+    this.deps.workerManager.sendCommand(targetSessionId, chatStartCommand);
+
+    // 7. Subscribe to target worker stdout events, forward to caller
+    this.subscribeToTargetStdout(targetSessionId, id, callerSessionId);
+  }
+
+  private waitForReady(targetSessionId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = this.deps.workerManager.getWorker(targetSessionId);
+      if (!child || !child.stdout) {
+        reject(new Error('worker stdout not available'));
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('interagent target ready timeout'));
+      }, 30000);
+
+      let buffer = '';
+      const handler = (data: Buffer): void => {
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('{')) continue;
+          try {
+            const msg = JSON.parse(trimmed);
+            if (msg.type === 'ready') {
+              clearTimeout(timeout);
+              cleanup();
+              resolve();
+              return;
+            }
+          } catch {
+            // not JSON, skip
+          }
+        }
+      };
+
+      const cleanup = (): void => {
+        child.stdout?.removeListener('data', handler);
+      };
+
+      child.stdout.on('data', handler);
+    });
+  }
+
+  private subscribeToTargetStdout(targetSessionId: string, invokeId: string, callerSessionId: string): void {
+    const child = this.deps.workerManager.getWorker(targetSessionId);
+    if (!child || !child.stdout) {
+      workerLogger.warn('Cannot subscribe to target stdout', { targetSessionId, invokeId });
+      return;
+    }
+
+    const handler = (data: Buffer): void => {
+      const text = data.toString();
+      const lines = text.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('{')) continue;
+        try {
+          const event = JSON.parse(trimmed) as WorkerEvent;
+          // Only forward chat:* events (skip ready, pong, db:request, etc.)
+          if (typeof event.type === 'string' && event.type.startsWith('chat:')) {
+            this.sendEventToCaller(callerSessionId, invokeId, event);
+          }
+          // On terminal events, cleanup
+          if (event.type === 'chat:done' || event.type === 'chat:error') {
+            child.stdout?.removeListener('data', handler);
+            this.cleanup(invokeId);
+          }
+        } catch {
+          // not JSON, skip
+        }
+      }
+    };
+
+    child.stdout.on('data', handler);
   }
 
   private handleTimeout(id: string): void {
