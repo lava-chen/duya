@@ -732,6 +732,9 @@ export function ChatView({
                     permissionUpdatePending={permissionUpdatePending}
                     placeholder={t('chat.typeMessage')}
                     messages={messages}
+                    // Welcome page: input sits in the middle, popup must open
+                    // below so it doesn't cover the heading / selector above.
+                    popoverPlacement="bottom"
                   />
 
                   {/* Bottom toolbar - outside input box */}

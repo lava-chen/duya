@@ -4,26 +4,42 @@ import { useCallback, useMemo } from 'react';
 import type { PopoverItem, PopoverMode } from '@/types/slash-command';
 import { detectPopoverTrigger, resolveItemSelection } from '@/lib/message-input-logic';
 import { getCommandsForPlatform } from '@/lib/commands';
+import { useTranslation } from '@/hooks/useTranslation';
 import {
   Terminal,
   Question,
-  Eraser,
-  ChartLine,
   Brain,
   GlobeSimple,
   ClockCounterClockwise,
+  Code,
+  Sparkle,
+  Wrench,
+  GitBranch,
+  ListChecks,
+  Database,
+  DownloadSimple,
+  Paperclip,
+  Feather,
+  Plug,
 } from '@phosphor-icons/react';
+import { TelescopeIcon } from '@/components/icons';
 
-// Command icons mapping
+// Commands removed from the popover (handled elsewhere or deleted).
+const HIDDEN_COMMANDS = new Set(['/help', '/status', '/cost', '/new', '/clear', '/model']);
+
+// Per-command icons for built-in slash commands that remain in the popover.
 const COMMAND_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
-  '/help': Question,
-  '/clear': Eraser,
-  '/cost': ChartLine,
   '/compact': Brain,
+  '/memory': Database,
+  '/export': DownloadSimple,
   '/recap': ClockCounterClockwise,
+  '/review': Code,
+  '/simplify': Sparkle,
+  '/doctor': Wrench,
+  '/commit': GitBranch,
 };
 
-// Category icons mapping
+// Category fallback icons.
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   info: Question,
   session: Terminal,
@@ -35,6 +51,7 @@ export interface UseSlashCommandsReturn {
   insertItem: (item: PopoverItem) => void;
   handleInputChange: (val: string) => Promise<void>;
   handleInsertSlash: () => void;
+  openCommandPopover: () => Promise<void>;
 }
 
 type SlashInputElement = HTMLTextAreaElement | HTMLDivElement;
@@ -118,26 +135,121 @@ export function useSlashCommands(opts: {
     sessionId,
   } = opts;
 
-  // Get commands from registry
+  const { t, locale } = useTranslation();
+
+  // Static settings items (not slash commands, not filterable).
+  const settingsItems = useMemo<PopoverItem[]>(() => {
+    const isZh = locale === 'zh';
+    return [
+      {
+        label: isZh ? '添加附件' : 'Add files',
+        value: '__add_files',
+        description: isZh ? '文件、图片' : 'Files or photos',
+        icon: Paperclip,
+        kind: 'settings_action' as const,
+        group: 'settings' as const,
+      },
+      {
+        label: isZh ? '思考程度' : 'Thinking',
+        value: '__thinking',
+        description: isZh ? '推理深度' : 'Reasoning depth',
+        icon: Brain,
+        kind: 'settings_submenu' as const,
+        submenu: 'thinking' as const,
+        group: 'settings' as const,
+      },
+      {
+        label: isZh ? '输出风格' : 'Output style',
+        value: '__style',
+        description: isZh ? '回复风格' : 'Response style',
+        icon: Feather,
+        kind: 'settings_submenu' as const,
+        submenu: 'style' as const,
+        group: 'settings' as const,
+      },
+      {
+        label: isZh ? 'MCP 服务器' : 'MCP servers',
+        value: '__mcp',
+        description: isZh ? '工具开关' : 'Tool toggles',
+        icon: Plug,
+        kind: 'settings_submenu' as const,
+        submenu: 'mcp' as const,
+        group: 'settings' as const,
+      },
+    ];
+  }, [locale]);
+
+  // Mode items (mutually exclusive single-select).
+  const modeItems = useMemo<PopoverItem[]>(() => {
+    const isZh = locale === 'zh';
+    return [
+      {
+        label: isZh ? 'Plan Mode' : 'Plan Mode',
+        value: '__mode_plan',
+        description: isZh ? '只读规划，先设计再实施' : 'Read-only planning before implementation',
+        icon: ListChecks,
+        kind: 'mode' as const,
+        modeValue: 'plan',
+        group: 'mode' as const,
+      },
+      {
+        label: 'Deep Research',
+        value: '__mode_research',
+        description: isZh ? '深度研究模式' : 'Deep research mode',
+        icon: TelescopeIcon,
+        kind: 'mode' as const,
+        modeValue: 'research',
+        group: 'mode' as const,
+      },
+    ];
+  }, [locale]);
+
+  // Built-in slash commands from registry (filtered).
   const registryCommands = useMemo(() => {
     const cmds = getCommandsForPlatform('app');
-    return cmds.map((cmd) => ({
-      label: `/${cmd.name}`,
-      value: `/${cmd.name}`,
-      description: cmd.description,
-      icon: CATEGORY_ICONS[cmd.category] ?? Terminal,
-      builtIn: true,
-      kind: 'slash_command' as const,
-      group: cmd.category === 'tools' ? 'skills' as const : 'settings' as const,
-    }));
-  }, []);
+    const isZh = locale === 'zh';
+    return cmds
+      .filter((cmd) => !HIDDEN_COMMANDS.has(`/${cmd.name}`))
+      .map((cmd) => {
+        const slashName = `/${cmd.name}`;
+        const title = isZh
+          ? (cmd.labelZh ?? cmd.label ?? slashName)
+          : (cmd.label ?? cmd.labelZh ?? slashName);
+        const desc = isZh
+          ? (cmd.descriptionZh ?? cmd.description)
+          : cmd.description;
+        const icon = COMMAND_ICONS[slashName]
+          ?? CATEGORY_ICONS[cmd.category]
+          ?? Terminal;
 
-  // Insert selected item
+        // /compact, /memory, /export, /recap are session actions (execute
+        // immediately, don't insert into input).
+        // /review, /simplify, /doctor, /commit are also session actions —
+        // they trigger a flow rather than inserting a skill badge. They
+        // belong to the settings group, not skills.
+        const isAction = ['compact', 'memory', 'export', 'recap',
+          'review', 'simplify', 'doctor', 'commit'].includes(cmd.name);
+        return {
+          label: title,
+          value: slashName,
+          description: desc,
+          icon,
+          builtIn: true,
+          kind: isAction ? ('settings_action' as const) : ('slash_command' as const),
+          group: 'settings' as const,
+        };
+      });
+  }, [locale]);
+
+  // Insert selected item (skill commands only).
   const insertItem = useCallback(
     (item: PopoverItem) => {
-      if (triggerPos === null) return;
+      // If triggerPos is null (opened via plus button), append at cursor or end.
+      const cursorEl = textareaRef.current;
+      const pos = triggerPos ?? (cursorEl ? getCursorPosition(cursorEl) : inputValue.length);
+      const effectiveTriggerPos = triggerPos ?? pos;
 
-      const result = resolveItemSelection(item, popoverMode, triggerPos, inputValue, popoverFilter);
+      const result = resolveItemSelection(item, popoverMode, effectiveTriggerPos, inputValue, popoverFilter);
 
       switch (result.action) {
         case 'insert_slash_command':
@@ -147,7 +259,7 @@ export function useSlashCommands(opts: {
             const textarea = textareaRef.current;
             if (!textarea) return;
             textarea.focus();
-            const commandEnd = triggerPos + (result.commandValue?.length ?? 0) + 1;
+            const commandEnd = effectiveTriggerPos + (result.commandValue?.length ?? 0) + 1;
             setCursorPosition(textarea, commandEnd);
           });
           return;
@@ -162,9 +274,9 @@ export function useSlashCommands(opts: {
     [triggerPos, popoverMode, closePopover, inputValue, popoverFilter, textareaRef, setInputValue],
   );
 
-  // Fetch skills for / command (registry commands + enabled agent skills)
+  // Fetch all items: settings + mode + registry commands + dynamic skills.
   const fetchSkills = useCallback(async () => {
-    const builtIns = registryCommands;
+    const builtIns = [...settingsItems, ...modeItems, ...registryCommands];
 
     if (!sessionId) {
       return builtIns;
@@ -187,8 +299,6 @@ export function useSlashCommands(opts: {
             .map((skill) => ({
               label: `/${skill.name}`,
               value: `/${skill.name}`,
-              // Coerce to string — some skill files contain non-string `description`
-              // values (arrays/objects), which would crash filterItems() later.
               description:
                 typeof skill.description === 'string' ? skill.description : '',
               kind: 'agent_skill' as const,
@@ -205,7 +315,7 @@ export function useSlashCommands(opts: {
       console.error('[useSlashCommands] Error fetching skills:', error);
       return builtIns;
     }
-  }, [registryCommands, sessionId]);
+  }, [settingsItems, modeItems, registryCommands, sessionId]);
 
   // Handle input changes to detect @ and /
   const handleInputChange = useCallback(
@@ -254,9 +364,24 @@ export function useSlashCommands(opts: {
     handleInputChange(newValue);
   }, [inputValue, handleInputChange, textareaRef, setInputValue]);
 
+  // Open the command popover via the plus button (no `/` inserted into input).
+  // Render built-ins instantly so the popover feels responsive; dynamic agent
+  // skills are appended in the background once the IPC call resolves.
+  const openCommandPopover = useCallback(async () => {
+    setPopoverMode('skill');
+    setPopoverFilter('');
+    setTriggerPos(null);
+    setSelectedIndex(0);
+    const builtIns = [...settingsItems, ...modeItems, ...registryCommands];
+    setPopoverItems(builtIns);
+    const fullItems = await fetchSkills();
+    setPopoverItems(fullItems);
+  }, [fetchSkills, settingsItems, modeItems, registryCommands, setPopoverMode, setPopoverFilter, setTriggerPos, setSelectedIndex, setPopoverItems]);
+
   return {
     insertItem,
     handleInputChange,
     handleInsertSlash,
+    openCommandPopover,
   };
 }
