@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   DotsThreeIcon,
   CaretRightIcon,
@@ -68,10 +69,18 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
   useEffect(() => {
     if (!menuOpen) return;
     const handleDown = (e: MouseEvent) => {
-      if (menuRootRef.current && !menuRootRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-        setOpenSubmenu(null);
+      const target = e.target as Node | null;
+      // The menu is portaled to document.body, so it is no longer a
+      // DOM descendant of `menuRootRef`. Check both the wrap and the
+      // menu element directly.
+      if (
+        menuRootRef.current?.contains(target) ||
+        menuListRef.current?.contains(target)
+      ) {
+        return;
       }
+      setMenuOpen(false);
+      setOpenSubmenu(null);
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -87,21 +96,27 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
     };
   }, [menuOpen]);
 
-  useLayoutEffect(() => {
-    if (!menuOpen || !menuListRef.current || !triggerRef.current) return;
+  // Position the menu next to the trigger. Called once after mount
+  // (useLayoutEffect) and again on every scroll/resize while the
+  // menu is open (useEffect) so the menu follows the trigger when
+  // the layout shifts. The menu is portaled to document.body so
+  // `position: fixed` resolves against the viewport rather than a
+  // transformed ancestor's containing block.
+  const repositionMenu = useCallback(() => {
     const el = menuListRef.current;
-    const trigger = triggerRef.current.getBoundingClientRect();
+    const trigger = triggerRef.current;
+    if (!el || !trigger) return;
+    const rect = trigger.getBoundingClientRect();
     const pad = 8;
     const gap = 4;
-
     const menuW = el.offsetWidth || 240;
     const menuH = el.offsetHeight || 200;
 
-    let left = trigger.left;
-    let top = trigger.bottom + gap;
+    let left = rect.left;
+    let top = rect.bottom + gap;
 
     if (left + menuW > window.innerWidth - pad) {
-      left = trigger.right - menuW;
+      left = rect.right - menuW;
     }
     if (left < pad) left = pad;
     if (left + menuW > window.innerWidth - pad) {
@@ -109,13 +124,40 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
     }
 
     if (top + menuH > window.innerHeight - pad) {
-      top = trigger.top - gap - menuH;
+      top = rect.top - gap - menuH;
     }
     if (top < pad) top = pad;
 
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
-  }, [menuOpen, openSubmenu]);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    repositionMenu();
+  }, [menuOpen, openSubmenu, repositionMenu]);
+
+  // Keep the menu anchored to the trigger while the page scrolls or
+  // resizes, and while the title reflows (e.g. side panel opens).
+  // capture: true catches scroll events on any ancestor, not just
+  // window. ResizeObserver fires when the trigger's own size changes
+  // (e.g. theme/font swap reflows the title).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onScrollOrResize = () => repositionMenu();
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined" && triggerRef.current) {
+      observer = new ResizeObserver(onScrollOrResize);
+      observer.observe(triggerRef.current);
+    }
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+      observer?.disconnect();
+    };
+  }, [menuOpen, repositionMenu]);
 
   const commitRename = useCallback(() => {
     const next = draft.trim();
@@ -267,24 +309,26 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
                   <DotsThreeIcon size={16} weight="bold" />
                 </button>
 
-                {menuOpen && (
-                  <div
-                    ref={menuListRef}
-                    role="menu"
-                    className="chat-header-menu"
-                    onMouseLeave={() => setOpenSubmenu(null)}
-                  >
-                    {menuItems.map((item) => (
-                      <MenuItem
-                        key={item.id}
-                        item={item}
-                        openSubmenu={openSubmenu}
-                        setOpenSubmenu={setOpenSubmenu}
-                        closeMenu={closeMenu}
-                      />
-                    ))}
-                  </div>
-                )}
+                {menuOpen &&
+                  createPortal(
+                    <div
+                      ref={menuListRef}
+                      role="menu"
+                      className="chat-header-menu"
+                      onMouseLeave={() => setOpenSubmenu(null)}
+                    >
+                      {menuItems.map((item) => (
+                        <MenuItem
+                          key={item.id}
+                          item={item}
+                          openSubmenu={openSubmenu}
+                          setOpenSubmenu={setOpenSubmenu}
+                          closeMenu={closeMenu}
+                        />
+                      ))}
+                    </div>,
+                    document.body,
+                  )}
               </div>
             </div>
           )}
