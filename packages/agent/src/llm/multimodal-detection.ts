@@ -35,6 +35,10 @@ export const MULTIMODAL_MODEL_PATTERNS: RegExp[] = [
   /phi[.-]?3[.-]?vision/i,
   /phi[.-]?3[.-]5[.-]?vision/i,
   /phi[.-]?4[.-]?multimodal/i,
+  // MiniMax-M3 supports image (JPEG/PNG/GIF/WEBP) and video (MP4/AVI/MOV/MKV)
+  // inputs via the Anthropic-compatible endpoint. M2.x series is text-only.
+  // See https://platform.minimaxi.com/docs/api-reference/text-anthropic-api
+  /minimax-m3/i,
   /vision/i,
   /multimodal/i,
 ];
