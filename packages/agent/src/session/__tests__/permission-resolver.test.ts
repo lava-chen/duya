@@ -5,12 +5,14 @@
  * 测试 matrix:
  *   - 普通 new + explicit=full_access → full_access
  *   - 普通 new + explicit=auto → auto
- *   - 普通 new + 无 explicit → default
+ *   - 普通 new + 无 explicit → auto (新装默认)
  *   - 派生 + parent=default + explicit=full_access (untrusted) → default (忽略 untrusted)
  *   - 派生 + parent=full_access + explicit=default (untrusted) → full_access
  *   - 派生 + parent=default + explicit=full_access (trusted) → full_access
- *   - 派生 + parent 不存在 + 无 explicit → default (fail closed)
- *   - 派生 + parent.profile=garbage → default (parent 非法, fail closed)
+ *   - 派生 + parent 不存在 + 无 explicit → auto (降级到新装默认)
+ *   - 派生 + parent.profile=garbage → auto (parent 非法, 降级到新装默认)
+ *
+ * DEFAULT_PROFILE 自 0.x.y 起为 'auto' (YOLO), 与新安装默认一致.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -87,18 +89,18 @@ describe('resolveAgentPermissionProfile', () => {
       expect(resolveAgentPermissionProfile('default', undefined)).toBe('default');
     });
 
-    it('无 explicit → default', () => {
-      expect(resolveAgentPermissionProfile(undefined, undefined)).toBe('default');
+    it('无 explicit → auto (新装默认)', () => {
+      expect(resolveAgentPermissionProfile(undefined, undefined)).toBe('auto');
     });
 
-    it('explicit=garbage → default (非法忽略)', () => {
-      expect(resolveAgentPermissionProfile('garbage', undefined)).toBe('default');
+    it('explicit=garbage → auto (非法忽略, 走新装默认)', () => {
+      expect(resolveAgentPermissionProfile('garbage', undefined)).toBe('auto');
     });
 
     it('agent 端无 settings 路径: 普通 new 不可能升权到 full_access (除显式 explicit)', () => {
       // 与 electron 端行为差异验证: electron 普通 new + settings=bypass → full_access
-      // agent 端相同输入 → default
-      expect(resolveAgentPermissionProfile(undefined, undefined)).toBe('default');
+      // agent 端相同输入 → auto (新装默认), 不读任何全局设置
+      expect(resolveAgentPermissionProfile(undefined, undefined)).toBe('auto');
     });
   });
 
@@ -118,13 +120,13 @@ describe('resolveAgentPermissionProfile', () => {
       expect(resolveAgentPermissionProfile(undefined, 'p3')).toBe('auto');
     });
 
-    it('parent 不存在 → default (fail closed)', () => {
-      expect(resolveAgentPermissionProfile(undefined, 'non-existent')).toBe('default');
+    it('parent 不存在 → auto (新装默认)', () => {
+      expect(resolveAgentPermissionProfile(undefined, 'non-existent')).toBe('auto');
     });
 
-    it('parent.profile=garbage → default (parent 非法, fail closed)', () => {
+    it('parent.profile=garbage → auto (parent 非法, 降级到新装默认)', () => {
       insertSession(testDb, 'p4', 'garbage');
-      expect(resolveAgentPermissionProfile(undefined, 'p4')).toBe('default');
+      expect(resolveAgentPermissionProfile(undefined, 'p4')).toBe('auto');
     });
 
     it('parent=default + explicit=full_access (untrusted) → default (忽略 untrusted)', () => {

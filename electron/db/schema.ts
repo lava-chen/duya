@@ -464,6 +464,13 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   insertSetting.run('skillNudgeInterval', '10', Date.now());
   insertSetting.run('summaryLLMEnabled', 'false', Date.now());
   insertSetting.run('summaryLLMConfig', 'null', Date.now());
+  // Permission mode defaults: 'auto' (YOLO) is the new-install default for
+  // desktop chat, cron automation, and IM gateway. INSERT OR IGNORE means
+  // existing installs are not touched. Users can still switch each surface
+  // to 'default' (ask) or 'bypass' (full access) via Settings → Security.
+  insertSetting.run('permissionMode', 'auto', Date.now());
+  insertSetting.run('cronPermissionMode', 'auto', Date.now());
+  insertSetting.run('gatewayPermissionMode', 'auto', Date.now());
 
   const insertCanvas = db.prepare(`
     INSERT OR IGNORE INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at)

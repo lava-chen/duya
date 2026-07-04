@@ -6,10 +6,12 @@
  *   - 普通 new + explicit=auto + settings=bypass → auto (override 优先)
  *   - 派生 + parent=default + settings=bypass → default (不升权)
  *   - 派生 + parent=full_access + settings=default → full_access
- *   - 派生 + parent 不存在 + settings=bypass → default (fail closed)
+ *   - 派生 + parent 不存在 + settings=bypass → auto (降级到新装默认)
  *   - 派生 + explicit=default (untrusted) → 忽略 explicit, 走父
  *   - 派生 + explicit=bypass (trusted) → bypass (trusted override 允许)
- *   - 派生 + 父.profile=garbage + settings=bypass → default (parent profile 非法, fail closed)
+ *   - 派生 + 父.profile=garbage + settings=bypass → auto (parent profile 非法, 降级到新装默认)
+ *
+ * DEFAULT_PROFILE 自 0.x.y 起为 'auto' (YOLO), 与新安装默认一致.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -95,8 +97,8 @@ describe('resolvePermissionProfile', () => {
       expect(resolvePermissionProfile(undefined, undefined)).toBe('default');
     });
 
-    it('settings 未设置 → default (fail closed)', () => {
-      expect(resolvePermissionProfile(undefined, undefined)).toBe('default');
+    it('settings 未设置 → auto (新安装默认)', () => {
+      expect(resolvePermissionProfile(undefined, undefined)).toBe('auto');
     });
 
     it('explicit=auto 优先 settings=bypass', () => {
@@ -133,9 +135,9 @@ describe('resolvePermissionProfile', () => {
       expect(resolvePermissionProfile(undefined, 'parent-2')).toBe('full_access');
     });
 
-    it('parent 不存在 + settings=bypass → child=default (fail closed)', () => {
+    it('parent 不存在 + settings=bypass → child=auto (新安装默认)', () => {
       setSetting(testDb, 'permissionMode', 'bypass');
-      expect(resolvePermissionProfile(undefined, 'non-existent')).toBe('default');
+      expect(resolvePermissionProfile(undefined, 'non-existent')).toBe('auto');
     });
 
     it('parent=auto + settings=bypass → child=auto (继承, 不读 settings)', () => {
@@ -144,19 +146,19 @@ describe('resolvePermissionProfile', () => {
       expect(resolvePermissionProfile(undefined, 'parent-3')).toBe('auto');
     });
 
-    it('parent.profile=garbage + settings=bypass → child=default (parent 非法, fail closed)', () => {
+    it('parent.profile=garbage + settings=bypass → child=auto (parent 非法, 降级到新装默认)', () => {
       setSetting(testDb, 'permissionMode', 'bypass');
       insertSession(testDb, 'parent-4', 'garbage');
-      expect(resolvePermissionProfile(undefined, 'parent-4')).toBe('default');
+      expect(resolvePermissionProfile(undefined, 'parent-4')).toBe('auto');
     });
 
-    it('parent.profile="" (空字符串) + settings=bypass → child=default (空字符串非法, fail closed)', () => {
+    it('parent.profile="" (空字符串) + settings=bypass → child=auto (空字符串非法, 降级到新装默认)', () => {
       setSetting(testDb, 'permissionMode', 'bypass');
       // 模拟 DB 端返回空字符串 (与 NULL 在 resolver 中同样被视为非法)
       testDb.prepare(
         'INSERT INTO chat_sessions (id, permission_profile, created_at, updated_at) VALUES (?, ?, ?, ?)',
       ).run('parent-5', '', Date.now(), Date.now());
-      expect(resolvePermissionProfile(undefined, 'parent-5')).toBe('default');
+      expect(resolvePermissionProfile(undefined, 'parent-5')).toBe('auto');
     });
   });
 
@@ -192,11 +194,11 @@ describe('resolvePermissionProfile', () => {
   });
 
   describe('settings 缺失 / DB 错误时的降级', () => {
-    it('普通 new + settings 缺失 + 无 explicit → default', () => {
-      expect(resolvePermissionProfile(undefined, undefined)).toBe('default');
+    it('普通 new + settings 缺失 + 无 explicit → auto (新安装默认)', () => {
+      expect(resolvePermissionProfile(undefined, undefined)).toBe('auto');
     });
 
-    it('settings 行 value="" → default (空字符串视作未设置)', () => {
+    it('settings 行 value="" → default (行存在但值非法, 走 settingsModeToProfile 安全降级)', () => {
       setSetting(testDb, 'permissionMode', '');
       expect(resolvePermissionProfile(undefined, undefined)).toBe('default');
     });
