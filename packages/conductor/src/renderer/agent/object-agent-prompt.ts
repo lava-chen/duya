@@ -18,9 +18,6 @@ function inferObjectCapability(element: CanvasElement): string {
   if (nativeKind === "sticky" || kind === "widget/note-pad") {
     return "Prefer element.update_content or widget.update_data to rewrite note text. Split into new sticky notes only when the user asks for decomposition.";
   }
-  if (nativeKind === "mindmap") {
-    return "Use mindmap_create for new maps, or element.update_content for updates to the selected mind map tree.";
-  }
   if (nativeKind === "connector" || kind.endsWith("/connector")) {
     return "Use connector.create only for new connections. For selected connector styling, use element.update_content or element.update as available.";
   }
@@ -89,7 +86,6 @@ export function buildObjectAgentPrompt(args: {
     "- Prefer the smallest reversible change that satisfies the request.",
     "- For text-only edits, update content/data rather than recreating the object.",
     "- For widget HTML or SVG changes, preserve safe markup and do not introduce scripts, inline event handlers, or network dependencies.",
-    "- For mind maps, preserve existing node ids where possible and only add or reorganize branches needed by the request.",
     "- Do not delete objects unless the user explicitly asks for deletion.",
   ].join("\n");
 }

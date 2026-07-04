@@ -10,7 +10,8 @@ const CANVAS_TOOL_DEFINITIONS: Record<string, string> = {
 Create any element on the canvas. Supports these kinds:
 - **native/sticky** — Sticky note with color (yellow, blue, green, pink, purple, gray)
 - **native/connector** — Connection line between two elements with sourceId and targetId
-- **native/mindmap** — Mind map with topic and branches
+- **native/image** — Image element (assetId or url)
+- **native/file** — File attachment element (assetId, fileName, mimeType)
 - **widget/task-list**, **widget/note-pad**, **widget/pomodoro**, **widget/news-board** — Structured widgets
 
 Parameters: canvasId, kind, position {x, y, w, h, zIndex}, vizSpec (kind-specific), config`,

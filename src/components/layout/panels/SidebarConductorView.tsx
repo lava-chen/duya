@@ -53,38 +53,26 @@ export function SidebarConductorView({
 
         setCanvases(list);
 
-        if (tabCanvasId) {
-          // Canvas id was provided via tab params — look it up in the
-          // list and activate it. Only switch if the canvas exists; the
-          // first-canvas / create-new fallbacks below are the legacy
-          // "active canvas" behavior used when no canvasId is given.
-          const target = list.find((c) => c.id === tabCanvasId);
-          if (target) {
-            setActiveCanvas(target.id);
-            const snap = await getSnapshot(target.id);
-            if (snap && !cancelled) setSnapshot(snap);
-            connectBridge(target.id);
-          } else if (list.length > 0) {
-            setActiveCanvas(list[0].id);
-            const snap = await getSnapshot(list[0].id);
-            if (snap && !cancelled) setSnapshot(snap);
-            connectBridge(list[0].id);
-          } else {
-            const canvas = await createCanvas("Workbench");
-            if (!cancelled) {
-              setCanvases([canvas]);
-              setActiveCanvas(canvas.id);
-              connectBridge(canvas.id);
-              const snap = await getSnapshot(canvas.id);
-              if (snap) setSnapshot(snap);
-            }
-          }
-        } else if (list.length > 0 && !activeCanvasId) {
-          setActiveCanvas(list[0].id);
-          const snap = await getSnapshot(list[0].id);
+        // Decide which canvas to show. Priority:
+        //   1. tab.params.canvasId (frozen tab)
+        //   2. store.activeCanvasId (resume last viewed)
+        //   3. list[0] (first canvas)
+        //   4. create new "Workbench"
+        const desiredId =
+          (tabCanvasId && list.find((c) => c.id === tabCanvasId)?.id) ||
+          (activeCanvasId && list.find((c) => c.id === activeCanvasId)?.id) ||
+          list[0]?.id;
+
+        if (desiredId) {
+          // Always reload the snapshot. The store may have stale
+          // elements from a previous canvas (or none at all) — without
+          // this refresh, reopening the panel shows an empty canvas
+          // until the user manually refreshes.
+          setActiveCanvas(desiredId);
+          const snap = await getSnapshot(desiredId);
           if (snap && !cancelled) setSnapshot(snap);
-          connectBridge(list[0].id);
-        } else if (list.length === 0) {
+          connectBridge(desiredId);
+        } else {
           const canvas = await createCanvas("Workbench");
           if (!cancelled) {
             setCanvases([canvas]);
@@ -106,7 +94,8 @@ export function SidebarConductorView({
       cancelled = true;
       disconnectBridge();
     };
-  }, [tabCanvasId, activeCanvasId, setCanvases, setActiveCanvas, setSnapshot, connectBridge, disconnectBridge, setUiError]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabCanvasId]);
 
   const handlePositionChange = useCallback(
     (id: string, position: CanvasPosition) => {

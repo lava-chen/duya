@@ -215,66 +215,6 @@ test.describe.serial('Sticky element', () => {
   });
 });
 
-// ─── Spec: MindMap — IPC create + UI create ────────────────────────────
-
-test.describe.serial('MindMap element', () => {
-  let app: DuyaApp;
-  let canvasId: string;
-
-  test.beforeAll(async () => {
-    app = await launchDuya({ namespace: 'cond-mindmap' });
-    const { page } = app;
-    await navigateToConductor(page, 'cond-mindmap');
-    canvasId = await getCanvasId(page);
-    await deleteAllElements(page, canvasId);
-  });
-
-  test.afterAll(async () => {
-    if (app) await closeDuya(app.app);
-  });
-
-  test('IPC: create → elementKind is native/mindmap with rootNode', async () => {
-    const rootNode = {
-      id: 'root',
-      text: 'Central Idea',
-      children: [
-        { id: 'a', text: 'Branch A', children: [] },
-        { id: 'b', text: 'Branch B', children: [] },
-      ],
-    };
-
-    const result = await invokeApi<{ success: boolean; elementId: string }>(
-      app.page,
-      'conductor.action',
-      {
-        action: 'element.create_native',
-        canvasId,
-        nodeType: 'mindmap',
-        position: { x: 100, y: 100, w: 8, h: 6, zIndex: 0, rotation: 0 },
-        content: { rootNode, layoutDirection: 'right', branchColors: [], branchWidth: 3, branchStyle: 'curve' },
-        style: {},
-      },
-    );
-    expect(result.success).toBe(true);
-
-    const after = await waitForElementCount(app.page, canvasId, 1);
-    expect(after[0].elementKind).toBe('native/mindmap');
-    expect((after[0].config.rootNode as { text: string }).text).toBe('Central Idea');
-  });
-
-  test('UI: M key + click creates a mindmap', async () => {
-    await deleteAllElements(app.page, canvasId);
-
-    await app.page.locator('.canvas-area').first().click({ position: { x: 50, y: 50 } });
-    await app.page.keyboard.press('m');
-    await app.page.waitForTimeout(150);
-    await app.page.locator('.canvas-area').first().click({ position: { x: 500, y: 400 } });
-
-    const after = await waitForElementCount(app.page, canvasId, 1);
-    expect(after[0].elementKind).toBe('native/mindmap');
-  });
-});
-
 // ─── Spec: Connector — IPC create + drag-to-connect ─────────────────────
 
 test.describe.serial('Connector element', () => {

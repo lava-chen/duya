@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from "react";
 import { CanvasToolbar } from "./CanvasToolbar";
 import { CanvasArea } from "./CanvasArea";
 import { ConductorComposer } from "./ConductorComposer";
-import { HistoryPanel } from "./HistoryPanel";
 import { CanvasStatusBar } from "./CanvasStatusBar";
 import { CanvasSelector } from "./CanvasSelector";
 import { useConductorStore } from "..//stores/conductor-store";
@@ -25,7 +24,6 @@ export function ConductorView() {
     setSnapshot,
     connectBridge,
     disconnectBridge,
-    historyOpen,
     uiError,
     setUiError,
     elements,
@@ -169,12 +167,19 @@ export function ConductorView() {
 
         setCanvases(list);
 
-        if (list.length > 0 && !activeCanvasId) {
-          setActiveCanvas(list[0].id);
-          const snap = await getSnapshot(list[0].id);
+        // Always pick a canvas and reload its snapshot. Resuming from
+        // store state without reloading leaves elements empty until
+        // manual refresh.
+        const desiredId =
+          (activeCanvasId && list.find((c) => c.id === activeCanvasId)?.id) ||
+          list[0]?.id;
+
+        if (desiredId) {
+          setActiveCanvas(desiredId);
+          const snap = await getSnapshot(desiredId);
           if (snap && !cancelled) setSnapshot(snap);
-          connectBridge(list[0].id);
-        } else if (list.length === 0) {
+          connectBridge(desiredId);
+        } else {
           const canvas = await createCanvas("Workbench");
           if (!cancelled) {
             setCanvases([canvas]);
@@ -196,7 +201,8 @@ export function ConductorView() {
       cancelled = true;
       disconnectBridge();
     };
-  }, [activeCanvasId, connectBridge, disconnectBridge, setActiveCanvas, setCanvases, setSnapshot, setUiError]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handlePositionChange = useCallback(
     (id: string, position: CanvasPosition) => {
@@ -280,8 +286,6 @@ export function ConductorView() {
             <CanvasStatusBar />
           </div>
         </div>
-
-        {historyOpen && <HistoryPanel />}
 
         <RefinePanel />
       </div>
