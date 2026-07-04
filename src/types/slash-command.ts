@@ -1,5 +1,19 @@
 // slash-command.ts - Types for slash commands system
 
+export type PopoverItemKind =
+  | 'slash_command'
+  | 'agent_command'
+  | 'agent_skill'
+  | 'sdk_command'
+  | 'cli_tool'
+  | 'settings_action'   // execute immediately (add files, /compact, /memory, /export, /recap)
+  | 'settings_submenu'  // open a sub-view (thinking, style, mcp)
+  | 'mode';             // toggle a mode (plan, research)
+
+export type PopoverItemGroup = 'settings' | 'mode' | 'skills';
+
+export type SettingsSubmenu = 'thinking' | 'style' | 'mcp';
+
 export interface PopoverItem {
   label: string;
   value: string;
@@ -9,12 +23,16 @@ export interface PopoverItem {
   icon?: React.ComponentType<{ size?: number; className?: string }>;
   builtIn?: boolean;
   immediate?: boolean;
-  kind?: 'slash_command' | 'agent_command' | 'agent_skill' | 'sdk_command' | 'cli_tool';
+  kind?: PopoverItemKind;
   installedSource?: 'agents' | 'claude';
   source?: 'global' | 'project' | 'plugin' | 'installed' | 'sdk';
-  group?: 'settings' | 'skills';
+  group?: PopoverItemGroup;
   /** Absolute path to the skill directory (SKILL.md parent). Only set for agent_skill items. */
   skillRoot?: string;
+  /** For settings_submenu items: which sub-view to open. */
+  submenu?: SettingsSubmenu;
+  /** For mode items: the mode value to toggle (e.g. 'plan', 'research'). */
+  modeValue?: string;
 }
 
 export type PopoverMode = 'skill' | 'file' | 'cli' | null;

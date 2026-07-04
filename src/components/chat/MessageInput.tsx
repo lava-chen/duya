@@ -9,6 +9,7 @@ import { ArrowUpIcon,
   StopIcon,
   XCircleIcon,
   PaperclipIcon,
+  PlusIcon,
 } from '@/components/icons';
 import { Select } from 'antd';
 import type { CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
@@ -32,7 +33,6 @@ import { listProvidersIPC, listOutputStylesIPC, type Provider } from '@/lib/ipc-
 import { saveDraftIPC, getDraftIPC } from '@/lib/ipc-client';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
-import { AttachmentMenu } from './AttachmentMenu';
 import { ContextUsageRing } from './ContextUsageRing';
 import { RichTextInput } from './RichTextInput';
 import type { Message } from '@/types/message';
@@ -79,6 +79,10 @@ interface MessageInputProps {
    */
   permissionUpdatePending?: boolean;
   placeholder?: string;
+  // Slash-command popover placement. Default `top` keeps the popup above the
+  // input (chat history). Pass `bottom` on the welcome / start page where
+  // there is more room below the input.
+  popoverPlacement?: 'top' | 'bottom';
   // For chat commands (/help, /clear, /cost) - execute locally
   onExecuteCommand?: (command: string) => { content: string } | null;
   // For clearing messages (/clear)
@@ -146,6 +150,7 @@ export function MessageInput({
   onPermissionModeChange,
   permissionUpdatePending = false,
   placeholder,
+  popoverPlacement = 'top',
   onExecuteCommand,
   onClearMessages,
   messages = [],
@@ -216,6 +221,7 @@ export function MessageInput({
   const {
     insertItem,
     handleInputChange: handleSlashInputChange,
+    openCommandPopover,
   } = useSlashCommands({
     textareaRef,
     inputValue,
@@ -1030,10 +1036,30 @@ export function MessageInput({
         }
         if (e.key === 'Enter' || e.key === 'Tab') {
           e.preventDefault();
-          if (filteredItems[selectedIndex]) {
-            insertItem(filteredItems[selectedIndex]);
+          const item = filteredItems[selectedIndex];
+          if (!item) return;
+          // Dispatch by kind — same logic as popover's handleItemClick.
+          switch (item.kind) {
+            case 'settings_action':
+              if (item.value === '__add_files') {
+                fileInputRef.current?.click();
+              } else {
+                onExecuteCommand?.(item.value);
+              }
+              closePopover();
+              return;
+            case 'settings_submenu':
+              // Sub-view navigation is click-only; ignore keyboard activation.
+              return;
+            case 'mode': {
+              const modeValue = item.modeValue ?? '';
+              setSendMode((prev) => (prev === modeValue ? undefined : modeValue));
+              return;
+            }
+            default:
+              insertItem(item);
+              return;
           }
-          return;
         }
         if (e.key === 'Escape') {
           e.preventDefault();
@@ -1095,6 +1121,37 @@ export function MessageInput({
           triggerPos={triggerPos}
           searchInputRef={searchInputRef}
           allDisplayedItems={filteredItems}
+          placement={popoverPlacement}
+          // Settings state + callbacks
+          thinkingEffort={selectedEffort ?? null}
+          onSelectThinkingEffort={(effort) => {
+            setSelectedEffort(effort ?? undefined);
+            onEffortChange?.(effort ?? undefined);
+          }}
+          responseStyles={responseStyles.map(s => ({ id: s.id, name: s.name, description: s.description }))}
+          selectedStyle={selectedStyleId}
+          onSelectStyle={(styleId) => setSelectedStyleId(styleId)}
+          mcpServers={mcpServers}
+          onToggleMcpServer={(serverName, enabled) => {
+            setMcpServers((prev) =>
+              prev.map((s) => (s.name === serverName ? { ...s, enabled } : s))
+            );
+          }}
+          onAddFiles={() => fileInputRef.current?.click()}
+          // Action commands (/compact, /memory, /export, /recap)
+          onExecuteAction={(action) => {
+            if (onExecuteCommand) {
+              onExecuteCommand(action);
+            } else if (onCommand) {
+              onCommand(action);
+            }
+          }}
+          // Mode state (mutually exclusive single-select)
+          currentMode={sendMode ?? null}
+          onSelectMode={(mode) => {
+            setSendMode(mode ?? undefined);
+            if (mode) textareaRef.current?.focus();
+          }}
           onInsertItem={insertItem}
           onSetSelectedIndex={setSelectedIndex}
           onSetPopoverFilter={setPopoverFilter}
@@ -1162,71 +1219,33 @@ export function MessageInput({
 
           {/* Bottom Toolbar */}
           <div className="mt-1 px-2 flex items-center justify-between">
-            {/* Left: Plus Button (with file attach, model selector, effort) & Permission */}
+            {/* Left: Plus Button (opens unified command popover) & Permission */}
             <div className="flex items-center gap-2">
-              {/* Plus Button with Dropdown Menu */}
-              <AttachmentMenu
-                onAddFiles={() => fileInputRef.current?.click()}
-                skills={skills}
-                mcpServers={mcpServers}
-                responseStyles={responseStyles.map(s => ({ id: s.id, name: s.name, description: s.description }))}
-                selectedStyle={selectedStyleId}
-                onSelectStyle={(styleId) => {
-                  setSelectedStyleId(styleId);
-                  const style = responseStyles.find(s => s.id === styleId);
-                  if (style) {
-                    console.log('Selected style:', style.name, styleId);
+              {/* Plus Button — opens the slash command popover (settings + mode + skills) */}
+              <button
+                type="button"
+                data-plus-trigger
+                onClick={() => {
+                  if (popoverMode === 'skill') {
+                    closePopover();
+                  } else {
+                    openCommandPopover();
                   }
                 }}
-                onSelectSkill={(skillName) => {
-                  // Insert skill command into input
-                  const skillCommand = `/${skillName}`;
-                  setInputValue((prev) => {
-                    const textarea = textareaRef.current;
-                    if (textarea) {
-                      const cursorPos = getEditableCursorPosition(textarea, prev.length);
-                      const before = prev.slice(0, cursorPos);
-                      const after = prev.slice(cursorPos);
-                      const newValue = before + skillCommand + after;
-                      setTimeout(() => {
-                        textarea.focus();
-                      }, 0);
-                      return newValue;
-                    }
-                    return prev + skillCommand;
-                  });
-                }}
-                onToggleMcpServer={(serverName, enabled) => {
-                  setMcpServers((prev) =>
-                    prev.map((s) => (s.name === serverName ? { ...s, enabled } : s))
-                  );
-                  // TODO: Persist MCP server state
-                  console.log('Toggle MCP server:', serverName, enabled);
-                }}
-                onManageSkills={() => {
-                  // TODO: Navigate to skills management
-                  console.log('Manage skills clicked');
-                }}
-                onAddSkill={() => {
-                  // TODO: Navigate to add skill
-                  console.log('Add skill clicked');
-                }}
-                onCreateStyle={() => {
-                  // TODO: Navigate to style creation
-                  console.log('Create style clicked');
-                }}
-                thinkingEffort={selectedEffort ?? null}
-                onSelectThinkingEffort={(effort) => {
-                  const newEffort = effort || undefined;
-                  setSelectedEffort(newEffort);
-                  onEffortChange?.(newEffort);
-                }}
-                modelSupportsEffort={true}
-                onRunResearchMode={() => {
-                  setSendMode('research');
-                  textareaRef.current?.focus();
-                }}
-              />
+                className="size-7 rounded-lg flex items-center justify-center transition-all text-xs"
+                style={
+                  popoverMode === 'skill'
+                    ? {
+                        color: 'var(--text)',
+                        backgroundColor: 'var(--chip)',
+                        border: '1px solid var(--border)',
+                      }
+                    : { color: 'var(--muted)' }
+                }
+                title={t('common.settings') || 'Settings'}
+              >
+                <PlusIcon size={16} />
+              </button>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1261,8 +1280,8 @@ export function MessageInput({
                 disabled={isStreaming}
               />
 
-              {/* Research Mode Badge */}
-              {sendMode === 'research' && (
+              {/* Mode Badge — shows when a mode (plan/research) is active */}
+              {sendMode && (
                 <button
                   type="button"
                   onClick={() => setSendMode(undefined)}
@@ -1272,11 +1291,7 @@ export function MessageInput({
                     size={14}
                     className="hidden group-hover:block"
                   />
-                  <SearchIcon
-                    size={14}
-                    className="block group-hover:hidden"
-                  />
-                  <span>深度研究</span>
+                  <span>{sendMode === 'research' ? 'Deep Research' : 'Plan Mode'}</span>
                 </button>
               )}
             </div>
