@@ -35,6 +35,7 @@ import { skillTool } from './SkillTool/SkillTool.js';
 import { skillManageTool } from './SkillManageTool.js';
 import { briefTool } from './BriefTool/BriefTool.js';
 import { sessionSearchTool } from './SessionSearchTool/index.js';
+import { messageSessionTool } from './MessageSessionTool/index.js';
 import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
@@ -167,6 +168,8 @@ export function createBuiltinRegistry(
   registry.register(skillTool, skillTool);
   registry.register(briefTool, briefTool);
   registry.register(sessionSearchTool.toTool(), sessionSearchTool);
+  // Inter-agent communication tool — message another session's agent
+  registry.register(messageSessionTool.toTool(), messageSessionTool);
   const visionTool = new VisionTool();
   registry.register(visionTool, visionTool);
   // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
@@ -338,6 +341,7 @@ export { skillTool } from './SkillTool/SkillTool.js';
 export { skillManageTool } from './SkillManageTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { VisionTool } from './VisionTool/VisionTool.js';
+export { messageSessionTool, MessageSessionTool } from './MessageSessionTool/index.js';
 // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
 // duyaConfigTool removed in plan 102 — use `duya_cli` (argv: 'config …' / 'mcp …') instead.
 export { duyaCliTool } from './DuyaCliTool/index.js';
