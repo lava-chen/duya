@@ -287,6 +287,33 @@ const pendingIpcRequests = new Map<string, {
   reject: (error: Error) => void;
 }>();
 
+// Pending inter-agent call registry.
+// Architecture: the caller worker sends `interagent:invoke` via process.send,
+// the server routes it to a target worker, and forwards the target's chat:*
+// events back to the caller as `interagent:event` commands. The caller
+// buffers events here (keyed by invoke id) and resolves the tool promise
+// on `chat:done` / `chat:error`.
+export interface PendingInteragentCall {
+  events: import('./worker-protocol.js').WorkerEvent[];
+  resolveDone: (event: import('./worker-protocol.js').WorkerEvent) => void;
+  resolveError: (event: import('./worker-protocol.js').WorkerEvent) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const pendingInteragentCalls = new Map<string, PendingInteragentCall>();
+
+export function registerPendingInteragentCall(id: string, call: PendingInteragentCall): void {
+  pendingInteragentCalls.set(id, call);
+}
+
+export function unregisterPendingInteragentCall(id: string): void {
+  pendingInteragentCalls.delete(id);
+}
+
+export function getPendingInteragentCall(id: string): PendingInteragentCall | undefined {
+  return pendingInteragentCalls.get(id);
+}
+
 // Helper: IPC request for conductor executor
 function conductorIpcRequest<T = unknown>(
   action: string,
@@ -2635,6 +2662,22 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             // missing entry is the expected state — log at info, not warn,
             // to avoid noise.
             log('[Agent-Process] No pending permission for resolved id (likely already resolved or expired):', resolveSessionId, id);
+          }
+          break;
+        }
+
+        case 'interagent:event': {
+          const eventMsg = msg as unknown as { type: 'interagent:event'; id: string; event: import('./worker-protocol.js').WorkerEvent };
+          const call = pendingInteragentCalls.get(eventMsg.id);
+          if (!call) {
+            // Stale event after cleanup — safe to ignore
+            break;
+          }
+          call.events.push(eventMsg.event);
+          if (eventMsg.event.type === 'chat:done') {
+            call.resolveDone(eventMsg.event);
+          } else if (eventMsg.event.type === 'chat:error') {
+            call.resolveError(eventMsg.event);
           }
           break;
         }
