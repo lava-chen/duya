@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { EventEmitter } from 'events';
 import { CycleDetector } from '../interagent-router';
 
 describe('CycleDetector', () => {
@@ -60,16 +61,35 @@ function createMockDeps(overrides?: {
     transitionState: vi.fn(),
   } as unknown as SessionManager;
 
+  // Fake child process stdout that emits a 'ready' event on the next tick
+  // after a 'data' listener is registered, so waitForReady resolves.
+  const fakeStdout = new EventEmitter();
+  const originalOn = fakeStdout.on.bind(fakeStdout);
+  fakeStdout.on = ((event: string, listener: (...args: unknown[]) => void) => {
+    const result = originalOn(event, listener);
+    if (event === 'data') {
+      process.nextTick(() => {
+        fakeStdout.emit('data', Buffer.from(JSON.stringify({ type: 'ready', sessionId: 'B' }) + '\n'));
+      });
+    }
+    return result;
+  }) as typeof fakeStdout.on;
+  const fakeChild = { stdout: fakeStdout };
+
   const workerManager = {
     workerCount: overrides?.workerCount ?? 1,
     spawnWorker: vi.fn(),
     sendCommand: vi.fn(),
     interruptWorker: vi.fn(),
-    getWorker: vi.fn(),
+    getWorker: vi.fn(() => fakeChild),
     setMessageHandler: vi.fn(),
   } as unknown as WorkerManager;
 
-  const dbRequest = vi.fn();
+  const dbRequest = vi.fn().mockImplementation((action: string) => {
+    if (action === 'session:get') return Promise.resolve({ id: 'B', model: 'test', systemPrompt: '', workingDirectory: '', providerId: 'test', agentProfileId: null, permissionProfile: 'default' });
+    if (action === 'provider:get') return Promise.resolve({ apiKey: 'test', model: 'test', provider: 'anthropic' });
+    return Promise.resolve(undefined);
+  });
 
   return { sessionManager, workerManager, dbRequest };
 }
