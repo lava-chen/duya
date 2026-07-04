@@ -385,6 +385,14 @@ export interface ChatOptions {
   };
   /** List of tool names to disable for this chat turn */
   disabledTools?: string[];
+  /**
+   * Caller-supplied allowlist of tool names permitted for this chat turn.
+   * When set, only tools whose `name` is in this list are exposed to the LLM.
+   * Applied as Layer 0 (before `disabledTools` and agent profile policy),
+   * so it is the most restrictive filter. Used by interagent `minimal` mode
+   * to lock the target agent down to Read/Grep/Glob.
+   */
+  allowedTools?: string[];
   /** If true, skip system prompt entirely (use empty string) */
   disableSystemPrompt?: boolean;
   /** Prefix to prepend to the system prompt */
