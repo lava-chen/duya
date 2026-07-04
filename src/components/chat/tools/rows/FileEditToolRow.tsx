@@ -2,7 +2,9 @@
 // family. The collapsed chrome shows:
 //   - a blue clickable filename (.html/.htm → DUYA's side-panel browser,
 //     .doc/.docx/.ppt/.pptx/.xls/.xlsx → DUYA's side-panel Office viewer,
-//     everything else → system default editor via shell.openPath), and
+//     .md/.txt/.json/.png/.pdf/.ts/.tsx/.py/... → DUYA's side-panel file
+//     preview workspace, everything else → system default editor via
+//     shell.openPath), and
 //   - live `+N -M` git-style stats in the right slot. Stats are
 //     computed from `input` as soon as the tool_use arrives, then
 //     recomputed from the authoritative `result` once the tool
@@ -25,7 +27,7 @@ import { SimpleDiffViewer, calculateDiff } from '@/components/diff/SimpleDiffVie
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus, getFilePath } from '../registry';
 import { FILE_CREATE_TOOLS, FILE_EDIT_TOOLS } from '../classify';
-import { openLocalFileTarget } from '@/lib/chat-file-links';
+import { openLocalArtifactTarget } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import type { ToolAction, FileEditStats } from '../types';
 
@@ -151,7 +153,9 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [fileHovered, setFileHovered] = useState(false);
-  const filePath = getFilePath(tool.input);
+  const resultFilePath = typeof tool.metadata?.filePath === 'string' ? tool.metadata.filePath : '';
+  const inputFilePath = getFilePath(tool.input);
+  const filePath = resultFilePath || inputFilePath;
   const fileName = filePath ? (filePath.split(/[/\\]/).pop() || filePath) : 'file';
   const status = getStatus(tool);
   const hasResult = tool.result !== undefined && tool.result !== '';
@@ -173,10 +177,13 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
         : (isCreate ? 'streaming.toolAction.created' : 'streaming.toolAction.edited');
   const openFileTitle = t('streaming.toolAction.openFile');
 
-  // Open the file. Delegates to openLocalFileTarget which routes:
+  // Open the file. Delegates to openLocalArtifactTarget which routes:
   //   - .html / .htm → DUYA's side-panel browser (duya:open-browser-panel)
   //   - .doc / .docx / .ppt / .pptx / .xls / .xlsx → DUYA's side-panel
   //     Office viewer (duya:open-office-panel)
+  //   - previewable assets (md, txt, json, png, ts, tsx, py, go, rs, …)
+  //     → DUYA's side-panel file preview workspace
+  //     (duya:open-file-preview-panel)
   //   - everything else → system default editor via shell.openPath
   // The helper also resolves relative paths against the current
   // thread's working directory, so a bare "tank-battle.html" becomes
@@ -186,7 +193,7 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
       e.stopPropagation();
       e.preventDefault();
       if (!filePath) return;
-      openLocalFileTarget(filePath, cwd);
+      openLocalArtifactTarget(filePath, cwd);
     },
     [filePath, cwd],
   );

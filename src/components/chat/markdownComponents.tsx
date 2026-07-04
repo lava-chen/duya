@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CodeBlock } from './CodeBlock';
-import { openLocalFileTarget, isLikelyLocalFileReference, isLocalhostUrl } from '@/lib/chat-file-links';
+import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
 
@@ -72,7 +72,7 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
       onClick={(event) => {
         if (!href || !isLocalFile) return;
         event.preventDefault();
-        openLocalFileTarget(href, cwd);
+        openLocalArtifactTarget(href, cwd);
       }}
     >
       {children}
