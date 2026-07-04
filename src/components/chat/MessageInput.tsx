@@ -3,12 +3,10 @@
 'use client';
 
 import React, { useState, useRef, useCallback, KeyboardEvent, FormEvent, useEffect } from 'react';
-import {
-  ArrowUpIcon,
+import { ArrowUpIcon,
   SearchIcon,
   XIcon,
   StopIcon,
-  FileIcon,
   XCircleIcon,
   PaperclipIcon,
 } from '@/components/icons';
@@ -22,10 +20,13 @@ import {
 } from '@/lib/message-input-logic';
 import { ModelSelector, type ModelOption } from './ModelSelector';
 import { PermissionModeSelector, type PermissionMode } from './PermissionModeSelector';
-import { useFileAttachments } from '@/hooks/useFileAttachments';
-import { usePastedContent } from '@/hooks/usePastedContent';
-import { PastedContentList } from './PastedContentAttachment';
-import { FileAttachmentCard } from './FileAttachmentCard';
+import { useAttachments } from '@/hooks/useAttachments';
+import { AttachmentBar } from './AttachmentBar';
+import {
+  dispatchAddAttachment,
+  ADD_ATTACHMENT_EVENT,
+  type AddAttachmentDetail,
+} from '@/lib/add-attachment-event';
 import { useTranslation } from '@/hooks/useTranslation';
 import { listProvidersIPC, listOutputStylesIPC, type Provider } from '@/lib/ipc-client';
 import { saveDraftIPC, getDraftIPC } from '@/lib/ipc-client';
@@ -33,34 +34,8 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { AttachmentMenu } from './AttachmentMenu';
 import { ContextUsageRing } from './ContextUsageRing';
-import { RichTextInput, browserReferenceToken, terminalReferenceToken } from './RichTextInput';
+import { RichTextInput } from './RichTextInput';
 import type { Message } from '@/types/message';
-import { serializeBrowserReferenceForDisplay } from '@/lib/browser-reference-display';
-
-interface FileChip {
-  id: string;
-  name: string;
-  path: string;
-}
-
-interface TerminalReferenceChip {
-  id: string;
-  shell: string;
-  cwd: string;
-  text: string;
-  createdAt: number;
-}
-
-interface BrowserReferenceChip {
-  id: string;
-  kind: 'element' | 'screenshot';
-  label: string;
-  title: string;
-  url: string;
-  content: string;
-  attachmentId?: string;
-  createdAt: number;
-}
 
 function getEditableCursorPosition(element: HTMLElement | null, fallback: number): number {
   if (!element) return fallback;
@@ -199,11 +174,6 @@ export function MessageInput({
     prePasteValueRef.current = inputValue;
   }, [inputValue]);
 
-  // File chips from file tree
-  const [fileChips, setFileChips] = useState<FileChip[]>([]);
-  const [terminalReferenceChips, setTerminalReferenceChips] = useState<TerminalReferenceChip[]>([]);
-  const [browserReferenceChips, setBrowserReferenceChips] = useState<BrowserReferenceChip[]>([]);
-
   // CLI badge state (for AI-requested CLI tools)
   const [cliBadge, setCliBadge] = useState<CliBadge | null>(null);
 
@@ -256,95 +226,161 @@ export function MessageInput({
     sessionId,
   });
 
-  // File attachments
-  const { attachedFiles, parseErrors, isParsing, addFile, addAttachment, removeFile, clearFiles, handleFileInput } = useFileAttachments();
-
-  // Pasted content attachments
+  // Plan 220 Phase 4: unified attachment state. Single source of truth for
+  // files, paste, terminal refs, browser refs, and file-tree refs. Replaces
+  // the 5 separate state carriers (fileChips / terminalReferenceChips /
+  // browserReferenceChips / pastedContents / attachedFiles) that existed
+  // before this refactor.
   const {
-    pastedContents,
-    removePastedContent,
-    clearPastedContents,
-    handlePaste,
-    getCombinedContentWithMarkers,
-    hasPastedContents,
-  } = usePastedContent();
+    attachments,
+    parseErrors,
+    isParsing,
+    addAttachment,
+    addPastedText,
+    addFile,
+    addBrowserScreenshot,
+    remove: removeAttachment,
+    clear: clearAttachments,
+    buildModelContent,
+    buildDisplayContent,
+    hasUnparsedDocs,
+  } = useAttachments();
 
-  // Listen for file tree add-to-input events
+  // Plan 220 Phase 4: single listener for `duya:add-attachment` plus
+  // legacy event name aliases (kept for one minor version per Plan 220
+  // §Design). The legacy aliases just re-dispatch as the new event so
+  // panels can migrate independently.
   useEffect(() => {
-    const handleAddToInput = (e: Event) => {
-      const customEvent = e as CustomEvent<{ path: string }>;
-      const path = customEvent.detail.path;
-      const name = path.split(/[/\\]/).pop() || path;
-      
-      // Check if file is already added
-      setFileChips((prev) => {
-        if (prev.some((c) => c.path === path)) {
-          return prev; // Already added, skip
-        }
-        const chip: FileChip = {
-          id: crypto.randomUUID(),
-          name,
-          path,
-        };
-        return [...prev, chip];
-      });
+    const handleAddAttachment = (e: Event) => {
+      const detail = (e as CustomEvent<AddAttachmentDetail>).detail;
+      if (!detail) return;
 
-      // Focus textarea after adding file
+      switch (detail.kind) {
+        case 'pasted-text': {
+          addPastedText(detail.text);
+          break;
+        }
+        case 'file-tree-ref': {
+          // Skip if a chip for this path is already attached.
+          const already = attachments.some(
+            (a) => a.kind === 'file-tree-ref' && a.path === detail.path,
+          );
+          if (already) break;
+          addAttachment({
+            id: crypto.randomUUID(),
+            kind: 'file-tree-ref',
+            name: detail.path.split(/[/\\]/).pop() || detail.path,
+            type: 'text/plain',
+            url: '',
+            size: 0,
+            path: detail.path,
+            previewText: detail.path.split(/[/\\]/).pop() || detail.path,
+          });
+          break;
+        }
+        case 'terminal-ref': {
+          if (!detail.text?.trim()) break;
+          addAttachment({
+            id: crypto.randomUUID(),
+            kind: 'terminal-ref',
+            name: detail.shell,
+            type: 'text/plain',
+            url: '',
+            size: detail.text.length,
+            text: detail.text.trim(),
+            previewText: (() => {
+              const first =
+                detail.text
+                  .trim()
+                  .split(/\r?\n/)
+                  .find((line) => line.trim())?.trim() ?? 'Terminal selection';
+              return first;
+            })(),
+            metadata: {
+              shell: detail.shell,
+              cwd: detail.cwd,
+              createdAt: Date.now(),
+            },
+          });
+          break;
+        }
+        case 'browser-ref': {
+          const ref = detail.reference;
+          const att =
+            detail.attachment ??
+            (ref.attachment
+              ? { ...ref.attachment, kind: 'image' as const }
+              : undefined);
+          if (ref.kind === 'screenshot' && att) {
+            addBrowserScreenshot(
+              {
+                elementKind: 'screenshot',
+                label: ref.label,
+                title: ref.title,
+                url: ref.url,
+                text: ref.content,
+                attachmentId: att.id,
+              },
+              att,
+            );
+          } else {
+            addAttachment({
+              id: crypto.randomUUID(),
+              kind: 'browser-ref',
+              name: ref.label,
+              type: 'text/plain',
+              url: '',
+              size: ref.content.length,
+              text: ref.content,
+              previewText: ref.title || ref.label,
+              metadata: {
+                url: ref.url,
+                elementKind: ref.kind,
+                title: ref.title,
+              },
+            });
+          }
+          break;
+        }
+        case 'file': {
+          addAttachment(detail.file);
+          break;
+        }
+        default: {
+          // Exhaustive check — invalid kind does nothing.
+          break;
+        }
+      }
+
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
         adjustTextareaHeight();
       });
     };
 
-    window.addEventListener('file-tree-add-to-input', handleAddToInput as EventListener);
-    return () => {
-      window.removeEventListener('file-tree-add-to-input', handleAddToInput as EventListener);
+    window.addEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
+
+    // Legacy alias listeners: re-dispatch under the new event name so
+    // existing panels keep working without modification.
+    const legacyFileTree = (e: Event) => {
+      const detail = (e as CustomEvent<{ path: string }>).detail;
+      if (detail?.path) {
+        dispatchAddAttachment({ kind: 'file-tree-ref', path: detail.path });
+      }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const handleTerminalQuote = (e: Event) => {
-      const customEvent = e as CustomEvent<{
-        shell: string;
-        cwd: string;
-        text: string;
-      }>;
-      const detail = customEvent.detail;
-      if (!detail?.text?.trim()) return;
-
-      const text = detail.text.trim();
-      const id = crypto.randomUUID();
-      const token = terminalReferenceToken(id);
-      const cursorPos = getEditableCursorPosition(textareaRef.current, inputValue.length);
-      setTerminalReferenceChips((prev) => [
-        ...prev,
-        {
-          id,
+    const legacyTerminal = (e: Event) => {
+      const detail = (e as CustomEvent<{ shell: string; cwd: string; text: string }>).detail;
+      if (detail) {
+        dispatchAddAttachment({
+          kind: 'terminal-ref',
           shell: detail.shell,
           cwd: detail.cwd,
-          text,
-          createdAt: Date.now(),
-        },
-      ]);
-      setInputValue((prev) => `${prev.slice(0, cursorPos)}${token}${prev.slice(cursorPos)}`);
-
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus();
-        adjustTextareaHeight();
-      });
+          text: detail.text,
+        });
+      }
     };
-
-    window.addEventListener("terminal-add-to-input", handleTerminalQuote as EventListener);
-    return () => {
-      window.removeEventListener("terminal-add-to-input", handleTerminalQuote as EventListener);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputValue.length]);
-
-  useEffect(() => {
-    const handleBrowserAddToInput = (event: Event) => {
-      const customEvent = event as CustomEvent<{
+    const legacyBrowser = (e: Event) => {
+      const detail = (e as CustomEvent<{
         text?: string;
         attachment?: FileAttachment;
         reference?: {
@@ -355,163 +391,59 @@ export function MessageInput({
           content: string;
           attachmentId?: string;
         };
-      }>;
-      const detail = customEvent.detail;
-      const attachment = detail?.attachment;
-      const reference = detail?.reference;
-
-      if (attachment) {
-        addAttachment(attachment);
-      }
-
-      if (reference) {
-        const id = crypto.randomUUID();
-        const token = browserReferenceToken(id);
-        const cursorPos = getEditableCursorPosition(textareaRef.current, inputValue.length);
-        setBrowserReferenceChips((prev) => [
-          ...prev,
-          {
-            id,
-            kind: reference.kind,
-            label: reference.label,
-            title: reference.title,
-            url: reference.url,
-            content: reference.content,
-            attachmentId: reference.attachmentId,
-            createdAt: Date.now(),
+      }>).detail;
+      if (!detail) return;
+      if (detail.reference) {
+        const ref = detail.reference;
+        dispatchAddAttachment({
+          kind: 'browser-ref',
+          reference: {
+            kind: ref.kind,
+            label: ref.label,
+            title: ref.title,
+            url: ref.url,
+            content: ref.content,
+            attachment: detail.attachment,
           },
-        ]);
-        setInputValue((prev) => {
-          const before = prev.slice(0, cursorPos);
-          const after = prev.slice(cursorPos);
-          const spacerBefore = before && !before.endsWith('\n') ? '\n\n' : '';
-          const spacerAfter = after && !after.startsWith('\n') ? '\n\n' : '';
-          return `${before}${spacerBefore}${token}${spacerAfter}${after}`;
+          attachment: detail.attachment,
         });
-      } else {
-        const text = detail?.text?.trim();
-        if (text) {
-          const cursorPos = getEditableCursorPosition(textareaRef.current, inputValue.length);
-          setInputValue((prev) => {
-            const before = prev.slice(0, cursorPos);
-            const after = prev.slice(cursorPos);
-            const spacerBefore = before && !before.endsWith('\n') ? '\n\n' : '';
-            const spacerAfter = after && !after.startsWith('\n') ? '\n\n' : '';
-            return `${before}${spacerBefore}${text}${spacerAfter}${after}`;
-          });
-        }
+      } else if (detail.text) {
+        // Plain text insert (legacy) — fall through to typed text path.
+        // We surface this as a terminal-ref for parity, but with empty shell/cwd
+        // the attachment's preview line becomes the text itself.
+        dispatchAddAttachment({
+          kind: 'terminal-ref',
+          shell: 'browser',
+          cwd: '',
+          text: detail.text,
+        });
       }
-
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus();
-        adjustTextareaHeight();
-      });
     };
 
-    window.addEventListener("browser-add-to-input", handleBrowserAddToInput as EventListener);
+    window.addEventListener('file-tree-add-to-input', legacyFileTree as EventListener);
+    window.addEventListener('terminal-add-to-input', legacyTerminal as EventListener);
+    window.addEventListener('browser-add-to-input', legacyBrowser as EventListener);
+
     return () => {
-      window.removeEventListener("browser-add-to-input", handleBrowserAddToInput as EventListener);
+      window.removeEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
+      window.removeEventListener('file-tree-add-to-input', legacyFileTree as EventListener);
+      window.removeEventListener('terminal-add-to-input', legacyTerminal as EventListener);
+      window.removeEventListener('browser-add-to-input', legacyBrowser as EventListener);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addAttachment, inputValue.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachments]);
 
-  const removeFileChip = useCallback((id: string) => {
-    setFileChips((prev) => prev.filter((c) => c.id !== id));
-    requestAnimationFrame(() => {
-      adjustTextareaHeight();
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Build content with attachments baked in. The hook's `buildModelContent`
+  // already handles all 5 kinds; we just call it.
+  const buildContentWithChips = useCallback(
+    (textValue: string): string => buildModelContent(textValue),
+    [buildModelContent],
+  );
 
-  const removeTerminalReferenceChip = useCallback((id: string) => {
-    setTerminalReferenceChips((prev) => prev.filter((chip) => chip.id !== id));
-    setInputValue((prev) => prev.split(terminalReferenceToken(id)).join(''));
-    requestAnimationFrame(() => {
-      adjustTextareaHeight();
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const removeBrowserReferenceChip = useCallback((id: string) => {
-    const attachmentId = browserReferenceChips.find((chip) => chip.id === id)?.attachmentId;
-    setBrowserReferenceChips((prev) => prev.filter((chip) => chip.id !== id));
-    setInputValue((prev) => prev.split(browserReferenceToken(id)).join(''));
-    if (attachmentId) {
-      removeFile(attachmentId);
-    }
-    requestAnimationFrame(() => {
-      adjustTextareaHeight();
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserReferenceChips, removeFile]);
-
-  // Build content with file chip paths inserted
-  // Append file paths at the end of the message
-  const buildContentWithChips = useCallback((textValue: string): string => {
-    const additions: string[] = [];
-    let textWithReferences = textValue;
-
-    if (fileChips.length > 0) {
-      additions.push(fileChips.map((chip) => chip.path).join('\n'));
-    }
-
-    for (const chip of terminalReferenceChips) {
-      const block = [
-        `Terminal reference (${chip.shell}, ${chip.cwd}):`,
-        "```text",
-        chip.text,
-        "```",
-      ].join("\n");
-      textWithReferences = textWithReferences.split(terminalReferenceToken(chip.id)).join(block);
-    }
-
-    for (const chip of browserReferenceChips) {
-      textWithReferences = textWithReferences
-        .split(browserReferenceToken(chip.id))
-        .join(chip.content);
-    }
-
-    if (additions.length === 0) return textWithReferences;
-    const suffix = additions.join("\n\n");
-    if (!textWithReferences.trim()) return suffix;
-    return `${textWithReferences}\n\n${suffix}`;
-  }, [browserReferenceChips, fileChips, terminalReferenceChips]);
-
-  const buildDisplayContentWithChips = useCallback((textValue: string): string => {
-    const additions: string[] = [];
-    let displayValue = textValue;
-
-    if (fileChips.length > 0) {
-      additions.push(fileChips.map((chip) => chip.path).join('\n'));
-    }
-
-    for (const chip of terminalReferenceChips) {
-      const block = [
-        `Terminal reference (${chip.shell}, ${chip.cwd}):`,
-        "```text",
-        chip.text,
-        "```",
-      ].join("\n");
-      displayValue = displayValue.split(terminalReferenceToken(chip.id)).join(block);
-    }
-
-    for (const chip of browserReferenceChips) {
-      displayValue = displayValue
-        .split(browserReferenceToken(chip.id))
-        .join(serializeBrowserReferenceForDisplay({
-          kind: chip.kind,
-          label: chip.label,
-          title: chip.title,
-          url: chip.url,
-          content: chip.content,
-        }));
-    }
-
-    if (additions.length === 0) return displayValue;
-    const suffix = additions.join("\n\n");
-    if (!displayValue.trim()) return suffix;
-    return `${displayValue}\n\n${suffix}`;
-  }, [browserReferenceChips, fileChips, terminalReferenceChips]);
+  const buildDisplayContentWithChips = useCallback(
+    (textValue: string): string => buildDisplayContent(textValue),
+    [buildDisplayContent],
+  );
 
   // Sync model with prop
   // Also clean up double-quoted model names (legacy data cleanup)
@@ -863,8 +795,14 @@ export function MessageInput({
 
       // Fall back to text paste handling
       const prePasteValue = prePasteValueRef.current;
-      const pastedContent = handlePaste(e);
-      if (pastedContent) {
+      const pastedText = e.clipboardData.getData('text');
+      // Plan 220 Phase 4: legacy `usePastedContent.handlePaste` is gone.
+      // Reproduce its threshold check (500 chars) inline — long pastes
+      // become a `pasted-text` attachment instead of streaming into the
+      // input value.
+      if (pastedText.length > 500) {
+        e.preventDefault();
+        addPastedText(pastedText);
         setTimeout(() => {
           if (
             textareaRef.current &&
@@ -877,7 +815,7 @@ export function MessageInput({
         adjustTextareaHeight();
       }
     },
-    [handlePaste, adjustTextareaHeight, addFile],
+    [addPastedText, adjustTextareaHeight, addFile],
   );
 
   // Drag-and-drop handlers — accept files dropped anywhere on the input box
@@ -931,14 +869,13 @@ export function MessageInput({
       e.preventDefault();
       const trimmedValue = inputValue.trim();
 
-      // Check if we have any content to send (input, pasted content, files, file chips, or parsed docs)
-      const hasContent = trimmedValue || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0 || terminalReferenceChips.length > 0 || browserReferenceChips.length > 0;
+      // Check if we have any content to send (input or any attachment).
+      const hasContent = trimmedValue || attachments.length > 0;
       if (!hasContent) return;
       if (disabled) return;
 
       // Block sending while document parsing is in progress — the parsed
       // text would be missing and the agent would see "Not Parsed" warnings.
-      const hasUnparsedDocs = attachedFiles.some(f => f.path && !f.text && !f.type.startsWith('image/'));
       if (isParsing && hasUnparsedDocs) return;
 
       // Block sending while permission profile is being persisted to DB.
@@ -952,12 +889,12 @@ export function MessageInput({
         }
       };
 
-      // Build content with file chip paths
-      const contentWithChips = buildContentWithChips(trimmedValue);
+      // Build content + display content from the unified hook.
+      // Markers are gone (Plan 220 Phase 3), so the model-facing and the
+      // UI-facing content are equivalent.
+      const modelContent = buildContentWithChips(trimmedValue);
       const displayContentWithChips = buildDisplayContentWithChips(trimmedValue);
 
-      // Get combined content with markers for storage/display
-      const contentWithMarkers = getCombinedContentWithMarkers(contentWithChips);
       // Build output style config from selected style
       const outputStyleConfig = selectedStyleId
         ? responseStyles.find(s => s.id === selectedStyleId)
@@ -965,6 +902,14 @@ export function MessageInput({
       const styleOpts = outputStyleConfig
         ? { name: outputStyleConfig.name, prompt: outputStyleConfig.prompt, keepCodingInstructions: outputStyleConfig.keepCodingInstructions }
         : null;
+
+      // Files are a subset of attachments (kind=file or kind=image). The
+      // rest (pasted-text, terminal-ref, browser-ref, file-tree-ref) is
+      // baked into `content` via `buildContentWithChips` and is NOT
+      // passed to the file upload pipeline.
+      const fileAttachments = attachments.filter(
+        (a) => a.kind === 'file' || a.kind === 'image',
+      );
 
       // Check for direct slash commands
       const slashResult = resolveDirectSlash(trimmedValue);
@@ -974,36 +919,25 @@ export function MessageInput({
           onClearMessages?.();
           clearDraft();
           setInputValue('');
-          setFileChips([]);
-          setTerminalReferenceChips([]);
-          setBrowserReferenceChips([]);
-          clearPastedContents();
+          clearAttachments();
           return;
         }
         if (cmd === '/recap') {
           onCommand?.(cmd);
           clearDraft();
           setInputValue('');
-          setFileChips([]);
-          setTerminalReferenceChips([]);
-          setBrowserReferenceChips([]);
-          clearPastedContents();
-          clearFiles();
+          clearAttachments();
           return;
         }
         const result = onExecuteCommand?.(cmd);
         if (result) {
           // Show command result as a message
-          onSend(result.content, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode);
+          onSend(result.content, fileAttachments.length > 0 ? fileAttachments : undefined, styleOpts, sendMode);
           setSendMode(undefined);
         }
         clearDraft();
         setInputValue('');
-        setFileChips([]);
-        setTerminalReferenceChips([]);
-        setBrowserReferenceChips([]);
-        clearPastedContents();
-        clearFiles();
+        clearAttachments();
         return;
       }
 
@@ -1012,19 +946,15 @@ export function MessageInput({
       if (cliBadge) setCliBadge(null);
 
       clearDraft();
-      onSend(contentWithMarkers, attachedFiles.length > 0 ? attachedFiles : undefined, styleOpts, sendMode, displayContentWithChips);
+      onSend(modelContent, fileAttachments.length > 0 ? fileAttachments : undefined, styleOpts, sendMode, displayContentWithChips);
       setSendMode(undefined);
       setInputValue('');
-      setFileChips([]);
-      setTerminalReferenceChips([]);
-      setBrowserReferenceChips([]);
-      clearPastedContents();
-      clearFiles();
+      clearAttachments();
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, disabled, isStreaming, isParsing, cliBadge, attachedFiles, hasPastedContents, fileChips, terminalReferenceChips, browserReferenceChips, buildContentWithChips, buildDisplayContentWithChips, getCombinedContentWithMarkers, clearPastedContents, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
+    [inputValue, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, buildDisplayContentWithChips, clearAttachments, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
   );
 
   const handleKeyDown = useCallback(
@@ -1058,13 +988,13 @@ export function MessageInput({
       // Submit on Enter (without shift)
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        const hasContent = inputValue.trim() || hasPastedContents || attachedFiles.length > 0 || fileChips.length > 0 || terminalReferenceChips.length > 0 || browserReferenceChips.length > 0;
+        const hasContent = inputValue.trim() || attachments.length > 0;
         if (hasContent) {
           handleSubmit({ preventDefault: () => {} } as FormEvent);
         }
       }
     },
-    [isStreaming, inputValue, hasPastedContents, attachedFiles, fileChips, terminalReferenceChips, browserReferenceChips, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
+    [isStreaming, inputValue, attachments, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
   );
 
   const handleStop = useCallback(() => {
@@ -1133,80 +1063,18 @@ export function MessageInput({
               </div>
             </div>
           )}
-          {/* File Attachments Square Cards - Inside input box */}
-          {attachedFiles.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-2">
-              {attachedFiles.map((file) => (
-                <FileAttachmentCard
-                  key={file.id}
-                  id={file.id}
-                  name={file.name}
-                  thumbnail={file.displayUrl || file.thumbnail}
-                  url={file.url}
-                  onRemove={removeFile}
-                  width={104}
-                />
-              ))}
-            </div>
-          )}
-
-          {/* Pasted Content Attachments - Inside input box */}
-          <PastedContentList contents={pastedContents} onRemove={removePastedContent} />
-
-          {/* File Chips from file tree - Inline style */}
-          {fileChips.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {fileChips.map((chip) => (
-                <div
-                  key={chip.id}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium border"
-                  style={{
-                    backgroundColor: 'var(--accent-soft)',
-                    color: 'var(--accent)',
-                    borderColor: 'var(--accent-soft)',
-                  }}
-                >
-                  <FileIcon size={12} />
-                  <span className="truncate max-w-[150px]">{chip.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeFileChip(chip.id)}
-                    className="w-4 h-4 rounded-full flex items-center justify-center hover:bg-accent/30 transition-colors"
-                    style={{ color: 'var(--accent)' }}
-                  >
-                    <XIcon size={10} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {terminalReferenceChips.length > 0 && (
-            <div className="terminal-reference-chip-list">
-              {terminalReferenceChips.map((chip) => {
-                const firstLine = chip.text.split(/\r?\n/).find((line) => line.trim())?.trim() || "Terminal selection";
-                const lineCount = chip.text.split(/\r?\n/).length;
-                return (
-                  <div
-                    key={chip.id}
-                    className="terminal-reference-chip"
-                    title={`${chip.shell} - ${chip.cwd}\n${chip.text}`}
-                  >
-                    <button
-                      type="button"
-                      className="terminal-reference-chip-remove"
-                      onClick={() => removeTerminalReferenceChip(chip.id)}
-                      aria-label="Remove terminal reference"
-                    >
-                      <XIcon size={10} />
-                    </button>
-                    <span className="terminal-reference-chip-label">{firstLine}</span>
-                    <span className="terminal-reference-chip-meta">{lineCount}行</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {/* Plan 220 Phase 4: unified attachment bar above the editor.
+              All 5 attachment kinds (file / image / pasted-text /
+              terminal-ref / browser-ref / file-tree-ref) render through
+              this single component. */}
+          <AttachmentBar
+            attachments={attachments}
+            mode="input"
+            onRemove={(id) => {
+              removeAttachment(id);
+              requestAnimationFrame(() => adjustTextareaHeight());
+            }}
+          />
 
           {/* Textarea */}
           <RichTextInput
@@ -1217,10 +1085,6 @@ export function MessageInput({
             onPaste={handlePasteEvent}
             placeholder={cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
             disabled={disabled}
-            terminalReferenceChips={terminalReferenceChips}
-            onRemoveTerminalReferenceChip={removeTerminalReferenceChip}
-            browserReferenceChips={browserReferenceChips}
-            onRemoveBrowserReferenceChip={removeBrowserReferenceChip}
           />
 
           {/* CLI Badge */}
@@ -1311,7 +1175,14 @@ export function MessageInput({
                 type="file"
                 multiple
                 className="hidden"
-                onChange={handleFileInput}
+                onChange={async (e) => {
+                  const input = e.target;
+                  if (!input.files) return;
+                  for (const file of Array.from(input.files)) {
+                    await addFile(file);
+                  }
+                  input.value = '';
+                }}
               />
 
               {/* Model Selector */}
@@ -1372,7 +1243,7 @@ export function MessageInput({
               )}
               <button
                 type="submit"
-                disabled={disabled || (!inputValue.trim() && !hasPastedContents && attachedFiles.length === 0 && fileChips.length === 0 && terminalReferenceChips.length === 0 && browserReferenceChips.length === 0)}
+                disabled={disabled || (!inputValue.trim() && attachments.length === 0)}
                 className="w-8 h-8 rounded-full text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-colors ml-1"
                 style={{ backgroundColor: 'var(--send-btn)' }}
                 onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--send-btn-hover)'; }}

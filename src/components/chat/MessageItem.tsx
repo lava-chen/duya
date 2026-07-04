@@ -16,6 +16,7 @@ import {
 import { FileAttachmentCard } from './FileAttachmentCard';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
+import { decodeMessageAttachments } from '@/lib/decode-message-attachments';
 import { parseAllShowWidgets } from '@/lib/widget-parser';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
@@ -177,11 +178,9 @@ function extractMarkdownFromBlocks(content: string | unknown[]): string {
 
 function AssistantContent({
   text,
-  pastedContents,
   sourceMessageId,
 }: {
   text: string;
-  pastedContents: PastedContentInfo[];
   sourceMessageId?: string;
 }) {
   const hasWidgetFence = text.includes('```show-widget');
@@ -678,6 +677,7 @@ function toolResultsEqual(a: ToolResultInfo[] = [], b: ToolResultInfo[] = []): b
       || left.content !== right.content
       || left.is_error !== right.is_error
       || left.duration_ms !== right.duration_ms
+      || JSON.stringify(left.metadata ?? null) !== JSON.stringify(right.metadata ?? null)
     ) {
       return false;
     }
@@ -709,7 +709,6 @@ function MessageItemComponent({ message, toolResults = [], onToolResult, mergedM
   const [previewPastedContent, setPreviewPastedContent] = useState<{ id: string; content: string; preview: string } | null>(null);
 
   const { t, locale } = useTranslation();
-  const isSubAgentSession = !!useConversationStore(s => s.parentSessionId);
   const activeThreadId = useConversationStore(s => s.activeThreadId);
   const threads = useConversationStore(s => s.threads);
   const workingDirectory = threads.find(thread => thread.id === activeThreadId)?.workingDirectory;
@@ -723,18 +722,35 @@ function MessageItemComponent({ message, toolResults = [], onToolResult, mergedM
     return map;
   }, [toolResults]);
 
-  // Parse main message content (including pasted content markers)
-  // For user messages with displayContent, render the original prompt
-  // instead of the full assembled context (pre-analysis + attachment text)
-  const { text: mainText, pastedContents } = useMemo(() => {
-    const displaySource = message.role === 'user' && message.displayContent !== undefined && !(typeof message.displayContent === 'string' && message.displayContent.length === 0)
-      ? message.displayContent
-      : message.content;
+  // Parse main message content (including pasted content markers).
+// For user messages with displayContent, render the original prompt
+// instead of the full assembled context (pre-analysis + attachment text).
+//
+// Plan 220 Phase 3: route through `decodeMessageAttachments` so legacy
+// `<pasted-content>` and `[[duya-browser-ref:...]]` markers found in
+// `content` are promoted to typed attachments and stripped from the
+// returned text. New messages never hit this path because the write
+// side no longer emits markers.
+const { text: mainText, pastedContents } = useMemo(() => {
+    const displaySource =
+      message.role === 'user' &&
+      message.displayContent !== undefined &&
+      !(typeof message.displayContent === 'string' && message.displayContent.length === 0)
+        ? message.displayContent
+        : message.content;
     const parsed = parseMessageContent(displaySource, message.msgType);
-    const withPasted = parseMessageContentWithPasted(parsed.text);
+    const decoded = decodeMessageAttachments(parsed.text, message.attachments);
     return {
-      text: withPasted.text,
-      pastedContents: withPasted.pastedContents,
+      text: decoded.text,
+      pastedContents: decoded.attachments
+        .filter(
+          (a): a is FileAttachment & { kind: 'pasted-text' } => a.kind === 'pasted-text',
+        )
+        .map((a) => ({
+          id: a.id,
+          preview: a.previewText ?? '',
+          fullContent: a.text ?? '',
+        })),
     };
   }, [message.content, message.displayContent, message.msgType, message.role]);
 
@@ -1101,13 +1117,12 @@ function MessageItemComponent({ message, toolResults = [], onToolResult, mergedM
             {hasToolActions && (
               <ToolActionsGroup
                 actions={toolOnlyActions}
-                flat={isSubAgentSession}
                 totalDurationMs={totalRoundDurationMs}
               />
             )}
             <InterleavedContent actions={actions} sourceMessageId={message.id} />
             {finalText && (
-              <AssistantContent text={finalText} pastedContents={allPastedContents} sourceMessageId={message.id} />
+              <AssistantContent text={finalText} sourceMessageId={message.id} />
             )}
           </>
         ) : (
@@ -1115,12 +1130,11 @@ function MessageItemComponent({ message, toolResults = [], onToolResult, mergedM
             {hasActions && (
               <ToolActionsGroup
                 actions={actions}
-                flat={isSubAgentSession}
                 totalDurationMs={totalRoundDurationMs}
               />
             )}
             {finalText && (
-              <AssistantContent text={finalText} pastedContents={allPastedContents} sourceMessageId={message.id} />
+              <AssistantContent text={finalText} sourceMessageId={message.id} />
             )}
           </>
         )}
