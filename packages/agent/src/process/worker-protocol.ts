@@ -71,6 +71,12 @@ export interface ChatStartCommand {
      * `thinking.budget_tokens` by the LLM client.
      */
     effort?: string;
+    /**
+     * Allowlist of tool names permitted for this chat turn. When set, only
+     * tools whose name is in this list are exposed to the LLM. Used by
+     * interagent `minimal` mode to restrict the target agent to Read/Grep/Glob.
+     */
+    allowedTools?: string[];
   };
 }
 

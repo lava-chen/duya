@@ -1365,7 +1365,8 @@ export class duyaAgent {
   /**
    * Build the tool list for this turn.
    *
-   * Two layers of filtering are applied in order:
+   * Three layers of filtering are applied in order:
+   *   0. `options.allowedTools` — caller-supplied hard allowlist (most restrictive)
    *   1. `options.disabledTools` — caller-supplied hard denylist
    *   2. `appliedProfile.allowedTools/disallowedTools` — agent profile policy
    *
@@ -1416,6 +1417,15 @@ export class duyaAgent {
     }
     const allTools = registry.getAllTools();
     let tools: Tool[] = allTools;
+
+    // Layer 0: caller-supplied allowlist (interagent minimal mode)
+    if (options?.allowedTools?.length) {
+      const allowedSet = new Set(options.allowedTools);
+      tools = tools.filter((t) => allowedSet.has(t.name));
+      logger.info(
+        `[Agent] streamChat: Filtered tools by allowedTools allowlist, ${tools.length}/${allTools.length} enabled`
+      );
+    }
 
     // Layer 1: caller-supplied denylist
     if (options?.disabledTools?.length) {

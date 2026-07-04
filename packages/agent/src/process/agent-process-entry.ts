@@ -187,6 +187,12 @@ interface ChatStartMessage {
     titleGenerationModel?: string;
     titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
     effort?: string;
+    /**
+     * Allowlist of tool names permitted for this chat turn. When set, only
+     * tools whose name is in this list are exposed to the LLM. Used by
+     * interagent `minimal` mode to restrict the target agent to Read/Grep/Glob.
+     */
+    allowedTools?: string[];
   };
 }
 
@@ -1629,6 +1635,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       attachments: files,
       displayContent: msg.options?.displayContent,
       effort: msg.options?.effort,
+      allowedTools: msg.options?.allowedTools,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
