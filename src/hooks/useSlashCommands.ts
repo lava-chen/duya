@@ -11,16 +11,11 @@ import {
   Brain,
   GlobeSimple,
   ClockCounterClockwise,
-  Code,
-  Sparkle,
-  Wrench,
-  GitBranch,
   ListChecks,
-  Database,
-  DownloadSimple,
   Paperclip,
   Feather,
   Plug,
+  SquareHalf,
 } from '@phosphor-icons/react';
 import { TelescopeIcon } from '@/components/icons';
 
@@ -29,14 +24,7 @@ const HIDDEN_COMMANDS = new Set(['/help', '/status', '/cost', '/new', '/clear', 
 
 // Per-command icons for built-in slash commands that remain in the popover.
 const COMMAND_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
-  '/compact': Brain,
-  '/memory': Database,
-  '/export': DownloadSimple,
   '/recap': ClockCounterClockwise,
-  '/review': Code,
-  '/simplify': Sparkle,
-  '/doctor': Wrench,
-  '/commit': GitBranch,
 };
 
 // Category fallback icons.
@@ -201,15 +189,25 @@ export function useSlashCommands(opts: {
         modeValue: 'research',
         group: 'mode' as const,
       },
+      {
+        label: isZh ? 'Conductor 画布' : 'Conductor Canvas',
+        value: '__conductor_toggle',
+        description: isZh ? '注入画布操作工具，agent 可控制 conductor 画布' : 'Inject canvas tools, agent can control conductor canvas',
+        icon: SquareHalf,
+        kind: 'conductor_toggle' as const,
+        group: 'mode' as const,
+      },
     ];
   }, [locale]);
 
   // Built-in slash commands from registry (filtered).
+  // Only /recap is kept in the popover; other built-ins are hidden until
+  // their execution logic is wired up.
   const registryCommands = useMemo(() => {
     const cmds = getCommandsForPlatform('app');
     const isZh = locale === 'zh';
     return cmds
-      .filter((cmd) => !HIDDEN_COMMANDS.has(`/${cmd.name}`))
+      .filter((cmd) => cmd.name === 'recap')
       .map((cmd) => {
         const slashName = `/${cmd.name}`;
         const title = isZh
@@ -222,20 +220,13 @@ export function useSlashCommands(opts: {
           ?? CATEGORY_ICONS[cmd.category]
           ?? Terminal;
 
-        // /compact, /memory, /export, /recap are session actions (execute
-        // immediately, don't insert into input).
-        // /review, /simplify, /doctor, /commit are also session actions —
-        // they trigger a flow rather than inserting a skill badge. They
-        // belong to the settings group, not skills.
-        const isAction = ['compact', 'memory', 'export', 'recap',
-          'review', 'simplify', 'doctor', 'commit'].includes(cmd.name);
         return {
           label: title,
           value: slashName,
           description: desc,
           icon,
           builtIn: true,
-          kind: isAction ? ('settings_action' as const) : ('slash_command' as const),
+          kind: 'settings_action' as const,
           group: 'settings' as const,
         };
       });

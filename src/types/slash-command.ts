@@ -8,7 +8,8 @@ export type PopoverItemKind =
   | 'cli_tool'
   | 'settings_action'   // execute immediately (add files, /compact, /memory, /export, /recap)
   | 'settings_submenu'  // open a sub-view (thinking, style, mcp)
-  | 'mode';             // toggle a mode (plan, research)
+  | 'mode'              // toggle a mode (plan, research)
+  | 'conductor_toggle'; // toggle Conductor canvas injection (independent of modes)
 
 export type PopoverItemGroup = 'settings' | 'mode' | 'skills';
 

@@ -39,6 +39,10 @@ export interface Thread {
   agentType?: string;
   /** Agent name for display */
   agentName?: string;
+  /** Conductor mode: 1 = enabled (canvas tools injected), 0 = disabled */
+  conductorModeEnabled?: number;
+  /** Conductor canvas ID bound to this session (when conductor mode is on) */
+  conductorCanvasId?: string | null;
 }
 
 // Project group for sidebar display
@@ -120,6 +124,8 @@ interface ConversationState {
   updateThreadTitle: (id: string, title: string) => void;
   setThreadWorkingDirectory: (id: string, workingDirectory: string, projectName: string) => void;
   setThreadModel: (id: string, model: string, providerId?: string) => void;
+  /** Update conductor mode binding on the thread (local + DB IPC). */
+  setThreadConductorBinding: (id: string, enabled: boolean, canvasId: string | null) => void;
   addProjectFolder: (workingDirectory: string) => Promise<ProjectGroup | null>;
   toggleProjectExpanded: (workingDirectory: string) => void;
   toggleThreadExpanded: (threadId: string) => void;
@@ -590,6 +596,22 @@ export const useConversationStore = create<ConversationState>()(
         if (thread) {
           get().syncThreadToDatabase(thread);
         }
+      },
+
+      setThreadConductorBinding: (id, enabled, canvasId) => {
+        set((state) => ({
+          threads: state.threads.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  conductorModeEnabled: enabled ? 1 : 0,
+                  conductorCanvasId: canvasId,
+                  updatedAt: Date.now(),
+                }
+              : t
+          ),
+        }));
+        // DB persistence is handled by the caller via session.setConductorMode IPC.
       },
 
       addProjectFolder: async (workingDirectory) => {

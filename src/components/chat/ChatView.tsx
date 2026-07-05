@@ -41,6 +41,7 @@ import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
 import { usePanel } from '@/hooks/usePanel';
+import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
 
 interface ChatViewProps {
   sessionId: string;
@@ -49,7 +50,7 @@ interface ChatViewProps {
    * 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生.
    * 第一个参数 permissionMode 保留签名兼容 (App.handleSendMessage 还在声明), 但不使用.
    */
-  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string) => void;
+  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string, conductorMode?: boolean) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
   hasQueuedMessages?: boolean;
@@ -157,7 +158,13 @@ export function ChatView({
   const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
   const taskDrawerOpen = useTaskDrawerOpen();
-  const { workspaceExpanded } = usePanel();
+  const { workspaceExpanded, openOrActivatePage } = usePanel();
+
+  // Conductor mode is independent of plan/research modes — separate state.
+  // conductorCanvasId is the durable binding to the sidebar canvas; when
+  // conductor is enabled and no canvas exists yet, one is created lazily.
+  const [conductorEnabled, setConductorEnabled] = useState(false);
+  const [conductorCanvasId, setConductorCanvasId] = useState<string | null>(null);
 
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);
@@ -317,11 +324,25 @@ export function ChatView({
               setAgentMode('main');
               setAgentProfileId(getProfileIdForMode('main'));
             }
+
+            // Restore conductor mode state from the session row. When the
+            // session has a bound canvas, reopen the sidebar conductor panel
+            // so the user sees their canvas on thread load.
+            if (data.thread.conductorModeEnabled) {
+              setConductorEnabled(true);
+              setConductorCanvasId(data.thread.conductorCanvasId ?? null);
+              if (data.thread.conductorCanvasId) {
+                openOrActivatePage('conductor', { canvasId: data.thread.conductorCanvasId });
+              }
+            } else {
+              setConductorEnabled(false);
+              setConductorCanvasId(null);
+            }
           }
         })
         .catch(console.error);
     }
-  }, [sessionId, settings.lastSelectedModel]);
+  }, [sessionId, settings.lastSelectedModel, openOrActivatePage]);
 
   // Parse UI model format "[providerName] modelId" to extract pure model name
   const parseModelName = useCallback((model: string): { providerName: string | null; modelName: string } => {
@@ -477,9 +498,78 @@ export function ChatView({
       }
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent);
+      onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled);
     },
-    [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort]
+    [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort, conductorEnabled]
+  );
+
+  // Toggle conductor mode for the current session. On enable, resolve the
+  // canvas ID with the following priority (per project requirement:
+  // "默认是项目画布；用户在侧栏手动打开其他画布则以侧栏为准"):
+  //   1. Sidebar active canvas id (user explicitly opened another canvas)
+  //   2. Session-bound canvas id (already stored on the session row)
+  //   3. Project canvas (looked up by workingDirectory via project_path)
+  //   4. Otherwise create a new project canvas named after projectName and
+  //      bind it to the project path so subsequent sessions reuse it.
+  // Reopening the sidebar conductor panel is deferred to the IPC success
+  // path so a failed write doesn't open an orphan panel.
+  const handleConductorChange = useCallback(
+    async (enabled: boolean) => {
+      if (!sessionId) return;
+      setConductorEnabled(enabled);
+      if (!enabled) {
+        try {
+          await window.electronAPI.session.setConductorMode(sessionId, false, conductorCanvasId ?? null);
+          useConversationStore.getState().setThreadConductorBinding(sessionId, false, conductorCanvasId ?? null);
+        } catch (err) {
+          console.error('[ChatView] setConductorMode IPC failed (disable)', err);
+        }
+        return;
+      }
+
+      let canvasId: string | null =
+        useConductorStore.getState().activeCanvasId ??
+        conductorCanvasId ??
+        null;
+
+      const thread = useConversationStore.getState().threads.find((t) => t.id === sessionId);
+      const workingDirectory = thread?.workingDirectory ?? null;
+      const projectName = thread?.projectName || (workingDirectory ? workingDirectory.split(/[\\/]/).pop() ?? 'Untitled' : 'Untitled');
+
+      if (!canvasId && workingDirectory) {
+        try {
+          const existing = await window.electronAPI.conductor.getCanvasByProjectPath(workingDirectory);
+          canvasId = (existing as { id?: string } | null)?.id ?? null;
+        } catch (err) {
+          console.error('[ChatView] getCanvasByProjectPath failed', err);
+        }
+      }
+
+      if (!canvasId) {
+        try {
+          const newCanvas = await window.electronAPI.conductor.createCanvas({
+            name: projectName,
+            projectPath: workingDirectory ?? null,
+          });
+          canvasId = (newCanvas as { id?: string } | null)?.id ?? null;
+        } catch (err) {
+          console.error('[ChatView] failed to create conductor canvas', err);
+        }
+      }
+
+      if (canvasId) setConductorCanvasId(canvasId);
+
+      try {
+        await window.electronAPI.session.setConductorMode(sessionId, true, canvasId ?? null);
+        useConversationStore.getState().setThreadConductorBinding(sessionId, true, canvasId ?? null);
+      } catch (err) {
+        console.error('[ChatView] setConductorMode IPC failed', err);
+      }
+      if (canvasId) {
+        openOrActivatePage('conductor', { canvasId });
+      }
+    },
+    [sessionId, conductorCanvasId, openOrActivatePage],
   );
 
   const handleStop = useCallback(() => {
@@ -732,6 +822,8 @@ export function ChatView({
                     permissionUpdatePending={permissionUpdatePending}
                     placeholder={t('chat.typeMessage')}
                     messages={messages}
+                    conductorEnabled={conductorEnabled}
+                    onConductorChange={handleConductorChange}
                     // Welcome page: input sits in the middle, popup must open
                     // below so it doesn't cover the heading / selector above.
                     popoverPlacement="bottom"
@@ -867,6 +959,8 @@ export function ChatView({
                 permissionUpdatePending={permissionUpdatePending}
                 placeholder={t('chat.typeMessage')}
                 messages={messages}
+                conductorEnabled={conductorEnabled}
+                onConductorChange={handleConductorChange}
               />
             )}
 

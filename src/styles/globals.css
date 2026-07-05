@@ -11369,25 +11369,6 @@ html[data-message-font-size="large"] .prose h3 {
 .conductor-resize-handle.w { left: -5px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
 .conductor-resize-handle.e { right: -5px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
 
-/* Sticky note corner curl */
-.conductor-sticky-curl {
-  position: relative;
-}
-
-.conductor-sticky-curl::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 0;
-  height: 0;
-  border-style: solid;
-  border-width: 0 12px 12px 0;
-  border-color: transparent rgba(0, 0, 0, 0.06) transparent transparent;
-  border-top-right-radius: var(--radius-element);
-  pointer-events: none;
-}
-
 /* Error toast */
 .conductor-error-toast {
   background: var(--panel-bg-solid);
