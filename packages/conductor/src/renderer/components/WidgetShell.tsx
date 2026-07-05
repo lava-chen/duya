@@ -46,6 +46,26 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
     }).catch(() => {});
   };
 
+  // Dynamic widgets are agent-generated HTML/SVG. They already provide
+  // their own visual container (background, borders, title), so we render
+  // them without the builtin widget shell/header.
+  if (dynamicDef?.renderMode === "iframe" && dynamicDef.sanitizedHtml) {
+    return (
+      <div
+        ref={captureRef}
+        data-testid={`widget-shell-${widget.id}`}
+        className="w-full h-full overflow-hidden"
+      >
+        <iframe
+          srcDoc={dynamicDef.sanitizedHtml}
+          sandbox="allow-scripts"
+          style={{ width: "100%", height: "100%", border: "none", pointerEvents: "none" }}
+          title="widget-dynamic"
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={captureRef}
@@ -91,13 +111,6 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
           <div className="flex items-center justify-center h-full text-xs text-[var(--error)]">
             Widget failed to load
           </div>
-        ) : dynamicDef?.renderMode === "iframe" && dynamicDef.sanitizedHtml ? (
-          <iframe
-            srcDoc={dynamicDef.sanitizedHtml}
-            sandbox="allow-scripts"
-            style={{ width: "100%", height: "100%", border: "none", pointerEvents: "none" }}
-            title="widget-dynamic"
-          />
         ) : WidgetContent ? (
           <WidgetContent
             data={widget.data}

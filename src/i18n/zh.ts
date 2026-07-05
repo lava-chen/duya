@@ -812,6 +812,8 @@ const zh: Record<TranslationKey, string> = {
   'fileTree.noFiles': '未找到文件',
   'fileTree.selectFolder': '选择项目文件夹以查看文件',
 
+  'filePreview.frontmatterTitle': '文档信息',
+
   'project.selectFolder': '选择文件夹',
   'project.recentProjects': '最近的项目',
   'project.noRecent': '暂无最近项目',

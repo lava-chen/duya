@@ -112,6 +112,14 @@ export class AgentServerClient {
       promptLength: prompt.length,
       filesCount: options?.files?.length,
       baseUrl,
+      options: {
+        agentProfileId: options?.agentProfileId,
+        mode: options?.mode,
+        conductorMode: options?.conductorMode,
+        conductorCanvasId: options?.conductorCanvasId,
+        wikiAgentEnabled: options?.wikiAgentEnabled,
+        effort: options?.effort,
+      },
     });
 
     let streamEndedCleanly = false;

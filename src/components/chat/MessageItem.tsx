@@ -755,8 +755,11 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
       // Plan 220: all non-file/image kinds (pasted-text, terminal-ref,
       // browser-ref, file-tree-ref) render through AttachmentBar in
       // history mode for visual consistency with the input view.
+      // `kind === undefined` is excluded here so legacy file/image
+      // attachments (persisted before the discriminator existed) are
+      // rendered by FileAttachmentCard above the bubble, not as chips.
       refAttachments: decoded.attachments.filter(
-        (a) => a.kind !== 'file' && a.kind !== 'image',
+        (a) => a.kind !== 'file' && a.kind !== 'image' && a.kind !== undefined,
       ),
     };
   }, [message.content, message.displayContent, message.msgType, message.role]);
@@ -971,8 +974,14 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
   }, [displayText, isUser]);
 
   const hasAttachments = message.attachments && message.attachments.length > 0;
-  const imageAttachments = message.attachments?.filter(a => a.type.startsWith('image/')) || [];
-  const fileAttachments = message.attachments?.filter(a => !a.type.startsWith('image/')) || [];
+  // Render image attachments alongside file attachments. Pasted images
+  // store a data URL on `url` (no `thumbnail`/`displayUrl`), so pass
+  // `url` through as a preview-source fallback for image kinds.
+  // `kind === undefined` covers legacy attachments persisted before
+  // Plan 220 introduced the discriminator — they are all file/image.
+  const fileAttachments = message.attachments?.filter(
+    (a) => a.kind === 'file' || a.kind === 'image' || a.kind === undefined,
+  ) || [];
 
   if (message.isCompactBoundary) {
     return (
@@ -1001,7 +1010,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     return (
       <div data-message-id={message.id} className="flex justify-end py-3 px-4 group">
         <div className="max-w-[85%] lg:max-w-[75%] flex flex-col items-end">
-          {/* File Attachments (PDF, DOCX, etc.) - Above message bubble */}
+          {/* File & Image Attachments (PDF, DOCX, PNG, etc.) - Above message bubble */}
           {fileAttachments.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">
               {fileAttachments.map((attachment) => (
@@ -1009,16 +1018,18 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                   key={attachment.id}
                   id={attachment.id}
                   name={attachment.name}
-                  thumbnail={attachment.thumbnail}
+                  thumbnail={
+                    attachment.displayUrl
+                    || attachment.thumbnail
+                    || (attachment.kind === 'image' ? attachment.url : undefined)
+                  }
+                  url={attachment.url}
                   width={120}
                   onClick={() => handleOpenAttachmentPreview(attachment)}
                 />
               ))}
             </div>
           )}
-          {/* Image attachments are not rendered as a card here — the
-              chat bubble / file preview already surfaces the image.
-              Plan 220 user feedback: drop image card entirely. */}
           {/* Plan 220: Unified reference attachment cards (pasted-text,
               terminal-ref, browser-ref, file-tree-ref). Replaces the
               bespoke pasted-content list and BrowserReferenceCard. */}

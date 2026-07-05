@@ -5,9 +5,8 @@ import { ResponsiveGridLayout, useContainerWidth } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import { useConductorStore } from "..//stores/conductor-store";
-import { widgetRegistry } from "..//widgets/registry";
-import { WidgetShell } from "./WidgetShell";
-import type { ConductorWidget, CanvasElement } from "..//types/conductor";
+import { WidgetElement } from "..//elements/WidgetElement";
+import type { CanvasElement } from "..//types/conductor";
 import { executeAction } from "..//ipc/conductor-ipc";
 
 const COLS = { lg: 12, md: 8, sm: 4 };
@@ -19,57 +18,7 @@ interface WidgetLayerProps {
   readOnly: boolean;
 }
 
-function elementToConductorWidget(el: CanvasElement): ConductorWidget {
-  const widgetType = el.elementKind.replace("widget/", "");
-  const def = widgetRegistry.get(widgetType);
-
-  let widgetData: Record<string, unknown> = {};
-  let widgetConfig: Record<string, unknown> = el.config;
-
-  if (def) {
-    const configKeySet = new Set(Object.keys(def.defaultConfig));
-    const data: Record<string, unknown> = {};
-    const config: Record<string, unknown> = {};
-
-    for (const [key, value] of Object.entries(el.config)) {
-      if (configKeySet.has(key)) {
-        config[key] = value;
-      } else {
-        data[key] = value;
-      }
-    }
-
-    widgetData = Object.keys(data).length > 0 ? data : (def.defaultData as Record<string, unknown>);
-    widgetConfig = { ...def.defaultConfig, ...config };
-  }
-
-  return {
-    id: el.id,
-    canvasId: el.canvasId,
-    kind: "builtin",
-    type: widgetType,
-    position: {
-      x: el.position.x,
-      y: el.position.y,
-      w: el.position.w,
-      h: el.position.h,
-    },
-    config: widgetConfig,
-    data: widgetData,
-    dataVersion: el.dataVersion,
-    sourceCode: el.sourceCode,
-    state: el.state === "error" ? "error" : el.state === "loading" ? "loading" : "idle",
-    permissions: {
-      agentCanRead: el.permissions.agentCanRead,
-      agentCanWrite: el.permissions.agentCanWrite,
-      agentCanDelete: el.permissions.agentCanDelete,
-    },
-    createdAt: el.createdAt,
-    updatedAt: el.updatedAt,
-  };
-}
-
-function elementToLayoutItem(el: CanvasElement): LayoutItem {
+function elementToLayoutItem(el: CanvasElement, readOnly: boolean): LayoutItem {
   return {
     i: el.id,
     x: el.position.x,
@@ -78,24 +27,19 @@ function elementToLayoutItem(el: CanvasElement): LayoutItem {
     h: el.position.h,
     minW: 2,
     minH: 2,
-    isDraggable: !false,
-    isResizable: !false,
+    isDraggable: !readOnly,
+    isResizable: !readOnly,
   };
 }
 
 export const WidgetLayer: React.FC<WidgetLayerProps> = ({ elements, readOnly }) => {
-  const { activeCanvasId, updateElement } = useConductorStore();
+  const { activeCanvasId } = useConductorStore();
   const { width, containerRef } = useContainerWidth();
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  const widgets = useMemo(
-    () => elements.map((el) => elementToConductorWidget(el)),
-    [elements]
-  );
-
   const layout = useMemo<LayoutItem[]>(
-    () => elements.map((el) => elementToLayoutItem(el)),
-    [elements]
+    () => elements.map((el) => elementToLayoutItem(el, readOnly)),
+    [elements, readOnly]
   );
 
   const debouncedSave = useCallback(
@@ -157,24 +101,26 @@ export const WidgetLayer: React.FC<WidgetLayerProps> = ({ elements, readOnly }) 
   );
 
   return (
-    <ResponsiveGridLayout
-      className="layout widget-layer"
-      width={Math.max(width, 1200)}
-      layouts={{ lg: layout }}
-      breakpoints={BREAKPOINTS}
-      cols={COLS}
-      rowHeight={80}
-      onLayoutChange={handleLayoutChange}
-      onDragStop={handleDragStop}
-      onResizeStop={handleResizeStop}
-      margin={[16, 16]}
-      containerPadding={[16, 16]}
-    >
-      {widgets.map((widget) => (
-        <div key={widget.id}>
-          <WidgetShell widget={widget} />
-        </div>
-      ))}
-    </ResponsiveGridLayout>
+    <div ref={containerRef} className="w-full h-full">
+      <ResponsiveGridLayout
+        className="layout widget-layer"
+        width={Math.max(width, 1200)}
+        layouts={{ lg: layout }}
+        breakpoints={BREAKPOINTS}
+        cols={COLS}
+        rowHeight={80}
+        onLayoutChange={handleLayoutChange}
+        onDragStop={handleDragStop}
+        onResizeStop={handleResizeStop}
+        margin={[16, 16]}
+        containerPadding={[16, 16]}
+      >
+        {elements.map((el) => (
+          <div key={el.id}>
+            <WidgetElement element={el} readOnly={readOnly} />
+          </div>
+        ))}
+      </ResponsiveGridLayout>
+    </div>
   );
 };

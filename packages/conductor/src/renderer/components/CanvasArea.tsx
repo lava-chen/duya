@@ -38,6 +38,10 @@ function snapToGrid(value: number, grid = SNAP_GRID): number {
   return Math.round(value / grid) * grid;
 }
 
+// Snap a value expressed in grid units to the SNAP_GRID pixel granularity.
+// (SNAP_GRID is in pixels; grid-unit values must be scaled by GRID_PX first.)
+const snapGridUnits = (v: number) => snapToGrid(v, SNAP_GRID / GRID_PX);
+
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
   sticky: { w: 3, h: 3, zIndex: 0 },
   image: { w: 5, h: 4, zIndex: 0 },
@@ -443,12 +447,15 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const primary = latestElements.find((el) => el.id === d.elementId);
       const primaryStart = targets.get(d.elementId);
       if (primary && primaryStart) {
+        // Use raw (unsnapped) position during the live drag so the element
+        // follows the cursor pixel-by-pixel. Grid snapping happens on commit
+        // (mouseup) — see handleGlobalUp.
         const proposedPrimary: CanvasElement = {
           ...primary,
           position: {
             ...primary.position,
-            x: snapToGrid(primaryStart.origX + dxGrid),
-            y: snapToGrid(primaryStart.origY + dyGrid),
+            x: primaryStart.origX + dxGrid,
+            y: primaryStart.origY + dyGrid,
           },
         };
         guideOffset = computeAlignmentSnap(proposedPrimary, latestElements, skippedIds);
@@ -468,8 +475,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             ...el,
             position: {
               ...el.position,
-              x: snapToGrid(target.origX + dxGrid) + guideDxGrid,
-              y: snapToGrid(target.origY + dyGrid) + guideDyGrid,
+              x: target.origX + dxGrid + guideDxGrid,
+              y: target.origY + dyGrid + guideDyGrid,
             },
           };
         }),
@@ -508,9 +515,27 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         }
 
         if (d.moved && onPositionChange) {
-          const { elements: els } = useConductorStore.getState();
+          // Snap final positions to grid on commit — during the drag the
+          // element followed the cursor raw; now we round to the grid so
+          // the layout stays tidy. Positions are in grid units, so use
+          // snapGridUnits (SNAP_GRID/GRID_PX) not the pixel-space snapToGrid.
+          useConductorStore.setState((state) => ({
+            elements: state.elements.map((el) => {
+              const tgt = d.targets.find((t) => t.id === el.id);
+              if (!tgt) return el;
+              return {
+                ...el,
+                position: {
+                  ...el.position,
+                  x: snapGridUnits(el.position.x),
+                  y: snapGridUnits(el.position.y),
+                },
+              };
+            }),
+          }));
+          const { elements: snappedEls } = useConductorStore.getState();
           d.targets.forEach((target) => {
-            const el = els.find((candidate) => candidate.id === target.id);
+            const el = snappedEls.find((candidate) => candidate.id === target.id);
             if (el) onPositionChange(el.id, el.position);
           });
         }
@@ -812,7 +837,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     }
   }, [isBoxSelecting, boxRect, freeformElements, setSelectedElementIds, syncCanvasStateToStore, setHostCursor, startInertia, springZoomToHard, isDragging]);
 
-  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+  const handleWheel = useCallback((e: WheelEvent) => {
     const host = viewportRef.current;
     if (!host) return;
     const rect = host.getBoundingClientRect();
@@ -824,8 +849,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       e.stopPropagation();
       cancelInertia();
 
-      // Apple-style: zoom proportional to deltaY, feels smoother than fixed step
-      const zoomFactor = Math.exp(-e.deltaY * 0.01);
+      // Smooth zoom: 0.0015 factor gives ~14% change per mouse-wheel notch
+      // (deltaY≈100) and stays responsive on trackpad pinch (deltaY≈1-5).
+      const zoomFactor = Math.exp(-e.deltaY * 0.0015);
       const nextZoom = clampZoomElastic(zoom * zoomFactor);
       if (Math.abs(nextZoom - zoom) < 0.001) return;
 
@@ -1160,6 +1186,18 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
   }, [setCanvasViewportSize]);
 
+  useEffect(() => {
+    const host = viewportRef.current;
+    if (!host) return;
+    // Wheel events are passive by default in modern browsers. We need to
+    // call preventDefault() to stop the page from scrolling while panning
+    // / zooming the canvas, so bind with { passive: false }.
+    host.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      host.removeEventListener("wheel", handleWheel);
+    };
+  }, [handleWheel]);
+
   const cursor = (() => {
     if (isSpaceHeld || spaceHeldRef.current) {
       if (panRef.current?.active) return "grabbing";
@@ -1183,7 +1221,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     e.preventDefault();
     e.stopPropagation();
     const { zoom } = transformRef.current;
-    const zoomFactor = Math.exp(-e.deltaY * 0.01);
+    const zoomFactor = Math.exp(-e.deltaY * 0.0015);
     const nextZoom = clampZoomHard(zoom * zoomFactor);
     if (Math.abs(nextZoom - zoom) < 0.001) return;
 
@@ -1205,7 +1243,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       className="relative h-full overflow-hidden canvas-area conductor-canvas-surface"
       ref={viewportRef}
       tabIndex={0}
-      onWheel={handleWheel}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
       onDragOver={handleDragOver}
@@ -1243,7 +1280,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               <WidgetLayer elements={widgetElements} readOnly={readOnly} />
             </div>
             <GroupLayer elements={elements} />
-            <div style={{ zIndex: 1, position: "absolute", inset: 0 }}>
+            <div style={{ zIndex: 1, position: "absolute", inset: 0, pointerEvents: "none" }}>
               <FreeformLayer
                 elements={freeformElements}
                 readOnly={readOnly}
