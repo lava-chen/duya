@@ -34,6 +34,8 @@ export interface SessionRow {
   agent_profile_id: string | null;
   agent_type: string;
   agent_name: string;
+  conductor_mode_enabled: number;
+  conductor_canvas_id: string | null;
   is_deleted: number;
   created_at: number;
   updated_at: number;
@@ -60,6 +62,8 @@ export interface CreateSessionInput {
    * 控制派生 session 显式 override 是否允许 (与 resolver 配合).
    */
   is_trusted_permission_override?: boolean;
+  conductor_mode_enabled?: number;
+  conductor_canvas_id?: string | null;
   created_at?: number;
   updated_at?: number;
 }
@@ -81,11 +85,13 @@ export function createSession(data: CreateSessionInput): SessionRow {
       id, title, model, system_prompt, working_directory,
       project_name, status, mode, provider_id, generation,
       parent_id, permission_profile, agent_type, agent_name,
+      conductor_mode_enabled, conductor_canvas_id,
       created_at, updated_at, is_deleted
     ) VALUES (
       @id, @title, @model, @system_prompt, @working_directory,
       @project_name, @status, @mode, @provider_id, @generation,
       @parent_id, @permission_profile, @agent_type, @agent_name,
+      @conductor_mode_enabled, @conductor_canvas_id,
       @created_at, @updated_at, 0
     )
     ON CONFLICT(id) DO UPDATE SET
@@ -116,6 +122,8 @@ export function createSession(data: CreateSessionInput): SessionRow {
     permission_profile: permissionProfile,
     agent_type: data.agent_type ?? 'main',
     agent_name: data.agent_name ?? '',
+    conductor_mode_enabled: data.conductor_mode_enabled ?? 0,
+    conductor_canvas_id: data.conductor_canvas_id ?? null,
     created_at: createdAt,
     updated_at: updatedAt,
   });
@@ -141,6 +149,8 @@ const SESSION_FIELD_MAP: Record<string, string> = {
   agent_profile_id: 'agent_profile_id',
   agent_type: 'agent_type',
   agent_name: 'agent_name',
+  conductor_mode_enabled: 'conductor_mode_enabled',
+  conductor_canvas_id: 'conductor_canvas_id',
 };
 
 export function updateSession(sessionId: string, data: Record<string, unknown>): SessionRow | undefined {

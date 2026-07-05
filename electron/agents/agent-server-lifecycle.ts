@@ -8,6 +8,7 @@ import { killProcessTree } from '../lib/process-cleanup';
 import { getWikiAgentRuntime, initWikiAgentRuntime } from '../wiki-agent/WikiAgentRuntime';
 import { getDatabasePath } from '../db/connection';
 import type { ChatDonePayload } from '../wiki-agent/types';
+import type { ConductorExecutorProxy, ExecutorRpcRequest } from '../conductor/executor-proxy';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -16,6 +17,11 @@ const MAX_BACKOFF = 30000;
 const BACKOFF_MULTIPLIER = 2;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isShuttingDown = false;
+let conductorExecutorProxy: ConductorExecutorProxy | null = null;
+
+export function setConductorExecutorProxy(proxy: ConductorExecutorProxy | null): void {
+  conductorExecutorProxy = proxy;
+}
 
 function getAgentServerPath(): string {
   if (app.isPackaged) {
@@ -92,6 +98,50 @@ export function spawnAgentServer(): Promise<number> {
         }).catch((error) => {
           getLogger().error('handleDbRequest failed for Agent Server', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Main);
         });
+        return;
+      }
+
+      if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string') {
+        console.error(`[RPC-DEBUG] main received: requestId=${msg.requestId}, action=${msg.action}, hasProxy=${!!conductorExecutorProxy}`);
+        if (!conductorExecutorProxy) {
+          if (!child.killed) {
+            child.send({
+              type: 'conductor:executor:rpc:response',
+              requestId: msg.requestId,
+              success: false,
+              error: { code: 'NO_PROXY', message: 'ConductorExecutorProxy not injected' },
+            });
+          }
+          return;
+        }
+        const request: ExecutorRpcRequest = {
+          requestId: msg.requestId,
+          action: msg.action,
+          payload: msg.payload,
+          sessionId: msg.sessionId,
+        };
+        conductorExecutorProxy
+          .execute(request)
+          .then((response) => {
+            console.error(`[RPC-DEBUG] main→server response: requestId=${msg.requestId}, success=${response.success}, error=${response.error ? JSON.stringify(response.error) : 'none'}`);
+            if (!child.killed) {
+              child.send({
+                type: 'conductor:executor:rpc:response',
+                requestId: msg.requestId,
+                ...response,
+              });
+            }
+          })
+          .catch((err) => {
+            if (!child.killed) {
+              child.send({
+                type: 'conductor:executor:rpc:response',
+                requestId: msg.requestId,
+                success: false,
+                error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
+              });
+            }
+          });
         return;
       }
 

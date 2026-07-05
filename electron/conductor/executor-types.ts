@@ -8,13 +8,19 @@ export type ExecutorAction =
   | 'canvas.snapshot'
   | 'canvas.capture'
   | 'element.create'
+  | 'element.batch_create'
   | 'element.update'
+  | 'element.update_content'
   | 'element.delete'
   | 'element.arrange'
   | 'element.align'
   | 'element.layout_grid'
   | 'element.create_native'
-  | 'connector.create';
+  | 'connector.create'
+  | 'group.create'
+  | 'group.ungroup'
+  | 'group.add_members'
+  | 'group.remove_members';
 
 export interface ExecutorRpcRequest {
   requestId: string;

@@ -1,3 +1,7 @@
+// @deprecated (plan 221 Phase 7): The main chat agent now handles conductor
+// mode via injection. This service is retained for reference but no longer
+// spawned. New canvas entry points forward their input to the main chat
+// session (see ObjectAgentPrompt.tsx / ConductorComposer.tsx).
 import { spawn, fork, ChildProcess } from 'child_process';
 import * as http from 'http';
 import { randomUUID } from 'crypto';
@@ -18,6 +22,12 @@ import { workerLogger } from './logger';
 
 type DbRequestFn = (action: string, payload: Record<string, unknown>) => Promise<unknown>;
 
+/**
+ * @deprecated (plan 221 Phase 7) The main chat agent now handles conductor
+ * mode via injection. This service is retained for reference but no longer
+ * the primary execution path. New canvas entry points forward their input
+ * to the main chat session (see ObjectAgentPrompt / ConductorComposer).
+ */
 export class ConductorService {
   private sessions = new Map<string, ConductorSession>();
   private workerManager: WorkerManager;
@@ -34,6 +44,11 @@ export class ConductorService {
     this.maxConcurrentSubAgents = maxConcurrentSubAgents;
   }
 
+  /**
+   * @deprecated (plan 221 Phase 7) Conductor sessions are no longer created
+   * on the legacy worker path. The main chat session carries the conductor
+   * mode flag instead.
+   */
   async createSession(canvasId: string): Promise<ConductorSession> {
     const existing = this.getSessionByCanvasId(canvasId);
     if (existing) {
@@ -93,6 +108,11 @@ export class ConductorService {
     });
   }
 
+  /**
+   * @deprecated (plan 221 Phase 7) Turns are no longer executed through the
+   * dedicated conductor worker. The main chat agent drives canvas tools
+   * directly via the injected tool registry.
+   */
   async executeTurn(
     sessionId: string,
     prompt: string,
@@ -338,6 +358,11 @@ export class ConductorService {
     }
   }
 
+  /**
+   * @deprecated (plan 221 Phase 7) Worker event routing is no longer the
+   * primary path — the main chat agent emits its own stream events. Retained
+   * for any in-flight legacy workers.
+   */
   private setupWorkerEventRouting(
     session: ConductorSession,
     child: ChildProcess,
@@ -641,7 +666,7 @@ export class ConductorService {
           state: 'idle',
           dataVersion: 0,
           vizSpec: (a.vizSpec as VizSpec | undefined) || null,
-          sourceCode: null,
+          sourceCode: (a.sourceCode as string | null | undefined) ?? null,
           permissions: { agentCanRead: true, agentCanWrite: true, agentCanDelete: true },
           metadata: { label: '', tags: [], createdBy: 'user' },
           createdAt: now,

@@ -16,6 +16,8 @@ import type {
   ExecutorRpcResponse,
 } from './executor-types';
 
+export type { ExecutorRpcRequest, ExecutorRpcResponse } from './executor-types';
+
 /**
  * Function that requests a canvas screenshot from the renderer process.
  * The main process injects this when constructing the proxy — it sends
@@ -52,10 +54,22 @@ export class ConductorExecutorProxy {
     this.captureFn = fn;
   }
 
+  /**
+   * Inject the broadcast function used to push state:patch messages
+   * to the renderer. Called by main.ts after channelManager is ready.
+   * Without this, agent edits write to DB but the canvas won't
+   * live-update.
+   */
+  setBroadcastPatch(fn: import('./db-service').BroadcastPatchFn): void {
+    this.dbService.setBroadcastPatch(fn);
+  }
+
   async execute(request: ExecutorRpcRequest): Promise<ExecutorRpcResponse> {
     const { action, payload } = request;
+    console.error(`[RPC-DEBUG] proxy.execute: action=${action}, payload=${JSON.stringify(payload).substring(0, 200)}`);
 
     try {
+      console.error(`[RPC-DEBUG] proxy dispatching to dbService.${action}`);
       switch (action) {
         case 'canvas.snapshot':
           return this.dbService.getCanvasSnapshot(payload.canvasId as string);
@@ -87,8 +101,14 @@ export class ConductorExecutorProxy {
         case 'element.create':
           return this.dbService.createElement(payload);
 
+        case 'element.batch_create':
+          return this.dbService.batchCreate(payload);
+
         case 'element.update':
           return this.dbService.updateElement(payload);
+
+        case 'element.update_content':
+          return this.dbService.updateElementContent(payload);
 
         case 'element.delete':
           return this.dbService.deleteElement(payload);
@@ -107,6 +127,24 @@ export class ConductorExecutorProxy {
 
         case 'connector.create':
           return this.dbService.createConnector(payload);
+
+        case 'group.create':
+          return this.dbService.createGroup(payload);
+
+        case 'group.ungroup':
+          return this.dbService.ungroup(payload);
+
+        case 'group.add_members':
+          return this.dbService.addGroupMembers(payload);
+
+        case 'group.remove_members':
+          return this.dbService.removeGroupMembers(payload);
+
+        case 'canvas.list_elements':
+          return this.dbService.listElements(payload);
+
+        case 'canvas.find_empty_space':
+          return this.dbService.findEmptySpace(payload);
 
         default:
           return {

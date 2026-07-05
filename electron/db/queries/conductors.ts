@@ -17,6 +17,15 @@ function db(): BetterSqlite3 {
   return d;
 }
 
+function safeParseJson<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 // ============================================================
 // Types
 // ============================================================
@@ -29,6 +38,8 @@ export interface ConductorCanvas {
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
+  /** Project path bound to this canvas (unique per project). Null for ad-hoc canvases. */
+  projectPath: string | null;
 }
 
 export interface ConductorWidget {
@@ -111,15 +122,39 @@ export function listCanvases(): ConductorCanvas[] {
     sortOrder: r.sort_order,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    projectPath: r.project_path ?? null,
   }));
 }
 
-export function createCanvas(data: { name: string; description?: string }): ConductorCanvas {
+/**
+ * Find the canvas bound to a given project path. Each project maps to
+ * at most one canvas (enforced by idx_conductor_canvases_project_path).
+ * Returns null when no canvas has been bound for the project yet.
+ */
+export function getCanvasByProjectPath(projectPath: string): ConductorCanvas | null {
+  const row = db().prepare(
+    'SELECT * FROM conductor_canvases WHERE project_path = ?'
+  ).get(projectPath) as any;
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    layoutConfig: JSON.parse(row.layout_config),
+    sortOrder: row.sort_order,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    projectPath: row.project_path ?? null,
+  };
+}
+
+export function createCanvas(data: { name: string; description?: string; projectPath?: string | null }): ConductorCanvas {
   const id = randomUUID();
   const now = Date.now();
+  const projectPath = data.projectPath ?? null;
   db().prepare(
-    'INSERT INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, data.name, data.description ?? null, '{}', 0, now, now);
+    'INSERT INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at, project_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, data.name, data.description ?? null, '{}', 0, now, now, projectPath);
 
   // Return constructed ConductorCanvas directly instead of re-querying
   return {
@@ -130,6 +165,7 @@ export function createCanvas(data: { name: string; description?: string }): Cond
     sortOrder: 0,
     createdAt: now,
     updatedAt: now,
+    projectPath,
   };
 }
 
@@ -166,6 +202,7 @@ export function updateCanvas(id: string, data: {
     sortOrder: data.sortOrder ?? existingRow.sort_order,
     createdAt: existingRow.created_at,
     updatedAt: now,
+    projectPath: existingRow.project_path ?? null,
   };
 }
 
@@ -189,14 +226,14 @@ export function getCanvasSnapshot(canvasId: string): ConductorSnapshot | null {
       id: e.id,
       canvasId: e.canvas_id,
       elementKind: e.element_kind,
-      position: JSON.parse(e.position),
-      config: JSON.parse(e.config),
-      vizSpec: e.viz_spec ? JSON.parse(e.viz_spec) : null,
+      position: safeParseJson(e.position, { x: 0, y: 0, w: 0, h: 0 }),
+      config: safeParseJson(e.config, {}),
+      vizSpec: e.viz_spec ? safeParseJson(e.viz_spec, null) : null,
       sourceCode: e.source_code,
       state: e.state,
       dataVersion: e.data_version,
-      permissions: JSON.parse(e.permissions),
-      metadata: JSON.parse(e.metadata),
+      permissions: safeParseJson(e.permissions, {}),
+      metadata: safeParseJson(e.metadata, { label: e.element_kind, tags: [], createdBy: 'user' }),
       createdAt: e.created_at,
       updatedAt: e.updated_at,
     }));
@@ -206,13 +243,13 @@ export function getCanvasSnapshot(canvasId: string): ConductorSnapshot | null {
       id: w.id,
       canvasId: w.canvas_id,
       elementKind: `widget/${w.type}`,
-      position: { ...JSON.parse(w.position), zIndex: 0, rotation: 0 },
-      config: JSON.parse(w.config),
+      position: { ...safeParseJson(w.position, {}), zIndex: 0, rotation: 0 },
+      config: safeParseJson(w.config, {}),
       vizSpec: null,
       sourceCode: w.source_code,
       state: w.state,
       dataVersion: w.data_version,
-      permissions: JSON.parse(w.permissions),
+      permissions: safeParseJson(w.permissions, {}),
       metadata: { label: `${w.kind}:${w.type}`, tags: [], createdBy: 'user' },
       createdAt: w.created_at,
       updatedAt: w.updated_at,
@@ -227,10 +264,11 @@ export function getCanvasSnapshot(canvasId: string): ConductorSnapshot | null {
       id: canvas.id,
       name: canvas.name,
       description: canvas.description,
-      layoutConfig: JSON.parse(canvas.layout_config),
+      layoutConfig: safeParseJson(canvas.layout_config, {}),
       sortOrder: canvas.sort_order,
       createdAt: canvas.created_at,
       updatedAt: canvas.updated_at,
+      projectPath: canvas.project_path ?? null,
     },
     elements,
     widgets: widgetRows.map((w: any) => ({
@@ -238,13 +276,13 @@ export function getCanvasSnapshot(canvasId: string): ConductorSnapshot | null {
       canvasId: w.canvas_id,
       kind: w.kind,
       type: w.type,
-      position: JSON.parse(w.position),
-      config: JSON.parse(w.config),
-      data: JSON.parse(w.data),
+      position: safeParseJson(w.position, {}),
+      config: safeParseJson(w.config, {}),
+      data: safeParseJson(w.data, {}),
       dataVersion: w.data_version,
       sourceCode: w.source_code,
       state: w.state,
-      permissions: JSON.parse(w.permissions),
+      permissions: safeParseJson(w.permissions, {}),
       createdAt: w.created_at,
       updatedAt: w.updated_at,
     })),
@@ -388,6 +426,11 @@ export function findLastDeleteAction(widgetId: string, canvasId: string): Conduc
 // Element CRUD
 // ============================================================
 
+export function elementExists(elementId: string): boolean {
+  const row = db().prepare('SELECT 1 FROM conductor_elements WHERE id = ?').get(elementId);
+  return row !== undefined;
+}
+
 export function getElement(elementId: string, canvasId: string): ConductorElement | undefined {
   const row = db().prepare('SELECT * FROM conductor_elements WHERE id = ? AND canvas_id = ?').get(elementId, canvasId) as any;
   if (!row) return undefined;
@@ -408,11 +451,11 @@ export function getElement(elementId: string, canvasId: string): ConductorElemen
   };
 }
 
-export function insertElement(elementId: string, canvasId: string, elementKind: string, position: Record<string, unknown>, config: Record<string, unknown>, vizSpec: Record<string, unknown> | null, permissions: Record<string, unknown>, metadata: Record<string, unknown>, now: number, nativeKind: string | null = null): void {
+export function insertElement(elementId: string, canvasId: string, elementKind: string, position: Record<string, unknown>, config: Record<string, unknown>, vizSpec: Record<string, unknown> | null, permissions: Record<string, unknown>, metadata: Record<string, unknown>, now: number, nativeKind: string | null = null, sourceCode: string | null = null): void {
   db().prepare(
     `INSERT INTO conductor_elements (id, canvas_id, element_kind, native_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'idle', 1, ?, ?, ?, ?)`
-  ).run(elementId, canvasId, elementKind, nativeKind, JSON.stringify(position), JSON.stringify(config), vizSpec ? JSON.stringify(vizSpec) : null, JSON.stringify(permissions), JSON.stringify(metadata), now, now);
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'idle', 1, ?, ?, ?, ?)`
+  ).run(elementId, canvasId, elementKind, nativeKind, JSON.stringify(position), JSON.stringify(config), vizSpec ? JSON.stringify(vizSpec) : null, sourceCode, JSON.stringify(permissions), JSON.stringify(metadata), now, now);
 }
 
 export function insertRestoredElement(elementId: string, canvasId: string, elementKind: string, position: Record<string, unknown>, config: Record<string, unknown>, vizSpec: Record<string, unknown> | null, state: string, dataVersion: number, permissions: Record<string, unknown>, metadata: Record<string, unknown>, createdAt: number, now: number): void {

@@ -115,6 +115,7 @@ export interface ThreadAPI {
 export interface SessionAPI {
   saveDraft: (sessionId: string, draft: string) => Promise<void>
   getDraft: (sessionId: string) => Promise<string>
+  setConductorMode: (sessionId: string, enabled: boolean, canvasId?: string | null) => Promise<unknown>
 }
 
 export interface MessageAPI {
@@ -906,7 +907,6 @@ export interface ElectronAPI {
     quit: () => Promise<void>
     getDefaultWorkspace: () => Promise<string>
     createProjectFolder: (projectName: string) => Promise<{ success: boolean; error: string; path: string }>
-    ensureWindowWidth: (targetWidth: number) => Promise<{ width: number; changed: boolean }>
   }
   system: {
     getLocation: () => Promise<{
@@ -944,7 +944,8 @@ export interface ElectronAPI {
   // Database IPC APIs
   conductor: {
     listCanvases: () => Promise<unknown[]>
-    createCanvas: (data: { name: string; description?: string }) => Promise<unknown>
+    getCanvasByProjectPath: (projectPath: string) => Promise<unknown>
+    createCanvas: (data: { name: string; description?: string; projectPath?: string | null }) => Promise<unknown>
     updateCanvas: (
       id: string,
       data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }
@@ -1300,6 +1301,15 @@ function getConductorPortAPI(): ConductorPortAPI | null {
   };
 
   return {
+    /**
+     * @deprecated (plan 221 Phase 7) Spawning a dedicated conductor agent
+     * via MessagePort is no longer the primary path. In-canvas entry points
+     * (ObjectAgentPrompt / ConductorComposer) now forward their input to
+     * the main chat session, which drives canvas tools directly. Retained
+     * for legacy renderer code paths. `conductor:state:patch` and
+     * `conductor:capture:request` are NOT deprecated — they remain in use
+     * for canvas state sync.
+     */
     startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string; language?: string; visionModel?: string; permissionMode?: string }) => {
       const sessionId = data.canvasId ? `conductor-${data.canvasId}` : `conductor-${Date.now()}`;
       console.log('[preload] startAgent called:', { sessionId, contentLength: data.content?.length, canvasId: data.canvasId });
@@ -1527,7 +1537,6 @@ const electronAPI: ElectronAPI = {
     quit: () => ipcRenderer.invoke('app:quit'),
     getDefaultWorkspace: () => ipcRenderer.invoke('app:get-default-workspace'),
     createProjectFolder: (projectName: string) => ipcRenderer.invoke('app:create-project-folder', projectName),
-    ensureWindowWidth: (targetWidth: number) => ipcRenderer.invoke('window:ensure-width', targetWidth),
   },
   system: {
     getLocation: () => ipcRenderer.invoke('system:get-location'),
@@ -1622,7 +1631,8 @@ const electronAPI: ElectronAPI = {
   // Database IPC APIs
   conductor: {
     listCanvases: () => ipcRenderer.invoke('conductor:canvas:list'),
-    createCanvas: (data: { name: string; description?: string }) => ipcRenderer.invoke('conductor:canvas:create', data),
+    getCanvasByProjectPath: (projectPath: string) => ipcRenderer.invoke('conductor:canvas:getByProjectPath', projectPath),
+    createCanvas: (data: { name: string; description?: string; projectPath?: string | null }) => ipcRenderer.invoke('conductor:canvas:create', data),
     updateCanvas: (
       id: string,
       data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }
@@ -1650,6 +1660,8 @@ const electronAPI: ElectronAPI = {
   session: {
     saveDraft: (sessionId: string, draft: string) => ipcRenderer.invoke('db:session:saveDraft', sessionId, draft),
     getDraft: (sessionId: string) => ipcRenderer.invoke('db:session:getDraft', sessionId),
+    setConductorMode: (sessionId: string, enabled: boolean, canvasId?: string | null) =>
+      ipcRenderer.invoke('db:session:set_conductor_mode', { sessionId, enabled, canvasId }),
   },
   message: {
     add: (data: Record<string, unknown>) => ipcRenderer.invoke('db:message:add', data),

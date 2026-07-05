@@ -6,6 +6,9 @@ import { SessionManager } from './session-store';
 import { SessionState, ConductorAction } from './types';
 import { WorkerManager } from './worker-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
+// @deprecated (plan 221 Phase 7) ConductorService is retained for legacy
+// HTTP/SSE routes but no longer the primary execution path. The main chat
+// agent now drives conductor mode via injection.
 import { ConductorService } from './conductor-service';
 import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
@@ -14,6 +17,7 @@ export interface RouterDeps {
   sessionManager: SessionManager;
   workerManager: WorkerManager;
   checkpointBatcher: CheckpointBatcher;
+  /** @deprecated (plan 221 Phase 7) — retained for legacy HTTP/SSE routes. */
   conductorService: ConductorService;
   logger: Logger;
   httpLogger: Logger;
@@ -164,6 +168,16 @@ async function handlePostChat(
     const defaultWorkspaceDirectory = parsed.defaultWorkspaceDirectory;
 
     try {
+      // Validate session exists in DB before proceeding. Without a
+      // chat_sessions row, message persistence would fail with FOREIGN KEY
+      // constraint errors, and the agent worker would run uselessly.
+      const dbSession = await deps.dbRequest('session:get', { id: sessionId });
+      if (!dbSession) {
+        httpLogger.warn('Chat rejected: session not found in DB', { sessionId });
+        sendJson(res, 404, { error: `Session not found: ${sessionId}` });
+        return;
+      }
+
       const totalMem = os.totalmem();
       const freeMem = os.freemem();
       const usedRatio = (totalMem - freeMem) / totalMem;
@@ -207,6 +221,12 @@ async function handlePostChat(
       child.on('message', (msg: Record<string, unknown>) => {
         if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
           workerDbRequests.set(msg.id, child);
+          process.send(msg);
+          return;
+        }
+        if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
+          workerDbRequests.set(`rpc:${msg.requestId}`, child);
+          console.error(`[RPC-DEBUG] server→main: requestId=${msg.requestId}, action=${msg.action}`);
           process.send(msg);
         }
       });
@@ -990,6 +1010,12 @@ async function lazySpawnWorkerForCompact(
     if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
       workerDbRequests.set(msg.id, child);
       process.send(msg);
+      return;
+    }
+    if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
+      workerDbRequests.set(`rpc:${msg.requestId}`, child);
+      console.error(`[RPC-DEBUG] server→main (lazy): requestId=${msg.requestId}, action=${msg.action}`);
+      process.send(msg);
     }
   });
 
@@ -1561,6 +1587,7 @@ function handleConductorStream(
   if (!session) {
     httpLogger.info('Conductor route: stream - session not found, creating', { conductorId });
     const canvasId = conductorId.replace(/^conductor-/, '');
+    // @deprecated (plan 221 Phase 7) Legacy conductor session create.
     conductorService.createSession(canvasId).then((s) => {
       session = s;
       httpLogger.info('Conductor route: stream - session created', { conductorId, canvasId });
@@ -1671,6 +1698,7 @@ function handleConductorExecute(
       httpLogger.info('Conductor route: execute - session not found, creating', { conductorId });
       const canvasId = conductorId.replace(/^conductor-/, '');
       try {
+        // @deprecated (plan 221 Phase 7) Legacy conductor session create.
         session = await conductorService.createSession(canvasId);
         httpLogger.info('Conductor route: execute - session created', { conductorId, canvasId });
       } catch (err) {
@@ -1688,6 +1716,9 @@ function handleConductorExecute(
     }
 
     try {
+      // @deprecated (plan 221 Phase 7) Legacy conductor worker spawn path.
+      // Retained for backward compatibility with older renderer builds;
+      // the main chat agent is the preferred execution path now.
       await conductorService.executeTurn(conductorId, parsed.prompt, parsed.providerConfig, {
         agentId: parsed.agentId,
         agentName: parsed.agentName,
