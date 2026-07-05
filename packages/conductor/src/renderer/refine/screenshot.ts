@@ -94,6 +94,8 @@ export async function captureCanvasView(
   options: CanvasCaptureOptions,
 ): Promise<CanvasCaptureResult> {
   const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+  // Cap scale to keep capture fast and file sizes reasonable for LLM vision.
+  const scale = Math.min(pixelRatio, 1.5);
   const html2canvas = (await import("html2canvas")).default;
 
   let targetEl: HTMLElement;
@@ -139,9 +141,16 @@ export async function captureCanvasView(
     captureH = rect.height;
   }
 
+  // Downsample very large captures so html2canvas stays fast and the
+  // resulting PNG stays small enough to save and send to vision models.
+  // html2canvas output size is (width * scale), so cap that product.
+  const MAX_CAPTURE_WIDTH = 1920;
+  const renderScale =
+    captureW * scale > MAX_CAPTURE_WIDTH ? MAX_CAPTURE_WIDTH / captureW : scale;
+
   const canvas = await html2canvas(targetEl, {
     backgroundColor: null,
-    scale: pixelRatio,
+    scale: renderScale,
     useCORS: true,
     logging: false,
     width: captureW,
@@ -157,8 +166,8 @@ export async function captureCanvasView(
 
   return {
     pngBase64,
-    width: Math.round(captureW),
-    height: Math.round(captureH),
+    width: canvas.width,
+    height: canvas.height,
     pixelRatio,
     scope: options.scope,
     capturedAt: new Date().toISOString(),

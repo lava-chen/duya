@@ -111,7 +111,8 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({
     const nodes = elements.filter((el) => el.elementKind.startsWith("native/") && el.elementKind !== "native/connector");
     for (const node of nodes) {
       if (node.id === skipNodeId) continue;
-      const abs = getAbsolutePosition(node, elements);
+      const gridAbs = getAbsolutePosition(node, elements);
+      const abs = { x: gridAbs.x * GRID_PX, y: gridAbs.y * GRID_PX };
       const w = node.position.w * GRID_PX;
       const h = node.position.h * GRID_PX;
       if (point.x >= abs.x && point.x <= abs.x + w && point.y >= abs.y && point.y <= abs.y + h) {

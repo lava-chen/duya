@@ -4,8 +4,7 @@ import React, { memo, useMemo } from "react";
 import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
 import { ElementRenderer } from "./ElementRenderer";
-
-const GRID_PX = 80;
+import { gridUnitsToPx } from "../domain/canvas/units";
 
 function isWidgetKind(element: CanvasElement): boolean {
   return element.elementKind.startsWith("widget/");
@@ -15,15 +14,15 @@ function isConnectorElement(element: CanvasElement): boolean {
   return element.elementKind === "native/connector";
 }
 
+function isGroupElement(element: CanvasElement): boolean {
+  return element.elementKind === "native/group";
+}
+
 interface FreeformLayerProps {
   elements: CanvasElement[];
   readOnly: boolean;
   onPositionChange?: (id: string, position: CanvasPosition) => void;
   onDeleteElement?: (id: string) => void;
-}
-
-function elementSizeToPx(size: number): number {
-  return Math.round(size * GRID_PX);
 }
 
 interface FreeformItemProps {
@@ -48,11 +47,13 @@ const FreeformItem = memo(function FreeformItem({
       id={`native-el-${element.id}`}
       data-native-element-id={element.id}
       style={{
+        // position.x/y are persisted in grid units; convert to pixels here
+        // so the layout box matches the size computed from w/h below.
         position: "absolute",
-        left: element.position.x,
-        top: element.position.y,
-        width: elementSizeToPx(element.position.w),
-        height: elementSizeToPx(element.position.h),
+        left: gridUnitsToPx(element.position.x),
+        top: gridUnitsToPx(element.position.y),
+        width: gridUnitsToPx(element.position.w),
+        height: gridUnitsToPx(element.position.h),
         zIndex: element.position.zIndex,
         transform: `rotate(${element.position.rotation ?? 0}deg)`,
         cursor: readOnly ? "default" : "grab",
@@ -92,7 +93,7 @@ export const FreeformLayer: React.FC<FreeformLayerProps> = ({
 
   const sorted = useMemo(() => {
     return elements
-      .filter((el) => !isWidgetKind(el) && !isConnectorElement(el))
+      .filter((el) => !isWidgetKind(el) && !isConnectorElement(el) && !isGroupElement(el))
       .slice()
       .sort((a, b) => a.position.zIndex - b.position.zIndex);
   }, [elements]);

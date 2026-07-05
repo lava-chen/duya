@@ -3,8 +3,6 @@
 import React from "react";
 import type { CanvasElement } from "../..//types/conductor";
 
-const GRID_PX = 80;
-
 function formatBytes(bytes: unknown): string {
   if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -38,9 +36,6 @@ export const FileElement: React.FC<{ element: CanvasElement }> = ({ element }) =
   const mimeType = (element.config.mimeType as string) || undefined;
   const size = element.config.size as number | undefined;
 
-  const pxW = Math.round(element.position.w * GRID_PX);
-  const pxH = Math.round(element.position.h * GRID_PX);
-
   const ext = extOf(fileName);
   const isPdfFile = isPdf(mimeType, fileName);
   const { label, color } = iconFor(ext, mimeType);
@@ -55,8 +50,8 @@ export const FileElement: React.FC<{ element: CanvasElement }> = ({ element }) =
   return (
     <div
       style={{
-        width: `${pxW}px`,
-        height: `${pxH}px`,
+        width: "100%",
+        height: "100%",
         borderRadius: "var(--radius-element)",
         background: "var(--bg-canvas, #fff)",
         display: "flex",

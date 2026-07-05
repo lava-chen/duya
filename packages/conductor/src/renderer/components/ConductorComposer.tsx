@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { PaperPlaneTilt, Stop, SpinnerGap, Robot, Wrench, Warning, CheckCircle, XCircle } from "@phosphor-icons/react";
 import { useConductorStore } from "..//stores/conductor-store";
+import { useConversationStore } from "@/stores/conversation-store";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { executeAction } from "..//ipc/conductor-ipc";
 import { useConductorStream, useConductorStreamControl } from "../hooks/useConductorStream";
@@ -14,8 +15,6 @@ export function ConductorComposer() {
     activeCanvasId,
     agentStatus,
     setAgentStatus,
-    widgets,
-    snapshot,
     conductorModels,
     conductorModel,
     conductorModelsLoading,
@@ -29,9 +28,18 @@ export function ConductorComposer() {
   const streamRef = useRef<HTMLDivElement>(null);
   const [showStream, setShowStream] = useState(false);
 
+  // Plan 221 Phase 7: in-canvas composer now forwards to the main chat
+  // session. `useConductorStream` and `useConductorStreamControl` are still
+  // imported for the legacy port-event routing (canvas state patches, tool
+  // results from any pre-existing in-flight conductor workers). The
+  // `startStream` path is intentionally not destructured: the conductor
+  // worker is no longer spawned from this component.
+  // TODO(plan 221 Phase 7): remove useConductorStreamControl once the
+  // legacy port-event listeners are migrated to the main stream session.
+  const activeThreadId = useConversationStore((state) => state.activeThreadId);
   // Use unified stream session manager
   const { events, phase, error } = useConductorStream(activeCanvasId);
-  const { startStream, stopStream, handleEvent } = useConductorStreamControl(activeCanvasId);
+  const { stopStream, handleEvent } = useConductorStreamControl(activeCanvasId);
 
   // Sync phase with agentStatus
   useEffect(() => {
@@ -170,29 +178,51 @@ export function ConductorComposer() {
     setShowStream(true);
     setAgentStatus("thinking");
 
-    const canvasSnapshot = snapshot || {
-      canvasId: activeCanvasId,
-      canvasName: "Canvas",
-      widgets: widgets.map((w) => ({
-        id: w.id,
-        type: w.type,
-        kind: w.kind,
-        position: w.position,
-        config: w.config,
-        data: w.data,
-        dataVersion: w.dataVersion,
-      })),
-      actionCursor: 0,
-    };
-
-    startStream({
-      content,
-      snapshot: canvasSnapshot,
-      model: conductorModel || undefined,
-      visionModel: conductorVisionModel || undefined,
-      permissionMode: conductorPermissionMode || undefined,
-    });
-  }, [value, agentStatus, activeCanvasId, widgets, snapshot, conductorModel, conductorVisionModel, conductorPermissionMode, setAgentStatus, startStream]);
+    // Plan 221 Phase 7: forward to the main chat session instead of
+    // spawning a separate conductor agent. The main agent (with conductor
+    // mode enabled) receives the prompt and uses the canvas tools directly.
+    // The legacy `startStream({...})` call is intentionally removed; the
+    // composer's stream display will go quiet — agent output now appears in
+    // the main chat panel. Canvas state patches still flow back through
+    // conductorPort (onStatePatch) for in-canvas updates.
+    try {
+      if (activeThreadId) {
+        await window.electronAPI?.session?.setConductorMode(
+          activeThreadId,
+          true,
+          activeCanvasId,
+        );
+      }
+      window.dispatchEvent(
+        new CustomEvent("conductor:forward-message", {
+          detail: {
+            text: content,
+            canvasId: activeCanvasId,
+            sessionId: activeThreadId,
+            model: conductorModel || undefined,
+            visionModel: conductorVisionModel || undefined,
+            permissionMode: conductorPermissionMode || undefined,
+            source: "conductor-composer",
+          },
+        }),
+      );
+    } catch (error) {
+      setAgentStatus("error");
+      setUiError(
+        `Conductor forward failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }, [
+    activeCanvasId,
+    activeThreadId,
+    agentStatus,
+    conductorModel,
+    conductorPermissionMode,
+    conductorVisionModel,
+    setAgentStatus,
+    setUiError,
+    value,
+  ]);
 
   const handleStop = useCallback(() => {
     stopStream();

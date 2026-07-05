@@ -2,12 +2,16 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { PaperPlaneTilt, SpinnerGap } from "@phosphor-icons/react";
-import { useConductorStreamControl } from "../hooks/useConductorStream";
 import { buildObjectAgentPrompt } from "../agent/object-agent-prompt";
 import { useConductorStore } from "../stores/conductor-store";
+import { useConversationStore } from "@/stores/conversation-store";
 import type { CanvasElement } from "../types/conductor";
-
-const GRID_PX = 80;
+import {
+  isStylePanelKind,
+  STYLE_PANEL_HEIGHT,
+  STYLE_PANEL_STACK_GAP,
+} from "./StylePanel";
+import { GRID_PX } from "../domain/canvas/units";
 const PANEL_WIDTH = 320;
 
 export function ObjectAgentPrompt() {
@@ -27,7 +31,10 @@ export function ObjectAgentPrompt() {
     setUiError,
     snapshot,
   } = useConductorStore();
-  const { startStream } = useConductorStreamControl(activeCanvasId);
+  // Plan 221 Phase 7: in-canvas entry points now forward to the main chat
+  // session. We only need the active main thread id (the conductor sign is
+  // applied via session.setConductorMode below).
+  const activeThreadId = useConversationStore((state) => state.activeThreadId);
 
   const selectedElements = useMemo(() => {
     const ids = selectedElementIds.length > 0
@@ -41,16 +48,20 @@ export function ObjectAgentPrompt() {
 
   const primary = selectedElements[0] ?? null;
   const isBusy = agentStatus === "thinking" || agentStatus === "streaming" || agentStatus === "tool_use";
+  // When the StylePanel is visible (single sticky/connector/group selection),
+  // stack below it to avoid overlap.
+  const stylePanelVisible = !!primary && isStylePanelKind(primary.elementKind);
 
   const position = useMemo(() => {
     if (!primary) return null;
     const zoom = canvasZoom > 0 ? canvasZoom : 1;
     const widthPx = primary.position.w * GRID_PX * zoom;
-    const left = canvasScrollX + primary.position.x * zoom + widthPx / 2;
-    const top = canvasScrollY + (primary.position.y + primary.position.h * GRID_PX) * zoom + 14;
+    const left = canvasScrollX + primary.position.x * GRID_PX * zoom + widthPx / 2;
+    const stackOffset = stylePanelVisible ? STYLE_PANEL_HEIGHT + STYLE_PANEL_STACK_GAP : 0;
+    const top = canvasScrollY + (primary.position.y * GRID_PX + primary.position.h * GRID_PX) * zoom + 14 + stackOffset;
     const clampedLeft = Math.max(16, Math.min(left - PANEL_WIDTH / 2, Math.max(16, canvasViewportW - PANEL_WIDTH - 16)));
     return { left: clampedLeft, top: Math.max(56, top) };
-  }, [canvasScrollX, canvasScrollY, canvasViewportW, canvasZoom, primary]);
+  }, [canvasScrollX, canvasScrollY, canvasViewportW, canvasZoom, primary, stylePanelVisible]);
 
   const handleSubmit = useCallback(() => {
     if (!activeCanvasId || !primary || !value.trim() || isBusy) return;
@@ -66,24 +77,45 @@ export function ObjectAgentPrompt() {
     setAgentStatus("thinking");
     setUiError(null);
 
-    try {
-      startStream({
-        content,
-        snapshot: snapshot ?? {
-          canvasId: activeCanvasId,
-          canvasName: "Canvas",
-          elements,
-          widgets: [],
-          actionCursor: 0,
-        },
-        model: conductorModel || undefined,
-      });
-    } catch (error) {
-      setAgentStatus("error");
-      setUiError(`Object agent failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    // Plan 221 Phase 7: forward to the main chat session instead of spawning
+    // a separate conductor agent. The main agent (with conductor mode
+    // enabled) receives the prompt and uses the canvas tools directly.
+    void (async () => {
+      const sessionId = activeThreadId;
+      try {
+        if (sessionId) {
+          await window.electronAPI?.session?.setConductorMode(
+            sessionId,
+            true,
+            activeCanvasId,
+          );
+        }
+        window.dispatchEvent(
+          new CustomEvent("conductor:forward-message", {
+            detail: {
+              text: content,
+              canvasId: activeCanvasId,
+              sessionId,
+              elementContext: selectedElements.map((el) => ({
+                id: el.id,
+                elementKind: el.elementKind,
+              })),
+              // Pass through model preference for the main chat input to pick up.
+              model: conductorModel || undefined,
+              source: "object-agent-prompt",
+            },
+          }),
+        );
+      } catch (error) {
+        setAgentStatus("error");
+        setUiError(
+          `Object agent forward failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    })();
   }, [
     activeCanvasId,
+    activeThreadId,
     conductorModel,
     elements,
     isBusy,
@@ -92,7 +124,6 @@ export function ObjectAgentPrompt() {
     setAgentStatus,
     setUiError,
     snapshot,
-    startStream,
     value,
   ]);
 

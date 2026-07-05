@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useConductorStore } from "..//stores/conductor-store";
 import { ELEMENT_ICONS } from "./toolbar/element-icons";
 import { uploadAsset } from "..//ipc/conductor-ipc";
+import { STICKY_COLORS, STICKY_COLOR_KEYS } from "./native/sticky-colors";
 
 type ToolId =
   | "select" | "sticky"
@@ -25,14 +26,11 @@ const TOOLS: Tool[] = [
   { id: "media", icon: ELEMENT_ICONS.media, label: "Media", shortcut: "M", group: 1 },
 ];
 
-const STICKY_COLORS = [
-  { color: "yellow", hex: "#FFF9C4" },
-  { color: "blue", hex: "#BBDEFB" },
-  { color: "green", hex: "#C8E6C9" },
-  { color: "pink", hex: "#F8BBD0" },
-  { color: "purple", hex: "#E1BEE7" },
-  { color: "gray", hex: "#E0E0E0" },
-];
+// Sticky color palette — derived from the shared module so the toolbar preview
+// swatch matches the rendered sticky color exactly.
+const STICKY_COLORS_LIST: { color: string; hex: string }[] = STICKY_COLOR_KEYS.map(
+  (key) => ({ color: key, hex: STICKY_COLORS[key].bg }),
+);
 
 function createToolValue(type: string, extra?: Record<string, unknown>): string {
   const encoded = extra ? `:${encodeURIComponent(JSON.stringify(extra))}` : "";
@@ -64,7 +62,7 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
     return (
       <div ref={ref} className={baseClass} style={{ top: anchorY }}>
         <div className="flex gap-1.5 px-3 py-2.5">
-          {STICKY_COLORS.map((c) => (
+          {STICKY_COLORS_LIST.map((c) => (
             <button
               key={c.color}
               draggable

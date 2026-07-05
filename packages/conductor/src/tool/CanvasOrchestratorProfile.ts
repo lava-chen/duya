@@ -6,11 +6,16 @@
  * conductor-specific: they go through the conductor IPC bridge, not
  * the agent's general tool layer. Agent only knows how to register
  * them via `registerConductor({ tools: ... })` at startup.
+ *
+ * @deprecated Plan 221: Conductor now uses injected tools via packages/agent/src/tool/CanvasConductor/. This profile is no longer registered for new sessions.
  */
 
 import type { Tool, ToolResult, ToolUseContext } from '@duya/agent/types';
 import type { ToolExecutor } from '@duya/agent/tool/registry';
 
+/**
+ * @deprecated Plan 221: Conductor now uses injected tools via packages/agent/src/tool/CanvasConductor/. This profile is no longer registered for new sessions.
+ */
 export const CANVAS_ORCHESTRATOR_TOOLS: Tool[] = [
   {
     name: 'canvas_create_element',
@@ -28,13 +33,13 @@ export const CANVAS_ORCHESTRATOR_TOOLS: Tool[] = [
         position: {
           type: 'object',
           properties: {
-            x: { type: 'number' },
-            y: { type: 'number' },
-            w: { type: 'number' },
-            h: { type: 'number' },
+            x: { type: 'number', description: 'X coordinate in grid units (1 unit = 80 px)' },
+            y: { type: 'number', description: 'Y coordinate in grid units (1 unit = 80 px)' },
+            w: { type: 'number', description: 'Width in grid units (1 unit = 80 px)' },
+            h: { type: 'number', description: 'Height in grid units (1 unit = 80 px)' },
             zIndex: { type: 'number', description: 'Layer order (lower = behind)' },
           },
-          description: 'Position and size on canvas',
+          description: 'Position and size on canvas — x/y/w/h are all in **grid units** (1 unit = 80 px on screen)',
         },
         vizSpec: {
           type: 'object',
@@ -55,7 +60,7 @@ export const CANVAS_ORCHESTRATOR_TOOLS: Tool[] = [
         canvasId: { type: 'string' },
         elementId: { type: 'string' },
         vizSpec: { type: 'object', description: 'Updated visualization spec' },
-        position: { type: 'object', description: 'Updated position' },
+        position: { type: 'object', description: 'Updated position; x/y/w/h in **grid units** (1 unit = 80 px)' },
         config: { type: 'object', description: 'Updated config' },
       },
       required: ['canvasId', 'elementId'],
@@ -91,10 +96,10 @@ export const CANVAS_ORCHESTRATOR_TOOLS: Tool[] = [
               position: {
                 type: 'object',
                 properties: {
-                  x: { type: 'number' },
-                  y: { type: 'number' },
-                  w: { type: 'number' },
-                  h: { type: 'number' },
+                  x: { type: 'number', description: 'X in grid units' },
+                  y: { type: 'number', description: 'Y in grid units' },
+                  w: { type: 'number', description: 'Width in grid units' },
+                  h: { type: 'number', description: 'Height in grid units' },
                 },
               },
             },
@@ -157,17 +162,17 @@ export const CANVAS_ORCHESTRATOR_TOOLS: Tool[] = [
         },
         gap: {
           type: 'number',
-          description: 'Gap between elements in pixels',
+          description: 'Gap between elements, in screen pixels',
           default: 20,
         },
         cellWidth: {
           type: 'number',
-          description: 'Width of each grid cell',
+          description: 'Width of each grid cell, in screen pixels',
           default: 250,
         },
         cellHeight: {
           type: 'number',
-          description: 'Height of each grid cell',
+          description: 'Height of each grid cell, in screen pixels',
           default: 150,
         },
       },
@@ -222,6 +227,112 @@ whether the canvas matches the user's intent.`,
         },
       },
       required: ['canvasId', 'scope'],
+    },
+  },
+
+  {
+    name: 'group_create',
+    description: `Create a group element that loosely binds existing elements by their IDs.
+Used to organize related elements by theme / process stage / responsibility.
+
+Group is a semantic judgment, NOT a type judgment — do NOT auto-group by
+element type. Look at the element list (id + type + text summary) and
+decide which elements belong together.
+
+The group renders as a dashed frame around its members with an optional
+title at the top-left. Members stay at their absolute canvas positions
+and remain independently draggable; the group frame recalculates its
+bbox in real time.
+
+Parameters:
+- canvasId: target canvas
+- memberIds: non-empty array of existing element IDs on the same canvas
+- title (optional): label shown at top-left of the frame
+- bgColor (optional): CSS color for semi-transparent frame overlay`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'The canvas ID' },
+        memberIds: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          description: 'Element IDs to include in the group. All must exist on the same canvas.',
+        },
+        title: { type: 'string', description: 'Optional label shown at the top-left of the frame' },
+        bgColor: { type: 'string', description: 'Optional CSS color for the semi-transparent frame overlay' },
+      },
+      required: ['canvasId', 'memberIds'],
+    },
+  },
+
+  {
+    name: 'group_ungroup',
+    description: `Remove a group element (the dashed frame). Member elements are NOT
+deleted — only the group frame is removed. Use when the grouping is no
+longer relevant.
+
+Parameters:
+- canvasId: target canvas
+- groupId: ID of the group element to remove`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'The canvas ID' },
+        groupId: { type: 'string', description: 'ID of the group element to remove', minLength: 1 },
+      },
+      required: ['canvasId', 'groupId'],
+    },
+  },
+
+  {
+    name: 'group_add_members',
+    description: `Append members to an existing group. New memberIds are deduped against
+the existing list. All memberIds must exist on the same canvas as the
+group, and a group cannot be a member of itself.
+
+Parameters:
+- canvasId: target canvas
+- groupId: ID of the group element to update
+- memberIds: non-empty array of element IDs to add`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'The canvas ID' },
+        groupId: { type: 'string', description: 'ID of the group element to update', minLength: 1 },
+        memberIds: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          description: 'Element IDs to add to the group',
+        },
+      },
+      required: ['canvasId', 'groupId', 'memberIds'],
+    },
+  },
+
+  {
+    name: 'group_remove_members',
+    description: `Remove members from an existing group. Only the membership relation is
+removed — the elements themselves stay on the canvas.
+
+Parameters:
+- canvasId: target canvas
+- groupId: ID of the group element to update
+- memberIds: non-empty array of element IDs to remove from the group`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'The canvas ID' },
+        groupId: { type: 'string', description: 'ID of the group element to update', minLength: 1 },
+        memberIds: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          description: 'Element IDs to remove from the group',
+        },
+      },
+      required: ['canvasId', 'groupId', 'memberIds'],
     },
   },
 ];
@@ -562,6 +673,129 @@ const canvasCaptureExecutor: ToolExecutor = {
   },
 };
 
+const groupCreateExecutor: ToolExecutor = {
+  async execute(
+    input: Record<string, unknown>,
+    _workingDirectory?: string,
+    context?: ToolUseContext,
+  ): Promise<ToolResult> {
+    if (!context) {
+      return {
+        id: crypto.randomUUID(),
+        name: 'group_create',
+        result: JSON.stringify({ success: false, error: { code: 'NO_CONTEXT', message: 'Tool execution context not available' } }),
+        error: true,
+      };
+    }
+
+    const response = await ipcRequest(context, 'group.create', {
+      canvasId: input.canvasId,
+      memberIds: input.memberIds,
+      title: input.title,
+      bgColor: input.bgColor,
+    });
+
+    return {
+      id: crypto.randomUUID(),
+      name: 'group_create',
+      result: JSON.stringify(response),
+      error: !response.success,
+    };
+  },
+};
+
+const groupUngroupExecutor: ToolExecutor = {
+  async execute(
+    input: Record<string, unknown>,
+    _workingDirectory?: string,
+    context?: ToolUseContext,
+  ): Promise<ToolResult> {
+    if (!context) {
+      return {
+        id: crypto.randomUUID(),
+        name: 'group_ungroup',
+        result: JSON.stringify({ success: false, error: { code: 'NO_CONTEXT', message: 'Tool execution context not available' } }),
+        error: true,
+      };
+    }
+
+    const response = await ipcRequest(context, 'group.ungroup', {
+      canvasId: input.canvasId,
+      groupId: input.groupId,
+    });
+
+    return {
+      id: crypto.randomUUID(),
+      name: 'group_ungroup',
+      result: JSON.stringify(response),
+      error: !response.success,
+    };
+  },
+};
+
+const groupAddMembersExecutor: ToolExecutor = {
+  async execute(
+    input: Record<string, unknown>,
+    _workingDirectory?: string,
+    context?: ToolUseContext,
+  ): Promise<ToolResult> {
+    if (!context) {
+      return {
+        id: crypto.randomUUID(),
+        name: 'group_add_members',
+        result: JSON.stringify({ success: false, error: { code: 'NO_CONTEXT', message: 'Tool execution context not available' } }),
+        error: true,
+      };
+    }
+
+    const response = await ipcRequest(context, 'group.add_members', {
+      canvasId: input.canvasId,
+      groupId: input.groupId,
+      memberIds: input.memberIds,
+    });
+
+    return {
+      id: crypto.randomUUID(),
+      name: 'group_add_members',
+      result: JSON.stringify(response),
+      error: !response.success,
+    };
+  },
+};
+
+const groupRemoveMembersExecutor: ToolExecutor = {
+  async execute(
+    input: Record<string, unknown>,
+    _workingDirectory?: string,
+    context?: ToolUseContext,
+  ): Promise<ToolResult> {
+    if (!context) {
+      return {
+        id: crypto.randomUUID(),
+        name: 'group_remove_members',
+        result: JSON.stringify({ success: false, error: { code: 'NO_CONTEXT', message: 'Tool execution context not available' } }),
+        error: true,
+      };
+    }
+
+    const response = await ipcRequest(context, 'group.remove_members', {
+      canvasId: input.canvasId,
+      groupId: input.groupId,
+      memberIds: input.memberIds,
+    });
+
+    return {
+      id: crypto.randomUUID(),
+      name: 'group_remove_members',
+      result: JSON.stringify(response),
+      error: !response.success,
+    };
+  },
+};
+
+/**
+ * @deprecated Plan 221: Conductor now uses injected tools via packages/agent/src/tool/CanvasConductor/. This profile is no longer registered for new sessions.
+ */
 export function getCanvasOrchestratorExecutors(): Record<string, ToolExecutor> {
   return {
     canvas_get_snapshot: canvasGetSnapshotExecutor,
@@ -572,5 +806,9 @@ export function getCanvasOrchestratorExecutors(): Record<string, ToolExecutor> {
     canvas_align: canvasAlignExecutor,
     canvas_layout_grid: canvasLayoutGridExecutor,
     canvas_capture: canvasCaptureExecutor,
+    group_create: groupCreateExecutor,
+    group_ungroup: groupUngroupExecutor,
+    group_add_members: groupAddMembersExecutor,
+    group_remove_members: groupRemoveMembersExecutor,
   };
 }

@@ -6,15 +6,7 @@ import remarkGfm from "remark-gfm";
 import type { CanvasElement } from "../..//types/conductor";
 import { updateElementContent } from "../..//ipc/conductor-ipc";
 import { useConductorStore } from "../..//stores/conductor-store";
-
-const STICKY_COLORS: Record<string, { bg: string; text: string; placeholder: string; shadow: string }> = {
-  yellow: { bg: "#FFF8B8", text: "#5C4A00", placeholder: "rgba(92,74,0,0.3)", shadow: "rgba(255,200,0,0.18)" },
-  blue: { bg: "#B8DFFF", text: "#0D3A66", placeholder: "rgba(13,58,102,0.3)", shadow: "rgba(0,122,255,0.18)" },
-  green: { bg: "#C4ECC4", text: "#1A4D1A", placeholder: "rgba(26,77,26,0.3)", shadow: "rgba(48,209,88,0.18)" },
-  pink: { bg: "#FFC4DC", text: "#661A3D", placeholder: "rgba(102,26,61,0.3)", shadow: "rgba(255,79,108,0.18)" },
-  purple: { bg: "#DCC4F0", text: "#3D1A5C", placeholder: "rgba(61,26,92,0.3)", shadow: "rgba(167,139,250,0.18)" },
-  gray: { bg: "#E0E0E0", text: "#333333", placeholder: "rgba(51,51,51,0.3)", shadow: "rgba(0,0,0,0.1)" },
-};
+import { STICKY_COLORS, type StickyColorKey } from "./sticky-colors";
 
 const STICKY_MARKDOWN_COMPONENTS = {
   h1: ({ children, ...props }: any) => (
@@ -74,12 +66,24 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
 
   const isSelected = selectedElementId === element.id;
   const isEditing = editingElementId === element.id;
-  const color = (element.config.color as string) || "yellow";
+  const color = (element.config.color as StickyColorKey) || "yellow";
   const theme = STICKY_COLORS[color] ?? STICKY_COLORS.yellow;
   const fontSize = (element.config.fontSize as number) || 14;
   const text = (element.config.text as string) || "";
-  const pxW = Math.round(element.position.w * 80);
-  const pxH = Math.round(element.position.h * 80);
+
+  // New style fields (optional, fall back to defaults for old data).
+  const shape = (element.config.shape as "rect" | "diamond" | "ellipse" | undefined) || "rect";
+  const bgColor = element.config.bgColor as string | undefined;
+  const borderStyleCfg = element.config.borderStyle as
+    | { color?: string; width?: number; style?: "solid" | "dashed" | "dotted" }
+    | undefined;
+  const borderWidth = borderStyleCfg?.width ?? 0;
+  const borderColor = borderStyleCfg?.color ?? "transparent";
+  const borderStyleValue = borderStyleCfg?.style ?? "solid";
+
+  // Short shapes (diamond/ellipse) downgrade font size for long text to avoid overflow.
+  const isShortShape = shape === "diamond" || shape === "ellipse";
+  const effectiveFontSize = isShortShape && text.length > 20 ? 12 : fontSize;
 
   const [editText, setEditText] = useState(text);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -121,16 +125,32 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
     setEditingElementId(element.id);
   }, [element.id, setEditingElementId]);
 
+  // Shape-driven outer styles.
+  const borderRadius = shape === "ellipse" ? "50%" : "var(--radius-element)";
+  const padding = shape === "ellipse" ? "20px 22px" : shape === "diamond" ? "18px 20px" : "14px 16px";
+  const shapeRotate = shape === "diamond" ? "rotate(45deg)" : "";
+  const combinedTransform = shapeRotate || "none";
+  const outerBackground = bgColor ?? theme.bg;
+  // When the user hasn't configured a borderStyle, default to a 1px solid
+  // border using the diagram stroke color so sticky notes share the visual
+  // language of diagram module nodes.
+  const outerBorder =
+    borderWidth > 0
+      ? `${borderWidth}px ${borderStyleValue} ${borderColor}`
+      : `1px solid ${theme.stroke}`;
+  // Counter-rotate inner content so it stays upright inside a diamond.
+  const contentWrapperTransform = shape === "diamond" ? "rotate(-45deg)" : "none";
+
   return (
     <div
       className="conductor-sticky-curl"
       style={{
-        width: `${pxW}px`,
-        height: `${pxH}px`,
-        backgroundColor: theme.bg,
-        borderRadius: "var(--radius-element)",
-        padding: "14px 16px",
-        fontSize: `${fontSize}px`,
+        width: "100%",
+        height: "100%",
+        backgroundColor: outerBackground,
+        borderRadius,
+        padding,
+        fontSize: `${effectiveFontSize}px`,
         color: theme.text,
         lineHeight: 1.55,
         wordBreak: "break-word",
@@ -140,18 +160,29 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
         display: "flex",
         flexDirection: "column",
         position: "relative",
-        boxShadow: isSelected
-          ? `var(--shadow-focusing)`
-          : `0 1px 2px ${theme.shadow}, 0 2px 8px ${theme.shadow}, 0 8px 24px ${theme.shadow}`,
-        transition: "box-shadow var(--motion-duration-small) var(--motion-smooth), transform var(--motion-duration-small) var(--motion-smooth)",
-        transform: isSelected ? "scale(1.01)" : "none",
+        border: outerBorder,
+        boxShadow: "none",
+        transform: combinedTransform,
       }}
       onMouseDown={(e) => {
         if (isEditing) e.stopPropagation();
       }}
     >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
+          transform: contentWrapperTransform,
+          // Center content for short shapes where the usable area is smaller.
+          alignItems: isShortShape ? "center" : "stretch",
+          justifyContent: isShortShape ? "center" : "flex-start",
+          textAlign: isShortShape ? "center" : "left",
+        }}
+      >
       {isEditing ? (
-        <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, width: "100%" }}>
           <textarea
             ref={editTextareaRef}
             value={editText}
@@ -175,7 +206,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
               background: "rgba(0,0,0,0.04)",
               borderRadius: 4,
               padding: "6px 8px",
-              fontSize: `${fontSize}px`,
+              fontSize: `${effectiveFontSize}px`,
               color: theme.text,
               lineHeight: 1.55,
               fontFamily: "inherit",
@@ -250,7 +281,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
                 display: "flex",
                 justifyContent: "center",
                 padding: "4px 0",
-                background: `linear-gradient(transparent, ${theme.bg} 60%)`,
+                background: theme.bg,
                 pointerEvents: "auto",
               }}
               onMouseDown={(e) => e.stopPropagation()}
@@ -270,8 +301,6 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
                   color: theme.text,
                   cursor: "pointer",
                   fontWeight: 500,
-                  backdropFilter: "blur(4px)",
-                  boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
                 }}
               >
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
@@ -283,6 +312,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
           )}
         </>
       )}
+      </div>
     </div>
   );
 };

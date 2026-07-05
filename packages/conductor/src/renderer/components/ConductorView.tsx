@@ -93,6 +93,8 @@ export function ConductorView() {
           }
         };
 
+        console.log("[ConductorView] capture request received", req.requestId, req.scope, req.canvasId);
+
         try {
           const viewportEl = document.querySelector<HTMLElement>(".canvas-area");
           const canvasInnerEl = document.querySelector<HTMLElement>(".canvas-inner");
@@ -111,6 +113,7 @@ export function ConductorView() {
             region: req.region,
           });
 
+          console.log("[ConductorView] capture succeeded", req.requestId, result.width, result.height);
           send({
             requestId: req.requestId,
             result: {
@@ -123,6 +126,7 @@ export function ConductorView() {
             },
           });
         } catch (err) {
+          console.error("[ConductorView] capture failed", req.requestId, err);
           send({
             requestId: req.requestId,
             error: err instanceof Error ? err.message : String(err),

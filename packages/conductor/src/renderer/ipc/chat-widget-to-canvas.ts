@@ -1,6 +1,7 @@
 import { createCanvas, createElement, getSnapshot, listCanvases } from "..//ipc/conductor-ipc";
 import { useConductorStore } from "..//stores/conductor-store";
 import type { CanvasElement, CanvasPosition, ConductorCanvas, VizSpec } from "..//types/conductor";
+import { GRID_PX, gridUnitsToPx, pxToGridUnits } from "../domain/canvas/units";
 
 interface AddChatWidgetToCanvasParams {
   widgetCode: string;
@@ -14,11 +15,12 @@ interface AddChatWidgetToCanvasResult {
   elementId: string;
 }
 
-const GRID_PX = 80;
 const DEFAULT_W = 10;
 const DEFAULT_H = 7;
-const FALLBACK_X = 160;
-const FALLBACK_Y = 120;
+// Fallback grid coordinates used only when the conductor viewport hasn't
+// reported its size yet — in grid units (1 unit = 80 px).
+const FALLBACK_X = 2;
+const FALLBACK_Y = 1.5;
 const CHROME_HEIGHT_PX = 48;
 
 function isCanvasElement(value: unknown): value is CanvasElement {
@@ -95,8 +97,8 @@ function buildPosition(canvasId: string, widgetCode: string): CanvasPosition {
   const zIndex = elements.reduce((max, element) => Math.max(max, element.position.zIndex ?? 0), 0) + 1;
   const size = estimateWidgetGridSize(widgetCode);
 
-  const widgetWidthPx = size.w * GRID_PX;
-  const widgetHeightPx = size.h * GRID_PX;
+  const widgetWidthPx = gridUnitsToPx(size.w);
+  const widgetHeightPx = gridUnitsToPx(size.h);
   const hasViewport = conductor.canvasViewportW > 0 && conductor.canvasViewportH > 0;
   const zoom = conductor.canvasZoom > 0 ? conductor.canvasZoom : 1;
 
@@ -104,9 +106,14 @@ function buildPosition(canvasId: string, widgetCode: string): CanvasPosition {
     return { x: FALLBACK_X, y: FALLBACK_Y, w: size.w, h: size.h, zIndex, rotation: 0 };
   }
 
+  // Viewport values (W/H/scrollX/scrollY) are in screen pixels — convert
+  // back to grid units for storage so the renderer and DB stay in one unit.
+  const cxGrid = pxToGridUnits(conductor.canvasViewportW / 2 - conductor.canvasScrollX) / zoom;
+  const cyGrid = pxToGridUnits(conductor.canvasViewportH / 2 - conductor.canvasScrollY) / zoom;
+
   return {
-    x: Math.round((conductor.canvasViewportW / 2 - conductor.canvasScrollX) / zoom - widgetWidthPx / 2),
-    y: Math.round((conductor.canvasViewportH / 2 - conductor.canvasScrollY) / zoom - widgetHeightPx / 2),
+    x: Math.round(cxGrid - size.w / 2),
+    y: Math.round(cyGrid - size.h / 2),
     w: size.w,
     h: size.h,
     zIndex,

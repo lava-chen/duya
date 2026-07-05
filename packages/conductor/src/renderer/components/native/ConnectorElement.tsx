@@ -101,9 +101,17 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   const sourceEndpoint = connector.config.source as ConnectorEndpoint | undefined;
   const targetEndpoint = connector.config.target as ConnectorEndpoint | undefined;
   const style = connector.config.style as Record<string, unknown> | undefined;
-  const stroke = (style?.stroke as string) || "var(--text-secondary)";
-  const strokeWidth = Number(style?.strokeWidth ?? 2);
+  // New top-level style fields (preferred), falling back to nested style.* for old data.
+  const stroke = (connector.config.color as string) || (style?.stroke as string) || "var(--text-secondary)";
+  const strokeWidth = Number(connector.config.lineWidth ?? style?.strokeWidth ?? 2);
+  const strokeStyleValue = (connector.config.strokeStyle as "solid" | "dashed" | "dotted" | undefined) || "solid";
+  const arrowStart = (connector.config.arrowStart as boolean) || false;
+  const arrowEnd = connector.config.arrowEnd as boolean | undefined;
   const endMarker = (style?.endMarker as string) || "arrow";
+  // arrowEnd defaults to true; when unset, fall back to old endMarker logic.
+  const showEndMarker = arrowEnd ?? (endMarker === "arrow");
+  // Map strokeStyle to stroke-dasharray.
+  const dashArray = strokeStyleValue === "dashed" ? "8 4" : strokeStyleValue === "dotted" ? "2 4" : undefined;
 
   const sourceNodeId = sourceEndpoint?.nodeId;
   const targetNodeId = targetEndpoint?.nodeId;
@@ -125,9 +133,10 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
     [connector, elements, sourcePos, targetPos]
   );
 
-  if (!computedData) return null;
+  if (!computedData || !computedData.path || computedData.path.includes('NaN')) return null;
 
-  const markerEndUrl = endMarker === "arrow" ? "url(#native-connector-arrowhead)" : undefined;
+  const markerEndUrl = showEndMarker ? "url(#native-connector-arrowhead)" : undefined;
+  const markerStartUrl = arrowStart ? "url(#native-connector-arrowhead)" : undefined;
 
   return (
     <g
@@ -153,6 +162,8 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
         stroke={isSelected ? "var(--conductor-accent)" : stroke}
         strokeWidth={isSelected ? strokeWidth + 0.5 : strokeWidth}
         strokeLinecap="round"
+        strokeDasharray={dashArray}
+        markerStart={markerStartUrl}
         markerEnd={markerEndUrl}
         style={{ pointerEvents: "none", transition: "stroke var(--motion-duration-micro) var(--motion-smooth), stroke-width var(--motion-duration-micro) var(--motion-smooth)" }}
       />

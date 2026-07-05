@@ -1,4 +1,19 @@
-import type { ConductorWidget, CanvasElement, ElementKind } from '../types/conductor';
+import type { ConductorWidget, CanvasElement, ElementKind, CanvasPosition } from '../types/conductor';
+
+function normalizePosition(p: { x?: number; y?: number; w?: number; h?: number }): CanvasPosition {
+  return {
+    x: p.x ?? 0,
+    y: p.y ?? 0,
+    // 4x3 grid units matches the legacy widget default (see also
+    // `widget.move` normalization in conductor-store). Without these
+    // fallbacks, missing JSON fields propagate `undefined` through the
+    // store and produce `NaN` sizes at render time.
+    w: typeof p.w === "number" && Number.isFinite(p.w) ? p.w : 4,
+    h: typeof p.h === "number" && Number.isFinite(p.h) ? p.h : 3,
+    zIndex: 0,
+    rotation: 0,
+  };
+}
 
 export function widgetToElementAdapter(widget: ConductorWidget): CanvasElement {
   const elementKind = `widget/${widget.type}` as ElementKind;
@@ -7,7 +22,7 @@ export function widgetToElementAdapter(widget: ConductorWidget): CanvasElement {
     id: widget.id,
     canvasId: widget.canvasId,
     elementKind,
-    position: { x: widget.position.x, y: widget.position.y, w: widget.position.w, h: widget.position.h, zIndex: 0, rotation: 0 },
+    position: normalizePosition(widget.position),
     config: { ...widget.data, ...widget.config },
     vizSpec: null,
     sourceCode: widget.sourceCode,
@@ -33,7 +48,7 @@ export function elementToWidgetAdapter(element: CanvasElement): ConductorWidget 
     canvasId: element.canvasId,
     kind: 'builtin',
     type,
-    position: { x: element.position.x, y: element.position.y, w: element.position.w, h: element.position.h },
+    position: normalizePosition(element.position),
     config: element.config,
     data: element.config,
     dataVersion: element.dataVersion,

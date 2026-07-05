@@ -1,8 +1,12 @@
 import type { CanvasElement } from '../../types/conductor';
 import type { AnchorId, Point, Direction } from '../../types/canvas-node';
 import { getAbsolutePosition } from '../../stores/conductor-store';
+import { GRID_PX } from './units';
 
-export const GRID_PX = 80;
+// Re-export for back-compat with code paths that imported GRID_PX
+// from this module before the canonical units.ts module existed.
+// New code should import directly from './units'.
+export { GRID_PX };
 
 export const directionVector: Record<Direction, Point> = {
   up: { x: 0, y: -1 },
@@ -35,9 +39,16 @@ export function getAnchorPosition(
   anchorId: AnchorId,
   allNodes: CanvasElement[],
 ): Point {
-  const abs = getAbsolutePosition(node, allNodes);
-  const pxW = node.position.w * GRID_PX;
-  const pxH = node.position.h * GRID_PX;
+  // getAbsolutePosition returns grid units; convert to pixels so all
+  // downstream geometry lives in one unit space.
+  const gridAbs = getAbsolutePosition(node, allNodes);
+  const x = Number.isFinite(gridAbs.x) ? gridAbs.x : 0;
+  const y = Number.isFinite(gridAbs.y) ? gridAbs.y : 0;
+  const abs = { x: x * GRID_PX, y: y * GRID_PX };
+  const w = Number.isFinite(node.position.w) ? (node.position.w as number) : 4;
+  const h = Number.isFinite(node.position.h) ? (node.position.h as number) : 3;
+  const pxW = w * GRID_PX;
+  const pxH = h * GRID_PX;
   const cx = abs.x + pxW / 2;
   const cy = abs.y + pxH / 2;
 
@@ -59,6 +70,13 @@ function getRectEdgeIntersection(
 ): Point {
   const cx = rect.x + rect.w / 2;
   const cy = rect.y + rect.h / 2;
+
+  // Defensive: if either point is non-finite, fall back to the rect center
+  // so the connector path does not render with NaN coordinates.
+  if (!Number.isFinite(from.x) || !Number.isFinite(from.y) ||
+      !Number.isFinite(to.x) || !Number.isFinite(to.y)) {
+    return { x: cx, y: cy };
+  }
 
   const dx = to.x - from.x;
   const dy = to.y - from.y;
@@ -111,9 +129,14 @@ export function getConnectorEndpoint(
   allNodes: CanvasElement[],
   otherPoint: Point,
 ): Point {
-  const abs = getAbsolutePosition(node, allNodes);
-  const pxW = node.position.w * GRID_PX;
-  const pxH = node.position.h * GRID_PX;
+  const gridAbs = getAbsolutePosition(node, allNodes);
+  const x = Number.isFinite(gridAbs.x) ? gridAbs.x : 0;
+  const y = Number.isFinite(gridAbs.y) ? gridAbs.y : 0;
+  const abs = { x: x * GRID_PX, y: y * GRID_PX };
+  const w = Number.isFinite(node.position.w) ? (node.position.w as number) : 4;
+  const h = Number.isFinite(node.position.h) ? (node.position.h as number) : 3;
+  const pxW = w * GRID_PX;
+  const pxH = h * GRID_PX;
   const cx = abs.x + pxW / 2;
   const cy = abs.y + pxH / 2;
 
@@ -137,15 +160,22 @@ export function computeBezierPath(
   tgtDir: Direction,
   curvature = 0.4,
 ): string {
+  // Defensive: ensure all coordinates are finite and directions are valid.
+  if (!Number.isFinite(src.x) || !Number.isFinite(src.y) ||
+      !Number.isFinite(tgt.x) || !Number.isFinite(tgt.y)) {
+    return '';
+  }
+  const safeSrcDir = directionVector[srcDir] ? srcDir : autoDirection(src, tgt);
+  const safeTgtDir = directionVector[tgtDir] ? tgtDir : autoDirection(tgt, src);
   const dist = Math.hypot(tgt.x - src.x, tgt.y - src.y);
   const tension = Math.max(28, dist * curvature);
   const cp1 = {
-    x: src.x + directionVector[srcDir].x * tension,
-    y: src.y + directionVector[srcDir].y * tension,
+    x: src.x + directionVector[safeSrcDir].x * tension,
+    y: src.y + directionVector[safeSrcDir].y * tension,
   };
   const cp2 = {
-    x: tgt.x + directionVector[tgtDir].x * tension,
-    y: tgt.y + directionVector[tgtDir].y * tension,
+    x: tgt.x + directionVector[safeTgtDir].x * tension,
+    y: tgt.y + directionVector[safeTgtDir].y * tension,
   };
   return `M ${src.x} ${src.y} C ${cp1.x} ${cp1.y} ${cp2.x} ${cp2.y} ${tgt.x} ${tgt.y}`;
 }
@@ -158,15 +188,22 @@ export function evaluateBezierPoint(
   curvature: number,
   t: number,
 ): Point {
+  // Defensive: ensure all coordinates are finite and directions are valid.
+  if (!Number.isFinite(src.x) || !Number.isFinite(src.y) ||
+      !Number.isFinite(tgt.x) || !Number.isFinite(tgt.y)) {
+    return { x: 0, y: 0 };
+  }
+  const safeSrcDir = directionVector[srcDir] ? srcDir : autoDirection(src, tgt);
+  const safeTgtDir = directionVector[tgtDir] ? tgtDir : autoDirection(tgt, src);
   const dist = Math.hypot(tgt.x - src.x, tgt.y - src.y);
   const tension = Math.max(28, dist * curvature);
   const cp1 = {
-    x: src.x + directionVector[srcDir].x * tension,
-    y: src.y + directionVector[srcDir].y * tension,
+    x: src.x + directionVector[safeSrcDir].x * tension,
+    y: src.y + directionVector[safeSrcDir].y * tension,
   };
   const cp2 = {
-    x: tgt.x + directionVector[tgtDir].x * tension,
-    y: tgt.y + directionVector[tgtDir].y * tension,
+    x: tgt.x + directionVector[safeTgtDir].x * tension,
+    y: tgt.y + directionVector[safeTgtDir].y * tension,
   };
 
   const u = 1 - t;
@@ -193,7 +230,8 @@ export function autoSelectAnchor(
   node: CanvasElement,
   allNodes: CanvasElement[],
 ): AnchorId {
-  const abs = getAbsolutePosition(node, allNodes);
+  const gridAbs = getAbsolutePosition(node, allNodes);
+  const abs = { x: gridAbs.x * GRID_PX, y: gridAbs.y * GRID_PX };
   const pxW = node.position.w * GRID_PX;
   const pxH = node.position.h * GRID_PX;
   const cx = abs.x + pxW / 2;

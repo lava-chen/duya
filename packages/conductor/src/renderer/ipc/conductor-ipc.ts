@@ -20,7 +20,10 @@ function getConductorAPI() {
     listCanvases: (): Promise<ConductorCanvas[]> =>
       conductor.listCanvases(),
 
-    createCanvas: (data: { name: string; description?: string }): Promise<ConductorCanvas> =>
+    getCanvasByProjectPath: (projectPath: string): Promise<ConductorCanvas | null> =>
+      conductor.getCanvasByProjectPath(projectPath),
+
+    createCanvas: (data: { name: string; description?: string; projectPath?: string | null }): Promise<ConductorCanvas> =>
       conductor.createCanvas(data),
 
     updateCanvas: (id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }): Promise<ConductorCanvas | null> =>
@@ -52,10 +55,20 @@ export async function listCanvases(): Promise<ConductorCanvas[]> {
   return api.listCanvases();
 }
 
-export async function createCanvas(name: string, description?: string): Promise<ConductorCanvas> {
+export async function getCanvasByProjectPath(projectPath: string): Promise<ConductorCanvas | null> {
+  const api = getConductorAPI();
+  if (!api) return null;
+  return api.getCanvasByProjectPath(projectPath);
+}
+
+export async function createCanvas(
+  name: string,
+  description?: string,
+  projectPath?: string | null,
+): Promise<ConductorCanvas> {
   const api = getConductorAPI();
   if (!api) throw new Error("IPC not available");
-  return api.createCanvas({ name, description });
+  return api.createCanvas({ name, description, projectPath });
 }
 
 export async function updateCanvas(id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }): Promise<ConductorCanvas | null> {

@@ -3,16 +3,17 @@
 import type { ConductorWidget } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
 import { executeAction } from "..//ipc/conductor-ipc";
-import { widgetRegistry } from "..//widgets/registry";
+import { widgetRegistry, type DynamicWidgetDefinition } from "..//widgets/registry";
 import { useRefineCaptureTarget } from "..//refine/useRefineCaptureTarget";
 import { RefineToolbarButton } from "..//refine/RefineToolbarButton";
 import { X, Warning, SpinnerGap, Robot } from "@phosphor-icons/react";
 
 interface WidgetShellProps {
   widget: ConductorWidget;
+  dynamicDef?: DynamicWidgetDefinition;
 }
 
-export function WidgetShell({ widget }: WidgetShellProps) {
+export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
   const { editMode, activeCanvasId, removeWidget, agentStatus } = useConductorStore();
   const captureRef = useRefineCaptureTarget(widget.id);
 
@@ -90,6 +91,13 @@ export function WidgetShell({ widget }: WidgetShellProps) {
           <div className="flex items-center justify-center h-full text-xs text-[var(--error)]">
             Widget failed to load
           </div>
+        ) : dynamicDef?.renderMode === "iframe" && dynamicDef.sanitizedHtml ? (
+          <iframe
+            srcDoc={dynamicDef.sanitizedHtml}
+            sandbox="allow-scripts"
+            style={{ width: "100%", height: "100%", border: "none", pointerEvents: "none" }}
+            title="widget-dynamic"
+          />
         ) : WidgetContent ? (
           <WidgetContent
             data={widget.data}
