@@ -17,6 +17,7 @@ import type { ToolExecutor } from '../registry.js';
 import { getCanvasId, ipcRequest, noCanvasIdResult, noContextResult } from './ipc-request.js';
 import { formatValidationErrors, validateElementInput } from './validate.js';
 import { appendWidgetStyleSignature, extractWidgetStyleSignature } from './style-signature.js';
+import { trackCreatedElement } from './freshness.js';
 
 export const TOOL_NAME = 'canvas_create_element';
 
@@ -219,6 +220,15 @@ export const executor: ToolExecutor = {
     if (response.success && kind === 'widget/dynamic' && sourceCode && context) {
       const signature = extractWidgetStyleSignature(sourceCode);
       context.widgetStyleHistory = appendWidgetStyleSignature(context.widgetStyleHistory, signature);
+    }
+
+    // Track the newly created element so subsequent fill/style/move calls
+    // bypass the STALE_STATE check without forcing another canvas_list_elements.
+    if (response.success && context) {
+      const createdId = (response as unknown as { data?: { diff?: { targetId?: string } } }).data?.diff?.targetId;
+      if (createdId) {
+        trackCreatedElement(context, createdId);
+      }
     }
 
     return {

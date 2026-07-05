@@ -63,7 +63,7 @@ Use `canvas_style_element` to change `stroke` / `strokeWidth` /
 ### widget/* — embedded mini-apps
 Kinds: `widget/task-list`, `widget/note-pad`, `widget/pomodoro`,
 `widget/news-board`. Each has its own content fields; read the current
-config via `canvas_get_snapshot` before patching.
+config via `canvas_list_elements` before patching.
 
 ### widget/dynamic: Agent-Generated HTML/SVG
 
@@ -153,11 +153,13 @@ Do NOT capture:
 
 ## Tool Call Order
 
-1. **Sense** — `canvas_get_snapshot` to read current state. Always
-   start here; never assume element state from a prior turn.
+1. **Sense** — `canvas_list_elements` to read current state. Always
+   start here; never assume element state from a prior turn. This is
+   also the REQUIRED first step before any move/resize/delete/fill/style
+   on existing elements — those tools reject stale state with STALE_STATE.
 2. **Plan** — decide moves / resizes / content / style changes.
    Group related changes so they happen in one turn.
-3. **Act** — call the 5 tools. Move/resize are independent; content
+3. **Act** — call the canvas tools. Move/resize are independent; content
    and style both merge-patch config, so call them in either order.
 4. **Verify** — `canvas_capture` + `vision_analyze` two-step flow (ONLY if visual judgment is needed).
 5. **Report** — describe what changed in natural language, in the
@@ -171,5 +173,5 @@ Do NOT capture:
   changes — it replaces config wholesale. Use `canvas_fill_content` /
   `canvas_style_element` for merge-patch semantics.
 - Do not assume a sticky's color is `yellow` — always read the current
-  config via `canvas_get_snapshot` first.
+  config via `canvas_list_elements` first.
 - Do not move elements off-canvas (negative coords or beyond 40x30 grid units);

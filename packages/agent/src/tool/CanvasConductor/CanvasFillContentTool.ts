@@ -18,6 +18,7 @@ import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { getCanvasId, ipcRequest, noCanvasIdResult, noContextResult } from './ipc-request.js';
 import { resolveElementId } from './resolve-element-id.js';
+import { isMutationFresh, staleStateResult } from './freshness.js';
 
 export const TOOL_NAME = 'canvas_fill_content';
 
@@ -30,7 +31,7 @@ export const definition: Tool = {
     '  - native/image: { url, fileName? }\n' +
     '  - native/file: { fileName, mimeType?, url? }\n' +
     '  - native/connector: { source, target }\n' +
-    '  - widget/*: per-widget content fields\n\n' +
+    '  - widget/dynamic: pass sourceCode (top-level) to revise the HTML/SVG\n\n' +
     'Only the supplied fields are overwritten; other config fields are preserved. ' +
     'Use canvas_style_element for visual style changes (color, fontSize, stroke).',
   input_schema: {
@@ -38,7 +39,7 @@ export const definition: Tool = {
     properties: {
       elementId: {
         type: 'string',
-        description: 'The ID of the element to fill. Obtain from the user or canvas_capture screenshot.',
+        description: 'The ID of the element to fill. Obtain from canvas_list_elements, or use a ref from a canvas_batch_create you just made in this turn.',
       },
       ref: {
         type: 'string',
@@ -84,8 +85,14 @@ export const definition: Tool = {
         },
         additionalProperties: true,
       },
+      sourceCode: {
+        type: 'string',
+        description:
+          'New HTML/SVG source for widget/dynamic elements. Use this to revise a widget after creation ' +
+          '(e.g. fix layout, change data display, add sections). Ignored for non-widget kinds.',
+      },
     },
-    required: ['content'],
+    required: [],
   },
 };
 
@@ -106,23 +113,9 @@ export const executor: ToolExecutor = {
       return noCanvasIdResult(TOOL_NAME);
     }
 
-    const now = Date.now();
-    const lastList = context?.lastListElementsTime;
-    if (!lastList || now - lastList > 30000) {
-      return {
-        id: crypto.randomUUID(),
-        name: TOOL_NAME,
-        result: JSON.stringify({
-          success: false,
-          error: {
-            code: 'STALE_STATE',
-            message: 'You must call canvas_list_elements within the last 30 seconds before mutating elements. This prevents edits based on outdated canvas state.',
-          },
-        }),
-        error: true,
-      };
-    }
-
+    // Resolve elementId first so we can check freshness against it.
+    // fill_content is a merge-patch (idempotent, non-destructive), so
+    // we still allow it on freshly-created elements even if list is stale.
     const resolved = resolveElementId(
       { elementId: input.elementId as string | undefined, ref: input.ref as string | undefined },
       context,
@@ -136,6 +129,10 @@ export const executor: ToolExecutor = {
       };
     }
     const elementId = resolved.elementId;
+
+    if (!isMutationFresh(context, elementId)) {
+      return staleStateResult(TOOL_NAME, elementId);
+    }
     let content = (input.content as Record<string, unknown>) ?? {};
 
     // Fallback: if the LLM put text/color/url/etc. at the top level
@@ -159,10 +156,14 @@ export const executor: ToolExecutor = {
     // element.update_content merges the patch into the existing
     // config record — non-supplied fields are preserved. Use this
     // instead of element.update (which replaces config wholesale).
+    // For widget/dynamic, sourceCode (if provided) updates the
+    // widget's HTML/SVG so the agent can revise it after creation.
+    const widgetSourceCode = typeof input.sourceCode === 'string' ? input.sourceCode : undefined;
     const response = await ipcRequest(context, 'element.update_content', {
       canvasId,
       elementId,
       config: content,
+      ...(widgetSourceCode !== undefined ? { sourceCode: widgetSourceCode } : {}),
     });
 
     return {

@@ -89,7 +89,10 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     name: 'General',
     description: 'General purpose assistant for most tasks',
     allowedTools: ['*'],
-    disallowedTools: ['canvas_*'],
+    // Conductor canvas tools are gated by the per-session conductorMode
+    // toggle, not by the agent profile. Removing canvas_* from the default
+    // denylist lets the tools appear when the user explicitly enables
+    // conductor mode.
     promptProfile: {
       enableSections: ['generalTaskGuidance'],
       disableSections: ['taskHandling'],
@@ -119,7 +122,10 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     name: 'Research',
     description: 'Research, investigation and deep analysis',
     allowedTools: ['*'],
-    disallowedTools: ['Agent', 'canvas_*', 'skill_manage', 'duya_*', 'WebSearch', 'WebFetch'],
+    // canvas_* removed: conductor canvas tools are gated by the session
+    // conductorMode toggle. Research mode can still use canvas tools when
+    // the user explicitly enables conductor mode.
+    disallowedTools: ['Agent', 'skill_manage', 'duya_*', 'WebSearch', 'WebFetch'],
     promptProfile: {
       disableSections: ['taskHandling', 'actions'],
     },

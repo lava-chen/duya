@@ -22,7 +22,8 @@ export const definition: Tool = {
     'List all elements on the bound canvas as a compact text tree. ' +
     'Use this as the primary way to read canvas state — it is cheaper than canvas_capture ' +
     'and returns structured IDs, positions, and content summaries. ' +
-    'Call this before any move/resize/fill/style/delete when you need to target an existing element.',
+    'REQUIRED FIRST STEP: call this before any move/resize/delete/fill/style on existing elements. ' +
+    'Without a recent canvas_list_elements call, those tools will reject the operation with STALE_STATE.',
   input_schema: {
     type: 'object',
     properties: {

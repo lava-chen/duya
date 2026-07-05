@@ -23,7 +23,7 @@ const RETRYABLE_ERRORS = new Set([
   'NO_IPC',
 ]);
 
-const RETRY_DELAY_MS = 500;
+const RETRY_DELAY_MS = 200;
 
 export interface IpcResponse<T = unknown> {
   success: boolean;
