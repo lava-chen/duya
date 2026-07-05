@@ -177,6 +177,8 @@ export function registerDbHandlers(): void {
       agent_profile_id: 'agent_profile_id',
       agent_type: 'agent_type',
       agent_name: 'agent_name',
+      conductor_mode_enabled: 'conductor_mode_enabled',
+      conductor_canvas_id: 'conductor_canvas_id',
     };
 
     for (const [key, dbField] of Object.entries(fieldMap)) {
@@ -1258,6 +1260,17 @@ export function registerDbHandlers(): void {
     return database.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
   });
 
+  ipcMain.handle(
+    'db:session:set_conductor_mode',
+    (_event, payload: { sessionId: string; enabled: boolean; canvasId?: string | null }) => {
+      const database = getDb();
+      database.prepare(
+        'UPDATE chat_sessions SET conductor_mode_enabled = ?, conductor_canvas_id = ?, updated_at = ? WHERE id = ?',
+      ).run(payload.enabled ? 1 : 0, payload.canvasId ?? null, Date.now(), payload.sessionId);
+      return database.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(payload.sessionId);
+    },
+  );
+
   // ==================== DB Stats Handler ====================
 
   ipcMain.handle('db:stats', () => {
@@ -1291,16 +1304,35 @@ export function registerConductorHandlers(): void {
       sortOrder: r.sort_order,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
+      projectPath: r.project_path ?? null,
     }));
   });
 
-  ipcMain.handle('conductor:canvas:create', (_event, data: { name: string; description?: string }) => {
+  ipcMain.handle('conductor:canvas:getByProjectPath', (_event, projectPath: string) => {
+    const row = getDb().prepare(
+      'SELECT * FROM conductor_canvases WHERE project_path = ?'
+    ).get(projectPath) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      layoutConfig: JSON.parse(row.layout_config),
+      sortOrder: row.sort_order,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      projectPath: row.project_path ?? null,
+    };
+  });
+
+  ipcMain.handle('conductor:canvas:create', (_event, data: { name: string; description?: string; projectPath?: string | null }) => {
     const d = getDb();
     const id = randomUUID();
     const now = Date.now();
+    const projectPath = data.projectPath ?? null;
     d.prepare(
-      'INSERT INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, data.name, data.description ?? null, '{}', 0, now, now);
+      'INSERT INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at, project_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, data.name, data.description ?? null, '{}', 0, now, now, projectPath);
 
     const row = d.prepare('SELECT * FROM conductor_canvases WHERE id = ?').get(id) as any;
     return {
@@ -1311,6 +1343,7 @@ export function registerConductorHandlers(): void {
       sortOrder: row.sort_order,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      projectPath: row.project_path ?? null,
     };
   });
 
@@ -1350,6 +1383,7 @@ export function registerConductorHandlers(): void {
       sortOrder: row.sort_order,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      projectPath: row.project_path ?? null,
     };
   });
 
@@ -1429,6 +1463,7 @@ export function registerConductorHandlers(): void {
         sortOrder: canvas.sort_order,
         createdAt: canvas.created_at,
         updatedAt: canvas.updated_at,
+        projectPath: canvas.project_path ?? null,
       },
       elements,
       widgets: widgetRows.map((w: any) => ({

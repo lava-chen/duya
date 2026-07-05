@@ -2,6 +2,8 @@ import * as http from 'http';
 import { SessionManager } from './session-store';
 import { WorkerManager } from './worker-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
+// @deprecated (plan 221 Phase 7) ConductorService is retained for legacy
+// HTTP/SSE routes but no longer the primary execution path.
 import { ConductorService } from './conductor-service';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps } from './router';
@@ -55,6 +57,18 @@ process.on('message', (msg: Record<string, unknown>) => {
         pending.reject(new Error(typeof msg.error === 'string' ? msg.error : 'DB request failed'));
       }
     }
+    return;
+  }
+
+  if (msg.type === 'conductor:executor:rpc:response' && typeof msg.requestId === 'string') {
+    console.error(`[RPC-DEBUG] server received response: requestId=${msg.requestId}`);
+    const key = `rpc:${msg.requestId}`;
+    const workerChild = workerDbRequests.get(key);
+    if (workerChild && !workerChild.killed) {
+      workerDbRequests.delete(key);
+      console.error(`[RPC-DEBUG] server→worker response: requestId=${msg.requestId}`);
+      workerChild.send(msg);
+    }
   }
 });
 
@@ -79,6 +93,9 @@ function dbRequest(action: string, payload: Record<string, unknown>): Promise<un
   });
 }
 
+// @deprecated (plan 221 Phase 7) ConductorService is retained for legacy
+// HTTP/SSE routes but no longer the primary execution path. The main chat
+// agent now drives conductor mode via injection.
 const conductorService = new ConductorService(workerManager, dbRequest);
 
 const interagentRouter = new InteragentRouter({

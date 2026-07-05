@@ -29,7 +29,9 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       agent_profile_id TEXT DEFAULT NULL,
       parent_id TEXT REFERENCES chat_sessions(id),
       agent_type TEXT NOT NULL DEFAULT 'main',
-      agent_name TEXT NOT NULL DEFAULT ''
+      agent_name TEXT NOT NULL DEFAULT '',
+      conductor_mode_enabled INTEGER NOT NULL DEFAULT 0,
+      conductor_canvas_id TEXT DEFAULT NULL
     )
   `);
 
@@ -591,6 +593,32 @@ function ensureCriticalSchema(db: BetterSqlite3Db): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_pmc_provider_id ON provider_model_capabilities(provider_id)`);
+
+  // Self-repair: ensure chat_sessions has conductor columns.
+  // Migration #37 adds these, but if _schema_migrations is out of sync
+  // (e.g. id=37 marked applied by a prior different migration, or DB
+  // restored from backup without rolling back migration records), the
+  // migration would be skipped and createSession INSERTs would fail with
+  // "no such column". This check runs on every startup, independent of
+  // the migration system, so the app can always boot.
+  ensureChatSessionColumns(db, [
+    { name: 'conductor_mode_enabled', ddl: 'ALTER TABLE chat_sessions ADD COLUMN conductor_mode_enabled INTEGER NOT NULL DEFAULT 0' },
+    { name: 'conductor_canvas_id', ddl: 'ALTER TABLE chat_sessions ADD COLUMN conductor_canvas_id TEXT DEFAULT NULL' },
+  ]);
+}
+
+/** Add missing columns to chat_sessions. Idempotent — skips columns that already exist. */
+function ensureChatSessionColumns(
+  db: BetterSqlite3Db,
+  columns: Array<{ name: string; ddl: string }>,
+): void {
+  const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
+  const existing = new Set(tableInfo.map((col) => col.name));
+  for (const col of columns) {
+    if (!existing.has(col.name)) {
+      db.exec(col.ddl);
+    }
+  }
 }
 
 function ensureMigrationsTable(db: BetterSqlite3Db): void {
@@ -1830,6 +1858,33 @@ const migrations: Migration[] = [
       txn();
     },
   },
+  {
+    id: 37,
+    name: 'add_conductor_session_binding_columns',
+    migrate(db: BetterSqlite3Db): void {
+      const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
+      const columns = tableInfo.map((col) => col.name);
+      if (!columns.includes('conductor_mode_enabled')) {
+        db.exec(`ALTER TABLE chat_sessions ADD COLUMN conductor_mode_enabled INTEGER NOT NULL DEFAULT 0`);
+      }
+      if (!columns.includes('conductor_canvas_id')) {
+        db.exec(`ALTER TABLE chat_sessions ADD COLUMN conductor_canvas_id TEXT DEFAULT NULL`);
+      }
+    },
+  },
+  {
+    id: 38,
+    name: 'add_conductor_canvas_project_path',
+    migrate(db: BetterSqlite3Db): void {
+      const tableInfo = db.prepare('PRAGMA table_info(conductor_canvases)').all() as Array<{ name: string }>;
+      const columns = tableInfo.map((col) => col.name);
+      if (!columns.includes('project_path')) {
+        db.exec(`ALTER TABLE conductor_canvases ADD COLUMN project_path TEXT`);
+      }
+      // Unique index so a project maps to at most one canvas.
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conductor_canvases_project_path ON conductor_canvases(project_path) WHERE project_path IS NOT NULL`);
+    },
+  },
 ];
 
 /**
@@ -1868,7 +1923,7 @@ export function selfCheckAndRepairSchema(db: BetterSqlite3Db): void {
   const logger = getLogger();
   try {
     ensureCriticalSchema(db);
-    logger.info('Schema self-check completed', { repaired: ['message_attachments'] }, LogComponent.DBMigration);
+    logger.info('Schema self-check completed', { repaired: ['message_attachments', 'chat_sessions_conductor_columns'] }, LogComponent.DBMigration);
   } catch (error) {
     logger.error(
       'Schema self-check failed',

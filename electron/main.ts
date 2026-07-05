@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, protocol } from 'electron';
 import { randomUUID } from 'crypto';
-import { platform as getPlatform } from 'os';
+import { platform as getPlatform, tmpdir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -355,8 +355,57 @@ if (gotTheLock) {
 
       if (data.error) {
         pending.reject(new Error(String(data.error)));
-      } else {
-        pending.resolve(data.result);
+        return;
+      }
+
+      const result = data.result as {
+        dataUrl?: string;
+        pngBase64?: string;
+        width?: number;
+        height?: number;
+        scope?: string;
+        capturedAt?: string;
+      } | undefined;
+
+      // Save screenshot to a file and return the file path instead of the
+      // base64 dataUrl. This keeps the value passed back to the agent
+      // (and ultimately the LLM) as a short string, avoiding the large
+      // token cost of inlining base64 image data.
+      const dataUrl = result?.dataUrl;
+      if (!dataUrl) {
+        pending.resolve(result);
+        return;
+      }
+
+      try {
+        const base64Match = /^data:image\/(\w+);base64,(.+)$/.exec(dataUrl);
+        if (!base64Match) {
+          pending.resolve(result);
+          return;
+        }
+        const ext = base64Match[1] === 'jpeg' ? 'jpg' : base64Match[1];
+        const buffer = Buffer.from(base64Match[2], 'base64');
+
+        const capturesDir = path.join(tmpdir(), 'duya-captures');
+        fs.mkdirSync(capturesDir, { recursive: true });
+        const filename = `canvas_${Date.now()}.${ext}`;
+        const filePath = path.join(capturesDir, filename);
+        fs.writeFileSync(filePath, buffer);
+
+        pending.resolve({
+          filePath,
+          width: result?.width,
+          height: result?.height,
+          scope: result?.scope,
+          capturedAt: result?.capturedAt ?? new Date().toISOString(),
+        });
+      } catch (err) {
+        getLogger().warn(
+          '[capture] Failed to save screenshot to file, returning raw result',
+          { error: err instanceof Error ? err.message : String(err) },
+          LogComponent.Main,
+        );
+        pending.resolve(result);
       }
     });
 
@@ -368,13 +417,24 @@ if (gotTheLock) {
       (canvasId, scope, elementId?, region?) =>
         new Promise((resolve, reject) => {
           const requestId = randomUUID();
+          const timeoutMs = 15000;
           const timer = setTimeout(() => {
             pendingCaptures.delete(requestId);
-            reject(new Error('Canvas capture timed out (30s)'));
-          }, 30000);
+            logger.warn(
+              'Canvas capture timed out waiting for renderer',
+              { requestId, canvasId, scope, timeoutMs },
+              LogComponent.Main,
+            );
+            reject(new Error(`Canvas capture timed out after ${timeoutMs}ms (renderer did not respond)`));
+          }, timeoutMs);
 
           pendingCaptures.set(requestId, { resolve, reject, timer });
 
+          logger.debug(
+            'Sending canvas capture request to renderer',
+            { requestId, canvasId, scope, elementId, hasRegion: !!region },
+            LogComponent.Main,
+          );
           channelManager.sendToChannel('conductor', {
             type: 'conductor:capture:request',
             requestId,
@@ -385,6 +445,23 @@ if (gotTheLock) {
           });
         }),
     );
+
+    // Inject the broadcast function so agent edits (canvas_create_element,
+    // canvas_fill_content, etc.) push state:patch messages to the
+    // renderer's conductor channel. Without this, the canvas only sees
+    // agent edits on the next full snapshot reload — no live update.
+    conductorExecutorProxy.setBroadcastPatch((patch) => {
+      channelManager.sendToChannel('conductor', {
+        type: 'conductor:state:patch',
+        _v2: true,
+        ...patch,
+      });
+    });
+
+    // Inject the proxy into the agent-server lifecycle so the main chat
+    // worker can also reach it via the `conductor:executor:rpc` bridge.
+    const { setConductorExecutorProxy } = await import('./agents/agent-server-lifecycle');
+    setConductorExecutorProxy(conductorExecutorProxy);
 
     const handleExecutorRpc = async (rpcMsg: Record<string, unknown>, sessionId: string) => {
       const request: ExecutorRpcRequest = {
@@ -414,6 +491,10 @@ if (gotTheLock) {
       };
       const interruptedSessions = new Set<string>();
 
+      // @deprecated (plan 221 Phase 7) Legacy conductor MessagePort spawn
+      // path. In-canvas entry points now forward to the main chat session;
+      // this handler remains for backward compatibility with older
+      // renderer builds that still post `conductor:agent:start`.
       if (msg.type === 'conductor:agent:start' && msg.sessionId && msg.prompt) {
         const conductorSessionId = msg.sessionId;
 

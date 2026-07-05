@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import type { WorkerManager } from './worker-manager';
 import type { SessionManager } from './session-store';
 import { SessionState } from './types';
@@ -143,9 +144,10 @@ export class InteragentRouter {
     const { id, callerSessionId, callerAgentName, targetSessionId, message, mode } = params;
 
     // 1. Load target session row + provider config from DB (via main process)
-    const sessionRow = await this.deps.dbRequest('session:get', { sessionId: targetSessionId }) as {
-      id: string; model: string; systemPrompt: string; workingDirectory: string;
-      providerId: string; agentProfileId: string | null; permissionProfile: string;
+    // db-bridge 'session:get' reads p.id (not p.sessionId), so we must pass { id }.
+    const sessionRow = await this.deps.dbRequest('session:get', { id: targetSessionId }) as {
+      id: string; model: string; system_prompt: string; working_directory: string;
+      provider_id: string; agent_profile_id: string | null; permission_profile: string;
     } | null;
     if (!sessionRow) {
       this.sendEventToCaller(callerSessionId, id, {
@@ -156,7 +158,7 @@ export class InteragentRouter {
       return;
     }
 
-    const providerConfig = await this.deps.dbRequest('provider:get', { providerId: sessionRow.providerId }) as Record<string, unknown>;
+    const providerConfig = await this.deps.dbRequest('config:provider:get', { id: sessionRow.provider_id }) as Record<string, unknown>;
     if (!providerConfig) {
       this.sendEventToCaller(callerSessionId, id, {
         type: 'chat:error', sessionId: targetSessionId,
@@ -174,26 +176,27 @@ export class InteragentRouter {
       type: 'init',
       sessionId: targetSessionId,
       providerConfig,
-      workingDirectory: sessionRow.workingDirectory || undefined,
-      systemPrompt: sessionRow.systemPrompt || undefined,
+      workingDirectory: sessionRow.working_directory || undefined,
+      systemPrompt: sessionRow.system_prompt || undefined,
     };
     this.deps.workerManager.sendCommand(targetSessionId, initCommand);
 
     // 4. Wait for ready (reuse the stdout-scanning pattern from router.ts waitForReady)
     await this.waitForReady(targetSessionId);
 
-    // 5. Append caller's message to target session
+    // 5. Append caller's message to target session.
+    // db-bridge 'message:append' expects { sessionId, messages: [...] }.
+    // Each message needs an id (PRIMARY KEY, NOT NULL). The `metadata` field
+    // is not a DB column — caller attribution is conveyed via `name`.
     await this.deps.dbRequest('message:append', {
       sessionId: targetSessionId,
-      message: {
+      messages: [{
+        id: randomUUID(),
         role: 'user',
         content: message,
-        metadata: {
-          caller_session_id: callerSessionId,
-          caller_agent_name: callerAgentName,
-          interagent: true,
-        },
-      },
+        name: callerAgentName || 'interagent',
+        msg_type: 'text',
+      }],
     });
 
     // 6. Send chat:start with mode-based toolset filtering

@@ -3,6 +3,12 @@
  *
  * Wraps queries/conductors.ts for executor-specific operations.
  * All functions return { result, diff } for state:patch broadcasting.
+ *
+ * After each mutation, `broadcastPatch` is invoked to push the diff
+ * to the renderer via the `conductor` MessagePort channel. This keeps
+ * the canvas live-updating when the agent creates/moves/deletes
+ * elements (without it, the renderer only sees agent edits on the
+ * next full snapshot reload).
  */
 
 import { randomUUID } from 'crypto';
@@ -15,9 +21,18 @@ import {
   deleteElement,
   writeActionLog,
   getElement,
+  elementExists,
   findElementsByType,
   findAttachedConnectors,
 } from '../db/queries/conductors';
+import type { ConductorElement } from '../db/queries/conductors';
+import { getDatabase } from '../db/connection';
+import {
+  clampPositionToCanvas,
+  formatValidationErrors,
+  validateElementInput,
+  validateConnectorShape,
+} from '../../packages/agent/src/tool/CanvasConductor/validate.js';
 import type {
   ExecutorRpcResponse,
   ElementActionResult,
@@ -25,10 +40,152 @@ import type {
 } from './executor-types';
 
 const ACTOR = 'agent';
-const CANVAS_WIDTH = 1200;
-const CANVAS_HEIGHT = 800;
+// Canvas bounds in *grid units* (1 unit = 80 px). The conductor canvas model
+// persists `CanvasPosition.x/y/w/h` in grid units, so all layout math below
+// (clamp, align, default origin) operates in grid units too.
+const CANVAS_WIDTH_UNITS = 40;
+const CANVAS_HEIGHT_UNITS = 30;
+
+/** Truncate a string to `max` chars, appending an ellipsis when truncated. */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max) + '…';
+}
+
+/**
+ * Provide sensible default width/height for an element when the agent
+ * omits them. Keeps the canvas visually consistent and prevents downstream
+ * geometry (connector anchors, hit testing) from seeing undefined sizes.
+ */
+function applyDefaultDimensions(
+  elementKind: string,
+  position: Record<string, unknown>,
+): Record<string, unknown> {
+  if (Number.isFinite(position.w as number) && Number.isFinite(position.h as number)) {
+    return position;
+  }
+  const defaults: Record<string, { w: number; h: number }> = {
+    'native/sticky': { w: 4, h: 3 },
+    'native/image': { w: 5, h: 4 },
+    'native/file': { w: 4, h: 3 },
+    'native/connector': { w: 0, h: 0 },
+    'native/group': { w: 0, h: 0 },
+    'widget/dynamic': { w: 5, h: 4 },
+  };
+  const kindDefaults = defaults[elementKind] ?? { w: 4, h: 3 };
+  return {
+    ...position,
+    w: Number.isFinite(position.w as number) ? position.w : kindDefaults.w,
+    h: Number.isFinite(position.h as number) ? position.h : kindDefaults.h,
+  };
+}
+
+/**
+ * Build a minimal element summary for the agent tool result.
+ * Keeps only the fields the agent actually needs to reason about
+ * the canvas; drops internal metadata (permissions, dataVersion,
+ * timestamps, state) to keep tool results short and readable.
+ */
+function summarizeElementForAgent(element: {
+  id: string;
+  canvasId: string;
+  elementKind: string;
+  position: Record<string, unknown>;
+  config: Record<string, unknown>;
+  sourceCode?: string | null;
+}): Record<string, unknown> {
+  return {
+    id: element.id,
+    kind: element.elementKind,
+    elementKind: element.elementKind,
+    position: element.position,
+    config: element.config,
+    ...(element.sourceCode ? { sourceCode: element.sourceCode } : {}),
+  };
+}
+
+/**
+ * Resolve a connector endpoint value to a display string.
+ * Accepts either a raw elementId string or { nodeId: string }.
+ */
+function resolveConnectorEndpoint(value: unknown): string {
+  if (typeof value === 'string') return value || '?';
+  if (value && typeof value === 'object' && 'nodeId' in value) {
+    return (value as { nodeId?: string }).nodeId || '?';
+  }
+  return '?';
+}
+
+/**
+ * Broadcast a state:patch message to the renderer's `conductor`
+ * channel. Mirrors the shape emitted by `db-handlers.ts:1524` so the
+ * renderer's `onStatePatch` handler can apply it uniformly.
+ */
+export type BroadcastPatchFn = (patch: {
+  canvasId: string;
+  elementId?: string;
+  actionId?: number;
+  resultPatch: Record<string, unknown>;
+  actor?: string;
+}) => void;
 
 export class ConductorDbService {
+  private broadcastPatch: BroadcastPatchFn | null = null;
+
+  /**
+   * Inject the broadcast function. Called by main.ts after the
+   * channelManager is initialized. Without this, agent edits still
+   * write to the DB but the renderer won't live-update.
+   */
+  setBroadcastPatch(fn: BroadcastPatchFn): void {
+    this.broadcastPatch = fn;
+  }
+
+  /**
+   * Internal helper: broadcast a diff to the renderer if a broadcaster
+   * is wired. `elementId` is lifted to the top level so the
+   * `onStatePatch` handler can match it against `patch.elementId`.
+   */
+  private emit(canvasId: string, diff: Record<string, unknown>, elementId?: string): void {
+    if (!this.broadcastPatch) return;
+    this.broadcastPatch({
+      canvasId,
+      elementId: elementId ?? (diff.targetId as string | undefined),
+      actionId: (diff.actionId as number) ?? 0,
+      resultPatch: diff,
+      actor: ACTOR,
+    });
+  }
+
+  /**
+   * Generate a fresh element ID and ensure it does not already exist.
+   * Collisions are astronomically unlikely but this guards against
+   * duplicate IDs when restoring / retrying operations.
+   */
+  private ensureUniqueElementId(): string {
+    let id = randomUUID();
+    while (elementExists(id)) {
+      id = randomUUID();
+    }
+    return id;
+  }
+
+  /**
+   * Normalize a connector endpoint value to { nodeId: string }.
+   * Accepts either a raw elementId string or an already-normalized
+   * { nodeId: string } object. Returns undefined for unresolvable input.
+   */
+  private normalizeConnectorEndpoint(value: unknown): { nodeId: string } | undefined {
+    if (typeof value === 'string' && value) {
+      return { nodeId: value };
+    }
+    if (value && typeof value === 'object' && 'nodeId' in value) {
+      const nodeId = (value as { nodeId?: string }).nodeId;
+      if (nodeId) return { nodeId };
+    }
+    return undefined;
+  }
+
   getCanvasSnapshot(canvasId: string): ExecutorRpcResponse {
     const snapshot = getCanvasSnapshot(canvasId);
     if (!snapshot) {
@@ -42,8 +199,10 @@ export class ConductorDbService {
       canvas: {
         id: snapshot.canvas.id,
         name: snapshot.canvas.name,
-        width: CANVAS_WIDTH,
-        height: CANVAS_HEIGHT,
+        // Bounding-box dimensions in grid units. (See CANVAS_WIDTH_UNITS
+        // above for the rationale.)
+        width: CANVAS_WIDTH_UNITS,
+        height: CANVAS_HEIGHT_UNITS,
         description: snapshot.canvas.description,
       },
       elements: snapshot.elements.map((el) => ({
@@ -64,19 +223,313 @@ export class ConductorDbService {
     return { success: true, result };
   }
 
+  /**
+   * List every element on a canvas as a compact summary. Cheaper read
+   * path than getCanvasSnapshot — omits vizSpec/state/dataVersion and
+   * collapses config into a kind-specific one-line summary. Set
+   * payload.includeConfig=true to attach the full config object per
+   * element (useful when the model needs to inspect exact fields).
+   */
+  listElements(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const includeConfig = payload.includeConfig === true;
+
+    const snapshot = getCanvasSnapshot(canvasId);
+    if (!snapshot) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `Canvas ${canvasId} not found` },
+      };
+    }
+
+    const elements = snapshot.elements;
+    const overlaps = this.detectOverlaps(elements);
+    const spatialOverview = this.buildSpatialOverview(elements);
+    const markdown = this.buildElementsMarkdown(elements, includeConfig);
+
+    return {
+      success: true,
+      result: {
+        canvasId,
+        markdown,
+        count: elements.length,
+        overlaps,
+        spatialOverview,
+      },
+    };
+  }
+
+  findEmptySpace(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const preferredX = typeof payload.preferredX === 'number' ? payload.preferredX : 1;
+    const preferredY = typeof payload.preferredY === 'number' ? payload.preferredY : 1;
+    const w = typeof payload.w === 'number' ? payload.w : 3;
+    const h = typeof payload.h === 'number' ? payload.h : 3;
+    const direction = (payload.direction as 'right' | 'down' | 'auto') ?? 'auto';
+
+    const snapshot = this.getCanvasSnapshot(canvasId);
+    if (!snapshot.success) {
+      return { success: false, error: { code: 'CANVAS_NOT_FOUND', message: `Canvas ${canvasId} not found` } };
+    }
+
+    const snapshotData = snapshot.result as CanvasSnapshotResult;
+    const obstacles = snapshotData.elements
+      .filter(el => el.elementKind !== 'native/connector' && el.position?.w && el.position?.h)
+      .map(el => {
+        const pos = el.position as { x?: number; y?: number; w?: number; h?: number };
+        return {
+          x: pos.x ?? 0,
+          y: pos.y ?? 0,
+          w: pos.w ?? 0,
+          h: pos.h ?? 0,
+        };
+      });
+
+    const result = this.searchEmptySpace(preferredX, preferredY, w, h, direction, obstacles);
+
+    return {
+      success: true,
+      result: {
+        x: result.x,
+        y: result.y,
+        w,
+        h,
+        overlapsExisting: result.overlapsExisting,
+      },
+    };
+  }
+
+  private searchEmptySpace(
+    preferredX: number,
+    preferredY: number,
+    w: number,
+    h: number,
+    direction: 'right' | 'down' | 'auto',
+    obstacles: Array<{ x: number; y: number; w: number; h: number }>,
+  ): { x: number; y: number; overlapsExisting: boolean } {
+    void direction;
+    const MARGIN = 1;
+    const MAX_X = CANVAS_WIDTH_UNITS - w - MARGIN;
+    const MAX_Y = CANVAS_HEIGHT_UNITS - h - MARGIN;
+
+    const testOverlap = (tx: number, ty: number) =>
+      obstacles.some(o => tx < o.x + o.w && tx + w > o.x && ty < o.y + o.h && ty + h > o.y);
+
+    const candidates: Array<{ x: number; y: number }> = [];
+    for (let gy = MARGIN; gy <= MAX_Y; gy += 1) {
+      for (let gx = MARGIN; gx <= MAX_X; gx += 1) {
+        candidates.push({ x: gx, y: gy });
+      }
+    }
+
+    candidates.sort((a, b) => {
+      const da = Math.abs(a.x - preferredX) + Math.abs(a.y - preferredY);
+      const db = Math.abs(b.x - preferredX) + Math.abs(b.y - preferredY);
+      return da - db;
+    });
+
+    for (const c of candidates) {
+      if (!testOverlap(c.x, c.y)) {
+        return { x: c.x, y: c.y, overlapsExisting: false };
+      }
+    }
+
+    const closest = candidates[0] ?? { x: Math.max(MARGIN, Math.min(preferredX, MAX_X)), y: Math.max(MARGIN, Math.min(preferredY, MAX_Y)) };
+    return { x: closest.x, y: closest.y, overlapsExisting: true };
+  }
+
+  /**
+   * Produce a short kind-specific text describing an element's content.
+   * Used by listElements to keep the per-element payload small. Truncates
+   * long text fields so a single listElements response stays well under
+   * the model's context budget even for canvases with many elements.
+   */
+  private summarizeElement(
+    elementKind: string,
+    config: Record<string, unknown>,
+  ): string {
+    const cfg = config || {};
+    switch (elementKind) {
+      case 'native/sticky': {
+        const text = typeof cfg.text === 'string' ? cfg.text : '';
+        return truncate(text, 40);
+      }
+      case 'native/image': {
+        const name =
+          (typeof cfg.fileName === 'string' && cfg.fileName) ||
+          (typeof cfg.url === 'string' && cfg.url) ||
+          '';
+        return truncate(name, 60);
+      }
+      case 'native/file': {
+        const name = typeof cfg.fileName === 'string' ? cfg.fileName : '';
+        return truncate(name, 60);
+      }
+      case 'native/connector': {
+        const src = resolveConnectorEndpoint(cfg.source);
+        const tgt = resolveConnectorEndpoint(cfg.target);
+        return `${src} -> ${tgt}`;
+      }
+      case 'native/group': {
+        const memberIds = Array.isArray(cfg.memberIds) ? cfg.memberIds : [];
+        return `members: ${memberIds.length}`;
+      }
+      default: {
+        if (elementKind.startsWith('widget/')) {
+          const title =
+            (typeof cfg.title === 'string' && cfg.title) ||
+            (typeof cfg.label === 'string' && cfg.label) ||
+            '';
+          return title || elementKind;
+        }
+        return elementKind;
+      }
+    }
+  }
+
+  /**
+   * Detect bounding box overlaps between non-connector elements.
+   * position is in grid units: { x, y, w, h }.
+   */
+  private detectOverlaps(elements: ConductorElement[]): Array<{ a: string; b: string; reason: string }> {
+    const rects = elements
+      .filter((el) => el.elementKind !== 'native/connector' && el.position?.w && el.position?.h)
+      .map((el) => {
+        const pos = el.position as { x?: number; y?: number; w?: number; h?: number };
+        return {
+          id: el.id,
+          x: pos.x ?? 0,
+          y: pos.y ?? 0,
+          w: pos.w ?? 0,
+          h: pos.h ?? 0,
+        };
+      });
+
+    const overlaps: Array<{ a: string; b: string; reason: string }> = [];
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i];
+        const b = rects[j];
+        // AABB overlap test
+        if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) {
+          const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+          const overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+          overlaps.push({
+            a: a.id,
+            b: b.id,
+            reason: `bounding box intersection (${overlapX.toFixed(1)} x ${overlapY.toFixed(1)} grid units)`,
+          });
+        }
+      }
+    }
+    return overlaps;
+  }
+
+  /**
+   * Build spatial overview by quadrant (40x30 grid split into 4 quadrants).
+   */
+  private buildSpatialOverview(elements: ConductorElement[]): string {
+    const quadrants = [
+      { name: 'Top-left [0-20, 0-15]', minX: 0, minY: 0, maxX: 20, maxY: 15, items: [] as string[] },
+      { name: 'Top-right [20-40, 0-15]', minX: 20, minY: 0, maxX: 40, maxY: 15, items: [] as string[] },
+      { name: 'Bottom-left [0-20, 15-30]', minX: 0, minY: 15, maxX: 20, maxY: 30, items: [] as string[] },
+      { name: 'Bottom-right [20-40, 15-30]', minX: 20, minY: 15, maxX: 40, maxY: 30, items: [] as string[] },
+    ];
+
+    for (const el of elements) {
+      if (el.elementKind === 'native/connector') continue;
+      const pos = el.position as { x?: number; y?: number; w?: number; h?: number };
+      const cx = (pos.x ?? 0) + (pos.w ?? 0) / 2;
+      const cy = (pos.y ?? 0) + (pos.h ?? 0) / 2;
+      for (const q of quadrants) {
+        if (cx >= q.minX && cx < q.maxX && cy >= q.minY && cy < q.maxY) {
+          const shortKind = el.elementKind.replace('native/', '').replace('widget/', '');
+          q.items.push(shortKind);
+          break;
+        }
+      }
+    }
+
+    const lines = quadrants.map((q) => {
+      if (q.items.length === 0) return `- ${q.name}: empty`;
+      const counts: Record<string, number> = {};
+      for (const item of q.items) counts[item] = (counts[item] ?? 0) + 1;
+      const summary = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
+      return `- ${q.name}: ${summary}`;
+    });
+    return `### Spatial Overview (40x30 grid)\n${lines.join('\n')}`;
+  }
+
+  /**
+   * Map an element kind to a display category for the layered Markdown.
+   */
+  private categorizeElement(kind: string): string {
+    if (kind === 'native/sticky') return 'Stickies';
+    if (kind === 'native/connector') return 'Connectors';
+    if (kind === 'native/image') return 'Images';
+    if (kind === 'native/file') return 'Files';
+    if (kind === 'native/group') return 'Groups';
+    if (kind.startsWith('widget/')) return 'Widgets';
+    return 'Other';
+  }
+
+  /**
+   * Build layered Markdown of all elements grouped by kind.
+   */
+  private buildElementsMarkdown(elements: ConductorElement[], includeConfig: boolean): string {
+    const byKind: Record<string, ConductorElement[]> = {};
+    for (const el of elements) {
+      const category = this.categorizeElement(el.elementKind);
+      if (!byKind[category]) byKind[category] = [];
+      byKind[category].push(el);
+    }
+
+    const lines: string[] = [`## Canvas State (${elements.length} elements)\n`];
+
+    const categoryOrder = ['Stickies', 'Images', 'Files', 'Connectors', 'Widgets', 'Groups', 'Other'];
+    for (const cat of categoryOrder) {
+      if (!byKind[cat] || byKind[cat].length === 0) continue;
+      lines.push(`### ${cat} (${byKind[cat].length})`);
+      for (const el of byKind[cat]) {
+        const pos = el.position as { x?: number; y?: number; w?: number; h?: number };
+        const posStr = `${pos?.w ?? 0}x${pos?.h ?? 0} @ (${pos?.x ?? 0},${pos?.y ?? 0})`;
+        const summary = this.summarizeElement(el.elementKind, el.config);
+        let line = `- ${el.id} [${posStr}] ${summary}`;
+        if (includeConfig && el.config) {
+          line += `\n  config: ${JSON.stringify(el.config)}`;
+        }
+        lines.push(line);
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
   createElement(payload: Record<string, unknown>): ExecutorRpcResponse {
     const canvasId = payload.canvasId as string;
     const elementKind = payload.kind as string;
     const position = payload.position as Record<string, unknown>;
     const vizSpec = (payload.vizSpec as Record<string, unknown>) || null;
     const config = (payload.config as Record<string, unknown>) || {};
+    const sourceCode = (payload.sourceCode as string | null | undefined) ?? null;
 
-    const elementId = randomUUID();
+    const validation = validateElementInput(elementKind, position, config);
+    if (!validation.valid) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: formatValidationErrors(validation) },
+      };
+    }
+
+    const defaultedPosition = applyDefaultDimensions(elementKind, position);
+    const clampedPosition = clampPositionToCanvas(defaultedPosition, CANVAS_WIDTH_UNITS, CANVAS_HEIGHT_UNITS);
+    const elementId = this.ensureUniqueElementId();
     const now = Date.now();
     const permissions = { agentCanRead: true, agentCanWrite: true, agentCanDelete: true };
     const metadata = { label: elementKind, tags: [] as string[], createdBy: ACTOR };
 
-    insertElement(elementId, canvasId, elementKind, position, config, vizSpec, permissions, metadata, now);
+    insertElement(elementId, canvasId, elementKind, clampedPosition, config, vizSpec, permissions, metadata, now, null, sourceCode);
 
     writeActionLog({
       canvasId,
@@ -91,7 +544,7 @@ export class ConductorDbService {
       id: elementId,
       canvasId,
       elementKind,
-      position,
+      position: clampedPosition,
       config,
       vizSpec,
       state: 'idle',
@@ -107,13 +560,276 @@ export class ConductorDbService {
         type: 'element.create',
         targetId: elementId,
         canvasId,
-        element,
+        element: summarizeElementForAgent(element),
         actionId: 0,
         timestamp: now,
       },
     };
 
+    this.emit(canvasId, result.diff, elementId);
+
     return { success: true, result };
+  }
+
+  /**
+   * Create multiple elements and connectors in a single atomic transaction.
+   * Supports ref bindings so connectors can reference elements created
+   * earlier in the same batch. If any insert fails, the whole batch
+   * rolls back. Dangling connector references produce warnings but do
+   * not abort the batch — the LLM can fix them in a follow-up call.
+   */
+  batchCreate(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const operations = payload.operations as Array<Record<string, unknown>>;
+
+    if (!Array.isArray(operations) || operations.length === 0) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'operations must be a non-empty array' },
+      };
+    }
+
+    // Pass 1: pre-generate elementIds for create ops with ref bindings.
+    // Connectors cannot be referenced (no ref created for op=connect).
+    const refs = new Map<string, string>();
+    for (const op of operations) {
+      if ((op.op as string) === 'create') {
+        const ref = op.ref as string | undefined;
+        if (ref) {
+          refs.set(ref, randomUUID());
+        }
+      }
+    }
+
+    const createdElements: Array<Record<string, unknown>> = [];
+    const warnings: string[] = [];
+    const batchTimestamp = Date.now();
+
+    const dbInstance = getDatabase();
+    if (!dbInstance) {
+      return {
+        success: false,
+        error: { code: 'INTERNAL', message: 'Database not initialized' },
+      };
+    }
+
+    // Pass 2: execute all operations inside a single transaction.
+    // If any insert throws, the whole batch rolls back.
+    const runBatch = dbInstance.transaction(() => {
+      for (const op of operations) {
+        const opType = op.op as string;
+
+        if (opType === 'create') {
+          const ref = op.ref as string | undefined;
+          const elementId = ref ? (refs.get(ref) ?? this.ensureUniqueElementId()) : this.ensureUniqueElementId();
+          if (ref) refs.set(ref, elementId);
+
+          const elementKind = op.kind as string;
+          const position = (op.position as Record<string, unknown>) ?? {};
+          const config = (op.config as Record<string, unknown>) ?? {};
+          const vizSpec = (op.vizSpec as Record<string, unknown> | undefined) ?? null;
+          const sourceCode = (op.sourceCode as string | null | undefined) ?? null;
+
+          const validation = validateElementInput(elementKind, position, config);
+          if (!validation.valid) {
+            throw new Error(`Invalid operation for ref '${ref ?? '(no ref)'}': ${formatValidationErrors(validation)}`);
+          }
+
+          const clampedPosition = clampPositionToCanvas(position, CANVAS_WIDTH_UNITS, CANVAS_HEIGHT_UNITS);
+          const now = Date.now();
+          const permissions = { agentCanRead: true, agentCanWrite: true, agentCanDelete: true };
+          const metadata = { label: elementKind, tags: [] as string[], createdBy: ACTOR };
+
+          insertElement(
+            elementId,
+            canvasId,
+            elementKind,
+            clampedPosition,
+            config,
+            vizSpec,
+            permissions,
+            metadata,
+            now,
+            null,
+            sourceCode,
+          );
+
+          writeActionLog({
+            canvasId,
+            widgetId: null,
+            actor: ACTOR,
+            actionType: 'element.create',
+            payload: { elementKind, position, config, vizSpec },
+            resultPatch: { elementId },
+          });
+
+          createdElements.push({
+            id: elementId,
+            ref: ref ?? null,
+            kind: elementKind,
+            elementKind,
+            position: clampedPosition,
+          });
+        } else if (opType === 'connect') {
+          const sourceRaw = op.source as string | undefined;
+          const targetRaw = op.target as string | undefined;
+
+          // Resolve source: ref first, then existing elementId.
+          let sourceId: string | null = null;
+          if (sourceRaw) {
+            if (refs.has(sourceRaw)) {
+              sourceId = refs.get(sourceRaw) as string;
+            } else if (getElement(sourceRaw, canvasId)) {
+              sourceId = sourceRaw;
+            } else {
+              warnings.push(
+                `Connector source '${sourceRaw}' not found in refs or canvas`,
+              );
+            }
+          }
+
+          // Resolve target: ref first, then existing elementId.
+          let targetId: string | null = null;
+          if (targetRaw) {
+            if (refs.has(targetRaw)) {
+              targetId = refs.get(targetRaw) as string;
+            } else if (getElement(targetRaw, canvasId)) {
+              targetId = targetRaw;
+            } else {
+              warnings.push(
+                `Connector target '${targetRaw}' not found in refs or canvas`,
+              );
+            }
+          }
+
+          const connectorPosition = { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 };
+          const curvature = (op.curvature as number) ?? 0.4;
+          const style = (op.style as Record<string, unknown>) ?? {};
+          const connectorConfig = {
+            source: { nodeId: sourceId },
+            target: { nodeId: targetId },
+            curvature,
+            routingMode: 'bezier',
+            style,
+          };
+
+          const shapeValidation = validateConnectorShape(connectorConfig);
+          if (!shapeValidation.valid) {
+            throw new Error(`Invalid connector operation: ${formatValidationErrors(shapeValidation)}`);
+          }
+
+          const elementId = this.ensureUniqueElementId();
+          const now = Date.now();
+          const nativeKind = 'connector';
+          const elementKind = 'native/connector';
+          const connectorMetadata = {
+            label: 'Connector',
+            tags: [] as string[],
+            createdBy: ACTOR,
+            parentId: null,
+            childIds: [] as string[],
+          };
+          const permissions = {
+            agentCanRead: true,
+            agentCanWrite: true,
+            agentCanDelete: true,
+          };
+
+          insertElement(
+            elementId,
+            canvasId,
+            elementKind,
+            connectorPosition,
+            connectorConfig,
+            null,
+            permissions,
+            connectorMetadata,
+            now,
+            nativeKind,
+          );
+
+          writeActionLog({
+            canvasId,
+            widgetId: null,
+            actor: ACTOR,
+            actionType: 'connector.create',
+            payload: { source: sourceId, target: targetId, curvature, style },
+            resultPatch: {
+              elementId,
+              elementKind,
+              config: connectorConfig,
+              metadata: connectorMetadata,
+            },
+          });
+
+          createdElements.push({
+            id: elementId,
+            ref: null,
+            kind: elementKind,
+            elementKind,
+            position: connectorPosition,
+          });
+        }
+      }
+    });
+
+    try {
+      runBatch();
+    } catch (err) {
+      return {
+        success: false,
+        error: {
+          code: 'BATCH_FAILED',
+          message: err instanceof Error ? err.message : String(err),
+        },
+      };
+    }
+
+    const batchDiff = {
+      type: 'element.batch_create',
+      canvasId,
+      elements: createdElements,
+      actionId: 0,
+      timestamp: batchTimestamp,
+    };
+
+    // Emit patch for live update (was missing — bug fix, aligns with createElement)
+    this.emit(canvasId, batchDiff);
+
+    // Post-create overlap detection among newly created elements
+    const createdRects = createdElements
+      .filter((e) => {
+        const kind = e.kind as string;
+        const pos = e.position as Record<string, unknown> | undefined;
+        return kind !== 'native/connector' && pos && pos.w && pos.h;
+      })
+      .map((e) => {
+        const pos = e.position as Record<string, unknown>;
+        return {
+          id: e.id as string,
+          x: (pos.x as number) ?? 0,
+          y: (pos.y as number) ?? 0,
+          w: (pos.w as number) ?? 0,
+          h: (pos.h as number) ?? 0,
+        };
+      });
+    for (let i = 0; i < createdRects.length; i++) {
+      for (let j = i + 1; j < createdRects.length; j++) {
+        const a = createdRects[i];
+        const b = createdRects[j];
+        if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) {
+          warnings.push(`overlap: ${a.id} and ${b.id} bounding boxes intersect — consider moving one`);
+        }
+      }
+    }
+
+    return {
+      success: true,
+      result: {
+        diff: batchDiff,
+        warnings,
+      },
+    };
   }
 
   updateElement(payload: Record<string, unknown>): ExecutorRpcResponse {
@@ -170,6 +886,63 @@ export class ConductorDbService {
       },
     };
 
+    this.emit(canvasId, result.diff, elementId);
+
+    return { success: true, result };
+  }
+
+  /**
+   * Merge-patch the element's `config` field without replacing it.
+   * Used by `canvas_fill_content` (content fields) and `canvas_style_element`
+   * (visual fields). Reads the previous config, shallow-merges the patch,
+   * then writes it back via `updateElementConfig`.
+   */
+  updateElementContent(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const elementId = payload.elementId as string;
+    const patch = (payload.config as Record<string, unknown>) || {};
+
+    const prev = getElement(elementId, canvasId);
+    if (!prev) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `Element ${elementId} not found` },
+      };
+    }
+
+    const prevConfig = (prev.config as Record<string, unknown>) || {};
+    const mergedConfig: Record<string, unknown> = { ...prevConfig, ...patch };
+    const now = Date.now();
+    updateElementConfig(elementId, mergedConfig, now);
+
+    const changes: Record<string, unknown> = {
+      config: mergedConfig,
+      prevConfig,
+      patch,
+    };
+
+    writeActionLog({
+      canvasId,
+      widgetId: null,
+      actor: ACTOR,
+      actionType: 'element.update_content',
+      payload: { elementId, config: patch },
+      resultPatch: changes,
+    });
+
+    const result: ElementActionResult = {
+      diff: {
+        type: 'element.update_content',
+        targetId: elementId,
+        canvasId,
+        changes,
+        actionId: 0,
+        timestamp: now,
+      },
+    };
+
+    this.emit(canvasId, result.diff, elementId);
+
     return { success: true, result };
   }
 
@@ -202,10 +975,15 @@ export class ConductorDbService {
         type: 'element.delete',
         targetId: elementId,
         canvasId,
+        // onStatePatch handler looks for `deletedElement` to remove
+        // the element from the store.
+        deletedElement: { id: elementId },
         actionId: 0,
         timestamp: now,
       },
     };
+
+    this.emit(canvasId, result.diff, elementId);
 
     return { success: true, result };
   }
@@ -238,6 +1016,8 @@ export class ConductorDbService {
       },
     };
 
+    this.emit(canvasId, result.diff);
+
     return { success: true, result };
   }
 
@@ -245,7 +1025,11 @@ export class ConductorDbService {
     const canvasId = payload.canvasId as string;
     const elementId = payload.elementId as string;
     const alignment = payload.alignment as string;
-    const margin = (payload.margin as number) || 20;
+    // `margin` is documented to be in screen pixels; convert to grid units
+    // (1 unit = 80 px) so the stored x/y stays in the same coordinate
+    // system as the element's existing w/h.
+    const marginPx = (payload.margin as number) || 20;
+    const margin = marginPx / 80;
 
     const element = getElement(elementId, canvasId);
     if (!element) {
@@ -256,16 +1040,16 @@ export class ConductorDbService {
     }
 
     const elPos = element.position as Record<string, number>;
-    const elW = elPos.w || 200;
-    const elH = elPos.h || 150;
+    const elW = elPos.w || 0;
+    const elH = elPos.h || 0;
     const newPos: Record<string, number> = { ...elPos };
 
     switch (alignment) {
       case 'top-left': newPos.x = margin; newPos.y = margin; break;
-      case 'top-right': newPos.x = CANVAS_WIDTH - elW - margin; newPos.y = margin; break;
-      case 'bottom-left': newPos.x = margin; newPos.y = CANVAS_HEIGHT - elH - margin; break;
-      case 'bottom-right': newPos.x = CANVAS_WIDTH - elW - margin; newPos.y = CANVAS_HEIGHT - elH - margin; break;
-      case 'center': newPos.x = (CANVAS_WIDTH - elW) / 2; newPos.y = (CANVAS_HEIGHT - elH) / 2; break;
+      case 'top-right': newPos.x = CANVAS_WIDTH_UNITS - elW - margin; newPos.y = margin; break;
+      case 'bottom-left': newPos.x = margin; newPos.y = CANVAS_HEIGHT_UNITS - elH - margin; break;
+      case 'bottom-right': newPos.x = CANVAS_WIDTH_UNITS - elW - margin; newPos.y = CANVAS_HEIGHT_UNITS - elH - margin; break;
+      case 'center': newPos.x = (CANVAS_WIDTH_UNITS - elW) / 2; newPos.y = (CANVAS_HEIGHT_UNITS - elH) / 2; break;
       default:
         return { success: false, error: { code: 'INVALID_INPUT', message: `Unknown alignment: ${alignment}` } };
     }
@@ -288,10 +1072,14 @@ export class ConductorDbService {
         targetId: elementId,
         canvasId,
         changes: { position: newPos, prevPosition: elPos },
+        // onStatePatch handler reads `position` from resultPatch
+        position: newPos,
         actionId: 0,
         timestamp: now,
       },
     };
+
+    this.emit(canvasId, result.diff, elementId);
 
     return { success: true, result };
   }
@@ -341,6 +1129,8 @@ export class ConductorDbService {
       },
     };
 
+    this.emit(canvasId, result.diff);
+
     return { success: true, result };
   }
 
@@ -352,11 +1142,22 @@ export class ConductorDbService {
     const style = (payload.style as Record<string, unknown>) || {};
     const parentId = payload.parentId as string | null | undefined;
 
-    const elementId = randomUUID();
-    const now = Date.now();
-    const nativeKind = nodeType;
     const elementKind = `native/${nodeType}`;
     const config = { ...content, style };
+
+    const validation = validateElementInput(elementKind, position, config);
+    if (!validation.valid) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: formatValidationErrors(validation) },
+      };
+    }
+
+    const defaultedPosition = applyDefaultDimensions(elementKind, position);
+    const clampedPosition = clampPositionToCanvas(defaultedPosition, CANVAS_WIDTH_UNITS, CANVAS_HEIGHT_UNITS);
+    const elementId = this.ensureUniqueElementId();
+    const now = Date.now();
+    const nativeKind = nodeType;
     const metadata = {
       label: content.label || nodeType,
       tags: [],
@@ -366,7 +1167,7 @@ export class ConductorDbService {
     };
     const permissions = { agentCanRead: true, agentCanWrite: true, agentCanDelete: true };
 
-    insertElement(elementId, canvasId, elementKind, position, config, null, permissions, metadata, now, nativeKind);
+    insertElement(elementId, canvasId, elementKind, clampedPosition, config, null, permissions, metadata, now, nativeKind);
 
     writeActionLog({
       canvasId,
@@ -377,46 +1178,59 @@ export class ConductorDbService {
       resultPatch: { elementId, elementKind, config, metadata },
     });
 
-    return {
-      success: true,
-      result: {
-        diff: {
-          type: 'element.create_native',
-          targetId: elementId,
-          canvasId,
-          element: {
-            id: elementId,
-            canvasId,
-            elementKind,
-            position,
-            config,
-            state: 'idle',
-            dataVersion: 1,
-            permissions,
-            metadata,
-            createdAt: now,
-            updatedAt: now,
-          },
-          actionId: 0,
-          timestamp: now,
-        },
-      },
+    const diff = {
+      type: 'element.create_native',
+      targetId: elementId,
+      canvasId,
+      element: summarizeElementForAgent({
+        id: elementId,
+        canvasId,
+        elementKind,
+        position: clampedPosition,
+        config,
+      }),
+      actionId: 0,
+      timestamp: now,
     };
+
+    this.emit(canvasId, diff, elementId);
+
+    return { success: true, result: { diff } };
   }
 
   createConnector(payload: Record<string, unknown>): ExecutorRpcResponse {
     const canvasId = payload.canvasId as string;
-    const source = payload.source as Record<string, unknown>;
-    const target = payload.target as Record<string, unknown>;
+    const rawSource = payload.source;
+    const rawTarget = payload.target;
     const curvature = (payload.curvature as number) || 0.4;
     const style = (payload.style as Record<string, unknown>) || {};
 
-    const elementId = randomUUID();
+    const source = this.normalizeConnectorEndpoint(rawSource) ?? (rawSource as Record<string, unknown>);
+    const target = this.normalizeConnectorEndpoint(rawTarget) ?? (rawTarget as Record<string, unknown>);
+    const config = { source, target, curvature, routingMode: 'bezier', style };
+    const shapeValidation = validateConnectorShape(config);
+    if (!shapeValidation.valid) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: formatValidationErrors(shapeValidation) },
+      };
+    }
+
+    const warnings: string[] = [];
+    const sourceId = (source as { nodeId?: string }).nodeId ?? (rawSource as string);
+    const targetId = (target as { nodeId?: string }).nodeId ?? (rawTarget as string);
+    if (!getElement(sourceId, canvasId)) {
+      warnings.push(`Connector source element ${sourceId} not found on canvas ${canvasId}`);
+    }
+    if (!getElement(targetId, canvasId)) {
+      warnings.push(`Connector target element ${targetId} not found on canvas ${canvasId}`);
+    }
+
+    const elementId = this.ensureUniqueElementId();
     const now = Date.now();
     const nativeKind = 'connector';
     const elementKind = 'native/connector';
     const position = { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 };
-    const config = { source, target, curvature, routingMode: 'bezier', style };
     const metadata = {
       label: 'Connector',
       tags: [],
@@ -437,31 +1251,229 @@ export class ConductorDbService {
       resultPatch: { elementId, elementKind, config, metadata },
     });
 
+    const diff = {
+      type: 'connector.create',
+      targetId: elementId,
+      canvasId,
+      element: summarizeElementForAgent({
+        id: elementId,
+        canvasId,
+        elementKind,
+        position,
+        config,
+      }),
+      actionId: 0,
+      timestamp: now,
+    };
+
+    this.emit(canvasId, diff, elementId);
+
     return {
       success: true,
       result: {
-        diff: {
-          type: 'connector.create',
-          targetId: elementId,
-          canvasId,
-          element: {
-            id: elementId,
-            canvasId,
-            elementKind,
-            position,
-            config,
-            state: 'idle',
-            dataVersion: 1,
-            permissions,
-            metadata,
-            createdAt: now,
-            updatedAt: now,
-          },
-          actionId: 0,
-          timestamp: now,
-        },
+        diff,
+        warnings: warnings.length > 0 ? warnings : undefined,
       },
     };
+  }
+
+  /**
+   * Create a group element. Group kind is `native/group`; the config
+   * stores the GroupContent ({ title?, bgColor?, memberIds }). All
+   * memberIds must already exist on the same canvas — cross-canvas
+   * references are rejected.
+   */
+  createGroup(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const memberIds = payload.memberIds as string[];
+    const title = payload.title as string | undefined;
+    const bgColor = payload.bgColor as string | undefined;
+
+    if (!Array.isArray(memberIds) || memberIds.length === 0) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'memberIds must be a non-empty array' },
+      };
+    }
+
+    // Cross-canvas validation: every memberId must already exist on canvasId.
+    for (const mid of memberIds) {
+      const found = getElement(mid, canvasId);
+      if (!found) {
+        return {
+          success: false,
+          error: { code: 'INVALID_INPUT', message: `Member ${mid} not found on canvas ${canvasId}` },
+        };
+      }
+    }
+
+    // Reuse createNativeElement path so the renderer's existing patch
+    // handler picks up the new element via resultPatch.element.
+    const groupPayload: Record<string, unknown> = {
+      canvasId,
+      nodeType: 'group',
+      position: { x: 0, y: 0, w: 0, h: 0, zIndex: -1, rotation: 0 },
+      content: {
+        title: title ?? '',
+        bgColor: bgColor ?? '',
+        memberIds,
+      },
+      style: {},
+    };
+    return this.createNativeElement(groupPayload);
+  }
+
+  /**
+   * Delete a group element. Member elements are NOT deleted — only the
+   * group frame is removed. Reuses the existing deleteElement path so
+   * the renderer removes the group element via resultPatch.deletedElement.
+   */
+  ungroup(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const groupId = payload.groupId as string;
+
+    if (!groupId) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'groupId is required' },
+      };
+    }
+
+    const existing = getElement(groupId, canvasId);
+    if (!existing) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `Group ${groupId} not found on canvas ${canvasId}` },
+      };
+    }
+    if (existing.elementKind !== 'native/group') {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: `Element ${groupId} is not a group` },
+      };
+    }
+
+    const deletePayload: Record<string, unknown> = { canvasId, elementId: groupId };
+    return this.deleteElement(deletePayload);
+  }
+
+  /**
+   * Append memberIds to an existing group's config.memberIds (deduped).
+   * Rejects self-reference (memberIds containing groupId itself) and
+   * cross-canvas references. Reuses updateElementContent so the
+   * renderer applies a merge-patch via resultPatch.config.
+   */
+  addGroupMembers(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const groupId = payload.groupId as string;
+    const memberIds = payload.memberIds as string[];
+
+    if (!groupId) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'groupId is required' },
+      };
+    }
+    if (!Array.isArray(memberIds) || memberIds.length === 0) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'memberIds must be a non-empty array' },
+      };
+    }
+
+    // Self-reference check: a group cannot contain itself.
+    if (memberIds.includes(groupId)) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'A group cannot be a member of itself' },
+      };
+    }
+
+    const existing = getElement(groupId, canvasId);
+    if (!existing) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `Group ${groupId} not found on canvas ${canvasId}` },
+      };
+    }
+    if (existing.elementKind !== 'native/group') {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: `Element ${groupId} is not a group` },
+      };
+    }
+
+    // Cross-canvas validation: every new memberId must exist on canvasId.
+    for (const mid of memberIds) {
+      const found = getElement(mid, canvasId);
+      if (!found) {
+        return {
+          success: false,
+          error: { code: 'INVALID_INPUT', message: `Member ${mid} not found on canvas ${canvasId}` },
+        };
+      }
+    }
+
+    const existingConfig = (existing.config as Record<string, unknown>) || {};
+    const existingMemberIds = (existingConfig.memberIds as string[]) || [];
+    const merged = Array.from(new Set([...existingMemberIds, ...memberIds]));
+
+    const contentPayload: Record<string, unknown> = {
+      canvasId,
+      elementId: groupId,
+      config: { ...existingConfig, memberIds: merged },
+    };
+    return this.updateElementContent(contentPayload);
+  }
+
+  /**
+   * Remove memberIds from an existing group's config.memberIds.
+   * Reuses updateElementContent so the renderer applies a merge-patch
+   * via resultPatch.config.
+   */
+  removeGroupMembers(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const groupId = payload.groupId as string;
+    const memberIds = payload.memberIds as string[];
+
+    if (!groupId) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'groupId is required' },
+      };
+    }
+    if (!Array.isArray(memberIds) || memberIds.length === 0) {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'memberIds must be a non-empty array' },
+      };
+    }
+
+    const existing = getElement(groupId, canvasId);
+    if (!existing) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `Group ${groupId} not found on canvas ${canvasId}` },
+      };
+    }
+    if (existing.elementKind !== 'native/group') {
+      return {
+        success: false,
+        error: { code: 'INVALID_INPUT', message: `Element ${groupId} is not a group` },
+      };
+    }
+
+    const existingConfig = (existing.config as Record<string, unknown>) || {};
+    const existingMemberIds = (existingConfig.memberIds as string[]) || [];
+    const removeSet = new Set(memberIds);
+    const merged = existingMemberIds.filter((id) => !removeSet.has(id));
+
+    const contentPayload: Record<string, unknown> = {
+      canvasId,
+      elementId: groupId,
+      config: { ...existingConfig, memberIds: merged },
+    };
+    return this.updateElementContent(contentPayload);
   }
 
 }
