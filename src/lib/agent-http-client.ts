@@ -35,6 +35,17 @@ export interface ChatOptions {
    * undefined/Auto means no extended thinking.
    */
   effort?: string;
+  /**
+   * Conductor mode — per-turn trusted override. When true, the agent
+   * registers the 5 canvas conductor tools and injects the conductor
+   * prompt overlay.
+   */
+  conductorMode?: boolean;
+  /**
+   * Conductor canvas ID — durable binding from the session row.
+   * Injected into ToolUseContext.conductorCanvasId.
+   */
+  conductorCanvasId?: string;
 }
 
 export interface AgentEvent {
@@ -130,6 +141,8 @@ export class AgentServerClient {
             wikiAgentEnabled: options?.wikiAgentEnabled,
             securityScanEnabled: options?.securityScanEnabled,
             effort: options?.effort,
+            conductorMode: options?.conductorMode,
+            conductorCanvasId: options?.conductorCanvasId,
           },
           providerConfig: options?.providerConfig,
           workingDirectory: options?.workingDirectory,

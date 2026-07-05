@@ -32,6 +32,8 @@ export interface Thread {
   parentId: string | null
   agentType: string
   agentName: string
+  conductorModeEnabled?: number
+  conductorCanvasId?: string | null
 }
 
 export interface Message {
@@ -145,6 +147,8 @@ interface DbThread {
   parent_id: string | null
   agent_type: string
   agent_name: string
+  conductor_mode_enabled: number
+  conductor_canvas_id: string | null
 }
 
 interface DbMessage {
@@ -218,7 +222,8 @@ interface DbProjectGroup {
 }
 
 // Conversion helpers
-function dbThreadToThread(db: DbThread): Thread {
+function dbThreadToThread(db: DbThread | null | undefined): Thread | null {
+  if (!db) return null;
   return {
     id: db.id,
     title: db.title,
@@ -240,6 +245,8 @@ function dbThreadToThread(db: DbThread): Thread {
     parentId: db.parent_id || null,
     agentType: db.agent_type || 'main',
     agentName: db.agent_name || '',
+    conductorModeEnabled: db.conductor_mode_enabled,
+    conductorCanvasId: db.conductor_canvas_id,
   }
 }
 
@@ -307,7 +314,7 @@ function backendProjectToProject(db: DbProjectGroup): ProjectGroup {
 // Thread operations
 export async function listThreadsIPC(): Promise<Thread[]> {
   const dbThreads = await window.electronAPI!.thread!.list() as DbThread[]
-  return dbThreads.map(dbThreadToThread)
+  return dbThreads.map(dbThreadToThread).filter((t): t is Thread => t !== null)
 }
 
 export async function getThreadIPC(id: string): Promise<{ thread: Thread; messages: Message[] } | null> {
@@ -315,7 +322,7 @@ export async function getThreadIPC(id: string): Promise<{ thread: Thread; messag
   if (!dbThread) return null
   const dbMessages = await window.electronAPI!.message!.getBySession(id) as DbMessage[]
   return {
-    thread: dbThreadToThread(dbThread),
+    thread: dbThreadToThread(dbThread)!,
     messages: dbMessages.map(dbMessageToMessage),
   }
 }
@@ -378,7 +385,7 @@ export async function updateThreadIPC(id: string, data: {
 
 export async function listThreadsByParentIdIPC(parentId: string): Promise<Thread[]> {
   const dbThreads = await window.electronAPI!.thread!.listByParentId(parentId) as DbThread[]
-  return dbThreads.map(dbThreadToThread)
+  return dbThreads.map(dbThreadToThread).filter((t): t is Thread => t !== null)
 }
 
 export async function deleteThreadIPC(id: string): Promise<boolean> {

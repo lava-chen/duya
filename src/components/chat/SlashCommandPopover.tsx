@@ -62,12 +62,16 @@ interface SlashCommandPopoverProps {
   onToggleMcpServer: (name: string, enabled: boolean) => void;
   onAddFiles: () => void;
 
-  // Action commands (/compact, /memory, /export, /recap)
+  // Action commands (/recap)
   onExecuteAction: (action: string) => void;
 
   // Mode state (mutually exclusive single-select)
   currentMode: string | null;
   onSelectMode: (mode: string | null) => void;
+
+  // Conductor canvas toggle (independent of plan/research modes)
+  conductorEnabled: boolean;
+  onToggleConductor: (enabled: boolean) => void;
 
   // Skill insertion (existing behavior)
   onInsertItem: (item: PopoverItem) => void;
@@ -108,6 +112,9 @@ export function SlashCommandPopover({
   currentMode,
   onSelectMode,
 
+  conductorEnabled,
+  onToggleConductor,
+
   onInsertItem,
   onSetSelectedIndex,
   onSetPopoverFilter,
@@ -137,7 +144,7 @@ export function SlashCommandPopover({
           onAddFiles();
           onClosePopover();
         } else {
-          // /compact, /memory, /export, /recap
+          // /recap
           onExecuteAction(item.value);
           onClosePopover();
         }
@@ -146,6 +153,11 @@ export function SlashCommandPopover({
       case 'settings_submenu':
         setSubView(item.submenu ?? null);
         return;
+
+      case 'conductor_toggle': {
+        onToggleConductor(!conductorEnabled);
+        return;
+      }
 
       case 'mode': {
         const modeValue = item.modeValue ?? '';
@@ -160,7 +172,7 @@ export function SlashCommandPopover({
         onInsertItem(item);
         return;
     }
-  }, [onAddFiles, onClosePopover, onExecuteAction, onInsertItem, onSelectMode, currentMode]);
+  }, [onAddFiles, onClosePopover, onExecuteAction, onInsertItem, onSelectMode, currentMode, conductorEnabled, onToggleConductor]);
 
   // -----------------------------------------------------------------------
   // Keyboard handler (for main view only)
@@ -330,6 +342,32 @@ export function SlashCommandPopover({
         {/* Right side indicators */}
         {isModeActive && (
           <CheckIcon size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        )}
+        {item.kind === 'conductor_toggle' && (
+          <div
+            style={{
+              width: 28,
+              height: 16,
+              borderRadius: 8,
+              backgroundColor: conductorEnabled ? 'var(--accent)' : 'var(--command-menu-border)',
+              position: 'relative',
+              flexShrink: 0,
+              transition: 'background-color 0.15s',
+            }}
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: 2,
+                left: conductorEnabled ? 14 : 2,
+                width: 12,
+                height: 12,
+                borderRadius: 6,
+                backgroundColor: '#fff',
+                transition: 'left 0.15s',
+              }}
+            />
+          </div>
         )}
         {currentValueLabel && (
           <span style={{ fontSize: 11, color: 'var(--command-menu-muted)', flexShrink: 0 }}>
@@ -614,9 +652,9 @@ export function SlashCommandPopover({
           renderSubView()
         ) : (
           <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-            {renderSection('Settings', settingsGroup, 0)}
-            {renderSection('Mode', modeGroup, settingsGroup.length)}
-            {renderSection('Skills', skillGroup, settingsGroup.length + modeGroup.length)}
+            {renderSection('Mode', modeGroup, 0)}
+            {renderSection('Settings', settingsGroup, modeGroup.length)}
+            {renderSection('Skills', skillGroup, modeGroup.length + settingsGroup.length)}
           </div>
         )}
       </div>

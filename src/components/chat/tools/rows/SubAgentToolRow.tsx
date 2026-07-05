@@ -1,203 +1,320 @@
-// SubAgentToolRow — handles `agent` / `subagent` / `sub_agent` and the
-// legacy `task` alias. The collapsed chrome shows tool count + pending
-// tool count in the right slot; the expanded body renders a step list
-// reconstructed from the agent's progress event stream (started →
-// thinking → tool_use → tool_result → done). When the result payload
-// arrives we synthesize a synthetic "Background agent launched" /
-// "Completed" / "Failed" step if no events streamed in.
+// SubAgentToolRow — one-line, non-expandable row for sub-agent tool calls.
+// Shows agent type (colored) + live tool-usage stats with a fade-out tail
+// when the line overflows. Clicking switches to the sub-agent's session.
 
 'use client';
 
-import React, { useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { MarkdownRenderer } from '../../MarkdownRenderer';
+import React, { useMemo } from 'react';
+import { RobotIcon } from '@/components/icons';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
-import { getRenderer, getStatus } from '../registry';
+import { getRenderer } from '../registry';
 import { parseSubAgentToolResult } from '@/lib/subagent-result';
-import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
-import type { ToolAction, ToolStatus } from '../types';
+import { useConversationStore } from '@/stores/conversation-store';
+import { useStreamingAgentProgress, type AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
+import type { ToolAction } from '../types';
 
 interface SubAgentToolRowProps {
   tool: ToolAction;
   agentProgressEvents?: AgentProgressEventWithMeta[];
 }
 
+const READ_TOOLS = new Set([
+  'read',
+  'readfile',
+  'read_file',
+  'read_multiple_files',
+]);
+
+const EDIT_TOOLS = new Set([
+  'edit',
+  'edit_file',
+  'str_replace_editor',
+  'write',
+  'writefile',
+  'write_file',
+  'create_file',
+  'createfile',
+]);
+
+const SEARCH_TOOLS = new Set([
+  'search',
+  'glob',
+  'grep',
+  'find_files',
+  'search_files',
+]);
+
+const SHELL_TOOLS = new Set([
+  'shell',
+  'bash',
+  'execute',
+  'run',
+  'execute_command',
+  'run_command',
+  'powershell',
+]);
+
+interface ToolStats {
+  read: number;
+  edit: number;
+  search: number;
+  shell: number;
+  browser: number;
+  other: number;
+  total: number;
+}
+
+function computeStats(events: AgentProgressEventWithMeta[]): ToolStats {
+  const stats: ToolStats = { read: 0, edit: 0, search: 0, shell: 0, browser: 0, other: 0, total: 0 };
+  for (const e of events) {
+    if (e.type !== 'tool_result' || !e.toolName) continue;
+    const name = e.toolName.toLowerCase();
+    stats.total++;
+    if (READ_TOOLS.has(name)) stats.read++;
+    else if (EDIT_TOOLS.has(name)) stats.edit++;
+    else if (SEARCH_TOOLS.has(name)) stats.search++;
+    else if (SHELL_TOOLS.has(name)) stats.shell++;
+    else if (name.startsWith('browser_') || name.startsWith('browser-') || name === 'browser') stats.browser++;
+    else stats.other++;
+  }
+  return stats;
+}
+
+function getPrefixColor(prefix: string): string | undefined {
+  const lower = prefix.toLowerCase();
+  if (lower.includes('explore')) return '#3b82f6';
+  if (lower.includes('code') || lower.includes('coding')) return 'var(--foreground)';
+  if (lower.includes('plan')) return '#eab308';
+  if (lower.includes('research')) return '#a855f7';
+  return undefined;
+}
+
+function getToolVerb(toolName?: string): string {
+  if (!toolName) return '运行工具';
+  const name = toolName.toLowerCase();
+  if (READ_TOOLS.has(name)) return '读取文件';
+  if (EDIT_TOOLS.has(name)) return '编辑文件';
+  if (SEARCH_TOOLS.has(name)) return '搜索';
+  if (SHELL_TOOLS.has(name)) return '执行命令';
+  if (name.startsWith('browser_') || name.startsWith('browser-') || name === 'browser') return '浏览网页';
+  if (name === 'task') return '操作任务';
+  if (name === 'memory') return '更新记忆';
+  if (name === 'askuserquestion') return '询问用户';
+  if (name === 'duya_cli' || name === 'duya-cli' || name === 'duyacli') return '运行 CLI';
+  if (name === 'agent' || name === 'subagent' || name === 'sub_agent') return '运行子代理';
+  if (name.startsWith('canvas_')) return '操作画布';
+  return '运行工具';
+}
+
+function getLivePhrase(latest: AgentProgressEventWithMeta | undefined): string | null {
+  if (!latest) return null;
+  switch (latest.type) {
+    case 'started':
+      return '启动中...';
+    case 'thinking':
+      return '思考中...';
+    case 'tool_use':
+      return `正在${getToolVerb(latest.toolName)}...`;
+    case 'tool_result':
+      return `完成${getToolVerb(latest.toolName)}`;
+    case 'text':
+      return '输出结果中...';
+    case 'done':
+      return '已完成';
+    case 'error':
+      return '失败';
+    default:
+      return null;
+  }
+}
+
+function buildStatsPhrase(stats: ToolStats): string {
+  const parts: string[] = [];
+  if (stats.read > 0) parts.push(`读${stats.read}`);
+  if (stats.edit > 0) parts.push(`写${stats.edit}`);
+  if (stats.search > 0) parts.push(`搜${stats.search}`);
+  if (stats.shell > 0) parts.push(`命令${stats.shell}`);
+  if (stats.browser > 0) parts.push(`浏览${stats.browser}`);
+  if (stats.other > 0) parts.push(`其他${stats.other}`);
+  if (parts.length === 0) return '';
+  return `${parts.join('·')} (${stats.total})`;
+}
+
+function buildStatusPhrase(
+  latest: AgentProgressEventWithMeta | undefined,
+  isRunning: boolean,
+  isError: boolean,
+  stats: ToolStats,
+): string {
+  if (isError) return '失败';
+
+  if (!isRunning) {
+    const statsPhrase = buildStatsPhrase(stats);
+    if (statsPhrase) return `已完成 · ${statsPhrase}`;
+    return '已完成';
+  }
+
+  const live = getLivePhrase(latest);
+  const statsPhrase = buildStatsPhrase(stats);
+  if (live && statsPhrase) return `${live} · ${statsPhrase}`;
+  if (live) return live;
+  if (statsPhrase) return statsPhrase;
+  return '初始化中...';
+}
+
 export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowProps) {
-  const [expanded, setExpanded] = useState(false);
-  const [hovered, setHovered] = useState(false);
   const renderer = getRenderer(tool.name);
   const summary = renderer.getSummary(tool.input, tool.name);
   const parsedResult = useMemo(() => parseSubAgentToolResult(tool.result), [tool.result]);
-  const displayResult = parsedResult?.error || parsedResult?.content || tool.result;
   const isError = tool.isError || !!parsedResult?.error;
-  const status: ToolStatus = tool.result === undefined ? 'running' : isError ? 'error' : 'success';
-  const isRunning = status === 'running';
+  const isRunning = tool.result === undefined;
 
-  // Filter events for this sub-agent
+  // The prop-based event stream is only populated when the parent renders
+  // via StreamingMessage. History-rendered messages (MessageItem) do not
+  // forward agentProgressEvents, so a background sub-agent that outlives
+  // the parent turn would lose its live status + click target. Subscribe
+  // directly to the active session's progress channel as a fallback so
+  // the row keeps updating regardless of which renderer mounted it.
+  const activeThreadId = useConversationStore((s) => s.activeThreadId);
+  const ownEvents = useStreamingAgentProgress(activeThreadId || '');
+  const mergedEvents = useMemo(() => {
+    const seen = new Set<string>();
+    const out: AgentProgressEventWithMeta[] = [];
+    for (const e of agentProgressEvents ?? []) {
+      const key = `${e.agentId ?? ''}-${e.type}-${e.receivedAt ?? 0}-${e.toolName ?? ''}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(e);
+      }
+    }
+    for (const e of ownEvents) {
+      const key = `${e.agentId ?? ''}-${e.type}-${e.receivedAt ?? 0}-${e.toolName ?? ''}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(e);
+      }
+    }
+    return out;
+  }, [agentProgressEvents, ownEvents]);
+
+  // Filter events for this sub-agent. While running (no parsedResult yet),
+  // we cannot filter by sessionId/agentId because the tool result hasn't
+  // arrived. Fall back to matching by agentType + description from the
+  // tool input so multiple concurrent sub-agents don't cross-wire.
+  const toolInput = tool.input as Record<string, unknown> | undefined;
+  const inputDescription = typeof toolInput?.description === 'string' ? toolInput.description : '';
+  const inputName = typeof toolInput?.name === 'string' ? toolInput.name : '';
+  const inputSubagentType = typeof toolInput?.subagent_type === 'string' ? toolInput.subagent_type : '';
+
   const subAgentEvents = useMemo(() => {
-    const events = agentProgressEvents || [];
+    const events = mergedEvents;
+    if (events.length === 0) return events;
+
+    // Once we have the result, filter by sessionId/agentId precisely.
     const sessionId = parsedResult?.sessionId;
     if (sessionId) {
-      const filteredBySession = events.filter((event) => event.sessionId === sessionId);
-      if (filteredBySession.length > 0) return filteredBySession;
+      const filtered = events.filter((event) => event.sessionId === sessionId);
+      if (filtered.length > 0) return filtered;
     }
     const agentId = parsedResult?.agentId || parsedResult?.taskId;
     if (agentId) {
-      const filteredByTask = events.filter((event) => event.agentId === agentId);
-      if (filteredByTask.length > 0) return filteredByTask;
+      const filtered = events.filter((event) => event.agentId === agentId);
+      if (filtered.length > 0) return filtered;
     }
-    return events;
-  }, [agentProgressEvents, parsedResult?.sessionId, parsedResult?.agentId, parsedResult?.taskId]);
-  const toolUseCount = subAgentEvents.filter((e) => e.type === 'tool_use').length;
-  const toolResultCount = subAgentEvents.filter((e) => e.type === 'tool_result').length;
-  const unresolvedTools = Math.max(0, toolUseCount - toolResultCount);
-  const latestEvent = subAgentEvents[subAgentEvents.length - 1];
-  const liveStatusText = (() => {
-    if (!latestEvent) return null;
-    if (latestEvent.type === 'started') return 'Started';
-    if (latestEvent.type === 'thinking') return latestEvent.data || 'Thinking';
-    if (latestEvent.type === 'tool_use') return `Running ${latestEvent.toolName || 'tool'}`;
-    if (latestEvent.type === 'tool_result') return `Finished ${latestEvent.toolName || 'tool'}`;
-    if (latestEvent.type === 'text') return latestEvent.data || 'Writing';
-    if (latestEvent.type === 'done') return 'Completed';
-    if (latestEvent.type === 'error') return 'Failed';
-    return null;
-  })();
 
-  // Build progress steps from events
-  const steps = useMemo(() => {
-    const result: Array<{ type: string; title: string; status: 'running' | 'done' | 'error' }> = [];
-    for (const event of subAgentEvents) {
-      if (event.type === 'started') {
-        result.push({ type: 'started', title: 'Started', status: 'running' });
-      } else if (event.type === 'thinking') {
-        const started = result.find((s) => s.type === 'started' && s.status === 'running');
-        if (started) started.status = 'done';
-        result.push({ type: 'thinking', title: 'Thinking', status: 'done' });
-      } else if (event.type === 'tool_use') {
-        const started = result.find((s) => s.type === 'started' && s.status === 'running');
-        if (started) started.status = 'done';
-        result.push({ type: 'tool', title: `Run ${event.toolName || 'Tool'}`, status: 'running' });
-      } else if (event.type === 'tool_result') {
-        // Mark last running tool as done
-        const lastTool = result.filter((s) => s.type === 'tool').pop();
-        if (lastTool) lastTool.status = 'done';
-      } else if (event.type === 'done') {
-        // Mark all running as done
-        result.forEach((s) => { if (s.status === 'running') s.status = 'done'; });
-      } else if (event.type === 'error') {
-        result.push({ type: 'error', title: 'Failed', status: 'error' });
-      }
-    }
-    if (tool.result !== undefined) {
-      result.forEach((step) => {
-        if (step.status === 'running') step.status = isError ? 'error' : 'done';
+    // Running: match by agentType + description/name so concurrent
+    // sub-agents with different types don't get mixed up. If only one
+    // sub-agent is running, fall through to all events.
+    const desc = inputDescription || inputName;
+    if (desc) {
+      const byDesc = events.filter((event) => {
+        const eventDesc = event.agentDescription || event.agentName || '';
+        return eventDesc === desc;
       });
-      if (result.length === 0) {
-        result.push({
-          type: isError ? 'error' : 'done',
-          title: parsedResult?.background ? 'Background agent launched' : isError ? 'Failed' : 'Completed',
-          status: isError ? 'error' : 'done',
-        });
-      }
+      if (byDesc.length > 0) return byDesc;
     }
-    return result;
-  }, [isError, parsedResult?.background, subAgentEvents, tool.result]);
+    if (inputSubagentType) {
+      const byType = events.filter((event) => {
+        const eventType = event.agentType || '';
+        return eventType.toLowerCase().includes(inputSubagentType.toLowerCase());
+      });
+      if (byType.length > 0) return byType;
+    }
 
-  // Right-slot tail: tool count + pending count live between the
-  // summary and the duration so the chrome's verb + summary + status
-  // dot remain in their expected positions.
-  const subagentRightSlot = (
-    <>
-      {toolUseCount > 0 && (
-        <span className="text-muted-foreground/60 text-[10px]">({toolUseCount} tools)</span>
-      )}
-      {unresolvedTools > 0 && (
-        <span className="text-amber-500 text-[10px]">{unresolvedTools} pending</span>
-      )}
-    </>
+    // Single sub-agent — use all events.
+    return events;
+  }, [mergedEvents, parsedResult?.sessionId, parsedResult?.agentId, parsedResult?.taskId, inputDescription, inputName, inputSubagentType]);
+
+  const latestEvent = subAgentEvents[subAgentEvents.length - 1];
+  const metaEvent = useMemo(
+    () => [...subAgentEvents].reverse().find((e) => e.agentType || e.agentName || e.agentDescription),
+    [subAgentEvents],
   );
 
-  const verbKey =
-    status === 'running' ? 'streaming.toolAction.running.agent'
-    : status === 'error' ? 'streaming.toolAction.error.agent'
-    : 'streaming.toolAction.done.agent';
+  const targetSessionId = parsedResult?.sessionId
+    || subAgentEvents.find((e) => e.sessionId)?.sessionId;
+
+  const stats = useMemo(() => computeStats(subAgentEvents), [subAgentEvents]);
+
+  const prefix = parsedResult?.resolvedAgentType
+    || parsedResult?.agentType
+    || metaEvent?.agentName
+    || metaEvent?.agentType
+    || inputSubagentType
+    || 'SubAgent';
+
+  const description = summary
+    || parsedResult?.description
+    || metaEvent?.agentDescription
+    || inputDescription
+    || '';
+
+  const statusPhrase = buildStatusPhrase(latestEvent, isRunning, isError, stats);
+  const prefixColor = getPrefixColor(prefix);
+
+  const handleClick = () => {
+    if (!targetSessionId) return;
+    useConversationStore.getState().setActiveThread(targetSessionId);
+  };
+
+  const status = isRunning ? 'running' : isError ? 'error' : 'success';
 
   return (
-    <div>
-      <ActionRowChrome
-        status={status}
-        verbKey={verbKey}
-        canExpand
-        expanded={expanded}
-        hovered={hovered}
-        durationMs={tool.durationMs}
-        onClick={() => setExpanded((prev) => !prev)}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        rightSlot={subagentRightSlot}
-      >
-        {summary}
-      </ActionRowChrome>
-
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{ overflow: 'hidden' }}
-          >
-            <div className="ml-4 mt-1 border-l-2 border-border/30 pl-3 py-2">
-              {steps.length === 0 ? (
-                <div className="text-[11px] text-muted-foreground/60">
-                  {liveStatusText || (isRunning ? 'Initializing...' : 'Completed')}
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {steps.map((step, index) => (
-                    <div key={index} className="flex items-center gap-2 text-[11px]">
-                      <span className="text-muted-foreground/50">#{index + 1}</span>
-                      <span
-                        className={`inline-block h-1.5 w-1.5 rounded-full ${
-                          step.status === 'running'
-                            ? 'bg-amber-500 animate-pulse'
-                            : step.status === 'error'
-                            ? 'bg-red-500'
-                            : 'bg-emerald-500'
-                        }`}
-                      />
-                      <span className="text-muted-foreground/80">{step.title}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {(parsedResult?.resolvedAgentType || parsedResult?.sessionId) && (
-                <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] tool-card-faint">
-                  {(parsedResult?.resolvedAgentType || parsedResult?.agentType) && (
-                    <span className="rounded-full border border-tool-card-divider px-2 py-0.5" style={{ borderColor: 'var(--tool-card-divider)' }}>
-                      {parsedResult?.resolvedAgentType || parsedResult?.agentType}
-                    </span>
-                  )}
-                  {parsedResult?.sessionId && (
-                    <span className="rounded-full border border-tool-card-divider px-2 py-0.5 font-mono" style={{ borderColor: 'var(--tool-card-divider)' }}>
-                      {parsedResult.sessionId.slice(0, 8)}
-                    </span>
-                  )}
-                </div>
-              )}
-              {displayResult && (
-                <div className="mt-2 rounded-md tool-card p-2">
-                  <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none message-content max-h-[160px] overflow-y-auto pr-1 text-[12px] tool-card-subtle">
-                    {displayResult}
-                  </MarkdownRenderer>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    <ActionRowChrome
+      status={status}
+      verbKey={undefined}
+      canExpand={false}
+      expanded={false}
+      hovered={false}
+      durationMs={tool.durationMs}
+      onClick={targetSessionId ? handleClick : undefined}
+      buttonClassName={targetSessionId ? 'cursor-pointer' : 'cursor-default'}
+    >
+      <div className="group relative flex items-center gap-1.5 min-w-0 w-full">
+        <RobotIcon size={14} className="shrink-0 text-muted-foreground" />
+        <div className="relative min-w-0 flex-1 overflow-hidden">
+          <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
+            <span
+              className="transition-all group-hover:brightness-75 font-medium"
+              style={prefixColor ? { color: prefixColor } : undefined}
+            >
+              {prefix}
+            </span>
+            {description && (
+              <span className="text-muted-foreground/80">{description}</span>
+            )}
+            <span className="text-muted-foreground/50">·</span>
+            <span className="text-muted-foreground/80">{statusPhrase}</span>
+          </span>
+          {/* Fade-out mask when content overflows the row width */}
+          <span
+            className="pointer-events-none absolute inset-y-0 right-0 w-8"
+            style={{
+              background: 'linear-gradient(to right, transparent, var(--bg-canvas, var(--background)))',
+            }}
+          />
+        </div>
+      </div>
+    </ActionRowChrome>
   );
 }

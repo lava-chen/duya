@@ -370,6 +370,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       mode?: string,
       effort?: string,
       displayContent?: string,
+      conductorMode?: boolean,
     ) => {
       if (!activeThreadId) return;
 
@@ -386,6 +387,9 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       // and the user sees the active provider's rate-limit error.
       const activeThread = useConversationStore.getState().threads.find((t) => t.id === activeThreadId);
       const sessionProviderId = activeThread?.providerId;
+      // Conductor canvas binding lives on the session row; read it here so
+      // both enqueueMessage and startStream carry the durable canvasId.
+      const conductorCanvasId = activeThread?.conductorCanvasId ?? undefined;
       const permissionModeOverride = permissionModeToAgentOverride(uiPermissionMode);
 
       if (!canSend(activeThreadId)) {
@@ -404,6 +408,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           wikiAgentEnabled,
           providerId: sessionProviderId,
           effort,
+          conductorMode,
+          conductorCanvasId,
         });
         return;
       }
@@ -448,6 +454,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         defaultWorkspaceDirectory: settings.workspaceDir,
         providerId: sessionProviderId,
         effort,
+        conductorMode,
+        conductorCanvasId,
       });
 
       setToolTimeoutCallback(activeThreadId, (retryContent: string) => {

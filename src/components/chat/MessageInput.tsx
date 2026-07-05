@@ -59,6 +59,7 @@ interface MessageInputProps {
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
     mode?: string,
     displayContent?: string,
+    conductorMode?: boolean,
   ) => void;
   onCommand?: (command: string) => void;
   onStop?: () => void;
@@ -89,6 +90,9 @@ interface MessageInputProps {
   onClearMessages?: () => void;
   // Messages for context usage calculation
   messages?: Message[];
+  // Conductor mode toggle state (independent of plan/research modes).
+  conductorEnabled?: boolean;
+  onConductorChange?: (enabled: boolean) => void;
 }
 
 interface EffortOption {
@@ -154,6 +158,8 @@ export function MessageInput({
   onExecuteCommand,
   onClearMessages,
   messages = [],
+  conductorEnabled,
+  onConductorChange,
 }: MessageInputProps) {
   const { t } = useTranslation();
   const [inputValue, setInputValue] = useState('');
@@ -471,15 +477,45 @@ export function MessageInput({
     };
     window.addEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
 
+    // Conductor canvas UI (ObjectAgentPrompt / ConductorComposer) forwards
+    // submissions here. We enable conductor mode on the current session and
+    // populate the input box with the forwarded text (+ element context).
+    const handleForwardMessage = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        text?: string;
+        canvasId?: string;
+        sessionId?: string;
+        elementContext?: unknown;
+      } | undefined;
+      if (!detail?.text) return;
+      // Implicitly enable conductor mode on the current session.
+      if (detail.sessionId && onConductorChange) {
+        onConductorChange(true);
+      }
+      // Compose forwarded text. If element context is provided, prepend it as
+      // a synthetic block so the agent knows what was selected on the canvas.
+      const ctxPrefix = detail.elementContext
+        ? `[Selected canvas element context: ${JSON.stringify(detail.elementContext)}]\n\n`
+        : '';
+      const forwarded = `${ctxPrefix}${detail.text}`;
+      setInputValue(forwarded);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustTextareaHeight();
+      });
+    };
+    window.addEventListener('conductor:forward-message', handleForwardMessage as EventListener);
+
     return () => {
       window.removeEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
       window.removeEventListener('file-tree-add-to-input', legacyFileTree as EventListener);
       window.removeEventListener('terminal-add-to-input', legacyTerminal as EventListener);
       window.removeEventListener('browser-add-to-input', legacyBrowser as EventListener);
       window.removeEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
+      window.removeEventListener('conductor:forward-message', handleForwardMessage as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachments]);
+  }, [attachments, onConductorChange]);
 
   // Build content with attachments + hidden prompt baked in. The
   // `hiddenPrompt` is the auto-injected context that the LLM should
@@ -993,7 +1029,7 @@ export function MessageInput({
         const result = onExecuteCommand?.(cmd);
         if (result) {
           // Show command result as a message
-          onSend(result.content, allAttachments, styleOpts, sendMode);
+          onSend(result.content, allAttachments, styleOpts, sendMode, undefined, conductorEnabled);
           setSendMode(undefined);
         }
         clearDraft();
@@ -1008,7 +1044,7 @@ export function MessageInput({
       if (cliBadge) setCliBadge(null);
 
       clearDraft();
-      onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser);
+      onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser, conductorEnabled);
       setSendMode(undefined);
       setInputValue('');
       setHiddenPrompt('');
@@ -1017,7 +1053,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending],
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending, conductorEnabled],
   );
 
   const handleKeyDown = useCallback(
@@ -1051,6 +1087,10 @@ export function MessageInput({
             case 'settings_submenu':
               // Sub-view navigation is click-only; ignore keyboard activation.
               return;
+            case 'conductor_toggle': {
+              onConductorChange?.(!(conductorEnabled ?? false));
+              return;
+            }
             case 'mode': {
               const modeValue = item.modeValue ?? '';
               setSendMode((prev) => (prev === modeValue ? undefined : modeValue));
@@ -1138,7 +1178,7 @@ export function MessageInput({
             );
           }}
           onAddFiles={() => fileInputRef.current?.click()}
-          // Action commands (/compact, /memory, /export, /recap)
+          // Action commands (/recap)
           onExecuteAction={(action) => {
             if (onExecuteCommand) {
               onExecuteCommand(action);
@@ -1152,6 +1192,8 @@ export function MessageInput({
             setSendMode(mode ?? undefined);
             if (mode) textareaRef.current?.focus();
           }}
+          conductorEnabled={conductorEnabled ?? false}
+          onToggleConductor={(enabled) => onConductorChange?.(enabled)}
           onInsertItem={insertItem}
           onSetSelectedIndex={setSelectedIndex}
           onSetPopoverFilter={setPopoverFilter}
@@ -1199,6 +1241,7 @@ export function MessageInput({
             onPaste={handlePasteEvent}
             placeholder={cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
             disabled={disabled}
+            conductorSign={{ enabled: conductorEnabled ?? false, onDisable: () => onConductorChange?.(false) }}
           />
 
           {/* CLI Badge */}
@@ -1221,7 +1264,7 @@ export function MessageInput({
           <div className="mt-1 px-2 flex items-center justify-between">
             {/* Left: Plus Button (opens unified command popover) & Permission */}
             <div className="flex items-center gap-2">
-              {/* Plus Button — opens the slash command popover (settings + mode + skills) */}
+              {/* Plus Button — opens the slash command popover (modes + settings + skills) */}
               <button
                 type="button"
                 data-plus-trigger
@@ -1232,7 +1275,7 @@ export function MessageInput({
                     openCommandPopover();
                   }
                 }}
-                className="size-7 rounded-lg flex items-center justify-center transition-all text-xs"
+                className="size-7 rounded-lg flex items-center justify-center transition-all text-xs hover:shadow-[0_2px_8px_rgba(0,0,0,0.15)]"
                 style={
                   popoverMode === 'skill'
                     ? {

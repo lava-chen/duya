@@ -20,6 +20,7 @@ export interface ToolAction {
   result?: string;
   isError?: boolean;
   durationMs?: number | null;
+  metadata?: Record<string, unknown>;
 }
 
 /**

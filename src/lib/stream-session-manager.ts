@@ -19,7 +19,7 @@ import type {
 import type { PermissionRequestEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
-import { getAgentServerClient } from './agent-http-client';
+import { getAgentServerClient, type ChatOptions } from './agent-http-client';
 import { useConversationStore } from '@/stores/conversation-store';
 
 // Provider config interface
@@ -305,6 +305,16 @@ interface StartStreamParams {
    * means no extended thinking.
    */
   effort?: string;
+  /**
+   * Conductor mode flag — when true, the agent runs in conductor mode
+   * and binds to the conductorCanvasId. Forwarded to ChatOptions.
+   */
+  conductorMode?: boolean;
+  /**
+   * Conductor canvas ID — durable binding from the session row.
+   * Injected into the agent's ToolUseContext.conductorCanvasId.
+   */
+  conductorCanvasId?: string;
 }
 
 interface StartStreamResult {
@@ -1159,7 +1169,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled } = params;
+    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId } = params;
 
     // Resolve workingDirectory from the thread store — sessionId IS the threadId
     let workingDirectory: string | undefined;
@@ -1313,7 +1323,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, displayContent, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, effort },
+      { content, displayContent, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId },
       nextGeneration
     );
 
@@ -1343,6 +1353,8 @@ class StreamSessionManager {
       defaultWorkspaceDirectory?: string;
       securityScanEnabled?: boolean;
       effort?: string;
+      conductorMode?: boolean;
+      conductorCanvasId?: string;
     },
     generation: number
   ): Promise<void> {
@@ -1609,7 +1621,9 @@ class StreamSessionManager {
         defaultWorkspaceDirectory: params.defaultWorkspaceDirectory,
         securityScanEnabled: params.securityScanEnabled,
         effort: params.effort,
-      });
+        conductorMode: params.conductorMode,
+        conductorCanvasId: params.conductorCanvasId,
+      } satisfies ChatOptions);
     } catch (error) {
       console.error('[stream-session-manager] Agent Server error:', error);
       const s = this.sessions.get(sessionId);

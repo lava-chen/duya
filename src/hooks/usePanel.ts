@@ -45,14 +45,9 @@ const MIN_CHAT_WIDTH = 680;
 // The panel must not exceed this share of the workspace. Keeps the
 // chat column readable on both 1280px and 4K windows.
 const MAX_PANEL_RATIO = 0.6;
-// Space the side panel cannot claim: left sidebar (~260) + minimum main
-// column (680) + a few pixels of chrome. Used to grow the Electron window
-// so the panel can sit beside the chat instead of overlapping it.
-const MIN_MAIN_COLUMNS = 944;
-
 // Re-export the layout constants for siblings (e.g. PanelZone) that need
 // the same caps when computing drag-resize bounds.
-export { MIN_PANEL_WIDTH, MAX_PANEL_WIDTH, MAX_PANEL_RATIO, MIN_CHAT_WIDTH, MIN_MAIN_COLUMNS };
+export { MIN_PANEL_WIDTH, MAX_PANEL_WIDTH, MAX_PANEL_RATIO, MIN_CHAT_WIDTH };
 
 const PANEL_STORAGE_PREFIX = "duya:panel:v2:";
 const HOME_PANEL_KEY = "__home__";
@@ -200,17 +195,6 @@ function preferredPanelWidth(
   return Math.max(fallback, Math.min(desired, upperBound));
 }
 
-// Ask the Electron main process to widen the window so the panel fits
-// beside the chat column. No-op outside Electron (Vite dev, browser).
-// Only grows — never shrinks — so manual resizing is never overridden.
-function growWindowForPanel(panelWidth: number): void {
-  if (typeof window === "undefined") return;
-  const api = (window as unknown as { electronAPI?: { app?: { ensureWindowWidth?: (w: number) => Promise<unknown> } } }).electronAPI;
-  if (!api?.app?.ensureWindowWidth) return;
-  const target = panelWidth + MIN_MAIN_COLUMNS;
-  void api.app.ensureWindowWidth(target).catch(() => {});
-}
-
 export function PanelProvider({ children }: { children: React.ReactNode }) {
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const sessionKey = activeThreadId ?? HOME_PANEL_KEY;
@@ -280,7 +264,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setWorkspaceExpandedState(descriptor.defaultExpanded);
     setPanelOpen(true);
     setPanelView("content");
-    growWindowForPanel(nextWidth);
   }, []);
 
   const togglePanel = useCallback(() => {

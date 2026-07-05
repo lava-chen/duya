@@ -126,13 +126,13 @@ export function AttachmentBar({
   if (attachments.length === 0) return null;
 
   // Separate kinds into two render tracks:
-  //  - file uses FileAttachmentCard (existing visual treatment)
-  //  - image kind is hidden: file preview / chat bubble already shows
-  //    the image, so the 104x104 thumbnail in the input is redundant
-  //    (Plan 220 user feedback: drop image card entirely)
+  //  - file and image kinds use FileAttachmentCard (existing visual
+  //    treatment). For images, the data URL on `url` (clipboard paste)
+  //    or the file path (local file add) is passed through `thumbnail`
+  //    so the card can render an <img> preview.
   //  - everything else uses the unified reference card
   const fileKindAttachments = attachments.filter(
-    (a) => a.kind === 'file',
+    (a) => a.kind === 'file' || a.kind === 'image',
   );
   const chipAttachments = attachments.filter(
     (a) => a.kind !== 'file' && a.kind !== 'image',
@@ -147,7 +147,11 @@ export function AttachmentBar({
               key={att.id}
               id={att.id}
               name={att.name}
-              thumbnail={att.displayUrl || att.thumbnail}
+              thumbnail={
+                att.displayUrl
+                || att.thumbnail
+                || (att.kind === 'image' ? att.url : undefined)
+              }
               url={att.url}
               width={104}
               onRemove={mode === 'input' ? (id) => onRemove?.(id) : undefined}
