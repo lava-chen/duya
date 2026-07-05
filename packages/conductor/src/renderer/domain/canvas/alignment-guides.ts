@@ -1,5 +1,4 @@
 import type { CanvasElement } from "../..//types/conductor";
-import { getAbsolutePosition } from "../..//stores/conductor-store";
 
 const DEFAULT_THRESHOLD = 6;
 

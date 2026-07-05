@@ -45,6 +45,7 @@ export const ElementKind = {
   'widget/note-pad': 'widget/note-pad',
   'widget/pomodoro': 'widget/pomodoro',
   'widget/news-board': 'widget/news-board',
+  'widget/dynamic': 'widget/dynamic',
 } as const;
 export type ElementKind = (typeof ElementKind)[keyof typeof ElementKind] | `native/${string}`;
 
@@ -56,7 +57,10 @@ export const RenderMode = {
 } as const;
 export type RenderMode = (typeof RenderMode)[keyof typeof RenderMode];
 
-export function getRenderModeForKind(kind: ElementKind): RenderMode {
+export function getRenderModeForKind(kind: ElementKind, hasSourceCode?: boolean): RenderMode {
+  if (kind === 'widget/dynamic' || (hasSourceCode && kind.startsWith('widget/'))) {
+    return 'iframe';
+  }
   if (kind.startsWith('native/')) return 'svg-native';
   if (kind.startsWith('widget/')) return 'react';
   return 'react';
@@ -130,6 +134,8 @@ export interface ConductorCanvas {
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
+  /** Project path bound to this canvas (unique per project). Null for ad-hoc canvases. */
+  projectPath?: string | null;
 }
 
 export interface ConductorWidget {
@@ -185,7 +191,11 @@ export type ConductorActionRequest =
   | { action: 'element.create_native'; canvasId: string; nodeType: string; position: CanvasPosition; content: Record<string, unknown>; style?: Record<string, unknown> }
   | { action: 'connector.create'; canvasId: string; source: ConnectorEndpoint; target: ConnectorEndpoint; curvature?: number; style?: Record<string, unknown> }
   | { action: 'element.update_content'; elementId: string; canvasId: string; content: Record<string, unknown> }
-  | { action: 'element.reparent'; elementId: string; canvasId: string; parentId: string | null };
+  | { action: 'element.reparent'; elementId: string; canvasId: string; parentId: string | null }
+  | { action: 'group.create'; canvasId: string; memberIds: string[]; title?: string; bgColor?: string }
+  | { action: 'group.ungroup'; canvasId: string; groupId: string }
+  | { action: 'group.add_members'; canvasId: string; groupId: string; memberIds: string[] }
+  | { action: 'group.remove_members'; canvasId: string; groupId: string; memberIds: string[] };
 
 export const DbConductorCanvas = {
   id: '',
@@ -306,6 +316,10 @@ export const ConductorActionRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('connector.create'), canvasId: z.string(), source: ConnectorEndpointSchema, target: ConnectorEndpointSchema, curvature: z.number().optional(), style: z.record(z.string(), z.unknown()).optional() }),
   z.object({ action: z.literal('element.update_content'), elementId: z.string(), canvasId: z.string(), content: z.record(z.string(), z.unknown()) }),
   z.object({ action: z.literal('element.reparent'), elementId: z.string(), canvasId: z.string(), parentId: z.string().nullable() }),
+  z.object({ action: z.literal('group.create'), canvasId: z.string(), memberIds: z.array(z.string()).min(1), title: z.string().optional(), bgColor: z.string().optional() }),
+  z.object({ action: z.literal('group.ungroup'), canvasId: z.string(), groupId: z.string().min(1) }),
+  z.object({ action: z.literal('group.add_members'), canvasId: z.string(), groupId: z.string().min(1), memberIds: z.array(z.string()).min(1) }),
+  z.object({ action: z.literal('group.remove_members'), canvasId: z.string(), groupId: z.string().min(1), memberIds: z.array(z.string()).min(1) }),
 ]);
 
 export function validateActionRequest(data: unknown): ConductorActionRequest {

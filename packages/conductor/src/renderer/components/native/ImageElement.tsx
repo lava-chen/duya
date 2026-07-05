@@ -3,8 +3,6 @@
 import React from "react";
 import type { CanvasElement } from "../..//types/conductor";
 
-const GRID_PX = 80;
-
 function formatBytes(bytes: unknown): string {
   if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -19,14 +17,11 @@ export const ImageElement: React.FC<{ element: CanvasElement }> = ({ element }) 
   const objectFit = (element.config.objectFit as "fill" | "contain" | "cover" | "none") || "cover";
   const size = element.config.size as number | undefined;
 
-  const pxW = Math.round(element.position.w * GRID_PX);
-  const pxH = Math.round(element.position.h * GRID_PX);
-
   return (
     <div
       style={{
-        width: `${pxW}px`,
-        height: `${pxH}px`,
+        width: "100%",
+        height: "100%",
         borderRadius: "var(--radius-element)",
         overflow: "hidden",
         background: "var(--canvas-surface, rgba(0,0,0,0.04))",

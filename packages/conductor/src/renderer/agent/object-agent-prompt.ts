@@ -16,10 +16,13 @@ function inferObjectCapability(element: CanvasElement): string {
     return "Use widget.update_data for data-only changes. For dynamic HTML/SVG edits, propose a sanitized preview-oriented update and avoid scripts, event handlers, network access, localStorage, or Electron APIs.";
   }
   if (nativeKind === "sticky" || kind === "widget/note-pad") {
-    return "Prefer element.update_content or widget.update_data to rewrite note text. Split into new sticky notes only when the user asks for decomposition.";
+    return "Prefer element.update_content or widget.update_data to rewrite note text. Split into new sticky notes only when the user asks for decomposition. Sticky supports optional style fields: shape (rect|diamond|ellipse — short labels ≤20 chars use diamond/ellipse, paragraphs use rect), bgColor (CSS color override), and borderStyle ({color,width,style}). Use diamond for decision nodes, ellipse for start/end nodes.";
   }
   if (nativeKind === "connector" || kind.endsWith("/connector")) {
-    return "Use connector.create only for new connections. For selected connector styling, use element.update_content or element.update as available.";
+    return "Use connector.create only for new connections. For selected connector styling, use element.update_content or element.update as available. Connector supports optional top-level style fields: strokeStyle (solid|dashed|dotted — dashed for conditional branches, dotted for weak relations), lineWidth, color (CSS color), arrowStart (default false), arrowEnd (default true). Use arrowStart=true+arrowEnd=true for bidirectional relations, arrowEnd=false for conditional branches with no outcome.";
+  }
+  if (nativeKind === "group") {
+    return "Selected object is a group. Use group_add_members / group_remove_members to manage membership, group_ungroup to dissolve the group frame (members stay), or element.update_content to edit the title / bgColor. Group membership is a semantic judgment — do NOT auto-group by element type.";
   }
   if (nativeKind === "text" || nativeKind === "shape" || nativeKind === "frame" || nativeKind === "section") {
     return "Prefer element.update_content for content or styling. Use element.arrange only when layout changes are explicitly requested.";

@@ -3,19 +3,22 @@
 import React, { useCallback, useRef, useState, useEffect } from "react";
 import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
-import { createNativeElement, uploadAsset } from "..//ipc/conductor-ipc";
+import { createNativeElement, executeAction, uploadAsset } from "..//ipc/conductor-ipc";
 import { FreeformLayer } from "./FreeformLayer";
 import { WidgetLayer } from "./WidgetLayer";
 import { ConnectorOverlay } from "./ConnectorOverlay";
 import { NativeConnectorOverlay } from "./NativeConnectorOverlay";
+import { GroupLayer } from "./GroupLayer";
 import { ObjectAgentPrompt } from "./ObjectAgentPrompt";
+import { StylePanel } from "./StylePanel";
+import { MultiSelectBar } from "./MultiSelectBar";
+import { GRID_PX } from "../domain/canvas/units";
 
 const MIN_CANVAS_WIDTH = 3200;
 const MIN_CANVAS_HEIGHT = 2400;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3;
 const ZOOM_STEP = 0.1;
-const GRID_PX = 80;
 const SNAP_GRID = 20;
 const DRAG_THRESHOLD = 3;
 const ALIGN_THRESHOLD = 8;
@@ -39,6 +42,7 @@ const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> 
   sticky: { w: 3, h: 3, zIndex: 0 },
   image: { w: 5, h: 4, zIndex: 0 },
   file: { w: 4, h: 3, zIndex: 0 },
+  group: { w: 0, h: 0, zIndex: -1 },
 };
 
 export const canvasTransformState = { panX: 0, panY: 0, zoom: 1 };
@@ -57,23 +61,33 @@ function parseCreateTool(activeTool: string | null): { type: string; extra: Reco
 }
 
 function isWidgetKind(el: CanvasElement) {
-  return el.elementKind.startsWith("widget/");
+  return el.elementKind?.startsWith("widget/") ?? false;
 }
 
 function isConnectorKind(el: CanvasElement) {
   return el.elementKind === "native/connector";
 }
 
+function isGroupKind(el: CanvasElement) {
+  return el.elementKind === "native/group";
+}
+
 function getElementBounds(element: CanvasElement, x = element.position.x, y = element.position.y) {
+  // x/y are in grid units (canvas-persisted), so convert to pixels here so
+  // the returned bbox is in a single unit space — alignment snap compares
+  // boxes against each other and renders them onto the transformed viewport,
+  // both of which need pixel coordinates.
+  const pxX = x * GRID_PX;
+  const pxY = y * GRID_PX;
   const w = element.position.w * GRID_PX;
   const h = element.position.h * GRID_PX;
   return {
-    left: x,
-    right: x + w,
-    centerX: x + w / 2,
-    top: y,
-    bottom: y + h,
-    centerY: y + h / 2,
+    left: pxX,
+    right: pxX + w,
+    centerX: pxX + w / 2,
+    top: pxY,
+    bottom: pxY + h,
+    centerY: pxY + h / 2,
   };
 }
 
@@ -90,7 +104,7 @@ function computeAlignmentSnap(
   const movingHorizontal = [movingBounds.top, movingBounds.centerY, movingBounds.bottom];
 
   for (const other of allElements) {
-    if (skippedIds.has(other.id) || isConnectorKind(other)) continue;
+    if (skippedIds.has(other.id) || isConnectorKind(other) || isGroupKind(other)) continue;
     const otherBounds = getElementBounds(other);
     const otherVertical = [otherBounds.left, otherBounds.centerX, otherBounds.right];
     const otherHorizontal = [otherBounds.top, otherBounds.centerY, otherBounds.bottom];
@@ -320,7 +334,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     window.requestAnimationFrame(animate);
   }, [applyTransform, clampZoomHard, syncCanvasStateToStore]);
 
-  const freeformElements = elements.filter((el) => !isWidgetKind(el) && !isConnectorKind(el));
+  const freeformElements = elements.filter((el) => !isWidgetKind(el) && !isConnectorKind(el) && !isGroupKind(el));
   const widgetElements = elements.filter((el) => isWidgetKind(el));
   const hasFreeformElements = freeformElements.length > 0;
 
@@ -336,8 +350,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   }, []);
 
   const elementCenterPx = useCallback((el: CanvasElement) => ({
-    x: el.position.x + (el.position.w * GRID_PX) / 2,
-    y: el.position.y + (el.position.h * GRID_PX) / 2,
+    // All inputs in grid units — convert x/y to pixels first so the math
+    // mixes only pixel-scale values.
+    x: el.position.x * GRID_PX + (el.position.w * GRID_PX) / 2,
+    y: el.position.y * GRID_PX + (el.position.h * GRID_PX) / 2,
   }), []);
 
   const setHostCursor = useCallback((cursor: string) => {
@@ -412,8 +428,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
       const startCanvas = clientToCanvas(d.startMouseX, d.startMouseY);
       const currentCanvas = clientToCanvas(d.lastClientX, d.lastClientY);
-      const dx = currentCanvas.x - startCanvas.x;
-      const dy = currentCanvas.y - startCanvas.y;
+      // dx/dy are canvas-perspective pixel deltas. `targets` carry their
+      // origin in grid units (matches the canvas model), so convert the
+      // delta back to grid before applying.
+      const dxPx = currentCanvas.x - startCanvas.x;
+      const dyPx = currentCanvas.y - startCanvas.y;
+      const dxGrid = dxPx / GRID_PX;
+      const dyGrid = dyPx / GRID_PX;
       const targets = new Map(d.targets.map((target) => [target.id, target]));
       const skippedIds = new Set(d.targets.map((target) => target.id));
       let guideOffset = { dx: 0, dy: 0, guides: [] as RenderGuide[] };
@@ -426,8 +447,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           ...primary,
           position: {
             ...primary.position,
-            x: snapToGrid(primaryStart.origX + dx),
-            y: snapToGrid(primaryStart.origY + dy),
+            x: snapToGrid(primaryStart.origX + dxGrid),
+            y: snapToGrid(primaryStart.origY + dyGrid),
           },
         };
         guideOffset = computeAlignmentSnap(proposedPrimary, latestElements, skippedIds);
@@ -435,6 +456,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
       setAlignmentGuides(guideOffset.guides);
 
+      // `guideOffset.dx/dy` come from computeAlignmentSnap (pixels); convert
+      // back to grid units for the stored position.
+      const guideDxGrid = guideOffset.dx / GRID_PX;
+      const guideDyGrid = guideOffset.dy / GRID_PX;
       useConductorStore.setState((state) => ({
         elements: state.elements.map((el) => {
           const target = targets.get(el.id);
@@ -443,8 +468,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             ...el,
             position: {
               ...el.position,
-              x: snapToGrid(target.origX + dx) + guideOffset.dx,
-              y: snapToGrid(target.origY + dy) + guideOffset.dy,
+              x: snapToGrid(target.origX + dxGrid) + guideDxGrid,
+              y: snapToGrid(target.origY + dyGrid) + guideDyGrid,
             },
           };
         }),
@@ -501,8 +526,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         const { elements: els } = useConductorStore.getState();
         const target = els.find((el) => {
           if (el.id === cd.sourceId) return false;
-          const left = el.position.x;
-          const top = el.position.y;
+          // canvasPoint is in canvas-perspective pixels; compare with a
+          // pixel bbox so both axes agree.
+          const left = el.position.x * GRID_PX;
+          const top = el.position.y * GRID_PX;
           const right = left + el.position.w * GRID_PX;
           const bottom = top + el.position.h * GRID_PX;
           return canvasPoint.x >= left && canvasPoint.x <= right
@@ -743,8 +770,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   const handleMouseUp = useCallback(() => {
     if (isBoxSelecting && boxRect && boxRect.w > 4 && boxRect.h > 4) {
       const selected = freeformElements.filter((el) => {
-        const left = el.position.x;
-        const top = el.position.y;
+        // boxRect is in canvas-pixel space (from clientToCanvas), so the
+        // element bbox must be in pixels too.
+        const left = el.position.x * GRID_PX;
+        const top = el.position.y * GRID_PX;
         const right = left + el.position.w * GRID_PX;
         const bottom = top + el.position.h * GRID_PX;
         return left < boxRect.x + boxRect.w && right > boxRect.x
@@ -996,6 +1025,40 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     hasCenteredRef.current = true;
   }, [applyTransform, syncCanvasStateToStore]);
 
+  // Consume pending focus requests from the store. centerOnElement()
+  // sets pendingFocusElementId; this effect computes the target
+  // pan/zoom using the live viewport + transformRef (the store can't
+  // see those), applies it, then clears the pending flag.
+  const pendingFocusElementId = useConductorStore((s) => s.pendingFocusElementId);
+  const clearPendingFocus = useConductorStore((s) => s.clearPendingFocus);
+  useEffect(() => {
+    if (!pendingFocusElementId) return;
+    const el = useConductorStore.getState().elements.find((e) => e.id === pendingFocusElementId);
+    if (!el) {
+      clearPendingFocus();
+      return;
+    }
+    const host = viewportRef.current;
+    if (!host) {
+      clearPendingFocus();
+      return;
+    }
+    const elWidthPx = el.position.w * GRID_PX;
+    const elHeightPx = el.position.h * GRID_PX;
+    // Convert grid-unit x/y to pixels so the center math matches the size
+    // math (and the host's pixel-space clientWidth/clientHeight).
+    const elCenterX = el.position.x * GRID_PX + elWidthPx / 2;
+    const elCenterY = el.position.y * GRID_PX + elHeightPx / 2;
+    const zoom = transformRef.current.zoom || 1;
+    const cw = host.clientWidth;
+    const ch = host.clientHeight;
+    transformRef.current.panX = Math.round(cw / 2 - elCenterX * zoom);
+    transformRef.current.panY = Math.round(ch / 2 - elCenterY * zoom);
+    applyTransform();
+    syncCanvasStateToStore();
+    clearPendingFocus();
+  }, [pendingFocusElementId, applyTransform, syncCanvasStateToStore, clearPendingFocus]);
+
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       const { editingElementId } = useConductorStore.getState();
@@ -1008,6 +1071,72 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           e.preventDefault();
           ids.forEach((id) => onDeleteElement(id));
           clearSelection();
+        }
+      }
+
+      // Ctrl/Cmd+G: group selection (≥2 non-group elements) or ungroup
+      // (exactly 1 group selected). Mirrors MultiSelectBar's buttons.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "g" || e.key === "G")) {
+        const target = e.target as HTMLElement | null;
+        const isEditingInput =
+          target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.isContentEditable);
+        if (isEditingInput) return;
+
+        const state = useConductorStore.getState();
+        const ids =
+          state.selectedElementIds.length > 0
+            ? state.selectedElementIds
+            : state.selectedElementId
+              ? [state.selectedElementId]
+              : [];
+        const idSet = new Set(ids);
+        const selected = state.elements.filter((el) => idSet.has(el.id));
+        if (selected.length === 0) return;
+
+        const isUngroupMode =
+          selected.length === 1 && selected[0].elementKind === "native/group";
+
+        e.preventDefault();
+
+        if (isUngroupMode && state.activeCanvasId) {
+          // Ungroup = delete the group element, keep members.
+          const groupEl = selected[0];
+          state.removeElement(groupEl.id);
+          executeAction({
+            action: "element.delete",
+            elementId: groupEl.id,
+            canvasId: state.activeCanvasId,
+          }).catch((err) => {
+            state.setUiError(`Ungroup failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+          state.clearSelection();
+        } else if (selected.length >= 2 && state.activeCanvasId) {
+          // Group: filter out groups (no nesting).
+          const memberIds = selected
+            .filter((el) => el.elementKind !== "native/group")
+            .map((el) => el.id);
+          if (memberIds.length < 2) return;
+          // Group position is metadata only — GroupElement renders its bbox
+          // from live member positions. Zero position matches the e2e pattern.
+          const groupPosition: CanvasPosition = {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            zIndex: -1,
+            rotation: 0,
+          };
+          createNativeElement(state.activeCanvasId, "group", groupPosition, {
+            title: "",
+            memberIds,
+            bgColor: undefined,
+          }).catch((err) => {
+            state.setUiError(`Group failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+          state.clearSelection();
         }
       }
     };
@@ -1113,6 +1242,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             <div style={{ zIndex: 0, position: "relative" }}>
               <WidgetLayer elements={widgetElements} readOnly={readOnly} />
             </div>
+            <GroupLayer elements={elements} />
             <div style={{ zIndex: 1, position: "absolute", inset: 0 }}>
               <FreeformLayer
                 elements={freeformElements}
@@ -1207,7 +1337,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         {Math.round(zoomDisplay * 100)}%
       </div>
 
+      <StylePanel />
       <ObjectAgentPrompt />
+      <MultiSelectBar />
     </div>
   );
 };

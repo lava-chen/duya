@@ -1,9 +1,43 @@
 import { create } from "zustand";
-import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorAction, Actor, CanvasElement } from "..//types/conductor";
+import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorAction, Actor, CanvasElement, CanvasPosition } from "..//types/conductor";
 import { ConductorBridge } from "..//ipc/conductor-bridge";
 import { undoAction, redoAction, executeAction } from "..//ipc/conductor-ipc";
 import { getConductorHostOrNull, type ModelOption, type ConductorModelInfo } from "..//host";
 import { widgetToElementAdapter } from "..//ipc/widget-element-adapter";
+
+/**
+ * Normalize an incoming position to the full `CanvasPosition` shape.
+ *
+ * Several write paths (legacy widget JSON parsed without `w`/`h`, agent
+ * output, IPC patches) may produce a partial position object. If we hand
+ * that straight to renderers, `undefined * GRID_PX === NaN` and React
+ * logs "NaN is an invalid value for the width css style property".
+ * Defaults match the legacy widget size used by `widget.move` and
+ * `widget-element-adapter.ts`.
+ */
+function normalizePosition(pos: Partial<CanvasPosition> | null | undefined): CanvasPosition {
+  const w = typeof pos?.w === "number" && Number.isFinite(pos.w) ? pos.w : 4;
+  const h = typeof pos?.h === "number" && Number.isFinite(pos.h) ? pos.h : 3;
+  return {
+    x: typeof pos?.x === "number" && Number.isFinite(pos.x) ? pos.x : 0,
+    y: typeof pos?.y === "number" && Number.isFinite(pos.y) ? pos.y : 0,
+    w,
+    h,
+    zIndex: typeof pos?.zIndex === "number" && Number.isFinite(pos.zIndex) ? pos.zIndex : 0,
+    rotation: typeof pos?.rotation === "number" && Number.isFinite(pos.rotation) ? pos.rotation : 0,
+  };
+}
+
+function normalizeElement(el: CanvasElement): CanvasElement {
+  // Defensive: patches may use `kind` (LLM-friendly alias) instead of `elementKind`.
+  // Map it so CanvasArea's isWidgetKind/isConnectorKind don't crash on undefined.
+  const { kind, elementKind, ...rest } = el as CanvasElement & { kind?: string };
+  return {
+    ...rest,
+    elementKind: elementKind ?? kind ?? 'native/sticky',
+    position: normalizePosition(el.position),
+  };
+}
 
 type ModelInfo = ConductorModelInfo;
 
@@ -69,6 +103,17 @@ interface ConductorState {
   setCanvasScroll: (x: number, y: number) => void;
   setCanvasViewportSize: (w: number, h: number) => void;
   centerOnElement: (elementId: string) => void;
+
+  /**
+   * Element id that CanvasArea should focus on next render. Set by
+   * `centerOnElement`; CanvasArea consumes it via useEffect, applies
+   * the pan/zoom to its transformRef, then clears it. This avoids the
+   * store ↔ transformRef sync cycle (centerOnElement used to write
+   * canvasScrollX/Y directly, but CanvasArea's debounced
+   * syncCanvasStateToStore would overwrite it on the next pan).
+   */
+  pendingFocusElementId: string | null;
+  clearPendingFocus: () => void;
 
   // Unified canvas contents getter
   getCanvasContents: () => CanvasElement[];
@@ -174,6 +219,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   canvasScrollY: 0,
   canvasViewportW: 0,
   canvasViewportH: 0,
+  pendingFocusElementId: null,
 
   setCanvases: (canvases) => set({ canvases }),
 
@@ -218,16 +264,22 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
       widgets: state.widgets.filter((w) => w.id !== widgetId),
     })),
 
-  setElements: (elements) => set({ elements }),
+  setElements: (elements) => set({ elements: elements.map(normalizeElement) }),
 
   addElement: (element) =>
-    set((state) => ({ elements: [...state.elements, element] })),
+    set((state) => ({ elements: [...state.elements, normalizeElement(element)] })),
 
   updateElement: (elementId, patch) =>
     set((state) => ({
-      elements: state.elements.map((e) =>
-        e.id === elementId ? { ...e, ...patch } : e
-      ),
+      elements: state.elements.map((e) => {
+        if (e.id !== elementId) return e;
+        // Only re-normalize position when the patch touches it; otherwise
+        // preserve the existing element shape untouched.
+        const merged = patch.position
+          ? { ...e, ...patch, position: normalizePosition({ ...e.position, ...patch.position }) }
+          : { ...e, ...patch };
+        return merged;
+      }),
     })),
 
   removeElement: (elementId) =>
@@ -282,7 +334,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         const exists = elements.some((e) => e.id === incoming.id);
         if (!exists) {
           set({
-            elements: [...elements, incoming],
+            elements: [...elements, normalizeElement(incoming)],
             canUndo: true,
             canRedo: false,
             uiStatus: "idle",
@@ -308,22 +360,19 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
       // widget.move / widget.resize
       if (patch.widgetId && resultPatch?.position && typeof resultPatch.position === "object") {
+        const rpPos = resultPatch.position as Partial<CanvasPosition>;
         get().updateWidget(patch.widgetId as string, {
-          position: resultPatch.position as ConductorWidget["position"],
+          position: normalizePosition(rpPos),
           updatedAt: Date.now(),
         });
-        const rpPos = resultPatch.position as any;
         const { elements: moveEls } = get();
         const existingEl = moveEls.find(e => e.id === patch.widgetId);
         get().updateElement(patch.widgetId as string, {
-          position: {
-            x: rpPos.x ?? 0,
-            y: rpPos.y ?? 0,
-            w: rpPos.w ?? 4,
-            h: rpPos.h ?? 3,
-            zIndex: existingEl?.position?.zIndex ?? 0,
-            rotation: existingEl?.position?.rotation ?? 0,
-          },
+          // Preserve existing zIndex/rotation when the patch omits them.
+          position: normalizePosition({
+            ...existingEl?.position,
+            ...rpPos,
+          }),
           updatedAt: Date.now(),
         });
         set({
@@ -385,12 +434,22 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         const exists = elements.some((e) => e.id === incoming.id);
         if (!exists) {
           set({
-            elements: [...elements, incoming],
+            elements: [...elements, normalizeElement(incoming)],
             canUndo: true,
             canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
           });
+          // Auto-focus on agent-created elements so the user can see
+          // what the agent is working on. Skip when actor is 'user'
+          // (user drags place the element where they want it).
+          if (patch.actor === 'agent') {
+            // Defer to next tick so the new element is committed to
+            // the store before centerOnElement reads it.
+            setTimeout(() => {
+              get().centerOnElement(incoming.id);
+            }, 0);
+          }
         }
         return;
       }
@@ -746,31 +805,17 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   setCanvasViewportSize: (w, h) => set({ canvasViewportW: w, canvasViewportH: h }),
 
   centerOnElement: (elementId) => {
-    const { elements, canvasViewportW, canvasViewportH, canvasZoom } = get();
+    const { elements } = get();
     const el = elements.find((e) => e.id === elementId);
-    if (!el || canvasViewportW <= 0 || canvasViewportH <= 0) return;
-
-    const GRID_PX = 80;
-    const elWidthPx = el.position.w * GRID_PX;
-    const elHeightPx = el.position.h * GRID_PX;
-    const elCenterX = el.position.x + elWidthPx / 2;
-    const elCenterY = el.position.y + elHeightPx / 2;
-
-    const zoom = canvasZoom > 0 ? canvasZoom : 1;
-    const panX = Math.round(canvasViewportW / 2 - elCenterX * zoom);
-    const panY = Math.round(canvasViewportH / 2 - elCenterY * zoom);
-
-    set({ canvasScrollX: panX, canvasScrollY: panY });
-
-    if (typeof window !== 'undefined') {
-      requestAnimationFrame(() => {
-        const canvasEls = document.querySelectorAll<HTMLElement>('.canvas-inner');
-        canvasEls.forEach((canvasEl) => {
-          canvasEl.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-        });
-      });
-    }
+    if (!el) return;
+    // Don't compute pan/zoom here — CanvasArea owns transformRef and
+    // will apply the focus in its own effect (where it has access to
+    // the live viewport size and transformRef). Setting
+    // pendingFocusElementId is enough to trigger that effect.
+    set({ pendingFocusElementId: elementId });
   },
+
+  clearPendingFocus: () => set({ pendingFocusElementId: null }),
 
   getCanvasContents: () => {
     const { elements, widgets } = get();
@@ -785,7 +830,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
   getNativeNodes: () => {
     const { elements } = get();
-    return elements.filter((e) => e.elementKind.startsWith('native/') && e.elementKind !== 'native/connector');
+    return elements.filter((e) => e.elementKind?.startsWith('native/') && e.elementKind !== 'native/connector');
   },
 
   getConnectors: () => {
@@ -794,6 +839,11 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   },
 }));
 
+/**
+ * Resolve an element's top-left canvas position in **grid units**.
+ * Returns the parent's grid-unit offset plus this node's grid-unit offset.
+ * Callers that need pixel coordinates should multiply by GRID_PX.
+ */
 export function getAbsolutePosition(node: CanvasElement, allNodes: CanvasElement[]): { x: number; y: number } {
   if (!node.metadata?.parentId) return { x: node.position.x, y: node.position.y };
   const parent = allNodes.find((n) => n.id === node.metadata.parentId);

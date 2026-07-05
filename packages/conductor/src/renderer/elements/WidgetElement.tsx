@@ -4,9 +4,12 @@ import React, { useMemo } from "react";
 import type { ElementComponentProps } from "./ElementRegistry";
 import type { ConductorWidget, WidgetKind, WidgetPermissions, WidgetState, Position } from "..//types/conductor";
 import { WidgetShell } from "..//components/WidgetShell";
+import { sanitizeForIframe } from "./widget-sanitizer";
+import type { DynamicWidgetDefinition } from "..//widgets/registry";
 
 function canvasElementToWidget(element: ElementComponentProps["element"]): ConductorWidget {
-  const kind: WidgetKind = "builtin";
+  const hasSourceCode = Boolean(element.sourceCode);
+  const kind: WidgetKind = hasSourceCode ? "dynamic" : "builtin";
   const type = element.elementKind.replace("widget/", "");
   const position: Position = {
     x: element.position.x,
@@ -39,7 +42,30 @@ function canvasElementToWidget(element: ElementComponentProps["element"]): Condu
   };
 }
 
+function buildDynamicDef(
+  element: ElementComponentProps["element"],
+  widget: ConductorWidget,
+): DynamicWidgetDefinition | undefined {
+  if (!element.sourceCode) return undefined;
+  return {
+    kind: "dynamic",
+    type: widget.type,
+    label: (element.config?.title as string) || widget.type,
+    defaultData: {},
+    defaultConfig: {},
+    defaultSize: { w: element.position.w, h: element.position.h },
+    minSize: { w: 2, h: 2 },
+    renderMode: "iframe",
+    sourceHtml: element.sourceCode,
+    sanitizedHtml: sanitizeForIframe(element.sourceCode),
+    warnings: [],
+    generatedAt: element.updatedAt,
+    confirmedByUser: true,
+  };
+}
+
 export const WidgetElement: React.FC<ElementComponentProps> = ({ element }) => {
   const widget = useMemo(() => canvasElementToWidget(element), [element]);
-  return <WidgetShell widget={widget} />;
+  const dynamicDef = useMemo(() => buildDynamicDef(element, widget), [element, widget]);
+  return <WidgetShell widget={widget} dynamicDef={dynamicDef} />;
 };

@@ -12,6 +12,7 @@ The conductor canvas supports a minimal element set:
 - **native/connector** — Connection line between elements
 - **native/image** — Image element (assetId or url)
 - **native/file** — File attachment element (assetId, fileName, mimeType)
+- **native/group** — Loose-binding group frame around member elements
 - **widget/task-list** — Structured task list widget
 - **widget/note-pad** — Plain-text note pad widget
 - **widget/pomodoro** — Pomodoro timer widget
@@ -25,10 +26,26 @@ vizSpec format:
 \`\`\`json
 {
   "text": "Discuss pricing model",
-  "color": "yellow"
+  "color": "yellow",
+  "shape": "rect"
 }
 \`\`\`
-Color options: yellow, blue, green, pink, purple, gray.
+Color options: yellow, blue, green, pink, purple, gray. Hex values mirror the
+diagram module's .s-* palette (yellow maps to .s-chk Amber, blue maps to .s-proc,
+green maps to .s-agent, pink maps to .s-err Red, purple maps to .s-msg, gray maps to .s-sub). Note that the pink
+key renders as light red (.s-err) and is kept for back-compat. Default border is
+1px solid in the theme stroke color; set borderStyle only when you need
+a non-default border.
+
+Style fields (all optional):
+- **shape**: "rect" | "diamond" | "ellipse" — default "rect".
+  - Use "rect" for paragraph content and long notes.
+  - Use "diamond" for decision nodes (e.g. "Approved?").
+  - Use "ellipse" for start/end nodes (e.g. "Begin", "Done").
+  - Short labels (≤20 chars) use diamond/ellipse; paragraphs use rect.
+- **bgColor**: CSS color string — overrides the theme color when set.
+- **borderStyle**: { color?, width?, style? } — "style" is "solid" | "dashed" | "dotted".
+  When width is omitted, a 1px solid theme stroke is rendered.
 
 ### native/connector — Connection Lines
 
@@ -39,9 +56,27 @@ vizSpec format:
 {
   "sourceId": "element-uuid-1",
   "targetId": "element-uuid-2",
-  "label": "depends on"
+  "label": "depends on",
+  "strokeStyle": "solid",
+  "lineWidth": 2,
+  "color": "#7C5CFF",
+  "arrowStart": false,
+  "arrowEnd": true
 }
 \`\`\`
+
+Style fields (all optional, top-level):
+- **strokeStyle**: "solid" | "dashed" | "dotted" — default "solid".
+  - Use "dashed" for conditional/optional branches.
+  - Use "dotted" for weak/implicit relations.
+- **lineWidth**: number — default 2.
+- **color**: CSS color string — default var(--text-secondary).
+- **arrowStart**: boolean — default false. Set true for bidirectional relations.
+- **arrowEnd**: boolean — default true. Set false for conditional branches with no outcome.
+
+Examples:
+- Conditional branch: strokeStyle="dashed", arrowEnd=false
+- Bidirectional relation: arrowStart=true, arrowEnd=true
 
 ### native/image — Image Elements
 
@@ -70,6 +105,43 @@ vizSpec format:
   "size": 102400
 }
 \`\`\`
+
+### native/group — Group Frames
+
+Use for: visually organizing related elements by theme / process stage /
+responsibility. A group is a dashed frame drawn around its member
+elements. Members keep their absolute canvas positions and remain
+independently draggable; the frame's bbox is recalculated in real time.
+
+Group is a **semantic judgment, NOT a type judgment** — do NOT auto-group
+by element type. Look at the element list (id + type + text summary) and
+decide which elements belong together.
+
+Config fields (stored on the group element's config):
+- **title** (optional): label shown at the top-left of the frame.
+- **bgColor** (optional): CSS color for a semi-transparent frame overlay.
+- **memberIds** (required): non-empty array of existing element IDs on
+  the same canvas.
+
+Use the dedicated group tools (group_create, group_ungroup,
+group_add_members, group_remove_members) — do NOT use element.create
+or element.update_content for group manipulation.
+
+Examples:
+- **By theme**: group stickers discussing "pricing model" together
+  \`\`\`json
+  { "title": "Pricing discussion", "memberIds": ["s1", "s3", "s5"] }
+  \`\`\`
+- **By process stage**: split a flow into Requirements / Design /
+  Implementation / Test groups
+  \`\`\`json
+  { "title": "Requirements", "memberIds": ["r1", "r2"] }
+  \`\`\`
+- **By responsibility**: cluster work items by Frontend / Backend /
+  Design owners
+  \`\`\`json
+  { "title": "Frontend", "bgColor": "#B8DFFF", "memberIds": ["f1", "f2", "f3"] }
+  \`\`\`
 
 ### widget/* — Structured Widgets
 

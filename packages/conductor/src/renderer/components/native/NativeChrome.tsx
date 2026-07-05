@@ -4,12 +4,12 @@ import React, { useCallback, useEffect, useRef } from "react";
 import type { CanvasElement } from "../..//types/conductor";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { canvasTransformState } from "../CanvasArea";
+import { GRID_PX } from "../../domain/canvas/units";
 
 type HandleDirection = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 const HANDLE_SIZE = 8;
 const MIN_SIZE_GRID = 1;
-const GRID_UNIT = 80;
 
 interface NativeChromeProps {
   element: CanvasElement;
@@ -77,8 +77,8 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       const zoom = canvasTransformState.zoom || 1;
       const dx = (r.lastMouseX - r.startMouseX) / zoom;
       const dy = (r.lastMouseY - r.startMouseY) / zoom;
-      const dw = Math.round(dx / GRID_UNIT);
-      const dh = Math.round(dy / GRID_UNIT);
+      const dw = Math.round(dx / GRID_PX);
+      const dh = Math.round(dy / GRID_PX);
 
       let newW = r.origW;
       let newH = r.origH;

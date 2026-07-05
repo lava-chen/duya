@@ -6,6 +6,7 @@ import { StickyElement } from "./StickyElement";
 import { ConnectorElement } from "./ConnectorElement";
 import { ImageElement } from "./ImageElement";
 import { FileElement } from "./FileElement";
+import { GroupElement } from "./GroupElement";
 import { NativeChrome } from "./NativeChrome";
 
 interface NativeElementRendererProps {
@@ -27,6 +28,7 @@ const elementMap: Record<string, React.ComponentType<{ element: CanvasElement }>
   connector: ConnectorElement,
   image: ImageElement,
   file: FileElement,
+  group: GroupElement,
 };
 
 export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({
