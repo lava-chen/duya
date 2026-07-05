@@ -92,6 +92,8 @@ export interface SkillReviewResult {
 
 const DEFAULT_SKILL_NUDGE_INTERVAL = 10;
 const MAX_REVISION_ITERATIONS = 3;
+/** Minimum evaluator score (0-10) for a draft skill to pass. */
+const PASS_THRESHOLD = 7;
 
 // ============================================================================
 // Prompts
@@ -102,16 +104,26 @@ const MAX_REVISION_ITERATIONS = 3;
  */
 const SKILL_CREATOR_PROMPT = `You are a skill creator. Analyze the conversation history and existing skills to decide whether to improve an existing skill or create a new one.
 
+## Step 0: Mandatory Overlap Check
+
+Before creating ANY new skill, you MUST:
+1. Read the existing skills list below carefully
+2. Call skill_manage(action='list') to get the full current list
+3. Compare your candidate skill name AND its workflow against every existing skill
+4. If ANY existing skill covers a similar workflow — even partially — you MUST use action='edit' or 'patch' on that skill instead of creating a new one
+
+Creating a near-duplicate skill is the WORST outcome. When in doubt, improve rather than create.
+
 ## Step 1: Analyze Existing Skills
 
-First, examine the existing skills listed below. Consider:
-- Does any existing skill cover a similar workflow or approach?
-- Would improving an existing skill be better than creating a new one?
-- Is the current task's approach complementary to an existing skill?
+Examine the existing skills listed below. For each, consider:
+- Does it cover a similar workflow or approach?
+- Could the current task's approach extend or update it?
+- Is the current task's approach complementary or overlapping?
 
 ## Step 2: Analyze the Conversation
 
-Then analyze the conversation history to understand:
+Analyze the conversation history to understand:
 - What task was being performed?
 - What approach/workflow was discovered or used?
 - Were there any non-trivial patterns, tricks, or lessons learned?
@@ -123,7 +135,7 @@ Then analyze the conversation history to understand:
 
 1. **If an existing skill is relevant** (covers similar workflow):
    - Improve the existing skill instead of creating a new one
-   - Call skill_manage(action='draft', name='<existing-skill-name>', content=<updated-full-content>)
+   - Call skill_manage(action='edit', name='<existing-skill-name>', content=<updated-full-content>)
    - Focus on: adding new steps, updating outdated parts, or extending scope
 
 2. **If NO existing skill is relevant** AND the task is worth saving:
@@ -134,20 +146,23 @@ Then analyze the conversation history to understand:
 3. **If the task is simple or not reusable**:
    - Return "Nothing significant to save."
 
-## Decision Criteria
+## Strict Quality Criteria — Do NOT Create a Skill If:
 
-A skill is worth creating/improving when:
-- Involves 5+ tool calls (non-trivial workflow)
-- Required trial-and-error or changing approach
-- Contains reusable patterns others could benefit from
-- Documents non-obvious solutions or workarounds
+- The task involved fewer than 5 tool calls (it was trivial)
+- The workflow is generic common knowledge (e.g. "write a React component", "deploy with Docker", "write a polite email")
+- The approach did NOT require trial-and-error or changing course
+- The "skill" would just be a checklist that any LLM could produce without prior experience
+- The content is purely methodology/advice without concrete commands, file paths, or tool usage
 
-## Important: Always Use 'draft' Action
+A skill is worth creating ONLY when:
+- It involved 5+ tool calls AND trial-and-error to discover the right approach
+- It documents non-obvious solutions, project-specific paths, or hard-won lessons
+- The workflow is reusable for similar future tasks
+- The content contains concrete commands, file paths, or specific tool configurations
 
-For BOTH new skills AND improvements to existing skills:
-- Use action='draft' to create the skill in draft directory for evaluation
-- The evaluation system will handle promoting to正式 location after approval
-- Do NOT use 'edit' or 'patch' directly - they bypass the quality evaluation
+## Size Guideline
+
+Keep SKILL.md under 300 lines. If the workflow is large, split it into multiple focused skills. A single 2000+ line skill violates progressive disclosure.
 
 ## Existing Skills to Consider
 
@@ -159,14 +174,14 @@ For BOTH new skills AND improvements to existing skills:
 ---
 name: <lowercase-with-hyphens>
 description: <brief-one-line-description>
-category: <category-name>
+category: <category-name>    # REQUIRED — skills must be placed in a category directory
 allowed-tools: <comma-separated-tool-names>
 ---
 
 # <Skill Title>
 
 ## When to Use
-<describe when this skill should be invoked>
+<describe when this skill should be invoked — be specific about the trigger conditions>
 
 ## Steps
 1. <numbered steps with exact commands>
@@ -180,9 +195,23 @@ allowed-tools: <comma-separated-tool-names>
 <how to verify the skill worked correctly>
 \`\`\`
 
+## Support Files
+
+A skill is not just SKILL.md — it is a **directory package**. Use support files to keep SKILL.md under 300 lines:
+
+- \`references/\` — detailed notes, API docs excerpts, domain knowledge, configuration samples
+- \`templates/\` — starter files to copy and modify (e.g., HTML templates, config files)
+- \`scripts/\` — runnable scripts (validation, fixture generators, probes)
+- \`assets/\` — other resources (images, data files)
+
+Write support files with: skill_manage(action='write_file', name='<skill>', file_path='references/example.md', file_content='...')
+
+Reference them in SKILL.md with relative paths — the loader auto-resolves them to absolute paths.
+
 ## Important
 
-- ALWAYS use action='draft' for evaluation (both new AND improved skills)
+- For NEW skills: use action='draft' to create in draft directory for evaluation
+- For EXISTING skills: use action='edit' or 'patch' to improve in place
 - After creating or improving, provide a brief summary of what changed.
 `.trim();
 
@@ -225,7 +254,7 @@ Execute the task using the tools and steps described in the skill. Observe:
 ### Step 4: Pass/Fail Decision
 
 - **Pass (score >= 7)**: Call skill_manage(action='promote', name='<skill-name>')
-- **Fail (score < 7)**: Provide detailed feedback for revision
+- **Fail (score < 7)**: Call skill_manage(action='reject', name='<skill-name>') to delete the failed draft, then provide detailed feedback for revision
 
 ### Step 5: Return Evaluation
 
@@ -260,7 +289,11 @@ const SKILL_REVIEW_PROMPT = `Review the conversation above and consider saving o
 
 Focus on: was a non-trivial approach used to complete a task that required trial and error, or changing course due to experiential findings along the way, or did the user expect or desire a different method or outcome?
 
-If a relevant skill already exists, update it with what you learned. Otherwise, create a new skill if the approach is reusable.
+Before creating a new skill, you MUST call skill_manage(action='list') to check for existing skills that already cover a similar workflow. If one exists, improve it with action='edit' or 'patch' instead of creating a duplicate.
+
+Do NOT create a skill if the task was trivial (fewer than 5 tool calls), involved only generic common knowledge, or did not require trial-and-error.
+
+If a relevant skill already exists, update it with what you learned. Otherwise, create a new skill only if the approach is reusable and contains concrete commands, paths, or tool configurations.
 If nothing is worth saving, just say 'Nothing to save.' and stop.`;
 
 // ============================================================================
@@ -609,7 +642,9 @@ export class SelfImprover {
   }
 
   /**
-   * Get a summary of existing skills for the Creator Agent to consider
+   * Get a summary of existing skills for the Creator Agent to consider.
+   * Includes the `whenToUse` text so the Creator can judge overlap
+   * by semantics, not just by name.
    */
   private getExistingSkillsSummary(): string {
     try {
@@ -620,22 +655,71 @@ export class SelfImprover {
         return 'No existing skills.';
       }
 
+      // Also include draft skills so the Creator knows what is
+      // already in the evaluation pipeline.
       const lines: string[] = [];
       lines.push(`Found ${skills.length} existing skill(s):\n`);
 
-      for (const skill of skills.slice(0, 20)) { // Limit to 20 skills for prompt size
+      for (const skill of skills.slice(0, 30)) {
         lines.push(`## ${skill.name}`);
         lines.push(`Description: ${skill.description || 'N/A'}`);
+        if (skill.whenToUse) {
+          // Truncate to keep prompt size manageable
+          const wt = skill.whenToUse.length > 200
+            ? skill.whenToUse.slice(0, 200) + '...'
+            : skill.whenToUse;
+          lines.push(`When to Use: ${wt}`);
+        }
+        if (skill.category) {
+          lines.push(`Category: ${skill.category}`);
+        }
         lines.push('');
       }
 
-      if (skills.length > 20) {
-        lines.push(`... and ${skills.length - 20} more skills.`);
+      if (skills.length > 30) {
+        lines.push(`... and ${skills.length - 30} more skills.`);
       }
 
       return lines.join('\n');
     } catch {
       return 'Could not load existing skills.';
+    }
+  }
+
+  /**
+   * Detect potential overlap between a candidate skill name and
+   * existing skill names. Returns the matching skill name if a
+   * near-duplicate is found, or null otherwise.
+   *
+   * The check is intentionally simple (case-insensitive substring /
+   * Levenshtein-lite) because the Creator Agent receives the full
+   * list in its prompt and should do the semantic comparison. This
+   * function is a code-level safety net for the most obvious cases.
+   */
+  private detectOverlap(candidateName: string): string | null {
+    try {
+      const registry = getSkillRegistry();
+      const skills = registry.listMetadata();
+      const candidate = candidateName.toLowerCase().replace(/[-_]/g, '');
+
+      for (const skill of skills) {
+        const existing = skill.name.toLowerCase().replace(/[-_]/g, '');
+
+        // Exact match after normalisation
+        if (existing === candidate) {
+          return skill.name;
+        }
+        // One is a substring of the other (e.g. "electron-e2e" vs
+        // "electron-e2e-setup" vs "electron-e2e-testing")
+        if (existing.length > 3 && candidate.length > 3) {
+          if (existing.includes(candidate) || candidate.includes(existing)) {
+            return skill.name;
+          }
+        }
+      }
+      return null;
+    } catch {
+      return null;
     }
   }
 
@@ -746,10 +830,34 @@ export class SelfImprover {
 
       console.log(`[SelfImprover] Creator Phase: Skill '${skillName}' action=${actionType}`);
 
-      // If improving an existing skill (edit/patch), create a draft from it for evaluation
+      // Code-level overlap detection — if the Creator tried to
+      // `draft` a skill whose name is a near-duplicate of an
+      // existing one, block the creation and instruct the Creator
+      // to use edit/patch instead. This catches the "electron-e2e"
+      // / "electron-e2e-setup" / "electron-e2e-testing" pattern.
+      if (actionType === 'draft' && skillName) {
+        const overlap = this.detectOverlap(skillName);
+        if (overlap) {
+          console.log(`[SelfImprover] Creator Phase: Blocked duplicate creation of '${skillName}' (overlaps with '${overlap}')`);
+          return {
+            created: false,
+            reason: `Skill '${skillName}' overlaps with existing skill '${overlap}'. Use skill_manage(action='edit' or 'patch', name='${overlap}') to improve it instead of creating a new one.`,
+          };
+        }
+      }
+
+      // If improving an existing skill (edit/patch), the
+      // skill_manage tool already wrote the changes to the skill
+      // directory. For evaluation, we need a draft copy — create
+      // one from the updated content so the Evaluator can review
+      // it in the draft directory.
       if (actionType === 'edit' || actionType === 'patch') {
-        // The improved skill content should be in skillContent for draft creation
-        // For now, we'll treat this as if a draft was created for evaluation
+        // If we have the full content, create a draft for evaluation
+        if (skillContent) {
+          const { createDraftSkill } = await import('../skills/SkillDraftManager.js');
+          await createDraftSkill(skillName, skillContent, undefined);
+          console.log(`[SelfImprover] Creator Phase: Created draft copy of edited skill '${skillName}' for evaluation`);
+        }
         return {
           created: true,
           skillName,
@@ -1005,8 +1113,16 @@ ${feedback}`;
       const evaluationResult = await this.executeEvaluatorPhase(skillName, llmConfig, workingDirectory);
       lastEvaluation = evaluationResult;
 
-      if (evaluationResult.passed) {
-        // Success! Skill passed evaluation
+      // Use the authoritative threshold constant rather than trusting
+      // the evaluator's self-reported `passed` boolean, which may
+      // disagree with the external threshold if the prompt and code
+      // fall out of sync.
+      const passed = evaluationResult.score >= PASS_THRESHOLD;
+
+      if (passed) {
+        // Success! Skill passed evaluation — clean up any backups
+        // left by revision iterations.
+        await this.cleanupDraftBackups(skillName);
         return {
           phase: ImprovementPhase.IDLE,
           creatorResult: { created: true, skillName, reason: 'Skill passed evaluation' },
@@ -1020,7 +1136,9 @@ ${feedback}`;
       iteration++;
 
       if (iteration >= this.maxIterations) {
-        // Max iterations reached - fail
+        // Max iterations reached — reject the draft so it doesn't
+        // accumulate in skills-draft/ forever.
+        await this.rejectDraft(skillName);
         return {
           phase: ImprovementPhase.IDLE,
           creatorResult: { created: true, skillName, reason: 'Max iterations reached' },
@@ -1060,6 +1178,49 @@ ${feedback}`;
       maxIterations: this.maxIterations,
       error: 'Unexpected loop exit',
     };
+  }
+
+  /**
+   * Remove .backup files left by revision iterations.
+   * Called after a skill passes evaluation (promoted) so the
+   * draft directory doesn't accumulate stale backups.
+   */
+  private async cleanupDraftBackups(skillName: string): Promise<void> {
+    try {
+      const { listDraftSkills } = await import('../skills/SkillDraftManager.js');
+      const drafts = await listDraftSkills();
+      const draft = drafts.find(d => d.name === skillName);
+      if (!draft) return;
+
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const draftDir = draft.path;
+      const entries = await fs.readdir(draftDir);
+      for (const entry of entries) {
+        if (entry.endsWith('.backup') || entry.startsWith('SKILL.md.backup')) {
+          await fs.unlink(path.join(draftDir, entry));
+          console.log(`[SelfImprover] Cleaned up backup: ${entry}`);
+        }
+      }
+    } catch {
+      // Best-effort — cleanup failures are non-critical
+    }
+  }
+
+  /**
+   * Reject a draft skill after all revision iterations are
+   * exhausted. Deletes the draft directory (including backups)
+   * so it doesn't accumulate in skills-draft/ forever.
+   */
+  private async rejectDraft(skillName: string): Promise<void> {
+    try {
+      const { rejectDraftSkill } = await import('../skills/SkillDraftManager.js');
+      await rejectDraftSkill(skillName);
+      console.log(`[SelfImprover] Rejected draft skill '${skillName}' after max iterations`);
+    } catch {
+      // Best-effort — if rejection fails the draft stays, which
+      // is better than crashing the review loop
+    }
   }
 
   /**

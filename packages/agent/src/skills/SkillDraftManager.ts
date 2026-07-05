@@ -11,6 +11,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
+import { scanSkillContent } from '../security/skillSecurityScanner.js';
 
 // ============================================================================
 // Constants
@@ -101,10 +102,22 @@ export async function createDraftSkill(
     return { success: false, error: validationError };
   }
 
+  // Default to 'general' category if none provided — every skill
+  // must live inside a category directory to maintain a clean
+  // skills/<category>/<skill>/ structure.
+  const effectiveCategory = category || 'general';
+
+  // Security scan — block dangerous drafts before they are written
+  const scanResult = scanSkillContent(content, name);
+  if (scanResult.verdict === 'dangerous') {
+    return {
+      success: false,
+      error: `Security scan blocked: ${scanResult.findings.map(f => f.description).join('; ')}`,
+    };
+  }
+
   // Resolve draft directory path
-  const skillDir = category
-    ? path.join(DRAFT_SKILLS_DIR, category, name)
-    : path.join(DRAFT_SKILLS_DIR, name);
+  const skillDir = path.join(DRAFT_SKILLS_DIR, effectiveCategory, name);
 
   // Check if already exists
   try {
@@ -241,6 +254,21 @@ export async function promoteDraftSkill(name: string): Promise<DraftSkillResult>
   try {
     await fs.mkdir(path.dirname(targetDir), { recursive: true });
     await fs.rename(draftDir, targetDir);
+
+    // Ensure the category directory has a DESCRIPTION.md
+    if (category) {
+      const descPath = path.join(SKILLS_DIR, category, 'DESCRIPTION.md');
+      try {
+        await fs.access(descPath);
+      } catch {
+        // Not found — create a minimal description
+        const humanName = category
+          .split('-')
+          .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(' ');
+        await atomicWriteText(descPath, `# ${humanName}\n\nSkills in the "${category}" category.\n`);
+      }
+    }
 
     return {
       success: true,

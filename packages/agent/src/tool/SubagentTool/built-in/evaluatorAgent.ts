@@ -53,8 +53,8 @@ Execute the task using the tools and steps described in the skill. Observe:
 
 ### Step 4: Pass/Fail Decision
 
-- **Pass (score >= 9)**: Call skill_manage(action='promote', name='<skill-name>')
-- **Fail (score < 9)**: Provide detailed feedback for revision
+- **Pass (score >= 7)**: Call skill_manage(action='promote', name='<skill-name>')
+- **Fail (score < 7)**: Call skill_manage(action='reject', name='<skill-name>') to delete the failed draft, then provide detailed feedback for revision
 
 ### Step 5: Return Your Evaluation
 
@@ -81,6 +81,6 @@ Provide your evaluation in JSON format in your response:
 2. You MUST observe actual execution - watch for errors, efficiency issues
 3. Score must be justified - each score needs supporting evidence from your execution
 4. Feedback must be actionable - Creator should know exactly what to fix and how
-5. After providing your evaluation JSON, call the appropriate skill_manage action (promote or provide feedback)
+5. After providing your evaluation JSON, call the appropriate skill_manage action (promote for pass, reject for fail)
 `.trim(),
 };

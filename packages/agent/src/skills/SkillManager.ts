@@ -33,6 +33,15 @@ import os from 'node:os';
 import yaml from 'yaml';
 import { homedir } from 'node:os';
 import { createDraftSkill, promoteDraftSkill, rejectDraftSkill } from './SkillDraftManager.js';
+import {
+  recordSkillCreate,
+  recordSkillPatch,
+  recordSkillDelete,
+  markAgentCreated,
+  isAgentCreated,
+  type SkillProvenance,
+} from './skillUsage.js';
+import { scanSkillContent, shouldAllowSkill } from '../security/skillSecurityScanner.js';
 
 // ============================================================================
 // Constants
@@ -204,6 +213,35 @@ function resolveSkillDir(name: string, category?: string): string {
     return path.join(SKILLS_DIR, category, name);
   }
   return path.join(SKILLS_DIR, name);
+}
+
+/**
+ * Ensure a category directory has a DESCRIPTION.md file.
+ * If the file does not exist, create a minimal one from the
+ * category name. If it exists, leave it untouched (user may
+ * have customised it).
+ */
+async function ensureCategoryDescription(category: string): Promise<void> {
+  if (!category) return;
+  const catDir = path.join(SKILLS_DIR, category);
+  const descPath = path.join(catDir, 'DESCRIPTION.md');
+  try {
+    await fs.access(descPath);
+    // Already exists — don't overwrite
+    return;
+  } catch {
+    // Not found — create a minimal description
+    const humanName = category
+      .split('-')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+    const content = `# ${humanName}\n\nSkills in the "${category}" category.\n`;
+    try {
+      await atomicWriteText(descPath, content);
+    } catch {
+      // Best-effort — failure to write DESCRIPTION.md is non-critical
+    }
+  }
 }
 
 // ============================================================================
@@ -474,8 +512,13 @@ async function createSkill(name: string, content: string, category?: string): Pr
   let err = validateName(name);
   if (err) return { success: false, message: '', error: err };
 
+  // Default to 'general' category if none provided — every skill
+  // must live inside a category directory to maintain a clean
+  // skills/<category>/<skill>/ structure.
+  const effectiveCategory = category || 'general';
+
   // Validate category
-  err = validateCategory(category);
+  err = validateCategory(effectiveCategory);
   if (err) return { success: false, message: '', error: err };
 
   // Validate content
@@ -484,6 +527,17 @@ async function createSkill(name: string, content: string, category?: string): Pr
 
   err = validateContentSize(content);
   if (err) return { success: false, message: '', error: err };
+
+  // Security scan — block dangerous skills before they are written
+  const scanResult = scanSkillContent(content, name);
+  const allowed = shouldAllowSkill(scanResult.verdict, 'user');
+  if (allowed === false) {
+    return {
+      success: false,
+      message: '',
+      error: `Security scan blocked skill creation: ${scanResult.findings.map(f => f.description).join('; ')}`,
+    };
+  }
 
   // Check for name collisions
   const existing = await findSkill(name);
@@ -496,7 +550,7 @@ async function createSkill(name: string, content: string, category?: string): Pr
   }
 
   // Create the skill directory
-  const skillDir = resolveSkillDir(name, category);
+  const skillDir = resolveSkillDir(name, effectiveCategory);
   await fs.mkdir(skillDir, { recursive: true });
 
   // Write SKILL.md atomically
@@ -517,15 +571,19 @@ async function createSkill(name: string, content: string, category?: string): Pr
     };
   }
 
+  // Ensure the category directory has a DESCRIPTION.md
+  await ensureCategoryDescription(effectiveCategory);
+
+  // Record usage telemetry
+  await recordSkillCreate(name, 'user');
+
   const result: SkillResult = {
     success: true,
-    message: `Skill '${name}' created.`,
+    message: `Skill '${name}' created in category '${effectiveCategory}'.`,
     path: path.relative(SKILLS_DIR, skillDir),
     skill_md: skillMd,
+    category: effectiveCategory,
   };
-  if (category) {
-    result.category = category;
-  }
   result.hint = `To add reference files, templates, or scripts, use skill_manage(action='write_file', name='${name}', file_path='references/example.md', file_content='...')`;
 
   return result;
@@ -615,6 +673,9 @@ async function editSkill(name: string, content?: string, oldString?: string, new
       error: `Failed to write SKILL.md: ${e}`,
     };
   }
+
+  // Record patch telemetry
+  await recordSkillPatch(name);
 
   return {
     success: true,
@@ -725,6 +786,9 @@ async function patchSkill(
     return { success: false, message: '', error: `Failed to write: ${e}` };
   }
 
+  // Record patch telemetry
+  await recordSkillPatch(name);
+
   return {
     success: true,
     message: `Patched ${label || 'SKILL.md'} in skill '${name}' (${matchCount} replacement${matchCount > 1 ? 's' : ''}).`,
@@ -757,6 +821,9 @@ async function deleteSkill(name: string): Promise<SkillResult> {
       // Ignore
     }
   }
+
+  // Record deletion in usage telemetry
+  await recordSkillDelete(name);
 
   return {
     success: true,
@@ -912,7 +979,7 @@ async function removeFile(name: string, filePath: string): Promise<SkillResult> 
 // ============================================================================
 
 export interface SkillManageParams {
-  action: 'create' | 'patch' | 'edit' | 'delete' | 'write_file' | 'remove_file' | 'draft' | 'promote' | 'reject' | 'list';
+  action: 'create' | 'patch' | 'edit' | 'delete' | 'write_file' | 'remove_file' | 'draft' | 'promote' | 'reject' | 'list' | 'pin' | 'unpin';
   // For `list`, name is ignored. For all other actions it is required; the
   // Zod schema on the tool side enforces that.
   name?: string;
@@ -1014,6 +1081,10 @@ export async function skillManage(params: SkillManageParams): Promise<SkillResul
     case 'promote':
       {
         const promoteResult = await promoteDraftSkill(name);
+        if (promoteResult.success) {
+          // Skills promoted through self-improvement are agent-created
+          await recordSkillCreate(name, 'agent');
+        }
         result = {
           success: promoteResult.success,
           message: promoteResult.success ? `Draft skill '${name}' promoted to ${promoteResult.path}` : '',
@@ -1034,8 +1105,30 @@ export async function skillManage(params: SkillManageParams): Promise<SkillResul
       }
       break;
 
+    case 'pin':
+      {
+        const { pinSkill } = await import('./skillUsage.js');
+        await pinSkill(name);
+        result = {
+          success: true,
+          message: `Skill '${name}' pinned. It will not be auto-archived or consolidated.`,
+        };
+      }
+      break;
+
+    case 'unpin':
+      {
+        const { unpinSkill } = await import('./skillUsage.js');
+        await unpinSkill(name);
+        result = {
+          success: true,
+          message: `Skill '${name}' unpinned.`,
+        };
+      }
+      break;
+
     default:
-      result = { success: false, message: '', error: `Unknown action '${action}'. Use: create, edit, patch, delete, write_file, remove_file, draft, promote, reject, list` };
+      result = { success: false, message: '', error: `Unknown action '${action}'. Use: create, edit, patch, delete, write_file, remove_file, draft, promote, reject, list, pin, unpin` };
   }
 
   // Note: In hermes-agent, this calls clear_skills_system_prompt_cache().

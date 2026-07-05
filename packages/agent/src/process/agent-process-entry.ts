@@ -62,7 +62,6 @@ import { isModelLikelyMultimodal } from '../llm/multimodal-detection.js';
 import { detectModelCapability } from '../llm/model-capability-cache.js';
 import type { ProbeConfig } from '../llm/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
-import { setConductorToolProvider } from '../tool/builtin.js';
 import type { ToolExecutor } from '../tool/registry.js';
 
 // Polyfill globalThis.crypto for Node.js
@@ -193,6 +192,10 @@ interface ChatStartMessage {
      * interagent `minimal` mode to restrict the target agent to Read/Grep/Glob.
      */
     allowedTools?: string[];
+    /** Conductor mode — inject canvas tools + prompt overlay for this turn. */
+    conductorMode?: boolean;
+    /** Conductor canvas ID bound to the session (required when conductorMode is true). */
+    conductorCanvasId?: string;
   };
 }
 
@@ -320,15 +323,28 @@ export function getPendingInteragentCall(id: string): PendingInteragentCall | un
   return pendingInteragentCalls.get(id);
 }
 
-// Helper: IPC request for conductor executor
+// Helper: IPC request for conductor executor.
+//
+// This function is assigned to ToolUseContext.ipcRequest, so its signature
+// MUST match the ipcRequest contract: (channel, payload, options) => Promise.
+// The `channel` is always 'conductor:executor:rpc' (set by ipc-request.ts),
+// and `payload` is { action, payload } — the inner action + its payload.
+//
+// We unwrap the payload and send the RPC message with the action at the
+// top level so ConductorExecutorProxy.execute() can switch on it.
 function conductorIpcRequest<T = unknown>(
-  action: string,
+  channel: string,
   payload: unknown,
   options?: { timeout?: number }
 ): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
   return new Promise((resolve, reject) => {
     const requestId = crypto.randomUUID();
     const timeout = options?.timeout || 30000;
+
+    // Unwrap { action, payload } from the ipc-request.ts helper.
+    const outerPayload = payload as { action?: string; payload?: unknown } | undefined;
+    const action = outerPayload?.action ?? channel;
+    const innerPayload = outerPayload?.payload ?? payload;
 
     pendingIpcRequests.set(requestId, {
       resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
@@ -339,8 +355,9 @@ function conductorIpcRequest<T = unknown>(
       type: 'conductor:executor:rpc',
       requestId,
       action,
-      payload,
+      payload: innerPayload,
     });
+    console.error(`[RPC-DEBUG] worker→server: requestId=${requestId}, action=${action}`);
 
     setTimeout(() => {
       if (pendingIpcRequests.has(requestId)) {
@@ -1636,6 +1653,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       displayContent: msg.options?.displayContent,
       effort: msg.options?.effort,
       allowedTools: msg.options?.allowedTools,
+      conductorMode: msg.options?.conductorMode ? true : undefined,
+      conductorCanvasId: msg.options?.conductorCanvasId,
+      conductorIpc: msg.options?.conductorMode
+        ? { sendToMain, ipcRequest: conductorIpcRequest }
+        : undefined,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
@@ -2701,6 +2723,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             result?: unknown;
             error?: { code: string; message: string };
           };
+          console.error(`[RPC-DEBUG] worker received response: requestId=${requestId}, success=${success}`);
           const pending = pendingIpcRequests.get(requestId);
           if (pending) {
             pendingIpcRequests.delete(requestId);
@@ -2760,14 +2783,12 @@ async function main(): Promise<void> {
       '../prompts/PromptSystem.js'
     );
     const conductor = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor') as {
-      CANVAS_ORCHESTRATOR_TOOLS: Tool[];
-      getCanvasOrchestratorExecutors: () => Record<string, ToolExecutor>;
       registerConductor: typeof import('@duya/conductor')['registerConductor'];
     };
-    setConductorToolProvider({
-      CANVAS_ORCHESTRATOR_TOOLS: conductor.CANVAS_ORCHESTRATOR_TOOLS,
-      getCanvasOrchestratorExecutors: conductor.getCanvasOrchestratorExecutors,
-    });
+    // Note: canvas tools now live in packages/agent/src/tool/CanvasConductor/
+    // and are registered per-turn by createBuiltinRegistry when
+    // ChatOptions.conductorMode is true. We only keep the conductor prompt
+    // system registration here for the standalone conductor agent path.
     conductor.registerConductor({
       prompt: {
         registerPromptSystem: (name, factory) => {
