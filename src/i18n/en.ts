@@ -817,6 +817,8 @@ const en = {
   'fileTree.noFiles': 'No files found',
   'fileTree.selectFolder': 'Select a project folder to view files',
 
+  'filePreview.frontmatterTitle': 'Metadata',
+
   'project.selectFolder': 'Select Folder',
   'project.recentProjects': 'Recent Projects',
   'project.noRecent': 'No recent projects',

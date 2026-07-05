@@ -77,8 +77,9 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       const zoom = canvasTransformState.zoom || 1;
       const dx = (r.lastMouseX - r.startMouseX) / zoom;
       const dy = (r.lastMouseY - r.startMouseY) / zoom;
-      const dw = Math.round(dx / GRID_PX);
-      const dh = Math.round(dy / GRID_PX);
+      // Use float grid units for smooth live resize; snap on commit.
+      const dw = dx / GRID_PX;
+      const dh = dy / GRID_PX;
 
       let newW = r.origW;
       let newH = r.origH;
@@ -149,6 +150,18 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       if (r.rafId !== null) {
         window.cancelAnimationFrame(r.rafId);
         flushResizeFrame();
+      }
+      // Snap final size/position to whole grid units on commit so the
+      // layout stays tidy after a smooth live resize.
+      const el = useConductorStore.getState().elements.find((e) => e.id === element.id);
+      if (el) {
+        const snappedW = Math.max(MIN_SIZE_GRID, Math.round(el.position.w));
+        const snappedH = Math.max(MIN_SIZE_GRID, Math.round(el.position.h));
+        const snappedX = Math.round(el.position.x);
+        const snappedY = Math.round(el.position.y);
+        updateElement(element.id, {
+          position: { ...el.position, x: snappedX, y: snappedY, w: snappedW, h: snappedH },
+        });
       }
       resizeRef.current = null;
       onPositionChange?.(element.id);

@@ -68,7 +68,7 @@ function emptyPanelState(): PersistedPanelState {
     panelOpen: false,
     panelView: "picker",
     workspaceExpanded: false,
-    workspaceTreeOpen: true,
+    workspaceTreeOpen: false,
   };
 }
 
@@ -112,7 +112,7 @@ function loadPersistedState(sessionKey: string): PersistedPanelState | null {
       panelOpen: !!parsed.panelOpen,
       panelView: parsed.panelView === "picker" ? "picker" : "content",
       workspaceExpanded: parsed.workspaceExpanded === true,
-      workspaceTreeOpen: parsed.workspaceTreeOpen !== false,
+      workspaceTreeOpen: parsed.workspaceTreeOpen === true,
     };
   } catch {
     return null;

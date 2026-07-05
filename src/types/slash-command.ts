@@ -11,7 +11,7 @@ export type PopoverItemKind =
   | 'mode'              // toggle a mode (plan, research)
   | 'conductor_toggle'; // toggle Conductor canvas injection (independent of modes)
 
-export type PopoverItemGroup = 'settings' | 'mode' | 'skills';
+export type PopoverItemGroup = 'attachments' | 'mode' | 'settings' | 'skills';
 
 export type SettingsSubmenu = 'thinking' | 'style' | 'mcp';
 

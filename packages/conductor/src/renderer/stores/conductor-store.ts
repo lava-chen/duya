@@ -427,7 +427,37 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         });
       }
 
-      // element.create -> append element from resultPatch
+      // element.batch_create -> append ALL elements, then focus on the
+      // first one. Without this branch, batch_create patches were emitted
+      // by db-service but silently dropped here, so the canvas only
+      // updated on the next full snapshot reload.
+      if (Array.isArray(resultPatch?.elements) && resultPatch.elements.length > 0) {
+        const incoming = resultPatch.elements as CanvasElement[];
+        const { elements: existing } = get();
+        const existingIds = new Set(existing.map((e) => e.id));
+        const fresh = incoming.filter((e) => !existingIds.has(e.id));
+        if (fresh.length > 0) {
+          set({
+            elements: [...existing, ...fresh.map(normalizeElement)],
+            canUndo: true,
+            canRedo: false,
+            uiStatus: "idle",
+            syncStatusText: "",
+          });
+          // Auto-focus on the first newly created element so the user
+          // sees the agent's work appear in view.
+          if (patch.actor === 'agent') {
+            const focusId = fresh[0].id;
+            setTimeout(() => {
+              get().centerOnElement(focusId);
+            }, 0);
+          }
+        }
+        return;
+      }
+
+      // element.create / connector.create / element.create_native ->
+      // append single element from resultPatch.element
       if (resultPatch?.element && typeof resultPatch.element === "object") {
         const incoming = resultPatch.element as CanvasElement;
         const { elements } = get();
@@ -466,10 +496,19 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         return;
       }
 
-      // element.move
-      if (patch.elementId && resultPatch?.position && typeof resultPatch.position === "object" && !patch.widgetId) {
+      // element.move / element.update (position) — read position from
+      // either top-level (alignElement) or changes.position (updateElement).
+      // The old handler only checked top-level, so canvas_move_element and
+      // canvas_resize_element patches were silently dropped.
+      const positionPatch =
+        (resultPatch?.position && typeof resultPatch.position === "object"
+          ? resultPatch.position
+          : (resultPatch?.changes as Record<string, unknown> | undefined)?.position) as
+          | Partial<CanvasPosition>
+          | undefined;
+      if (patch.elementId && positionPatch && !patch.widgetId) {
         get().updateElement(patch.elementId as string, {
-          position: resultPatch.position as CanvasElement["position"],
+          position: normalizePosition(positionPatch),
           updatedAt: Date.now(),
         });
         set({
@@ -481,14 +520,38 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         return;
       }
 
-      // element.update
-      if (patch.elementId && (resultPatch?.config !== undefined || resultPatch?.vizSpec !== undefined)) {
+      // element.update_content / element.update (config) — read config
+      // from either top-level or changes.config. The old handler only
+      // checked top-level, so canvas_fill_content and canvas_style_element
+      // patches were silently dropped.
+      const configPatch =
+        (resultPatch?.config !== undefined
+          ? resultPatch.config
+          : (resultPatch?.changes as Record<string, unknown> | undefined)?.config) as
+          | Record<string, unknown>
+          | undefined;
+      const vizSpecPatch =
+        (resultPatch?.vizSpec !== undefined
+          ? resultPatch.vizSpec
+          : (resultPatch?.changes as Record<string, unknown> | undefined)?.vizSpec) as
+          | Record<string, unknown>
+          | undefined;
+      const sourceCodePatch =
+        (resultPatch?.sourceCode !== undefined
+          ? resultPatch.sourceCode
+          : (resultPatch?.changes as Record<string, unknown> | undefined)?.sourceCode) as
+          | string
+          | undefined;
+      if (patch.elementId && (configPatch !== undefined || vizSpecPatch !== undefined || sourceCodePatch !== undefined)) {
         const elementPatch: Partial<CanvasElement> = { updatedAt: Date.now() };
-        if (resultPatch?.config !== undefined) {
-          elementPatch.config = resultPatch.config as Record<string, unknown>;
+        if (configPatch !== undefined) {
+          elementPatch.config = configPatch as Record<string, unknown>;
         }
-        if (resultPatch?.vizSpec !== undefined) {
-          elementPatch.vizSpec = resultPatch.vizSpec as any;
+        if (vizSpecPatch !== undefined) {
+          elementPatch.vizSpec = vizSpecPatch as any;
+        }
+        if (sourceCodePatch !== undefined) {
+          (elementPatch as Record<string, unknown>).sourceCode = sourceCodePatch;
         }
         get().updateElement(patch.elementId as string, elementPatch);
         set({

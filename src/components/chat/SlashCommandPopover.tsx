@@ -267,9 +267,8 @@ export function SlashCommandPopover({
   // -----------------------------------------------------------------------
   // Row renderer
   // -----------------------------------------------------------------------
-  const renderRow = (item: PopoverItem, idx: number, isActive: boolean) => {
+  const renderRow = (item: PopoverItem, globalIdx: number, isSelected: boolean) => {
     const IconComponent = item.icon ?? (item.group === 'skills' ? CubeIcon : undefined);
-    const isSelected = isActive;
 
     // For mode items, show a check if active.
     // For settings_submenu items, show a caret-right.
@@ -292,14 +291,14 @@ export function SlashCommandPopover({
 
     return (
       <div
-        key={`${idx}-${item.value}`}
+        key={`${globalIdx}-${item.value}`}
         role="option"
         aria-selected={isSelected}
         onClick={() => handleItemClick(item)}
         onMouseEnter={() => {
           // Mark as mouse-originated so the scroll effect won't fight the cursor.
           lastSelectSource.current = 'mouse';
-          onSetSelectedIndex(idx);
+          onSetSelectedIndex(globalIdx);
         }}
         onMouseMove={() => {
           // If the pointer moves over a different row without a mouseenter
@@ -402,7 +401,7 @@ export function SlashCommandPopover({
       >
         {label}
       </div>
-      {items.map((item, idx) => renderRow(item, idx, startIndex + idx === selectedIndex))}
+      {items.map((item, idx) => renderRow(item, startIndex + idx, startIndex + idx === selectedIndex))}
     </section>
   );
 
@@ -608,23 +607,28 @@ export function SlashCommandPopover({
   if (allDisplayedItems.length === 0 && !subView) return null;
 
   // -----------------------------------------------------------------------
-  // Partition items into 3 groups
+  // Partition items into groups
   // -----------------------------------------------------------------------
   // When filtering (typing after /), static settings/mode items are always
   // shown; only skill/action items are filtered.
-  const settingsGroup = filteredItems.filter(
-    (item) => item.group === 'settings' || item.kind === 'settings_action' || item.kind === 'settings_submenu',
+  const attachmentsGroup = filteredItems.filter(
+    (item) => item.group === 'attachments',
   );
   const modeGroup = filteredItems.filter(
     (item) => item.group === 'mode' || item.kind === 'mode',
+  );
+  const settingsGroup = filteredItems.filter(
+    (item) => item.group === 'settings' || item.kind === 'settings_action' || item.kind === 'settings_submenu',
   );
   const skillGroup = filteredItems.filter(
     (item) => item.group === 'skills' && item.kind !== 'settings_action',
   );
 
-  // -----------------------------------------------------------------------
-  // Render
-  // -----------------------------------------------------------------------
+  // Visual order matches allDisplayedItems order: attachments → mode → settings → skills.
+  const attachmentsEnd = attachmentsGroup.length;
+  const modeEnd = attachmentsEnd + modeGroup.length;
+  const settingsEnd = modeEnd + settingsGroup.length;
+
   return (
     <div
       ref={popoverRef}
@@ -652,9 +656,11 @@ export function SlashCommandPopover({
           renderSubView()
         ) : (
           <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-            {renderSection('Mode', modeGroup, 0)}
-            {renderSection('Settings', settingsGroup, modeGroup.length)}
-            {renderSection('Skills', skillGroup, modeGroup.length + settingsGroup.length)}
+            {attachmentsGroup.map((item, idx) =>
+              renderRow(item, idx, idx === selectedIndex))}
+            {renderSection('Mode', modeGroup, attachmentsEnd)}
+            {renderSection('Settings', settingsGroup, modeEnd)}
+            {renderSection('Skills', skillGroup, settingsEnd)}
           </div>
         )}
       </div>

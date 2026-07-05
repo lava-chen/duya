@@ -125,18 +125,23 @@ export function useSlashCommands(opts: {
 
   const { t, locale } = useTranslation();
 
+  // Attachment item (rendered standalone at the top of the popover).
+  const addFilesItem = useMemo<PopoverItem>(() => {
+    const isZh = locale === 'zh';
+    return {
+      label: isZh ? '添加附件' : 'Add files',
+      value: '__add_files',
+      description: isZh ? '文件、图片' : 'Files or photos',
+      icon: Paperclip,
+      kind: 'settings_action' as const,
+      group: 'attachments' as const,
+    };
+  }, [locale]);
+
   // Static settings items (not slash commands, not filterable).
   const settingsItems = useMemo<PopoverItem[]>(() => {
     const isZh = locale === 'zh';
     return [
-      {
-        label: isZh ? '添加附件' : 'Add files',
-        value: '__add_files',
-        description: isZh ? '文件、图片' : 'Files or photos',
-        icon: Paperclip,
-        kind: 'settings_action' as const,
-        group: 'settings' as const,
-      },
       {
         label: isZh ? '思考程度' : 'Thinking',
         value: '__thinking',
@@ -267,7 +272,7 @@ export function useSlashCommands(opts: {
 
   // Fetch all items: settings + mode + registry commands + dynamic skills.
   const fetchSkills = useCallback(async () => {
-    const builtIns = [...settingsItems, ...modeItems, ...registryCommands];
+    const builtIns = [addFilesItem, ...modeItems, ...settingsItems, ...registryCommands];
 
     if (!sessionId) {
       return builtIns;
@@ -363,7 +368,7 @@ export function useSlashCommands(opts: {
     setPopoverFilter('');
     setTriggerPos(null);
     setSelectedIndex(0);
-    const builtIns = [...settingsItems, ...modeItems, ...registryCommands];
+    const builtIns = [addFilesItem, ...modeItems, ...settingsItems, ...registryCommands];
     setPopoverItems(builtIns);
     const fullItems = await fetchSkills();
     setPopoverItems(fullItems);

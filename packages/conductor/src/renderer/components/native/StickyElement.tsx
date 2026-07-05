@@ -87,18 +87,29 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
 
   const [editText, setEditText] = useState(text);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // Guards against double-handling when Escape triggers blur during unmount.
+  const exitModeRef = useRef<"save" | "cancel" | null>(null);
 
   useEffect(() => {
     setEditText(text);
   }, [element.id, text]);
 
   useEffect(() => {
-    if (isEditing && editTextareaRef.current) {
-      editTextareaRef.current.focus();
+    if (isEditing) {
+      exitModeRef.current = null;
+      if (editTextareaRef.current) {
+        editTextareaRef.current.focus();
+        // Place caret at end so typing appends rather than prepends.
+        const ta = editTextareaRef.current;
+        const len = ta.value.length;
+        ta.setSelectionRange(len, len);
+      }
     }
   }, [isEditing]);
 
   const save = useCallback(() => {
+    if (exitModeRef.current !== null) return;
+    exitModeRef.current = "save";
     const trimmed = editText.trim();
     if (trimmed !== text) {
       const newConfig = { ...element.config, text: trimmed };
@@ -112,6 +123,8 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   }, [activeCanvasId, editText, element.config, element.id, setEditingElementId, setUiError, text, updateElement]);
 
   const cancel = useCallback(() => {
+    if (exitModeRef.current !== null) return;
+    exitModeRef.current = "cancel";
     setEditText(text);
     setEditingElementId(null);
   }, [setEditingElementId, text]);
@@ -165,7 +178,12 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
         transform: combinedTransform,
       }}
       onMouseDown={(e) => {
-        if (isEditing) e.stopPropagation();
+        if (isEditing) {
+          // Keep focus in the textarea — only a click OUTSIDE the sticky
+          // should blur (and thus auto-save).
+          e.stopPropagation();
+          e.preventDefault();
+        }
       }}
     >
       <div
@@ -182,74 +200,38 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
         }}
       >
       {isEditing ? (
-        <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, width: "100%" }}>
-          <textarea
-            ref={editTextareaRef}
-            value={editText}
-            onChange={(e) => setEditText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                e.preventDefault();
-                cancel();
-              }
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                save();
-              }
-            }}
-            style={{
-              flex: 1,
-              width: "100%",
-              resize: "none",
-              border: "none",
-              outline: "none",
-              background: "rgba(0,0,0,0.04)",
-              borderRadius: 4,
-              padding: "6px 8px",
-              fontSize: `${effectiveFontSize}px`,
-              color: theme.text,
-              lineHeight: 1.55,
-              fontFamily: "inherit",
-              whiteSpace: "pre-wrap",
-              overflowY: "auto",
-            }}
-            placeholder="Write markdown..."
-          />
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 6, flexShrink: 0 }}>
-            <button
-              type="button"
-              onClick={cancel}
-              style={{
-                padding: "2px 10px",
-                fontSize: 11,
-                borderRadius: 4,
-                border: "none",
-                background: "rgba(0,0,0,0.08)",
-                color: theme.text,
-                cursor: "pointer",
-                opacity: 0.7,
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={save}
-              style={{
-                padding: "2px 10px",
-                fontSize: 11,
-                borderRadius: 4,
-                border: "none",
-                background: "rgba(0,0,0,0.16)",
-                color: theme.text,
-                cursor: "pointer",
-                fontWeight: 600,
-              }}
-            >
-              Save
-            </button>
-          </div>
-        </div>
+        <textarea
+          ref={editTextareaRef}
+          value={editText}
+          onChange={(e) => setEditText(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              save();
+            }
+          }}
+          style={{
+            flex: 1,
+            width: "100%",
+            resize: "none",
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            padding: 0,
+            fontSize: `${effectiveFontSize}px`,
+            color: theme.text,
+            lineHeight: 1.55,
+            fontFamily: "inherit",
+            whiteSpace: "pre-wrap",
+            overflowY: "auto",
+          }}
+          placeholder="Write markdown…"
+        />
       ) : (
         <>
           <div
