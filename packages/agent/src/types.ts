@@ -409,6 +409,22 @@ export interface ChatOptions {
    * Mapped to `thinking.budget_tokens` by the Anthropic LLM client.
    */
   effort?: string;
+  /**
+   * Conductor mode — per-turn trusted override. When true, the agent
+   * registers the 5 canvas conductor tools (canvas_move_element /
+   * canvas_resize_element / canvas_fill_content /
+   * canvas_style_element / canvas_capture) and injects the conductor
+   * prompt overlay into the system prompt. The canvasId is bound
+   * separately via conductorCanvasId.
+   */
+  conductorMode?: boolean;
+  /**
+   * Conductor canvas ID — durable binding from the session row.
+   * Injected into ToolUseContext.conductorCanvasId so canvas tools
+   * know which canvas to operate on. Only effective when
+   * conductorMode is true.
+   */
+  conductorCanvasId?: string;
 }
 
 // 会话信息
@@ -501,6 +517,34 @@ export interface ToolUseContext {
     payload: unknown,
     options?: { timeout?: number }
   ) => Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }>;
+  /**
+   * Conductor mode: bound canvas ID. Injected when ChatOptions.conductorMode
+   * is true. Canvas tools read this instead of receiving canvasId from LLM
+   * input, so the model never needs to track canvas state.
+   */
+  conductorCanvasId?: string;
+  /**
+   * Timestamp (ms) of the last successful canvas_list_elements call.
+   * Write tools use this to enforce a "list before mutate" workflow.
+   */
+  lastListElementsTime?: number;
+  /**
+   * Ref name → elementId map populated by canvas_batch_create.
+   * Allows later tools to reference elements by semantic names like "login"
+   * instead of memorizing UUIDs.
+   */
+  refMap?: Map<string, string>;
+  /**
+   * Recent widget/dynamic style signatures used for anti-slop diversity.
+   * Canvas tools append to this history so the conductor prompt can nudge
+   * the model toward different color palettes, fonts, and layouts.
+   */
+  widgetStyleHistory?: Array<{
+    backgroundColor?: string;
+    textColor?: string;
+    fontFamily?: string;
+    layoutType?: string;
+  }>;
 }
 
 /** Progress event emitted by a sub-agent during execution */

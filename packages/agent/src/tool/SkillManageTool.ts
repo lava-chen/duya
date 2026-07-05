@@ -11,7 +11,7 @@ import type { ToolExecutor } from './registry.js';
 import { skillManage, type SkillManageParams } from '../skills/SkillManager.js';
 
 const inputSchema = z.object({
-  action: z.enum(['create', 'patch', 'edit', 'delete', 'write_file', 'remove_file', 'draft', 'promote', 'reject', 'list']).describe('The action to perform.'),
+  action: z.enum(['create', 'patch', 'edit', 'delete', 'write_file', 'remove_file', 'draft', 'promote', 'reject', 'list', 'pin', 'unpin']).describe('The action to perform.'),
   name: z.string().optional().describe('Skill name (lowercase, hyphens/underscores, max 64 chars). Required for create/patch/edit/delete/write_file/remove_file/draft/promote/reject. Ignored for list.'),
   content: z.string().optional().describe('Full SKILL.md content (YAML frontmatter + markdown body). Required for \'create\' and \'draft\'. Optional for \'edit\' when doing full rewrite.'),
   old_string: z.string().optional().describe('Text to find in the file (required for \'patch\', optional for \'edit\'). When used with \'edit\', performs patch-style edit on SKILL.md.'),
@@ -60,7 +60,7 @@ Good skills: trigger conditions, numbered steps with exact commands, pitfalls se
     properties: {
       action: {
         type: 'string',
-        enum: ['create', 'patch', 'edit', 'delete', 'write_file', 'remove_file', 'draft', 'promote', 'reject', 'list'],
+        enum: ['create', 'patch', 'edit', 'delete', 'write_file', 'remove_file', 'draft', 'promote', 'reject', 'list', 'pin', 'unpin'],
         description: 'The action to perform.',
       },
       name: {

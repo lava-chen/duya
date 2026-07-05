@@ -11,6 +11,7 @@ import { getPrompt } from './prompt.js';
 import { getSkillRegistry } from '../../skills/registry.js';
 import type { SkillMetadata } from '../../skills/types.js';
 import type { PromptSkill } from '../../skills/types.js';
+import { recordSkillUse } from '../../skills/skillUsage.js';
 
 const inputSchema = z.object({
   skill: z.string().describe('The skill name (e.g., "pdf", "commit", or "mcp__server__skill")'),
@@ -134,6 +135,9 @@ export class SkillTool implements Tool, ToolExecutor {
     // Get skill prompt content
     const content = await skill.getPromptForCommand(args || '', context);
 
+    // Record usage telemetry (fire-and-forget)
+    void recordSkillUse(skillName);
+
     // Return result with skill content included
     return {
       id: crypto.randomUUID(),
@@ -174,6 +178,9 @@ export class SkillTool implements Tool, ToolExecutor {
 
     const content = await skill.getPromptForCommand(args || '', context);
     const agentId = crypto.randomUUID();
+
+    // Record usage telemetry (fire-and-forget)
+    void recordSkillUse(skillName);
 
     return {
       id: crypto.randomUUID(),

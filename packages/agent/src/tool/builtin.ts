@@ -47,6 +47,7 @@ import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.j
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { runVisualSelfReview } from './WidgetRenderer/runVisualSelfReview.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
+import { registerCanvasConductorTools } from './CanvasConductor/index.js';
 import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
 import { ResearchMemory } from '../research-memory/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
@@ -96,6 +97,7 @@ export function createBuiltinRegistry(
     // (not the manager itself) so the tool always sees the latest
     // connection state without re-registration.
     mcpManagerProvider?: () => import('../mcp/index.js').MCPManager | undefined;
+    conductorMode?: boolean;
   }
 ): ToolRegistry {
   const registry = new ToolRegistry();
@@ -297,15 +299,19 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
     }
   );
 
-  // Canvas Orchestrator tools - generic element operations.
-  if (conductorToolProvider) {
-    const orchestratorExecutors = conductorToolProvider.getCanvasOrchestratorExecutors();
-    for (const tool of conductorToolProvider.CANVAS_ORCHESTRATOR_TOOLS) {
-      const executor = orchestratorExecutors[tool.name];
-      if (executor) {
-        registry.register(tool, executor);
-      }
-    }
+  // Conductor canvas tools (10 tools) — only registered when conductor mode is on.
+  // Legacy CANVAS_ORCHESTRATOR_TOOLS (8 tools, including group_create /
+  // canvas_get_snapshot / canvas_create_element) were removed by plan 221:
+  // they route through the deprecated conductor-service path and time out.
+  // The new 10-tool set uses the conductor:executor:rpc bridge wired in Phase 3.
+  if (options?.conductorMode) {
+    registerCanvasConductorTools(registry);
+    const canvasToolCount = registry.getAllTools().filter((t) => t.name.startsWith('canvas_')).length;
+    // eslint-disable-next-line no-console
+    console.error(`[builtin] conductorMode=true, registered ${canvasToolCount} canvas tools. Total tools: ${registry.getAllTools().length}`);
+  } else {
+    // eslint-disable-next-line no-console
+    console.error(`[builtin] conductorMode=false, canvas tools NOT registered. Total tools: ${registry.getAllTools().length}`);
   }
 
   return registry;

@@ -40,12 +40,15 @@ import { compactHistory } from '../compact/compact.js';
 import type { CompactResult, TokenEstimation } from '../compact/compact.js';
 import { estimateContextTokens, needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD } from '../compact/compact.js';
 import { microCleanupMessages } from '../compact/microCompactCleanup.js';
+import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
 import { createLLMClient, createRetryableLLMClient, inferProvider, isMiniMaxURL, LLMClientWrapper } from '../llm/index.js';
 import type { LLMClient, RetryConfig } from '../llm/index.js';
 import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapter.js';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
+import { buildConductorPrompt } from '../tool/CanvasConductor/prompt.js';
+import type { WidgetStyleHistory } from '../tool/CanvasConductor/prompt.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
 import { dequeueAllMatching, enqueuePendingNotification } from '../queue/index.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
@@ -127,6 +130,7 @@ function collectRecentImageAttachments(messages: Message[]): Array<{
 // module (e.g. `new SelfImprover(...)` in the constructor and
 // `getDefaultSelfImprover()` in the integration wiring below).
 import { SelfImprover, getDefaultSelfImprover } from '../self-improver/SelfImprover.js';
+import { SkillCurator, getDefaultCurator } from '../self-improver/SkillCurator.js';
 
 // Mode System imports (the class is the only consumer in this file;
 // the public re-exports live in src/index.ts).
@@ -230,12 +234,26 @@ export class duyaAgent {
   private permissionMode: PermissionMode = 'default'; // Permission mode for tool execution
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
   private selfImprover: SelfImprover; // Self-improvement tracker for skill creation
+  private curator: SkillCurator; // Periodic skill consolidation curator
   private visionClient?: LLMClient; // Optional vision model client
   private visionConfig?: import('../types.js').VisionConfig; // Vision model configuration
   private blockedDomains: string[] = [];
   private researchMemoryRuntime: ResearchMemory;
   private mcpManager: MCPManager | null = null;
   private _activeMode: BaseMode | null = null;
+  /**
+   * Rolling history of recent widget/dynamic style signatures.
+   * Canvas tools push to this via ToolUseContext so the conductor
+   * prompt can nudge the model away from repeating the same palette
+   * or layout.
+   */
+  private widgetStyleHistory: WidgetStyleHistory = [];
+  /**
+   * System prompt without the conductor overlay. Stored so each turn
+   * can refresh the anti-slop history without rebuilding the entire
+   * prompt system context.
+   */
+  private baseSystemPromptWithoutConductor?: string;
   /**
    * Phase 2: optional ProviderRuntimeConfig delivered by the main
    * process. The agent currently does not consume it directly (the
@@ -487,6 +505,11 @@ export class duyaAgent {
     // from previous queries. Errors are absorbed inside `init`.
     void this.selfImprover.init();
 
+    // Skill Curator — periodic umbrella consolidation.
+    // Uses a global singleton so the 7-day interval persists
+    // across DuyaAgent instances (each query creates a new agent).
+    this.curator = getDefaultCurator();
+
     // Store blocked domains for browser tool
     this.blockedDomains = options.blockedDomains ?? [];
     this.researchMemoryRuntime = new ResearchMemory();
@@ -633,6 +656,11 @@ export class duyaAgent {
     // and the main loop.
 
     const { tools, registry, agentDefinitions } = await this._resolveTools(options, appliedProfile);
+    // Diagnostic: worker uses console.error for stderr (stdout is JSON-RPC).
+    // eslint-disable-next-line no-console
+    console.error(`[Agent-Process] streamChat tools (${tools.length}): conductorMode=${options?.conductorMode}, agentProfileId=${options?.agentProfileId}, mode=${options?.mode}, hasCanvasCreate=${tools.some(t => t.name === 'canvas_create_element')}`);
+    // eslint-disable-next-line no-console
+    console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext();
     let messages = this._resolveInitialMessages(prompt, options);
@@ -681,6 +709,12 @@ export class duyaAgent {
     while (!this.abortController.signal.aborted) {
       turnCount++;
       const turnStartTime = Date.now();
+
+      // Refresh the conductor overlay each turn so anti-slop history stays
+      // current as canvas tools add widget/dynamic signatures during the stream.
+      if (options?.conductorMode && this.baseSystemPromptWithoutConductor !== undefined) {
+        systemPromptContent = buildConductorPrompt(this.widgetStyleHistory) + '\n\n' + this.baseSystemPromptWithoutConductor;
+      }
 
       // Only add user message on first turn (original prompt)
       // Subsequent turns are continuations after tool results, not new prompts
@@ -748,6 +782,7 @@ export class duyaAgent {
         abortController: this.abortController,
         getAppState: () => ({}),
         setAppState: () => {},
+        widgetStyleHistory: this.widgetStyleHistory,
         options: {
           recentImageAttachments: collectRecentImageAttachments(messages),
           tools,
@@ -779,6 +814,8 @@ export class duyaAgent {
         requestPermission: options?.requestPermission,
         // IPC for conductor executor communication
         ipcRequest: options?.conductorIpc?.ipcRequest,
+        // Conductor mode: bound canvas ID for canvas tools
+        conductorCanvasId: options?.conductorCanvasId,
       };
 
       const executor = new StreamingToolExecutor(
@@ -849,16 +886,18 @@ export class duyaAgent {
         logger.info(`[Agent] Turn ${turnCount}: Starting LLM stream, messages=${messages.length}, provider=${this.provider}`);
         let llmEventCount = 0;
         logger.info(`[Agent] Turn ${turnCount}: Calling llmClient.streamChat...`);
-        const llmMessages = runtimePromptMessageId
-          ? messages.map((msg) => (
-              msg.id === runtimePromptMessageId
-                ? {
-                    ...msg,
-                    content: prompt as string | MessageContent[],
-                  }
-                : msg
-            ))
-          : messages;
+        const llmMessages = compressHistoricalCanvasToolCalls(
+          runtimePromptMessageId
+            ? messages.map((msg) => (
+                msg.id === runtimePromptMessageId
+                  ? {
+                      ...msg,
+                      content: prompt as string | MessageContent[],
+                    }
+                  : msg
+              ))
+            : messages
+        );
         const streamGenerator = this.llmClient.streamChat(llmMessages, {
           systemPrompt: systemPromptContent,
           tools,
@@ -1022,6 +1061,10 @@ export class duyaAgent {
               `[Agent] Turn ${turnCount}: getRemainingResults completed, toolResultMessageCount=${toolResultMessageCount}`
             );
 
+            // Persist any widget/dynamic style signatures collected by canvas tools
+            // this turn so the next turn's conductor overlay can nudge for diversity.
+            this.widgetStyleHistory = toolUseContext.widgetStyleHistory ?? this.widgetStyleHistory;
+
             // Drain completed background sub-agents and inject their
             // <task-notification> XML envelopes (claude-code protocol).
             // metadata.isTaskNotification lets the renderer hide these
@@ -1086,6 +1129,10 @@ export class duyaAgent {
         // We do this BEFORE the max-turns / done checks so the
         // spawn can race the user-facing done event.
         yield* this._triggerBackgroundReviewWithEvents(validToolNames);
+
+        // Check if the Curator should run (7-day interval).
+        // Fire-and-forget — never blocks the conversation.
+        void this._maybeRunCurator();
 
         // Check max turns limit
         if (turnCount >= maxTurns) {
@@ -1412,6 +1459,7 @@ export class duyaAgent {
           enabledPluginIds,
           wikiAgentEnabled: options?.wikiAgentEnabled,
           mcpManagerProvider: () => this.mcpManager ?? undefined,
+          conductorMode: options?.conductorMode,
         }
       );
     }
@@ -1549,6 +1597,18 @@ export class duyaAgent {
     if (appliedProfile) {
       const identityBlock = buildAgentIdentityBlock(appliedProfile);
       systemPromptContent = identityBlock + '\n\n' + systemPromptContent;
+    }
+
+    // Store the system prompt without the conductor overlay so streamChat
+    // can refresh the anti-slop history each turn without rebuilding the
+    // entire prompt system context.
+    this.baseSystemPromptWithoutConductor = systemPromptContent;
+
+    // Conductor mode overlay — prepended last so it appears first and the
+    // model sees tool instructions and anti-slop history before anything else.
+    if (options?.conductorMode) {
+      systemPromptContent = buildConductorPrompt(this.widgetStyleHistory) + '\n\n' + systemPromptContent;
+      logger.info('Injected conductor mode prompt overlay');
     }
 
     return systemPromptContent;
@@ -1737,6 +1797,7 @@ export class duyaAgent {
         // be replaced at runtime (see `installMCPManager`) and we want
         // the tool to follow that.
         mcpManagerProvider: () => this.mcpManager ?? undefined,
+        conductorMode: options?.conductorMode,
       }
     );
     this.registerMCPTools(modeRegistry);
@@ -1838,6 +1899,25 @@ export class duyaAgent {
       },
       this.workingDirectory
     );
+  }
+
+  /**
+   * Run the Skill Curator if enough time has passed (default 7 days).
+   * Fire-and-forget — never blocks the conversation.
+   *
+   * The Curator performs:
+   *   1. Automatic lifecycle transitions (active → stale → archived)
+   *   2. Cluster detection and auto-archival of unused duplicates
+   */
+  private async _maybeRunCurator(): Promise<void> {
+    try {
+      if (!await this.curator.shouldRun()) return;
+      logger.info('[Curator] Starting periodic skill consolidation');
+      const result = await this.curator.run();
+      logger.info(`[Curator] Completed in ${result.duration.toFixed(1)}s: ${result.summary}`);
+    } catch (err) {
+      logger.error('[Curator] Failed', err instanceof Error ? err : new Error(String(err)));
+    }
   }
 
   /**

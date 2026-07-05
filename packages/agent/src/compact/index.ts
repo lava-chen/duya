@@ -23,5 +23,8 @@ export { PostCompactReinjector, createPostCompactReinjector, type ReinjectorConf
 // Micro cleanup for lightweight tool result pruning
 export { microCleanupMessages } from './microCompactCleanup.js'
 
+// Historical canvas tool-call compression (LLM-facing only)
+export { compressHistoricalCanvasToolCalls } from './canvasHistoryCompress.js'
+
 // Legacy exports from compact.ts for backward compatibility
 export { compactHistory, estimateContextTokens, needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD, type CompactResult, type TokenEstimation } from './compact.js'
