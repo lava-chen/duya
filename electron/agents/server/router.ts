@@ -161,6 +161,14 @@ async function handlePostChat(
     }
 
     // DEBUG: log file attachments received in POST body
+    console.log('[agent-server] chat request body parsed:', {
+      hasPrompt: !!parsed.prompt,
+      optionsKeys: parsed.options ? Object.keys(parsed.options) : [],
+      agentProfileId: parsed.options?.agentProfileId,
+      mode: parsed.options?.mode,
+      conductorMode: parsed.options?.conductorMode,
+      conductorCanvasId: parsed.options?.conductorCanvasId,
+    });
 
     const prompt = parsed.prompt || '';
     const providerConfig = parsed.providerConfig;
@@ -226,7 +234,6 @@ async function handlePostChat(
         }
         if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
           workerDbRequests.set(`rpc:${msg.requestId}`, child);
-          console.error(`[RPC-DEBUG] server→main: requestId=${msg.requestId}, action=${msg.action}`);
           process.send(msg);
         }
       });
@@ -1014,7 +1021,6 @@ async function lazySpawnWorkerForCompact(
     }
     if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
-      console.error(`[RPC-DEBUG] server→main (lazy): requestId=${msg.requestId}, action=${msg.action}`);
       process.send(msg);
     }
   });

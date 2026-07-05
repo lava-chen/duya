@@ -102,7 +102,6 @@ export function spawnAgentServer(): Promise<number> {
       }
 
       if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string') {
-        console.error(`[RPC-DEBUG] main received: requestId=${msg.requestId}, action=${msg.action}, hasProxy=${!!conductorExecutorProxy}`);
         if (!conductorExecutorProxy) {
           if (!child.killed) {
             child.send({
@@ -123,7 +122,6 @@ export function spawnAgentServer(): Promise<number> {
         conductorExecutorProxy
           .execute(request)
           .then((response) => {
-            console.error(`[RPC-DEBUG] main→server response: requestId=${msg.requestId}, success=${response.success}, error=${response.error ? JSON.stringify(response.error) : 'none'}`);
             if (!child.killed) {
               child.send({
                 type: 'conductor:executor:rpc:response',

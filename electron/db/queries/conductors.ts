@@ -477,6 +477,10 @@ export function updateElementVizSpec(elementId: string, vizSpec: Record<string, 
   db().prepare('UPDATE conductor_elements SET viz_spec = ?, updated_at = ? WHERE id = ?').run(vizSpec ? JSON.stringify(vizSpec) : null, now, elementId);
 }
 
+export function updateElementSourceCode(elementId: string, sourceCode: string | null, now: number): void {
+  db().prepare('UPDATE conductor_elements SET source_code = ?, updated_at = ? WHERE id = ?').run(sourceCode, now, elementId);
+}
+
 export function deleteElement(elementId: string): void {
   db().prepare('DELETE FROM conductor_elements WHERE id = ?').run(elementId);
 }

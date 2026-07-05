@@ -18,6 +18,7 @@ import {
   updateElementPosition,
   updateElementConfig,
   updateElementVizSpec,
+  updateElementSourceCode,
   deleteElement,
   writeActionLog,
   getElement,
@@ -663,12 +664,25 @@ export class ConductorDbService {
             resultPatch: { elementId },
           });
 
+          // Include full element data (config, vizSpec, sourceCode) so the
+          // renderer's batch_create patch handler can render the new element
+          // immediately without a follow-up snapshot reload. Without this,
+          // widget/dynamic elements appeared blank until the next reload.
           createdElements.push({
             id: elementId,
             ref: ref ?? null,
             kind: elementKind,
             elementKind,
             position: clampedPosition,
+            config,
+            vizSpec,
+            ...(sourceCode ? { sourceCode } : {}),
+            state: 'idle',
+            dataVersion: 1,
+            permissions,
+            metadata,
+            createdAt: now,
+            updatedAt: now,
           });
         } else if (opType === 'connect') {
           const sourceRaw = op.source as string | undefined;
@@ -768,6 +782,15 @@ export class ConductorDbService {
             kind: elementKind,
             elementKind,
             position: connectorPosition,
+            // Connector needs config.source/target to render the line.
+            config: connectorConfig,
+            vizSpec: null,
+            state: 'idle',
+            dataVersion: 1,
+            permissions,
+            metadata: connectorMetadata,
+            createdAt: now,
+            updatedAt: now,
           });
         }
       }
@@ -896,11 +919,16 @@ export class ConductorDbService {
    * Used by `canvas_fill_content` (content fields) and `canvas_style_element`
    * (visual fields). Reads the previous config, shallow-merges the patch,
    * then writes it back via `updateElementConfig`.
+   *
+   * Also handles an optional `sourceCode` payload field for widget/dynamic
+   * elements — this lets the agent update a widget's HTML/SVG after creation
+   * without deleting and recreating it.
    */
   updateElementContent(payload: Record<string, unknown>): ExecutorRpcResponse {
     const canvasId = payload.canvasId as string;
     const elementId = payload.elementId as string;
     const patch = (payload.config as Record<string, unknown>) || {};
+    const sourceCodePatch = payload.sourceCode as string | null | undefined;
 
     const prev = getElement(elementId, canvasId);
     if (!prev) {
@@ -921,12 +949,21 @@ export class ConductorDbService {
       patch,
     };
 
+    // Update sourceCode if provided (widget/dynamic only). This allows
+    // the agent to revise a widget's HTML/SVG after creation — e.g. fix
+    // a layout bug or change the dashboard's data display.
+    if (sourceCodePatch !== undefined && prev.elementKind === 'widget/dynamic') {
+      updateElementSourceCode(elementId, sourceCodePatch, now);
+      changes.sourceCode = sourceCodePatch;
+      changes.prevSourceCode = prev.sourceCode;
+    }
+
     writeActionLog({
       canvasId,
       widgetId: null,
       actor: ACTOR,
       actionType: 'element.update_content',
-      payload: { elementId, config: patch },
+      payload: { elementId, config: patch, sourceCode: sourceCodePatch },
       resultPatch: changes,
     });
 
