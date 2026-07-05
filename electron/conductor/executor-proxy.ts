@@ -66,10 +66,8 @@ export class ConductorExecutorProxy {
 
   async execute(request: ExecutorRpcRequest): Promise<ExecutorRpcResponse> {
     const { action, payload } = request;
-    console.error(`[RPC-DEBUG] proxy.execute: action=${action}, payload=${JSON.stringify(payload).substring(0, 200)}`);
 
     try {
-      console.error(`[RPC-DEBUG] proxy dispatching to dbService.${action}`);
       switch (action) {
         case 'canvas.snapshot':
           return this.dbService.getCanvasSnapshot(payload.canvasId as string);
