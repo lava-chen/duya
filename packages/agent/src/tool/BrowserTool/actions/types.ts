@@ -20,6 +20,8 @@ export interface ActionContext {
   };
   checkDomainBlocked(url: string): boolean;
   getBrowserPool(): import('../BrowserPool.js').BrowserPool;
+  /** Stable identifier for the current agent turn — used to scope screenshot files. */
+  sessionId?: string;
 }
 
 export interface ActionHandler<TInput = Record<string, unknown>> {

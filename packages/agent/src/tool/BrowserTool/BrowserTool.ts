@@ -93,7 +93,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     console.log('[BrowserTool.ensureConnection] using fallback browser');
   };
 
-  private buildContext(): ActionContext {
+  private buildContext(sessionId?: string): ActionContext {
     return {
       cdp: this.cdp,
       snapshotEngine: this.snapshotEngine,
@@ -107,10 +107,11 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
         if (!this.browserPool) this.browserPool = new BrowserPool();
         return this.browserPool;
       },
+      sessionId,
     };
   }
 
-  async execute(input: Record<string, unknown>, _workingDirectory?: string, _context?: ToolUseContext): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, _workingDirectory?: string, context?: ToolUseContext): Promise<ToolResult> {
     const operation = input['operation'] as string;
     console.log('[BrowserTool.execute] operation:', operation);
 
@@ -120,7 +121,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
 
     try {
       await this.ensureConnection();
-      const ctx = this.buildContext();
+      const ctx = this.buildContext(context?.options?.sessionId);
       console.log('[BrowserTool.execute] built context, about to execute:', operation);
       const result = await this.actionRegistry.execute(operation, input, ctx);
 

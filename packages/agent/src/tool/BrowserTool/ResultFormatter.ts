@@ -240,11 +240,26 @@ function formatIframeEvaluateResult(result: Record<string, unknown>): string {
 // ─── Screenshot Formatter ──────────────────────────────────────────────────
 
 function formatScreenshotResult(result: Record<string, unknown>): string {
-  if (result.screenshot) {
-    const fullPage = result.fullPage ? ' (full page)' : '';
-    const selector = result.selector ? ` [${result.selector}]` : '';
-    return `Screenshot captured${fullPage}${selector}`;
+  const fullPage = result.fullPage ? ' (full page)' : '';
+  const selector = result.selector ? ` [${result.selector}]` : '';
+  const filePath = typeof result.filePath === 'string' ? result.filePath : null;
+
+  if (filePath) {
+    return [
+      `Screenshot captured${fullPage}${selector}`,
+      `filePath: ${filePath}`,
+      'Pass this filePath to vision_analyze to inspect the image visually.',
+    ].join('\n');
   }
+
+  if (result.screenshot) {
+    return `Screenshot captured${fullPage}${selector} (inline data URL — prefer filePath if available)`;
+  }
+
+  if (result.error) {
+    return `Screenshot failed: ${String(result.error)}`;
+  }
+
   return 'Screenshot: (no data)';
 }
 
