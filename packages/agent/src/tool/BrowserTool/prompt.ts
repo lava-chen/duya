@@ -158,6 +158,9 @@ ${strategySection}
   \`\`\`json
   {"operation": "screenshot", "fullPage": true}
   \`\`\`
+  Saves the PNG to a temp file and returns a short \`filePath\` instead of an inline base64 data URL.
+  To inspect the image visually, pass that \`filePath\` to the \`vision_analyze\` tool:
+  \`{"operation": "vision_analyze", "image_path": "<filePath>", "question": "..."}\` (call \`vision_analyze\` separately — these are two different tools).
 
 - **evaluate** - Execute JavaScript and return result
   \`\`\`json
