@@ -70,6 +70,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [107-cron-cli-bugfix](./active/107-cron-cli-bugfix.md) | Cron CLI Bugfix — `info` / `message show` DTO wrap, `delete` 500 ReferenceError, schedule field-name UX, CI does not typecheck `electron/` | P0 | Phase 1 ✅, Phase 2 📋 |
 | [108-cli-channel-list-and-help](./active/108-cli-channel-list-and-help.md) | CLI Channel list / channel --help bugfix — merge `channel_bindings` into `duya channel list`; wire `--help` / `help` for every descriptor-driven top-level command | P0 | Planning |
 | [220-attachment-unification](./active/220-attachment-unification.md) | Chat input attachment unification — collapse 5 parallel state machines (paste/file/file-chip/terminal-ref/browser-ref) into 1 `pendingAttachments: FileAttachment[]` + 1 `<AttachmentBar>` + marker deletion with read-only legacy adapter | P1 | Phase 0–7 ✅ (decision log filled; not yet moved to completed) |
+| [221-conductor-main-agent-injection](./active/221-conductor-main-agent-injection.md) | Conductor 主 Agent 注入 — 取消画布独立 agent，改由主界面 agent 控制 (5 工具 + prompt overlay + 智能绑定 + UI toggle) | P0 | Implemented (9.3/9.4/9.5 deferred) |
 | [101-plugin-system-cleanup](./completed/101-plugin-system-cleanup.md) | Plugin System Cleanup & Runtime Wiring — 死代码清理 (`runtimeFactories` / `plugins/literature` / `PermissionService` override) + 接入路径修正 + capabilityCounts 派生 | P1 | Complete |
 
 | [215-office-workspace](./active/215-office-workspace.md) | Office side-panel workspace for DOCX/PPTX/XLSX preview, selection context, and Agent-driven edits | P1 | Phase 1 complete; Phase 2 pending |
@@ -119,6 +120,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 | [81-mindmap-interaction-correction](./active/81-mindmap-interaction-correction.md) | Follow-up: root move + subtree reorder + draft node flow | P0 | 73 |
 | [223-conductor-canvas-style-and-group](./active/223-conductor-canvas-style-and-group.md) | Post-mindmap: sticky/connector 样式扩展(shape/border/stroke) + Group 元素松散绑定 + 4 个 group tool + 属性面板 | P1 | 71, 72, 73 |
+
 ### Compact System Fix Plans
 
 | Plan | Description | Priority | Status |

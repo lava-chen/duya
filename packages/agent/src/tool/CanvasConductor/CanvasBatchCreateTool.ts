@@ -19,6 +19,7 @@ import type { ToolExecutor } from '../registry.js';
 import { getCanvasId, ipcRequest, noCanvasIdResult, noContextResult } from './ipc-request.js';
 import { formatValidationErrors, validateElementInput, validateConnectorShape } from './validate.js';
 import { appendWidgetStyleSignature, extractWidgetStyleSignature } from './style-signature.js';
+import { trackCreatedElement } from './freshness.js';
 
 export const TOOL_NAME = 'canvas_batch_create';
 
@@ -220,6 +221,8 @@ export const executor: ToolExecutor = {
       : undefined;
 
     // Populate refMap so later tools can reference elements by semantic ref names.
+    // Also track all created element IDs so subsequent fill/style/move calls
+    // bypass the STALE_STATE check without forcing another canvas_list_elements.
     if (context && batchResult?.diff?.elements) {
       if (!context.refMap) {
         context.refMap = new Map<string, string>();
@@ -227,6 +230,9 @@ export const executor: ToolExecutor = {
       for (const el of batchResult.diff.elements) {
         if (el.ref && el.id) {
           context.refMap.set(el.ref, el.id);
+        }
+        if (el.id) {
+          trackCreatedElement(context, el.id);
         }
       }
     }

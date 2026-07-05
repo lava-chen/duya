@@ -1483,6 +1483,11 @@ export class duyaAgent {
       );
     }
 
+    // Snapshot canvas tools before profile filtering so conductor mode can
+    // force them back if a profile (preset or user-defined) denies them.
+    const canvasTools = options?.conductorMode
+      ? tools.filter((t) => t.name.startsWith('canvas_'))
+      : [];
     // Layer 2: agent profile policy
     if (appliedProfile) {
       const allToolNames = tools.map((t) => t.name);
@@ -1504,6 +1509,25 @@ export class duyaAgent {
         }
       } else {
         logger.warn(`[Agent] streamChat: Agent profile filtering resulted in no available tools`);
+      }
+    }
+
+    // Conductor mode override: canvas tools are gated by the session toggle,
+    // not by the agent profile. Re-instate any canvas tools that a profile
+    // may have filtered out so the model always sees them when conductor mode
+    // is on.
+    if (options?.conductorMode && canvasTools.length > 0) {
+      const currentNames = new Set(tools.map((t) => t.name));
+      const missingCanvasTools = canvasTools.filter((t) => !currentNames.has(t.name));
+      if (missingCanvasTools.length > 0) {
+        tools = [...tools, ...missingCanvasTools];
+        logger.warn(
+          `[Agent] streamChat: Conductor mode reinstated ${missingCanvasTools.length} canvas tool(s) denied by profile`,
+          {
+            profileId: appliedProfile?.id ?? '(none)',
+            reinstated: missingCanvasTools.map((t) => t.name),
+          }
+        );
       }
     }
 

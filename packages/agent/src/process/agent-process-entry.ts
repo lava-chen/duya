@@ -357,7 +357,6 @@ function conductorIpcRequest<T = unknown>(
       action,
       payload: innerPayload,
     });
-    console.error(`[RPC-DEBUG] worker→server: requestId=${requestId}, action=${action}`);
 
     setTimeout(() => {
       if (pendingIpcRequests.has(requestId)) {
@@ -1103,7 +1102,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     agent.promptManager.updateOptions({ language: msg.options.language });
   }
 
-  log('[Agent-Process] handleChatStart:', { sessionId: msg.sessionId, promptLength: msg.prompt.length, agentProfileId: msg.options?.agentProfileId || '(none)' });
+  log('[Agent-Process] handleChatStart:', {
+    sessionId: msg.sessionId,
+    promptLength: msg.prompt.length,
+    agentProfileId: msg.options?.agentProfileId || '(none)',
+    conductorMode: msg.options?.conductorMode ?? false,
+    hasConductorCanvasId: !!msg.options?.conductorCanvasId,
+  });
   if (agent) {
     log('[Agent-Process] Agent LLM config:', {
       model: agent.model,
@@ -1217,8 +1222,41 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       console.error('[IMAGE-DETAIL] Processing image file:', file.name, 'url:', file.url?.substring(0, 50), 'type:', file.type);
 
       if (file.url.startsWith('data:')) {
-        base64Data = file.url.split(',')[1] || '';
-        console.error('[IMAGE-DETAIL] Extracted from data: URL, length:', base64Data.length);
+        // Data URL path (clipboard paste / screenshot tool). Decode and
+        // run through the same resize pipeline as file-path images so
+        // long screenshots (e.g. 1920x8000) get scaled down to <=2048px
+        // before being sent to the vision model. Without this, a tall
+        // webpage screenshot can blow the model's context window because
+        // vision token count is proportional to pixel count, not byte size.
+        try {
+          const commaIdx = file.url.indexOf(',');
+          const header = commaIdx > 0 ? file.url.slice(5, commaIdx) : '';
+          const rawBase64 = file.url.slice(commaIdx + 1);
+          const imgBuffer = Buffer.from(rawBase64, 'base64');
+          // Prefer the media type declared in the data URL header;
+          // fall back to the FileAttachment.type.
+          const headerMediaType = /data:([^;]+)/.exec(header)?.[1];
+          mediaType = headerMediaType || file.type;
+          console.error('[IMAGE-DETAIL] Decoded data: URL, buffer size:', imgBuffer.length, 'bytes');
+          if (needsResizing(imgBuffer)) {
+            try {
+              const resized = await resizeImageBuffer(imgBuffer, TARGET_IMAGE_SIZE_BYTES);
+              base64Data = resized.buffer.toString('base64');
+              mediaType = resized.mediaType;
+              log(`[Agent-Process] Compressed pasted image "${file.name}": ${imgBuffer.length} → ${resized.buffer.length} bytes`);
+            } catch (resizeErr) {
+              warn(`[Agent-Process] Image compression failed for pasted "${file.name}", using original:`, resizeErr);
+              base64Data = rawBase64;
+            }
+          } else {
+            base64Data = rawBase64;
+            console.error('[IMAGE-DETAIL] Pasted image did not need resizing, base64 length:', base64Data.length);
+          }
+        } catch (decodeErr) {
+          console.error('[IMAGE-DETAIL] FAILED to decode data: URL:', decodeErr);
+          // Last-resort fallback: keep the old behavior.
+          base64Data = file.url.split(',')[1] || '';
+        }
       } else if ((file as unknown as Record<string, string>).base64) {
         base64Data = (file as unknown as Record<string, string>).base64;
         console.error('[IMAGE-DETAIL] Extracted from base64 field, length:', base64Data.length);
@@ -2723,7 +2761,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             result?: unknown;
             error?: { code: string; message: string };
           };
-          console.error(`[RPC-DEBUG] worker received response: requestId=${requestId}, success=${success}`);
           const pending = pendingIpcRequests.get(requestId);
           if (pending) {
             pendingIpcRequests.delete(requestId);

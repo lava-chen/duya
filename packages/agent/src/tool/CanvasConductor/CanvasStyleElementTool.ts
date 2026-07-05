@@ -16,6 +16,7 @@ import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { getCanvasId, ipcRequest, noCanvasIdResult, noContextResult } from './ipc-request.js';
 import { resolveElementId } from './resolve-element-id.js';
+import { isMutationFresh, staleStateResult } from './freshness.js';
 
 export const TOOL_NAME = 'canvas_style_element';
 
@@ -34,7 +35,7 @@ export const definition: Tool = {
     properties: {
       elementId: {
         type: 'string',
-        description: 'The ID of the element to restyle. Obtain from the user or canvas_capture screenshot.',
+        description: 'The ID of the element to restyle. Obtain from canvas_list_elements, or use a ref from a canvas_batch_create you just made in this turn.',
       },
       ref: {
         type: 'string',
@@ -69,23 +70,6 @@ export const executor: ToolExecutor = {
       return noCanvasIdResult(TOOL_NAME);
     }
 
-    const now = Date.now();
-    const lastList = context?.lastListElementsTime;
-    if (!lastList || now - lastList > 30000) {
-      return {
-        id: crypto.randomUUID(),
-        name: TOOL_NAME,
-        result: JSON.stringify({
-          success: false,
-          error: {
-            code: 'STALE_STATE',
-            message: 'You must call canvas_list_elements within the last 30 seconds before mutating elements. This prevents edits based on outdated canvas state.',
-          },
-        }),
-        error: true,
-      };
-    }
-
     const resolved = resolveElementId(
       { elementId: input.elementId as string | undefined, ref: input.ref as string | undefined },
       context,
@@ -99,6 +83,10 @@ export const executor: ToolExecutor = {
       };
     }
     const elementId = resolved.elementId;
+
+    if (!isMutationFresh(context, elementId)) {
+      return staleStateResult(TOOL_NAME, elementId);
+    }
     const style = (input.style as Record<string, unknown>) ?? {};
 
     // element.update_content merges the patch into the existing

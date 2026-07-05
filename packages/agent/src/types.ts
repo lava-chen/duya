@@ -535,6 +535,13 @@ export interface ToolUseContext {
    */
   refMap?: Map<string, string>;
   /**
+   * Element IDs created by the agent in this session. Populated by
+   * canvas_create_element and canvas_batch_create. Used by the freshness
+   * check so the agent can fill/style/move an element it just created
+   * without re-calling canvas_list_elements.
+   */
+  recentlyCreatedElementIds?: Set<string>;
+  /**
    * Recent widget/dynamic style signatures used for anti-slop diversity.
    * Canvas tools append to this history so the conductor prompt can nudge
    * the model toward different color palettes, fonts, and layouts.
