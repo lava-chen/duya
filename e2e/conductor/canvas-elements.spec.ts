@@ -445,3 +445,271 @@ test.describe.serial('Conductor UX ergonomics', () => {
     expect(after.length).toBe(0);
   });
 });
+
+// ─── Spec: Style + Group — shape, stroke, group lifecycle ──────────────
+//
+// Covers Part E2 of plan 223: sticky shape, connector strokeStyle, group
+// create/frame render/ungroup. Group actions (`group.create` / `group.
+// ungroup`) are exposed to the renderer only through the executor RPC
+// channel (worker → main). The renderer-facing `conductor:action` IPC
+// does NOT route `group.*` cases, so we create group elements via
+// `element.create_native` with `nodeType: 'group'` — this is the same
+// path that `ConductorDbService.createGroup` uses internally. Ungroup
+// is exercised via `element.delete` on the group element, matching
+// `ConductorDbService.ungroup` which delegates to `deleteElement`.
+
+test.describe.serial('Style + Group lifecycle', () => {
+  let app: DuyaApp;
+  let canvasId: string;
+
+  test.beforeAll(async () => {
+    app = await launchDuya({ namespace: 'cond-style-group' });
+    const { page } = app;
+    await navigateToConductor(page, 'cond-style-group');
+    canvasId = await getCanvasId(page);
+    await deleteAllElements(page, canvasId);
+  });
+
+  test.afterAll(async () => {
+    if (app) await closeDuya(app.app);
+  });
+
+  test('Sticky: change shape to diamond applies rotate(45deg) transform', async () => {
+    await deleteAllElements(app.page, canvasId);
+
+    const created = await invokeApi<{ elementId: string }>(app.page, 'conductor.action', {
+      action: 'element.create_native',
+      canvasId,
+      nodeType: 'sticky',
+      position: { x: 200, y: 200, w: 3, h: 3, zIndex: 0, rotation: 0 },
+      content: { text: 'D', color: 'yellow', fontSize: 14 },
+      style: {},
+    });
+    expect(created.elementId).toBeTruthy();
+
+    const [sticky] = await waitForElementCount(app.page, canvasId, 1);
+    await app.page.waitForSelector(`[data-native-element-id="${sticky.id}"]`, { timeout: 5_000 });
+
+    // Update config to diamond. `element.update` replaces config wholesale,
+    // so we include the full config (content fields + style wrapper).
+    await invokeApi(app.page, 'conductor.action', {
+      action: 'element.update',
+      canvasId,
+      elementId: sticky.id,
+      config: { text: 'D', color: 'yellow', fontSize: 14, shape: 'diamond', style: {} },
+    });
+
+    // Wait for the broadcastPatch to reach the renderer and re-render.
+    await app.page.waitForTimeout(300);
+
+    // DOM assertion: the sticky curl wrapper should now carry rotate(45deg).
+    const curl = app.page
+      .locator(`[data-native-element-id="${sticky.id}"] .conductor-sticky-curl`)
+      .first();
+    await expect(curl).toBeVisible({ timeout: 3_000 });
+    const transform = await curl.evaluate((el) => (el as HTMLElement).style.transform);
+    expect(transform).toContain('rotate(45deg)');
+
+    // IPC assertion: persisted config carries shape=diamond.
+    const after = await getElements(app.page, canvasId);
+    const updated = after.find((e) => e.id === sticky.id);
+    expect((updated?.config as Record<string, unknown>).shape).toBe('diamond');
+  });
+
+  test('Connector: change strokeStyle to dashed applies stroke-dasharray', async () => {
+    await deleteAllElements(app.page, canvasId);
+
+    const sticky1 = await invokeApi<{ elementId: string }>(app.page, 'conductor.action', {
+      action: 'element.create_native',
+      canvasId,
+      nodeType: 'sticky',
+      position: { x: 200, y: 200, w: 3, h: 3, zIndex: 0, rotation: 0 },
+      content: { text: 'A', color: 'yellow', fontSize: 14 },
+      style: {},
+    });
+    const sticky2 = await invokeApi<{ elementId: string }>(app.page, 'conductor.action', {
+      action: 'element.create_native',
+      canvasId,
+      nodeType: 'sticky',
+      position: { x: 600, y: 200, w: 3, h: 3, zIndex: 0, rotation: 0 },
+      content: { text: 'B', color: 'blue', fontSize: 14 },
+      style: {},
+    });
+    const conn = await invokeApi<{ elementId: string }>(app.page, 'conductor.action', {
+      action: 'connector.create',
+      canvasId,
+      source: { nodeId: sticky1.elementId, anchorId: 'center' },
+      target: { nodeId: sticky2.elementId, anchorId: 'center' },
+      curvature: 0.4,
+      style: {},
+    });
+    expect(conn.elementId).toBeTruthy();
+
+    await waitForElementCount(app.page, canvasId, 3);
+
+    // Update connector config to dashed. ConnectorElement reads the
+    // top-level `strokeStyle` field (preferred over nested style.*).
+    await invokeApi(app.page, 'conductor.action', {
+      action: 'element.update',
+      canvasId,
+      elementId: conn.elementId,
+      config: {
+        source: { nodeId: sticky1.elementId, anchorId: 'center' },
+        target: { nodeId: sticky2.elementId, anchorId: 'center' },
+        curvature: 0.4,
+        routingMode: 'bezier',
+        style: {},
+        strokeStyle: 'dashed',
+      },
+    });
+
+    await app.page.waitForTimeout(300);
+
+    // DOM assertion: the visible path (second child of the connector g)
+    // should carry stroke-dasharray="8 4". The first path is a transparent
+    // hit target; the second is the visible stroke.
+    const visiblePath = app.page
+      .locator('.native-connector-overlay g > path')
+      .nth(1);
+    await expect(visiblePath).toBeVisible({ timeout: 3_000 });
+    const dashArray = await visiblePath.getAttribute('stroke-dasharray');
+    expect(dashArray).toBe('8 4');
+
+    // IPC assertion.
+    const after = await getElements(app.page, canvasId);
+    const connector = after.find((e) => e.id === conn.elementId);
+    expect((connector?.config as Record<string, unknown>).strokeStyle).toBe('dashed');
+  });
+
+  test('Group: create group element via create_native carries memberIds', async () => {
+    await deleteAllElements(app.page, canvasId);
+
+    const sticky1 = await invokeApi<{ elementId: string }>(app.page, 'conductor.action', {
+      action: 'element.create_native',
+      canvasId,
+      nodeType: 'sticky',
+      position: { x: 200, y: 200, w: 3, h: 3, zIndex: 0, rotation: 0 },
+      content: { text: 'G1', color: 'yellow', fontSize: 14 },
+      style: {},
+    });
+    const sticky2 = await invokeApi<{ elementId: string }>(app.page, 'conductor.action', {
+      action: 'element.create_native',
+      canvasId,
+      nodeType: 'sticky',
+      position: { x: 600, y: 300, w: 3, h: 3, zIndex: 0, rotation: 0 },
+      content: { text: 'G2', color: 'blue', fontSize: 14 },
+      style: {},
+    });
+
+    const group = await invokeApi<{ elementId: string }>(app.page, 'conductor.action', {
+      action: 'element.create_native',
+      canvasId,
+      nodeType: 'group',
+      position: { x: 0, y: 0, w: 0, h: 0, zIndex: -1, rotation: 0 },
+      content: {
+        title: 'Test Group',
+        memberIds: [sticky1.elementId, sticky2.elementId],
+      },
+      style: {},
+    });
+    expect(group.elementId).toBeTruthy();
+
+    const after = await waitForElementCount(app.page, canvasId, 3);
+    const groupEl = after.find((e) => e.elementKind === 'native/group');
+    expect(groupEl).toBeTruthy();
+    const cfg = groupEl!.config as Record<string, unknown>;
+    expect(Array.isArray(cfg.memberIds)).toBe(true);
+    expect((cfg.memberIds as string[]).sort()).toEqual(
+      [sticky1.elementId, sticky2.elementId].sort(),
+    );
+    expect(cfg.title).toBe('Test Group');
+  });
+
+  test('Group: frame renders and bbox follows member positions', async () => {
+    // Reuses the state from the previous test (3 elements: 2 stickies + 1 group).
+    // Verify the group frame is visible in the DOM.
+    const groupFrame = app.page.locator('.conductor-group').first();
+    await expect(groupFrame).toBeVisible({ timeout: 3_000 });
+
+    // Move one member via IPC and verify the group frame's bbox recomputes
+    // (loose-binding: bbox is derived from members in real time). This is
+    // the non-flaky analogue of "drag group → members follow delta".
+    const before = await getElements(app.page, canvasId);
+    const groupEl = before.find((e) => e.elementKind === 'native/group');
+    const memberIds = (groupEl!.config as { memberIds: string[] }).memberIds;
+    const movingId = memberIds[0];
+    const movingEl = before.find((e) => e.id === movingId)!;
+    const origPos = movingEl.position as { x: number; y: number; w: number; h: number };
+    const newPos = { ...origPos, x: origPos.x + 400, y: origPos.y + 200 };
+
+    // Capture the frame's bbox BEFORE the move so we can diff after.
+    const frameBoxBefore = await groupFrame.boundingBox();
+    expect(frameBoxBefore).toBeTruthy();
+
+    await invokeApi(app.page, 'conductor.action', {
+      action: 'element.move',
+      canvasId,
+      elementId: movingId,
+      position: newPos,
+    });
+
+    // Wait for the broadcastPatch to reach the renderer and re-render.
+    await app.page.waitForTimeout(450);
+
+    // The group frame should still be visible and its bbox should have
+    // shifted to track the new member position.
+    const frameBoxAfter = await groupFrame.boundingBox();
+    expect(frameBoxAfter).toBeTruthy();
+    // The frame should have moved horizontally (member moved +400px in x).
+    expect(Math.abs(frameBoxAfter!.x - frameBoxBefore!.x)).toBeGreaterThan(50);
+
+    // IPC assertion: the moved member's new position persisted.
+    const after = await getElements(app.page, canvasId);
+    const movedEl = after.find((e) => e.id === movingId);
+    expect((movedEl!.position as { x: number }).x).toBe(newPos.x);
+  });
+
+  test('Group: ungroup removes the group frame but leaves members intact', async () => {
+    const before = await getElements(app.page, canvasId);
+    const groupEl = before.find((e) => e.elementKind === 'native/group');
+    expect(groupEl).toBeTruthy();
+    const memberIds = (groupEl!.config as { memberIds: string[] }).memberIds;
+    expect(memberIds.length).toBe(2);
+
+    // Capture member positions before ungroup so we can assert they are unchanged.
+    const memberPositionsBefore = new Map<string, { x: number; y: number }>();
+    for (const id of memberIds) {
+      const el = before.find((e) => e.id === id)!;
+      const pos = el.position as { x: number; y: number };
+      memberPositionsBefore.set(id, { x: pos.x, y: pos.y });
+    }
+
+    // Ungroup = delete the group element. Members are NOT deleted
+    // (loose-binding: members are independent elements).
+    await invokeApi(app.page, 'conductor.action', {
+      action: 'element.delete',
+      canvasId,
+      elementId: groupEl!.id,
+    });
+
+    await app.page.waitForTimeout(300);
+
+    const after = await getElements(app.page, canvasId);
+    // Group element is gone.
+    expect(after.find((e) => e.elementKind === 'native/group')).toBeUndefined();
+    // Both members remain.
+    expect(after.length).toBe(2);
+    // Member positions are unchanged.
+    for (const id of memberIds) {
+      const el = after.find((e) => e.id === id);
+      expect(el).toBeTruthy();
+      const pos = el!.position as { x: number; y: number };
+      const beforePos = memberPositionsBefore.get(id)!;
+      expect(pos.x).toBe(beforePos.x);
+      expect(pos.y).toBe(beforePos.y);
+    }
+
+    // DOM assertion: the group frame is no longer rendered.
+    await expect(app.page.locator('.conductor-group')).toHaveCount(0);
+  });
+});

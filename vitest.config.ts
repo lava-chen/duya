@@ -15,6 +15,8 @@ export default defineConfig({
       'packages/gateway/src/**/*.test.ts',
       'packages/agent/src/**/*.test.ts',
       'packages/cli/src/**/*.test.ts',
+      'packages/conductor/src/**/*.test.ts',
+      'packages/conductor/src/**/*.test.tsx',
     ],
     exclude: ['node_modules', 'dist', '.next'],
     setupFiles: ['./test-setup.ts'],
