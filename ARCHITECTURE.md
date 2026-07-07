@@ -914,6 +914,61 @@ duya/
 | **自动更新** | electron-updater 集成，支持检查/下载/安装 | ✅ 已实现 |
 | **浏览器扩展** | 浏览器守护进程 + 扩展通信 | ✅ 已实现 |
 
+## Profile / Mode / Permission 三层正交（Plan 224）
+
+DUYA 的"agent 配置"由三个正交层组合而成。每一层独立选择、互不干扰，最终在 `streamChat` 入口合成为一个完整的运行时配置。
+
+### 三层职责
+
+| 层 | 标识 | 来源 | 控制内容 |
+|----|------|------|----------|
+| **Profile** | `AgentProfile.id`（main / code / plan / …） | Agent Profile 选择器（侧栏顶部） | 基础工具集 + 基础 system prompt + 默认权限模式 |
+| **Mode** | `ModeModifier.id`（plan-task / research / conductor） | 输入框 popover "Mode" 项 | 在 profile 之上叠加：注入/屏蔽工具、追加 prompt 前缀/后缀、注入 ToolUseContext 字段 |
+| **Permission** | `PermissionMode`（ask / auto / bypass） | 权限选择器（输入框右侧） | 工具执行前的授权检查策略 |
+
+三层的运行时合成由 `DuyaAgent.streamChat` 在 `_resolveAgentProfile` → `_buildSystemPrompt` → `applyModes` → `_buildPermissionContext` 顺序完成。Profile 与 Mode 通过 `applyModes` 合并工具集和 prompt；Permission 独立作用于 `canUseTool` 检查函数。
+
+### ModeModifier 双范式架构
+
+`ModeModifier` 接口（`packages/agent/src/modes/types.ts`）支持两种范式，一个 mode 选其一：
+
+- **Modifier 范式**（声明式叠加）：声明 `tools` / `prompt` / `hooks`，由 `applyModes` 在 agent loop 之上组合。适合"修饰型" mode。示例：`conductor`（注入 11 个 canvas 工具 + 前置 prompt + 注入 canvasId）、`plan-task`（block 写工具 + 前置只读规划 prompt）。
+- **Orchestrator 范式**（接管整个 stream）：声明 `orchestrator.execute`，自己管 LLM 调用、工具执行、SSE 流、多阶段逻辑。适合"流程型" mode。示例：`research`（plan → clarification → iteration → synthesis）。
+
+两种范式共享 `modeModifierRegistry` 的注册、互斥（`exclusiveWith`）、UI 元数据（`display`）机制。
+
+### 互斥规则
+
+`exclusiveWith` 字段定义两两互斥关系，对称声明：
+
+- `plan-task` ↔ `research`、`conductor`（只读规划与所有写/接管 mode 冲突）
+- `research` ↔ `plan-task`（不与 conductor 冲突 —— Research + Conductor 可叠加）
+- `conductor` ↔ `plan-task`（不与 research 冲突）
+
+前端 `src/types/mode-id.ts` 的 `MODE_EXCLUSIVE_WITH` 镜像此规则，供 popover 渲染"互斥"/"可叠加"提示与禁用态。
+
+### 新增 Mode 标准流程（3 步）
+
+1. 在 `packages/agent/src/modes/` 新建 `<mode>-mode.ts`，声明 `ModeModifier` 对象（modifier 或 orchestrator 范式）。
+2. 在 `packages/agent/src/modes/index.ts` 调用 `modeModifierRegistry.register(<mode>);`。
+3. 如需 UI 入口，在 `src/hooks/useSlashCommands.ts` 的 `modeItems` 数组追加一项（`kind: 'mode'`, `modeValue: '<id>'`），并在 `src/types/mode-id.ts` 的 `ModeModifierId` / `MODE_KIND` / `MODE_EXCLUSIVE_WITH` 补充对应条目。
+
+无需改动 `DuyaAgent.streamChat` / `builtin.ts` —— `applyModes` 自动消费新注册的 modifier，`collectActiveModes` 自动转发 `options.mode` 字段。
+
+### 关键文件
+
+| 文件 | 作用 |
+|------|------|
+| `packages/agent/src/modes/types.ts` | `ModeModifier` / `ModeModifierContext` / `ResolvedMode` / `ToolRegistration` 类型定义 |
+| `packages/agent/src/modes/registry.ts` | `ModeModifierRegistry`：注册 + `resolve(ids)` 合并互斥规则 |
+| `packages/agent/src/modes/apply-modes.ts` | `applyModes`：单入口执行 onEnter hooks → prompt prefix/suffix → tools 合并 → toolUseContextPatch → beforeStream hooks；`collectActiveModes` 从 ChatOptions 提取激活 mode ids |
+| `packages/agent/src/modes/conductor-mode.ts` | Conductor modifier（session 级，注入 canvas 工具） |
+| `packages/agent/src/modes/plan-task-mode.ts` | Plan-task modifier（message 级，只读规划） |
+| `packages/agent/src/modes/research-mode.ts` | Research orchestrator（session 级，接管 stream） |
+| `src/types/mode-id.ts` | 前端镜像：`ModeModifierId` / `MODE_KIND` / `MODE_EXCLUSIVE_WITH` / `toggleModeInSet` / `isModeExcludedByActive` |
+| `src/components/chat/SlashCommandPopover.tsx` | popover UI：activeModes 状态 + 互斥可视化 + conductor toggle 视觉 |
+| `src/components/chat/MessageInput.tsx` | `activeModes: Set<ModeModifierId>` 统一状态 + conductor slot 与 DB 双向同步 |
+
 ## 相关文档
 
 - [AGENTS.md](./AGENTS.md) - 开发规则和流程
