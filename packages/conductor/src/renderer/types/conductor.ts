@@ -100,6 +100,14 @@ export interface ElementMetadata {
   sourceActionId?: number;
   parentId?: string | null;
   childIds?: string[];
+  /** User-locked: excluded from auto-layout & push-aside. Default false. */
+  locked?: boolean;
+  /** Viewport-aware packing preference. Default 'mid'. */
+  priority?: 'high' | 'mid' | 'low';
+  /** Minimum size in grid units; zoom-to-fit will not shrink below this. */
+  minSize?: { w: number; h: number };
+  /** Resize handle behavior. Default 'free'. */
+  resizeMode?: 'free' | 'ratio' | 'fixed';
 }
 
 export interface CanvasElement {
