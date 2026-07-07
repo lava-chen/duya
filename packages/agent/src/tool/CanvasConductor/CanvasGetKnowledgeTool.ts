@@ -32,16 +32,17 @@ export const definition: Tool = {
   description:
     'Fetch design knowledge for the canvas conductor. ' +
     'Returns focused guidance on sticky colors, connector styles, ' +
-    'widget usage, or layout templates for flowcharts and mind maps. ' +
+    'widget usage, widget design system (size/density/typography/colors), ' +
+    'or layout templates for flowcharts and mind maps. ' +
     'Call this when you need specific design guidance — do NOT call ' +
-    'it for every request, only when you need help with styling or ' +
-    'layout decisions.',
+    'it for every request, only when you need help with styling, ' +
+    'sizing, density, or layout decisions.',
   input_schema: {
     type: 'object',
     properties: {
       section: {
         type: 'string',
-        enum: ['sticky-style', 'connector-style', 'widget-usage', 'flowchart-layout', 'mindmap-layout'],
+        enum: ['sticky-style', 'connector-style', 'widget-usage', 'widget-design-system', 'widget-todolist', 'flowchart-layout', 'mindmap-layout'],
         description: 'Which knowledge section to retrieve.',
       },
     },

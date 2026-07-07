@@ -1,4 +1,3 @@
-import { ModeRegistry } from '../index.js';
 import { BaseMode, type ModeContext, type SSEEvent, type ClarificationQuestion } from '../types.js';
 import { Orchestrator } from './Orchestrator.js';
 import { convertToSSEEvent } from './SSEProtocol.js';
@@ -767,5 +766,3 @@ async function* filterTextDeltas(
     }
   }
 }
-
-ModeRegistry.register('research', ResearchMode);

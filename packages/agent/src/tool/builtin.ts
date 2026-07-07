@@ -47,7 +47,6 @@ import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.j
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { runVisualSelfReview } from './WidgetRenderer/runVisualSelfReview.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
-import { registerCanvasConductorTools } from './CanvasConductor/index.js';
 import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
 import { ResearchMemory } from '../research-memory/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
@@ -97,6 +96,13 @@ export function createBuiltinRegistry(
     // (not the manager itself) so the tool always sees the latest
     // connection state without re-registration.
     mcpManagerProvider?: () => import('../mcp/index.js').MCPManager | undefined;
+    /**
+     * @deprecated Plan 224 Phase 3: canvas tools are now injected by
+     * `conductorMode.tools.inject` via `applyModes` in `DuyaAgent.streamChat`.
+     * This flag is no longer read by `createBuiltinRegistry` and is kept
+     * only to avoid breaking callers that still pass it. Remove in a
+     * future cleanup phase.
+     */
     conductorMode?: boolean;
   }
 ): ToolRegistry {
@@ -299,20 +305,11 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
     }
   );
 
-  // Conductor canvas tools (10 tools) — only registered when conductor mode is on.
-  // Legacy CANVAS_ORCHESTRATOR_TOOLS (8 tools, including group_create /
-  // canvas_get_snapshot / canvas_create_element) were removed by plan 221:
-  // they route through the deprecated conductor-service path and time out.
-  // The new 10-tool set uses the conductor:executor:rpc bridge wired in Phase 3.
-  if (options?.conductorMode) {
-    registerCanvasConductorTools(registry);
-    const canvasToolCount = registry.getAllTools().filter((t) => t.name.startsWith('canvas_')).length;
-    // eslint-disable-next-line no-console
-    console.error(`[builtin] conductorMode=true, registered ${canvasToolCount} canvas tools. Total tools: ${registry.getAllTools().length}`);
-  } else {
-    // eslint-disable-next-line no-console
-    console.error(`[builtin] conductorMode=false, canvas tools NOT registered. Total tools: ${registry.getAllTools().length}`);
-  }
+  // Plan 224 Phase 3: canvas conductor tools are no longer registered
+  // here. They are injected declaratively via `conductorMode.tools.inject`
+  // when `applyModes` resolves the conductor modifier in `DuyaAgent.streamChat`.
+  // The `conductorMode` option is now read from `ChatOptions` by the mode
+  // registry, not by `createBuiltinRegistry`.
 
   return registry;
 }

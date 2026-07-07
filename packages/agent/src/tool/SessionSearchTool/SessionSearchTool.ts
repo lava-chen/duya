@@ -35,7 +35,7 @@ export interface SummaryLLMConfig {
 }
 
 interface SessionSearchResult {
-  id: string;
+  sessionId: string;
   title: string;
   created_at: number;
   updated_at: number;
@@ -585,14 +585,17 @@ export class SessionSearchTool extends BaseTool {
 
     const results: SearchResult[] = [];
     for (const row of rows) {
-      const resolvedSid = this.resolveToParent(row.id, db);
+      // SQL aliases this column as `sessionId` (see SELECT above); reading
+      // `row.id` here silently yields undefined, which propagates as
+      // `Session ID: undefined` and missing sessionId in the JSON envelope.
+      const resolvedSid = this.resolveToParent(row.sessionId, db);
 
       // Skip current session lineage
       if (currentRoot && resolvedSid === currentRoot) continue;
-      if (this.currentSessionId && row.id === this.currentSessionId) continue;
+      if (this.currentSessionId && row.sessionId === this.currentSessionId) continue;
 
       results.push({
-        sessionId: row.id,
+        sessionId: row.sessionId,
         title: row.title || 'Untitled',
         date: new Date(row.updated_at).toLocaleDateString(),
         snippet: row.snippet ? row.snippet.slice(0, 100) + '...' : 'No messages',
@@ -616,7 +619,19 @@ export class SessionSearchTool extends BaseTool {
     for (const s of sessions) {
       lines.push(`### "${s.title}" (${s.date})`);
       lines.push(`Session ID: ${s.sessionId}`);
-      lines.push(`Last activity: ${s.snippet}\n`);
+      lines.push(`Last activity: ${s.snippet}`);
+      lines.push('');
+      // Machine-readable JSON envelope alongside the markdown so the
+      // sessionId survives even when downstream tooling parses the
+      // output as plain text without preserving the "Session ID:" line.
+      lines.push('```json');
+      lines.push(JSON.stringify({
+        sessionId: s.sessionId,
+        title: s.title,
+        date: s.date,
+      }, null, 2));
+      lines.push('```');
+      lines.push('');
     }
 
     return lines.join('\n');
@@ -790,6 +805,19 @@ export class SessionSearchTool extends BaseTool {
       if (s.model) {
         lines.push(`- **Model**: ${s.model}`);
       }
+      lines.push('');
+      // Machine-readable JSON envelope: do NOT change summary text,
+      // but emit a structured payload alongside the markdown so an
+      // LLM-driven downstream agent can still recover `sessionId`
+      // even if the aux summarizer rewrote the natural-language part.
+      lines.push('```json');
+      lines.push(JSON.stringify({
+        sessionId: s.sessionId,
+        when: s.when,
+        source: s.source,
+        model: s.model ?? null,
+      }, null, 2));
+      lines.push('```');
       lines.push('');
       lines.push(s.summary);
       lines.push('');

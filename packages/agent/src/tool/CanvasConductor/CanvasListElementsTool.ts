@@ -77,8 +77,12 @@ export const executor: ToolExecutor = {
     }).data;
     const markdown = data?.markdown ?? `Canvas has ${data?.count ?? 0} elements.`;
 
-    if (context) {
-      context.lastListElementsTime = Date.now();
+    // Record the fresh list timestamp on the shared canvasFreshness
+    // container (NOT on context directly). StreamingToolExecutor spreads
+    // ToolUseContext per tool call, so a direct write would be lost; the
+    // container is a stable reference shared across all calls in the turn.
+    if (context?.canvasFreshness) {
+      context.canvasFreshness.lastListElementsTime = Date.now();
     }
 
     return {

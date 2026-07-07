@@ -13,6 +13,8 @@ export type KnowledgeSection =
   | 'sticky-style'
   | 'connector-style'
   | 'widget-usage'
+  | 'widget-design-system'
+  | 'widget-todolist'
   | 'flowchart-layout'
   | 'mindmap-layout';
 
@@ -61,6 +63,28 @@ Do NOT exceed 20 — larger sizes overflow the default 160x100 sticky.
 - 160w x 100h. Leave 40px gap between stickies.
 - For titles, keep 160x100 — increase fontSize instead of width.
 - For detailed notes, increase height to 140-160 instead of width.
+
+### Size-to-Content Matching (Important)
+
+Do not make a sticky larger than its content. Oversized stickies force the canvas to zoom out, making everything tiny.
+
+| Content | Recommended grid size (w x h) | fontSize | Notes |
+|---------|-------------------------------|----------|-------|
+| 1-2 Chinese chars label | 3 x 2 | 16 | e.g. "开始" |
+| 1 short Chinese line / 3-6 chars | 3 x 2 | 16-18 | e.g. "用户登录" |
+| 2 short lines / 6-10 chars | 4 x 2 | 16 | Use slash or newline |
+| Standard sticky (1-2 sentences) | 4 x 3 | 18 | Most common |
+| Detailed note (2-3 lines) | 5 x 3 | 18 | |
+| Paragraph / long sentence | 5 x 4 | 18-20 | |
+| Wide header / section title | 6-8 x 2 | 18 | Keep height at 2 |
+
+Rules:
+
+- Width should match content width. A 4-char label does not need w=8.
+- Height should barely clear the text. Single line → h=2. Two lines → h=2 or 3. Do not default to h=4+ "just in case".
+- Prefer larger fontSize over larger box. Default 14 is too small for Chinese; use 16-18 for body, 20 for titles.
+- If text does not fit in w=6-8, h=4-5, use widget/dynamic instead of shrinking fontSize below 14.
+- Leave 1 grid unit gap between stickies. Keep margins small and consistent.
 `,
 
   'connector-style': `## Connector Style Guide
@@ -186,6 +210,207 @@ Note: checkbox disabled because JS is blocked; for static display only.
 - SVG must have explicit width/height.
 - Default widget size: 4 x 3 grid units (320 x 240 px). Override via position.w/h.
 - For text-heavy content, use position.w=6 h=4 or larger.
+`,
+
+  'widget-design-system': `## Widget/dynamic Design System
+
+Use these rules for every agent-generated widget/dynamic element. The goal is legibility at the default canvas zoom, not packing the maximum amount of information into one container.
+
+### Canvas Scaling (read this first)
+
+The canvas viewport defaults to framing the entire 40 x 30 grid on screen. This creates a counter-intuitive effect: **the larger a single widget is, the more the whole canvas zooms out to fit it, and the smaller its text appears.** A 36 x 20 widget looks "big" in grid units but renders as a tiny card because everything is scaled down. A smaller widget lets the canvas stay zoomed in, so the same text actually looks larger.
+
+### Size Budget
+
+- **Hard upper limit: w ≤ 14, h ≤ 10** (1120 x 800 px). Never exceed this.
+- **Preferred range for explanatory diagrams: w=8-12, h=5-8.** Start here and only approach the hard limit when the content truly needs it.
+- For dashboards with many metrics, prefer w=10-12, h=6-8.
+- For single cards or small tools, prefer w=5-7, h=4-6.
+
+### Information Density Budget
+
+A widget is read as one composed image, not a scrollable document.
+
+- **Aim for 4-6 visual sections total.** If the diagram needs more, it is too dense.
+- **Each section = short title + at most one subtitle of ≤5 Chinese words.** Do not write full sentences or detailed file-line descriptions inside boxes.
+- **Prefer hierarchy over enumeration.** "文件层" with subtitle "页面骨架 / 样式 / 脚本 / 资源" is better than four full-width file rows.
+- **Details belong elsewhere.** If the user needs the full list (every file, every component, every metric), keep a concise overview widget in the reference zone and offer to create a separate detailed widget on demand. Do not turn the overview into a wall of text.
+
+### Typography
+
+- Base font-family: sans-serif.
+- Section title: 16-18px, font-weight 600.
+- Subtitle / secondary text: 12-14px, color #64748b or #475569.
+- Body text inside boxes: 13-14px.
+- Never go below 11px for primary content.
+
+### Spacing
+
+- Outer padding: 12-16px.
+- Gap between sections: 10-12px.
+- Internal gap inside a section: 6-8px.
+- Border-radius: 6-8px for cards, 4px for small tags.
+
+### Color Palette
+
+Reuse the same semantic palette as native stickies so the canvas reads as one visual system:
+
+| Semantic | Fill | Stroke / Text |
+|----------|------|---------------|
+| Neutral / default | #fef9c3 (yellow) | #854f0b |
+| Info / process | #e6f1fb (blue) | #185fa5 |
+| Success / done | #e1f5ee (green) | #0f6e56 |
+| Error / warning | #fcebeb (pink/red) | #a32d2d |
+| Message / cross-system | #eeedfe (purple) | #534ab7 |
+| Sub / terminal | #f1efe8 (gray) | #5f5e5a |
+
+### Splitting Strategy
+
+When content exceeds the density budget:
+
+1. Keep a high-level overview widget (4-6 sections) in the reference zone.
+2. Offer to create one or more detail widgets for the parts the user wants to drill into.
+3. Never try to make one widget serve both "global overview" and "deep detail" at the same time.
+`,
+
+  'widget-todolist': `## TodoList Widget Design Spec
+
+Use this spec when the user asks for a todo list, task list, checklist, or backlog. It gives the todo-list widget a consistent visual structure across sessions so users can recognize "this is a task board" at a glance.
+
+### When to Use This vs Other Tools
+
+- User wants a **whole-list view** (see all tasks at once, status overview) → use this widget/dynamic spec.
+- User wants **individually-editable items** (drag one task, reorder, per-item color) → use native/sticky or widget/task-list instead.
+- User wants a **kanban with columns** (todo / doing / done as separate swimlanes) → use the KanbanBoard template in widget-usage, not this spec.
+
+### Recommended Size
+
+- Default: w=6, h=7 (480 x 560 px). Fits 6-8 items comfortably.
+- Compact (3-5 items): w=5, h=5 (400 x 400 px).
+- Long list (8-12 items): w=7, h=9 (560 x 720 px). Do NOT exceed w=14, h=10 hard limit.
+- If the list has more than 12 items, split into a summary widget + a detail widget, or group by phase.
+
+### Structure
+
+Every todo-list widget has exactly four layers, top to bottom:
+
+1. **Header** — list title + optional progress summary (e.g. "3/8 done").
+2. **Progress bar** (optional, only if >3 items) — thin bar showing done/total ratio.
+3. **Item list** — the tasks. Each item is one row.
+4. **Footer** (optional) — last-updated timestamp or a one-line note.
+
+Do not add extra sections (metrics, descriptions, unrelated content) inside a todo-list widget. If you need those, create a separate widget beside it.
+
+### Item Row Anatomy
+
+Each row contains, left to right:
+
+- **Status marker** — a fixed-width glyph at the left edge.
+- **Task text** — the main label, one short line.
+- **Meta tag** (optional) — a small right-aligned tag for priority / owner / phase.
+
+Row height: 32-36px. Row padding: 6px 8px. Gap between rows: 4px.
+
+### Status Marker Styles
+
+Use these exact markers — they are the visual language users recognize across the canvas:
+
+| Status   | Marker | Color    | Text style               |
+|----------|--------|----------|--------------------------|
+| Todo     | ○      | #94a3b8  | normal                   |
+| Doing    | ◐      | #3b82f6  | font-weight 500          |
+| Done     | ●      | #10b981  | line-through, opacity 0.5|
+| Blocked  | ✕      | #ef4444  | normal, color #ef4444    |
+
+Marker width: 20px, fixed. Font-size: 14px. This keeps task text aligned even when statuses differ.
+
+### Typography
+
+- Header title: 15px, font-weight 600, color #1e293b.
+- Progress summary: 12px, color #64748b, right-aligned in header.
+- Task text: 13px, color #334155. Done items: color #94a3b8.
+- Meta tag: 11px, color #64748b, background #f1f5f9, padding 2px 6px, border-radius 3px.
+- Footer: 11px, color #94a3b8.
+
+### Colors
+
+- Widget background: #ffffff.
+- Header divider: 1px solid #e2e8f0.
+- Row hover (visual only, not interactive): no hover state needed.
+- Progress bar track: #e2e8f0. Fill: #10b981.
+- Blocked row background tint: #fef2f2 (very light red).
+
+### Information Density
+
+- Max 12 items in one widget. Beyond that, split.
+- Task text ≤ 20 Chinese chars. If longer, truncate with ellipsis and put the full text in a separate detail widget.
+- Meta tag ≤ 4 chars (e.g. "P0", "前端", "v2").
+- Do NOT embed file paths, line numbers, or long descriptions in task text.
+
+### Full Template
+
+\`\`\`html
+<div style="font-family:sans-serif;padding:14px;background:#fff;border-radius:8px;min-width:320px">
+  <!-- Header -->
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+    <h3 style="margin:0;font-size:15px;font-weight:600;color:#1e293b">项目任务</h3>
+    <span style="font-size:12px;color:#64748b">3/8 done</span>
+  </div>
+  <div style="height:1px;background:#e2e8f0;margin-bottom:10px"></div>
+  <!-- Progress bar -->
+  <div style="height:4px;background:#e2e8f0;border-radius:2px;margin-bottom:12px;overflow:hidden">
+    <div style="height:100%;width:37.5%;background:#10b981;border-radius:2px"></div>
+  </div>
+  <!-- Items -->
+  <div style="display:flex;flex-direction:column;gap:4px">
+    <!-- Done item -->
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px">
+      <span style="display:inline-block;width:20px;text-align:center;font-size:14px;color:#10b981">●</span>
+      <span style="flex:1;font-size:13px;color:#94a3b8;text-decoration:line-through">需求评审</span>
+      <span style="font-size:11px;color:#64748b;background:#f1f5f9;padding:2px 6px;border-radius:3px">P0</span>
+    </div>
+    <!-- Doing item -->
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px">
+      <span style="display:inline-block;width:20px;text-align:center;font-size:14px;color:#3b82f6">◐</span>
+      <span style="flex:1;font-size:13px;color:#334155;font-weight:500">接口联调</span>
+      <span style="font-size:11px;color:#64748b;background:#f1f5f9;padding:2px 6px;border-radius:3px">后端</span>
+    </div>
+    <!-- Todo item -->
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px">
+      <span style="display:inline-block;width:20px;text-align:center;font-size:14px;color:#94a3b8">○</span>
+      <span style="flex:1;font-size:13px;color:#334155">编写单元测试</span>
+      <span style="font-size:11px;color:#64748b;background:#f1f5f9;padding:2px 6px;border-radius:3px">测试</span>
+    </div>
+    <!-- Blocked item -->
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;background:#fef2f2">
+      <span style="display:inline-block;width:20px;text-align:center;font-size:14px;color:#ef4444">✕</span>
+      <span style="flex:1;font-size:13px;color:#ef4444">部署到预发环境</span>
+      <span style="font-size:11px;color:#64748b;background:#f1f5f9;padding:2px 6px;border-radius:3px">运维</span>
+    </div>
+  </div>
+  <!-- Footer -->
+  <div style="margin-top:10px;font-size:11px;color:#94a3b8">Updated 2026-07-07</div>
+</div>
+\`\`\`
+
+### Revision Workflow
+
+When the user asks to update task status (e.g. "把接口联调标记为完成"):
+
+1. Call canvas_list_elements to find the widget elementId.
+2. Regenerate the FULL sourceCode with the updated status marker and text style. The marker for the changed item moves from ○/◐ to ●, and the text gets line-through + opacity 0.5.
+3. Call canvas_fill_content with the new sourceCode. Do not try to patch individual rows — the whole sourceCode is replaced.
+4. Update the progress bar width and the "X/Y done" counter in the header to stay in sync.
+
+### Grouped Variant
+
+If the list has distinct phases (e.g. "Phase 1 / Phase 2"), insert a phase sub-header row before the items of each phase:
+
+\`\`\`html
+<div style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin:10px 0 4px 0">Phase 1: 基础设施</div>
+\`\`\`
+
+Keep phase sub-headers sparse — max 3 groups per widget. More than 3 means the list is too complex for one widget.
 `,
 
   'flowchart-layout': `## Flowchart Layout Templates

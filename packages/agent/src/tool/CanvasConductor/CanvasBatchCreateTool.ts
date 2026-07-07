@@ -220,16 +220,16 @@ export const executor: ToolExecutor = {
       ? (response as unknown as { data?: { diff?: { elements?: Array<{ ref?: string; id?: string }> } } }).data
       : undefined;
 
-    // Populate refMap so later tools can reference elements by semantic ref names.
-    // Also track all created element IDs so subsequent fill/style/move calls
-    // bypass the STALE_STATE check without forcing another canvas_list_elements.
-    if (context && batchResult?.diff?.elements) {
-      if (!context.refMap) {
-        context.refMap = new Map<string, string>();
-      }
+    // Populate the shared refMap so later tools can reference elements by
+    // semantic ref names. Also track all created element IDs so subsequent
+    // fill/style/move calls bypass the STALE_STATE check without forcing
+    // another canvas_list_elements. Both writes target the stable
+    // canvasFreshness container (spread-safe), NOT the context directly.
+    const freshness = context?.canvasFreshness;
+    if (context && freshness && batchResult?.diff?.elements) {
       for (const el of batchResult.diff.elements) {
         if (el.ref && el.id) {
-          context.refMap.set(el.ref, el.id);
+          freshness.refMap.set(el.ref, el.id);
         }
         if (el.id) {
           trackCreatedElement(context, el.id);
@@ -238,12 +238,13 @@ export const executor: ToolExecutor = {
     }
 
     // Track widget/dynamic style signatures for anti-slop diversity nudging.
-    if (response.success && context) {
+    // Mutate the shared array in place (see CanvasCreateElementTool for why).
+    if (response.success && context?.widgetStyleHistory) {
       for (const raw of operations) {
         const op = raw as Record<string, unknown>;
         if (op.op === 'create' && op.kind === 'widget/dynamic' && typeof op.sourceCode === 'string') {
           const signature = extractWidgetStyleSignature(op.sourceCode);
-          context.widgetStyleHistory = appendWidgetStyleSignature(context.widgetStyleHistory, signature);
+          appendWidgetStyleSignature(context.widgetStyleHistory, signature);
         }
       }
     }

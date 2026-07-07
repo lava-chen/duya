@@ -487,7 +487,26 @@ export class OpenAIClient implements LLMClient {
 
       if (!delta) continue;
 
-      // Handle text content with MiniMax <think> tag parsing
+      // Handle native reasoning_content / reasoning field (DeepSeek-R1, Qwen3, GLM-4.6, etc.)
+      // Some providers stream reasoning incrementally via delta.reasoning_content,
+      // others send it as a single string on delta.reasoning. Yield both as thinking events
+      // so they render in ThinkingRow. Only check string types to avoid OpenAI SDK type errors.
+      const reasoningDelta = (delta as { reasoning_content?: unknown }).reasoning_content;
+      const reasoningFull = (delta as { reasoning?: unknown }).reasoning;
+      if (typeof reasoningDelta === 'string' && reasoningDelta) {
+        yield {
+          type: 'thinking',
+          data: reasoningDelta,
+        };
+      }
+      if (typeof reasoningFull === 'string' && reasoningFull) {
+        yield {
+          type: 'thinking',
+          data: reasoningFull,
+        };
+      }
+
+      // Handle text content with MiniMax  tag parsing
       if (delta.content) {
         const textDelta = delta.content;
         thinkBuffer += textDelta;
@@ -520,7 +539,7 @@ export class OpenAIClient implements LLMClient {
               if (extractedThinking) {
                 yield {
                   type: 'thinking',
-                  data: extractedThinking.slice(0, 200),
+                  data: extractedThinking,
                 };
               }
             }

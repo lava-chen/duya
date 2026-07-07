@@ -47,8 +47,7 @@ import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapt
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
-import { buildConductorPrompt } from '../tool/CanvasConductor/prompt.js';
-import type { WidgetStyleHistory } from '../tool/CanvasConductor/prompt.js';
+import type { WidgetStyleSignature, CanvasFreshnessState } from '../types.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
 import { dequeueAllMatching, enqueuePendingNotification } from '../queue/index.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
@@ -62,7 +61,6 @@ import { resolveAllowedTools } from '../agent-profile/ToolFilter.js';
 import { ResearchMemory } from '../research-memory/index.js';
 import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
-import { buildResearchRunDB } from '../session/researchRunDb.js';
 import type { MailboxApplyMode, MailboxRow } from '../session/db.js';
 
 function extractTextFromContent(content: string | MessageContent[]): string {
@@ -134,9 +132,9 @@ import { SkillCurator, getDefaultCurator } from '../self-improver/SkillCurator.j
 
 // Mode System imports (the class is the only consumer in this file;
 // the public re-exports live in src/index.ts).
-import { ModeRegistry } from '../modes/index.js';
-import type { BaseMode, ModeContext } from '../modes/index.js';
-import '../modes/research-mode/index.js';
+import { modeModifierRegistry } from '../modes/index.js';
+import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ResolvedMode, ToolRegistration } from '../modes/index.js';
+import { applyModes, collectActiveModes } from '../modes/apply-modes.js';
 
 import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
@@ -240,20 +238,46 @@ export class duyaAgent {
   private blockedDomains: string[] = [];
   private researchMemoryRuntime: ResearchMemory;
   private mcpManager: MCPManager | null = null;
-  private _activeMode: BaseMode | null = null;
   /**
    * Rolling history of recent widget/dynamic style signatures.
    * Canvas tools push to this via ToolUseContext so the conductor
    * prompt can nudge the model away from repeating the same palette
    * or layout.
    */
-  private widgetStyleHistory: WidgetStyleHistory = [];
+  private widgetStyleHistory: WidgetStyleSignature[] = [];
   /**
-   * System prompt without the conductor overlay. Stored so each turn
-   * can refresh the anti-slop history without rebuilding the entire
-   * prompt system context.
+   * Per-session mutable canvas state (list-freshness timestamp, created
+   * element IDs, ref map). Shared across tool calls and turns via a
+   * stable reference on ToolUseContext so StreamingToolExecutor's
+   * per-call shallow spread does not lose writes.
    */
-  private baseSystemPromptWithoutConductor?: string;
+  private canvasFreshness: CanvasFreshnessState = {
+    refMap: new Map(),
+    recentlyCreatedElementIds: new Set(),
+  };
+  /**
+   * System prompt without mode-modifier prefixes/suffixes. Stored so
+   * each turn can re-evaluate mode prompt prefixes (e.g. conductor's
+   * anti-slop section) against the latest mode context state without
+   * rebuilding the entire prompt system context.
+   *
+   * Plan 224 Phase 3: generalizes the former
+   * `baseSystemPromptWithoutConductor` (conductor-only) to all mode modifiers.
+   */
+  private baseSystemPromptWithoutModes?: string;
+  /**
+   * Resolved mode modifiers for the current streamChat call. Used by
+   * the per-turn prompt refresh loop to re-evaluate function-form
+   * prefixes (e.g. conductor's `buildConductorPrefix` which reads the
+   * rolling `widgetStyleHistory`).
+   */
+  private resolvedModes?: ResolvedMode;
+  /**
+   * Mode context for the current streamChat call. Holds
+   * `toolUseContextPatch` (consumed by the tool executor) and
+   * `state` (read by mode prompt builders and hooks).
+   */
+  private modeCtx?: ModeModifierContext;
   /**
    * Phase 2: optional ProviderRuntimeConfig delivered by the main
    * process. The agent currently does not consume it directly (the
@@ -637,14 +661,29 @@ export class duyaAgent {
     const appliedProfile = this._resolveAgentProfile(options);
 
     // === Mode Dispatch ===
-    // Resolve mode: explicit option > profile-derived (research agent → research mode) > 'normal'
-    // Execution modes must be explicitly requested by the caller. Agent
-    // profiles control prompt/tool behavior and must not silently switch the
-    // runtime into a specialized orchestration mode.
+    // Resolve mode: explicit option > 'normal'. Orchestrator-paradigm
+    // modes (research) take over the entire stream via
+    // `_dispatchOrchestratorMode`. Modifier-paradigm modes (plan-task,
+    // conductor via `conductorMode` flag) fall through to the normal
+    // agent loop where `applyModes` composes them on top of the profile.
     const requestedMode = options?.mode || 'normal';
     if (requestedMode !== 'normal') {
-      yield* this._dispatchMode(requestedMode, prompt, options);
-      return;
+      const mod = modeModifierRegistry.get(requestedMode);
+      if (mod?.orchestrator) {
+        yield* this._dispatchOrchestratorMode(mod, prompt, options);
+        return;
+      }
+      if (!mod && !options?.conductorMode) {
+        // Unknown mode — no registry entry and no conductor flag.
+        yield {
+          type: 'error',
+          data: `Unknown mode: ${requestedMode}`,
+        } as SSEEvent;
+        return;
+      }
+      // Modifier-paradigm mode (plan-task) or conductor-only — fall
+      // through to the normal agent loop; `applyModes` below composes
+      // the mode overlay onto the profile-resolved base.
     }
 
     // === Normal Mode ===
@@ -655,7 +694,8 @@ export class duyaAgent {
     // `this.messages` together — a single bridge between helper output
     // and the main loop.
 
-    const { tools, registry, agentDefinitions } = await this._resolveTools(options, appliedProfile);
+    const { tools: baseTools, registry, agentDefinitions } = await this._resolveTools(options, appliedProfile);
+    let tools = baseTools;
     // Diagnostic: worker uses console.error for stderr (stdout is JSON-RPC).
     // eslint-disable-next-line no-console
     console.error(`[Agent-Process] streamChat tools (${tools.length}): conductorMode=${options?.conductorMode}, agentProfileId=${options?.agentProfileId}, mode=${options?.mode}, hasCanvasCreate=${tools.some(t => t.name === 'canvas_create_element')}`);
@@ -693,6 +733,80 @@ export class duyaAgent {
       }
     }
 
+    // === Plan 224 Phase 3+4: apply declarative mode modifiers ===
+    // Modifier-paradigm modes (conductor, plan-task) inject tools,
+    // prepend prompt prefixes, and merge toolUseContextPatch on top
+    // of the profile-resolved base. Orchestrator-paradigm modes
+    // (research) are dispatched earlier via `_dispatchOrchestratorMode`
+    // and never reach this path.
+    //
+    // The resolved modes + ctx are stored on `this` so the per-turn
+    // refresh loop below can re-evaluate function-form prompt prefixes
+    // (e.g. conductor's anti-slop section) against the latest
+    // `widgetStyleHistory` without re-running `onEnter` hooks.
+    const activeModeIds = collectActiveModes(options ?? {});
+    this.resolvedModes = activeModeIds.length > 0
+      ? modeModifierRegistry.resolve(activeModeIds)
+      : undefined;
+    if (this.resolvedModes && this.resolvedModes.modes.length > 0) {
+      // Capture the pre-mode system prompt BEFORE applyModes applies
+      // prefixes. The per-turn refresh loop re-evaluates function-form
+      // prefixes against this base each turn.
+      this.baseSystemPromptWithoutModes = systemPromptContent;
+
+      // Build the mode context. `state` is pre-populated with fields
+      // modes need to read in their hooks / prompt builders:
+      //  - conductorCanvasId: passed by the frontend (4-level priority
+      //    resolution in ChatView.handleConductorChange)
+      //  - widgetStyleHistory: the agent's rolling anti-slop history
+      this.modeCtx = {
+        sessionId: this.sessionId ?? '',
+        workingDirectory: this.workingDirectory ?? '',
+        state: {
+          conductorCanvasId: options?.conductorCanvasId,
+          widgetStyleHistory: this.widgetStyleHistory,
+        },
+      };
+
+      // Build base ToolRegistration[] from the profile-filtered tools.
+      // The registry holds the executors; we look them up by name.
+      const baseToolRegistrations: ToolRegistration[] = tools.map((t) => ({
+        definition: t,
+        executor: registry.getExecutor(t.name)!,
+      }));
+
+      const modeResult = await applyModes({
+        basePrompt: systemPromptContent,
+        baseTools: baseToolRegistrations,
+        baseToolUseContext: undefined,
+        ctx: this.modeCtx,
+        resolved: this.resolvedModes,
+      });
+
+      // Register injected tool executors into the registry so the
+      // streaming executor can dispatch them. Tools that were already
+      // registered (e.g. by an earlier call) are skipped.
+      for (const tr of modeResult.tools) {
+        if (!registry.has(tr.definition.name)) {
+          registry.register(tr.definition, tr.executor);
+        }
+      }
+
+      // Update the LLM-facing tool list and system prompt with the
+      // mode-applied versions.
+      tools = modeResult.tools.map((t) => t.definition);
+      systemPromptContent = modeResult.systemPrompt;
+
+      logger.info(
+        `[Agent] streamChat: Applied ${this.resolvedModes.modes.length} mode modifier(s): ${this.resolvedModes.modes.map((m) => m.id).join(', ')}`,
+      );
+    } else {
+      // No active modes — clear stored state so per-turn refresh is a no-op.
+      this.resolvedModes = undefined;
+      this.modeCtx = undefined;
+      this.baseSystemPromptWithoutModes = undefined;
+    }
+
     let turnCount = 0;
     const maxTurns = options?.maxTurns ?? 100;
     let runtimePromptMessageId: string | null = null;
@@ -710,10 +824,25 @@ export class duyaAgent {
       turnCount++;
       const turnStartTime = Date.now();
 
-      // Refresh the conductor overlay each turn so anti-slop history stays
-      // current as canvas tools add widget/dynamic signatures during the stream.
-      if (options?.conductorMode && this.baseSystemPromptWithoutConductor !== undefined) {
-        systemPromptContent = buildConductorPrompt(this.widgetStyleHistory) + '\n\n' + this.baseSystemPromptWithoutConductor;
+      // Plan 224 Phase 3: re-evaluate function-form mode prompt prefixes
+      // each turn so mode state that mutates during the stream (e.g.
+      // conductor's `widgetStyleHistory` grows as canvas tools push new
+      // signatures) is reflected in the system prompt without rebuilding
+      // the entire base prompt.
+      if (
+        this.resolvedModes &&
+        this.modeCtx &&
+        this.baseSystemPromptWithoutModes !== undefined &&
+        this.resolvedModes.prompt.prefixes.length > 0
+      ) {
+        // Refresh ctx.state with the latest rolling state so prefix
+        // builders read current values.
+        this.modeCtx.state.widgetStyleHistory = this.widgetStyleHistory;
+        let prefix = '';
+        for (const p of this.resolvedModes.prompt.prefixes) {
+          prefix += typeof p === 'function' ? p(this.modeCtx, this.baseSystemPromptWithoutModes) : p;
+        }
+        systemPromptContent = prefix + '\n\n' + this.baseSystemPromptWithoutModes;
       }
 
       // Only add user message on first turn (original prompt)
@@ -783,6 +912,7 @@ export class duyaAgent {
         getAppState: () => ({}),
         setAppState: () => {},
         widgetStyleHistory: this.widgetStyleHistory,
+        canvasFreshness: this.canvasFreshness,
         options: {
           recentImageAttachments: collectRecentImageAttachments(messages),
           tools,
@@ -814,8 +944,15 @@ export class duyaAgent {
         requestPermission: options?.requestPermission,
         // IPC for conductor executor communication
         ipcRequest: options?.conductorIpc?.ipcRequest,
-        // Conductor mode: bound canvas ID for canvas tools
-        conductorCanvasId: options?.conductorCanvasId,
+        // Plan 224 Phase 3: mode modifiers surface fields like
+        // `conductorCanvasId` via `toolUseContextPatch` (populated by
+        // `conductorMode.hooks.onEnter`). Spread it here so every
+        // canvas tool sees the bound canvasId without the LLM passing
+        // it explicitly. Falls back to the legacy `options.conductorCanvasId`
+        // for safety when no mode modifier is active.
+        conductorCanvasId:
+          (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
+          options?.conductorCanvasId,
       };
 
       const executor = new StreamingToolExecutor(
@@ -1061,9 +1198,10 @@ export class duyaAgent {
               `[Agent] Turn ${turnCount}: getRemainingResults completed, toolResultMessageCount=${toolResultMessageCount}`
             );
 
-            // Persist any widget/dynamic style signatures collected by canvas tools
-            // this turn so the next turn's conductor overlay can nudge for diversity.
-            this.widgetStyleHistory = toolUseContext.widgetStyleHistory ?? this.widgetStyleHistory;
+            // widgetStyleHistory and canvasFreshness are stable references
+            // injected into toolUseContext; canvas tools mutate them in
+            // place, so nothing to copy back here. The next turn reads the
+            // same references via this.widgetStyleHistory / this.canvasFreshness.
 
             // Drain completed background sub-agents and inject their
             // <task-notification> XML envelopes (claude-code protocol).
@@ -1459,7 +1597,6 @@ export class duyaAgent {
           enabledPluginIds,
           wikiAgentEnabled: options?.wikiAgentEnabled,
           mcpManagerProvider: () => this.mcpManager ?? undefined,
-          conductorMode: options?.conductorMode,
         }
       );
     }
@@ -1483,11 +1620,6 @@ export class duyaAgent {
       );
     }
 
-    // Snapshot canvas tools before profile filtering so conductor mode can
-    // force them back if a profile (preset or user-defined) denies them.
-    const canvasTools = options?.conductorMode
-      ? tools.filter((t) => t.name.startsWith('canvas_'))
-      : [];
     // Layer 2: agent profile policy
     if (appliedProfile) {
       const allToolNames = tools.map((t) => t.name);
@@ -1512,24 +1644,11 @@ export class duyaAgent {
       }
     }
 
-    // Conductor mode override: canvas tools are gated by the session toggle,
-    // not by the agent profile. Re-instate any canvas tools that a profile
-    // may have filtered out so the model always sees them when conductor mode
-    // is on.
-    if (options?.conductorMode && canvasTools.length > 0) {
-      const currentNames = new Set(tools.map((t) => t.name));
-      const missingCanvasTools = canvasTools.filter((t) => !currentNames.has(t.name));
-      if (missingCanvasTools.length > 0) {
-        tools = [...tools, ...missingCanvasTools];
-        logger.warn(
-          `[Agent] streamChat: Conductor mode reinstated ${missingCanvasTools.length} canvas tool(s) denied by profile`,
-          {
-            profileId: appliedProfile?.id ?? '(none)',
-            reinstated: missingCanvasTools.map((t) => t.name),
-          }
-        );
-      }
-    }
+    // Plan 224 Phase 3: conductor canvas tool injection + profile-filter
+    // bypass moved to `applyModes` in `streamChat`. The `conductorMode`
+    // option is no longer read here; `createBuiltinRegistry` no longer
+    // registers canvas tools. The mode modifier's `tools.inject` +
+    // `tools.overrideFilter` handle both registration and bypass.
 
     logger.info(`[Agent] streamChat: Loaded ${tools.length} tools`);
 
@@ -1623,17 +1742,12 @@ export class duyaAgent {
       systemPromptContent = identityBlock + '\n\n' + systemPromptContent;
     }
 
-    // Store the system prompt without the conductor overlay so streamChat
-    // can refresh the anti-slop history each turn without rebuilding the
-    // entire prompt system context.
-    this.baseSystemPromptWithoutConductor = systemPromptContent;
-
-    // Conductor mode overlay — prepended last so it appears first and the
-    // model sees tool instructions and anti-slop history before anything else.
-    if (options?.conductorMode) {
-      systemPromptContent = buildConductorPrompt(this.widgetStyleHistory) + '\n\n' + systemPromptContent;
-      logger.info('Injected conductor mode prompt overlay');
-    }
+    // Plan 224 Phase 3: conductor prompt overlay moved to `applyModes`
+    // in `streamChat`. The mode modifier's `prompt.prefix` handles
+    // prepending `buildConductorPrompt(widgetStyleHistory)`, and the
+    // per-turn refresh loop re-evaluates it against the latest
+    // `widgetStyleHistory`. `_buildSystemPrompt` now returns the base
+    // prompt only — no mode-specific overlays.
 
     return systemPromptContent;
   }
@@ -1741,63 +1855,29 @@ export class duyaAgent {
   }
 
   /**
-   * Dispatch a non-`normal` mode (e.g. `research`) and stream its events.
+   * Dispatch to an orchestrator-paradigm ModeModifier (plan 224 Phase 1.5+).
    *
-   * Validates the requested mode is registered, refuses to run modes that
-   * require session state we don't have (research needs `sessionId` for run
-   * tracking and report persistence — failing fast is preferable to running
-   * the orchestrator, producing a report the user can't retrieve, and
-   * silently returning an empty `done`).
+   * Orchestrator modes (e.g. research) take over the entire stream with
+   * their own multi-stage logic. They receive {@link OrchestratorDeps}
+   * (llmClient, toolRegistry, sessionId, etc.) and are responsible for
+   * building their own LLM calls, tool execution, and persistence —
+   * they do NOT run through the agent tool loop.
    *
-   * The mode owns its own tool registry, run DB, and context wiring. The
-   * helper does not return a value; the caller should `yield*` and `return`
-   * immediately after invocation. `this._activeMode` is set on entry and
-   * cleared in `finally` so external abort / interrupt code can reach the
-   * mode while it is running.
+   * Tool registry construction is shared with the legacy path so that
+   * plugin/MCP tools remain available to orchestrator modes that
+   * choose to use them.
    */
-  private async *_dispatchMode(
-    requestedMode: string,
+  private async *_dispatchOrchestratorMode(
+    mod: ModeModifier,
     prompt: string | MessageContent[],
     options?: ChatOptions,
   ): AsyncGenerator<SSEEvent, void, unknown> {
-    if (!ModeRegistry.has(requestedMode)) {
-      yield {
-        type: 'error',
-        data: `Unknown mode: ${requestedMode}`,
-      } as SSEEvent;
-      return;
-    }
-
-    // Research mode depends on a chat session for run tracking and report
-    // persistence. Fail fast in contexts without one (CLI / standalone
-    // harness) instead of letting the orchestrator run, produce a report
-    // the user can't retrieve, and silently return an empty `done`.
-    if (requestedMode === 'research' && !this.sessionId) {
-      logger.warn('[Agent] Research mode requested without a sessionId; refusing to start');
-      yield {
-        type: 'error',
-        data: 'Research mode requires an active chat session (sessionId is missing)',
-      } as SSEEvent;
-      return;
-    }
-
-    const mode = ModeRegistry.create(requestedMode);
-    if (!mode) {
-      yield {
-        type: 'error',
-        data: `Failed to create mode: ${requestedMode}`,
-      } as SSEEvent;
-      return;
-    }
-
-    logger.info(`[Agent] Dispatching to mode: ${requestedMode}`);
-    this._activeMode = mode;
-
     const queryText = typeof prompt === 'string'
       ? prompt
       : prompt.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
 
-    // Build tool registry for this mode
+    // Build tool registry for orchestrator (same construction as legacy
+    // path — plugin + MCP tools are available to orchestrator modes).
     const { createBuiltinRegistry } = await import('../tool/builtin.js');
     let enabledPluginIds: Set<string> | undefined;
     try {
@@ -1808,73 +1888,87 @@ export class duyaAgent {
       enabledPluginIds = new Set(enabledIds);
     } catch (err) {
       logger.warn(
-        `[Agent] Mode tool setup: Failed plugin registry; ${err instanceof Error ? err.message : String(err)}`
+        `[Agent] Orchestrator mode tool setup: Failed plugin registry; ${err instanceof Error ? err.message : String(err)}`
       );
     }
-    const modeRegistry = createBuiltinRegistry(
+    const toolRegistry = createBuiltinRegistry(
       this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
       {
         enabledPluginIds,
         wikiAgentEnabled: options?.wikiAgentEnabled,
-        // Pass a closure (not the manager itself) so the resources tool
-        // always sees the latest connection state — `this.mcpManager` can
-        // be replaced at runtime (see `installMCPManager`) and we want
-        // the tool to follow that.
         mcpManagerProvider: () => this.mcpManager ?? undefined,
-        conductorMode: options?.conductorMode,
       }
     );
-    this.registerMCPTools(modeRegistry);
+    this.registerMCPTools(toolRegistry);
 
-    const { _researchRunId, runDB, persistState } = await buildResearchRunDB(
-      this.sessionId,
-      queryText,
-    );
+    // Plan 224 Phase 3: if a modifier mode (conductor) is active alongside
+    // this orchestrator mode (research), inject the modifier's tools into
+    // the orchestrator's registry so the orchestrator can call them. The
+    // orchestrator manages its own prompt/loop, so we only apply the tool
+    // injection — not prompt prefixes or hooks.
+    const orchestratorActiveModes = collectActiveModes(options ?? {});
+    const orchestratorResolved = orchestratorActiveModes.length > 0
+      ? modeModifierRegistry.resolve(orchestratorActiveModes)
+      : null;
+    if (orchestratorResolved) {
+      const orchestratorCtx: ModeModifierContext = {
+        sessionId: this.sessionId ?? '',
+        workingDirectory: this.workingDirectory ?? '',
+        state: {
+          conductorCanvasId: options?.conductorCanvasId,
+          widgetStyleHistory: this.widgetStyleHistory,
+        },
+      };
+      for (const inject of orchestratorResolved.tools.injects) {
+        const items = typeof inject === 'function' ? inject(orchestratorCtx) : inject;
+        for (const tr of items) {
+          if (!toolRegistry.has(tr.definition.name)) {
+            toolRegistry.register(tr.definition, tr.executor);
+          }
+        }
+      }
+    }
 
-    const modeContext: ModeContext = {
+    const deps: OrchestratorDeps = {
       llmClient: this.llmClient,
       abortController: this.abortController!,
       sessionId: this.sessionId,
       workingDirectory: this.workingDirectory,
       researchMemory: this.researchMemoryRuntime,
-      _researchRunId,
-      toolExecute: (name: string, input: Record<string, unknown>) =>
-        modeRegistry.execute(name, input, this.workingDirectory).then((r) => {
-          if (!r) throw new Error(`Tool not found: ${name}`);
-          return r;
-        }),
-      toolExecuteConcurrent: async function* (
-        calls: Array<{ name: string; input: Record<string, unknown> }>
-      ) {
-        const batchSize = 5;
-        for (let i = 0; i < calls.length; i += batchSize) {
-          const batch = calls.slice(i, i + batchSize);
-          const results = await Promise.all(
-            batch.map((c) =>
-              modeRegistry.execute(c.name, c.input, undefined).then((r) => {
-                if (!r) throw new Error(`Tool not found: ${c.name}`);
-                return r;
-              })
-            )
-          );
-          for (const r of results) yield r;
-        }
-      },
-      persistState,
-      runDB,
+      toolRegistry,
+      chatOptions: options as Record<string, unknown> | undefined,
+      blockedDomains: this.blockedDomains,
     };
 
-    try {
-      yield* mode.execute(queryText, modeContext);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error(`[Agent] Mode execution failed: ${message}`);
+    const ctx: ModeModifierContext = {
+      sessionId: this.sessionId ?? '',
+      workingDirectory: this.workingDirectory ?? '',
+      state: {},
+    };
+
+    logger.info(`[Agent] Dispatching to orchestrator mode: ${mod.id}`);
+
+    const orchestrator = mod.orchestrator;
+    if (!orchestrator) {
+      // Defensive — caller already checked mod.orchestrator before invoking
+      // _dispatchOrchestratorMode, but TypeScript can't narrow across the
+      // method boundary.
       yield {
         type: 'error',
-        data: `Research mode error: ${message}`,
+        data: `Mode "${mod.id}" has no orchestrator`,
       } as SSEEvent;
-    } finally {
-      this._activeMode = null;
+      return;
+    }
+
+    try {
+      yield* orchestrator.execute(queryText, ctx, deps);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`[Agent] Orchestrator mode "${mod.id}" execution failed: ${message}`);
+      yield {
+        type: 'error',
+        data: `${mod.id} mode error: ${message}`,
+      } as SSEEvent;
     }
   }
 

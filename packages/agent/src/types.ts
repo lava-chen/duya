@@ -524,34 +524,52 @@ export interface ToolUseContext {
    */
   conductorCanvasId?: string;
   /**
-   * Timestamp (ms) of the last successful canvas_list_elements call.
-   * Write tools use this to enforce a "list before mutate" workflow.
+   * Mutable, per-session canvas state shared across tool calls within a turn
+   * and across turns. MUST be a stable reference object: StreamingToolExecutor
+   * spreads ToolUseContext per call (creating a shallow copy with a new
+   * toolUseId), so any field written directly on the context (e.g.
+   * `context.lastListElementsTime = ...`) would land on the throwaway copy
+   * and be lost on the next call. Concentrating the mutable state inside a
+   * single referenced object lets every spread copy observe and mutate the
+   * same underlying state.
    */
+  canvasFreshness?: CanvasFreshnessState;
+  /**
+   * Recent widget/dynamic style signatures used for anti-slop diversity.
+   * Canvas tools append to this history so the conductor prompt can nudge
+   * the model toward different color palettes, fonts, and layouts.
+   */
+  widgetStyleHistory?: WidgetStyleSignature[];
+}
+
+/**
+ * Shared mutable canvas state. Stored as a reference on ToolUseContext so
+ * StreamingToolExecutor's per-call shallow spread does not lose writes.
+ */
+export interface CanvasFreshnessState {
+  /** Timestamp (ms) of the last successful canvas_list_elements call. */
   lastListElementsTime?: number;
   /**
-   * Ref name → elementId map populated by canvas_batch_create.
+   * Ref name -> elementId map populated by canvas_batch_create.
    * Allows later tools to reference elements by semantic names like "login"
    * instead of memorizing UUIDs.
    */
-  refMap?: Map<string, string>;
+  refMap: Map<string, string>;
   /**
    * Element IDs created by the agent in this session. Populated by
    * canvas_create_element and canvas_batch_create. Used by the freshness
    * check so the agent can fill/style/move an element it just created
    * without re-calling canvas_list_elements.
    */
-  recentlyCreatedElementIds?: Set<string>;
-  /**
-   * Recent widget/dynamic style signatures used for anti-slop diversity.
-   * Canvas tools append to this history so the conductor prompt can nudge
-   * the model toward different color palettes, fonts, and layouts.
-   */
-  widgetStyleHistory?: Array<{
-    backgroundColor?: string;
-    textColor?: string;
-    fontFamily?: string;
-    layoutType?: string;
-  }>;
+  recentlyCreatedElementIds: Set<string>;
+}
+
+/** Style signature captured from a widget/dynamic element's sourceCode. */
+export interface WidgetStyleSignature {
+  backgroundColor?: string;
+  textColor?: string;
+  fontFamily?: string;
+  layoutType?: string;
 }
 
 /** Progress event emitted by a sub-agent during execution */
