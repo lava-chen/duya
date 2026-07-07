@@ -13,12 +13,13 @@ export function resolveElementId(
     return { elementId: input.elementId };
   }
   if (input.ref && typeof input.ref === 'string') {
-    const id = context?.refMap?.get(input.ref);
+    const id = context?.canvasFreshness?.refMap.get(input.ref);
     if (id) {
       return { elementId: id };
     }
+    const available = [...(context?.canvasFreshness?.refMap.keys() ?? [])];
     return {
-      error: `Ref "${input.ref}" not found. Available refs: ${[...(context?.refMap?.keys() ?? [])].join(', ') || '(none)'}. Use elementId or create the element with a ref first.`,
+      error: `Ref "${input.ref}" not found. Available refs: ${available.join(', ') || '(none)'}. Use elementId or create the element with a ref first.`,
     };
   }
   return { error: 'Missing elementId or ref. Provide one to identify the target element.' };

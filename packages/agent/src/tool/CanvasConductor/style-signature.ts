@@ -6,9 +6,9 @@
  * toward visual diversity (anti-slop).
  */
 
-import type { ToolUseContext } from '../../types.js';
+import type { WidgetStyleSignature } from '../../types.js';
 
-export type WidgetStyleSignature = NonNullable<ToolUseContext['widgetStyleHistory']>[number];
+export type { WidgetStyleSignature };
 
 /**
  * Extract a coarse style signature from widget/dynamic sourceCode.
@@ -47,16 +47,21 @@ export function extractWidgetStyleSignature(sourceCode: string): WidgetStyleSign
   return signature;
 }
 
+/** Maximum number of recent signatures kept for anti-slop nudging. */
+const MAX_WIDGET_STYLE_HISTORY = 3;
+
 /**
- * Append a signature to the rolling history, keeping only the most recent 3.
+ * Append a signature to the rolling history in place, keeping only the most
+ * recent {@link MAX_WIDGET_STYLE_HISTORY} entries. Mutates the array directly
+ * because the history is shared across tool calls via ToolUseContext and must
+ * survive StreamingToolExecutor's per-call shallow spread of the context.
  */
 export function appendWidgetStyleSignature(
-  history: WidgetStyleSignature[] | undefined,
+  history: WidgetStyleSignature[],
   signature: WidgetStyleSignature,
-): WidgetStyleSignature[] {
-  const next = history ? [...history, signature] : [signature];
-  while (next.length > 3) {
-    next.shift();
+): void {
+  history.push(signature);
+  while (history.length > MAX_WIDGET_STYLE_HISTORY) {
+    history.shift();
   }
-  return next;
 }

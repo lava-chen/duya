@@ -85,12 +85,15 @@ export const definition: Tool = {
     '  - native/connector: { source, target } — bezier connector between two elements\n' +
     '  - widget/dynamic:   HTML/SVG sourceCode for custom visual content\n\n' +
     'Position is required and uses canvas grid units (1 unit = 80px). ' +
-    'ALWAYS provide w and h; do not omit them. Choose size based on content: short label 3x2, ' +
-    'standard sticky 4x3, detailed card 5x4. Minimum usable sticky size is 3x2. ' +
+    'ALWAYS provide w and h; do not omit them. Choose size based on content — do NOT oversize: ' +
+    'short label 3x2, 1 short Chinese line 3x2, standard sticky 4x3, detailed card 5x4. ' +
+    'Minimum usable sticky size is 3x2. For Chinese text, prefer larger fontSize and tighter boxes: ' +
+    'short label 3x2 with fontSize=16-18, standard sticky 4x3 with fontSize=18, detailed card 5x4 with fontSize=20. ' +
+    'The canvas zooms to fit the whole 40x30 grid by default, so excess whitespace shrinks everything else. ' +
     'config and vizSpec are optional and can be set later. ' +
     'Returns the new elementId in the result — use it with canvas_fill_content / ' +
     'canvas_style_element / canvas_move_element to complete the element. ' +
-    'Example: { "kind": "native/sticky", "position": {"x":1,"y":1,"w":4,"h":3}, "config": {"text":"Hello"} }',
+    'Example: { "kind": "native/sticky", "position": {"x":1,"y":1,"w":4,"h":3}, "config": {"text":"开始","fontSize":18,"color":"yellow"} }',
   input_schema: {
     type: 'object',
     properties: {
@@ -219,7 +222,12 @@ export const executor: ToolExecutor = {
 
     if (response.success && kind === 'widget/dynamic' && sourceCode && context) {
       const signature = extractWidgetStyleSignature(sourceCode);
-      context.widgetStyleHistory = appendWidgetStyleSignature(context.widgetStyleHistory, signature);
+      // widgetStyleHistory is a stable array reference injected by DuyaAgent,
+      // so mutating it in place survives StreamingToolExecutor's per-call
+      // shallow spread of the context.
+      if (context.widgetStyleHistory) {
+        appendWidgetStyleSignature(context.widgetStyleHistory, signature);
+      }
     }
 
     // Track the newly created element so subsequent fill/style/move calls

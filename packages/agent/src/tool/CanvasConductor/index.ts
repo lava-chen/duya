@@ -23,6 +23,7 @@
  */
 
 import type { ToolRegistry } from '../registry.js';
+import type { ToolRegistration } from '../../modes/types.js';
 import { definition as createDefinition, executor as createExecutor } from './CanvasCreateElementTool.js';
 import { definition as batchCreateDefinition, executor as batchCreateExecutor } from './CanvasBatchCreateTool.js';
 import { definition as deleteDefinition, executor as deleteExecutor } from './CanvasDeleteElementTool.js';
@@ -36,24 +37,44 @@ import { definition as captureDefinition, executor as captureExecutor } from './
 import { definition as getKnowledgeDefinition, executor as getKnowledgeExecutor } from './CanvasGetKnowledgeTool.js';
 
 /**
+ * The eleven canvas conductor tools as {@link ToolRegistration} pairs.
+ *
+ * Plan 224: this is the canonical export — `conductorMode.tools.inject`
+ * returns the result of this function so the modifier owns the tool
+ * set declaratively. The legacy {@link registerCanvasConductorTools}
+ * wrapper remains for any caller that still wants to push them
+ * directly into a registry.
+ *
+ * The first ten tools expect a bound canvasId in ToolUseContext and
+ * will fail without it. `canvas_get_knowledge` is the exception: it
+ * works without canvasId because it returns static knowledge content.
+ */
+export function getCanvasConductorTools(): ToolRegistration[] {
+  return [
+    { definition: createDefinition, executor: createExecutor },
+    { definition: batchCreateDefinition, executor: batchCreateExecutor },
+    { definition: deleteDefinition, executor: deleteExecutor },
+    { definition: moveDefinition, executor: moveExecutor },
+    { definition: resizeDefinition, executor: resizeExecutor },
+    { definition: fillDefinition, executor: fillExecutor },
+    { definition: styleDefinition, executor: styleExecutor },
+    { definition: listElementsDefinition, executor: listElementsExecutor },
+    { definition: findEmptySpaceDefinition, executor: findEmptySpaceExecutor },
+    { definition: captureDefinition, executor: captureExecutor },
+    { definition: getKnowledgeDefinition, executor: getKnowledgeExecutor },
+  ];
+}
+
+/**
  * Register the eleven canvas conductor tools on the given registry.
- * Call only when conductorMode is enabled — the first ten tools
- * expect a bound canvasId in ToolUseContext and will fail without it.
- * `canvas_get_knowledge` is the exception: it works without canvasId
- * because it returns static knowledge content.
+ *
+ * @deprecated Plan 224 Phase 3: prefer {@link getCanvasConductorTools}
+ * via `conductorMode.tools.inject`. This wrapper is retained for
+ * backward compatibility with call sites that push tools into a
+ * registry directly.
  */
 export function registerCanvasConductorTools(registry: ToolRegistry): void {
-  registry.register(createDefinition, createExecutor);
-  registry.register(batchCreateDefinition, batchCreateExecutor);
-  registry.register(deleteDefinition, deleteExecutor);
-  registry.register(moveDefinition, moveExecutor);
-  registry.register(resizeDefinition, resizeExecutor);
-  registry.register(fillDefinition, fillExecutor);
-  registry.register(styleDefinition, styleExecutor);
-  registry.register(listElementsDefinition, listElementsExecutor);
-  registry.register(findEmptySpaceDefinition, findEmptySpaceExecutor);
-  registry.register(captureDefinition, captureExecutor);
-  registry.register(getKnowledgeDefinition, getKnowledgeExecutor);
+  registry.registerAll(getCanvasConductorTools());
 }
 
 export {

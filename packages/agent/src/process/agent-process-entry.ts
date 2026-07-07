@@ -494,7 +494,7 @@ function messageRowToMessage(
     id: row.id,
     role: row.role,
     content,
-    displayContent: row.display_content && row.display_content.length > 0
+    displayContent: row.display_content != null
       ? row.display_content
       : undefined,
     name: row.name || undefined,
@@ -515,11 +515,11 @@ function messageRowToMessage(
 }
 
 function applyRequestDisplayContent(messages: readonly Message[], displayContent?: string): void {
-  if (!displayContent || displayContent.length === 0) {
+  if (displayContent === undefined) {
     return;
   }
   const userMessage = messages.find((item) => item.role === 'user');
-  if (userMessage && !userMessage.displayContent) {
+  if (userMessage && userMessage.displayContent === undefined) {
     userMessage.displayContent = displayContent;
   }
 }
@@ -2777,15 +2777,13 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
 
         case 'research:clarification:resolve': {
           const { requestId, answers } = msg as unknown as { requestId: string; answers: Record<string, string> };
-          const mode = agent?._activeMode;
-          let resolved = false;
-          if (mode && typeof mode.resolveClarification === 'function') {
-            resolved = mode.resolveClarification(requestId, answers);
-          }
-          if (!resolved) {
-            const { resolveResearchClarificationRequest } = await import('../modes/research-mode/index.js');
-            resolved = resolveResearchClarificationRequest(requestId, answers);
-          }
+          // Plan 224: Research mode now dispatches via modeModifierRegistry
+          // (orchestrator paradigm). The active ResearchMode instance is
+          // tracked in research-mode.ts, so resolveActiveResearchClarification
+          // tries the instance first, then falls back to the module-level
+          // pending map automatically.
+          const { resolveActiveResearchClarification } = await import('../modes/research-mode.js');
+          const resolved = resolveActiveResearchClarification(requestId, answers);
           if (!resolved) {
             warn('[Agent-Process] Research clarification resolution failed: no pending request found', requestId);
           }

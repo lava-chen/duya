@@ -1,18 +1,18 @@
 /**
  * Freshness check for canvas mutation tools.
  *
- * The original STALE_STATE check required canvas_list_elements to be
- * called within 30 seconds before any mutation. This was too strict:
- * the agent often creates elements, then tries to fill/style them,
- * only to be blocked because the list call was >30s ago.
- *
- * New policy:
+ * Policy:
  *   - Allow mutations if canvas_list_elements was called within 5 minutes.
  *   - OR if the target element was created in this session (tracked via
- *     context.recentlyCreatedElementIds). This lets the agent create an
- *     element and immediately fill/style/move it without re-listing.
- *   - canvas_fill_content and canvas_style_element are merge-patches
- *     (idempotent, non-destructive), so they skip the check entirely.
+ *     canvasFreshness.recentlyCreatedElementIds). This lets the agent
+ *     create an element and immediately fill/style/move it without
+ *     re-listing.
+ *
+ * All mutable state lives on `context.canvasFreshness` (a stable reference
+ * object) rather than directly on `context`. StreamingToolExecutor spreads
+ * ToolUseContext per tool call, so writing to `context.lastListElementsTime`
+ * would land on a throwaway copy. Writing to `context.canvasFreshness.xxx`
+ * works because the spread copies the reference, not the underlying object.
  */
 
 import type { ToolUseContext } from '../../types.js';
@@ -30,17 +30,18 @@ export function isMutationFresh(
   context: ToolUseContext | undefined,
   elementId?: string,
 ): boolean {
-  if (!context) return false;
+  const state = context?.canvasFreshness;
+  if (!state) return false;
 
   // Path 1: canvas_list_elements was called recently.
-  const lastList = context.lastListElementsTime;
+  const lastList = state.lastListElementsTime;
   if (typeof lastList === 'number' && Date.now() - lastList < LIST_FRESH_WINDOW_MS) {
     return true;
   }
 
   // Path 2: the target element was created in this session. The agent
   // knows the element exists because it just created it.
-  if (elementId && context.recentlyCreatedElementIds?.has(elementId)) {
+  if (elementId && state.recentlyCreatedElementIds.has(elementId)) {
     return true;
   }
 
@@ -70,16 +71,14 @@ export function staleStateResult(toolName: string, elementId?: string) {
 }
 
 /**
- * Record a freshly created element in the context so subsequent
- * mutations on it bypass the list-freshness check.
+ * Record a freshly created element in the shared freshness state so
+ * subsequent mutations on it bypass the list-freshness check. No-op if
+ * the context has no canvasFreshness container (defensive — DuyaAgent
+ * initializes it whenever conductor mode is active).
  */
 export function trackCreatedElement(
   context: ToolUseContext | undefined,
   elementId: string,
 ): void {
-  if (!context) return;
-  if (!context.recentlyCreatedElementIds) {
-    context.recentlyCreatedElementIds = new Set<string>();
-  }
-  context.recentlyCreatedElementIds.add(elementId);
+  context?.canvasFreshness?.recentlyCreatedElementIds.add(elementId);
 }
