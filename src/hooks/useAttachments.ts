@@ -481,8 +481,8 @@ export function useAttachments(): UseAttachmentsApi {
   );
 
   const buildDisplayContent = useCallback(
-    (inputText: string): string => buildModelContent(inputText),
-    [buildModelContent],
+    (inputText: string): string => inputText,
+    [],
   );
 
   return {

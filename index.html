@@ -6,9 +6,9 @@
     <meta name="theme-color" content="#fefdfb" />
     <title>DUYA</title>
     <script>
-      // Apply theme before React mounts to avoid a flash of wrong theme.
-      // Source of truth lives in the settings DB; this localStorage entry is a
-      // boot-time hint written by AppearanceSection and app-sidebar on every change.
+      // Apply theme + font before React mounts to avoid a flash of wrong styles.
+      // Source of truth lives in the settings DB; these localStorage entries are
+      // boot-time hints written by AppearanceSection on every change.
       (function () {
         try {
           var stored = window.localStorage.getItem("duya-theme");
@@ -20,6 +20,11 @@
               ? "dark"
               : "light";
           document.documentElement.setAttribute("data-theme", resolved);
+
+          var storedFont = window.localStorage.getItem("duya-font");
+          if (storedFont === "system") {
+            document.documentElement.setAttribute("data-font", "system");
+          }
         } catch (_) {
           /* ignore */
         }

@@ -26,14 +26,21 @@ import {
   PlugIcon,
   FileIcon,
   FolderOpenIcon,
+  DotsThreeIcon,
+  CaretRightIcon,
+  CaretDownIcon,
+  CheckIcon,
+  CornersInIcon,
+  CornersOutIcon,
+  NotePencilIcon,
 } from "@/components/icons";
-import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab } from "@/stores/conversation-store";
+import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectFilter } from "@/stores/conversation-store";
 import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
-import { usePanel } from "@/hooks/usePanel";
+import { useOptionalPanel } from "@/hooks/usePanel";
 import { InputDialog } from "@/components/ui/InputDialog";
 
 type ThemeMode = "light" | "dark";
@@ -134,9 +141,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const { settings, loading, error, save } = useSettings();
     const [isLoading, setIsLoading] = useState(true);
     const [isInputDialogOpen, setIsInputDialogOpen] = useState(false);
-    const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
     const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
-    const projectMenuRef = useRef<HTMLDivElement>(null);
 
     const {
       threads,
@@ -149,8 +154,16 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       setSettingsTab,
       enterSettings,
       exitSettings,
+      collapsedProjects,
+      collapseAllProjects,
+      expandAllProjects,
+      projectSortBy,
+      setProjectSortBy,
+      projectFilter,
+      setProjectFilter,
     } = useConversationStore();
-    const { openOrActivatePage } = usePanel();
+    const panel = useOptionalPanel();
+    const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
     const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
     const systemDark = useMemo(
@@ -244,19 +257,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       void save({ theme: resolvedTheme === "dark" ? "light" : "dark" });
     };
 
-    // Close project menu when clicking outside
-    useEffect(() => {
-      function handleClickOutside(event: MouseEvent) {
-        if (projectMenuRef.current && !projectMenuRef.current.contains(event.target as Node)) {
-          setIsProjectMenuOpen(false);
-        }
-      }
-      if (isProjectMenuOpen) {
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-      }
-    }, [isProjectMenuOpen]);
-
     const handleCreateProjectFromPath = useCallback(async (workingDirectory: string) => {
       if (workingDirectory.trim()) {
         const projectName = workingDirectory.trim().split(/[\\/]/).pop() || "Untitled";
@@ -268,7 +268,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     }, [createThread, setCurrentView]);
 
     const handleOpenExistingFolder = async () => {
-      setIsProjectMenuOpen(false);
       try {
         if (window.electronAPI?.dialog?.openFolder) {
           const result = await window.electronAPI.dialog.openFolder({
@@ -288,7 +287,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     };
 
     const handleNewBlankProject = () => {
-      setIsProjectMenuOpen(false);
       setIsNameProjectDialogOpen(true);
     };
 
@@ -340,18 +338,43 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       const noProjectThreads = groups.get("__no_project__") || [];
       groups.delete("__no_project__");
 
+      const RECENT_DAYS = 14;
+      const recentThreshold = Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000;
+
       const projectGroups: ProjectGroup[] = Array.from(groups.entries())
-        .map(([wd, groupThreads]) => ({
-          workingDirectory: wd,
-          projectName: groupThreads[0]?.projectName || wd.split(/[\\/]/).pop() || "Unknown",
-          threadCount: groupThreads.length,
-          lastActivity: Math.max(...groupThreads.map((t) => t.updatedAt)),
-          isExpanded: true,
-        }))
-        .sort((a, b) => b.lastActivity - a.lastActivity);
+        .map(([wd, groupThreads]) => {
+          const lastActivity = Math.max(...groupThreads.map((t) => t.updatedAt));
+          const createdAt = Math.min(...groupThreads.map((t) => t.createdAt));
+          return {
+            workingDirectory: wd,
+            projectName: groupThreads[0]?.projectName || wd.split(/[\\/]/).pop() || "Unknown",
+            threadCount: groupThreads.length,
+            lastActivity,
+            createdAt,
+            isExpanded: !collapsedProjects.has(wd),
+          };
+        })
+        .filter((group) => {
+          if (projectFilter === 'all') return true;
+          return group.lastActivity >= recentThreshold;
+        })
+        .sort((a, b) => {
+          if (projectSortBy === 'lastActivity') {
+            return b.lastActivity - a.lastActivity;
+          }
+          if (projectSortBy === 'createdAt') {
+            return b.createdAt - a.createdAt;
+          }
+          return a.projectName.localeCompare(b.projectName);
+        });
 
       return { projectGroups, noProjectThreads, threadChildren: childrenMap };
-    }, [threads]);
+    }, [threads, projectSortBy, projectFilter, collapsedProjects]);
+
+    const allCollapsed = useMemo(
+      () => projectGroups.length > 0 && projectGroups.every((p) => collapsedProjects.has(p.workingDirectory)),
+      [projectGroups, collapsedProjects]
+    );
 
     // Handle settings tab change
     const handleSettingsTabChange = (tabId: SettingsTab) => {
@@ -443,66 +466,16 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         </nav>
 
         {projectGroups.length > 0 && (
-          <div className="sidebar-section-header">
-            <span className="sidebar-section-label">{t('common.projects')}</span>
-            <div className="relative" ref={projectMenuRef}>
-              <button
-                type="button"
-                className="sidebar-section-action"
-                onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
-                title={t('project.newProject')}
-              >
-                <PlusIcon size={14} />
-              </button>
-              {isProjectMenuOpen && (
-                <div
-                  className="absolute right-0 top-full mt-1.5 py-1.5 rounded-lg z-50"
-                  style={{
-                    backgroundColor: 'var(--bg-canvas)',
-                    border: '1px solid var(--border)',
-                    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.15)',
-                    minWidth: '200px',
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left rounded-md mx-1"
-                    style={{ color: 'var(--text)', width: 'calc(100% - 8px)' }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                    onClick={handleNewBlankProject}
-                  >
-                    <span className="flex-shrink-0" style={{ color: 'var(--muted)' }}>
-                      <FileIcon size={15} />
-                    </span>
-                    <span className="whitespace-nowrap">{t('project.newBlankProject')}</span>
-                  </button>
-                  <div className="mx-3 my-1" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left rounded-md mx-1"
-                    style={{ color: 'var(--text)', width: 'calc(100% - 8px)' }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                    onClick={handleOpenExistingFolder}
-                  >
-                    <span className="flex-shrink-0" style={{ color: 'var(--muted)' }}>
-                      <FolderOpenIcon size={15} />
-                    </span>
-                    <span className="whitespace-nowrap">{t('project.useExistingFolder')}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
+          <SidebarProjectHeader
+            onNewBlankProject={handleNewBlankProject}
+            onCollapseAll={collapseAllProjects}
+            onExpandAll={expandAllProjects}
+            allCollapsed={allCollapsed}
+            projectSortBy={projectSortBy}
+            onProjectSortBy={setProjectSortBy}
+            projectFilter={projectFilter}
+            onProjectFilter={setProjectFilter}
+          />
         )}
 
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
@@ -617,3 +590,171 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     );
   }
 );
+
+interface SidebarProjectHeaderProps {
+  onNewBlankProject: () => void;
+  onCollapseAll: () => void;
+  onExpandAll: () => void;
+  allCollapsed: boolean;
+  projectSortBy: ProjectSortBy;
+  onProjectSortBy: (sortBy: ProjectSortBy) => void;
+  projectFilter: ProjectFilter;
+  onProjectFilter: (filter: ProjectFilter) => void;
+}
+
+type SubmenuPanel = 'organize' | 'sort' | null;
+
+function SidebarProjectHeader({
+  onNewBlankProject,
+  onCollapseAll,
+  onExpandAll,
+  allCollapsed,
+  projectSortBy,
+  onProjectSortBy,
+  projectFilter,
+  onProjectFilter,
+}: SidebarProjectHeaderProps) {
+  const { t } = useTranslation();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [openSubmenu, setOpenSubmenu] = useState<SubmenuPanel>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsMenuOpen(false);
+        setOpenSubmenu(null);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isMenuOpen]);
+
+  const closeMenu = () => {
+    setIsMenuOpen(false);
+    setOpenSubmenu(null);
+  };
+
+  const handleToggleAll = () => {
+    if (allCollapsed) {
+      onExpandAll();
+    } else {
+      onCollapseAll();
+    }
+  };
+
+  const menuPosition = useMemo(() => {
+    if (!menuButtonRef.current) return { top: 0, left: 0 };
+    const rect = menuButtonRef.current.getBoundingClientRect();
+    return {
+      top: rect.bottom + 6,
+      left: rect.right - 180,
+    };
+  }, [isMenuOpen]);
+
+  return (
+    <div className="sidebar-section-header">
+      <span className="sidebar-section-label">{t('common.projects')}</span>
+      <div className="relative flex items-center gap-0.5" ref={menuRef}>
+        <button
+          type="button"
+          className="sidebar-section-action"
+          onClick={handleToggleAll}
+          title={allCollapsed ? t('project.expandAll') : t('project.collapseAll')}
+        >
+          {allCollapsed ? <CornersOutIcon size={14} /> : <CornersInIcon size={14} />}
+        </button>
+        <button
+          type="button"
+          className="sidebar-section-action"
+          ref={menuButtonRef}
+          onClick={() => setIsMenuOpen((prev) => !prev)}
+          title={t('common.more')}
+        >
+          <DotsThreeIcon size={16} />
+        </button>
+        <button
+          type="button"
+          className="sidebar-section-action"
+          onClick={onNewBlankProject}
+          title={t('project.newProject')}
+        >
+          <NotePencilIcon size={14} />
+        </button>
+
+        {isMenuOpen && (
+          <div className="sidebar-project-menu" style={menuPosition}>
+            <div
+              className="sidebar-project-menu-item has-submenu"
+              onMouseEnter={() => setOpenSubmenu('organize')}
+              onMouseLeave={() => setOpenSubmenu((prev) => (prev === 'organize' ? null : prev))}
+            >
+              <SquaresFourIcon size={15} />
+              <span className="flex-1">{t('project.organizeSidebar')}</span>
+              <CaretRightIcon size={12} />
+              {openSubmenu === 'organize' && (
+                <div className="sidebar-project-submenu">
+                  <button
+                    type="button"
+                    className="sidebar-project-menu-item"
+                    onClick={() => { onProjectFilter('all'); closeMenu(); }}
+                  >
+                    <span className="flex-1">{t('project.filterAll')}</span>
+                    {projectFilter === 'all' && <CheckIcon size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar-project-menu-item"
+                    onClick={() => { onProjectFilter('recent'); closeMenu(); }}
+                  >
+                    <span className="flex-1">{t('project.filterRecent')}</span>
+                    {projectFilter === 'recent' && <CheckIcon size={14} />}
+                  </button>
+                </div>
+              )}
+            </div>
+            <div
+              className="sidebar-project-menu-item has-submenu"
+              onMouseEnter={() => setOpenSubmenu('sort')}
+              onMouseLeave={() => setOpenSubmenu((prev) => (prev === 'sort' ? null : prev))}
+            >
+              <ClockCounterClockwiseIcon size={15} />
+              <span className="flex-1">{t('project.sortBy')}</span>
+              <CaretRightIcon size={12} />
+              {openSubmenu === 'sort' && (
+                <div className="sidebar-project-submenu">
+                  <button
+                    type="button"
+                    className="sidebar-project-menu-item"
+                    onClick={() => { onProjectSortBy('lastActivity'); closeMenu(); }}
+                  >
+                    <span className="flex-1">{t('project.sortLastUpdated')}</span>
+                    {projectSortBy === 'lastActivity' && <CheckIcon size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar-project-menu-item"
+                    onClick={() => { onProjectSortBy('createdAt'); closeMenu(); }}
+                  >
+                    <span className="flex-1">{t('project.sortCreatedAt')}</span>
+                    {projectSortBy === 'createdAt' && <CheckIcon size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar-project-menu-item"
+                    onClick={() => { onProjectSortBy('name'); closeMenu(); }}
+                  >
+                    <span className="flex-1">{t('project.sortName')}</span>
+                    {projectSortBy === 'name' && <CheckIcon size={14} />}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

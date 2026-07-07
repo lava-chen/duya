@@ -23,6 +23,7 @@ interface MessageListProps {
   error?: string | null;
   sessionId: string;
   onRewindToMessage?: (messageId: string) => void;
+  onEditMessage?: (messageId: string) => void;
 }
 
 interface GroupedMessage {
@@ -115,6 +116,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   cachedHeight,
   onHeightChange,
   onRewindToMessage,
+  onEditMessage,
 }: {
   group: GroupedMessage;
   scrollRoot: React.RefObject<HTMLDivElement | null>;
@@ -122,6 +124,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   cachedHeight?: number;
   onHeightChange: (messageId: string, height: number) => void;
   onRewindToMessage?: (messageId: string) => void;
+  onEditMessage?: (messageId: string) => void;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [isNearViewport, setIsNearViewport] = useState(isAlwaysRendered);
@@ -190,6 +193,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
           toolResults={group.toolResults}
           mergedMessages={group.mergedMessages}
           onRewindToMessage={onRewindToMessage}
+          onEditMessage={onEditMessage}
         />
       ) : null}
     </div>
@@ -201,6 +205,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   && prev.isAlwaysRendered === next.isAlwaysRendered
   && prev.cachedHeight === next.cachedHeight
   && prev.onRewindToMessage === next.onRewindToMessage
+  && prev.onEditMessage === next.onEditMessage
 ));
 
 interface MessageNavigatorItem {
@@ -388,7 +393,7 @@ function buildNavigatorItems(groupedMessages: GroupedMessage[], activeMessageId:
       collectToolNames(msg, toolNames);
     }
 
-    const userSource = group.message.displayContent !== undefined && !(typeof group.message.displayContent === 'string' && group.message.displayContent.length === 0)
+    const userSource = group.message.displayContent !== undefined
       ? group.message.displayContent
       : group.message.content;
     const assistantText = assistantMessages
@@ -469,6 +474,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   error,
   sessionId,
   onRewindToMessage,
+  onEditMessage,
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -530,7 +536,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     if (!inner) return;
 
     const ro = new ResizeObserver(() => {
-      if (isStreaming && autoScrollRef.current) {
+      if (autoScrollRef.current) {
         requestAnimationFrame(() => {
           const container = containerRef.current;
           if (!container) return;
@@ -541,7 +547,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
     ro.observe(inner);
     return () => ro.disconnect();
-  }, [isStreaming]);
+  }, []);
 
   // Group assistant messages with their tool results
   // Merge messages from the same round (same seqIndex or consecutive assistant messages)
@@ -761,6 +767,14 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     }
   }, []);
 
+  // Scroll to bottom (exposed to parent)
+  const scrollToBottom = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    autoScrollRef.current = true;
+  }, []);
+
   // Scroll to bottom when messages are first loaded (after session switch or initial load)
   // Use useLayoutEffect to run after DOM mutations but before paint
   useLayoutEffect(() => {
@@ -770,12 +784,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     // Only scroll when we have messages and haven't scrolled yet for this session
     if (messages.length > 0 && !hasScrolledOnMountRef.current) {
       // Scroll immediately without animation to prevent visible scrolling
-      const lastMessageEl = container.querySelector('[data-message-id]:last-of-type');
-      if (lastMessageEl) {
-        lastMessageEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
-      } else {
-        container.scrollTop = container.scrollHeight;
-      }
+      scrollToBottom();
       hasScrolledOnMountRef.current = true;
       // Show content after scroll is done — layout is correct now
       setIsInitialLoading(false);
@@ -785,15 +794,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       hasScrolledOnMountRef.current = true;
       setIsInitialLoading(false);
     }
-  }, [messages.length, sessionId, shouldRenderResearchPanel]);
-
-  // Scroll to bottom (exposed to parent)
-  const scrollToBottom = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    container.scrollTop = container.scrollHeight;
-    autoScrollRef.current = true;
-  }, []);
+  }, [messages.length, sessionId, shouldRenderResearchPanel, scrollToBottom]);
 
   useImperativeHandle(ref, () => ({
     scrollToBottom,
@@ -822,38 +823,23 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           if (el) {
             el.scrollIntoView({ block: 'nearest', behavior: 'instant' as ScrollBehavior });
           } else {
-            const lastEl = container.querySelector('[data-message-id]:last-of-type');
-            if (lastEl) {
-              lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
-            } else {
-              container.scrollTop = container.scrollHeight;
-            }
+            scrollToBottom();
           }
         });
       } else if (autoScrollRef.current) {
         // Non-user message added — scroll to bottom only if user is already there
-        const lastEl = container.querySelector('[data-message-id]:last-of-type');
-        if (lastEl) {
-          lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
-        } else {
-          container.scrollTop = container.scrollHeight;
-        }
+        scrollToBottom();
       }
     }
 
     // Streaming just started — scroll to bottom
     if (isStreaming && !wasStreamingRef.current) {
-      const lastEl = container.querySelector('[data-message-id]:last-of-type');
-      if (lastEl) {
-        lastEl.scrollIntoView({ block: 'end', behavior: 'instant' as ScrollBehavior });
-      } else {
-        container.scrollTop = container.scrollHeight;
-      }
+      scrollToBottom();
     }
 
     prevMessagesLengthRef.current = messages.length;
     wasStreamingRef.current = isStreaming;
-  }, [messages, isStreaming]);
+  }, [messages, isStreaming, scrollToBottom]);
 
 
 
@@ -885,6 +871,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             cachedHeight={rowHeightsRef.current.get(group.message.id)}
             onHeightChange={handleRowHeightChange}
             onRewindToMessage={onRewindToMessage}
+            onEditMessage={onEditMessage}
           />
         ))}
 

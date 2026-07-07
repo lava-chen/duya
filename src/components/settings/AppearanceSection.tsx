@@ -13,19 +13,19 @@ import {
 } from "@/components/settings/ui";
 import { type TranslationKey } from "@/i18n";
 
+// Two functional font presets. Anything other than "system" renders as the
+// Duya-loaded font stack (Styrene) via globals.css defaults.
 const FONT_KEYS = [
+  { value: "duya", key: 'settings.appearance.fontDuya' },
   { value: "system", key: 'settings.appearance.fontSystem' },
-  { value: "geist", key: 'settings.appearance.fontGeist' },
-  { value: "inter", key: 'settings.appearance.fontInter' },
-  { value: "jetbrains", key: 'settings.appearance.fontJetbrains' },
 ];
 
-const FONT_FAMILY_MAP: Record<string, string> = {
-  system: "'Styrene', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
-  geist: "'Styrene', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
-  inter: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
-  jetbrains: "'JetBrains Mono', 'Fira Mono', 'Cascadia Mono', 'Consolas', monospace",
-};
+// Normalize any persisted font value to a valid preset. Legacy values
+// ("geist"/"inter"/"jetbrains") were no-ops that fell back to Styrene, so
+// they map to "duya" here.
+function normalizeFont(value: string | undefined): string {
+  return value === "system" ? "system" : "duya";
+}
 
 export function AppearanceSection() {
   const { t } = useTranslation();
@@ -42,7 +42,9 @@ export function AppearanceSection() {
   useEffect(() => {
     if (settings) {
       setTheme((settings.theme as "light" | "dark" | "system") || "system");
-      setFont(settings.font || "system");
+      const normalizedFont = normalizeFont(settings.font);
+      setFont(normalizedFont);
+      document.documentElement.setAttribute("data-font", normalizedFont);
       setCompactMode(settings.compactMode ?? false);
       const size = (settings.messageFontSize as "small" | "medium" | "large") || "medium";
       setMessageFontSize(size);
@@ -80,10 +82,16 @@ export function AppearanceSection() {
   };
 
   const applyFont = async (newFont: string) => {
-    setFont(newFont);
+    const normalized = normalizeFont(newFont);
+    setFont(normalized);
     const root = document.documentElement;
-    root.setAttribute("data-font", newFont);
-    await save({ font: newFont });
+    root.setAttribute("data-font", normalized);
+    try {
+      window.localStorage.setItem("duya-font", normalized);
+    } catch {
+      // localStorage may be unavailable; the boot script will fall back to Duya.
+    }
+    await save({ font: normalized });
   };
 
   const applyCompactMode = async (enabled: boolean) => {

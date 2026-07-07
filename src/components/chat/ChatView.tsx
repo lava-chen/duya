@@ -165,6 +165,22 @@ export function ChatView({
   // conductor is enabled and no canvas exists yet, one is created lazily.
   const [conductorEnabled, setConductorEnabled] = useState(false);
   const [conductorCanvasId, setConductorCanvasId] = useState<string | null>(null);
+  // Ref mirror of conductorCanvasId so `handleConductorChange` can read the
+  // latest value without depending on it in its `useCallback` deps. This
+  // keeps the callback reference stable across canvas-id changes, which
+  // prevents downstream effects in MessageInput from re-running and
+  // racing with the prop→state sync.
+  const conductorCanvasIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    conductorCanvasIdRef.current = conductorCanvasId;
+  }, [conductorCanvasId]);
+
+  // Ref mirror of conductorEnabled so the conductor-panel-open subscription
+  // below can read the latest value without re-subscribing on every toggle.
+  const conductorEnabledRef = useRef<boolean>(false);
+  useEffect(() => {
+    conductorEnabledRef.current = conductorEnabled;
+  }, [conductorEnabled]);
 
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);
@@ -173,6 +189,7 @@ export function ChatView({
   const addProjectFolder = useConversationStore(s => s.addProjectFolder);
   const setActiveThread = useConversationStore(s => s.setActiveThread);
   const rewindToMessage = useConversationStore(s => s.rewindToMessage);
+  const deleteMessageAndAfter = useConversationStore(s => s.deleteMessageAndAfter);
   const sendMailbox = useMailboxStore(s => s.send);
 
   const selectedProject = useMemo(() => {
@@ -239,6 +256,10 @@ export function ChatView({
   const lastUserContentRef = useRef<string>('');
   const lastFilesRef = useRef<FileAttachment[] | undefined>(undefined);
   const lastOutputStyleRef = useRef<{ name: string; prompt: string; keepCodingInstructions?: boolean } | null | undefined>(undefined);
+  // Edit-and-resend: when non-null, the next `handleSend` deletes this message
+  // (and everything after it) before sending the edited content. Set by
+  // `handleEditMessage`, cleared on send or session change.
+  const editingMessageIdRef = useRef<string | null>(null);
   const permissionProfile = permissionMode === 'bypass' ? 'full_access' : permissionMode === 'auto' ? 'auto' : 'default';
 
   // Permission system
@@ -482,7 +503,7 @@ export function ChatView({
   }, [sessionId, parentSessionId, loadThreadMessages]);
 
   const handleSend = useCallback(
-    (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, displayContent?: string) => {
+    async (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, displayContent?: string) => {
       lastUserContentRef.current = content;
       lastFilesRef.current = files;
       lastOutputStyleRef.current = outputStyleConfig;
@@ -496,11 +517,26 @@ export function ChatView({
         });
         return;
       }
+      // Edit-and-resend: if the user clicked "edit" on a previous user
+      // message, delete that message (and everything after it) before
+      // sending the edited content as a fresh message. This preserves the
+      // append-only contract — we never UPDATE the original, only DELETE +
+      // re-append. The ref is cleared before the async delete so a concurrent
+      // send can't double-truncate.
+      const editingId = editingMessageIdRef.current;
+      if (editingId) {
+        editingMessageIdRef.current = null;
+        try {
+          await deleteMessageAndAfter(sessionId, editingId);
+        } catch (err) {
+          console.error('[ChatView] edit-and-resend: deleteMessageAndAfter failed', err);
+        }
+      }
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled);
     },
-    [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort, conductorEnabled]
+    [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, deleteMessageAndAfter]
   );
 
   // Toggle conductor mode for the current session. On enable, resolve the
@@ -514,13 +550,17 @@ export function ChatView({
   // Reopening the sidebar conductor panel is deferred to the IPC success
   // path so a failed write doesn't open an orphan panel.
   const handleConductorChange = useCallback(
-    async (enabled: boolean) => {
+    async (enabled: boolean, options?: { openPanel?: boolean }) => {
       if (!sessionId) return;
+      const { openPanel = true } = options ?? {};
       setConductorEnabled(enabled);
+      // Read the latest canvas id from the ref to keep this callback's deps
+      // stable (see conductorCanvasIdRef comment above).
+      const currentCanvasId = conductorCanvasIdRef.current;
       if (!enabled) {
         try {
-          await window.electronAPI.session.setConductorMode(sessionId, false, conductorCanvasId ?? null);
-          useConversationStore.getState().setThreadConductorBinding(sessionId, false, conductorCanvasId ?? null);
+          await window.electronAPI.session.setConductorMode(sessionId, false, currentCanvasId ?? null);
+          useConversationStore.getState().setThreadConductorBinding(sessionId, false, currentCanvasId ?? null);
         } catch (err) {
           console.error('[ChatView] setConductorMode IPC failed (disable)', err);
         }
@@ -529,7 +569,7 @@ export function ChatView({
 
       let canvasId: string | null =
         useConductorStore.getState().activeCanvasId ??
-        conductorCanvasId ??
+        currentCanvasId ??
         null;
 
       const thread = useConversationStore.getState().threads.find((t) => t.id === sessionId);
@@ -565,12 +605,37 @@ export function ChatView({
       } catch (err) {
         console.error('[ChatView] setConductorMode IPC failed', err);
       }
-      if (canvasId) {
+      // Only open/activate the panel when explicitly requested (user toggle
+      // or session restore). When triggered by the panel-open subscription
+      // below, the panel is already open and we'd create a duplicate tab.
+      if (openPanel && canvasId) {
         openOrActivatePage('conductor', { canvasId });
       }
     },
-    [sessionId, conductorCanvasId, openOrActivatePage],
+    [sessionId, openOrActivatePage],
   );
+
+  // Auto-enable conductor mode when the user opens the conductor panel
+  // from the sidebar (or switches canvases inside an open panel while
+  // conductor mode is off). Subscribes to the conductor store's
+  // `activeCanvasId` — when it transitions to a non-null value and
+  // conductor mode is currently off, call `handleConductorChange(true)`
+  // with `openPanel: false` (the panel is already open, so we must not
+  // call `openOrActivatePage` again or we'd create a duplicate tab).
+  const conductorStoreActiveCanvasId = useConductorStore(s => s.activeCanvasId);
+  const prevStoreCanvasIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionId) return;
+    const prev = prevStoreCanvasIdRef.current;
+    prevStoreCanvasIdRef.current = conductorStoreActiveCanvasId;
+    if (
+      conductorStoreActiveCanvasId
+      && prev !== conductorStoreActiveCanvasId
+      && !conductorEnabledRef.current
+    ) {
+      void handleConductorChange(true, { openPanel: false });
+    }
+  }, [conductorStoreActiveCanvasId, sessionId, handleConductorChange]);
 
   const handleStop = useCallback(() => {
     onInterrupt?.();
@@ -618,6 +683,34 @@ export function ChatView({
     if (!confirmed) return;
     rewindToMessage(sessionId, messageId);
   }, [isStreaming, messages, sessionId, rewindToMessage]);
+
+  // Edit-and-resend: load a previous user message's text into the input box
+  // for editing. The next `handleSend` will delete the original message (and
+  // everything after it) before sending the edited version. Dispatches a
+  // `duya:edit-message` event that MessageInput listens for (same pattern as
+  // `conductor:forward-message`).
+  const handleEditMessage = useCallback((messageId: string) => {
+    if (isStreaming) return;
+    const target = messages.find(m => m.id === messageId);
+    if (!target || target.role !== 'user') return;
+    // Prefer displayContent (the pure user-typed text, without attachment
+    // bodies or pre-analysis). Fall back to content for older messages that
+    // predate the displayContent field.
+    const source = target.displayContent !== undefined ? target.displayContent : target.content;
+    let text = '';
+    if (typeof source === 'string') {
+      text = source;
+    } else if (Array.isArray(source)) {
+      text = source
+        .filter((b): b is { type: 'text'; text: string } =>
+          !!b && typeof b === 'object' && (b as Record<string, unknown>).type === 'text'
+          && typeof (b as Record<string, unknown>).text === 'string')
+        .map(b => b.text)
+        .join('');
+    }
+    editingMessageIdRef.current = messageId;
+    window.dispatchEvent(new CustomEvent('duya:edit-message', { detail: { content: text } }));
+  }, [isStreaming, messages]);
 
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
@@ -870,6 +963,7 @@ export function ChatView({
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
               onRewindToMessage={handleRewindToMessage}
+              onEditMessage={handleEditMessage}
             />
           </div>
         )}

@@ -21,7 +21,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
-import type { AgentPermissionMode } from "@/lib/permission-profile";
+import { uiPermissionModeToAgentModeOverride } from "@/lib/permission-mode";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
 
@@ -30,13 +30,6 @@ type BootSplashPhase = StartupLandingPhase;
 
 const ACTIVE_LIKE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 const isActiveLike = (phase: StreamPhase) => ACTIVE_LIKE_PHASES.includes(phase);
-
-function permissionModeToAgentOverride(mode: PermissionMode | undefined): AgentPermissionMode | undefined {
-  if (mode === 'bypass') return 'bypassPermissions';
-  if (mode === 'auto') return 'auto';
-  if (mode === 'ask') return 'default';
-  return undefined;
-}
 
 function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
   const messages: Message[] = [];
@@ -390,7 +383,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       // Conductor canvas binding lives on the session row; read it here so
       // both enqueueMessage and startStream carry the durable canvasId.
       const conductorCanvasId = activeThread?.conductorCanvasId ?? undefined;
-      const permissionModeOverride = permissionModeToAgentOverride(uiPermissionMode);
+      const permissionModeOverride = uiPermissionModeToAgentModeOverride(uiPermissionMode);
 
       if (!canSend(activeThreadId)) {
         enqueueMessage(activeThreadId, {

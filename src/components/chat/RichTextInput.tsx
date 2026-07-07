@@ -24,10 +24,6 @@ interface RichTextInputProps {
   onPaste: (e: React.ClipboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
   disabled?: boolean;
-  // Conductor canvas sign chip — when enabled, a "conductor" badge is
-  // prepended to the input so the user can see the agent will receive
-  // canvas tools. Clicking the × calls onDisable.
-  conductorSign?: { enabled: boolean; onDisable: () => void };
 }
 
 function dispatchOpenSkillPreview(skillName: string): void {
@@ -69,42 +65,9 @@ function createSkillChip(skillName: string): HTMLSpanElement {
   return chip;
 }
 
-function createConductorSignChip(onDisable: () => void): HTMLSpanElement {
-  const chip = document.createElement('span');
-  chip.contentEditable = 'false';
-  chip.className = 'inline-flex items-center gap-1';
-  chip.style.color = 'var(--conductor-accent, #2563eb)';
-  chip.style.fontWeight = '700';
-  chip.style.backgroundColor = 'rgba(37, 99, 235, 0.12)';
-  chip.style.padding = '1px 6px';
-  chip.style.borderRadius = '4px';
-  chip.style.marginRight = '4px';
-  chip.style.userSelect = 'none';
-  chip.style.cursor = 'default';
-  chip.dataset.conductorSign = 'true';
-
-  const label = document.createElement('span');
-  label.textContent = 'conductor';
-  chip.appendChild(label);
-
-  const closeBtn = document.createElement('span');
-  closeBtn.textContent = '×';
-  closeBtn.style.cursor = 'pointer';
-  closeBtn.style.marginLeft = '2px';
-  closeBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onDisable();
-  });
-  chip.appendChild(closeBtn);
-  return chip;
-}
-
-// Extract user-typed text from the editable element, skipping the
-// conductor sign chip so its label is not echoed back into `value`.
+// Extract user-typed text from the editable element.
 function extractUserText(el: HTMLElement): string {
   return Array.from(el.childNodes)
-    .filter((n) => !(n instanceof HTMLElement && n.dataset.conductorSign === 'true'))
     .map((n) => (n.nodeType === Node.TEXT_NODE ? n.textContent : (n as HTMLElement).textContent ?? ''))
     .join('');
 }
@@ -117,7 +80,6 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
     onPaste,
     placeholder,
     disabled,
-    conductorSign,
   }, ref) => {
     const innerRef = useRef<HTMLDivElement>(null);
     const isComposing = useRef(false);
@@ -137,10 +99,6 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       const skillToken = parseSkillToken(text);
       const slashParsed = parseSlashCommand(text);
       el.innerHTML = '';
-
-      if (conductorSign?.enabled) {
-        el.appendChild(createConductorSignChip(conductorSign.onDisable));
-      }
 
       if (skillToken) {
         const chip = createSkillChip(skillToken.skillName);
@@ -173,7 +131,7 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
-    }, [conductorSign]);
+    }, []);
 
     // Update content when value changes externally.
     useEffect(() => {
@@ -184,15 +142,6 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
         buildContent(el, value);
       }
     }, [value, buildContent]);
-
-    // Rebuild when the conductor sign chip toggles on/off — the chip
-    // is injected into the editable element but `value` does not
-    // change, so the value-only effect above never fires.
-    useEffect(() => {
-      const el = innerRef.current;
-      if (!el || isComposing.current) return;
-      buildContent(el, lastValue.current);
-    }, [conductorSign?.enabled, buildContent]);
 
     const handleInput = useCallback(() => {
       const el = innerRef.current;

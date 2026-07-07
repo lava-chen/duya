@@ -30,6 +30,7 @@ export interface PanelContextValue {
   closePanel: (tabId: string) => void;
   activateTab: (tabId: string) => void;
   updateTabTitle: (tabId: string, title: string) => void;
+  updateTabFavicon: (tabId: string, favicon: string | undefined) => void;
   openOrActivatePage: (pageId: PageId, params?: Record<string, unknown>) => string;
   reorderTabs: (fromId: string, toId: string, position: "before" | "after") => void;
 }
@@ -96,6 +97,7 @@ function loadPersistedState(sessionKey: string): PersistedPanelState | null {
         id: t.id,
         pageId: t.pageId,
         title: typeof t.title === "string" ? t.title : defaultTitle(t.pageId),
+        favicon: typeof t.favicon === "string" ? t.favicon : undefined,
         params:
           t.params && typeof t.params === "object" && !Array.isArray(t.params)
             ? (t.params as Record<string, unknown>)
@@ -329,15 +331,31 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const handleOpenFilePreview = (event: Event) => {
-      const detail = (event as CustomEvent<{ filePath?: string; workingDirectory?: string }>).detail;
+      const detail = (event as CustomEvent<{
+        filePath?: string;
+        workingDirectory?: string;
+        lineStart?: number;
+        lineEnd?: number;
+      }>).detail;
       const filePath = typeof detail?.filePath === "string" ? detail.filePath : "";
       const workingDirectory = typeof detail?.workingDirectory === "string" ? detail.workingDirectory : "";
       if (!filePath.trim() || !workingDirectory.trim()) return;
-      openOrActivatePage("preview", {
+      const params: Record<string, unknown> = {
         filePath,
         workingDirectory,
         title: filePath.split(/[/\\]/).pop() || "预览",
-      });
+      };
+      // Forward the agent's read line range so the preview panel can
+      // scroll to and highlight the exact lines on first mount. The
+      // follow-up `duya:preview-focus-lines` event handles re-focus on
+      // an already-open tab (see openLocalArtifactTarget).
+      if (typeof detail?.lineStart === "number" && Number.isFinite(detail.lineStart)) {
+        params.lineStart = detail.lineStart;
+        if (typeof detail?.lineEnd === "number" && Number.isFinite(detail.lineEnd)) {
+          params.lineEnd = detail.lineEnd;
+        }
+      }
+      openOrActivatePage("preview", params);
     };
 
     window.addEventListener("duya:open-file-preview-panel", handleOpenFilePreview as EventListener);
@@ -459,6 +477,14 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     )));
   }, []);
 
+  const updateTabFavicon = useCallback<PanelContextValue["updateTabFavicon"]>((tabId, favicon) => {
+    setTabs((prev) => prev.map((tab) => (
+      tab.id === tabId && tab.favicon !== favicon
+        ? { ...tab, favicon }
+        : tab
+    )));
+  }, []);
+
   const reorderTabs = useCallback<PanelContextValue["reorderTabs"]>(
     (fromId, toId, position) => {
       setTabs((prev) => {
@@ -502,6 +528,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       closePanel,
       activateTab,
       updateTabTitle,
+      updateTabFavicon,
       openOrActivatePage,
       reorderTabs,
     }),
@@ -520,9 +547,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       closePanel,
       activateTab,
       updateTabTitle,
+      updateTabFavicon,
       openOrActivatePage,
       reorderTabs,
-    ]
+    ],
   );
 
   return React.createElement(PanelContext.Provider, { value }, children);

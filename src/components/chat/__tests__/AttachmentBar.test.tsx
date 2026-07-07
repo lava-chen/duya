@@ -63,6 +63,28 @@ function imageAttachment(id: string): FileAttachment {
   };
 }
 
+function browserScreenshotPair(imageId: string, refId: string): FileAttachment[] {
+  return [
+    imageAttachment(imageId),
+    {
+      kind: 'browser-ref',
+      id: refId,
+      name: 'Screenshot',
+      type: 'text/plain',
+      url: '',
+      size: 0,
+      text: 'Browser screenshot reference: page snapshot',
+      previewText: 'Page title',
+      metadata: {
+        url: 'https://example.com',
+        elementKind: 'screenshot',
+        attachmentId: imageId,
+        title: 'Page title',
+      },
+    },
+  ];
+}
+
 function fileTreeAttachment(id: string): FileAttachment {
   return {
     kind: 'file-tree-ref',
@@ -158,5 +180,22 @@ describe('AttachmentBar (Plan 220 Phase 0 baseline)', () => {
     const removeButtons = screen.getAllByRole('button', { name: /remove attachment/i });
     fireEvent.click(removeButtons[0]);
     expect(onRemove).toHaveBeenCalledWith('p1');
+  });
+
+  it('renders a browser screenshot as a single square preview card', () => {
+    const attachments = browserScreenshotPair('img1', 'ref1');
+
+    const { container } = render(
+      <AttachmentBar
+        attachments={attachments}
+        mode="input"
+        onRemove={() => {}}
+      />,
+    );
+
+    expect(container.querySelectorAll('.browser-screenshot-attachment-card')).toHaveLength(1);
+    expect(container.querySelectorAll('.pasted-content-attachment')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-attachment-id="ref1"]')).toHaveLength(1);
+    expect(screen.queryByAltText('shot.png')).not.toBeInTheDocument();
   });
 });

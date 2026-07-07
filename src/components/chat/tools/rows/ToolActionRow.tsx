@@ -77,6 +77,9 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
   // the JSON envelope body, and the drawer auto-open trigger.
   const isTaskTool = isTaskToolAction(tool.input);
   const [expanded, setExpanded] = useState(false);
+  // Keep all useState calls before any conditional return so React hook
+  // order stays stable when routing conditions change between renders.
+  const [hovered, setHovered] = useState(false);
 
   if (isBash) {
     return <BashToolRow tool={tool} streamingToolOutput={streamingToolOutput} />;
@@ -149,7 +152,6 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
 
   const renderedResult = hasResult ? renderToolResult(toolInfo, resultInfo) : null;
   const canExpand = hasResult && renderedResult !== null;
-  const [hovered, setHovered] = useState(false);
 
   // Resolve the verb label through i18n. While running we use a
   // generic "Running…" label; once finished, the registry's noun

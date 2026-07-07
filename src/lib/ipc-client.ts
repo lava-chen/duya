@@ -109,6 +109,8 @@ export interface ProjectGroup {
   projectName: string
   threadCount: number
   lastActivity: number
+  createdAt: number
+  isExpanded?: boolean
 }
 
 export interface PermissionRequest {
@@ -219,6 +221,7 @@ interface DbProjectGroup {
   project_name: string
   thread_count: number
   last_activity: number
+  created_at?: number
 }
 
 // Conversion helpers
@@ -296,7 +299,7 @@ function dbMessageToMessage(db: DbMessage): Message {
     // Falls back to `content` for legacy rows that pre-date the
     // `display_content` column — those rows had the prompt stored in
     // `content` directly.
-    displayContent: db.display_content && db.display_content.length > 0
+    displayContent: db.display_content != null
       ? db.display_content
       : (typeof content === 'string' ? content : undefined),
   }
@@ -308,6 +311,8 @@ function backendProjectToProject(db: DbProjectGroup): ProjectGroup {
     projectName: db.project_name,
     threadCount: db.thread_count,
     lastActivity: db.last_activity,
+    createdAt: db.created_at ?? db.last_activity,
+    isExpanded: true,
   }
 }
 
@@ -465,6 +470,15 @@ export async function truncateMessagesAfterIPC(
   messageId: string
 ): Promise<{ deletedCount: number }> {
   return window.electronAPI!.message!.truncateAfter(sessionId, messageId) as Promise<{
+    deletedCount: number
+  }>
+}
+
+export async function truncateMessagesFromInclusiveIPC(
+  sessionId: string,
+  messageId: string
+): Promise<{ deletedCount: number }> {
+  return window.electronAPI!.message!.truncateFromInclusive(sessionId, messageId) as Promise<{
     deletedCount: number
   }>
 }
@@ -717,6 +731,8 @@ export async function getProjectGroupsIPC(): Promise<ProjectGroup[]> {
       projectName: workingDirectory.split(/[\\/]/).pop() || 'Untitled',
       threadCount: 0,
       lastActivity: Date.now() - index,
+      createdAt: Date.now() - index,
+      isExpanded: true,
     }))
 
   return [...projects, ...recentProjects]

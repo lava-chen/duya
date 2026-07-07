@@ -24,6 +24,7 @@ export interface PageTab {
   id: string;
   pageId: PageId;
   title: string;
+  favicon?: string;
   params?: Record<string, unknown>;
 }
 

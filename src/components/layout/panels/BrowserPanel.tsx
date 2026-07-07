@@ -8,10 +8,9 @@ import {
   Camera,
   CursorClick,
   Globe,
-  House,
-  PaperPlaneRight,
   WarningCircle,
 } from "@phosphor-icons/react";
+import { usePanel } from "@/hooks/usePanel";
 import type { PageTab } from "./registry";
 
 type WebviewElement = HTMLElement & {
@@ -280,6 +279,8 @@ function dispatchBrowserScreenshot(dataUrl: string, pageUrl: string, title: stri
 }
 
 export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
+  const { updateTabTitle, updateTabFavicon } = usePanel();
+
   const initialUrl = useMemo(() => {
     const raw = tab?.params?.url;
     return typeof raw === "string" && raw.trim() ? normalizeBrowserAddress(raw) : DEFAULT_URL;
@@ -307,10 +308,13 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       setAddressValue(nextUrl === EMPTY_URL ? "" : nextUrl);
       setCanGoBack(node.canGoBack());
       setCanGoForward(node.canGoForward());
+      if (tab?.id) {
+        updateTabTitle(tab.id, nextTitle);
+      }
     } catch {
       // Webview can throw while it is being attached or torn down.
     }
-  }, []);
+  }, [tab?.id, updateTabTitle]);
 
   const navigate = useCallback((nextRaw: string) => {
     const nextUrl = normalizeBrowserAddress(nextRaw);
@@ -338,6 +342,12 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       syncFromWebview();
     };
     const handleTitle = () => syncFromWebview();
+    const handleFavicon = (event: Event & { favicons?: string[] }) => {
+      const favicons = (event as Event & { favicons?: string[] }).favicons;
+      if (tab?.id && Array.isArray(favicons) && favicons.length > 0) {
+        updateTabFavicon(tab.id, favicons[0]);
+      }
+    };
     const handleFail = (event: Event & { errorDescription?: string; validatedURL?: string }) => {
       setLoading(false);
       setError(event.errorDescription || "Failed to load page");
@@ -349,6 +359,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     node.addEventListener("did-navigate", handleNavigate);
     node.addEventListener("did-navigate-in-page", handleNavigate);
     node.addEventListener("page-title-updated", handleTitle);
+    node.addEventListener("page-favicon-updated", handleFavicon as EventListener);
     node.addEventListener("did-fail-load", handleFail as EventListener);
     return () => {
       node.removeEventListener("did-start-loading", handleStart);
@@ -356,9 +367,10 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       node.removeEventListener("did-navigate", handleNavigate);
       node.removeEventListener("did-navigate-in-page", handleNavigate);
       node.removeEventListener("page-title-updated", handleTitle);
+      node.removeEventListener("page-favicon-updated", handleFavicon as EventListener);
       node.removeEventListener("did-fail-load", handleFail as EventListener);
     };
-  }, [syncFromWebview]);
+  }, [syncFromWebview, tab?.id, updateTabFavicon]);
 
   const handleScreenshot = useCallback(async () => {
     const node = webviewRef.current;
@@ -416,9 +428,6 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           navigate(addressValue);
         }}
       >
-        <button type="button" className="browser-panel-icon-btn" onClick={() => navigate(DEFAULT_URL)} title="Open localhost:3000">
-          <House size={14} />
-        </button>
         <button type="button" className="browser-panel-icon-btn" onClick={() => webviewRef.current?.goBack()} disabled={!canGoBack} title="Back">
           <ArrowLeft size={14} />
         </button>
@@ -437,21 +446,25 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
             spellCheck={false}
           />
         </label>
-        <button type="submit" className="browser-panel-icon-btn" title="Go">
-          <PaperPlaneRight size={14} />
+        <button
+          type="button"
+          className={`browser-panel-icon-btn${picking ? " active" : ""}`}
+          onClick={handlePickElement}
+          disabled={loading || picking}
+          title="Pick element"
+        >
+          <CursorClick size={14} />
+        </button>
+        <button
+          type="button"
+          className="browser-panel-icon-btn"
+          onClick={handleScreenshot}
+          disabled={loading}
+          title="Screenshot to input"
+        >
+          <Camera size={14} />
         </button>
       </form>
-
-      <div className="browser-panel-actions">
-        <button type="button" onClick={handlePickElement} className={picking ? "active" : ""} disabled={loading || picking}>
-          <CursorClick size={14} />
-          <span>Pick element</span>
-        </button>
-        <button type="button" onClick={handleScreenshot} disabled={loading}>
-          <Camera size={14} />
-          <span>Screenshot to input</span>
-        </button>
-      </div>
 
       {(status || error) && (
         <div className={`browser-panel-status${error ? " error" : ""}`}>
