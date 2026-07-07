@@ -14,6 +14,7 @@ import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import { getLogger, LogComponent } from '../logging/logger';
 import { createSession } from '../db/queries/sessions';
+import { createCanvas as createConductorCanvas } from '../db/queries/conductors';
 import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
@@ -476,6 +477,25 @@ export function registerDbHandlers(): void {
     const deleteResult = database.prepare(
       'DELETE FROM messages WHERE session_id = ? AND created_at > ?'
     ).run(sessionId, result.created_at);
+
+    database.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
+
+    return { deletedCount: deleteResult.changes };
+  });
+
+  // Edit-and-resend: delete the target message AND everything after it
+  // (inclusive), so the edited version can be appended as a fresh message.
+  ipcMain.handle('db:message:truncateFromInclusive', (_event, sessionId: string, messageId: string) => {
+    const database = getDb();
+    const target = database.prepare(
+      'SELECT created_at, rowid FROM messages WHERE id = ? AND session_id = ?'
+    ).get(messageId, sessionId) as { created_at: number; rowid: number } | undefined;
+
+    if (!target) return { deletedCount: 0 };
+
+    const deleteResult = database.prepare(
+      'DELETE FROM messages WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND rowid >= ?))'
+    ).run(sessionId, target.created_at, target.created_at, target.rowid);
 
     database.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
 
@@ -1326,24 +1346,16 @@ export function registerConductorHandlers(): void {
   });
 
   ipcMain.handle('conductor:canvas:create', (_event, data: { name: string; description?: string; projectPath?: string | null }) => {
-    const d = getDb();
-    const id = randomUUID();
-    const now = Date.now();
-    const projectPath = data.projectPath ?? null;
-    d.prepare(
-      'INSERT INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at, project_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, data.name, data.description ?? null, '{}', 0, now, now, projectPath);
-
-    const row = d.prepare('SELECT * FROM conductor_canvases WHERE id = ?').get(id) as any;
+    const canvas = createConductorCanvas(data);
     return {
-      id: row.id,
-      name: row.name,
-      description: row.description,
-      layoutConfig: JSON.parse(row.layout_config),
-      sortOrder: row.sort_order,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      projectPath: row.project_path ?? null,
+      id: canvas.id,
+      name: canvas.name,
+      description: canvas.description,
+      layoutConfig: canvas.layoutConfig,
+      sortOrder: canvas.sortOrder,
+      createdAt: canvas.createdAt,
+      updatedAt: canvas.updatedAt,
+      projectPath: canvas.projectPath,
     };
   });
 

@@ -605,6 +605,14 @@ function ensureCriticalSchema(db: BetterSqlite3Db): void {
     { name: 'conductor_mode_enabled', ddl: 'ALTER TABLE chat_sessions ADD COLUMN conductor_mode_enabled INTEGER NOT NULL DEFAULT 0' },
     { name: 'conductor_canvas_id', ddl: 'ALTER TABLE chat_sessions ADD COLUMN conductor_canvas_id TEXT DEFAULT NULL' },
   ]);
+
+  // Self-repair: ensure conductor_canvases has project_path.
+  // Migration #38 adds it, but if the packaged binary is older than #38,
+  // or the DB was restored from backup without rolling back migration
+  // records, the migration is skipped and canvas IPC calls fail with
+  // "no such column: project_path". This check runs on every startup,
+  // independent of the migration system, so the app can always boot.
+  ensureConductorCanvasColumns(db);
 }
 
 /** Add missing columns to chat_sessions. Idempotent — skips columns that already exist. */
@@ -619,6 +627,28 @@ function ensureChatSessionColumns(
       db.exec(col.ddl);
     }
   }
+}
+
+/**
+ * Self-repair for `conductor_canvases.project_path`.
+ *
+ * Mirrors `ensureChatSessionColumns`: this column is added by migration #38,
+ * but the packaged Beta build for users who upgraded from a pre-#38 binary
+ * (or restored a DB whose `_schema_migrations` row was lost) will report
+ * `SqliteError: no such column: project_path` on every canvas IPC call.
+ *
+ * We re-create the unique partial index here too — `CREATE UNIQUE INDEX IF
+ * NOT EXISTS` is idempotent, so this is safe to run on every startup.
+ */
+function ensureConductorCanvasColumns(db: BetterSqlite3Db): void {
+  const tableInfo = db.prepare('PRAGMA table_info(conductor_canvases)').all() as Array<{ name: string }>;
+  const existing = new Set(tableInfo.map((col) => col.name));
+  if (!existing.has('project_path')) {
+    db.exec(`ALTER TABLE conductor_canvases ADD COLUMN project_path TEXT`);
+  }
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_conductor_canvases_project_path ON conductor_canvases(project_path) WHERE project_path IS NOT NULL`,
+  );
 }
 
 function ensureMigrationsTable(db: BetterSqlite3Db): void {

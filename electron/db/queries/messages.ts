@@ -304,6 +304,35 @@ export function truncateMessagesAfter(sessionId: string, messageId: string): num
   return result.changes;
 }
 
+/**
+ * Truncate messages from the target (inclusive) onward.
+ *
+ * Unlike `truncateMessagesAfter` (which keeps the target), this deletes the
+ * target message AND everything created after it. Used by the "edit and
+ * resend" flow: the old user message is removed so the edited version can be
+ * appended as a fresh message — never overwriting the original (append-only
+ * contract is preserved because we DELETE, not UPDATE).
+ *
+ * Ties on `created_at` are resolved by also matching the target's rowid, so
+ * two messages sharing the same millisecond timestamp are both handled
+ * deterministically (the target is always removed).
+ */
+export function truncateMessagesFromInclusive(sessionId: string, messageId: string): number {
+  const target = db().prepare(
+    'SELECT created_at, rowid FROM messages WHERE id = ? AND session_id = ?'
+  ).get(messageId, sessionId) as { created_at: number; rowid: number } | undefined;
+
+  if (!target) return 0;
+
+  const result = db().prepare(
+    'DELETE FROM messages WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND rowid >= ?))'
+  ).run(sessionId, target.created_at, target.created_at, target.rowid);
+
+  db().prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
+
+  return result.changes;
+}
+
 export interface ReplaceMessagesResult {
   success: boolean;
   newGeneration?: number;

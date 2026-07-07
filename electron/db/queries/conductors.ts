@@ -149,9 +149,17 @@ export function getCanvasByProjectPath(projectPath: string): ConductorCanvas | n
 }
 
 export function createCanvas(data: { name: string; description?: string; projectPath?: string | null }): ConductorCanvas {
+  const projectPath = data.projectPath ?? null;
+
+  // Project-bound canvases are unique per project path. If one already
+  // exists, return it instead of failing on the UNIQUE constraint.
+  if (projectPath) {
+    const existing = getCanvasByProjectPath(projectPath);
+    if (existing) return existing;
+  }
+
   const id = randomUUID();
   const now = Date.now();
-  const projectPath = data.projectPath ?? null;
   db().prepare(
     'INSERT INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at, project_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(id, data.name, data.description ?? null, '{}', 0, now, now, projectPath);

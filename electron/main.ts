@@ -417,7 +417,10 @@ if (gotTheLock) {
       (canvasId, scope, elementId?, region?) =>
         new Promise((resolve, reject) => {
           const requestId = randomUUID();
-          const timeoutMs = 15000;
+          // Match the worker-side timeout (CanvasCaptureTool uses 30s).
+          // html2canvas can be slow on large canvases; 15s was too tight
+          // and caused spurious timeouts before the renderer responded.
+          const timeoutMs = 30000;
           const timer = setTimeout(() => {
             pendingCaptures.delete(requestId);
             logger.warn(
@@ -425,7 +428,7 @@ if (gotTheLock) {
               { requestId, canvasId, scope, timeoutMs },
               LogComponent.Main,
             );
-            reject(new Error(`Canvas capture timed out after ${timeoutMs}ms (renderer did not respond)`));
+            reject(new Error(`Canvas capture timed out after ${timeoutMs}ms (renderer did not respond). Ensure a canvas view (ConductorView or SidebarConductorView) is mounted.`));
           }, timeoutMs);
 
           pendingCaptures.set(requestId, { resolve, reject, timer });
