@@ -68,7 +68,6 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   const isEditing = editingElementId === element.id;
   const color = (element.config.color as StickyColorKey) || "yellow";
   const theme = STICKY_COLORS[color] ?? STICKY_COLORS.yellow;
-  const fontSize = (element.config.fontSize as number) || 14;
   const text = (element.config.text as string) || "";
 
   // New style fields (optional, fall back to defaults for old data).
@@ -81,9 +80,20 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   const borderColor = borderStyleCfg?.color ?? "transparent";
   const borderStyleValue = borderStyleCfg?.style ?? "solid";
 
+  // Use the configured fontSize if provided; otherwise derive a readable
+  // default from the element height (in grid units). A 2-unit-high sticky
+  // gets 16px text; each additional unit adds 2px. This keeps Chinese
+  // characters legible when the agent creates small labels.
+  const hGrid = element.position?.h ?? 3;
+  const defaultFontSize = 16 + Math.max(0, hGrid - 2) * 2;
+  const configuredFontSize = element.config.fontSize as number | undefined;
+  const fontSize = typeof configuredFontSize === "number" && configuredFontSize > 0
+    ? configuredFontSize
+    : defaultFontSize;
+
   // Short shapes (diamond/ellipse) downgrade font size for long text to avoid overflow.
   const isShortShape = shape === "diamond" || shape === "ellipse";
-  const effectiveFontSize = isShortShape && text.length > 20 ? 12 : fontSize;
+  const effectiveFontSize = isShortShape && text.length > 20 ? Math.max(12, fontSize - 4) : fontSize;
 
   const [editText, setEditText] = useState(text);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);

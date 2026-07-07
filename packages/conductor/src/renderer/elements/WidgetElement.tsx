@@ -17,10 +17,14 @@ function canvasElementToWidget(element: ElementComponentProps["element"]): Condu
     w: element.position.w,
     h: element.position.h,
   };
+  // Defensive: some patch paths (e.g. agent canvas_create_element) emit
+  // a partial element without permissions. Fall back to permissive defaults
+  // so the widget still renders instead of crashing.
+  const srcPerms = element.permissions;
   const permissions: WidgetPermissions = {
-    agentCanRead: element.permissions.agentCanRead,
-    agentCanWrite: element.permissions.agentCanWrite,
-    agentCanDelete: element.permissions.agentCanDelete,
+    agentCanRead: srcPerms?.agentCanRead ?? true,
+    agentCanWrite: srcPerms?.agentCanWrite ?? true,
+    agentCanDelete: srcPerms?.agentCanDelete ?? true,
   };
   const state: WidgetState =
     element.state === "error" ? "error" : element.state === "loading" ? "loading" : "idle";

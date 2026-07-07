@@ -64,15 +64,18 @@ function parseCreateTool(activeTool: string | null): { type: string; extra: Reco
   }
 }
 
-function isWidgetKind(el: CanvasElement) {
-  return el.elementKind?.startsWith("widget/") ?? false;
+function isWidgetKind(el: CanvasElement | undefined | null) {
+  if (!el || typeof el.elementKind !== "string") return false;
+  return el.elementKind.startsWith("widget/");
 }
 
-function isConnectorKind(el: CanvasElement) {
+function isConnectorKind(el: CanvasElement | undefined | null) {
+  if (!el || typeof el.elementKind !== "string") return false;
   return el.elementKind === "native/connector";
 }
 
-function isGroupKind(el: CanvasElement) {
+function isGroupKind(el: CanvasElement | undefined | null) {
+  if (!el || typeof el.elementKind !== "string") return false;
   return el.elementKind === "native/group";
 }
 
@@ -1358,9 +1361,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         )}
       </div>
 
-      {/* Zoom indicator pill — bottom right */}
+      {/* Zoom indicator pill — bottom right. Marked with data-capture-ignore
+          so canvas_capture screenshots omit it; otherwise it can overlap
+          elements in the bottom-right corner. */}
       <div
         className="conductor-zoom-pill"
+        data-capture-ignore
         style={{
           position: "absolute",
           bottom: 16,
@@ -1374,9 +1380,15 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         {Math.round(zoomDisplay * 100)}%
       </div>
 
-      <StylePanel />
-      <ObjectAgentPrompt />
-      <MultiSelectBar />
+      <div data-capture-ignore>
+        <StylePanel />
+      </div>
+      <div data-capture-ignore>
+        <ObjectAgentPrompt />
+      </div>
+      <div data-capture-ignore>
+        <MultiSelectBar />
+      </div>
     </div>
   );
 };
