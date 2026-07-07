@@ -31,11 +31,38 @@ function normalizePosition(pos: Partial<CanvasPosition> | null | undefined): Can
 function normalizeElement(el: CanvasElement): CanvasElement {
   // Defensive: patches may use `kind` (LLM-friendly alias) instead of `elementKind`.
   // Map it so CanvasArea's isWidgetKind/isConnectorKind don't crash on undefined.
+  // Also fill defaults for any other required fields the patch may omit —
+  // `summarizeElementForAgent` (backend) intentionally strips permissions,
+  // state, dataVersion, metadata, timestamps, vizSpec, sourceCode, canvasId
+  // to keep agent tool results short, but the renderer needs the full shape.
+  // Without these defaults, WidgetElement crashes on `element.permissions.agentCanRead`.
   const { kind, elementKind, ...rest } = el as CanvasElement & { kind?: string };
+  const DEFAULT_PERMISSIONS = { agentCanRead: true, agentCanWrite: true, agentCanDelete: true };
+  const permissions =
+    rest.permissions && typeof rest.permissions === 'object'
+      ? {
+          agentCanRead: rest.permissions.agentCanRead ?? true,
+          agentCanWrite: rest.permissions.agentCanWrite ?? true,
+          agentCanDelete: rest.permissions.agentCanDelete ?? true,
+        }
+      : DEFAULT_PERMISSIONS;
   return {
     ...rest,
     elementKind: elementKind ?? kind ?? 'native/sticky',
     position: normalizePosition(el.position),
+    canvasId: rest.canvasId ?? '',
+    config: rest.config ?? {},
+    state: rest.state ?? 'idle',
+    dataVersion: rest.dataVersion ?? 1,
+    vizSpec: rest.vizSpec ?? null,
+    sourceCode: rest.sourceCode ?? null,
+    permissions,
+    metadata:
+      rest.metadata && typeof rest.metadata === 'object'
+        ? rest.metadata
+        : { label: elementKind ?? kind ?? 'native/sticky', tags: [], createdBy: 'user' as const },
+    createdAt: rest.createdAt ?? Date.now(),
+    updatedAt: rest.updatedAt ?? Date.now(),
   };
 }
 

@@ -159,6 +159,11 @@ export async function captureCanvasView(
     y: captureY,
     windowWidth: captureW,
     windowHeight: captureH,
+    // Ignore UI overlays (zoom pill, style panels, toolbars) that are
+    // rendered inside the viewport but should not appear in agent screenshots.
+    // These elements are marked with `data-capture-ignore` in CanvasArea.
+    ignoreElements: (el: Element) =>
+      el instanceof HTMLElement && el.dataset.captureIgnore === "",
   });
 
   const dataUrl = canvas.toDataURL("image/png");
