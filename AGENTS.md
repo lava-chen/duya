@@ -33,6 +33,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - **Logging**: Structured logger (`electron/logging/logger.ts`), level `WARN` by default, console output only for WARN+. See [Logging](#logging).
 - esbuild does NOT type check. Always run `npm run typecheck:all` before committing.
 - After significant changes: update [ARCHITECTURE.md](./ARCHITECTURE.md).
+- **Mode architecture (plan 224)**: Popover "modes" (plan-task / research / conductor) are declarative `ModeModifier` objects registered in `packages/agent/src/modes/index.ts`. Two paradigms: modifier (tools/prompt/hooks, composed via `applyModes`) and orchestrator (takes over stream). Orthogonal to `AgentProfile` (base toolset) and `PermissionMode` (auth). See [ARCHITECTURE.md § Profile/Mode/Permission](./ARCHITECTURE.md#profile--mode--permission-三层正交plan-224). New mode = 3 steps: write `<mode>-mode.ts` → `modeModifierRegistry.register()` → add popover item + `mode-id.ts` entry. No `DuyaAgent` / `builtin.ts` changes needed.
 
 ## Commands
 
