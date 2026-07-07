@@ -14,6 +14,12 @@ import { ArrowUpIcon,
 import { Select } from 'antd';
 import type { CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
 import { FileAttachment } from '@/types/message';
+import type { ModeModifierId } from '@/types/mode-id';
+import {
+  toggleModeInSet,
+  isModeExcludedByActive,
+  MODE_KIND,
+} from '@/types/mode-id';
 import {
   buildCliAppend,
   resolveDirectSlash,
@@ -98,6 +104,37 @@ interface MessageInputProps {
 interface EffortOption {
   value: string;
   label: string;
+}
+
+/**
+ * Pick the first message-level mode from an activeModes set.
+ *
+ * Message-level modes (plan-task, research) are passed to `onSend` as the
+ * `mode` argument; the agent reads this to resolve its mode dispatch.
+ * Session-level modes (conductor) are passed separately as `conductorMode`.
+ * At most one message-level mode is active at a time (enforced by
+ * `MODE_EXCLUSIVE_WITH`), so returning the first match is unambiguous.
+ */
+function pickMessageMode(activeModes: Set<ModeModifierId>): string | undefined {
+  for (const mode of activeModes) {
+    if (MODE_KIND[mode] === 'message') return mode;
+  }
+  return undefined;
+}
+
+/**
+ * State updater that clears message-level modes (plan-task, research)
+ * while keeping session-level modes (conductor). Used after each send
+ * so per-message modes reset but conductor persists across messages.
+ */
+function clearMessageModes(prev: Set<ModeModifierId>): Set<ModeModifierId> {
+  const next = new Set<ModeModifierId>();
+  for (const mode of prev) {
+    if (MODE_KIND[mode] === 'session') {
+      next.add(mode);
+    }
+  }
+  return next;
 }
 
 function useEffortOptions(t: (key: 'messageInput.effortAuto' | 'messageInput.effortLow' | 'messageInput.effortMedium' | 'messageInput.effortHigh' | 'messageInput.effortMax') => string): EffortOption[] {
@@ -208,7 +245,61 @@ export function MessageInput({
   const [mcpServers, setMcpServers] = useState<Array<{ name: string; description?: string; enabled?: boolean }>>([]);
   const [responseStyles, setResponseStyles] = useState<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>>([]);
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
-  const [sendMode, setSendMode] = useState<string | undefined>(undefined);
+  // Plan 224 Phase 5: unified activeModes set. Holds all active popover
+  // modes (plan-task | research | conductor). Conductor (session-level)
+  // is synced with the `conductorEnabled` prop via the effect below;
+  // plan-task/research (message-level) are pure local state cleared
+  // after each send.
+  const [activeModes, setActiveModes] = useState<Set<ModeModifierId>>(new Set());
+  // Tracks the last known conductor slot state to prevent sync loops
+  // between the `conductorEnabled` prop and `activeModes`.
+  const conductorSlotRef = useRef<boolean>(false);
+
+  // Sync conductor slot from the prop (DB is the source of truth for
+  // session-level conductor). When the parent passes a new
+  // `conductorEnabled` value (e.g. session switch, external toggle),
+  // update `activeModes` to match. The ref prevents re-triggering when
+  // the change originated from user action (which already updated the ref).
+  // This is a one-way sync (prop → state); the reverse path (state → parent)
+  // is handled explicitly in `handleToggleMode` and `handleForwardMessage`
+  // to avoid a render-frame race where the effect would read stale
+  // `activeModes` and call `onConductorChange(false)`, clobbering the DB.
+  useEffect(() => {
+    const next = !!conductorEnabled;
+    if (next === conductorSlotRef.current) return;
+    conductorSlotRef.current = next;
+    setActiveModes((prev) => {
+      const hasConductor = prev.has('conductor');
+      if (next === hasConductor) return prev;
+      const updated = new Set(prev);
+      if (next) updated.add('conductor');
+      else updated.delete('conductor');
+      return updated;
+    });
+  }, [conductorEnabled]);
+
+  // Unified mode toggle — applies mutual-exclusion rules. Message-level
+  // modes (plan-task/research) are pure local state; conductor persistence
+  // is handled by explicitly calling `onConductorChange` here (user action)
+  // rather than via an effect, to avoid the render-frame race described above.
+  const handleToggleMode = useCallback((mode: ModeModifierId) => {
+    setActiveModes((prev) => {
+      // Block activation if it conflicts with an already-active mode.
+      if (!prev.has(mode) && isModeExcludedByActive(prev, mode)) {
+        return prev;
+      }
+      const next = toggleModeInSet(prev, mode);
+      // Persist conductor changes to the parent (DB) immediately. We compare
+      // against `prev` (not `next`) to detect the actual toggle direction.
+      if (mode === 'conductor') {
+        const willEnable = !prev.has('conductor');
+        conductorSlotRef.current = willEnable;
+        onConductorChange?.(willEnable);
+      }
+      return next;
+    });
+    textareaRef.current?.focus();
+  }, [onConductorChange]);
 
   // Drag-and-drop state — counter ref avoids flicker when crossing child boundaries
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -489,7 +580,17 @@ export function MessageInput({
       } | undefined;
       if (!detail?.text) return;
       // Implicitly enable conductor mode on the current session.
+      // Call `onConductorChange` directly (user-driven path) instead of
+      // relying on an effect, to avoid the render-frame race that
+      // previously clobbered the DB value during session restore.
       if (detail.sessionId && onConductorChange) {
+        setActiveModes((prev) => {
+          if (prev.has('conductor')) return prev;
+          const next = new Set(prev);
+          next.add('conductor');
+          return next;
+        });
+        conductorSlotRef.current = true;
         onConductorChange(true);
       }
       // Compose forwarded text. If element context is provided, prepend it as
@@ -506,6 +607,33 @@ export function MessageInput({
     };
     window.addEventListener('conductor:forward-message', handleForwardMessage as EventListener);
 
+    // Edit-and-resend: ChatView dispatches this when the user clicks the
+    // edit button on a previous user message. We populate the input box
+    // with the message's text so the user can edit it. The truncate-then-
+    // resend logic lives in ChatView.handleSend (keyed off editingMessageIdRef);
+    // MessageInput only handles the text population here.
+    const handleEditMessage = (e: Event) => {
+      const detail = (e as CustomEvent<{ content?: string }>).detail;
+      if (typeof detail?.content !== 'string') return;
+      setInputValue(detail.content);
+      prePasteValueRef.current = detail.content;
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustTextareaHeight();
+        // Move cursor to end so the user can immediately append/append edits.
+        const el = textareaRef.current;
+        if (el) {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        }
+      });
+    };
+    window.addEventListener('duya:edit-message', handleEditMessage as EventListener);
+
     return () => {
       window.removeEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
       window.removeEventListener('file-tree-add-to-input', legacyFileTree as EventListener);
@@ -513,6 +641,7 @@ export function MessageInput({
       window.removeEventListener('browser-add-to-input', legacyBrowser as EventListener);
       window.removeEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
       window.removeEventListener('conductor:forward-message', handleForwardMessage as EventListener);
+      window.removeEventListener('duya:edit-message', handleEditMessage as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachments, onConductorChange]);
@@ -1029,8 +1158,11 @@ export function MessageInput({
         const result = onExecuteCommand?.(cmd);
         if (result) {
           // Show command result as a message
-          onSend(result.content, allAttachments, styleOpts, sendMode, undefined, conductorEnabled);
-          setSendMode(undefined);
+          const sendMode = pickMessageMode(activeModes);
+          const conductorMode = activeModes.has('conductor') || undefined;
+          onSend(result.content, allAttachments, styleOpts, sendMode, undefined, conductorMode);
+          // Clear message-level modes (plan-task/research) after send; keep conductor (session-level).
+          setActiveModes(clearMessageModes);
         }
         clearDraft();
         setInputValue('');
@@ -1044,8 +1176,11 @@ export function MessageInput({
       if (cliBadge) setCliBadge(null);
 
       clearDraft();
-      onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser, conductorEnabled);
-      setSendMode(undefined);
+      const sendMode = pickMessageMode(activeModes);
+      const conductorMode = activeModes.has('conductor') || undefined;
+      onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser, conductorMode);
+      // Clear message-level modes (plan-task/research) after send; keep conductor (session-level).
+      setActiveModes(clearMessageModes);
       setInputValue('');
       setHiddenPrompt('');
       clearAttachments();
@@ -1053,7 +1188,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, sendMode, permissionUpdatePending, conductorEnabled],
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, permissionUpdatePending],
   );
 
   const handleKeyDown = useCallback(
@@ -1088,12 +1223,14 @@ export function MessageInput({
               // Sub-view navigation is click-only; ignore keyboard activation.
               return;
             case 'conductor_toggle': {
-              onConductorChange?.(!(conductorEnabled ?? false));
+              // Deprecated kind — route through unified toggle.
+              handleToggleMode('conductor');
               return;
             }
             case 'mode': {
-              const modeValue = item.modeValue ?? '';
-              setSendMode((prev) => (prev === modeValue ? undefined : modeValue));
+              const modeValue = item.modeValue as ModeModifierId | undefined;
+              if (!modeValue) return;
+              handleToggleMode(modeValue);
               return;
             }
             default:
@@ -1186,14 +1323,9 @@ export function MessageInput({
               onCommand(action);
             }
           }}
-          // Mode state (mutually exclusive single-select)
-          currentMode={sendMode ?? null}
-          onSelectMode={(mode) => {
-            setSendMode(mode ?? undefined);
-            if (mode) textareaRef.current?.focus();
-          }}
-          conductorEnabled={conductorEnabled ?? false}
-          onToggleConductor={(enabled) => onConductorChange?.(enabled)}
+          // Mode state (unified activeModes set, plan 224 Phase 5)
+          activeModes={activeModes}
+          onToggleMode={handleToggleMode}
           onInsertItem={insertItem}
           onSetSelectedIndex={setSelectedIndex}
           onSetPopoverFilter={setPopoverFilter}
@@ -1241,7 +1373,6 @@ export function MessageInput({
             onPaste={handlePasteEvent}
             placeholder={cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
             disabled={disabled}
-            conductorSign={{ enabled: conductorEnabled ?? false, onDisable: () => onConductorChange?.(false) }}
           />
 
           {/* CLI Badge */}
@@ -1275,16 +1406,11 @@ export function MessageInput({
                     openCommandPopover();
                   }
                 }}
-                className="size-7 rounded-lg flex items-center justify-center transition-all text-xs hover:shadow-[0_2px_8px_rgba(0,0,0,0.15)]"
-                style={
+                className={`size-7 rounded-lg flex items-center justify-center transition-all text-xs border ${
                   popoverMode === 'skill'
-                    ? {
-                        color: 'var(--text)',
-                        backgroundColor: 'var(--chip)',
-                        border: '1px solid var(--border)',
-                      }
-                    : { color: 'var(--muted)' }
-                }
+                    ? 'text-foreground bg-chip border-border'
+                    : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
+                }`}
                 title={t('common.settings') || 'Settings'}
               >
                 <PlusIcon size={16} />
@@ -1323,20 +1449,30 @@ export function MessageInput({
                 disabled={isStreaming}
               />
 
-              {/* Mode Badge — shows when a mode (plan/research) is active */}
-              {sendMode && (
-                <button
-                  type="button"
-                  onClick={() => setSendMode(undefined)}
-                  className="group flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium text-[#7db4ff] border border-transparent hover:bg-[rgba(37,99,235,0.18)] hover:border-[#7db4ff]/40"
-                >
-                  <XIcon
-                    size={14}
-                    className="hidden group-hover:block"
-                  />
-                  <span>{sendMode === 'research' ? 'Deep Research' : 'Plan Mode'}</span>
-                </button>
-              )}
+              {/* Mode Badges — one chip per active mode (plan-task / research / conductor) */}
+              {activeModes.size > 0 && Array.from(activeModes).map((mode) => {
+                const label = mode === 'research'
+                  ? 'Deep Research'
+                  : mode === 'plan-task'
+                    ? 'Plan Mode'
+                    : mode === 'conductor'
+                      ? 'Conductor'
+                      : mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => handleToggleMode(mode)}
+                    className="group flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium text-[#7db4ff] border border-transparent hover:bg-[rgba(37,99,235,0.18)] hover:border-[#7db4ff]/40"
+                  >
+                    <XIcon
+                      size={14}
+                      className="hidden group-hover:block"
+                    />
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Right: Send/Stop Button */}

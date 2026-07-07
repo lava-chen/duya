@@ -40,6 +40,49 @@ import {
   type BrowserReferenceDisplayData,
 } from '@/lib/browser-reference-display';
 
+function isImageAttachment(attachment: FileAttachment): boolean {
+  if (attachment.kind === 'image') return true;
+  if (attachment.type.startsWith('image/')) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(attachment.name);
+}
+
+function isBrowserScreenshotAttachment(attachment: FileAttachment): boolean {
+  return (
+    attachment.kind === 'browser-ref' &&
+    (attachment.metadata as { elementKind?: string } | undefined)?.elementKind === 'screenshot'
+  );
+}
+
+function resolveLinkedBrowserScreenshotAttachment(
+  attachment: FileAttachment,
+  attachments: FileAttachment[],
+): FileAttachment | undefined {
+  if (!isBrowserScreenshotAttachment(attachment)) return undefined;
+
+  const linkedImageId = (attachment.metadata as { attachmentId?: string } | undefined)?.attachmentId;
+  const linkedById = linkedImageId ? attachments.find((item) => item.id === linkedImageId) : undefined;
+  if (linkedById && isImageAttachment(linkedById)) {
+    return linkedById;
+  }
+
+  const index = attachments.findIndex((item) => item.id === attachment.id);
+  if (index < 0) return undefined;
+
+  const candidates: Array<FileAttachment | undefined> = [
+    attachments[index - 1],
+    attachments[index + 1],
+    attachments[index - 2],
+    attachments[index + 2],
+  ];
+
+  return candidates.find(
+    (candidate) =>
+      !!candidate &&
+      isImageAttachment(candidate) &&
+      candidate.name.startsWith('browser-screenshot-'),
+  );
+}
+
 function formatMessageTime(timestamp: number, t: (key: import('@/i18n').TranslationKey, params?: Record<string, string | number>) => string, locale: 'en' | 'zh' = 'en'): string {
   const date = new Date(timestamp);
   const now = new Date();
@@ -89,6 +132,9 @@ interface MessageItemProps {
   // Messages merged from the same round (thinking + tool_use + text)
   mergedMessages?: Message[];
   onRewindToMessage?: (messageId: string) => void;
+  // Edit-and-resend: load this user message into the input box for editing.
+  // Only meaningful for role=user messages.
+  onEditMessage?: (messageId: string) => void;
 }
 
 function parseMessageContent(content: string | unknown[], msgType?: string): {
@@ -700,10 +746,11 @@ function messageItemPropsEqual(prev: MessageItemProps, next: MessageItemProps): 
     && toolResultsEqual(prev.toolResults, next.toolResults)
     && messagesEqual(prev.mergedMessages, next.mergedMessages)
     && prev.onToolResult === next.onToolResult
-    && prev.onRewindToMessage === next.onRewindToMessage;
+    && prev.onRewindToMessage === next.onRewindToMessage
+    && prev.onEditMessage === next.onEditMessage;
 }
 
-function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], onRewindToMessage }: MessageItemProps) {
+function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], onRewindToMessage, onEditMessage }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
   // Preview modal state
   const [previewAttachment, setPreviewAttachment] = useState<FileAttachment | null>(null);
@@ -734,9 +781,7 @@ function MessageItemComponent({ message, toolResults = [], onToolResult, mergedM
 // side no longer emits markers.
 const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     const displaySource =
-      message.role === 'user' &&
-      message.displayContent !== undefined &&
-      !(typeof message.displayContent === 'string' && message.displayContent.length === 0)
+      message.role === 'user' && message.displayContent !== undefined
         ? message.displayContent
         : message.content;
     const parsed = parseMessageContent(displaySource, message.msgType);
@@ -759,7 +804,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
       // attachments (persisted before the discriminator existed) are
       // rendered by FileAttachmentCard above the bubble, not as chips.
       refAttachments: decoded.attachments.filter(
-        (a) => a.kind !== 'file' && a.kind !== 'image' && a.kind !== undefined,
+        (a) => a.kind !== 'file' && !isImageAttachment(a),
       ),
     };
   }, [message.content, message.displayContent, message.msgType, message.role]);
@@ -861,7 +906,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     try {
       let copyContent: string;
       if (message.role === 'user') {
-        const source = message.displayContent !== undefined && !(typeof message.displayContent === 'string' && message.displayContent.length === 0)
+        const source = message.displayContent !== undefined
           ? message.displayContent
           : message.content;
         if (typeof source === 'string') {
@@ -973,14 +1018,20 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     return parseBrowserReferenceDisplayContent(displayText);
   }, [displayText, isUser]);
 
-  const hasAttachments = message.attachments && message.attachments.length > 0;
+  const linkedBrowserScreenshotImageIds = new Set(
+    (message.attachments ?? [])
+      .map((attachment) => resolveLinkedBrowserScreenshotAttachment(attachment, message.attachments ?? [])?.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  );
   // Render image attachments alongside file attachments. Pasted images
   // store a data URL on `url` (no `thumbnail`/`displayUrl`), so pass
   // `url` through as a preview-source fallback for image kinds.
   // `kind === undefined` covers legacy attachments persisted before
   // Plan 220 introduced the discriminator — they are all file/image.
   const fileAttachments = message.attachments?.filter(
-    (a) => a.kind === 'file' || a.kind === 'image' || a.kind === undefined,
+    (a) =>
+      (a.kind === 'file' || isImageAttachment(a)) &&
+      !linkedBrowserScreenshotImageIds.has(a.id),
   ) || [];
 
   if (message.isCompactBoundary) {
@@ -1097,6 +1148,15 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
             >
               {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
             </button>
+            {onEditMessage && (
+              <button
+                onClick={() => onEditMessage(message.id)}
+                className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
+                title={locale === 'zh' ? '编辑并重新发送' : 'Edit and resend'}
+              >
+                <NotePencilIcon size={12} />
+              </button>
+            )}
             {onRewindToMessage && (
               <button
                 onClick={() => onRewindToMessage(message.id)}

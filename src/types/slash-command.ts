@@ -8,8 +8,14 @@ export type PopoverItemKind =
   | 'cli_tool'
   | 'settings_action'   // execute immediately (add files, /compact, /memory, /export, /recap)
   | 'settings_submenu'  // open a sub-view (thinking, style, mcp)
-  | 'mode'              // toggle a mode (plan, research)
-  | 'conductor_toggle'; // toggle Conductor canvas injection (independent of modes)
+  | 'mode'              // toggle a popover mode (plan-task | research | conductor)
+  /**
+   * @deprecated As of plan 224 Phase 5, Conductor is a regular `mode`
+   * item with `modeValue: 'conductor'`. The `conductor_toggle` kind is
+   * retained only for backward compatibility with persisted state or
+   * external callers; new code should use `kind: 'mode'`.
+   */
+  | 'conductor_toggle';
 
 export type PopoverItemGroup = 'attachments' | 'mode' | 'settings' | 'skills';
 
@@ -32,7 +38,7 @@ export interface PopoverItem {
   skillRoot?: string;
   /** For settings_submenu items: which sub-view to open. */
   submenu?: SettingsSubmenu;
-  /** For mode items: the mode value to toggle (e.g. 'plan', 'research'). */
+  /** For mode items: the ModeModifierId to toggle ('plan-task' | 'research' | 'conductor'). */
   modeValue?: string;
 }
 

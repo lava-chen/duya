@@ -14,6 +14,7 @@ import {
   getActiveProviderIPC,
   updateThreadIPC,
   truncateMessagesAfterIPC,
+  truncateMessagesFromInclusiveIPC,
   type Message as IpcMessage,
 } from '@/lib/ipc-client';
 import { getAgentServerClient } from '@/lib/agent-http-client';
@@ -51,8 +52,12 @@ export interface ProjectGroup {
   projectName: string;
   threadCount: number;
   lastActivity: number;
+  createdAt: number;
   isExpanded: boolean;
 }
+
+export type ProjectSortBy = 'lastActivity' | 'createdAt' | 'name';
+export type ProjectFilter = 'all' | 'recent';
 
 // View types for state-driven UI
 export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor' | 'memory';
@@ -100,6 +105,8 @@ interface ConversationState {
   lastSyncAt: number; // Timestamp of last sync with database
   expandedThreads: Set<string>; // Thread IDs whose children are visible in sidebar
   parentSessionId: string | null; // Parent session ID when viewing a sub-agent
+  projectSortBy: ProjectSortBy; // Sidebar project sort order
+  projectFilter: ProjectFilter; // Sidebar project filter
 
   // Actions
   setCurrentView: (view: ViewType) => void;
@@ -117,6 +124,12 @@ interface ConversationState {
   addMessage: (threadId: string, message: Message, options?: { persist?: boolean }) => void;
   clearMessages: (threadId: string) => void;
   rewindToMessage: (threadId: string, messageId: string) => Promise<void>;
+  /**
+   * Edit-and-resend: delete the target user message AND everything after it
+   * (inclusive), then reload. The caller is responsible for sending the new
+   * (edited) message after this resolves.
+   */
+  deleteMessageAndAfter: (threadId: string, messageId: string) => Promise<void>;
   /** P2-β: flag a message as interrupted (Esc / chat:interrupt). Local-only
    *  (does not persist to DB) — the original assistant message stays in the
    *  thread; the UI shows a "Stopped" badge via metadata.interrupted. */
@@ -128,6 +141,10 @@ interface ConversationState {
   setThreadConductorBinding: (id: string, enabled: boolean, canvasId: string | null) => void;
   addProjectFolder: (workingDirectory: string) => Promise<ProjectGroup | null>;
   toggleProjectExpanded: (workingDirectory: string) => void;
+  collapseAllProjects: () => void;
+  expandAllProjects: () => void;
+  setProjectSortBy: (sortBy: ProjectSortBy) => void;
+  setProjectFilter: (filter: ProjectFilter) => void;
   toggleThreadExpanded: (threadId: string) => void;
   loadFromDatabase: () => Promise<void>;
   loadThreadMessages: (threadId: string, options?: { force?: boolean }) => Promise<void>;
@@ -224,6 +241,8 @@ export const useConversationStore = create<ConversationState>()(
       collapsedProjects: new Set<string>(),
       expandedThreads: new Set<string>(),
       parentSessionId: null,
+      projectSortBy: 'lastActivity',
+      projectFilter: 'all',
       lastSyncAt: 0, // Initialize to 0 to force first sync
 
       setCurrentView: (view) => set({ currentView: view }),
@@ -528,6 +547,15 @@ export const useConversationStore = create<ConversationState>()(
         await get().loadThreadMessages(threadId);
       },
 
+      deleteMessageAndAfter: async (threadId, messageId) => {
+        const result = await truncateMessagesFromInclusiveIPC(threadId, messageId);
+        if (result.deletedCount === 0) return;
+        set((state) => ({
+          messages: { ...state.messages, [threadId]: [] },
+        }));
+        await get().loadThreadMessages(threadId);
+      },
+
       markMessageInterrupted: (threadId, messageId) => {
         set((state) => {
           const threadMessages = state.messages[threadId];
@@ -621,6 +649,7 @@ export const useConversationStore = create<ConversationState>()(
         const projectName = trimmed.split(/[\\/]/).pop() || 'Untitled';
         const projects = (await addRecentFolderIPC(trimmed)).map((p) => ({
           ...p,
+          createdAt: p.createdAt ?? p.lastActivity ?? Date.now(),
           isExpanded: true,
         }));
         const project = projects.find((p) => p.workingDirectory === trimmed) ?? {
@@ -628,6 +657,7 @@ export const useConversationStore = create<ConversationState>()(
           projectName,
           threadCount: 0,
           lastActivity: Date.now(),
+          createdAt: Date.now(),
           isExpanded: true,
         };
 
@@ -646,6 +676,30 @@ export const useConversationStore = create<ConversationState>()(
           return { collapsedProjects: newCollapsed };
         });
       },
+
+      collapseAllProjects: () => {
+        set((state) => {
+          const newCollapsed = new Set(state.collapsedProjects);
+          for (const project of state.projects) {
+            newCollapsed.add(project.workingDirectory);
+          }
+          return { collapsedProjects: newCollapsed };
+        });
+      },
+
+      expandAllProjects: () => {
+        set((state) => {
+          const newCollapsed = new Set(state.collapsedProjects);
+          for (const project of state.projects) {
+            newCollapsed.delete(project.workingDirectory);
+          }
+          return { collapsedProjects: newCollapsed };
+        });
+      },
+
+      setProjectSortBy: (sortBy) => set({ projectSortBy: sortBy }),
+
+      setProjectFilter: (filter) => set({ projectFilter: filter }),
 
       toggleThreadExpanded: (threadId) => {
         set((state) => {
@@ -717,6 +771,7 @@ export const useConversationStore = create<ConversationState>()(
           // Load projects (already converted to camelCase by getProjectGroupsIPC)
           const projects: ProjectGroup[] = (await getProjectGroupsIPC()).map((p) => ({
             ...p,
+            createdAt: p.createdAt ?? p.lastActivity ?? Date.now(),
             isExpanded: true,
           }));
 
@@ -811,6 +866,8 @@ export const useConversationStore = create<ConversationState>()(
         // Persisting only UI state
         collapsedProjects: Array.from(state.collapsedProjects),
         expandedThreads: Array.from(state.expandedThreads),
+        projectSortBy: state.projectSortBy,
+        projectFilter: state.projectFilter,
         lastSyncAt: state.lastSyncAt,
       }),
       onRehydrateStorage: () => (state) => {

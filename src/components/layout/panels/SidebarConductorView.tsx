@@ -7,6 +7,7 @@ import { CanvasSelector } from "@duya/conductor/renderer/components/CanvasSelect
 import { useConductorStore } from "@duya/conductor/renderer/stores/conductor-store";
 import { listCanvases, createCanvas, getSnapshot, executeAction } from "@duya/conductor/renderer/ipc/conductor-ipc";
 import { registerAllElements } from "@duya/conductor/renderer/elements";
+import { useCanvasCaptureRequest } from "@duya/conductor/renderer/hooks/useCanvasCaptureRequest";
 import "@duya/conductor/renderer/widgets";
 import type { CanvasPosition } from "@duya/conductor/renderer/types/conductor";
 import type { PageTab } from "./registry";
@@ -38,6 +39,13 @@ export function SidebarConductorView({
   const tabCanvasId = tab?.params?.canvasId as string | undefined;
 
   const [isLoading, setIsLoading] = useState(true);
+
+  // Register the agent-initiated canvas capture listener so the
+  // sidebar canvas can respond to canvas_capture tool calls. Without
+  // this, capture requests time out (15s) when the user is in chat
+  // view + sidebar conductor mode (the full ConductorView is not
+  // mounted in that layout).
+  useCanvasCaptureRequest(activeCanvasId);
 
   useEffect(() => {
     registerAllElements();

@@ -182,7 +182,7 @@ export function useSlashCommands(opts: {
         description: isZh ? '只读规划，先设计再实施' : 'Read-only planning before implementation',
         icon: ListChecks,
         kind: 'mode' as const,
-        modeValue: 'plan',
+        modeValue: 'plan-task',
         group: 'mode' as const,
       },
       {
@@ -196,10 +196,11 @@ export function useSlashCommands(opts: {
       },
       {
         label: isZh ? 'Conductor 画布' : 'Conductor Canvas',
-        value: '__conductor_toggle',
+        value: '__mode_conductor',
         description: isZh ? '注入画布操作工具，agent 可控制 conductor 画布' : 'Inject canvas tools, agent can control conductor canvas',
         icon: SquareHalf,
-        kind: 'conductor_toggle' as const,
+        kind: 'mode' as const,
+        modeValue: 'conductor',
         group: 'mode' as const,
       },
     ];

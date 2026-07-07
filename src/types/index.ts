@@ -21,6 +21,8 @@ export interface ProjectGroup {
   projectName: string;
   threadCount: number;
   lastActivity: number;
+  createdAt: number;
+  isExpanded?: boolean;
 }
 
 // App settings interface (used by useSettings hook)

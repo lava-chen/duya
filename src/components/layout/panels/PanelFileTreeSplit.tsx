@@ -1,6 +1,6 @@
 "use client";
 
-import { SidebarSimple } from "@phosphor-icons/react";
+import { Files } from "@phosphor-icons/react";
 import { useMemo, type ReactNode } from "react";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { FileTreePanel } from "./FileTreePanel";
@@ -14,7 +14,11 @@ export function PanelFileTreeSplit({
   children: ReactNode;
 }) {
   const panel = useOptionalPanel();
-  const workspaceTreeOpen = panel?.workspaceTreeOpen ?? true;
+  // Default the integrated file tree to CLOSED for the preview panel so
+  // the file preview opens like a focused editor rather than a split
+  // browser. Users can still expand it with the toolbar toggle inside
+  // FilePreviewPanel.
+  const workspaceTreeOpen = panel?.workspaceTreeOpen ?? false;
   const treeTab = useMemo<PageTab>(() => ({
     id: `integrated-files:${workingDirectory}`,
     pageId: "files",
@@ -39,7 +43,7 @@ export function PanelFileTreeSplit({
 
 export function PanelFileTreeToggle() {
   const panel = useOptionalPanel();
-  const workspaceTreeOpen = panel?.workspaceTreeOpen ?? true;
+  const workspaceTreeOpen = panel?.workspaceTreeOpen ?? false;
   return (
     <button
       type="button"
@@ -50,7 +54,7 @@ export function PanelFileTreeToggle() {
       aria-pressed={workspaceTreeOpen}
       data-testid="file-tree-toggle"
     >
-      <SidebarSimple size={15} weight="regular" />
+      <Files size={15} weight="regular" />
     </button>
   );
 }

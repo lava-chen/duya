@@ -403,6 +403,15 @@ body {
   font-family: 'Styrene', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
+/* Font family override: switch to OS default UI fonts when data-font="system".
+   When unset or "duya", the body/.message-content rules above (Styrene) apply. */
+html[data-font="system"] body,
+html[data-font="system"] .message-content,
+html[data-font="system"] .message-content p,
+html[data-font="system"] .message-content li {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
 /* Serif font (Copernicus) when data-message-font is set to serif */
 [data-message-font="serif"] .message-content,
 [data-message-font="serif"] .message-content p,
@@ -854,6 +863,68 @@ a {
 .sidebar-section-action:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.sidebar-project-menu {
+  position: fixed;
+  padding: 6px 0;
+  border-radius: 0.5rem;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.15);
+  min-width: 180px;
+  z-index: 100;
+}
+
+.sidebar-project-menu-item {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.35rem;
+  font-size: 0.82rem;
+  text-align: left;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-project-menu-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.sidebar-project-menu-item.disabled,
+.sidebar-project-menu-item:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.sidebar-project-menu-item.has-submenu {
+  position: relative;
+}
+
+.sidebar-project-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.35rem 0.7rem;
+}
+
+.sidebar-project-submenu {
+  position: absolute;
+  left: calc(100% - 4px);
+  top: -6px;
+  padding: 6px 0;
+  border-radius: 0.5rem;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.15);
+  min-width: 150px;
+  z-index: 101;
 }
 
 .empty-state {
@@ -3615,13 +3686,15 @@ a {
 }
 
 .browser-screenshot-attachment-title {
+  display: -webkit-box;
   overflow: hidden;
   color: #fff;
   font-size: 0.72rem;
   font-weight: 650;
   line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
@@ -6275,6 +6348,8 @@ html.compact .panel-zone {
 .permission-prompt-wrapper.ask-user-question {
   margin-bottom: 0;
   z-index: 22;
+  width: 100%;
+  margin-inline: 0;
 }
 
 .permission-prompt-panel.ask-user-question-panel {
@@ -8362,6 +8437,14 @@ html[data-message-font-size="large"] .prose h3 {
   max-width: 140px;
 }
 
+.panel-header-tab-favicon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
 .panel-header-tab-close {
   display: inline-flex;
   align-items: center;
@@ -9863,7 +9946,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .file-workspace-controls button,
-.file-preview-actions button {
+.file-preview-actions button:not(.file-preview-open-button) {
   display: inline-flex;
   width: 30px;
   height: 30px;
@@ -9880,7 +9963,7 @@ html[data-message-font-size="large"] .prose h3 {
 
 .file-workspace-controls button:hover,
 .file-workspace-controls button.active,
-.file-preview-actions button:hover {
+.file-preview-actions button:not(.file-preview-open-button):hover {
   background: var(--surface-hover);
   color: var(--text);
 }
@@ -9991,16 +10074,24 @@ html[data-message-font-size="large"] .prose h3 {
   background: var(--main-bg);
 }
 
+/* VSCode/Codex-style editor chrome. The title bar shows a breadcrumb
+ * path on the left and a compact "Open" dropdown on the right so the
+ * preview reads as a focused code editor rather than a generic card. */
 .file-preview-toolbar {
   display: flex;
-  min-height: 42px;
-  flex: 0 0 42px;
+  min-height: 40px;
+  flex: 0 0 40px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 10px 0 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  background: color-mix(in srgb, var(--main-bg) 88%, var(--sidebar-bg));
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #f3f3f3;
+}
+
+[data-theme="dark"] .file-preview-toolbar {
+  border-bottom-color: #333333;
+  background: #252526;
 }
 
 .file-preview-title,
@@ -10014,30 +10105,175 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 1 1 auto;
   gap: 8px;
   overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
+  color: #1f1f1f;
 }
 
-.file-preview-title > span {
+[data-theme="dark"] .file-preview-title {
+  color: #e0e0e0;
+}
+
+.file-preview-name-stack {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1px;
+}
+
+.file-preview-breadcrumb {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
   overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.file-preview-breadcrumb-root,
+.file-preview-breadcrumb-part,
+.file-preview-breadcrumb-current {
+  overflow: hidden;
+  flex: 0 1 auto;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.file-preview-title small {
-  flex: 0 0 auto;
-  padding: 2px 6px;
-  border-radius: 5px;
-  background: var(--chip);
-  color: var(--text-muted);
-  font-size: 9px;
+.file-preview-breadcrumb-root,
+.file-preview-breadcrumb-part {
+  color: #616161;
+}
+
+[data-theme="dark"] .file-preview-breadcrumb-root,
+[data-theme="dark"] .file-preview-breadcrumb-part {
+  color: #a0a0a0;
+}
+
+.file-preview-breadcrumb-current {
+  color: #1f1f1f;
   font-weight: 600;
+}
+
+[data-theme="dark"] .file-preview-breadcrumb-current {
+  color: #e0e0e0;
+}
+
+.file-preview-breadcrumb-separator {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  color: #9e9e9e;
+  font-size: 11px;
+}
+
+[data-theme="dark"] .file-preview-breadcrumb-separator {
+  color: #6e6e6e;
 }
 
 .file-preview-actions {
   flex: 0 0 auto;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-preview-actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #616161;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+[data-theme="dark"] .file-preview-actions > button {
+  color: #a0a0a0;
+}
+
+.file-preview-actions > button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+[data-theme="dark"] .file-preview-actions > button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* "Open" dropdown in the preview toolbar. */
+.file-preview-open-dropdown {
+  position: relative;
+  flex: 0 0 auto;
+  width: max-content;
+}
+
+.file-preview-open-button {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.file-preview-open-button:hover {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.file-preview-open-button svg.rotate-180 {
+  transform: rotate(180deg);
+}
+
+.file-preview-open-menu {
+  position: absolute;
+  z-index: 1000;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  width: max-content;
+  min-width: 170px;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-bg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+}
+
+.file-preview-open-menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  transition: background 0.12s ease;
+}
+
+.file-preview-open-menu button:hover {
+  background: var(--surface-hover);
 }
 
 .file-preview-canvas {
@@ -10047,7 +10283,11 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 1 1 auto;
   overflow: auto;
   overscroll-behavior: contain;
-  background: color-mix(in srgb, var(--main-bg) 97%, var(--sidebar-bg));
+  background: #ffffff;
+}
+
+[data-theme="dark"] .file-preview-canvas {
+  background: #1e1e1e;
 }
 
 .file-preview-state {
@@ -10102,20 +10342,45 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .file-preview-text.code {
-  padding: 12px 14px 32px;
+  padding: 0 0 40px;
 }
 
-.file-preview-code {
-  min-width: min-content;
+/* react-syntax-highlighter already tokenises and wraps lines. We only
+ * need to make the host <pre> fill the scrollable area and keep long
+ * lines on a single horizontal scroll track. */
+.file-preview-text.code pre {
   margin: 0;
-  padding: 4px 8px 32px;
-  background: transparent;
-  color: var(--text);
-  font-family: var(--font-mono, "Cascadia Code", "SFMono-Regular", Consolas, monospace);
+  min-width: 100%;
+  min-height: 100%;
+  padding: 0 24px;
+  background: transparent !important;
+}
+
+/* Override react-syntax-highlighter's default line-table cell padding
+ * so line numbers sit flush in the gutter and code has a stable left
+ * margin. */
+.file-preview-text.code pre > code {
+  display: block;
+  padding: 0 !important;
+  background: transparent !important;
+  font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.file-preview-text.code pre > code .linenumber {
+  display: inline-block;
+  min-width: 32px !important;
+  padding-right: 16px !important;
+  padding-left: 8px !important;
+  text-align: right !important;
   font-size: 12px;
-  line-height: 1.65;
-  tab-size: 2;
-  white-space: pre;
+  font-feature-settings: "tnum";
+}
+
+.file-preview-text.code pre > code .linenumber,
+.file-preview-text.code pre > code .linenumber + span {
+  user-select: none;
 }
 
 .file-preview-markdown {
@@ -10687,18 +10952,18 @@ html[data-message-font-size="large"] .prose h3 {
 
 .browser-panel-toolbar {
   display: grid;
-  grid-template-columns: repeat(4, 26px) minmax(140px, 1fr) repeat(3, 26px);
-  gap: 4px;
-  padding: 6px 7px;
+  grid-template-columns: repeat(3, 24px) minmax(120px, 1fr) repeat(2, 24px);
+  gap: 3px;
+  padding: 5px 7px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--sidebar-bg) 92%, var(--surface) 8%);
 }
 
 .browser-panel-icon-btn {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -10727,13 +10992,13 @@ html[data-message-font-size="large"] .prose h3 {
 
 .browser-panel-address {
   min-width: 0;
-  height: 26px;
+  height: 24px;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--muted);
 }
@@ -11452,11 +11717,45 @@ html[data-message-font-size="large"] .prose h3 {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  height: 32px;
-  flex: 0 0 32px;
-  padding: 0 6px;
-  border-bottom: 1px solid var(--border);
-  background: var(--main-bg);
+  height: 40px;
+  flex: 0 0 40px;
+  padding: 0 8px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #f3f3f3;
+}
+
+[data-theme="dark"] .panel-file-tree-header {
+  border-bottom-color: #333333;
+  background: #252526;
+}
+
+.panel-file-tree-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #616161;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+[data-theme="dark"] .panel-file-tree-header button {
+  color: #a0a0a0;
+}
+
+.panel-file-tree-header button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+[data-theme="dark"] .panel-file-tree-header button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 .panel-file-tree .file-tree-panel-embedded {

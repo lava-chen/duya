@@ -170,7 +170,16 @@ export function PanelHeader() {
               title={tab.title}
               aria-pressed={active}
             >
-              <Icon size={12} weight={active ? "fill" : "regular"} />
+              {tab.favicon ? (
+                <img
+                  src={tab.favicon}
+                  alt=""
+                  className="panel-header-tab-favicon"
+                  onError={(event) => { event.currentTarget.style.display = "none"; }}
+                />
+              ) : (
+                <Icon size={12} weight={active ? "fill" : "regular"} />
+              )}
               <span className="panel-header-tab-title">{tab.title}</span>
               <span
                 role="button"

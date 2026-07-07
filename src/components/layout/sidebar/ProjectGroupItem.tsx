@@ -17,8 +17,7 @@ const THREAD_COLLAPSE_THRESHOLD = 5;
 
 export function ProjectGroupItem({ project, threads, activeThreadId, threadChildren }: ProjectGroupItemProps) {
   const { t } = useTranslation();
-  const { deleteThread, createThread, setActiveThread } = useConversationStore();
-  const [isExpanded, setIsExpanded] = useState(true);
+  const { deleteThread, createThread, setActiveThread, collapsedProjects, toggleProjectExpanded } = useConversationStore();
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
@@ -36,9 +35,11 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
     : sortedThreads.slice(0, THREAD_COLLAPSE_THRESHOLD);
   const hiddenCount = sortedThreads.length - THREAD_COLLAPSE_THRESHOLD;
 
+  const isExpanded = !collapsedProjects.has(project.workingDirectory);
+
   const handleToggle = useCallback(() => {
-    setIsExpanded((prev) => !prev);
-  }, []);
+    toggleProjectExpanded(project.workingDirectory);
+  }, [toggleProjectExpanded, project.workingDirectory]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

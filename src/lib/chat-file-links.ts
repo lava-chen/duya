@@ -147,12 +147,32 @@ export function openLocalFileTarget(filePath: string, cwd?: string | null): void
   window.open(`file:///${encodeURI(resolved.replace(/\\/g, '/'))}`, '_blank');
 }
 
+/** Optional line range carried from a chat tool row (e.g. ReadTool) to
+ *  the file preview panel, so the panel can scroll to and highlight the
+ *  exact lines the agent read. `end` is optional and 1-indexed; when
+ *  omitted only `start` is focused. */
+export interface FocusLineRange {
+  start: number;
+  end?: number;
+}
+
 /**
  * Artifact cards should prefer DUYA's internal surfaces over external apps:
  * HTML → Browser panel, Office → Office panel, previewable local assets →
  * Preview panel. Falls back to the generic local-file handler otherwise.
+ *
+ * When `lineRange` is supplied for a previewable file, the preview panel
+ * both opens (or activates) with the line range in its params and receives
+ * a follow-up `duya:preview-focus-lines` event. The follow-up matters when
+ * a tab for this file is already open — `dedupKey` would only activate the
+ * existing tab without re-running its params, so the event is what actually
+ * drives the scroll-to-line in that case.
  */
-export function openLocalArtifactTarget(filePath: string, cwd?: string | null): void {
+export function openLocalArtifactTarget(
+  filePath: string,
+  cwd?: string | null,
+  lineRange?: FocusLineRange,
+): void {
   const resolved = resolveLocalFilePath(filePath, cwd);
   if (isHtmlFile(resolved)) {
     window.dispatchEvent(new CustomEvent('duya:open-browser-panel', {
@@ -167,12 +187,38 @@ export function openLocalArtifactTarget(filePath: string, cwd?: string | null): 
     return;
   }
   if (isSidebarPreviewFile(resolved)) {
-    window.dispatchEvent(new CustomEvent('duya:open-file-preview-panel', {
-      detail: {
-        filePath: resolved,
-        workingDirectory: defaultPreviewRootForFile(resolved, cwd),
-      },
-    }));
+    const hasLineRange =
+      !!lineRange &&
+      Number.isFinite(lineRange.start) &&
+      lineRange.start > 0;
+    const detail: {
+      filePath: string;
+      workingDirectory: string;
+      lineStart?: number;
+      lineEnd?: number;
+    } = {
+      filePath: resolved,
+      workingDirectory: defaultPreviewRootForFile(resolved, cwd),
+    };
+    if (hasLineRange) {
+      detail.lineStart = lineRange!.start;
+      if (Number.isFinite(lineRange!.end) && lineRange!.end! >= lineRange!.start) {
+        detail.lineEnd = lineRange!.end;
+      }
+    }
+    window.dispatchEvent(new CustomEvent('duya:open-file-preview-panel', { detail }));
+    // Re-broadcast as a focus-lines event so an already-open tab for this
+    // file (matched by filePath) can scroll to the new range without
+    // requiring a fresh tab. Skipped when there's no line range to focus.
+    if (hasLineRange) {
+      window.dispatchEvent(new CustomEvent('duya:preview-focus-lines', {
+        detail: {
+          filePath: resolved,
+          lineStart: detail.lineStart,
+          lineEnd: detail.lineEnd,
+        },
+      }));
+    }
     return;
   }
   openLocalFileTarget(resolved, cwd);

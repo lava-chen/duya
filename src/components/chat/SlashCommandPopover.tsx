@@ -9,6 +9,8 @@ import {
   CaretLeftIcon,
   CheckIcon,
 } from '@/components/icons';
+import type { ModeModifierId } from '@/types/mode-id';
+import { isModeExcludedByActive } from '@/types/mode-id';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -65,13 +67,12 @@ interface SlashCommandPopoverProps {
   // Action commands (/recap)
   onExecuteAction: (action: string) => void;
 
-  // Mode state (mutually exclusive single-select)
-  currentMode: string | null;
-  onSelectMode: (mode: string | null) => void;
-
-  // Conductor canvas toggle (independent of plan/research modes)
-  conductorEnabled: boolean;
-  onToggleConductor: (enabled: boolean) => void;
+  // Mode state — unified activeModes set (plan 224 Phase 5).
+  // Toggling a mode applies mutual-exclusion rules (see `toggleModeInSet`).
+  // The popover reads `activeModes` to render active/disabled states and
+  // calls `onToggleMode` when the user clicks a mode item.
+  activeModes: Set<ModeModifierId>;
+  onToggleMode: (mode: ModeModifierId) => void;
 
   // Skill insertion (existing behavior)
   onInsertItem: (item: PopoverItem) => void;
@@ -109,11 +110,8 @@ export function SlashCommandPopover({
 
   onExecuteAction,
 
-  currentMode,
-  onSelectMode,
-
-  conductorEnabled,
-  onToggleConductor,
+  activeModes,
+  onToggleMode,
 
   onInsertItem,
   onSetSelectedIndex,
@@ -154,16 +152,25 @@ export function SlashCommandPopover({
         setSubView(item.submenu ?? null);
         return;
 
-      case 'conductor_toggle': {
-        onToggleConductor(!conductorEnabled);
+      case 'mode': {
+        const modeValue = item.modeValue as ModeModifierId | undefined;
+        if (!modeValue) return;
+        // Skip if clicking would conflict with an already-active mode.
+        // The toggle helper enforces exclusion, but we also block the click
+        // so the user gets the disabled visual feedback instead of silently
+        // dropping the conflicting mode.
+        if (!activeModes.has(modeValue) && isModeExcludedByActive(activeModes, modeValue)) {
+          return;
+        }
+        onToggleMode(modeValue);
         return;
       }
 
-      case 'mode': {
-        const modeValue = item.modeValue ?? '';
-        // Toggle: if already active, deactivate; otherwise activate.
-        onSelectMode(currentMode === modeValue ? null : modeValue);
-        // Don't close — user may want to see the selection.
+      // Deprecated: Conductor now uses kind='mode' with modeValue='conductor'.
+      // Retained for backward compat with any external caller still passing
+      // kind='conductor_toggle' items.
+      case 'conductor_toggle': {
+        onToggleMode('conductor');
         return;
       }
 
@@ -172,7 +179,7 @@ export function SlashCommandPopover({
         onInsertItem(item);
         return;
     }
-  }, [onAddFiles, onClosePopover, onExecuteAction, onInsertItem, onSelectMode, currentMode, conductorEnabled, onToggleConductor]);
+  }, [onAddFiles, onClosePopover, onExecuteAction, onInsertItem, onToggleMode, activeModes]);
 
   // -----------------------------------------------------------------------
   // Keyboard handler (for main view only)
@@ -270,10 +277,29 @@ export function SlashCommandPopover({
   const renderRow = (item: PopoverItem, globalIdx: number, isSelected: boolean) => {
     const IconComponent = item.icon ?? (item.group === 'skills' ? CubeIcon : undefined);
 
-    // For mode items, show a check if active.
-    // For settings_submenu items, show a caret-right.
-    // For settings items with a current value, show it on the right.
-    const isModeActive = item.kind === 'mode' && currentMode === item.modeValue;
+    // Mode items: check active state, mutual-exclusion status, and
+    // whether this item is the Conductor (which keeps the toggle switch
+    // visual instead of the check mark).
+    const modeValue = item.kind === 'mode' ? (item.modeValue as ModeModifierId | undefined) : undefined;
+    const isModeActive = !!modeValue && activeModes.has(modeValue);
+    const isConductorMode = modeValue === 'conductor' || item.kind === 'conductor_toggle';
+    // A mode is disabled if it is NOT active AND conflicts with one of the
+    // currently active modes. Active modes remain clickable (to toggle off).
+    const isModeDisabled = !!modeValue
+      && !isModeActive
+      && isModeExcludedByActive(activeModes, modeValue);
+    // Hint text: "互斥" when disabled by conflict; "可叠加" when a non-active
+    // mode can coexist with the current active set (informational only).
+    let modeHint: string | null = null;
+    if (modeValue && !isModeActive) {
+      if (isModeDisabled) {
+        modeHint = '互斥';
+      } else if (activeModes.size > 0) {
+        // Some other mode is active but this one doesn't conflict — stackable.
+        modeHint = '可叠加';
+      }
+    }
+
     const isSubmenu = item.kind === 'settings_submenu';
 
     // Current value label for submenu items
@@ -294,6 +320,7 @@ export function SlashCommandPopover({
         key={`${globalIdx}-${item.value}`}
         role="option"
         aria-selected={isSelected}
+        aria-disabled={isModeDisabled || undefined}
         onClick={() => handleItemClick(item)}
         onMouseEnter={() => {
           // Mark as mouse-originated so the scroll effect won't fight the cursor.
@@ -306,7 +333,7 @@ export function SlashCommandPopover({
           // keep the source flagged as mouse so we don't scroll again.
           lastSelectSource.current = 'mouse';
         }}
-        className="command-menu-row flex items-center gap-2 px-2.5 cursor-pointer select-none"
+        className="command-menu-row flex items-center gap-2 px-2.5 select-none"
         style={{
           minHeight: 28,
           paddingTop: 4,
@@ -314,6 +341,8 @@ export function SlashCommandPopover({
           borderRadius: 6,
           backgroundColor: isSelected ? 'var(--command-menu-selected)' : 'transparent',
           color: 'var(--text)',
+          cursor: isModeDisabled ? 'not-allowed' : 'pointer',
+          opacity: isModeDisabled ? 0.5 : 1,
         }}
       >
         {IconComponent ? (
@@ -337,18 +366,31 @@ export function SlashCommandPopover({
               {item.description}
             </span>
           )}
+          {modeHint && (
+            <span
+              className="truncate"
+              style={{
+                fontSize: 10,
+                color: isModeDisabled ? 'var(--danger)' : 'var(--command-menu-muted)',
+                lineHeight: '14px',
+                fontStyle: 'italic',
+              }}
+            >
+              {modeHint}
+            </span>
+          )}
         </div>
         {/* Right side indicators */}
-        {isModeActive && (
+        {isModeActive && !isConductorMode && (
           <CheckIcon size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
         )}
-        {item.kind === 'conductor_toggle' && (
+        {isConductorMode && (
           <div
             style={{
               width: 28,
               height: 16,
               borderRadius: 8,
-              backgroundColor: conductorEnabled ? 'var(--accent)' : 'var(--command-menu-border)',
+              backgroundColor: isModeActive ? 'var(--accent)' : 'var(--command-menu-border)',
               position: 'relative',
               flexShrink: 0,
               transition: 'background-color 0.15s',
@@ -358,7 +400,7 @@ export function SlashCommandPopover({
               style={{
                 position: 'absolute',
                 top: 2,
-                left: conductorEnabled ? 14 : 2,
+                left: isModeActive ? 14 : 2,
                 width: 12,
                 height: 12,
                 borderRadius: 6,
@@ -618,7 +660,9 @@ export function SlashCommandPopover({
     (item) => item.group === 'mode' || item.kind === 'mode',
   );
   const settingsGroup = filteredItems.filter(
-    (item) => item.group === 'settings' || item.kind === 'settings_action' || item.kind === 'settings_submenu',
+    (item) =>
+      item.group !== 'attachments'
+      && (item.group === 'settings' || item.kind === 'settings_action' || item.kind === 'settings_submenu'),
   );
   const skillGroup = filteredItems.filter(
     (item) => item.group === 'skills' && item.kind !== 'settings_action',

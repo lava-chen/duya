@@ -76,14 +76,14 @@ function getCategoryColor(category?: string) {
 function SkillIcon({ category, size = "md" }: { category?: string; size?: "sm" | "md" | "lg" }) {
   const categoryColor = getCategoryColor(category);
   const sizeClasses = {
-    sm: "w-8 h-8 text-lg",
-    md: "w-10 h-10 text-xl",
-    lg: "w-12 h-12 text-2xl",
+    sm: "w-7 h-7 text-base rounded-lg",
+    md: "w-9 h-9 text-lg rounded-xl",
+    lg: "w-12 h-12 text-2xl rounded-xl",
   };
 
   return (
     <div
-      className={`${sizeClasses[size]} rounded-xl flex items-center justify-center flex-shrink-0`}
+      className={`${sizeClasses[size]} flex items-center justify-center flex-shrink-0`}
       style={{
         backgroundColor: categoryColor.bg,
         color: categoryColor.text,
@@ -133,7 +133,7 @@ function SecurityBadge({ security, source }: { security?: SkillSecurity; source?
   );
 }
 
-function SkillCard({
+function SkillListItem({
   skill,
   isEnabled,
   onClick,
@@ -144,21 +144,21 @@ function SkillCard({
 }) {
   return (
     <div
-      className="group p-4 rounded-xl border border-border/50 bg-surface/50 hover:border-accent/30 hover:bg-accent/[0.02] hover:shadow-sm hover:-translate-y-0.5 transition-all duration-200 cursor-pointer"
+      className="group flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors cursor-pointer"
       onClick={onClick}
     >
-      <div className="flex items-center gap-3">
-        <SkillIcon category={skill.category} size="md" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold text-foreground leading-tight truncate">{skill.name}</h3>
-            <SecurityBadge security={skill.security} source={skill.source} />
-          </div>
-          <p className="text-xs text-muted-foreground leading-[1.4] line-clamp-1 mt-0.5">{skill.description}</p>
-        </div>
+      <SkillIcon category={skill.category} size="sm" />
+      <div className="flex-1 min-w-0 flex items-center gap-4">
+        <h3 className="text-sm font-semibold text-foreground leading-tight truncate shrink-0 max-w-[180px]">
+          {skill.name}
+        </h3>
+        <p className="text-sm text-muted-foreground leading-tight truncate flex-1">{skill.description}</p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <SecurityBadge security={skill.security} source={skill.source} />
         {isEnabled && (
-          <div className="w-6 h-6 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
-            <CheckIcon size={14} className="text-accent" />
+          <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center">
+            <CheckIcon size={12} className="text-emerald-500" />
           </div>
         )}
       </div>
@@ -429,31 +429,6 @@ function SkillDetailModal({
   );
 }
 
-function groupSkillsByCategory(skills: SkillWithContent[]): Record<string, SkillWithContent[]> {
-  const groups: Record<string, SkillWithContent[]> = {};
-
-  skills.forEach((skill) => {
-    const category = skill.category || "other";
-    if (!groups[category]) {
-      groups[category] = [];
-    }
-    groups[category].push(skill);
-  });
-
-  const sortedGroups: Record<string, SkillWithContent[]> = {};
-  const categories = Object.keys(groups).sort((a, b) => {
-    if (a === "system") return -1;
-    if (b === "system") return 1;
-    return a.localeCompare(b);
-  });
-
-  categories.forEach((category) => {
-    sortedGroups[category] = groups[category];
-  });
-
-  return sortedGroups;
-}
-
 export function SkillsSection() {
   const { t } = useTranslation();
   const [skillPath, setSkillPath] = useState<string>("");
@@ -525,10 +500,6 @@ export function SkillsSection() {
         skill.category?.toLowerCase().includes(query)
     );
   }, [searchQuery, skills]);
-
-  const groupedSkills = useMemo(() => {
-    return groupSkillsByCategory(filteredSkills);
-  }, [filteredSkills]);
 
   const handleToggleEnabled = useCallback(async (skill: SkillWithContent) => {
     const win = window as unknown as {
@@ -628,25 +599,16 @@ export function SkillsSection() {
             </p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {Object.entries(groupedSkills).map(([category, categorySkills]) => (
-              <div key={category}>
-                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                  {category.charAt(0).toUpperCase() + category.slice(1)}
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {categorySkills.map((skill) => (
-                    <SkillCard
-                      key={skill.name}
-                      skill={skill}
-                      isEnabled={skill.enabled !== false}
-                      onClick={() => setSelectedSkill(skill)}
-                    />
-                  ))}
-                </div>
-              </div>
+          <SettingsCard className="divide-y divide-border/20">
+            {filteredSkills.map((skill) => (
+              <SkillListItem
+                key={skill.name}
+                skill={skill}
+                isEnabled={skill.enabled !== false}
+                onClick={() => setSelectedSkill(skill)}
+              />
             ))}
-          </div>
+          </SettingsCard>
         )}
       </SettingsSection>
 

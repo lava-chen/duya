@@ -2,16 +2,21 @@
 
 import {
   ArrowSquareOut,
-  ArrowsClockwise,
+  CaretDown,
+  Copy,
   FileText,
+  Files,
   FolderOpen,
-  Plus,
   Sparkle,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vs, vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
+import { useOptionalPanel } from "@/hooks/usePanel";
+import { useTheme } from "@/hooks/useTheme";
 import type { PageTab } from "./registry";
 
 interface PreviewPayload {
@@ -39,13 +44,111 @@ interface SelectionContext {
   lineEnd?: number;
 }
 
-const MARKDOWN_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
-
-function formatSize(bytes = 0): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+/** 1-indexed line range to focus (scroll to + highlight) inside the
+ *  preview. `end` is optional; when omitted only `start` is highlighted. */
+interface FocusLines {
+  start: number;
+  end?: number;
 }
+
+/** Extract the directory part of a Windows or Unix path without pulling
+ *  in the `path` Node module (renderer should stay lightweight). */
+function getDirectoryPath(filePath: string): string {
+  const idx = Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/"));
+  return idx > 0 ? filePath.slice(0, idx) : filePath;
+}
+
+interface BreadcrumbSegment {
+  name: string;
+  fullPath: string;
+}
+
+/** Build a breadcrumb from the project root to the current file.
+ *  Returns null when the file is not inside the root (e.g. an absolute
+ *  path outside the workspace). */
+function buildBreadcrumb(filePath: string, rootPath: string): BreadcrumbSegment[] | null {
+  if (!filePath || !rootPath) return null;
+  const normalizedFile = filePath.replace(/\\/g, "/");
+  const normalizedRoot = rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedFile.startsWith(normalizedRoot + "/")) return null;
+  const relative = normalizedFile.slice(normalizedRoot.length + 1);
+  if (!relative) return null;
+  const parts = relative.split("/").filter(Boolean);
+  return parts.map((name, index) => ({
+    name,
+    fullPath: normalizedRoot + "/" + parts.slice(0, index + 1).join("/"),
+  }));
+}
+
+/** Map a file extension to a react-syntax-highlighter language.
+ *  Keep the list conservative: only languages the highlighter bundles
+ *  by default; everything else falls back to "text" so rendering stays
+ *  fast and accurate. */
+function languageFromExtension(extension?: string): string {
+  if (!extension) return "text";
+  const ext = extension.toLowerCase();
+  const map: Record<string, string> = {
+    ts: "typescript",
+    tsx: "tsx",
+    js: "javascript",
+    jsx: "jsx",
+    mjs: "javascript",
+    cjs: "javascript",
+    py: "python",
+    rb: "ruby",
+    go: "go",
+    rs: "rust",
+    java: "java",
+    kt: "kotlin",
+    kts: "kotlin",
+    swift: "swift",
+    cs: "csharp",
+    cpp: "cpp",
+    cxx: "cpp",
+    cc: "cpp",
+    c: "c",
+    h: "c",
+    hpp: "cpp",
+    css: "css",
+    scss: "scss",
+    sass: "scss",
+    less: "less",
+    html: "html",
+    htm: "html",
+    json: "json",
+    jsonc: "json",
+    yaml: "yaml",
+    yml: "yaml",
+    xml: "xml",
+    svg: "xml",
+    md: "markdown",
+    markdown: "markdown",
+    mdx: "markdown",
+    sql: "sql",
+    sh: "bash",
+    bash: "bash",
+    zsh: "bash",
+    fish: "bash",
+    dockerfile: "docker",
+    toml: "toml",
+    ini: "ini",
+    conf: "ini",
+    cfg: "ini",
+    env: "bash",
+    vue: "html",
+    svelte: "html",
+    astro: "html",
+    graphql: "graphql",
+    gql: "graphql",
+    proto: "protobuf",
+    php: "php",
+    lua: "lua",
+    r: "r",
+  };
+  return map[ext] ?? "text";
+}
+
+const MARKDOWN_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
 
 export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const propFilePath = typeof tab.params?.filePath === "string" ? tab.params.filePath : "";
@@ -63,6 +166,96 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [selection, setSelection] = useState<SelectionContext | null>(null);
+  const [openMenuOpen, setOpenMenuOpen] = useState(false);
+  const [openMenuStyle, setOpenMenuStyle] = useState<{ top: number; left: number } | null>(null);
+  const openMenuRef = useRef<HTMLDivElement>(null);
+  const openButtonRef = useRef<HTMLButtonElement>(null);
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
+  const panel = useOptionalPanel();
+  const workspaceTreeOpen = panel?.workspaceTreeOpen ?? false;
+
+  // Read the initial focus range from tab.params (set by ReadToolRow via
+  // openLocalArtifactTarget → duya:open-file-preview-panel). Subsequent
+  // re-focus on an already-open tab arrives via the duya:preview-focus-lines
+  // event below, so we only read params once on mount.
+  const [focusLines, setFocusLines] = useState<FocusLines | null>(() => {
+    const ls = tab.params?.lineStart;
+    const le = tab.params?.lineEnd;
+    if (typeof ls === "number" && Number.isFinite(ls) && ls > 0) {
+      return { start: ls, end: typeof le === "number" && Number.isFinite(le) ? le : undefined };
+    }
+    return null;
+  });
+
+  // Close the "Open" dropdown when clicking outside.
+  useEffect(() => {
+    if (!openMenuOpen) return;
+    const handler = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        !openMenuRef.current?.contains(target) &&
+        !openButtonRef.current?.contains(target)
+      ) {
+        setOpenMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openMenuOpen]);
+
+  // Listen for re-focus events (fired by openLocalArtifactTarget when the
+  // caller supplied a line range). This is what lets a second click on a
+  // different ReadToolRow for the SAME file scroll the already-open tab to
+  // the new range — dedupKey would otherwise only activate the existing
+  // tab without re-running its params.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        filePath?: string;
+        lineStart?: number;
+        lineEnd?: number;
+      }>).detail;
+      if (!detail) return;
+      // Only accept events aimed at this panel's file. Resolve against the
+      // same filePath we're currently displaying (including overrides).
+      if (typeof detail.filePath === "string" && detail.filePath !== filePath) return;
+      const ls = detail.lineStart;
+      if (typeof ls !== "number" || !Number.isFinite(ls) || ls <= 0) {
+        setFocusLines(null);
+        return;
+      }
+      const le = detail.lineEnd;
+      setFocusLines({
+        start: ls,
+        end: typeof le === "number" && Number.isFinite(le) && le >= ls ? le : undefined,
+      });
+    };
+    window.addEventListener("duya:preview-focus-lines", handler as EventListener);
+    return () => window.removeEventListener("duya:preview-focus-lines", handler as EventListener);
+  }, [filePath]);
+
+  // After the syntax-highlighted code renders, scroll the first focused
+  // line into the vertical center of the canvas.
+  useEffect(() => {
+    if (!focusLines || !canvasRef.current || loading) return;
+    const canvas = canvasRef.current;
+    // Allow the highlighter one paint cycle to mount the line elements.
+    const raf = requestAnimationFrame(() => {
+      const lineEl = canvas.querySelector(`[data-preview-line="${focusLines.start}"]`) as HTMLElement | null;
+      if (lineEl) {
+        const canvasRect = canvas.getBoundingClientRect();
+        const lineRect = lineEl.getBoundingClientRect();
+        const targetScroll =
+          canvas.scrollTop +
+          (lineRect.top - canvasRect.top) -
+          canvas.clientHeight / 2 +
+          lineRect.height / 2;
+        canvas.scrollTo({ top: Math.max(0, targetScroll), behavior: "smooth" });
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [focusLines, loading, preview?.content]);
 
   const loadPreview = useCallback(async () => {
     if (!filePath || !workingDirectory) return;
@@ -140,20 +333,16 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     // Plan 220: compute 1-indexed line range from the selection.
     // We do this by walking up from the anchor/focus to the
     // <pre><code> container and computing the character offset of
-    // each endpoint against the raw preview content. The preview
-    // is rendered as a single text node, so the offset relative to
-    // that text node is the offset into `preview.content`.
+    // each endpoint against the raw preview content.
     let lineStart: number | undefined;
     let lineEnd: number | undefined;
     if (preview?.content) {
+      const codeEl = anchor.closest('code');
+      if (!codeEl) {
+        setSelection(null);
+        return;
+      }
       const offsetOfNode = (node: Node, offset: number): number => {
-        // Find the <code> ancestor that holds the raw text.
-        const codeEl =
-          node.nodeType === Node.ELEMENT_NODE
-            ? (node as Element).closest('code, pre')
-            : node.parentElement?.closest('code, pre');
-        if (!codeEl) return -1;
-        // Compute character offset from start of codeEl.
         const walker = document.createTreeWalker(codeEl, NodeFilter.SHOW_TEXT);
         let total = 0;
         let current: Node | null = walker.nextNode();
@@ -162,7 +351,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           total += current.textContent?.length ?? 0;
           current = walker.nextNode();
         }
-        return total;
+        return -1;
       };
       const startOff = offsetOfNode(
         nativeSelection?.anchorNode as Node,
@@ -219,6 +408,59 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     return `data:${preview.mediaType};base64,${preview.data}`;
   }, [preview?.data, preview?.mediaType]);
 
+  const language = useMemo(
+    () => languageFromExtension(preview?.extension),
+    [preview?.extension],
+  );
+
+  const lineProps = useCallback(
+    (lineNumber: number) => {
+      return {
+        "data-preview-line": lineNumber,
+        style: {
+          display: "block" as const,
+          width: "100%",
+        },
+      };
+    },
+    [],
+  );
+
+  const breadcrumb = useMemo(
+    () => buildBreadcrumb(filePath, workingDirectory),
+    [filePath, workingDirectory],
+  );
+
+  const rootName = useMemo(() => {
+    if (!workingDirectory) return "";
+    const normalized = workingDirectory.replace(/\\/g, "/").replace(/\/+$/, "");
+    const idx = normalized.lastIndexOf("/");
+    return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+  }, [workingDirectory]);
+
+  const handleOpenWithDefault = useCallback(() => {
+    setOpenMenuOpen(false);
+    void window.electronAPI?.shell?.openPath(filePath);
+  }, [filePath]);
+
+  const handleRevealInFolder = useCallback(() => {
+    setOpenMenuOpen(false);
+    if (window.electronAPI?.shell?.showItemInFolder) {
+      void window.electronAPI.shell.showItemInFolder(filePath);
+      return;
+    }
+    void window.electronAPI?.shell?.openPath(getDirectoryPath(filePath));
+  }, [filePath]);
+
+  const handleCopyPath = useCallback(async () => {
+    setOpenMenuOpen(false);
+    try {
+      await navigator.clipboard.writeText(filePath);
+    } catch {
+      // Ignore clipboard errors in restricted contexts.
+    }
+  }, [filePath]);
+
   if (!filePath) {
     return (
       <PanelFileTreeSplit workingDirectory={workingDirectory}>
@@ -236,27 +478,90 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     <div className="file-preview-panel">
       <div className="file-preview-toolbar">
         <div className="file-preview-title">
-          <FileText size={16} weight="duotone" />
-          <span>{preview?.name ?? tab.title}</span>
-          {preview?.extension && <small>{preview.extension.toUpperCase()}</small>}
-          {preview?.size !== undefined && <small>{formatSize(preview.size)}</small>}
+          <div className="file-preview-name-stack">
+            <div className="file-preview-breadcrumb">
+              {rootName && (
+                <span className="file-preview-breadcrumb-root">{rootName}</span>
+              )}
+              {breadcrumb?.map((segment, index) => {
+                const isLast = index === breadcrumb.length - 1;
+                return (
+                  <span key={segment.fullPath} className="file-preview-breadcrumb-segment">
+                    <span className="file-preview-breadcrumb-separator">›</span>
+                    <span className={isLast ? "file-preview-breadcrumb-current" : "file-preview-breadcrumb-part"}>
+                      {segment.name}
+                    </span>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
         </div>
         <div className="file-preview-actions">
-          <button type="button" onClick={() => addFileToInput()} title="添加到输入框" aria-label="添加到输入框">
-            <Plus size={15} />
-          </button>
-          <button type="button" onClick={() => void loadPreview()} title="重新加载" aria-label="重新加载">
-            <ArrowsClockwise size={15} className={loading ? "animate-spin" : ""} />
-          </button>
-          <button type="button" onClick={() => void window.electronAPI?.shell?.openPath(filePath)} title="用默认应用打开" aria-label="用默认应用打开">
-            <ArrowSquareOut size={15} />
-          </button>
+          {panel && workingDirectory && (
+            <button
+              type="button"
+              className={workspaceTreeOpen ? "active" : undefined}
+              onClick={() => panel.setWorkspaceTreeOpen(!workspaceTreeOpen)}
+              title={workspaceTreeOpen ? "收起文件树" : "展开文件树"}
+              aria-label={workspaceTreeOpen ? "收起文件树" : "展开文件树"}
+              aria-pressed={workspaceTreeOpen}
+              data-testid="file-tree-toggle"
+            >
+              <Files size={16} />
+            </button>
+          )}
+          <div className="file-preview-open-dropdown">
+            <button
+              ref={openButtonRef}
+              type="button"
+              className="file-preview-open-button"
+              onClick={() => {
+                const rect = openButtonRef.current?.getBoundingClientRect();
+                if (rect) {
+                  setOpenMenuStyle({ top: rect.bottom + 6, left: rect.left });
+                }
+                setOpenMenuOpen((prev) => !prev);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={openMenuOpen}
+            >
+              <ArrowSquareOut size={14} />
+              <span>打开</span>
+              <CaretDown size={12} className={openMenuOpen ? "rotate-180" : ""} />
+            </button>
+            {openMenuOpen && openMenuStyle && (
+              <div
+                ref={openMenuRef}
+                className="file-preview-open-menu"
+                role="menu"
+                style={{
+                  position: "fixed",
+                  top: openMenuStyle.top,
+                  left: openMenuStyle.left,
+                }}
+              >
+                <button type="button" role="menuitem" onClick={handleOpenWithDefault}>
+                  <ArrowSquareOut size={14} />
+                  用默认应用打开
+                </button>
+                <button type="button" role="menuitem" onClick={handleRevealInFolder}>
+                  <FolderOpen size={14} />
+                  在文件夹中显示
+                </button>
+                <button type="button" role="menuitem" onClick={handleCopyPath}>
+                  <Copy size={14} />
+                  复制路径
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="file-preview-canvas" ref={canvasRef} onMouseUp={captureSelection}>
         {loading && (
-          <div className="file-preview-state"><ArrowsClockwise size={18} className="animate-spin" /> 正在载入预览…</div>
+          <div className="file-preview-state"><span className="animate-pulse">正在载入预览…</span></div>
         )}
         {!loading && preview && !preview.success && (
           <div className="file-preview-state file-preview-error"><WarningCircle size={20} /> {preview.error || "无法预览文件"}</div>
@@ -282,7 +587,38 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                 {preview.content || ""}
               </MarkdownRenderer>
             ) : (
-              <pre className="file-preview-code"><code>{preview.content || ""}</code></pre>
+              <SyntaxHighlighter
+                language={language}
+                style={isDark ? vscDarkPlus : vs}
+                wrapLines
+                showLineNumbers
+                startingLineNumber={1}
+                lineProps={lineProps}
+                customStyle={{
+                  margin: 0,
+                  padding: 0,
+                  background: "transparent",
+                  fontSize: "13px",
+                  lineHeight: "1.65",
+                  minHeight: "100%",
+                }}
+                codeTagProps={{
+                  style: {
+                    fontFamily: "var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace)",
+                  },
+                }}
+                lineNumberStyle={{
+                  minWidth: "36px",
+                  paddingRight: "12px",
+                  paddingLeft: "8px",
+                  textAlign: "right",
+                  color: isDark ? "#6e7681" : "#6e7681",
+                  background: "transparent",
+                  userSelect: "none",
+                }}
+              >
+                {preview.content || ""}
+              </SyntaxHighlighter>
             )}
           </div>
         )}
