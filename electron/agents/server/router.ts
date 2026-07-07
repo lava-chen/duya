@@ -262,30 +262,42 @@ async function handlePostChat(
         }
       });
 
-      // Helper to wait for ready signal from worker via stdout
-      const waitForReady = (): Promise<void> => {
+      // Helper to wait for ready signal from worker.
+      // Subscribes to BOTH child.stdout line-scanning AND the IPC channel
+      // because worker sendToMain emits on both — stdout can lose frames on
+      // Windows + Electron child stdio pipes, but IPC is always reliable.
+      const waitForReady = (timeoutMs = 30000): Promise<void> => {
         return new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            cleanup();
-            reject(new Error('Worker ready timeout (30s)'));
-          }, 30000);
+          const startedAt = Date.now();
+          let recentStdout = '';
+          let lineBuffer = '';
+          let settled = false;
+          let timer: ReturnType<typeof setTimeout> | undefined;
 
-          let readyBuffer = '';
-
-          const readyHandler = (data: Buffer): void => {
-            readyBuffer += data.toString();
-            const lines = readyBuffer.split('\n');
-            readyBuffer = lines.pop() || '';
-
+          const onStdout = (data: Buffer): void => {
+            const text = data.toString();
+            recentStdout += text;
+            if (recentStdout.length > 4096) {
+              recentStdout = recentStdout.slice(-4096);
+            }
+            lineBuffer += text;
+            const lines = lineBuffer.split('\n');
+            lineBuffer = lines.pop() || '';
             for (const rawLine of lines) {
               const line = rawLine.trim();
               if (!line || !line.startsWith('{')) continue;
               try {
                 const msg = JSON.parse(line);
-                if (msg.type === 'ready' || msg.type === 'conductor:ready') {
-                  clearTimeout(timeout);
-                  cleanup();
-                  resolve();
+                if (
+                  (msg.type === 'ready' || msg.type === 'conductor:ready') &&
+                  (!msg.sessionId || msg.sessionId === sessionId)
+                ) {
+                  logger.info('Worker ready via stdout', {
+                    sessionId,
+                    waitedMs: Date.now() - startedAt,
+                    readyType: msg.type,
+                  });
+                  finish(resolve);
                   return;
                 }
               } catch {
@@ -294,12 +306,44 @@ async function handlePostChat(
             }
           };
 
-          const cleanup = (): void => {
-            clearTimeout(timeout);
-            child.stdout?.removeListener('data', readyHandler);
+          const onIpc = (msg: Record<string, unknown>): void => {
+            if (
+              (msg.type === 'ready' || msg.type === 'conductor:ready') &&
+              (!msg.sessionId || msg.sessionId === sessionId)
+            ) {
+              logger.info('Worker ready via IPC', {
+                sessionId,
+                waitedMs: Date.now() - startedAt,
+                readyType: msg.type,
+              });
+              finish(resolve);
+            }
           };
 
-          child.stdout!.on('data', readyHandler);
+          const finish = (fn: () => void): void => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            child.stdout?.removeListener('data', onStdout);
+            child.removeListener('message', onIpc);
+            fn();
+          };
+
+          timer = setTimeout(() => {
+            const waitedMs = Date.now() - startedAt;
+            const tail = recentStdout.slice(-500).replace(/\s+/g, ' ');
+            logger.warn('Worker ready timeout', {
+              sessionId,
+              waitedMs,
+              recentStdoutTail: recentStdout.slice(-2000),
+            });
+            finish(() => reject(new Error(
+              `Worker ready timeout (${waitedMs}ms); last stdout: ${tail}`,
+            )));
+          }, timeoutMs);
+
+          child.stdout!.on('data', onStdout);
+          child.on('message', onIpc);
         });
       };
 

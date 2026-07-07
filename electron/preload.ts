@@ -123,6 +123,7 @@ export interface MessageAPI {
   getBySession: (sessionId: string) => Promise<unknown[]>
   replace: (sessionId: string, messages: unknown[], generation: number) => Promise<unknown>
   truncateAfter: (sessionId: string, messageId: string) => Promise<{ deletedCount: number }>
+  truncateFromInclusive: (sessionId: string, messageId: string) => Promise<{ deletedCount: number }>
 }
 
 export interface SettingsAPI {
@@ -879,6 +880,7 @@ export interface ElectronAPI {
   }
   shell: {
     openPath: (folderPath: string) => Promise<string>
+    showItemInFolder: (filePath: string) => Promise<string>
     openExternal: (url: string) => Promise<string>
   }
   notification: {
@@ -1496,6 +1498,7 @@ const electronAPI: ElectronAPI = {
   },
   shell: {
     openPath: (folderPath) => ipcRenderer.invoke('shell:open-path', folderPath),
+    showItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', filePath),
     openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   },
   notification: {
@@ -1670,6 +1673,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('db:message:replace', sessionId, messages, generation),
     truncateAfter: (sessionId: string, messageId: string) =>
       ipcRenderer.invoke('db:message:truncateAfter', sessionId, messageId),
+    truncateFromInclusive: (sessionId: string, messageId: string) =>
+      ipcRenderer.invoke('db:message:truncateFromInclusive', sessionId, messageId),
   },
   settingsDb: {
     get: (key: string) => ipcRenderer.invoke('db:setting:get', key),

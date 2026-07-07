@@ -70,6 +70,25 @@ export function registerSystemHandlers(): void {
     return shell.openPath(folderPath);
   });
 
+  ipcMain.handle('shell:show-item-in-folder', async (_event, filePath: string) => {
+    if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > 4096) {
+      return 'Invalid path';
+    }
+    if (filePath.includes('\0')) {
+      return 'Invalid path';
+    }
+    // Electron resolves symlinks before revealing; reveal the real path
+    // so the OS file manager lands on the actual file.
+    let target = filePath;
+    try {
+      target = fs.realpathSync(filePath);
+    } catch {
+      // Fall back to the requested path if realpath fails.
+    }
+    shell.showItemInFolder(target);
+    return '';
+  });
+
   ipcMain.handle('shell:open-external', async (_event, url: string) => {
     if (typeof url !== 'string' || url.length === 0 || url.length > 4096) {
       return 'Invalid URL';

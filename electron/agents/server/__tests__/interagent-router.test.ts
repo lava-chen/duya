@@ -52,29 +52,63 @@ function createMockDeps(overrides?: {
   sessionState?: SessionState;
   workerCount?: number;
   sessionExists?: boolean;
+  readyChannel?: 'stdout' | 'ipc' | 'none';
+  readyDelayMs?: number;
+  stdoutTrailingLines?: string[];
 }) {
   const sessionState = overrides?.sessionState ?? SessionState.IDLE;
   const sessionExists = overrides?.sessionExists ?? true;
+  const readyChannel = overrides?.readyChannel ?? 'stdout';
+  const readyDelayMs = overrides?.readyDelayMs ?? 0;
 
   const sessionManager = {
     getSession: vi.fn(() => sessionExists ? { id: 'B', state: sessionState } : undefined),
     transitionState: vi.fn(),
   } as unknown as SessionManager;
 
-  // Fake child process stdout that emits a 'ready' event on the next tick
-  // after a 'data' listener is registered, so waitForReady resolves.
+  // Fake child process: stdout and the child itself are both EventEmitters so
+  // waitForReady's dual-subscription (stdout 'data' AND child 'message') can
+  // attach and tear down listeners cleanly.
   const fakeStdout = new EventEmitter();
-  const originalOn = fakeStdout.on.bind(fakeStdout);
-  fakeStdout.on = ((event: string, listener: (...args: unknown[]) => void) => {
-    const result = originalOn(event, listener);
-    if (event === 'data') {
-      process.nextTick(() => {
-        fakeStdout.emit('data', Buffer.from(JSON.stringify({ type: 'ready', sessionId: 'B' }) + '\n'));
-      });
+  const fakeChild = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    killed?: boolean;
+    stdin?: { writable: boolean };
+  };
+  fakeChild.stdout = fakeStdout;
+  fakeChild.killed = false;
+  fakeChild.stdin = { writable: true };
+
+  if (readyChannel === 'stdout') {
+    // Wait for the stdout 'data' listener to register, then emit ready.
+    // Use process.nextTick so vitest's fake timers don't intercept this
+    // (useFakeTimers defaults to faking setTimeout/setInterval/setImmediate
+    // but NOT nextTick).
+    const originalOn = fakeStdout.on.bind(fakeStdout);
+    fakeStdout.on = ((event: string, listener: (...args: unknown[]) => void) => {
+      const result = originalOn(event, listener);
+      if (event === 'data') {
+        process.nextTick(() => {
+          fakeStdout.emit('data', Buffer.from(JSON.stringify({ type: 'ready', sessionId: 'B' }) + '\n'));
+        });
+      }
+      return result;
+    }) as typeof fakeStdout.on;
+  } else if (readyChannel === 'ipc') {
+    // Emit ready on the IPC channel after a microtask so waitForReady has
+    // a chance to subscribe. nextTick is safe vs fake timers.
+    process.nextTick(() => {
+      fakeChild.emit('message', { type: 'ready', sessionId: 'B' });
+    });
+    if (overrides?.stdoutTrailingLines?.length) {
+      for (const line of overrides.stdoutTrailingLines) {
+        process.nextTick(() => {
+          fakeStdout.emit('data', Buffer.from(line + '\n'));
+        });
+      }
     }
-    return result;
-  }) as typeof fakeStdout.on;
-  const fakeChild = { stdout: fakeStdout };
+  }
+  // 'none' → never ready; used to drive timeout tests.
 
   const workerManager = {
     workerCount: overrides?.workerCount ?? 1,
@@ -82,6 +116,7 @@ function createMockDeps(overrides?: {
     sendCommand: vi.fn(),
     interruptWorker: vi.fn(),
     getWorker: vi.fn(() => fakeChild),
+    hasWorker: vi.fn(() => true),
     setMessageHandler: vi.fn(),
   } as unknown as WorkerManager;
 
@@ -155,5 +190,73 @@ describe('InteragentRouter rejection', () => {
     const router = new InteragentRouter(deps);
     const result = await router.handleInvoke(createParams());
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('InteragentRouter.waitForReady dual-channel', () => {
+  // waitForReady is private — invoke it indirectly via handleInvoke on a
+  // stub case where the spawnAndDriveTarget path runs to completion.
+  it('resolves when ready arrives via child IPC even if stdout never emits it', async () => {
+    const deps = createMockDeps({
+      sessionState: SessionState.IDLE,
+      readyChannel: 'ipc',
+      // Some stdout noise that should NOT cause waitForReady to resolve.
+      stdoutTrailingLines: [
+        JSON.stringify({ type: 'log', msg: 'still loading skills' }),
+        JSON.stringify({ type: 'log', msg: 'mcp apply' }),
+      ],
+    });
+    const router = new InteragentRouter(deps);
+    const result = await router.handleInvoke(createParams());
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('still resolves when ready arrives via stdout (legacy path)', async () => {
+    const deps = createMockDeps({
+      sessionState: SessionState.IDLE,
+      readyChannel: 'stdout',
+    });
+    const router = new InteragentRouter(deps);
+    const result = await router.handleInvoke(createParams());
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('rejects with diagnostic context (last stdout) when neither channel emits ready', async () => {
+    const deps = createMockDeps({
+      sessionState: SessionState.IDLE,
+      readyChannel: 'none',
+    });
+    const router = new InteragentRouter(deps);
+
+    const privateRouter = router as unknown as {
+      waitForReady: (sid: string, ms?: number) => Promise<void>;
+    };
+    const fakeChild = deps.workerManager.getWorker('B') as EventEmitter & { stdout: EventEmitter };
+
+    // Start waitForReady FIRST so the 'data' listener is attached before
+    // we emit log noise onto stdout.
+    const readyPromise = privateRouter.waitForReady('B', 50);
+
+    // Yield a microtask so the synchronous listener-attach in waitForReady
+    // completes before we start emitting.
+    await Promise.resolve();
+    fakeChild.stdout.emit(
+      'data',
+      Buffer.from(JSON.stringify({ type: 'log', msg: 'still loading skills' }) + '\n'),
+    );
+    fakeChild.stdout.emit(
+      'data',
+      Buffer.from(JSON.stringify({ type: 'log', msg: 'conductor subsystem register' }) + '\n'),
+    );
+
+    let directError: Error | undefined;
+    await readyPromise.catch((e: unknown) => {
+      directError = e as Error;
+    });
+
+    expect(directError).toBeInstanceOf(Error);
+    expect(directError!.message).toMatch(/interagent target ready timeout/);
+    expect(directError!.message).toMatch(/last stdout:/);
+    expect(directError!.message).toMatch(/still loading skills/);
   });
 });

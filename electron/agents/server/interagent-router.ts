@@ -216,7 +216,10 @@ export class InteragentRouter {
     this.subscribeToTargetStdout(targetSessionId, id, callerSessionId);
   }
 
-  private waitForReady(targetSessionId: string): Promise<void> {
+  private waitForReady(
+    targetSessionId: string,
+    timeoutMs = 30000,
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const child = this.deps.workerManager.getWorker(targetSessionId);
       if (!child || !child.stdout) {
@@ -224,25 +227,36 @@ export class InteragentRouter {
         return;
       }
 
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('interagent target ready timeout'));
-      }, 30000);
+      const startedAt = Date.now();
+      // Rolling ~4KB window of recent stdout for diagnostic messages.
+      let recentStdout = '';
+      let lineBuffer = '';
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
 
-      let buffer = '';
-      const handler = (data: Buffer): void => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+      const onStdout = (data: Buffer): void => {
+        const text = data.toString();
+        recentStdout += text;
+        if (recentStdout.length > 4096) {
+          recentStdout = recentStdout.slice(-4096);
+        }
+        lineBuffer += text;
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() || '';
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed || !trimmed.startsWith('{')) continue;
           try {
             const msg = JSON.parse(trimmed);
-            if (msg.type === 'ready') {
-              clearTimeout(timeout);
-              cleanup();
-              resolve();
+            if (
+              msg.type === 'ready' &&
+              (!msg.sessionId || msg.sessionId === targetSessionId)
+            ) {
+              workerLogger.info('Interagent target ready via stdout', {
+                targetSessionId,
+                waitedMs: Date.now() - startedAt,
+              });
+              finish(resolve);
               return;
             }
           } catch {
@@ -251,11 +265,46 @@ export class InteragentRouter {
         }
       };
 
-      const cleanup = (): void => {
-        child.stdout?.removeListener('data', handler);
+      // IPC fallback: sendToMain in the worker (agent-process-entry.ts:845)
+      // emits to BOTH stdout and process.send. On Windows + Electron child
+      // stdio pipes occasionally drop frames; the IPC channel is reliable.
+      const onIpc = (msg: Record<string, unknown>): void => {
+        if (
+          msg.type === 'ready' &&
+          (!msg.sessionId || msg.sessionId === targetSessionId)
+        ) {
+          workerLogger.info('Interagent target ready via IPC', {
+            targetSessionId,
+            waitedMs: Date.now() - startedAt,
+          });
+          finish(resolve);
+        }
       };
 
-      child.stdout.on('data', handler);
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        child.stdout?.removeListener('data', onStdout);
+        child.removeListener('message', onIpc);
+        fn();
+      };
+
+      timer = setTimeout(() => {
+        const waitedMs = Date.now() - startedAt;
+        const tail = recentStdout.slice(-500).replace(/\s+/g, ' ');
+        workerLogger.warn('Interagent target ready timeout', {
+          targetSessionId,
+          waitedMs,
+          recentStdoutTail: recentStdout.slice(-2000),
+        });
+        finish(() => reject(new Error(
+          `interagent target ready timeout after ${waitedMs}ms; last stdout: ${tail}`,
+        )));
+      }, timeoutMs);
+
+      child.stdout.on('data', onStdout);
+      child.on('message', onIpc);
     });
   }
 

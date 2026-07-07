@@ -66,6 +66,7 @@ const EXPECTED_INDICES = [
   'idx_conductor_actions_canvas_ts',
   'idx_conductor_actions_widget_ts',
   'idx_conductor_actions_undone',
+  'idx_conductor_canvases_project_path',
   'idx_gateway_user_map_session',
   'idx_gateway_user_map_platform',
   'idx_gateway_message_map_session',
@@ -95,6 +96,10 @@ const REQUIRED_COLUMNS = {
   ],
   settings: ['key', 'value', 'updated_at'],
   tasks: ['id', 'session_id', 'subject', 'description', 'status', 'owner', 'metadata', 'created_at', 'updated_at'],
+  conductor_canvases: [
+    'id', 'name', 'description', 'layout_config', 'sort_order',
+    'created_at', 'updated_at', 'project_path',
+  ],
 };
 
 // ============================================================
