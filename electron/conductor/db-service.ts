@@ -271,76 +271,56 @@ export class ConductorDbService {
     const w = typeof payload.w === 'number' ? payload.w : 3;
     const h = typeof payload.h === 'number' ? payload.h : 3;
     const direction = (payload.direction as 'right' | 'down' | 'auto') ?? 'auto';
+    void direction;
 
     const snapshot = this.getCanvasSnapshot(canvasId);
     if (!snapshot.success) {
       return { success: false, error: { code: 'CANVAS_NOT_FOUND', message: `Canvas ${canvasId} not found` } };
     }
-
     const snapshotData = snapshot.result as CanvasSnapshotResult;
-    const obstacles = snapshotData.elements
-      .filter(el => el.elementKind !== 'native/connector' && el.position?.w && el.position?.h)
-      .map(el => {
-        const pos = el.position as { x?: number; y?: number; w?: number; h?: number };
-        return {
-          x: pos.x ?? 0,
-          y: pos.y ?? 0,
-          w: pos.w ?? 0,
-          h: pos.h ?? 0,
-        };
-      });
 
-    const result = this.searchEmptySpace(preferredX, preferredY, w, h, direction, obstacles);
+    // Build the incoming element with the requested size at the preferred
+    // position; viewportAwarePack will place it avoiding existing elements.
+    const incoming: LayoutElement = {
+      id: '__find_empty_space__',
+      position: { x: preferredX, y: preferredY, w, h, zIndex: 0, rotation: 0 },
+      metadata: { locked: false, priority: 'high' },
+    };
 
+    const existing: LayoutElement[] = snapshotData.elements
+      .filter(el => el.elementKind !== 'native/connector')
+      .map(el => ({
+        id: el.id,
+        position: el.position as LayoutElement['position'],
+        metadata: (el.metadata as LayoutElement['metadata']) ?? { locked: false, priority: 'mid' },
+      }));
+
+    const results = viewportAwarePack(existing, [incoming], {
+      viewport: { width: CANVAS_WIDTH_UNITS, height: CANVAS_HEIGHT_UNITS },
+      gap: 0.25,
+      preserveLocked: true,
+      maxFreeRects: 32,
+      priorityWeight: { high: 0, mid: 1, low: 2 },
+    });
+
+    if (results.length === 0) {
+      return {
+        success: true,
+        result: { x: preferredX, y: preferredY, w, h, overlapsExisting: true },
+      };
+    }
+
+    const placed = results[0];
     return {
       success: true,
       result: {
-        x: result.x,
-        y: result.y,
+        x: placed.position.x,
+        y: placed.position.y,
         w,
         h,
-        overlapsExisting: result.overlapsExisting,
+        overlapsExisting: false,
       },
     };
-  }
-
-  private searchEmptySpace(
-    preferredX: number,
-    preferredY: number,
-    w: number,
-    h: number,
-    direction: 'right' | 'down' | 'auto',
-    obstacles: Array<{ x: number; y: number; w: number; h: number }>,
-  ): { x: number; y: number; overlapsExisting: boolean } {
-    void direction;
-    const MARGIN = 1;
-    const MAX_X = CANVAS_WIDTH_UNITS - w - MARGIN;
-    const MAX_Y = CANVAS_HEIGHT_UNITS - h - MARGIN;
-
-    const testOverlap = (tx: number, ty: number) =>
-      obstacles.some(o => tx < o.x + o.w && tx + w > o.x && ty < o.y + o.h && ty + h > o.y);
-
-    const candidates: Array<{ x: number; y: number }> = [];
-    for (let gy = MARGIN; gy <= MAX_Y; gy += 1) {
-      for (let gx = MARGIN; gx <= MAX_X; gx += 1) {
-        candidates.push({ x: gx, y: gy });
-      }
-    }
-
-    candidates.sort((a, b) => {
-      const da = Math.abs(a.x - preferredX) + Math.abs(a.y - preferredY);
-      const db = Math.abs(b.x - preferredX) + Math.abs(b.y - preferredY);
-      return da - db;
-    });
-
-    for (const c of candidates) {
-      if (!testOverlap(c.x, c.y)) {
-        return { x: c.x, y: c.y, overlapsExisting: false };
-      }
-    }
-
-    const closest = candidates[0] ?? { x: Math.max(MARGIN, Math.min(preferredX, MAX_X)), y: Math.max(MARGIN, Math.min(preferredY, MAX_Y)) };
-    return { x: closest.x, y: closest.y, overlapsExisting: true };
   }
 
   /**
