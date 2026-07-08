@@ -39,6 +39,10 @@ import type {
   ElementActionResult,
   CanvasSnapshotResult,
 } from './executor-types';
+import { binPack } from './layout/binPack';
+import { flowLayout } from './layout/flowLayout';
+import { viewportAwarePack } from './layout/viewport';
+import type { LayoutElement, LayoutResult } from './layout/types';
 
 const ACTOR = 'agent';
 // Canvas bounds in *grid units* (1 unit = 80 px). The conductor canvas model
@@ -1058,6 +1062,78 @@ export class ConductorDbService {
     return { success: true, result };
   }
 
+  /**
+   * Compute a layout preview without applying it. The agent calls this,
+   * inspects the preview (optionally via canvas_capture + vision_analyze),
+   * then calls element.arrange to commit.
+   */
+  autoLayout(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const algorithm = (payload.algorithm as 'bin-pack' | 'flow' | 'viewport-aware') ?? 'bin-pack';
+    const viewportAware = payload.viewportAware !== false;
+    const preserveLocked = payload.preserveLocked !== false;
+    const gap = (payload.gap as number) ?? 0.25;
+    const rowAlign = (payload.rowAlign as 'start' | 'center' | 'end') ?? 'start';
+
+    const snapshot = this.getCanvasSnapshot(canvasId);
+    if (!snapshot.success) {
+      return { success: false, error: { code: 'CANVAS_NOT_FOUND', message: `Canvas ${canvasId} not found` } };
+    }
+    const snapshotData = snapshot.result as CanvasSnapshotResult;
+
+    // Map DB elements to the layout module's LayoutElement shape.
+    const layoutElements: LayoutElement[] = snapshotData.elements
+      .filter(el => el.elementKind !== 'native/connector')
+      .map(el => ({
+        id: el.id,
+        position: el.position as LayoutElement['position'],
+        metadata: ((el as any).metadata as LayoutElement['metadata']) ?? { locked: false, priority: 'mid' as const },
+      }));
+
+    // Canvas dimensions (40x30 grid units).
+    const viewport = { width: CANVAS_WIDTH_UNITS, height: CANVAS_HEIGHT_UNITS };
+
+    let results: LayoutResult[];
+    if (algorithm === 'flow') {
+      results = flowLayout(layoutElements, { viewport: { width: viewport.width }, gap, rowAlign, preserveLocked });
+    } else if (algorithm === 'viewport-aware') {
+      // Split into existing (all) and incoming (none) — viewport-aware pack
+      // with no incoming just re-packs existing into the viewport.
+      results = viewportAwarePack(layoutElements, [], {
+        viewport,
+        gap,
+        preserveLocked,
+        maxFreeRects: 32,
+        priorityWeight: { high: 0, mid: 1, low: 2 },
+      });
+    } else {
+      // bin-pack (default)
+      results = binPack(layoutElements, { viewport, gap, preserveLocked, maxFreeRects: 32 });
+    }
+
+    // Compute stats.
+    const visibleCount = results.filter(r =>
+      r.position.x >= 0 && r.position.x + r.position.w <= viewport.width &&
+      r.position.y >= 0 && r.position.y + r.position.h <= viewport.height
+    ).length;
+    const fillRate = results.length > 0
+      ? visibleCount / results.length
+      : 0;
+
+    return {
+      success: true,
+      result: {
+        preview: results.map(r => ({
+          id: r.id,
+          x: r.position.x,
+          y: r.position.y,
+          w: r.position.w,
+          h: r.position.h,
+        })),
+        stats: { fillRate, visibleCount, total: results.length },
+      },
+    };
+  }
   alignElement(payload: Record<string, unknown>): ExecutorRpcResponse {
     const canvasId = payload.canvasId as string;
     const elementId = payload.elementId as string;
