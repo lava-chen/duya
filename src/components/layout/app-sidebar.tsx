@@ -657,7 +657,7 @@ function SidebarProjectHeader({
   return (
     <div className="sidebar-section-header">
       <span className="sidebar-section-label">{t('common.projects')}</span>
-      <div className="relative flex items-center gap-0.5" ref={menuRef}>
+      <div className="relative flex items-center gap-1" ref={menuRef}>
         <button
           type="button"
           className="sidebar-section-action"
