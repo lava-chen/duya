@@ -1,7 +1,7 @@
 /**
  * Canvas Conductor tools — registration entry point.
  *
- * Eleven tools for main-agent control of the conductor canvas:
+ * Thirteen tools for main-agent control of the conductor canvas:
  *   - canvas_create_element     : create a new sticky / image / file / connector / widget
  *   - canvas_batch_create       : create multiple elements + connectors in one call (with ref bindings)
  *   - canvas_delete_element     : delete an element by ID
@@ -11,6 +11,8 @@
  *   - canvas_style_element      : merge-patch visual style (color, fontSize, stroke)
  *   - canvas_list_elements      : list all elements as compact text tree (structured read)
  *   - canvas_find_empty_space   : find a non-overlapping position for a new element
+ *   - canvas_auto_layout        : compute a layout PREVIEW (bin-pack / flow / viewport-aware)
+ *   - canvas_apply_layout       : commit a layout preview to the canvas
  *   - canvas_capture            : screenshot for vision analysis
  *   - canvas_get_knowledge      : fetch design knowledge section on-demand (no canvas needed)
  *
@@ -35,9 +37,11 @@ import { definition as listElementsDefinition, executor as listElementsExecutor 
 import { definition as findEmptySpaceDefinition, executor as findEmptySpaceExecutor } from './CanvasFindEmptySpaceTool.js';
 import { definition as captureDefinition, executor as captureExecutor } from './CanvasCaptureTool.js';
 import { definition as getKnowledgeDefinition, executor as getKnowledgeExecutor } from './CanvasGetKnowledgeTool.js';
+import { definition as autoLayoutDefinition, executor as autoLayoutExecutor } from './CanvasAutoLayoutTool.js';
+import { definition as applyLayoutDefinition, executor as applyLayoutExecutor } from './CanvasApplyLayoutTool.js';
 
 /**
- * The eleven canvas conductor tools as {@link ToolRegistration} pairs.
+ * The thirteen canvas conductor tools as {@link ToolRegistration} pairs.
  *
  * Plan 224: this is the canonical export — `conductorMode.tools.inject`
  * returns the result of this function so the modifier owns the tool
@@ -45,7 +49,7 @@ import { definition as getKnowledgeDefinition, executor as getKnowledgeExecutor 
  * wrapper remains for any caller that still wants to push them
  * directly into a registry.
  *
- * The first ten tools expect a bound canvasId in ToolUseContext and
+ * The first twelve tools expect a bound canvasId in ToolUseContext and
  * will fail without it. `canvas_get_knowledge` is the exception: it
  * works without canvasId because it returns static knowledge content.
  */
@@ -60,13 +64,15 @@ export function getCanvasConductorTools(): ToolRegistration[] {
     { definition: styleDefinition, executor: styleExecutor },
     { definition: listElementsDefinition, executor: listElementsExecutor },
     { definition: findEmptySpaceDefinition, executor: findEmptySpaceExecutor },
+    { definition: autoLayoutDefinition, executor: autoLayoutExecutor },
+    { definition: applyLayoutDefinition, executor: applyLayoutExecutor },
     { definition: captureDefinition, executor: captureExecutor },
     { definition: getKnowledgeDefinition, executor: getKnowledgeExecutor },
   ];
 }
 
 /**
- * Register the eleven canvas conductor tools on the given registry.
+ * Register the thirteen canvas conductor tools on the given registry.
  *
  * @deprecated Plan 224 Phase 3: prefer {@link getCanvasConductorTools}
  * via `conductorMode.tools.inject`. This wrapper is retained for
@@ -121,6 +127,14 @@ export {
   definition as canvasGetKnowledgeDefinition,
   executor as canvasGetKnowledgeExecutor,
 } from './CanvasGetKnowledgeTool.js';
+export {
+  definition as canvasAutoLayoutDefinition,
+  executor as canvasAutoLayoutExecutor,
+} from './CanvasAutoLayoutTool.js';
+export {
+  definition as canvasApplyLayoutDefinition,
+  executor as canvasApplyLayoutExecutor,
+} from './CanvasApplyLayoutTool.js';
 export {
   ipcRequest as canvasIpcRequest,
   getCanvasId as getCanvasIdFromContext,
