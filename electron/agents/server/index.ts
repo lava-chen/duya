@@ -102,6 +102,7 @@ const interagentRouter = new InteragentRouter({
   workerManager,
   sessionManager,
   dbRequest,
+  workerDbRequests,
 });
 
 workerManager.setMessageHandler((sessionId, msg) => {
