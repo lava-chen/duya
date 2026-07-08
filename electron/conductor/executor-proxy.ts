@@ -143,6 +143,8 @@ export class ConductorExecutorProxy {
 
         case 'canvas.find_empty_space':
           return this.dbService.findEmptySpace(payload);
+        case 'canvas.auto_layout':
+          return this.dbService.autoLayout(payload);
 
         default:
           return {
