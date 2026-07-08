@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { hitTest } from '../hitTest';
 import { CanvasSpatialIndex } from '../spatialIndex';
-import type { CanvasElement } from '../../types/conductor';
+import type { CanvasElement } from '../../../types/conductor';
 
 function makeElement(id: string, x: number, y: number, w: number, h: number, zIndex = 0): CanvasElement {
   return {
