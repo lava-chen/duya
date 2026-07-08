@@ -6,7 +6,7 @@ import { useConductorStore } from "../..//stores/conductor-store";
 import { canvasTransformState } from "../CanvasArea";
 import { GRID_PX } from "../../domain/canvas/units";
 
-type HandleDirection = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+type HandleDirection = "nw" | "ne" | "se" | "sw";
 
 const HANDLE_SIZE = 8;
 const MIN_SIZE_GRID = 1;
@@ -86,7 +86,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       let newX = r.origX;
       let newY = r.origY;
 
-      switch (r.dir) {
+      switch (r.dir as HandleDirection | "n" | "e" | "s" | "w") {
         case "e":
           newW = Math.max(MIN_SIZE_GRID, r.origW + dw);
           break;
@@ -121,6 +121,30 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
           newH = Math.max(MIN_SIZE_GRID, r.origH + dh);
           newX = r.origX + r.origW - newW;
           break;
+      }
+
+      // Aspect-ratio lock for resizeMode='ratio' (Shift toggles free).
+      const resizeMode = element.metadata?.resizeMode ?? 'free';
+      const shiftHeld = (window.event as MouseEvent | null)?.shiftKey ?? false;
+      if (resizeMode === 'ratio' && !shiftHeld && (r.dir === 'nw' || r.dir === 'ne' || r.dir === 'se' || r.dir === 'sw')) {
+        const origRatio = r.origW / r.origH;
+        const newRatio = newW / newH;
+        if (Math.abs(newRatio - origRatio) > 0.001) {
+          // Adjust the smaller dimension to preserve ratio.
+          if (newW / origRatio <= newH) {
+            newH = newW / origRatio;
+          } else {
+            newW = newH * origRatio;
+          }
+          // For nw/sw: y was computed from origH - newH; recompute.
+          if (r.dir === 'nw' || r.dir === 'sw') {
+            newY = r.origY + r.origH - newH;
+          }
+          // For nw/ne: x was computed from origW - newW; recompute.
+          if (r.dir === 'nw' || r.dir === 'ne') {
+            newX = r.origX + r.origW - newW;
+          }
+        }
       }
 
       updateElement(element.id, {
@@ -177,13 +201,14 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
 
   const handleStyle: React.CSSProperties = {
     position: "absolute",
-    width: 10,
-    height: 10,
-    background: "var(--conductor-accent)",
-    border: "2px solid var(--canvas-bg)",
-    borderRadius: "50%",
+    width: 8,
+    height: 8,
+    background: "var(--canvas-bg, #fff)",
+    border: "1px solid var(--conductor-accent)",
+    borderRadius: 2,
     zIndex: 10,
     pointerEvents: "auto",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
     transition: "transform var(--motion-duration-micro) var(--motion-spring)",
   };
 
@@ -206,16 +231,32 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     >
       {children}
 
-      {isSelected && !isEditing && (
+      {isSelected && !isEditing && element.metadata?.resizeMode !== 'fixed' && (
         <>
-          <div data-resize-handle="nw" className="conductor-resize-handle nw" style={{ ...handleStyle, top: -5, left: -5, cursor: "nwse-resize" }} onMouseDown={(e) => handleResizeStart(e, "nw")} />
-          <div data-resize-handle="n" className="conductor-resize-handle n" style={{ ...handleStyle, top: -5, left: "calc(50% - 5px)", cursor: "ns-resize" }} onMouseDown={(e) => handleResizeStart(e, "n")} />
-          <div data-resize-handle="ne" className="conductor-resize-handle ne" style={{ ...handleStyle, top: -5, right: -5, cursor: "nesw-resize" }} onMouseDown={(e) => handleResizeStart(e, "ne")} />
-          <div data-resize-handle="e" className="conductor-resize-handle e" style={{ ...handleStyle, top: "calc(50% - 5px)", right: -5, cursor: "ew-resize" }} onMouseDown={(e) => handleResizeStart(e, "e")} />
-          <div data-resize-handle="se" className="conductor-resize-handle se" style={{ ...handleStyle, bottom: -5, right: -5, cursor: "nwse-resize" }} onMouseDown={(e) => handleResizeStart(e, "se")} />
-          <div data-resize-handle="s" className="conductor-resize-handle s" style={{ ...handleStyle, bottom: -5, left: "calc(50% - 5px)", cursor: "ns-resize" }} onMouseDown={(e) => handleResizeStart(e, "s")} />
-          <div data-resize-handle="sw" className="conductor-resize-handle sw" style={{ ...handleStyle, bottom: -5, left: -5, cursor: "nesw-resize" }} onMouseDown={(e) => handleResizeStart(e, "sw")} />
-          <div data-resize-handle="w" className="conductor-resize-handle w" style={{ ...handleStyle, top: "calc(50% - 5px)", left: -5, cursor: "ew-resize" }} onMouseDown={(e) => handleResizeStart(e, "w")} />
+          <div
+            data-resize-handle="nw"
+            className="conductor-resize-handle nw"
+            style={{ ...handleStyle, top: -4, left: -4, cursor: "nwse-resize" }}
+            onMouseDown={(e) => handleResizeStart(e, "nw")}
+          />
+          <div
+            data-resize-handle="ne"
+            className="conductor-resize-handle ne"
+            style={{ ...handleStyle, top: -4, right: -4, cursor: "nesw-resize" }}
+            onMouseDown={(e) => handleResizeStart(e, "ne")}
+          />
+          <div
+            data-resize-handle="se"
+            className="conductor-resize-handle se"
+            style={{ ...handleStyle, bottom: -4, right: -4, cursor: "nwse-resize" }}
+            onMouseDown={(e) => handleResizeStart(e, "se")}
+          />
+          <div
+            data-resize-handle="sw"
+            className="conductor-resize-handle sw"
+            style={{ ...handleStyle, bottom: -4, left: -4, cursor: "nesw-resize" }}
+            onMouseDown={(e) => handleResizeStart(e, "sw")}
+          />
         </>
       )}
     </div>
