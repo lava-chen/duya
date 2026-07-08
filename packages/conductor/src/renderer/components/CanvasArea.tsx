@@ -15,6 +15,7 @@ import { MultiSelectBar } from "./MultiSelectBar";
 import { GRID_PX } from "../domain/canvas/units";
 import { computeSnap } from "../domain/canvas/snap";
 import { pushAside } from "../domain/canvas/collision";
+import { zoomToFit } from "../domain/canvas/layout/viewport";
 import { canvasSpatialIndex } from "../stores/conductor-store";
 import type { AlignmentGuide } from "../domain/canvas/snap";
 
@@ -183,6 +184,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
   const spaceHeldRef = useRef(false);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zoomFitDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastViewportWRef = useRef(0);
+  const lastViewportHRef = useRef(0);
+  const userZoomLockRef = useRef(false);
 
   const applyTransform = useCallback(() => {
     const { panX, panY, zoom } = transformRef.current;
@@ -221,6 +226,28 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       syncTimerRef.current = null;
     }, 50);
   }, [setCanvasZoom, setCanvasScroll]);
+
+  const runZoomToFit = useCallback(() => {
+    if (userZoomLockRef.current) return;
+    const { elements: els } = useConductorStore.getState();
+    if (els.length === 0) return;
+    const { canvasViewportW, canvasViewportH } = useConductorStore.getState();
+    // Convert viewport px to grid units for the layout function.
+    const viewportGrid = { width: canvasViewportW / GRID_PX, height: canvasViewportH / GRID_PX };
+    const result = zoomToFit(els, {
+      viewport: viewportGrid,
+      minZoom: 0.2,
+      maxZoom: 1.5,
+      padding: 1,
+      respectMinSize: false,
+    });
+    transformRef.current.zoom = result.zoom;
+    // Pan to center the fitted bbox. panX/panY are in px.
+    transformRef.current.panX = result.panX * GRID_PX;
+    transformRef.current.panY = result.panY * GRID_PX;
+    applyTransform();
+    syncCanvasStateToStore();
+  }, [applyTransform, syncCanvasStateToStore]);
 
   // Start inertia panning after drag-pan release
   const startInertia = useCallback((velocityX: number, velocityY: number) => {
@@ -1155,12 +1182,30 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     const ro = new ResizeObserver(([entry]) => {
       const cr = entry.contentRect;
       setCanvasViewportSize(cr.width, cr.height);
+
+      // Debounced zoom-to-fit when viewport size changes by >8px.
+      const dw = Math.abs(cr.width - lastViewportWRef.current);
+      const dh = Math.abs(cr.height - lastViewportHRef.current);
+      if (dw > 8 || dh > 8) {
+        lastViewportWRef.current = cr.width;
+        lastViewportHRef.current = cr.height;
+        if (zoomFitDebounceRef.current !== null) {
+          clearTimeout(zoomFitDebounceRef.current);
+        }
+        zoomFitDebounceRef.current = setTimeout(() => {
+          runZoomToFit();
+          zoomFitDebounceRef.current = null;
+        }, 150);
+      }
     });
     ro.observe(host);
     return () => {
       ro.disconnect();
+      if (zoomFitDebounceRef.current !== null) {
+        clearTimeout(zoomFitDebounceRef.current);
+      }
     };
-  }, [setCanvasViewportSize]);
+  }, [setCanvasViewportSize, runZoomToFit]);
 
   useEffect(() => {
     const host = viewportRef.current;
@@ -1196,6 +1241,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   const handleZoomPillWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // Manual zoom override — cancel any pending auto-fit so it doesn't
+    // fight with the user's zoom. (Does NOT lock — next viewport resize
+    // re-triggers auto-fit. Use the lock toggle to disable permanently.)
+    if (zoomFitDebounceRef.current !== null) {
+      clearTimeout(zoomFitDebounceRef.current);
+      zoomFitDebounceRef.current = null;
+    }
     const { zoom } = transformRef.current;
     const zoomFactor = Math.exp(-e.deltaY * 0.0015);
     const nextZoom = clampZoomHard(zoom * zoomFactor);
@@ -1338,19 +1390,44 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           so canvas_capture screenshots omit it; otherwise it can overlap
           elements in the bottom-right corner. */}
       <div
-        className="conductor-zoom-pill"
         data-capture-ignore
         style={{
           position: "absolute",
           bottom: 16,
           right: 16,
           zIndex: 100,
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
         }}
-        onClick={handleZoomPillClick}
-        onWheel={handleZoomPillWheel}
-        title="Click to reset to 100%, scroll to zoom"
       >
-        {Math.round(zoomDisplay * 100)}%
+        <button
+          className="zoom-lock-toggle"
+          title={userZoomLockRef.current ? "Unlock auto-fit" : "Lock zoom (disable auto-fit)"}
+          onClick={() => {
+            userZoomLockRef.current = !userZoomLockRef.current;
+            // Force a re-render to update the icon.
+            setZoomDisplay(transformRef.current.zoom);
+          }}
+          style={{
+            background: "transparent",
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            padding: "2px 6px",
+            cursor: "pointer",
+            color: userZoomLockRef.current ? "var(--conductor-accent)" : "var(--text-secondary)",
+          }}
+        >
+          {userZoomLockRef.current ? "🔒" : "🔓"}
+        </button>
+        <div
+          className="conductor-zoom-pill"
+          onClick={handleZoomPillClick}
+          onWheel={handleZoomPillWheel}
+          title="Click to reset to 100%, scroll to zoom"
+        >
+          {Math.round(zoomDisplay * 100)}%
+        </div>
       </div>
 
       <div data-capture-ignore>
