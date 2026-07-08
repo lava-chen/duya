@@ -120,6 +120,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 | [81-mindmap-interaction-correction](./active/81-mindmap-interaction-correction.md) | Follow-up: root move + subtree reorder + draft node flow | P0 | 73 |
 | [223-conductor-canvas-style-and-group](./active/223-conductor-canvas-style-and-group.md) | Post-mindmap: sticky/connector 样式扩展(shape/border/stroke) + Group 元素松散绑定 + 4 个 group tool + 属性面板 | P1 | 71, 72, 73 |
+| [225-canvas-smart-layout-and-hit-test](./active/225-canvas-smart-layout-and-hit-test.md) | Canvas 智能布局 + 命中测试重做 (RBush + bin-pack + 视口感知) | P0 | Phase 1 ✅ Phase 2 ✅ |
 
 ### Compact System Fix Plans
 
