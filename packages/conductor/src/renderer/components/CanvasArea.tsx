@@ -13,6 +13,10 @@ import { ObjectAgentPrompt } from "./ObjectAgentPrompt";
 import { StylePanel } from "./StylePanel";
 import { MultiSelectBar } from "./MultiSelectBar";
 import { GRID_PX } from "../domain/canvas/units";
+import { computeSnap } from "../domain/canvas/snap";
+import { pushAside } from "../domain/canvas/collision";
+import { canvasSpatialIndex } from "../stores/conductor-store";
+import type { AlignmentGuide } from "../domain/canvas/snap";
 
 const MIN_CANVAS_WIDTH = 3200;
 const MIN_CANVAS_HEIGHT = 2400;
@@ -32,15 +36,11 @@ const PAN_INERTIA_MAX_MS = 1500;
 const KEYBOARD_PAN_STEP = 40;
 const KEYBOARD_ZOOM_STEP = 0.15;
 
-type RenderGuide = { type: "vertical" | "horizontal"; value: number };
+type RenderGuide = AlignmentGuide;
 
 function snapToGrid(value: number, grid = SNAP_GRID): number {
   return Math.round(value / grid) * grid;
 }
-
-// Snap a value expressed in grid units to the SNAP_GRID pixel granularity.
-// (SNAP_GRID is in pixels; grid-unit values must be scaled by GRID_PX first.)
-const snapGridUnits = (v: number) => snapToGrid(v, SNAP_GRID / GRID_PX);
 
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
   sticky: { w: 3, h: 3, zIndex: 0 },
@@ -95,54 +95,6 @@ function getElementBounds(element: CanvasElement, x = element.position.x, y = el
     top: pxY,
     bottom: pxY + h,
     centerY: pxY + h / 2,
-  };
-}
-
-function computeAlignmentSnap(
-  moving: CanvasElement,
-  allElements: CanvasElement[],
-  skippedIds: Set<string>,
-): { dx: number; dy: number; guides: RenderGuide[] } {
-  const movingBounds = getElementBounds(moving);
-  let bestDx: { delta: number; value: number } | null = null;
-  let bestDy: { delta: number; value: number } | null = null;
-
-  const movingVertical = [movingBounds.left, movingBounds.centerX, movingBounds.right];
-  const movingHorizontal = [movingBounds.top, movingBounds.centerY, movingBounds.bottom];
-
-  for (const other of allElements) {
-    if (skippedIds.has(other.id) || isConnectorKind(other) || isGroupKind(other)) continue;
-    const otherBounds = getElementBounds(other);
-    const otherVertical = [otherBounds.left, otherBounds.centerX, otherBounds.right];
-    const otherHorizontal = [otherBounds.top, otherBounds.centerY, otherBounds.bottom];
-
-    for (const movingValue of movingVertical) {
-      for (const otherValue of otherVertical) {
-        const delta = otherValue - movingValue;
-        if (Math.abs(delta) <= ALIGN_THRESHOLD && (!bestDx || Math.abs(delta) < Math.abs(bestDx.delta))) {
-          bestDx = { delta, value: otherValue };
-        }
-      }
-    }
-
-    for (const movingValue of movingHorizontal) {
-      for (const otherValue of otherHorizontal) {
-        const delta = otherValue - movingValue;
-        if (Math.abs(delta) <= ALIGN_THRESHOLD && (!bestDy || Math.abs(delta) < Math.abs(bestDy.delta))) {
-          bestDy = { delta, value: otherValue };
-        }
-      }
-    }
-  }
-
-  const guides: RenderGuide[] = [];
-  if (bestDx) guides.push({ type: "vertical", value: bestDx.value });
-  if (bestDy) guides.push({ type: "horizontal", value: bestDy.value });
-
-  return {
-    dx: bestDx?.delta ?? 0,
-    dy: bestDy?.delta ?? 0,
-    guides,
   };
 }
 
@@ -443,47 +395,83 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const dxGrid = dxPx / GRID_PX;
       const dyGrid = dyPx / GRID_PX;
       const targets = new Map(d.targets.map((target) => [target.id, target]));
-      const skippedIds = new Set(d.targets.map((target) => target.id));
-      let guideOffset = { dx: 0, dy: 0, guides: [] as RenderGuide[] };
 
       const { elements: latestElements } = useConductorStore.getState();
       const primary = latestElements.find((el) => el.id === d.elementId);
       const primaryStart = targets.get(d.elementId);
-      if (primary && primaryStart) {
-        // Use raw (unsnapped) position during the live drag so the element
-        // follows the cursor pixel-by-pixel. Grid snapping happens on commit
-        // (mouseup) — see handleGlobalUp.
-        const proposedPrimary: CanvasElement = {
-          ...primary,
-          position: {
-            ...primary.position,
-            x: primaryStart.origX + dxGrid,
-            y: primaryStart.origY + dyGrid,
-          },
-        };
-        guideOffset = computeAlignmentSnap(proposedPrimary, latestElements, skippedIds);
-      }
+      if (!primary || !primaryStart) return;
 
-      setAlignmentGuides(guideOffset.guides);
+      // 1. Compute the proposed primary position (raw, no snap yet).
+      const proposedPrimary: CanvasElement = {
+        ...primary,
+        position: {
+          ...primary.position,
+          x: primaryStart.origX + dxGrid,
+          y: primaryStart.origY + dyGrid,
+        },
+      };
 
-      // `guideOffset.dx/dy` come from computeAlignmentSnap (pixels); convert
-      // back to grid units for the stored position.
-      const guideDxGrid = guideOffset.dx / GRID_PX;
-      const guideDyGrid = guideOffset.dy / GRID_PX;
+      // 2. Push aside collided elements (passive collision).
+      const pushResult = pushAside(
+        proposedPrimary,
+        { dx: dxGrid, dy: dyGrid },
+        canvasSpatialIndex,
+        { gap: 0.25, cascade: true, maxDepth: 3 },
+      );
+
+      // 3. Compute alignment snap on the proposed primary.
+      const snapResult = computeSnap(proposedPrimary, latestElements, { threshold: ALIGN_THRESHOLD });
+
+      // 4. Determine final primary position.
+      const finalX = snapResult.kind === 'alignment' ? snapResult.x : proposedPrimary.position.x;
+      const finalY = snapResult.kind === 'alignment' ? snapResult.y : proposedPrimary.position.y;
+      const snapDx = finalX - proposedPrimary.position.x;
+      const snapDy = finalY - proposedPrimary.position.y;
+
+      // 5. Render alignment guides.
+      setAlignmentGuides(snapResult.kind === 'alignment' ? snapResult.guides : []);
+
+      // 6. Apply positions: dragged element + pushed-aside elements.
       useConductorStore.setState((state) => ({
         elements: state.elements.map((el) => {
           const target = targets.get(el.id);
-          if (!target) return el;
-          return {
-            ...el,
-            position: {
-              ...el.position,
-              x: target.origX + dxGrid + guideDxGrid,
-              y: target.origY + dyGrid + guideDyGrid,
-            },
-          };
+          if (target) {
+            // Dragged element (or multi-select target): apply raw delta + snap offset.
+            return {
+              ...el,
+              position: {
+                ...el.position,
+                x: target.origX + dxGrid + snapDx,
+                y: target.origY + dyGrid + snapDy,
+              },
+            };
+          }
+          // Pushed-aside element: apply its moved delta.
+          const moved = pushResult.moved.find((m) => m.id === el.id);
+          if (moved) {
+            return {
+              ...el,
+              position: {
+                ...el.position,
+                x: moved.toX,
+                y: moved.toY,
+              },
+            };
+          }
+          return el;
         }),
       }));
+
+      // 7. Sync spatial index for dragged + pushed elements.
+      const updatedEls = useConductorStore.getState().elements;
+      for (const target of d.targets) {
+        const el = updatedEls.find((e) => e.id === target.id);
+        if (el) canvasSpatialIndex.upsert(el);
+      }
+      for (const moved of pushResult.moved) {
+        const el = updatedEls.find((e) => e.id === moved.id);
+        if (el) canvasSpatialIndex.upsert(el);
+      }
     };
 
     const handleGlobalMove = (e: MouseEvent) => {
@@ -518,27 +506,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         }
 
         if (d.moved && onPositionChange) {
-          // Snap final positions to grid on commit — during the drag the
-          // element followed the cursor raw; now we round to the grid so
-          // the layout stays tidy. Positions are in grid units, so use
-          // snapGridUnits (SNAP_GRID/GRID_PX) not the pixel-space snapToGrid.
-          useConductorStore.setState((state) => ({
-            elements: state.elements.map((el) => {
-              const tgt = d.targets.find((t) => t.id === el.id);
-              if (!tgt) return el;
-              return {
-                ...el,
-                position: {
-                  ...el.position,
-                  x: snapGridUnits(el.position.x),
-                  y: snapGridUnits(el.position.y),
-                },
-              };
-            }),
-          }));
-          const { elements: snappedEls } = useConductorStore.getState();
+          // No grid snap on commit — the element stays at its released position
+          // (alignment-snap already applied during the drag in flushDragFrame).
+          // This is the "free placement" behavior: snap to alignment lines only.
+          const { elements: releasedEls } = useConductorStore.getState();
           d.targets.forEach((target) => {
-            const el = snappedEls.find((candidate) => candidate.id === target.id);
+            const el = releasedEls.find((candidate) => candidate.id === target.id);
             if (el) onPositionChange(el.id, el.position);
           });
         }
@@ -1321,8 +1294,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             className={`conductor-guide-line ${guide.type}`}
             style={
               guide.type === "vertical"
-                ? { left: guide.value, top: 0, height: "100%" }
-                : { left: 0, top: guide.value, width: "100%" }
+                ? { left: guide.value * GRID_PX, top: 0, height: "100%" }
+                : { left: 0, top: guide.value * GRID_PX, width: "100%" }
             }
           />
         ))}

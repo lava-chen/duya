@@ -4,6 +4,8 @@ import { ConductorBridge } from "..//ipc/conductor-bridge";
 import { undoAction, redoAction, executeAction } from "..//ipc/conductor-ipc";
 import { getConductorHostOrNull, type ModelOption, type ConductorModelInfo } from "..//host";
 import { widgetToElementAdapter } from "..//ipc/widget-element-adapter";
+import { CanvasSpatialIndex } from "../domain/canvas/spatialIndex";
+import { CanvasSpatialIndex } from "../domain/canvas/spatialIndex";
 
 /**
  * Normalize an incoming position to the full `CanvasPosition` shape.
@@ -68,6 +70,32 @@ function normalizeElement(el: CanvasElement): CanvasElement {
 
 type ModelInfo = ConductorModelInfo;
 
+/**
+ * Shared spatial index for the active canvas. Kept in sync with
+ * elements[] on every create/move/resize/delete via the store
+ * actions. UI reads from this index for hit-test, collision, and
+ * alignment-candidate pruning.
+ *
+ * Module-level (not in Zustand state) because RBush is a mutable
+ * class instance — Zustand's immutable updates would thrash the
+ * tree on every change. The index is a derived view of elements,
+ * not independent state.
+ */
+export const canvasSpatialIndex = new CanvasSpatialIndex();
+
+/**
+ * Shared spatial index for the active canvas. Kept in sync with
+ * elements[] on every create/move/resize/delete via the store
+ * actions. UI reads from this index for hit-test, collision, and
+ * alignment-candidate pruning.
+ *
+ * Module-level (not in Zustand state) because RBush is a mutable
+ * class instance — Zustand's immutable updates would thrash the
+ * tree on every change. The index is a derived view of elements,
+ * not independent state.
+ */
+export const canvasSpatialIndex = new CanvasSpatialIndex();
+
 export type AgentStreamStatus = "idle" | "thinking" | "streaming" | "tool_use" | "completed" | "error";
 export type ConductorUiStatus = "idle" | "editing" | "agent-editing" | "error" | "syncing";
 
@@ -130,6 +158,12 @@ interface ConductorState {
   setCanvasScroll: (x: number, y: number) => void;
   setCanvasViewportSize: (w: number, h: number) => void;
   centerOnElement: (elementId: string) => void;
+
+  /** Rebuild the spatial index from current elements. Called after snapshot load. */
+  rebuildSpatialIndex: () => void;
+
+  /** Rebuild the spatial index from current elements. Called after snapshot load. */
+  rebuildSpatialIndex: () => void;
 
   /**
    * Element id that CanvasArea should focus on next render. Set by
@@ -267,12 +301,15 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
   setActiveCanvas: (canvasId) => set({ activeCanvasId: canvasId }),
 
-  setSnapshot: (snapshot) =>
+  setSnapshot: (snapshot) => {
+    const elements = (snapshot as any).elements ?? [];
     set({
       snapshot,
       widgets: snapshot.widgets,
-      elements: (snapshot as any).elements ?? [],
-    }),
+      elements,
+    });
+    canvasSpatialIndex.rebuild(elements);
+  },
 
   setWidgets: (widgets) => set({ widgets }),
 
@@ -291,12 +328,19 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
       widgets: state.widgets.filter((w) => w.id !== widgetId),
     })),
 
-  setElements: (elements) => set({ elements: elements.map(normalizeElement) }),
+  setElements: (elements) => {
+    const normalized = elements.map(normalizeElement);
+    set({ elements: normalized });
+    canvasSpatialIndex.rebuild(normalized);
+  },
 
-  addElement: (element) =>
-    set((state) => ({ elements: [...state.elements, normalizeElement(element)] })),
+  addElement: (element) => {
+    const normalized = normalizeElement(element);
+    set((state) => ({ elements: [...state.elements, normalized] }));
+    canvasSpatialIndex.upsert(normalized);
+  },
 
-  updateElement: (elementId, patch) =>
+  updateElement: (elementId, patch) => {
     set((state) => ({
       elements: state.elements.map((e) => {
         if (e.id !== elementId) return e;
@@ -307,12 +351,17 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           : { ...e, ...patch };
         return merged;
       }),
-    })),
+    }));
+    const updated = get().elements.find((e) => e.id === elementId);
+    if (updated) canvasSpatialIndex.upsert(updated);
+  },
 
-  removeElement: (elementId) =>
+  removeElement: (elementId) => {
     set((state) => ({
       elements: state.elements.filter((e) => e.id !== elementId),
-    })),
+    }));
+    canvasSpatialIndex.remove(elementId);
+  },
 
   connectBridge: (canvasId) => {
     const { bridgeUnsubscribe } = get();
@@ -328,14 +377,16 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
       // Full widget list hydration patch
       if (patch.widgets && Array.isArray(patch.widgets)) {
+        const hydratedElements = (patch as any).elements ?? [];
         set({
           widgets: patch.widgets as ConductorWidget[],
-          elements: (patch as any).elements ?? [],
+          elements: hydratedElements,
           canUndo: true,
           canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
         });
+        canvasSpatialIndex.rebuild(hydratedElements);
         return;
       }
 
@@ -360,13 +411,15 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         const { elements } = get();
         const exists = elements.some((e) => e.id === incoming.id);
         if (!exists) {
+          const normalized = normalizeElement(incoming);
           set({
-            elements: [...elements, normalizeElement(incoming)],
+            elements: [...elements, normalized],
             canUndo: true,
             canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
           });
+          canvasSpatialIndex.upsert(normalized);
         }
         // Dual-write handled — skip standalone element.create check below
         return;
@@ -464,13 +517,17 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         const existingIds = new Set(existing.map((e) => e.id));
         const fresh = incoming.filter((e) => !existingIds.has(e.id));
         if (fresh.length > 0) {
+          const freshNormalized = fresh.map(normalizeElement);
           set({
-            elements: [...existing, ...fresh.map(normalizeElement)],
+            elements: [...existing, ...freshNormalized],
             canUndo: true,
             canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
           });
+          for (const el of freshNormalized) {
+            canvasSpatialIndex.upsert(el);
+          }
           // Auto-focus on the first newly created element so the user
           // sees the agent's work appear in view.
           if (patch.actor === 'agent') {
@@ -490,13 +547,15 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         const { elements } = get();
         const exists = elements.some((e) => e.id === incoming.id);
         if (!exists) {
+          const normalized = normalizeElement(incoming);
           set({
-            elements: [...elements, normalizeElement(incoming)],
+            elements: [...elements, normalized],
             canUndo: true,
             canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
           });
+          canvasSpatialIndex.upsert(normalized);
           // Auto-focus on agent-created elements so the user can see
           // what the agent is working on. Skip when actor is 'user'
           // (user drags place the element where they want it).
@@ -893,6 +952,16 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   setCanvasScroll: (x, y) => set({ canvasScrollX: x, canvasScrollY: y }),
 
   setCanvasViewportSize: (w, h) => set({ canvasViewportW: w, canvasViewportH: h }),
+
+  rebuildSpatialIndex: () => {
+    const { elements } = get();
+    canvasSpatialIndex.rebuild(elements);
+  },
+
+  rebuildSpatialIndex: () => {
+    const { elements } = get();
+    canvasSpatialIndex.rebuild(elements);
+  },
 
   centerOnElement: (elementId) => {
     const { elements } = get();
