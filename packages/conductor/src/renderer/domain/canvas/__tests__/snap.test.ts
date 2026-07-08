@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeSnap } from '../snap';
-import type { CanvasElement } from '../../types/conductor';
+import type { CanvasElement } from '../../../types/conductor';
 
 function makeElement(id: string, x: number, y: number, w: number, h: number): CanvasElement {
   return {
