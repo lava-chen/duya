@@ -62,6 +62,8 @@ A canvas is bound to this session. You have canvas tools. The canvasId is inject
 - canvas_capture: saves screenshot to file, returns filePath. Pass filePath to vision_analyze tool.
   Workflow: canvas_capture → vision_analyze(image_path=<filePath>, question="check layout/overlap/alignment").
 - canvas_get_knowledge: fetch design guidance when you need it (not every turn).
+- canvas_auto_layout: compute a layout PREVIEW (bin-pack / flow / viewport-aware). Returns proposed positions. Does NOT modify canvas.
+- canvas_apply_layout: commit a layout preview to the canvas. Pass the preview from canvas_auto_layout.
 
 ### Element Config Reference
 
@@ -125,6 +127,13 @@ The default viewport frames the entire 40 x 30 grid. Every extra grid unit you a
 - Connectors warn if their source/target element is missing, but the
   connector is still created. Check canvas_list_elements when you see
   these warnings.
+
+### Layout Workflow (when the canvas is messy)
+
+1. canvas_list_elements — see current state
+2. canvas_auto_layout({ algorithm: 'bin-pack' }) — get a preview
+3. (optional) canvas_capture → vision_analyze — verify the preview looks good
+4. canvas_apply_layout({ preview }) — commit
 
 ### One-Shot Diagram Pattern (preferred for explanatory diagrams / flowcharts)
 
