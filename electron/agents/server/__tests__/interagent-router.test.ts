@@ -112,21 +112,24 @@ function createMockDeps(overrides?: {
 
   const workerManager = {
     workerCount: overrides?.workerCount ?? 1,
-    spawnWorker: vi.fn(),
+    spawnWorker: vi.fn(() => fakeChild),
     sendCommand: vi.fn(),
     interruptWorker: vi.fn(),
+    killWorker: vi.fn(),
     getWorker: vi.fn(() => fakeChild),
     hasWorker: vi.fn(() => true),
     setMessageHandler: vi.fn(),
   } as unknown as WorkerManager;
 
   const dbRequest = vi.fn().mockImplementation((action: string) => {
-    if (action === 'session:get') return Promise.resolve({ id: 'B', model: 'test', systemPrompt: '', workingDirectory: '', providerId: 'test', agentProfileId: null, permissionProfile: 'default' });
-    if (action === 'provider:get') return Promise.resolve({ apiKey: 'test', model: 'test', provider: 'anthropic' });
+    if (action === 'session:get') return Promise.resolve({ id: 'B', model: 'test', system_prompt: '', working_directory: '', provider_id: 'test', agent_profile_id: null, permission_profile: 'default' });
+    if (action === 'config:provider:get') return Promise.resolve({ id: 'test', name: 'test', providerType: 'anthropic', baseUrl: '', apiKey: 'test-key', isActive: true, options: { defaultModel: 'test' } });
+    if (action === 'config:provider:getActive') return Promise.resolve({ id: 'test', name: 'test', providerType: 'anthropic', baseUrl: '', apiKey: 'test-key', isActive: true, options: { defaultModel: 'test' } });
+    if (action === 'message:append') return Promise.resolve({ success: true });
     return Promise.resolve(undefined);
   });
 
-  return { sessionManager, workerManager, dbRequest };
+  return { sessionManager, workerManager, dbRequest, workerDbRequests: new Map() };
 }
 
 function createParams(overrides?: Partial<InvokeParams>): InvokeParams {

@@ -2,6 +2,8 @@ import * as http from 'http';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
 import { ChildProcess } from 'child_process';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { SessionManager } from './session-store';
 import { SessionState, ConductorAction } from './types';
 import { WorkerManager } from './worker-manager';
@@ -12,6 +14,17 @@ import { CheckpointBatcher } from './checkpoint-batcher';
 import { ConductorService } from './conductor-service';
 import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
+
+/**
+ * Detect whether the project has a `.duya/references/` directory.
+ * When true, the agent's system prompt includes a section instructing it to
+ * consult those files as higher-authority context. Cheap `existsSync` call —
+ * sub-millisecond.
+ */
+export function detectReferencesEnabled(workingDirectory?: string): boolean {
+  if (!workingDirectory) return false;
+  return existsSync(join(workingDirectory, '.duya', 'references'));
+}
 
 export interface RouterDeps {
   sessionManager: SessionManager;
@@ -359,6 +372,7 @@ async function handlePostChat(
         language: 'zh',
         communicationPlatform: parsed.options?.platform,
         securityScanEnabled: parsed.options?.securityScanEnabled,
+        referencesEnabled: detectReferencesEnabled(workingDirectory),
       });
 
       try {
@@ -911,7 +925,7 @@ const MAX_CONCURRENT_WORKERS = 16;
  * Mirrors the construction in `agent-communicator.ts:agent:getProviderConfig`
  * so chat-spawned and compact-spawned workers get equivalent configs.
  */
-function buildInitProviderConfig(
+export function buildInitProviderConfig(
   sessionRow: Record<string, unknown>,
   provider: ApiProvider | undefined,
 ): Record<string, unknown> | undefined {
@@ -1096,6 +1110,7 @@ async function lazySpawnWorkerForCompact(
     defaultWorkspaceDirectory: '',
     systemPrompt: init.systemPrompt,
     language: 'zh',
+    referencesEnabled: detectReferencesEnabled(init.workingDirectory),
   });
 
   // Wait for ready (30s).

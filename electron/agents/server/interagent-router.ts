@@ -1,9 +1,20 @@
 import { randomUUID } from 'crypto';
+import type { ChildProcess } from 'child_process';
 import type { WorkerManager } from './worker-manager';
 import type { SessionManager } from './session-store';
 import { SessionState } from './types';
 import { workerLogger } from './logger';
 import type { WorkerEvent } from '../../../packages/agent/src/process/worker-protocol';
+import type { ApiProvider } from '../../config/provider-types';
+import { buildInitProviderConfig, detectReferencesEnabled } from './router';
+
+/**
+ * Shared map of pending DB requests, keyed by request id. The agent server
+ * (index.ts) owns this map and passes it to both the HTTP router and the
+ * interagent router so that either path can forward worker `db:request`
+ * IPC messages to the main process and route the `db:response` back.
+ */
+export type WorkerDbRequests = Map<string, ChildProcess>;
 
 /**
  * Tracks active inter-agent invocations as a directed graph.
@@ -51,6 +62,14 @@ export interface InteragentRouterDeps {
   workerManager: WorkerManager;
   sessionManager: SessionManager;
   dbRequest: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Shared map of pending worker DB requests. The interagent router must
+   * register target worker `db:request` messages here so the agent server's
+   * `db:response` handler can route responses back to the correct worker.
+   * Without this, the target worker's DB calls (loadMessages, getJson, etc.)
+   * silently hang for 30 seconds until the db-client timeout fires.
+   */
+  workerDbRequests: WorkerDbRequests;
 }
 
 const MAX_CONCURRENT_WORKERS = 16;
@@ -80,7 +99,15 @@ export interface InvokeResult {
 
 export class InteragentRouter {
   private cycleDetector = new CycleDetector();
-  private activeInvokes = new Map<string, { callerSessionId: string; targetSessionId: string; timer: ReturnType<typeof setTimeout> }>();
+  private activeInvokes = new Map<string, {
+    callerSessionId: string;
+    targetSessionId: string;
+    timer: ReturnType<typeof setTimeout>;
+    child?: ChildProcess;
+    onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
+    onDbRequest?: (msg: Record<string, unknown>) => void;
+    detachStdout?: () => void;
+  }>();
   private deps: InteragentRouterDeps;
 
   constructor(deps: InteragentRouterDeps) {
@@ -143,12 +170,9 @@ export class InteragentRouter {
   private async spawnAndDriveTarget(params: InvokeParams): Promise<void> {
     const { id, callerSessionId, callerAgentName, targetSessionId, message, mode } = params;
 
-    // 1. Load target session row + provider config from DB (via main process)
+    // 1. Load target session row from DB.
     // db-bridge 'session:get' reads p.id (not p.sessionId), so we must pass { id }.
-    const sessionRow = await this.deps.dbRequest('session:get', { id: targetSessionId }) as {
-      id: string; model: string; system_prompt: string; working_directory: string;
-      provider_id: string; agent_profile_id: string | null; permission_profile: string;
-    } | null;
+    const sessionRow = await this.deps.dbRequest('session:get', { id: targetSessionId }) as Record<string, unknown> | null;
     if (!sessionRow) {
       this.sendEventToCaller(callerSessionId, id, {
         type: 'chat:error', sessionId: targetSessionId,
@@ -158,7 +182,27 @@ export class InteragentRouter {
       return;
     }
 
-    const providerConfig = await this.deps.dbRequest('config:provider:get', { id: sessionRow.provider_id }) as Record<string, unknown>;
+    // Resolve provider config the same way the normal chat path does —
+    // buildInitProviderConfig maps the DB ApiProvider shape to the worker's
+    // expected { apiKey, baseURL, model, provider, authStyle } format.
+    // Passing the raw DB row directly causes LLM client init to fail.
+    const providerId = typeof sessionRow.provider_id === 'string' ? sessionRow.provider_id : '';
+    let apiProvider: ApiProvider | undefined;
+    if (providerId && providerId !== 'env') {
+      try {
+        apiProvider = await this.deps.dbRequest('config:provider:get', { id: providerId }) as ApiProvider | undefined;
+      } catch {
+        // fall through to active provider
+      }
+    }
+    if (!apiProvider) {
+      try {
+        apiProvider = await this.deps.dbRequest('config:provider:getActive', {}) as ApiProvider | undefined;
+      } catch {
+        // no provider available
+      }
+    }
+    const providerConfig = buildInitProviderConfig(sessionRow, apiProvider);
     if (!providerConfig) {
       this.sendEventToCaller(callerSessionId, id, {
         type: 'chat:error', sessionId: targetSessionId,
@@ -168,23 +212,109 @@ export class InteragentRouter {
       return;
     }
 
-    // 2. Spawn target worker
-    this.deps.workerManager.spawnWorker(targetSessionId);
+    const workingDirectory = typeof sessionRow.working_directory === 'string' ? sessionRow.working_directory : undefined;
+    const systemPrompt = typeof sessionRow.system_prompt === 'string' ? sessionRow.system_prompt : undefined;
 
-    // 3. Send init command
-    const initCommand: Record<string, unknown> = {
+    // 2. Normalize target session state before spawn.
+    // spawnWorker() transitions IDLE → STREAMING, but a previously-failed
+    // interagent call leaves the session in ERROR/CRASHED. The state machine
+    // only allows ERROR/CRASHED → IDLE, so we must reset to IDLE first
+    // or spawnWorker throws "Invalid state transition: ERROR → STREAMING".
+    const targetSession = this.deps.sessionManager.getSession(targetSessionId);
+    if (targetSession) {
+      if (targetSession.state === SessionState.ERROR || targetSession.state === SessionState.CRASHED) {
+        try {
+          this.deps.sessionManager.transitionState(targetSessionId, SessionState.IDLE);
+        } catch {
+          // transition may fail if another path raced us to IDLE; safe to ignore
+        }
+      }
+    }
+
+    const child = this.deps.workerManager.spawnWorker(targetSessionId);
+
+    // 3. Attach exit listener so we can notify the caller if the worker
+    //    dies before emitting chat:done / chat:error.
+    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (!this.activeInvokes.has(id)) return;
+      workerLogger.warn('Interagent target worker exited unexpectedly', {
+        invokeId: id, targetSessionId, exitCode: code, signal: String(signal),
+      });
+      this.sendEventToCaller(callerSessionId, id, {
+        type: 'chat:error',
+        sessionId: targetSessionId,
+        message: `target worker exited (code=${code}, signal=${signal})`,
+        code: 'worker_crashed',
+      });
+      this.cleanup(id);
+    };
+    child.once('exit', onExit);
+
+    // 4. Forward `db:request` IPC messages from the target worker to the
+    //    main process — the agent server's `process.on('message')` handler
+    //    routes `db:response` back via the shared `workerDbRequests` map.
+    //    Without this, the target worker's DB calls (loadMessages,
+    //    settingDb.getJson, etc.) during init silently hang for 30 seconds
+    //    until the db-client timeout fires, causing `ready` to never emit
+    //    within the waitForReady timeout window.
+    const onDbRequest = (msg: Record<string, unknown>): void => {
+      if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
+        this.deps.workerDbRequests.set(msg.id, child);
+        process.send(msg);
+        return;
+      }
+      if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
+        this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
+        process.send(msg);
+      }
+    };
+    child.on('message', onDbRequest);
+
+    // Store child + onExit + onDbRequest so cleanup() can detach listeners.
+    const entry = this.activeInvokes.get(id);
+    if (entry) {
+      entry.child = child;
+      entry.onExit = onExit;
+      entry.onDbRequest = onDbRequest;
+    }
+
+    // 4. Send init command — mirror the normal chat path (router.ts) which
+    //    includes language, referencesEnabled, etc. Missing these causes
+    //    features like .duya/references/ to silently break for the target.
+    this.deps.workerManager.sendCommand(targetSessionId, {
       type: 'init',
       sessionId: targetSessionId,
       providerConfig,
-      workingDirectory: sessionRow.working_directory || undefined,
-      systemPrompt: sessionRow.system_prompt || undefined,
-    };
-    this.deps.workerManager.sendCommand(targetSessionId, initCommand);
+      workingDirectory: workingDirectory || '',
+      defaultWorkspaceDirectory: '',
+      systemPrompt: systemPrompt || undefined,
+      language: 'zh',
+      referencesEnabled: detectReferencesEnabled(workingDirectory),
+    });
 
-    // 4. Wait for ready (reuse the stdout-scanning pattern from router.ts waitForReady)
-    await this.waitForReady(targetSessionId);
+    // 5. Wait for ready
+    try {
+      await this.waitForReady(targetSessionId);
+    } catch (err) {
+      // Kill the spawned worker on ready timeout so we don't leak it.
+      child.removeListener('exit', onExit);
+      this.deps.workerManager.killWorker(targetSessionId);
+      try {
+        this.deps.sessionManager.transitionState(targetSessionId, SessionState.ERROR);
+      } catch {
+        // state transition may be invalid
+      }
+      this.sendEventToCaller(callerSessionId, id, {
+        type: 'chat:error',
+        sessionId: targetSessionId,
+        message: `target ready timeout: ${err instanceof Error ? err.message : String(err)}`,
+        code: 'ready_timeout',
+      });
+      this.cleanup(id);
+      return;
+    }
 
-    // 5. Append caller's message to target session.
+    // 6. Append caller's message to target session.
     // db-bridge 'message:append' expects { sessionId, messages: [...] }.
     // Each message needs an id (PRIMARY KEY, NOT NULL). The `metadata` field
     // is not a DB column — caller attribution is conveyed via `name`.
@@ -199,7 +329,11 @@ export class InteragentRouter {
       }],
     });
 
-    // 6. Send chat:start with mode-based toolset filtering
+    // 7. Subscribe to target worker stdout BEFORE sending chat:start so we
+    //    don't miss early events (target may emit chat:text immediately).
+    this.subscribeToTargetStdout(targetSessionId, id, callerSessionId, child, onExit);
+
+    // 8. Send chat:start with mode-based toolset filtering
     const chatStartCommand: Record<string, unknown> = {
       type: 'chat:start',
       sessionId: targetSessionId,
@@ -211,9 +345,6 @@ export class InteragentRouter {
       },
     };
     this.deps.workerManager.sendCommand(targetSessionId, chatStartCommand);
-
-    // 7. Subscribe to target worker stdout events, forward to caller
-    this.subscribeToTargetStdout(targetSessionId, id, callerSessionId);
   }
 
   private waitForReady(
@@ -265,9 +396,9 @@ export class InteragentRouter {
         }
       };
 
-      // IPC fallback: sendToMain in the worker (agent-process-entry.ts:845)
-      // emits to BOTH stdout and process.send. On Windows + Electron child
-      // stdio pipes occasionally drop frames; the IPC channel is reliable.
+      // IPC fallback: sendToMain in the worker emits to BOTH stdout and
+      // process.send. On Windows + Electron child stdio pipes occasionally
+      // drop frames; the IPC channel is reliable.
       const onIpc = (msg: Record<string, unknown>): void => {
         if (
           msg.type === 'ready' &&
@@ -308,45 +439,77 @@ export class InteragentRouter {
     });
   }
 
-  private subscribeToTargetStdout(targetSessionId: string, invokeId: string, callerSessionId: string): void {
-    const child = this.deps.workerManager.getWorker(targetSessionId);
-    if (!child || !child.stdout) {
-      workerLogger.warn('Cannot subscribe to target stdout', { targetSessionId, invokeId });
-      return;
-    }
+  private subscribeToTargetStdout(
+    targetSessionId: string,
+    invokeId: string,
+    callerSessionId: string,
+    child: ChildProcess,
+    onExit: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): void {
+    // Use IPC (child.on('message')) exclusively for chat:* event delivery.
+    // stdout is unreliable on Windows + Electron (pipe buffering, dropped
+    // frames). The target worker emits every event on BOTH channels via
+    // sendToMain (stdout + process.send), so IPC alone is sufficient.
+    // This also avoids the dedup problem of monitoring both channels.
+    let detached = false;
 
-    const handler = (data: Buffer): void => {
-      const text = data.toString();
-      const lines = text.split('\n');
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('{')) continue;
+    const onIpcEvent = (msg: Record<string, unknown>): void => {
+      if (detached) return;
+      if (typeof msg.type !== 'string' || !msg.type.startsWith('chat:')) return;
+
+      this.sendEventToCaller(callerSessionId, invokeId, msg as unknown as WorkerEvent);
+
+      if (msg.type === 'chat:done' || msg.type === 'chat:error') {
+        detach();
+        if (!this.activeInvokes.has(invokeId)) return;
         try {
-          const event = JSON.parse(trimmed) as WorkerEvent;
-          // Only forward chat:* events (skip ready, pong, db:request, etc.)
-          if (typeof event.type === 'string' && event.type.startsWith('chat:')) {
-            this.sendEventToCaller(callerSessionId, invokeId, event);
-          }
-          // On terminal events, cleanup
-          if (event.type === 'chat:done' || event.type === 'chat:error') {
-            child.stdout?.removeListener('data', handler);
-            this.cleanup(invokeId);
-          }
+          this.deps.sessionManager.transitionState(
+            targetSessionId,
+            msg.type === 'chat:done' ? SessionState.COMPLETED : SessionState.ERROR,
+          );
         } catch {
-          // not JSON, skip
+          // state transition may be invalid; safe to ignore
         }
+        this.deps.workerManager.killWorker(targetSessionId);
+        this.cleanup(invokeId);
       }
     };
 
-    child.stdout.on('data', handler);
+    const detach = (): void => {
+      if (detached) return;
+      detached = true;
+      child.removeListener('message', onIpcEvent);
+      child.removeListener('exit', onExit);
+    };
+
+    const entry = this.activeInvokes.get(invokeId);
+    if (entry) {
+      entry.detachStdout = detach;
+    }
+
+    child.on('message', onIpcEvent);
   }
 
   private handleTimeout(id: string): void {
     const invoke = this.activeInvokes.get(id);
     if (!invoke) return;
     workerLogger.warn('Interagent invoke timeout', { invokeId: id, caller: invoke.callerSessionId, target: invoke.targetSessionId });
-    // Interrupt target
+    // Detach stdout + exit + db:request listeners so the kill below doesn't
+    // trigger a duplicate chat:error via onExit or leak listeners.
+    invoke.detachStdout?.();
+    if (invoke.child && invoke.onExit) {
+      invoke.child.removeListener('exit', invoke.onExit);
+    }
+    if (invoke.child && invoke.onDbRequest) {
+      invoke.child.removeListener('message', invoke.onDbRequest);
+    }
+    // Interrupt + kill target worker
     this.deps.workerManager.interruptWorker(invoke.targetSessionId);
+    try {
+      this.deps.sessionManager.transitionState(invoke.targetSessionId, SessionState.ERROR);
+    } catch {
+      // state transition may be invalid
+    }
     // Send synthetic error to caller
     this.sendEventToCaller(invoke.callerSessionId, id, {
       type: 'chat:error',
@@ -358,10 +521,29 @@ export class InteragentRouter {
   }
 
   private sendEventToCaller(callerSessionId: string, invokeId: string, event: WorkerEvent): void {
-    this.deps.workerManager.sendCommand(callerSessionId, {
-      type: 'interagent:event',
-      id: invokeId,
-      event,
+    // MUST use IPC (child.send) not stdin (sendCommand).
+    // The caller worker's main loop (for await ... parseStdin()) blocks
+    // while awaiting MessageSessionTool.execute(), so stdin messages pile
+    // up unread — including interagent:event — causing a deadlock where
+    // chat:done is in the stdin buffer but never processed, and the tool
+    // hangs until its 60s local timeout.
+    // IPC messages are received by process.on('message') in the caller
+    // (agent-process-entry.ts:2849) which runs independently of the stdin
+    // loop and synchronously resolves the tool promise via the
+    // 'interagent:event' case (agent-process-entry.ts:2736).
+    const child = this.deps.workerManager.getWorker(callerSessionId);
+    if (!child || child.killed) {
+      workerLogger.warn('Cannot send interagent:event: caller worker gone', {
+        callerSessionId, invokeId, eventType: event.type,
+      });
+      return;
+    }
+    child.send({ type: 'interagent:event', id: invokeId, event }, (err) => {
+      if (err) {
+        workerLogger.warn('Failed to send interagent:event via IPC', {
+          callerSessionId, invokeId, eventType: event.type, error: err.message,
+        });
+      }
     });
   }
 
@@ -369,6 +551,13 @@ export class InteragentRouter {
     const invoke = this.activeInvokes.get(id);
     if (invoke) {
       clearTimeout(invoke.timer);
+      invoke.detachStdout?.();
+      if (invoke.child && invoke.onExit) {
+        invoke.child.removeListener('exit', invoke.onExit);
+      }
+      if (invoke.child && invoke.onDbRequest) {
+        invoke.child.removeListener('message', invoke.onDbRequest);
+      }
     }
     this.activeInvokes.delete(id);
     this.cycleDetector.removeInvoke(id);
