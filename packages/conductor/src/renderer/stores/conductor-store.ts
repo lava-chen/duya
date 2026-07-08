@@ -5,7 +5,6 @@ import { undoAction, redoAction, executeAction } from "..//ipc/conductor-ipc";
 import { getConductorHostOrNull, type ModelOption, type ConductorModelInfo } from "..//host";
 import { widgetToElementAdapter } from "..//ipc/widget-element-adapter";
 import { CanvasSpatialIndex } from "../domain/canvas/spatialIndex";
-import { CanvasSpatialIndex } from "../domain/canvas/spatialIndex";
 
 /**
  * Normalize an incoming position to the full `CanvasPosition` shape.
@@ -83,19 +82,6 @@ type ModelInfo = ConductorModelInfo;
  */
 export const canvasSpatialIndex = new CanvasSpatialIndex();
 
-/**
- * Shared spatial index for the active canvas. Kept in sync with
- * elements[] on every create/move/resize/delete via the store
- * actions. UI reads from this index for hit-test, collision, and
- * alignment-candidate pruning.
- *
- * Module-level (not in Zustand state) because RBush is a mutable
- * class instance — Zustand's immutable updates would thrash the
- * tree on every change. The index is a derived view of elements,
- * not independent state.
- */
-export const canvasSpatialIndex = new CanvasSpatialIndex();
-
 export type AgentStreamStatus = "idle" | "thinking" | "streaming" | "tool_use" | "completed" | "error";
 export type ConductorUiStatus = "idle" | "editing" | "agent-editing" | "error" | "syncing";
 
@@ -158,9 +144,6 @@ interface ConductorState {
   setCanvasScroll: (x: number, y: number) => void;
   setCanvasViewportSize: (w: number, h: number) => void;
   centerOnElement: (elementId: string) => void;
-
-  /** Rebuild the spatial index from current elements. Called after snapshot load. */
-  rebuildSpatialIndex: () => void;
 
   /** Rebuild the spatial index from current elements. Called after snapshot load. */
   rebuildSpatialIndex: () => void;
@@ -952,11 +935,6 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   setCanvasScroll: (x, y) => set({ canvasScrollX: x, canvasScrollY: y }),
 
   setCanvasViewportSize: (w, h) => set({ canvasViewportW: w, canvasViewportH: h }),
-
-  rebuildSpatialIndex: () => {
-    const { elements } = get();
-    canvasSpatialIndex.rebuild(elements);
-  },
 
   rebuildSpatialIndex: () => {
     const { elements } = get();
