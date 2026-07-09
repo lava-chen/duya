@@ -156,6 +156,20 @@ describe('files-handlers', () => {
       const names = (result as { tree: { name: string }[] }).tree.map((n) => n.name);
       expect(names).toEqual(['src', 'README.md']);
     });
+
+    it('shows .agents, .claude, and .duya hidden directories', async () => {
+      mocks.fs.readdirSync.mockReturnValue([
+        { name: '.agents', isDirectory: () => true, isFile: () => false },
+        { name: '.claude', isDirectory: () => true, isFile: () => false },
+        { name: '.duya', isDirectory: () => true, isFile: () => false },
+        { name: '.git', isDirectory: () => true, isFile: () => false },
+        { name: '.env', isDirectory: () => false, isFile: () => true },
+        { name: 'src', isDirectory: () => true, isFile: () => false },
+      ]);
+      const result = await invokeHandler('files:browse', {}, '/somedir');
+      const names = (result as { tree: { name: string }[] }).tree.map((n) => n.name);
+      expect(names).toEqual(['.agents', '.claude', '.duya', 'src']);
+    });
   });
 
   describe('files:rename', () => {

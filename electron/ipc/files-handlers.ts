@@ -80,7 +80,14 @@ const IGNORED_ENTRIES = new Set([
   '*.log',
 ]);
 
+const VISIBLE_DOT_DIRS = new Set([
+  '.agents',
+  '.claude',
+  '.duya',
+]);
+
 function shouldIgnore(name: string): boolean {
+  if (VISIBLE_DOT_DIRS.has(name)) return false;
   if (IGNORED_ENTRIES.has(name)) return true;
   if (name.startsWith('.')) return true;
   if (name.endsWith('.log')) return true;
