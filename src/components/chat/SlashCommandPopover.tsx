@@ -276,6 +276,7 @@ export function SlashCommandPopover({
   // -----------------------------------------------------------------------
   const renderRow = (item: PopoverItem, globalIdx: number, isSelected: boolean) => {
     const IconComponent = item.icon ?? (item.group === 'skills' ? CubeIcon : undefined);
+    const isSkill = item.group === 'skills';
 
     // Mode items: check active state, mutual-exclusion status, and
     // whether this item is the Conductor (which keeps the toggle switch
@@ -346,7 +347,7 @@ export function SlashCommandPopover({
         }}
       >
         {IconComponent ? (
-          <span style={{ color: 'var(--muted)', flexShrink: 0, display: 'inline-flex', alignSelf: 'center' }}>
+          <span style={{ color: isSkill ? '#3b82f6' : 'var(--muted)', flexShrink: 0, display: 'inline-flex', alignSelf: 'center' }}>
             <IconComponent size={14} />
           </span>
         ) : (
@@ -357,7 +358,7 @@ export function SlashCommandPopover({
         <div className="flex-1 min-w-0 flex items-baseline" style={{ gap: 8 }}>
           <span
             className="truncate flex-shrink-0"
-            style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', lineHeight: '16px' }}
+            style={{ fontSize: 12, fontWeight: isSkill ? 600 : 500, color: 'var(--text)', lineHeight: '16px' }}
           >
             {item.label}
           </span>
