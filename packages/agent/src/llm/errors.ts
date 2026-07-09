@@ -172,15 +172,27 @@ function extractStatusCode(error: unknown): number | undefined {
 
 /**
  * Check if error is an abort error
+ *
+ * Detection order (most reliable first):
+ * 1. error.name === 'AbortError' — standard DOMException / AbortController
+ * 2. error.code === 'ABORT_ERR' — Node.js fetch abort
+ * 3. Case-insensitive message fallback — covers SDK-wrapped errors that
+ *    don't propagate name/code. Kept specific to avoid false positives.
  */
 export function isAbortError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
 
-  return (
-    error.name === 'AbortError' ||
-    error.message.includes('aborted') ||
-    error.message.includes('AbortError')
-  );
+  // 1. Standard AbortController / DOMException name
+  if (error.name === 'AbortError') return true;
+
+  // 2. Node.js fetch abort sets code = 'ABORT_ERR'
+  const code = (error as { code?: string }).code;
+  if (code === 'ABORT_ERR') return true;
+
+  // 3. Fallback: case-insensitive message check for SDK-wrapped errors
+  //    that don't propagate name/code. Kept specific to avoid false positives.
+  const lowerMsg = error.message.toLowerCase();
+  return lowerMsg.includes('aborterror') || lowerMsg.includes('aborted');
 }
 
 /**
@@ -261,7 +273,7 @@ export function classifyError(error: unknown): APIErrorType {
       case 408:
         return APIErrorType.TIMEOUT_ERROR;
       case 409:
-        return APIErrorType.SERVER_ERROR;
+        return APIErrorType.CLIENT_ERROR;
       case 429:
         return APIErrorType.RATE_LIMIT;
       case 529:
@@ -321,7 +333,7 @@ export function isRetryableError(error: unknown): boolean {
   const statusCode = extractStatusCode(error);
   if (statusCode !== undefined) {
     // Retry on specific status codes
-    if ([408, 409, 429, 500, 502, 503, 529].includes(statusCode)) {
+    if ([408, 429, 500, 502, 503, 529].includes(statusCode)) {
       return true;
     }
   }

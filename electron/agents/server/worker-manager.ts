@@ -10,6 +10,8 @@ export class WorkerManager {
   private sessionManager: SessionManager;
   private onWorkerCrash: ((sessionId: string) => void) | null = null;
   private onWorkerMessage: ((sessionId: string, msg: Record<string, unknown>) => void) | null = null;
+  // H6: Track intentionally killed workers so their exit is not misjudged as a crash
+  private intentionalKills = new WeakSet<ChildProcess>();
 
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
@@ -62,10 +64,19 @@ export class WorkerManager {
       betterSqlite3Path: env.DUYA_BETTER_SQLITE3_PATH,
     });
 
-    this.sessionManager.transitionState(sessionId, SessionState.STREAMING);
-
-    // Register new worker BEFORE killing old one, so workers map never goes empty for this session
     this.workers.set(sessionId, child);
+
+    // C5: Transition state after worker is registered. The caller may have already
+    // transitioned (e.g. handlePostChat uses transitionState as a concurrency lock),
+    // so wrap in try/catch to avoid throwing if the transition is invalid.
+    try {
+      this.sessionManager.transitionState(sessionId, SessionState.STREAMING);
+    } catch (err) {
+      workerLogger.warn('transitionState(STREAMING) skipped', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // Now kill the old worker if it existed
     if (oldChild) {
@@ -83,20 +94,27 @@ export class WorkerManager {
 
       const exitedCleanly = code === 0;
       const exitedBySignal = code === null && signal !== null;
+      // H6: Intentionally killed workers (e.g. via killWorker/interruptWorker) should
+      // not be misjudged as crashes on Windows where child.kill() produces non-zero exit.
+      const isIntentionalKill = this.intentionalKills.has(child);
 
       if (exitedCleanly) {
         workerLogger.info('Worker exited normally', { sessionId, pid: workerPid });
-      } else if (exitedBySignal) {
-        workerLogger.info('Worker terminated by signal', { sessionId, pid: workerPid, signal });
+      } else if (exitedBySignal || isIntentionalKill) {
+        workerLogger.info('Worker terminated by signal', { sessionId, pid: workerPid, signal, intentional: isIntentionalKill });
       } else {
         workerLogger.warn('Worker exited with error code', { sessionId, pid: workerPid, exitCode: code, signal });
       }
 
       const session = this.sessionManager.getSession(sessionId);
       if (session) {
-        const isRealCrash = typeof code === 'number' && code > 0 && session.state !== SessionState.COMPLETED;
+        const isRealCrash = !isIntentionalKill && typeof code === 'number' && code > 0 && session.state !== SessionState.COMPLETED;
         if (isRealCrash) {
-          this.sessionManager.transitionState(sessionId, SessionState.CRASHED);
+          try {
+            this.sessionManager.transitionState(sessionId, SessionState.CRASHED);
+          } catch {
+            // State transition may be invalid if session already moved on
+          }
           workerLogger.error('Worker crash detected', undefined, { sessionId, exitCode: code, signal });
           if (this.onWorkerCrash) {
             this.onWorkerCrash(sessionId);
@@ -181,6 +199,9 @@ export class WorkerManager {
   // Internal kill that accepts the child directly, used by spawnWorker during replace
   private killWorkerImpl(sessionId: string, child: ChildProcess): void {
     workerLogger.info('Killing worker', { sessionId, pid: child.pid });
+    // H6: Mark this child as intentionally killed so the spawnWorker exit handler
+    // does not misjudge it as a crash (especially on Windows).
+    this.intentionalKills.add(child);
     let exited = false;
     const forceKillTimeout = setTimeout(() => {
       if (!exited) {
@@ -192,31 +213,21 @@ export class WorkerManager {
       }
     }, 3000);
 
+    // M11: Single once('exit') listener handles both timeout cleanup and map deletion
     child.once('exit', () => {
       exited = true;
       clearTimeout(forceKillTimeout);
+      if (this.workers.get(sessionId) === child) {
+        this.workers.delete(sessionId);
+        workerLogger.info('Worker terminated', { sessionId });
+      }
     });
 
     if (process.platform === 'win32') {
       child.kill();
     } else {
       child.kill('SIGTERM');
-
-      child.on('exit', () => {
-        if (this.workers.get(sessionId) === child) {
-          this.workers.delete(sessionId);
-          workerLogger.info('Worker terminated', { sessionId });
-        }
-      });
-      return;
     }
-
-    child.on('exit', () => {
-      if (this.workers.get(sessionId) === child) {
-        this.workers.delete(sessionId);
-        workerLogger.info('Worker terminated', { sessionId });
-      }
-    });
   }
 
   sendCommand(sessionId: string, cmd: Record<string, unknown>): boolean {
@@ -227,7 +238,17 @@ export class WorkerManager {
     }
 
     workerLogger.debug('Sending command to worker', { sessionId, commandType: cmd.type });
-    child.stdin.write(JSON.stringify(cmd) + '\n');
+    try {
+      child.stdin.write(JSON.stringify(cmd) + '\n');
+    } catch (err) {
+      // C2: stdin.write can throw if the pipe is closed (worker exiting)
+      workerLogger.warn('Failed to write command to worker stdin', {
+        sessionId,
+        commandType: cmd.type,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
     return true;
   }
 

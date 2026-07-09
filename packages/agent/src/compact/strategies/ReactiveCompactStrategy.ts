@@ -12,6 +12,8 @@
 import type { CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
 import { COMPACTION_THRESHOLDS } from '../types.js'
 import { estimateMessagesTokens, estimateMessageTokens } from '../tokenBudget.js'
+import { adjustSliceBoundary } from '../compact.js'
+import { logger } from '../../utils/logger.js'
 import { MicroCompactStrategy, type FileStateEntry } from './MicroCompactStrategy.js'
 import { SessionMemoryCompactStrategy } from './SessionMemoryCompactStrategy.js'
 
@@ -126,7 +128,118 @@ function calculateMessageImportance(msg: Message, index: number, totalMessages: 
 }
 
 /**
- * Select which messages to keep based on importance scores
+ * Group messages into atomic units so that tool_use/tool_result
+ * round-trips are never split. Each group is either:
+ * - A standalone message (no tool_use or tool_result blocks), or
+ * - An assistant(tool_use) + its paired user(tool_result) messages.
+ *
+ * The group's score is the sum of its members' scores, and its
+ * token count is the sum of its members' tokens. When a group is
+ * selected for keeping, ALL its members are kept together.
+ */
+interface MessageGroup {
+  indices: number[]
+  score: number
+  tokens: number
+}
+
+function groupMessagesForToolRoundTrips(
+  messages: Message[],
+  scoredMessages: MessageImportance[],
+): MessageGroup[] {
+  // Build a map from index -> importance score
+  const scoreByIndex = new Map<number, MessageImportance>()
+  for (const sm of scoredMessages) {
+    scoreByIndex.set(sm.index, sm)
+  }
+
+  const groups: MessageGroup[] = []
+  let i = 0
+  while (i < messages.length) {
+    const msg = messages[i]
+
+    // Check if this is an assistant message with tool_use blocks
+    const hasToolUse =
+      Array.isArray(msg.content) &&
+      msg.content.some((b: unknown) => (b as Record<string, unknown>).type === 'tool_use')
+
+    if (hasToolUse) {
+      // Collect tool_use_ids from this assistant message
+      const toolUseIds = new Set<string>()
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          const b = block as unknown as Record<string, unknown>
+          if (b.type === 'tool_use' && typeof b.id === 'string') {
+            toolUseIds.add(b.id)
+          }
+        }
+      }
+
+      // Find the matching user(tool_result) message(s) that follow
+      const groupIndices = [i]
+      for (let j = i + 1; j < messages.length; j++) {
+        const nextMsg = messages[j]
+        const isUserWithToolResult =
+          nextMsg.role === 'user' &&
+          Array.isArray(nextMsg.content) &&
+          nextMsg.content.some((b: unknown) => (b as Record<string, unknown>).type === 'tool_result')
+
+        if (isUserWithToolResult) {
+          // Check if this tool_result references any of our tool_use_ids
+          const referencesOurToolUse = Array.isArray(nextMsg.content) &&
+            nextMsg.content.some((block) => {
+              const b = block as unknown as Record<string, unknown>
+              return b.type === 'tool_result' &&
+                typeof b.tool_use_id === 'string' &&
+                toolUseIds.has(b.tool_use_id)
+            })
+
+          if (referencesOurToolUse) {
+            groupIndices.push(j)
+            // Continue scanning — multiple user messages may hold
+            // tool_result blocks for the same tool_use set
+          } else {
+            // tool_result for a different tool_use — stop
+            break
+          }
+        } else {
+          // Non-tool_result message — stop
+          break
+        }
+      }
+
+      // Calculate group score and tokens
+      let groupScore = 0
+      let groupTokens = 0
+      for (const idx of groupIndices) {
+        const sm = scoreByIndex.get(idx)
+        if (sm) groupScore += sm.score
+        groupTokens += estimateMessageTokens(messages[idx])
+      }
+
+      groups.push({ indices: groupIndices, score: groupScore, tokens: groupTokens })
+      i = groupIndices[groupIndices.length - 1] + 1
+    } else {
+      // Standalone message — check if it's a user with tool_result
+      // (orphaned, no preceding assistant+tool_use in scope). Treat
+      // it as its own group so it can be removed independently.
+      const sm = scoreByIndex.get(i)
+      groups.push({
+        indices: [i],
+        score: sm?.score ?? 0,
+        tokens: estimateMessageTokens(msg),
+      })
+      i++
+    }
+  }
+
+  return groups
+}
+
+/**
+ * Select which messages to keep based on importance scores.
+ * Tool_use/tool_result round-trips are treated as atomic units —
+ * if one is kept, its paired message is kept too.
  */
 function selectMessagesByImportance(
   messages: Message[],
@@ -145,26 +258,44 @@ function selectMessagesByImportance(
     }
   }
 
-  // Sort by importance (descending)
-  scoredMessages.sort((a, b) => b.score - a.score)
+  // Group messages into atomic tool round-trip units
+  const groups = groupMessagesForToolRoundTrips(messages, scoredMessages)
 
-  // Select messages until we reach target token count
+  // Sort groups by importance (descending)
+  groups.sort((a, b) => b.score - a.score)
+
+  // Select groups until we reach target token count
   const keepIndices = new Set<number>()
   let currentTokens = estimateMessagesTokens(systemMessages)
+  let keptGroupCount = 0
 
-  for (const item of scoredMessages) {
-    const msgTokens = estimateMessageTokens(messages[item.index])
-    if (currentTokens + msgTokens <= targetTokenCount || keepIndices.size < 5) {
-      keepIndices.add(item.index)
-      currentTokens += msgTokens
+  for (const group of groups) {
+    // Keep at least 5 messages worth of groups as a floor
+    const shouldKeepFloor = keptGroupCount < 5
+    if (shouldKeepFloor || currentTokens + group.tokens <= targetTokenCount) {
+      for (const idx of group.indices) {
+        keepIndices.add(idx)
+      }
+      currentTokens += group.tokens
+      keptGroupCount++
     }
   }
 
-  // Split into keep and remove arrays, maintaining original order
+  // Split into keep and remove arrays, maintaining original order.
+  // System messages are always kept and excluded from scoring.
+  const systemIndices = new Set<number>()
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    if (msg.role === 'system' || typeof msg.content === 'string' && msg.content.startsWith('This session is being continued')) {
+      systemIndices.add(i)
+    }
+  }
+
   const keep: Message[] = [...systemMessages]
   const remove: Message[] = []
 
   for (let i = 0; i < messages.length; i++) {
+    if (systemIndices.has(i)) continue // already in systemMessages
     if (keepIndices.has(i)) {
       keep.push(messages[i])
     } else {
@@ -340,7 +471,7 @@ export class ReactiveCompactStrategy implements CompactionStrategy {
           result = null
         }
       } catch (error) {
-        console.error(`Reactive compact attempt ${attempts} failed:`, error)
+        logger.warn(`Reactive compact attempt ${attempts} failed`, { error: error instanceof Error ? error.message : String(error) })
         result = null
       }
     }
@@ -486,7 +617,12 @@ export class ReactiveCompactStrategy implements CompactionStrategy {
       (typeof m.content === 'string' && m.content.includes('session'))
     )
 
-    const recentMessages = messages.slice(-Math.max(this.config.minMessagesToKeep, 5))
+    // Keep only system messages and very recent messages.
+    // Adjust the boundary so we don't cut in the middle of a
+    // tool_use/tool_result round-trip (orphaned tool_result).
+    let splitIndex = Math.max(0, messages.length - Math.max(this.config.minMessagesToKeep, 5))
+    splitIndex = adjustSliceBoundary(messages, splitIndex)
+    const recentMessages = messages.slice(splitIndex)
     const removedCount = messages.length - systemMessages.length - recentMessages.length
 
     const summaryMessage: Message = {

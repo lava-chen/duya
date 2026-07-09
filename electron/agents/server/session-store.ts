@@ -86,7 +86,15 @@ export class SessionManager {
 
     this.setError(id, message, retryable);
     if (session.state === SessionState.STREAMING || session.state === SessionState.COMPLETING) {
-      this.transitionState(id, SessionState.ERROR);
+      try {
+        this.transitionState(id, SessionState.ERROR);
+      } catch (err) {
+        sessionLogger.warn('Failed to transition to ERROR state', {
+          sessionId: id,
+          currentState: session.state,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 

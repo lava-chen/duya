@@ -294,6 +294,7 @@ function pendingPermissionKey(sessionId: string, id: string): string {
 const pendingIpcRequests = new Map<string, {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
+  timeoutHandle?: ReturnType<typeof setTimeout>;
 }>();
 
 // Pending inter-agent call registry.
@@ -346,9 +347,17 @@ function conductorIpcRequest<T = unknown>(
     const action = outerPayload?.action ?? channel;
     const innerPayload = outerPayload?.payload ?? payload;
 
+    const timeoutHandle = setTimeout(() => {
+      if (pendingIpcRequests.has(requestId)) {
+        pendingIpcRequests.delete(requestId);
+        resolve({ success: false, error: { code: 'TIMEOUT', message: `IPC request timeout after ${timeout}ms` } });
+      }
+    }, timeout);
+
     pendingIpcRequests.set(requestId, {
       resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
       reject: (e) => reject(e),
+      timeoutHandle,
     });
 
     sendToMain({
@@ -357,13 +366,6 @@ function conductorIpcRequest<T = unknown>(
       action,
       payload: innerPayload,
     });
-
-    setTimeout(() => {
-      if (pendingIpcRequests.has(requestId)) {
-        pendingIpcRequests.delete(requestId);
-        resolve({ success: false, error: { code: 'TIMEOUT', message: `IPC request timeout after ${timeout}ms` } });
-      }
-    }, timeout);
   });
 }
 
@@ -736,6 +738,27 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
     // (vision, sub-model resolution, etc.).
     runtimeConfig: config.runtimeConfig,
   });
+
+  // Wire the compaction callback so proactive compaction inside
+  // streamChat persists the compacted message list to DB and updates
+  // existingMessageCount. Without this, the next incremental save
+  // would use a stale baseline, causing duplicate or missing rows.
+  agent.onMessagesCompacted = (newMessageCount: number): void => {
+    log(`[Agent-Process] Messages compacted, new count=${newMessageCount}`);
+    const currentMessages = agent.getMessages();
+    // Persist the full compacted message list. INSERT OR IGNORE in
+    // appendMessages handles dedup for rows that are already in DB.
+    appendMessages(sessionId!, currentMessages)
+      .then((result) => {
+        if (result.success) {
+          existingMessageCount = currentMessages.length;
+          log(`[Agent-Process] Compaction persisted, existingMessageCount=${existingMessageCount}`);
+        }
+      })
+      .catch((err) => {
+        log('[Agent-Process] Compaction persist failed:', err instanceof Error ? err.message : String(err));
+      });
+  };
 
   if (setSandboxEnabled) {
     setSandboxEnabled(sandboxEnabled ?? true);
@@ -2187,18 +2210,27 @@ async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
 }
 
 async function drainQueuedChatStart(): Promise<void> {
-  while (!chatInProgress) {
-    const next = dequeue<ChatStartMessage>(
-      (cmd: QueuedCommand<ChatStartMessage>) => cmd.agentId === undefined && cmd.mode === 'prompt'
-    );
-    if (!next) break;
+  // Atomic check-and-set: if a chat is already in progress, bail
+  // out immediately. The finally block of the active chat will
+  // re-invoke this via setImmediate, so we don't need a while loop.
+  if (chatInProgress) return;
 
-    log('[Agent-Process] Draining queued chat:start from priority queue');
-    chatInProgress = true;
-    handleChatStart(next.rawMessage).finally(() => {
-      chatInProgress = false;
-      drainQueuedChatStart();
-    });
+  const next = dequeue<ChatStartMessage>(
+    (cmd: QueuedCommand<ChatStartMessage>) => cmd.agentId === undefined && cmd.mode === 'prompt'
+  );
+  if (!next) return;
+
+  log('[Agent-Process] Draining queued chat:start from priority queue');
+  chatInProgress = true;
+  try {
+    await handleChatStart(next.rawMessage);
+  } finally {
+    chatInProgress = false;
+    // Use setImmediate to avoid stack overflow on rapid drain cycles
+    // and to ensure the current microtask queue clears first.
+    if (hasCommandsInQueue()) {
+      setImmediate(() => { void drainQueuedChatStart(); });
+    }
   }
 }
 
@@ -2417,10 +2449,17 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           }
           if (initializing) {
             log('[Agent-Process] Init in progress, waiting...');
+            const INIT_POLL_TIMEOUT_MS = 30_000;
+            const initPollStartTime = Date.now();
             const waitForInit = setInterval(() => {
               if (!initializing) {
                 clearInterval(waitForInit);
                 sendToMain({ type: 'ready', sessionId });
+              } else if (Date.now() - initPollStartTime >= INIT_POLL_TIMEOUT_MS) {
+                clearInterval(waitForInit);
+                initializing = false;
+                warn(`[Agent-Process] Init poll timed out after ${INIT_POLL_TIMEOUT_MS}ms, forcing ready`);
+                sendToMain({ type: 'ready', sessionId, status: 'error', reason: 'init_timeout' });
               }
             }, 50);
             break;
@@ -2535,7 +2574,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           chatInProgress = true;
           handleChatStart(chatMsg).finally(() => {
             chatInProgress = false;
-            drainQueuedChatStart();
+            setImmediate(() => { void drainQueuedChatStart(); });
           });
           break;
         }
@@ -2763,6 +2802,10 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           };
           const pending = pendingIpcRequests.get(requestId);
           if (pending) {
+            // Clear the timeout so it doesn't fire after a successful response
+            if (pending.timeoutHandle) {
+              clearTimeout(pending.timeoutHandle);
+            }
             pendingIpcRequests.delete(requestId);
             if (success) {
               pending.resolve({ success: true, data: result });

@@ -38,6 +38,21 @@ export function createChildAbortController(parent: AbortController): AbortContro
 
   parent.signal.addEventListener('abort', handler, { once: true })
 
+  // Attach a dispose function to the controller so callers can
+  // remove the parent listener when the child is no longer needed
+  // (e.g. after a summarizer call completes normally). Without this,
+  // the parent handler leaks for the lifetime of the parent signal.
+  const childController = controller as AbortController & {
+    dispose?: () => void
+  }
+  childController.dispose = () => {
+    try {
+      parent.signal.removeEventListener('abort', handler)
+    } catch {
+      // parent already GC'd or signal is unreachable
+    }
+  }
+
   const childSignal = controller.signal as AbortSignal & { reason?: unknown }
   const childHandler = () => {
     try {

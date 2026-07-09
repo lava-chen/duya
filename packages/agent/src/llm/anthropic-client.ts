@@ -11,7 +11,7 @@ import { logger } from '../utils/logger.js';
 import { checkCacheEligibility, applyCacheControl, type CacheRetention } from './prompt-caching.js';
 import { normalizeUsage, type NormalizedUsage } from './usage.js';
 import { CacheMonitor } from '../observability/cache-monitor.js';
-import { isCDNImageUrl } from '../utils/urlSafety.js';
+import { isCDNImageUrl, isSafeUrlSync } from '../utils/urlSafety.js';
 import { extractToolInputPreview, hasToolInputPreview } from './tool-input-preview.js';
 
 
@@ -120,6 +120,53 @@ export function extractAnthropicThinkingDelta(delta: unknown): string {
     record.content;
 
   return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Idle timeout for streaming LLM responses. If no data is received for
+ * `timeoutMs` milliseconds, the source iterator is cleaned up and a
+ * TimeoutError is thrown. The timer resets after each successfully
+ * received event.
+ */
+const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+async function* withIdleTimeout<T>(
+  source: AsyncIterable<T>,
+  timeoutMs: number = STREAM_IDLE_TIMEOUT_MS,
+): AsyncGenerator<T> {
+  const iterator = source[Symbol.asyncIterator]();
+  while (true) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(
+          `Stream idle timeout: no data received for ${timeoutMs}ms`,
+        );
+        err.name = 'TimeoutError';
+        reject(err);
+      }, timeoutMs);
+    });
+
+    try {
+      const result = await Promise.race([iterator.next(), timeoutPromise]);
+      if (timer) clearTimeout(timer);
+      if (result.done) {
+        return;
+      }
+      yield result.value;
+    } catch (err) {
+      if (timer) clearTimeout(timer);
+      // Ensure the source iterator is cleaned up on timeout/error
+      if (typeof iterator.return === 'function') {
+        try {
+          await iterator.return(undefined as never);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+      throw err;
+    }
+  }
 }
 
 /**
@@ -349,6 +396,124 @@ function handleThinkingBlocks(
 }
 
 /**
+ * Final safety net: ensure every tool_result has a matching tool_use and
+ * every tool_use has a matching tool_result. Logs the exact mismatches
+ * (with message index and id) at ERROR level so we can diagnose the root
+ * cause if a provider/proxy still produces unpairable blocks.
+ *
+ * This runs after all other transformations (merge, thinking handling,
+ * etc.) so it operates on the exact payload that would be sent to the API.
+ */
+function repairToolPairing(messages: MessageParam[]): MessageParam[] {
+  const toolUseIds = new Set<string>();
+  const toolResultIds = new Set<string>();
+
+  // First pass: collect ids
+  for (const m of messages) {
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (typeof b !== 'object' || b === null) continue;
+        if ((b as { type?: string }).type === 'tool_use') {
+          toolUseIds.add((b as { id?: string }).id || '');
+        }
+      }
+    }
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (typeof b !== 'object' || b === null) continue;
+        if ((b as { type?: string }).type === 'tool_result') {
+          toolResultIds.add((b as { tool_use_id?: string }).tool_use_id || '');
+        }
+      }
+    }
+  }
+
+  // Identify mismatches
+  const unmatchedResults = new Set<string>();
+  for (const id of toolResultIds) {
+    if (!toolUseIds.has(id)) {
+      unmatchedResults.add(id);
+    }
+  }
+  const unmatchedUses = new Set<string>();
+  for (const id of toolUseIds) {
+    if (!toolResultIds.has(id)) {
+      unmatchedUses.add(id);
+    }
+  }
+
+  if (unmatchedResults.size === 0 && unmatchedUses.size === 0) {
+    return messages;
+  }
+
+  // Log every mismatch with position for diagnosis
+  logger.error(
+    `[toAnthropicMessages] Tool pairing mismatch detected: ` +
+      `${unmatchedUses.size} tool_use(s) without result, ${unmatchedResults.size} tool_result(s) without use`,
+    undefined,
+    { unmatchedUseIds: Array.from(unmatchedUses), unmatchedResultIds: Array.from(unmatchedResults) },
+    'AnthropicClient'
+  );
+
+  // Second pass: log positions and repair
+  const repaired: MessageParam[] = [];
+  for (let mi = 0; mi < messages.length; mi++) {
+    const m = messages[mi];
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      const filtered = (m.content as ContentBlockParam[]).filter((b) => {
+        if (typeof b !== 'object' || b === null) return true;
+        if ((b as { type?: string }).type !== 'tool_use') return true;
+        const id = (b as { id?: string }).id || '';
+        if (unmatchedUses.has(id)) {
+          logger.error(
+            `[toAnthropicMessages] Removing unmatched tool_use at message[${mi}]: id=${id}`,
+            undefined,
+            undefined,
+            'AnthropicClient'
+          );
+          return false;
+        }
+        return true;
+      });
+      if (filtered.length === 0 && m.content.length > 0) {
+        repaired.push({ ...m, content: [{ type: 'text', text: '(tool call removed)' } as ContentBlockParam] });
+      } else {
+        repaired.push({ ...m, content: filtered });
+      }
+      continue;
+    }
+
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      const filtered = (m.content as ContentBlockParam[]).filter((b) => {
+        if (typeof b !== 'object' || b === null) return true;
+        if ((b as { type?: string }).type !== 'tool_result') return true;
+        const id = (b as { tool_use_id?: string }).tool_use_id || '';
+        if (unmatchedResults.has(id)) {
+          logger.error(
+            `[toAnthropicMessages] Removing unmatched tool_result at message[${mi}]: tool_use_id=${id}`,
+            undefined,
+            undefined,
+            'AnthropicClient'
+          );
+          return false;
+        }
+        return true;
+      });
+      if (filtered.length === 0 && m.content.length > 0) {
+        repaired.push({ ...m, content: [{ type: 'text', text: '(orphaned tool result removed)' } as ContentBlockParam] });
+      } else {
+        repaired.push({ ...m, content: filtered });
+      }
+      continue;
+    }
+
+    repaired.push(m);
+  }
+
+  return repaired;
+}
+
+/**
  * Convert duya Message[] to Anthropic MessageParam[]
  *
  * Implements hermes-agent equivalent logic with the following pipeline:
@@ -357,6 +522,7 @@ function handleThinkingBlocks(
  * 3. Strip orphaned tool_result blocks (no matching tool_use)
  * 4. Merge consecutive same-role messages
  * 5. Handle thinking blocks according to endpoint type
+ * 6. Final tool pairing repair (safety net)
  *
  * @param messages - The messages to convert
  * @param baseURL - The API base URL (used to detect third-party endpoints)
@@ -364,17 +530,29 @@ function handleThinkingBlocks(
 function toAnthropicMessages(messages: Message[], baseURL?: string): MessageParam[] {
   // Step 1: Convert all messages to Anthropic format, sanitizing tool IDs.
   //
-  // We thread a per-conversion-pass counter so that any empty/invalid
-  // tool_use or tool_result ID resolves to a unique synthetic string
-  // (e.g. `tool_synth_1`, `tool_synth_2`, ...) rather than collapsing
-  // to a fixed placeholder. See sanitizeToolId() for details.
+  // We thread TWO independent global counters through the whole pass:
+  //   - emptyToolUseCounter    — bumped for each empty tool_use.id
+  //                               encountered in assistant messages
+  //   - emptyToolResultCounter — bumped for each empty tool_result.tool_use_id
+  //                               encountered in tool messages
+  //
+  // Both resolve to `tool_synth_<n>`. Because both counters are GLOBAL
+  // (not per-message), the Nth empty tool_use.id and the Nth empty
+  // tool_result.tool_use_id both resolve to `tool_synth_<N>` — which
+  // is exactly the positional matching Anthropic requires. A previous
+  // version used a per-message-local counter for the assistant branch,
+  // which caused every assistant message's first empty tool_use to
+  // collapse to `tool_synth_0`, producing ID collisions across turns
+  // and triggering Anthropic 2013 "tool call result does not follow
+  // tool call".
   const converted: Array<{
     originalRole: string;
     toolCallIds: string[];
     toolResultIds: string[];
     param: MessageParam;
   }> = [];
-  let synthCounter = 0;
+  let emptyToolUseCounter = 0;
+  let emptyToolResultCounter = 0;
 
   for (const msg of messages) {
     if (msg.role === 'system') {
@@ -396,35 +574,27 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
     } else if (msg.role === 'assistant') {
       const convertedContent = convertContentToAnthropic(msg.content) as MessageParam['content'];
       const toolCallIds: string[] = [];
-      // Per-message counter so two empty IDs in the SAME assistant
-      // message still get unique synth IDs.
-      let assistantSynthCounter = 0;
+
+      // Single pass: build toolCallIds AND sanitize content together
+      // so both use the same counter value for the same tool_use block.
+      // The counter is global (not per-message) so two assistant
+      // messages with empty tool_use IDs get distinct synth IDs.
+      let sanitizedContent: MessageParam['content'];
       if (Array.isArray(convertedContent)) {
-        for (const block of convertedContent) {
+        sanitizedContent = convertedContent.map(block => {
           if (typeof block === 'object' && block !== null && (block as { type?: string }).type === 'tool_use') {
-            const id = (block as { id?: string }).id;
-            // Always push a sanitized ID, even for empty strings, so
-            // toolCallIds.length matches the actual number of tool_use
-            // blocks in the assistant message.
-            toolCallIds.push(sanitizeToolId(typeof id === 'string' ? id : '', assistantSynthCounter++));
+            const rawId = ((block as { id?: string }).id) || '';
+            const sanitizedId = sanitizeToolId(rawId, emptyToolUseCounter++);
+            // Collect the sanitized ID so toolCallIds.length matches
+            // the actual number of tool_use blocks.
+            toolCallIds.push(sanitizedId);
+            return { ...block, id: sanitizedId } as ContentBlockParam;
           }
-        }
+          return block;
+        });
+      } else {
+        sanitizedContent = convertedContent;
       }
-      // Sanitize tool_use IDs within the content blocks. We re-derive
-      // the counter from the same source so the IDs emitted here line
-      // up with the IDs collected above.
-      let contentSynthCounter = 0;
-      const sanitizedContent = Array.isArray(convertedContent)
-        ? convertedContent.map(block => {
-            if (typeof block === 'object' && block !== null && (block as { type?: string }).type === 'tool_use') {
-              return {
-                ...block,
-                id: sanitizeToolId(((block as { id?: string }).id) || '', contentSynthCounter++),
-              } as ContentBlockParam;
-            }
-            return block;
-          })
-        : convertedContent;
       converted.push({
         originalRole: 'assistant',
         toolCallIds,
@@ -438,7 +608,7 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
       const toolContent = typeof msg.content === 'string'
         ? msg.content
         : JSON.stringify(msg.content);
-      const toolUseId = sanitizeToolId(msg.tool_call_id || '', synthCounter++);
+      const toolUseId = sanitizeToolId(msg.tool_call_id || '', emptyToolResultCounter++);
       converted.push({
         originalRole: 'tool',
         toolCallIds: [],
@@ -563,6 +733,102 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
     );
   }
 
+  // Step 2b: Detect duplicate tool_use IDs and rename each occurrence pair.
+  //
+  // Even with the global counter fix above, a misbehaving provider could
+  // emit the SAME non-empty tool_use.id across multiple calls. We rename
+  // each *occurrence* of the duplicated id so that the Nth tool_use with
+  // that id pairs with the Nth tool_result with the same tool_use_id.
+  const useIdCounts = new Map<string, number>();
+  const resultIdCounts = new Map<string, number>();
+  for (const entry of result) {
+    if (entry.role === 'assistant' && Array.isArray(entry.content)) {
+      for (const b of entry.content) {
+        if (typeof b !== 'object' || b === null) continue;
+        if ((b as { type?: string }).type !== 'tool_use') continue;
+        const id = (b as { id?: string }).id || '';
+        if (id) useIdCounts.set(id, (useIdCounts.get(id) || 0) + 1);
+      }
+    }
+    if (entry.role === 'user' && Array.isArray(entry.content)) {
+      for (const b of entry.content) {
+        if (typeof b !== 'object' || b === null) continue;
+        if ((b as { type?: string }).type !== 'tool_result') continue;
+        const id = (b as { tool_use_id?: string }).tool_use_id || '';
+        if (id) resultIdCounts.set(id, (resultIdCounts.get(id) || 0) + 1);
+      }
+    }
+  }
+
+  const duplicatedIds = new Set<string>();
+  for (const [id, count] of useIdCounts) {
+    if (count > 1) duplicatedIds.add(id);
+  }
+  for (const [id, count] of resultIdCounts) {
+    if (count > 1) duplicatedIds.add(id);
+  }
+
+  if (duplicatedIds.size > 0) {
+    const occurrenceIndex = new Map<string, number>();
+    const idMappings = new Map<string, Map<number, string>>();
+    let dupRenameCounter = 0;
+    let duplicateUseIdRenamed = 0;
+
+    // Rename USE occurrences: first occurrence keeps original id,
+    // subsequent ones get tool_dup_<n>.
+    for (const entry of result) {
+      if (entry.role !== 'assistant' || !Array.isArray(entry.content)) continue;
+      for (let bi = 0; bi < entry.content.length; bi++) {
+        const block = entry.content[bi];
+        if (typeof block !== 'object' || block === null) continue;
+        if ((block as { type?: string }).type !== 'tool_use') continue;
+        const id = (block as { id?: string }).id || '';
+        if (!id || !duplicatedIds.has(id)) continue;
+        const idx = occurrenceIndex.get(id) || 0;
+        occurrenceIndex.set(id, idx + 1);
+        let perIdMap = idMappings.get(id);
+        if (!perIdMap) {
+          perIdMap = new Map();
+          idMappings.set(id, perIdMap);
+        }
+        let finalId = perIdMap.get(idx);
+        if (!finalId) {
+          finalId = idx === 0 ? id : `tool_dup_${dupRenameCounter++}`;
+          perIdMap.set(idx, finalId);
+        }
+        if (finalId !== id) {
+          (entry.content as ContentBlockParam[])[bi] = { ...block, id: finalId } as ContentBlockParam;
+          duplicateUseIdRenamed++;
+        }
+      }
+    }
+
+    // Rename RESULT occurrences using the same chronological mapping.
+    occurrenceIndex.clear();
+    for (const entry of result) {
+      if (entry.role !== 'user' || !Array.isArray(entry.content)) continue;
+      for (let bi = 0; bi < entry.content.length; bi++) {
+        const block = entry.content[bi];
+        if (typeof block !== 'object' || block === null) continue;
+        if ((block as { type?: string }).type !== 'tool_result') continue;
+        const id = (block as { tool_use_id?: string }).tool_use_id || '';
+        if (!id || !duplicatedIds.has(id)) continue;
+        const idx = occurrenceIndex.get(id) || 0;
+        occurrenceIndex.set(id, idx + 1);
+        const perIdMap = idMappings.get(id);
+        const finalId = perIdMap?.get(idx);
+        if (finalId && finalId !== id) {
+          (entry.content as ContentBlockParam[])[bi] = { ...block, tool_use_id: finalId } as ContentBlockParam;
+        }
+      }
+    }
+
+    logger.warn(
+      `[toAnthropicMessages] Renamed ${duplicateUseIdRenamed} duplicate tool_use occurrence(s) ` +
+        `for id(s): ${Array.from(duplicatedIds).join(', ')}`
+    );
+  }
+
   // Step 3: Strip orphaned tool_results (no matching tool_use). This is
   // now mostly redundant with the bidirectional cleanup above, but
   // stripOrphanToolResults still runs as a final safety net — it
@@ -576,7 +842,13 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
   // Step 5: Handle thinking blocks according to endpoint type
   const withThinkingHandled = handleThinkingBlocks(merged, baseURL);
 
-  return withThinkingHandled;
+  // Step 6: Final tool pairing repair. This is the last safety net
+  // before the request goes to the API. It removes any remaining
+  // unmatched tool_use/tool_result blocks and logs the exact IDs and
+  // positions so we can diagnose the root cause.
+  const repaired = repairToolPairing(withThinkingHandled);
+
+  return repaired;
 }
 
 /**
@@ -654,6 +926,12 @@ function convertContentBlock(block: MessageContent): ContentBlockParam | null {
     // attempt to fetch them via browser tool, which is incorrect.
     if (isCDNImageUrl(imgBlock.source.data)) {
       logger.warn('[AnthropicClient] Dropped MiniMax CDN image URL in content block');
+      return null;
+    }
+    // SSRF protection: reject file:// and internal/private network URLs
+    const urlSafety = isSafeUrlSync(imgBlock.source.data);
+    if (!urlSafety.safe) {
+      logger.warn(`[AnthropicClient] Dropped unsafe image URL: ${urlSafety.reason}`);
       return null;
     }
     return {
@@ -812,14 +1090,13 @@ export class AnthropicClient implements LLMClient {
           messages: anthropicMessages as MessageParam[],
           tools: tools?.length ? tools : undefined,
           ...(thinking ? { thinking } : {}),
-        }
+        },
+        options?.signal ? { signal: options.signal } : undefined
       );
       logger.debug('Stream created successfully', undefined, 'AnthropicClient');
     } catch (streamError) {
       logger.error('Failed to create stream', streamError instanceof Error ? streamError : new Error(String(streamError)), undefined, 'AnthropicClient');
-      yield { type: 'error', data: streamError instanceof Error ? streamError.message : 'Failed to create stream' };
-      yield { type: 'done' };
-      return;
+      throw streamError;
     }
     logger.debug('Starting to read events', undefined, 'AnthropicClient');
 
@@ -827,7 +1104,6 @@ export class AnthropicClient implements LLMClient {
     let toolResultContent = '';
     let lastToolPreviewSignature = '';
     let textContentSinceLastTool = '';
-    let thinkingContent = '';  // Accumulates thinking content from MiniMax blocks
     let toolStartTimes = new Map<string, number>();
     let accumulatedUsage: TokenUsage | null = null;
     // For parsing MiniMax <think/> tags embedded in text
@@ -839,9 +1115,9 @@ export class AnthropicClient implements LLMClient {
 
     let eventCount = 0;
     try {
-      for await (const event of stream) {
+      for await (const event of withIdleTimeout(stream)) {
         eventCount++;
-        if (event.type === 'content_block_start' || event.type === 'content_block_delta' || event.type === 'content_block_stop' || event.type === 'message_delta') {
+        if (event.type === 'content_block_start' || event.type === 'content_block_delta' || event.type === 'content_block_stop' || event.type === 'message_delta' || event.type === 'message_start') {
           logger.debug(`[AnthropicClient] Event ${eventCount}: type=${event.type}`);
         }
       if (event.type === 'content_block_start') {
@@ -865,8 +1141,6 @@ export class AnthropicClient implements LLMClient {
           hasExtractedThinkContent = false;
         } else if (event.content_block.type === 'thinking') {
           hasReceivedExtendedThinking = true;
-          // MiniMax thinking block - accumulate thinking content
-          thinkingContent = '';
         }
       } else if (event.type === 'content_block_delta') {
         if (event.delta.type === 'text_delta') {
@@ -882,6 +1156,8 @@ export class AnthropicClient implements LLMClient {
             // Check if we're entering a think tag
             if (!isInThinkTag && thinkBuffer.includes('<think>')) {
               isInThinkTag = true;
+              // Reset extraction gate so subsequent think blocks are also extracted
+              hasExtractedThinkContent = false;
             }
 
             // Check if think tag is complete
@@ -929,6 +1205,9 @@ export class AnthropicClient implements LLMClient {
                 type: 'thinking',
                 data: textContentSinceLastTool,
               };
+              // Clear accumulated text to prevent the same content from being
+              // re-yielded as thinking or text in subsequent processing.
+              textContentSinceLastTool = '';
             }
             yield {
               type: 'text',
@@ -936,9 +1215,8 @@ export class AnthropicClient implements LLMClient {
             };
           }
         } else if (event.delta.type === 'thinking_delta') {
-          // MiniMax thinking delta - accumulate and yield incremental content
+          // MiniMax thinking delta - yield incremental content
           const thinkingDelta = extractAnthropicThinkingDelta(event.delta);
-          thinkingContent += thinkingDelta;
           yield {
             type: 'thinking',
             data: thinkingDelta,
@@ -1002,26 +1280,41 @@ export class AnthropicClient implements LLMClient {
           toolResultContent = '';
           lastToolPreviewSignature = '';
         }
-      } else if (event.type === 'message_delta') {
-        // Extract usage information from message_delta event
-        // Anthropic API includes cache_read_input_tokens and cache_creation_input_tokens in usage
-        const usage = event.usage as unknown as Record<string, number> | undefined;
-        if (usage && usage.input_tokens !== null && usage.output_tokens !== null) {
+      } else if (event.type === 'message_start') {
+        // Capture input/cache token counts from message_start (sent once
+        // at the beginning of the stream). These fields are NOT present
+        // in message_delta, so we must extract them here.
+        const startUsage = (event as unknown as { message?: { usage?: Record<string, number> } }).message?.usage;
+        if (startUsage) {
           accumulatedUsage = {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            // Include cache tokens if present (map Anthropic field names to our field names)
-            cache_hit_tokens: usage.cache_read_input_tokens,
-            cache_creation_tokens: usage.cache_creation_input_tokens,
+            input_tokens: startUsage.input_tokens ?? 0,
+            output_tokens: startUsage.output_tokens ?? 0,
+            cache_hit_tokens: (startUsage as Record<string, number>).cache_read_input_tokens,
+            cache_creation_tokens: (startUsage as Record<string, number>).cache_creation_input_tokens,
+          };
+        }
+      } else if (event.type === 'message_delta') {
+        // message_delta only carries cumulative output_tokens.
+        // Preserve input/cache tokens captured from message_start.
+        // Cast to TokenUsage | null to defeat TS's control-flow narrowing
+        // which otherwise collapses the variable to `never` here (the only
+        // non-null assignment lives in the mutually-exclusive message_start
+        // branch, so within a single iteration TS thinks it can only be null).
+        const prevUsage = accumulatedUsage as TokenUsage | null;
+        const deltaUsage = event.usage as unknown as Record<string, number> | undefined;
+        if (deltaUsage && deltaUsage.output_tokens !== undefined && deltaUsage.output_tokens !== null) {
+          accumulatedUsage = {
+            input_tokens: prevUsage?.input_tokens ?? 0,
+            output_tokens: deltaUsage.output_tokens,
+            cache_hit_tokens: prevUsage?.cache_hit_tokens,
+            cache_creation_tokens: prevUsage?.cache_creation_tokens,
           };
         }
       }
     }
     } catch (streamReadError) {
       logger.error('Error reading stream events', streamReadError instanceof Error ? streamReadError : new Error(String(streamReadError)), undefined, 'AnthropicClient');
-      yield { type: 'error', data: streamReadError instanceof Error ? streamReadError.message : 'Error reading stream' };
-      yield { type: 'done' };
-      return;
+      throw streamReadError;
     }
 
     logger.debug(`Stream ended, total events=${eventCount}`, undefined, 'AnthropicClient');

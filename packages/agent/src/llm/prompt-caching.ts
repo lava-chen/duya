@@ -284,7 +284,7 @@ export function applyCacheControl(
   }
 
   // Deep clone to avoid mutating original
-  const result = JSON.parse(JSON.stringify(messages)) as Array<Record<string, unknown>>
+  const result = structuredClone(messages) as Array<Record<string, unknown>>
   let breakpointsUsed = 0
 
   // 1. Apply to system message (if exists and is first)
@@ -317,7 +317,7 @@ export function applyCacheControl(
  * Useful when switching providers or disabling caching.
  */
 export function stripCacheControl(messages: unknown[]): unknown[] {
-  const result = JSON.parse(JSON.stringify(messages)) as Array<Record<string, unknown>>
+  const result = structuredClone(messages) as Array<Record<string, unknown>>
 
   for (const message of result) {
     // Remove top-level cache_control

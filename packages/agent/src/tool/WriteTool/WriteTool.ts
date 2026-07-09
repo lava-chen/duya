@@ -6,7 +6,7 @@
 
 import { writeFile, mkdir, access } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve, isAbsolute, dirname } from 'node:path';
+import { resolve, isAbsolute, dirname, relative } from 'node:path';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
 import type {
@@ -139,21 +139,21 @@ export function checkPathTraversal(filePath: string, workingDirectory?: string):
     normalizedPath = normalizedPath.toLowerCase();
     normalizedWorkingDir = normalizedWorkingDir.toLowerCase();
   }
-  // Ensure working directory ends with slash for proper prefix check
+  // Ensure working directory ends with a slash before the prefix check so
+  // "/app" does not falsely match "/application" as a safe prefix.
   const workingDirPrefix = normalizedWorkingDir.endsWith('/') ? normalizedWorkingDir : normalizedWorkingDir + '/';
   if (!normalizedPath.startsWith(workingDirPrefix) && normalizedPath !== normalizedWorkingDir) {
     return { safe: false, reason: 'Path traversal outside working directory' };
   }
 
-  const segments = resolvedPath.split(/[/\\]/);
-  let parentTraversalCount = 0;
-  for (const segment of segments) {
-    if (segment === '..') {
-      parentTraversalCount++;
-      if (parentTraversalCount > 10) {
-        return { safe: false, reason: 'Path traversal depth exceeds limit' };
-      }
-    }
+  // Secondary guard: path.relative() returns a string starting with ".."
+  // only when the target escapes the base, and an absolute-ish string on
+  // different roots. This is the authoritative escape check — the previous
+  // ".." depth scan ran on the already-resolved path, where resolve() had
+  // collapsed all ".." segments, making it dead code that never fired.
+  const rel = relative(resolvedWorkingDir, resolvedPath);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    return { safe: false, reason: 'Path traversal outside working directory' };
   }
 
   return { safe: true };

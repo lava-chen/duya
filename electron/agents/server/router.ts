@@ -113,10 +113,16 @@ function emitWikiChatDone(event: Record<string, unknown>): void {
     return;
   }
 
-  process.send({
-    type: 'wiki:chat_done',
-    payload: event,
-  });
+  try {
+    process.send({
+      type: 'wiki:chat_done',
+      payload: event,
+    });
+  } catch {
+    // H2: process.send can throw if the IPC channel is closed.
+    // Swallow — the wiki:chat_done notification is best-effort and must not
+    // block the SSE done event from being sent to the client.
+  }
 }
 
 async function handlePostChat(
@@ -136,12 +142,6 @@ async function handlePostChat(
     session = sessionManager.getSession(sessionId)!;
   }
 
-  if (session.state === SessionState.STREAMING || session.state === SessionState.COMPLETING) {
-    httpLogger.warn('Session busy, rejecting chat', { sessionId, state: session.state });
-    sendJson(res, 409, { error: `Session is busy: ${session.state}`.trim() });
-    return;
-  }
-
   // Allow CRASHED and ERROR sessions to recover on new chat
   if (session.state === SessionState.CRASHED || session.state === SessionState.ERROR) {
     httpLogger.info('Resetting session state for new chat', { sessionId, from: session.state });
@@ -152,13 +152,43 @@ async function handlePostChat(
     }
   }
 
+  // M4: Use transitionState(STREAMING) as a concurrency lock. If this throws,
+  // another concurrent request already claimed the session — return 409.
+  try {
+    sessionManager.transitionState(sessionId, SessionState.STREAMING);
+  } catch (err) {
+    httpLogger.warn('Session busy, rejecting chat', {
+      sessionId,
+      state: session.state,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    sendJson(res, 409, { error: `Session is busy: ${session.state}`.trim() });
+    return;
+  }
+
   // 50MB default limit for chat payloads (supports file attachments with base64 data)
   const MAX_CHAT_PAYLOAD_SIZE = parseInt(process.env.DUYA_MAX_CHAT_PAYLOAD_SIZE || '52428800', 10);
+
+  // M4: Helper to release the STREAMING lock on early-return error paths.
+  // After M4, the session is in STREAMING state before the request body is
+  // read. If any check rejects the request, we must revert to IDLE so the
+  // session is not permanently stuck.
+  const revertStreamingLock = (): void => {
+    try {
+      const s = sessionManager.getSession(sessionId);
+      if (s && s.state === SessionState.STREAMING) {
+        sessionManager.transitionState(sessionId, SessionState.IDLE);
+      }
+    } catch {
+      // State may have already changed; ignore
+    }
+  };
 
   let body = '';
   req.on('data', (chunk: Buffer) => {
     body += chunk.toString();
     if (body.length > MAX_CHAT_PAYLOAD_SIZE) {
+      revertStreamingLock();
       sendJson(res, 413, { error: 'Payload too large' });
       req.destroy();
     }
@@ -169,12 +199,14 @@ async function handlePostChat(
     try {
       parsed = body ? JSON.parse(body) : {};
     } catch {
+      revertStreamingLock();
       sendJson(res, 400, { error: 'Invalid JSON body' });
       return;
     }
 
-    // DEBUG: log file attachments received in POST body
-    console.log('[agent-server] chat request body parsed:', {
+    // M7: Use structured logger instead of console.log
+    httpLogger.debug('Chat request body parsed', {
+      sessionId,
       hasPrompt: !!parsed.prompt,
       optionsKeys: parsed.options ? Object.keys(parsed.options) : [],
       agentProfileId: parsed.options?.agentProfileId,
@@ -195,6 +227,7 @@ async function handlePostChat(
       const dbSession = await deps.dbRequest('session:get', { id: sessionId });
       if (!dbSession) {
         httpLogger.warn('Chat rejected: session not found in DB', { sessionId });
+        revertStreamingLock();
         sendJson(res, 404, { error: `Session not found: ${sessionId}` });
         return;
       }
@@ -206,6 +239,7 @@ async function handlePostChat(
       const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.95');
       if (usedRatio > MEMORY_THRESHOLD) {
         logger.warn('System memory usage high, rejecting chat', { usedRatio, totalMem, freeMem, sessionId });
+        revertStreamingLock();
         res.writeHead(503, 'Service Unavailable', {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*',
@@ -218,6 +252,7 @@ async function handlePostChat(
       const MAX_CONCURRENT_WORKERS = 16;
       if (workerManager.workerCount >= MAX_CONCURRENT_WORKERS) {
         logger.warn('Max concurrent workers reached, rejecting chat', { current: workerManager.workerCount, max: MAX_CONCURRENT_WORKERS, sessionId });
+        revertStreamingLock();
         res.writeHead(503, 'Service Unavailable', {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*',
@@ -229,14 +264,16 @@ async function handlePostChat(
 
       const child = workerManager.spawnWorker(sessionId);
       const workerPid = child.pid;
-      console.log('[agent-server] Worker spawned', { sessionId, pid: workerPid });
+      // M7: Use structured logger
+      httpLogger.info('Worker spawned', { sessionId, pid: workerPid });
 
       // Log ALL worker stdout for debugging - capture everything
       child.stdout?.setEncoding('utf8');
       const stdoutChunks: string[] = [];
       child.stdout?.on('data', (data: string) => {
         stdoutChunks.push(data.toString().substring(0, 200));
-        console.log('[agent-server] Worker stdout:', data.toString().substring(0, 300));
+        // M7: Route worker stdout to debug logger instead of console
+        httpLogger.debug('Worker stdout', { sessionId, preview: data.toString().substring(0, 300) });
       });
 
       child.on('message', (msg: Record<string, unknown>) => {
@@ -255,6 +292,9 @@ async function handlePostChat(
       child.on('error', (err) => {
         logger.error('Worker spawn error', err, { sessionId });
         if (!res.headersSent) {
+          // M4: Release the STREAMING lock before sending the error response.
+          // Once SSE takes over (headersSent), the SSE handler manages state.
+          revertStreamingLock();
           sendJson(res, 500, { error: 'Failed to spawn worker' });
         }
       });
@@ -361,7 +401,8 @@ async function handlePostChat(
       };
 
       // Send init first if provider config is provided
-      console.log('[agent-server] Sending init command to worker', { sessionId, hasProviderConfig: !!providerConfig });
+      // M7: Use structured logger
+      httpLogger.debug('Sending init command to worker', { sessionId, hasProviderConfig: !!providerConfig });
       workerManager.sendCommand(sessionId, {
         type: 'init',
         sessionId,
@@ -376,16 +417,17 @@ async function handlePostChat(
       });
 
       try {
-        console.log('[agent-server] Waiting for worker ready...', { sessionId });
+        httpLogger.debug('Waiting for worker ready...', { sessionId });
         await waitForReady();
-        console.log('[agent-server] Worker ready signal received', { sessionId });
+        httpLogger.info('Worker ready signal received', { sessionId });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error('[agent-server] Worker ready timeout', msg, { sessionId, stdoutPreview: stdoutChunks.slice(-10) });
+        // M7: console.error removed — logger.error below covers this
         logger.error('Worker ready timeout', err instanceof Error ? err : new Error(msg), {
           sessionId,
           stdoutPreview: stdoutChunks.slice(-10),
         });
+        revertStreamingLock();
         sendJson(res, 500, { error: 'Worker initialization timeout' });
         return;
       }
@@ -411,11 +453,20 @@ async function handlePostChat(
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        revertStreamingLock();
         sendJson(res, 500, { error: message });
         return;
       }
-    } catch {
-      // Fallback catch for req.on('end') try block - already handled above
+    } catch (err) {
+      // C1: Top-level catch must not swallow errors silently — surface a 500
+      // so the client sees something went wrong instead of hanging forever.
+      revertStreamingLock();
+      if (!res.headersSent) {
+        const message = err instanceof Error ? err.message : String(err);
+        sendJson(res, 500, { error: message });
+      } else {
+        httpLogger.error('Unhandled error after headers sent', err instanceof Error ? err : new Error(String(err)), { sessionId });
+      }
     }
 
   }); // close req.on('end')
@@ -428,7 +479,7 @@ function handlePostChatSSE(
   child: ChildProcess,
   deps: RouterDeps,
 ): void {
-  const { sessionManager, checkpointBatcher, logger, httpLogger } = deps;
+  const { sessionManager, workerManager, checkpointBatcher, logger, httpLogger } = deps;
 
 
   res.writeHead(200, {
@@ -444,23 +495,38 @@ function handlePostChatSSE(
   let seqNum = 0;
   let doneReceived = false;
   let buffer = '';
+  // M5: multiLineBuffer promoted to outer scope so multi-line JSON fragments
+  // spanning multiple 'data' events are accumulated correctly.
+  let multiLineBuffer = '';
   // Accumulate checkpoint messages in memory, write to DB only on done/error
   let pendingMessages: unknown[] = [];
 
+  // H8: onData is referenced inside req.on('close') — declared as a let
+  // variable so the close handler can remove it. Assigned below.
+  let onData: ((data: Buffer) => void) | null = null;
+
   req.on('close', () => {
-    // Don't set doneReceived=true here - let the worker complete and we'll flush messages
-    // The client might have disconnected but the server can still try to send remaining data
+    // H8: If the client disconnects before done/error was received, interrupt
+    // the worker so it doesn't keep running uselessly, and tear down the
+    // stdout listener so we don't write to a dead response.
+    if (!doneReceived && !res.writableEnded) {
+      httpLogger.info('SSE client disconnected before completion, interrupting worker', { sessionId });
+      if (onData && child.stdout) {
+        child.stdout.removeListener('data', onData);
+      }
+      workerManager.interruptWorker(sessionId);
+    }
   });
 
   // Read events from worker stdout (JSON lines via sendEvent)
-  const onData = (data: Buffer): void => {
+  onData = (data: Buffer): void => {
     if (doneReceived) return;
 
     buffer += data.toString();
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
 
-    let multiLineBuffer = '';
+    // M5: multiLineBuffer is now at outer scope, not re-declared here
 
     for (const rawLine of lines) {
       let line = rawLine.trim();
@@ -616,8 +682,17 @@ function handlePostChatSSE(
                 generation: 0,
               },
             };
-            process.send(flushMsg);
-            pendingMessages = [];
+            try {
+              process.send(flushMsg);
+              pendingMessages = [];
+            } catch (err) {
+              // H2: process.send can throw if the IPC channel is closed.
+              // Keep pendingMessages in memory so a later flush can retry.
+              logger.error('Failed to flush pending messages on done', err instanceof Error ? err : new Error(String(err)), {
+                sessionId,
+                pendingCount: pendingMessages.length,
+              });
+            }
           }
           checkpointBatcher.flush();
           try {
@@ -641,8 +716,16 @@ function handlePostChatSSE(
           }
           httpLogger.info('Chat flow: done', { sessionId, seqNum });
           res.write(`event: done\nid: ${seqNum}\ndata: ${JSON.stringify(sseEvent)}\n\n`);
-          // Don't set doneReceived=true here - title_generated event may still come after done
-          // We close the connection when title_generated is received (or on error/close)
+          // H7: Don't set doneReceived=true here — title_generated event may
+          // still come after done. But if title_generated never arrives within
+          // 5s, force-close the SSE connection so the client doesn't hang.
+          setTimeout(() => {
+            if (!doneReceived && !res.writableEnded) {
+              httpLogger.warn('SSE: title_generated not received within 5s after done, closing', { sessionId });
+              doneReceived = true;
+              res.end();
+            }
+          }, 5000);
           return;
         }
 
@@ -652,7 +735,8 @@ function handlePostChatSSE(
           sessionManager.updateLastEventId(sessionId, seqNum);
           sessionManager.recordEvent(sessionId, 'title_generated', sseEvent, seqNum);
           res.write(`event: title_generated\nid: ${seqNum}\ndata: ${JSON.stringify(sseEvent)}\n\n`);
-          console.log('[agent-server] Sent title_generated event, closing SSE');
+          // M7: Use structured logger
+          httpLogger.info('Sent title_generated event, closing SSE', { sessionId });
           doneReceived = true;
           res.end();
           return;
@@ -691,8 +775,16 @@ function handlePostChatSSE(
                 generation: 0,
               },
             };
-            process.send(flushMsg);
-            pendingMessages = [];
+            try {
+              process.send(flushMsg);
+              pendingMessages = [];
+            } catch (err) {
+              // H2: process.send can throw if the IPC channel is closed.
+              logger.error('Failed to flush pending messages on error', err instanceof Error ? err : new Error(String(err)), {
+                sessionId,
+                pendingCount: pendingMessages.length,
+              });
+            }
           }
           checkpointBatcher.flush();
           seqNum++;
@@ -718,7 +810,8 @@ function handlePostChatSSE(
     }
   };
 
-  child.stdout!.on('data', onData);
+  // onData is assigned above; non-null assertion is safe here.
+  child.stdout!.on('data', onData!);
 
   child.on('error', (err: Error) => {
     sessionManager.failSession(sessionId, err.message, true);
@@ -731,7 +824,9 @@ function handlePostChatSSE(
   });
 
   child.on('exit', () => {
-    child.stdout?.removeListener('data', onData);
+    if (onData) {
+      child.stdout?.removeListener('data', onData);
+    }
     if (!doneReceived && res.writable) {
       sessionManager.failSession(sessionId, 'Worker exited before completing the chat', true);
       doneReceived = true;
@@ -753,6 +848,8 @@ function handlePostChatNonSSE(
   let allEvents: unknown[] = [];
   let doneReceived = false;
   let nonSseBuffer = '';
+  // M5: multiLineBuffer promoted to outer scope
+  let multiLineBuffer = '';
 
   child.stdout!.on('data', (data: Buffer) => {
     if (doneReceived) return;
@@ -760,8 +857,6 @@ function handlePostChatNonSSE(
     nonSseBuffer += data.toString();
     const lines = nonSseBuffer.split('\n');
     nonSseBuffer = lines.pop() || '';
-
-    let multiLineBuffer = '';
 
     for (const rawLine of lines) {
       if (doneReceived) return;
@@ -1067,8 +1162,8 @@ async function lazySpawnWorkerForCompact(
   child.stdout?.setEncoding('utf8');
   child.stdout?.on('data', (data: string) => {
     const text = data.toString();
-    // Forward raw lines for debugging (same as handlePostChat's stdoutChunks).
-    console.log('[agent-server] Worker stdout (compact-lazy):', text.substring(0, 300));
+    // M7: Route worker stdout to debug logger instead of console
+    httpLogger.debug('Worker stdout (compact-lazy)', { sessionId, preview: text.substring(0, 300) });
   });
 
   child.on('message', (msg: Record<string, unknown>) => {
@@ -1180,8 +1275,16 @@ async function handlePostCompact(
     httpLogger.info('Compact: autocreated session', { sessionId });
   }
 
-  if (session.state === SessionState.STREAMING || session.state === SessionState.COMPLETING) {
-    httpLogger.warn('Session busy, rejecting compact', { sessionId, state: session.state });
+  // M6: Use transitionState(COMPLETING) as a concurrency lock. If this throws,
+  // another concurrent request already claimed the session — return 409.
+  try {
+    sessionManager.transitionState(sessionId, SessionState.COMPLETING);
+  } catch (err) {
+    httpLogger.warn('Session busy, rejecting compact', {
+      sessionId,
+      state: session.state,
+      error: err instanceof Error ? err.message : String(err),
+    });
     sendJson(res, 409, { error: `Session is busy: ${session.state}` });
     return;
   }
@@ -1193,7 +1296,12 @@ async function handlePostCompact(
     httpLogger.info('Compact: no live worker, attempting lazy spawn', { sessionId });
     const result = await lazySpawnWorkerForCompact(sessionId, deps, workerDbRequests, res);
     if (!result.ok) {
-      // helper already wrote the error response
+      // helper already wrote the error response — revert COMPLETING lock to IDLE
+      try {
+        sessionManager.transitionState(sessionId, SessionState.IDLE);
+      } catch {
+        // State may have already changed; ignore
+      }
       return;
     }
   }
@@ -1215,6 +1323,12 @@ async function handlePostCompact(
     httpLogger.error('Compact: worker missing after lazy-spawn', undefined, { sessionId });
     res.write(`event: compact:error\ndata: ${JSON.stringify({ type: 'compact:error', sessionId, message: 'Worker became unavailable' })}\n\n`);
     res.end();
+    // M6: Revert COMPLETING lock to IDLE so the session can accept future requests
+    try {
+      sessionManager.transitionState(sessionId, SessionState.IDLE);
+    } catch {
+      // State may have already changed; ignore
+    }
     return;
   }
 
@@ -1224,14 +1338,14 @@ async function handlePostCompact(
   // Listen for compact events from worker stdout
   let compactDone = false;
   let compactBuffer = '';
+  // M5: multiLineBuffer promoted to outer scope
+  let multiLineBuffer = '';
   const onData = (data: Buffer): void => {
     if (compactDone) return;
 
     compactBuffer += data.toString();
     const lines = compactBuffer.split('\n');
     compactBuffer = lines.pop() || '';
-
-    let multiLineBuffer = '';
 
     for (const rawLine of lines) {
       if (compactDone) return;
@@ -1265,6 +1379,12 @@ async function handlePostCompact(
           compactDone = true;
           res.end();
           child.stdout?.removeListener('data', onData);
+          // M6: Release the COMPLETING lock
+          try {
+            sessionManager.transitionState(sessionId, SessionState.IDLE);
+          } catch {
+            // State may have already changed
+          }
           return;
         }
 
@@ -1274,6 +1394,12 @@ async function handlePostCompact(
           compactDone = true;
           res.end();
           child.stdout?.removeListener('data', onData);
+          // M6: Release the COMPLETING lock
+          try {
+            sessionManager.transitionState(sessionId, SessionState.IDLE);
+          } catch {
+            // State may have already changed
+          }
           return;
         }
       } catch {
@@ -1290,6 +1416,12 @@ async function handlePostCompact(
       res.write(`event: compact:error\ndata: ${JSON.stringify({ type: 'compact:error', sessionId, message: 'Worker exited' })}\n\n`);
       compactDone = true;
       res.end();
+      // M6: Release the COMPLETING lock
+      try {
+        sessionManager.transitionState(sessionId, SessionState.IDLE);
+      } catch {
+        // State may have already changed
+      }
     }
   });
 
@@ -1371,6 +1503,8 @@ function handleGetChat(
   let seqNum = session.lastEventId;
   let doneReceived = false;
   let reconnectBuffer = '';
+  // M5: multiLineBuffer promoted to outer scope
+  let multiLineBuffer = '';
 
   const onData = (data: Buffer) => {
     if (doneReceived) return;
@@ -1378,8 +1512,6 @@ function handleGetChat(
     reconnectBuffer += data.toString();
     const lines = reconnectBuffer.split('\n');
     reconnectBuffer = lines.pop() || '';
-
-    let multiLineBuffer = '';
 
     for (const rawLine of lines) {
       if (doneReceived) return;

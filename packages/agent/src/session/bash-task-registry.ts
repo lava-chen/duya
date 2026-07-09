@@ -69,6 +69,9 @@ export class BashTaskRegistry {
 
     this.tasks.set(taskId, task);
     this.notifyListeners(taskId, task);
+    // Terminal tasks are kept briefly so the UI/agent can read the final
+    // status, then evicted to bound memory growth of the tasks Map.
+    this.scheduleCleanup(taskId);
   }
 
   markKilled(taskId: string, reason: string): void {
@@ -81,6 +84,19 @@ export class BashTaskRegistry {
 
     this.tasks.set(taskId, task);
     this.notifyListeners(taskId, task);
+    this.scheduleCleanup(taskId);
+  }
+
+  /**
+   * Auto-remove a terminal task after a delay. Keeps the entry around long
+   * enough for late `task_output` queries, then frees the slot so the
+   * tasks Map does not grow unbounded over a long session. removeTask is
+   * idempotent, so a manual removal before the timer fires is safe.
+   */
+  private scheduleCleanup(taskId: string): void {
+    setTimeout(() => {
+      this.removeTask(taskId);
+    }, 5 * 60 * 1000);
   }
 
   getTask(taskId: string): BashBackgroundTask | undefined {

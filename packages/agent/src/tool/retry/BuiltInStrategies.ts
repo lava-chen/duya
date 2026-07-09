@@ -46,8 +46,10 @@ export const OFFICE_FALLBACK: RetryStrategy = {
  * Network tool failure fallback strategy
  *
  * Maps network-dependent tools to local alternatives:
- * - web_search → grep
  * - web_fetch → read
+ *
+ * (web_search → grep was removed: grep scans the local filesystem, which is
+ * semantically unrelated to a web search.)
  *
  * Usage:
  * ```typescript
@@ -82,6 +84,11 @@ export const NETWORK_FALLBACK: RetryStrategy = {
 export const TIMEOUT_RETRY: RetryStrategy = {
   maxAttempts: 2,
   backoffMs: 2000,
+  // Timeout retries must not re-run non-idempotent tools (write/edit/bash/...):
+  // a timed-out write may have already persisted, and re-running it would
+  // double-apply side effects. The executor skips RETRY for such tools and
+  // falls through to FALLBACK/ABORT instead.
+  idempotentOnly: true,
   shouldRetry: (ctx: ToolFailureContext) => {
     return (
       ctx.attemptNumber < 2 &&
@@ -98,9 +105,8 @@ export const TIMEOUT_RETRY: RetryStrategy = {
 export const PERMISSION_ERROR: RetryStrategy = {
   maxAttempts: 1,
   backoffMs: 0,
-  shouldRetry: (ctx: ToolFailureContext) => {
-    return !ERROR_PATTERNS.PERMISSION_DENIED.test(ctx.error.message)
-  },
+  // fast-fail on permission errors — retrying will not grant new permissions
+  shouldRetry: () => false,
 }
 
 /**

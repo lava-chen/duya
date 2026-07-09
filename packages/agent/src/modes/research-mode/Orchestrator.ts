@@ -234,9 +234,10 @@ export class Orchestrator {
   private activitySeq: number = 0;
   private stepMap: Map<string, string> = new Map();
 
-  private llmComplete: (prompt: string, systemPrompt?: string) => Promise<string>;
-  private llmStreamFn?: (prompt: string, systemPrompt?: string) => AsyncIterable<string>;
-  private llmAgentCall?: (input: AgentCallInput) => Promise<{ content: string; toolCalls: ToolCallResult[] }>;
+  // C1: callback signatures now accept optional AbortSignal for abort propagation
+  private llmComplete: (prompt: string, systemPrompt?: string, signal?: AbortSignal) => Promise<string>;
+  private llmStreamFn?: (prompt: string, systemPrompt?: string, signal?: AbortSignal) => AsyncIterable<string>;
+  private llmAgentCall?: (input: AgentCallInput, signal?: AbortSignal) => Promise<{ content: string; toolCalls: ToolCallResult[] }>;
   private toolExecute: (name: string, input: Record<string, unknown>) => Promise<ToolResult>;
   private toolExecuteConcurrent: (
     calls: Array<{ name: string; input: Record<string, unknown> }>
@@ -246,6 +247,10 @@ export class Orchestrator {
   private persistState?: (contextJSON: string) => Promise<void>;
   private cancelled = false;
   private readonly localAbortController = new AbortController();
+
+  // M1: consecutive exploration failure counter — aborts research past threshold
+  private consecutiveExploreErrors = 0;
+  private static readonly MAX_CONSECUTIVE_EXPLORE_ERRORS = 3;
 
   constructor(
     initialQuery: string,
@@ -399,7 +404,7 @@ export class Orchestrator {
       isLoopEvaluation: false,
     });
 
-    const response = await this.llmComplete(prompt);
+    const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
     const parsed = continueResearch.parseResponse(response);
     const newQuestions: ResearchQuestion[] = [];
 
@@ -611,7 +616,7 @@ export class Orchestrator {
     const prompt = classifyQuery.buildPrompt({ query: this.originalQuery });
 
     try {
-      const response = await this.llmComplete(prompt);
+      const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
       const result = classifyQuery.parseResponse(response);
       const complexity: QueryComplexity = result.complexity;
       const cfg = COMPLEXITY_CONFIG[complexity];
@@ -634,7 +639,11 @@ export class Orchestrator {
         type: 'complexity_classified',
         classification: this.currentClassification,
       });
-    } catch {
+    } catch (err) {
+      // M2: re-throw cancellation instead of silently falling back
+      if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+        throw err;
+      }
       this.currentClassification = {
         complexity: 'unknown',
         maxIterations: this.config.maxIterations,
@@ -673,10 +682,14 @@ export class Orchestrator {
     const prompt = generateClarification.buildPrompt({ query: this.originalQuery });
 
     try {
-      const response = await this.llmComplete(prompt);
+      const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
       const result = generateClarification.parseResponse(response);
       return result.questions;
-    } catch {
+    } catch (err) {
+      // M2: re-throw cancellation instead of silently returning empty
+      if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+        throw err;
+      }
       // fall through
     }
     return [];
@@ -708,13 +721,17 @@ export class Orchestrator {
     });
 
     try {
-      const response = await this.llmComplete(prompt);
+      const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
       const parsed = generatePlan.parseResponse(response);
 
       if (parsed && typeof parsed === 'object') {
         return this.parseResearchPlan(parsed as unknown as Record<string, unknown>);
       }
-    } catch {
+    } catch (err) {
+      // M2: re-throw cancellation instead of silently returning null
+      if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+        throw err;
+      }
       // fall through
     }
     return null;
@@ -1246,6 +1263,7 @@ export class Orchestrator {
       this.emit({
         type: 'iteration_complete',
         iteration: this.currentIteration,
+        maxIterations: maxIter,
         findingsCount: findingCount,
         coverage: this.context.calculateQualityCoverage(),
         qualityReport: updatedReport,
@@ -1374,7 +1392,7 @@ export class Orchestrator {
         tools: BROWSER_TOOLS,
         maxToolCalls: this.config.maxToolCallsPerIteration,
         toolExecute: this.toolExecute,
-      });
+      }, this.localAbortController.signal);
       this.throwIfCancelled();
 
       // Extract structured findings from agent's JSON response
@@ -1502,12 +1520,38 @@ export class Orchestrator {
             hu.verdict === 'refuted' ? 'high' : 'medium';
         }
       }
+
+      // M1: reset consecutive error counter on successful exploration
+      this.consecutiveExploreErrors = 0;
     } catch (err) {
       if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
         throw err;
       }
+      // M1: track consecutive failures — abort research past threshold
+      this.consecutiveExploreErrors++;
       const message = err instanceof Error ? err.message : String(err);
       await this._logActivity('error', '搜索过程遇到问题', message);
+
+      if (this.consecutiveExploreErrors >= Orchestrator.MAX_CONSECUTIVE_EXPLORE_ERRORS) {
+        // Fatal: too many consecutive failures, abort the entire research
+        this.emit({
+          type: 'research_warning',
+          message: `Research aborted after ${this.consecutiveExploreErrors} consecutive exploration failures. Last error: ${message}`,
+          consecutiveErrors: this.consecutiveExploreErrors,
+          recoverable: false,
+        });
+        throw new Error(
+          `Research aborted: ${this.consecutiveExploreErrors} consecutive exploration failures (last: ${message})`
+        );
+      }
+
+      // Recoverable: warn the frontend and continue to next iteration
+      this.emit({
+        type: 'research_warning',
+        message: `Exploration failed (${this.consecutiveExploreErrors}/${Orchestrator.MAX_CONSECUTIVE_EXPLORE_ERRORS} consecutive): ${message}`,
+        consecutiveErrors: this.consecutiveExploreErrors,
+        recoverable: true,
+      });
       this.emit({ type: 'error', message: `Exploration failed: ${message}` });
     }
 
@@ -1696,7 +1740,7 @@ export class Orchestrator {
           contentExcerpt: truncated,
         });
 
-        const response = await this.llmComplete(prompt);
+        const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
         const parsed = sourceCheck.parseResponse(response);
 
         const finding: ResearchFinding = {
@@ -1761,7 +1805,7 @@ export class Orchestrator {
           contextText,
         });
 
-        const response = await this.llmComplete(prompt);
+        const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
         const parsed = compare.parseResponse(response);
 
         const cmpId = `cmp_${Date.now()}`;
@@ -1849,9 +1893,13 @@ export class Orchestrator {
     });
 
     try {
-      const response = await this.llmComplete(prompt);
+      const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
       return selectActions.parseResponse(response, questions, this.config.concurrencyLimit);
-    } catch {
+    } catch (err) {
+      // M2: re-throw cancellation instead of silently falling through
+      if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+        throw err;
+      }
       // fall through
     }
 
@@ -1880,9 +1928,13 @@ export class Orchestrator {
     });
 
     try {
-      const response = await this.llmComplete(prompt);
+      const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
       return extractFindings.parseResponse(response, strategies, toolName, iteration);
-    } catch {
+    } catch (err) {
+      // M2: re-throw cancellation instead of silently returning empty
+      if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+        throw err;
+      }
       // fall through
     }
 
@@ -1930,7 +1982,7 @@ export class Orchestrator {
     });
 
     try {
-      const response = await this.llmComplete(prompt);
+      const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
       const parsed = continueResearch.parseResponse(response);
 
       this.researchState.questionCoverage = parsed.updatedCoverage.map((uc) => ({
@@ -1982,7 +2034,11 @@ export class Orchestrator {
           });
         }
       }
-    } catch {
+    } catch (err) {
+      // M2: re-throw cancellation instead of silently swallowing
+      if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+        throw err;
+      }
       // LLM evaluation is optional, silent failure is acceptable
     }
   }
@@ -2015,7 +2071,7 @@ export class Orchestrator {
     });
 
     try {
-      const response = await this.llmComplete(prompt);
+      const response = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
       const parsed = replan.parseResponse(response);
 
       const deltaType: PlanDeltaType = parsed.deltaType;
@@ -2146,7 +2202,11 @@ export class Orchestrator {
         goalChange,
       };
       this.emit({ type: 'plan_delta', data: delta });
-    } catch {
+    } catch (err) {
+      // M2: re-throw cancellation instead of silently swallowing
+      if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+        throw err;
+      }
       // replan is optional, silent failure is acceptable
     }
   }
@@ -2216,21 +2276,28 @@ export class Orchestrator {
         for await (const delta of this.llmStreamFn(
           prompt,
           'You are the synthesis module of a deep research agent. Write using only the collected findings. Do not introduce unsupported facts.',
+          this.localAbortController.signal,
         )) {
           this.throwIfCancelled();
           reportContent += delta;
           this.emit({ type: 'synthesis_chunk', delta, total: total + delta.length });
           total += delta.length;
         }
-      } catch {
+      } catch (err) {
+        // M2: re-throw cancellation, don't attempt fallback on abort
+        if (isResearchCancelledError(err) || this.cancelled || this.localAbortController.signal.aborted) {
+          throw err;
+        }
         this.throwIfCancelled();
-        const fallback = await this.llmComplete(prompt);
+        const fallback = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
+        this.throwIfCancelled();
         reportContent = fallback;
         this.emit({ type: 'synthesis_chunk', delta: fallback, total: fallback.length });
       }
     } else {
       this.throwIfCancelled();
-      const report = await this.llmComplete(prompt);
+      const report = await this.llmComplete(prompt, undefined, this.localAbortController.signal);
+      this.throwIfCancelled();
       reportContent = report;
       this.emit({ type: 'synthesis_chunk', delta: report, total: report.length });
     }

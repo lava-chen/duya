@@ -59,6 +59,7 @@ export class PortClient {
   private handlers = new Map<string, Set<(payload: unknown) => void>>();
   private stateChangeHandlers = new Set<(state: ConnectionState) => void>();
   private errorHandlers = new Set<(error: { code: string; message?: string }) => void>();
+  private reconnectHandlers = new Set<() => void>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastActivity = 0;
   private messageHandler: ((data: PortMessage) => void) | null = null;
@@ -186,7 +187,14 @@ export class PortClient {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectAttempts++;
       this.isReconnecting = false;
-      this.emitError({ code: 'RECONNECTING' });
+      // H3: Notify upper layer to re-establish the connection
+      this.emitReconnect();
+      // If upper layer did not re-establish connection, schedule next attempt
+      if (this.connectionState !== 'connected' && this.reconnectAttempts < this.config.maxReconnectAttempts) {
+        this.handleDisconnect();
+      } else if (this.connectionState !== 'connected') {
+        this.setConnectionState('disconnected');
+      }
     }, delay);
   }
 
@@ -337,6 +345,18 @@ export class PortClient {
     };
   }
 
+  /**
+   * Register a handler for reconnect requests.
+   * Called when the connection drops and the upper layer should re-establish it
+   * (e.g., re-request a MessagePort from the parent process).
+   */
+  onReconnect(handler: () => void): () => void {
+    this.reconnectHandlers.add(handler);
+    return () => {
+      this.reconnectHandlers.delete(handler);
+    };
+  }
+
   private setConnectionState(state: ConnectionState): void {
     this.connectionState = state;
     for (const handler of this.stateChangeHandlers) {
@@ -354,6 +374,16 @@ export class PortClient {
         handler(error);
       } catch (err) {
         console.error(`[PortClient:${this.portName}] Error handler error:`, err);
+      }
+    }
+  }
+
+  private emitReconnect(): void {
+    for (const handler of this.reconnectHandlers) {
+      try {
+        handler();
+      } catch (err) {
+        console.error(`[PortClient:${this.portName}] Reconnect handler error:`, err);
       }
     }
   }
@@ -384,6 +414,7 @@ export class PortClient {
     this.handlers.clear();
     this.stateChangeHandlers.clear();
     this.errorHandlers.clear();
+    this.reconnectHandlers.clear();
     this.setConnectionState('disconnected');
   }
 

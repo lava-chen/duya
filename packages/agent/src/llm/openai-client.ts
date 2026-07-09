@@ -54,6 +54,29 @@ function stripCDNUrlsFromText(text: string): string {
 }
 
 /**
+ * Check if a buffer could be the start of a think/thinking/thought tag.
+ * Used to avoid prematurely yielding text that might be a partial tag
+ * split across stream chunks.
+ *
+ * Returns true when:
+ * - The buffer starts with '<' AND
+ * - The buffer is a prefix of a tag name (e.g. "<th" is a prefix of "<think"), OR
+ * - The buffer starts with a full tag name but has no closing '>' yet (e.g. "<thinking foo")
+ */
+function couldBeThinkTagPrefix(buffer: string): boolean {
+  if (!buffer.startsWith('<')) return false;
+  const lower = buffer.toLowerCase();
+  const tagNames = ['<think', '<thinking', '<thought'];
+  for (const tag of tagNames) {
+    // Buffer is a prefix of the tag name (e.g., "<th" is prefix of "<think")
+    if (tag.startsWith(lower)) return true;
+    // Buffer starts with the full tag name but no closing > yet
+    if (lower.startsWith(tag) && !lower.includes('>')) return true;
+  }
+  return false;
+}
+
+/**
  * Scan OpenAI content parts for MiniMax CDN image URLs and strip them out.
  * The CDN URLs are MiniMax's internal representation of user-uploaded images.
  * Since we store base64 data in message_attachments and rehydrate at load time,
@@ -109,10 +132,16 @@ function dropPendingToolCalls(
     if (keptToolCalls.length > 0) {
       assistantMessage.tool_calls = keptToolCalls;
     } else {
+      const droppedCount = toolCalls.length;
       delete assistantMessage.tool_calls;
       if (!hasAssistantContent(assistantMessage)) {
         messages.splice(i, 1);
       }
+      logger.warn(
+        `[OpenAIClient] Dropped ${droppedCount} pending tool call(s) without matching tool results`,
+        { toolCallIds: toolCalls.map(tc => tc.id) },
+        'OpenAIClient',
+      );
     }
     pendingToolCallIds.clear();
     return;
@@ -222,7 +251,7 @@ function toOpenAIMessages(messages: Message[], includeToolCalls: boolean = true)
       }
       const assistantMsg: OpenAI.Chat.ChatCompletionAssistantMessageParam = {
         role: 'assistant',
-        content: textContent || undefined,
+        content: textContent || null,
       };
       if (toolCalls) {
         assistantMsg.tool_calls = toolCalls;
@@ -436,6 +465,7 @@ export class OpenAIClient implements LLMClient {
       tools?: Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>;
       maxTokens?: number;
       temperature?: number;
+      signal?: AbortSignal;
     }
   ): AsyncGenerator<SSEEvent, void, unknown> {
     logger.info(`[OpenAIClient] doStreamChat starting, model=${this.model}, baseURL=${this.baseURL}`, undefined, 'OpenAIClient');
@@ -452,7 +482,10 @@ export class OpenAIClient implements LLMClient {
 
     logger.info(`[OpenAIClient] Request params: ${JSON.stringify({ ...requestParams, messages: `[${requestParams.messages.length} messages]` })}`, undefined, 'OpenAIClient');
 
-    const stream = await this.client.chat.completions.create(requestParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
+    const stream = await this.client.chat.completions.create(
+      requestParams,
+      options?.signal ? { signal: options.signal } : undefined,
+    ) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
 
     // Track multiple tool calls by index (OpenAI streams tool_calls with index)
     const toolCallsMap = new Map<number, { id: string; name: string; arguments: string; started: boolean; previewSignature: string }>();
@@ -560,13 +593,23 @@ export class OpenAIClient implements LLMClient {
           thinkBuffer = '';
           isInThinkTag = false;
         } else if (!isInThinkTag) {
-          // No think tag, yield as normal text immediately
-          yield {
-            type: 'text',
-            data: textDelta,
-          };
-          // Clear buffer since we're yielding immediately
-          thinkBuffer = '';
+          // Check if buffer could be a partial think tag (starts with '<').
+          // If so, don't yield yet — wait for more data to confirm.
+          // Cap at 100 chars to avoid indefinite buffering on non-tag content
+          // that starts with '<' followed by tag-like characters.
+          if (couldBeThinkTagPrefix(thinkBuffer) && thinkBuffer.length < 100) {
+            // Potential partial think tag — keep buffering, don't yield yet.
+            // Will be resolved when more data arrives (either the tag completes
+            // and is detected above, or it's confirmed not to be a tag and
+            // flushed below).
+          } else {
+            // Not a think tag — yield buffered content as text
+            yield {
+              type: 'text',
+              data: thinkBuffer,
+            };
+            thinkBuffer = '';
+          }
         } else if (isInThinkTag && thinkBuffer.length > MAX_THINK_BUFFER_LENGTH) {
           // Buffer is getting too large, flush it to avoid hanging
           // This handles cases where closing tag is never received
@@ -669,9 +712,10 @@ export class OpenAIClient implements LLMClient {
         }
       }
 
-      // When the stream signals completion via finish_reason, yield all tool calls
-      if (finishReason === 'tool_calls' || finishReason === 'stop') {
-        // Yield all accumulated tool calls
+      // When the stream signals completion via finish_reason='tool_calls',
+      // yield all accumulated tool calls. On finish_reason='stop', discard
+      // any residual tool calls (the model didn't finalize them).
+      if (finishReason === 'tool_calls') {
         if (toolCallsMap.size > 0) {
           for (const [_, entry] of toolCallsMap) {
             try {
@@ -698,6 +742,15 @@ export class OpenAIClient implements LLMClient {
           }
           toolCallsMap.clear();
         }
+      } else if (finishReason === 'stop' && toolCallsMap.size > 0) {
+        // Residual tool calls with finish_reason='stop' — log but don't yield
+        // to avoid emitting tool_use events the model didn't finalize.
+        logger.warn(
+          `[OpenAIClient] Discarding ${toolCallsMap.size} residual tool call(s) with finish_reason='stop'`,
+          { toolCallNames: Array.from(toolCallsMap.values()).map(e => e.name) },
+          'OpenAIClient',
+        );
+        toolCallsMap.clear();
       }
     }
 

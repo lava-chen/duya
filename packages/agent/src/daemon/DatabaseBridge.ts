@@ -6,6 +6,8 @@
  * when responses are received.
  */
 
+import { logger } from '../utils/logger.js';
+
 /**
  * DB Request message sent to Main Process
  */
@@ -14,6 +16,10 @@ interface DbRequest {
   id: string;
   action: string;
   payload: unknown;
+  // Index signature makes DbRequest structurally assignable to DaemonMessage,
+  // removing the need for an unsafe `as unknown as` double-cast at the send
+  // call site.
+  [key: string]: unknown;
 }
 
 /**
@@ -44,8 +50,14 @@ interface DaemonMessage {
 export class DatabaseBridge {
   private pendingRequests = new Map<string, PendingRequest>();
   private requestId = 0;
+  private readonly timeoutMs: number;
 
-  constructor(private send: (message: DaemonMessage) => void) {}
+  constructor(
+    private send: (message: DaemonMessage) => void,
+    options: { timeoutMs?: number } = {},
+  ) {
+    this.timeoutMs = options.timeoutMs ?? 30000;
+  }
 
   /**
    * Generate unique request ID
@@ -103,7 +115,7 @@ export class DatabaseBridge {
   handleResponse(response: DbResponse): void {
     const pending = this.pendingRequests.get(response.id);
     if (!pending) {
-      console.warn('[DatabaseBridge] Received response for unknown request:', response.id);
+      logger.warn('Received response for unknown request', { requestId: response.id }, 'DatabaseBridge');
       return;
     }
 
@@ -127,7 +139,7 @@ export class DatabaseBridge {
         if (this.pendingRequests.delete(id)) {
           reject(new Error(`Database request timeout: ${operation}`));
         }
-      }, 30000);
+      }, this.timeoutMs);
 
       this.pendingRequests.set(id, {
         resolve: (result: unknown) => {
@@ -149,7 +161,7 @@ export class DatabaseBridge {
         payload: data,
       };
 
-      this.send(request as unknown as DaemonMessage);
+      this.send(request satisfies DaemonMessage);
     });
   }
 }

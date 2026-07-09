@@ -109,7 +109,11 @@ export class MessageRouter {
       const response = await handleDbRequest(msg as unknown as { type: 'db:request'; id: string; action: string; payload: unknown });
       const child = proc?.child;
       if (child && !child.killed) {
-        child.send(response);
+        try {
+          child.send(response);
+        } catch (sendErr) {
+          this.logger.warn('Failed to send db:response to child', { sessionId, error: sendErr instanceof Error ? sendErr.message : String(sendErr) }, LogComponent.AgentProcessPool);
+        }
       } else {
         this.logger.error('Cannot send db:response: child is ' + (child ? 'killed' : 'undefined'), undefined, { sessionId }, LogComponent.AgentProcessPool);
       }
@@ -117,12 +121,17 @@ export class MessageRouter {
       this.logger.error('handleDbRequest failed', error instanceof Error ? error : new Error(String(error)), { sessionId }, LogComponent.AgentProcessPool);
       const child = proc?.child;
       if (child && !child.killed) {
-        child.send({
-          type: 'db:response',
-          id: (msg as unknown as { id: string }).id,
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        try {
+          child.send({
+            type: 'db:response',
+            id: (msg as unknown as { id: string }).id,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } catch (sendErr) {
+          // C4: child.send in catch block can also throw — log and move on
+          this.logger.warn('Failed to send db:response error to child', { sessionId, error: sendErr instanceof Error ? sendErr.message : String(sendErr) }, LogComponent.AgentProcessPool);
+        }
       }
     }
   }

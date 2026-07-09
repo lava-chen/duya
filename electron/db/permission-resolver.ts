@@ -18,6 +18,7 @@ import {
   settingsModeToProfile,
   type PermissionProfile,
 } from '../lib/permission-profile';
+import { getLogger, LogComponent } from '../logging/logger';
 
 const DEFAULT_PROFILE: PermissionProfile = 'auto';
 
@@ -56,24 +57,34 @@ export function resolvePermissionProfile(
 }
 
 function readParentProfileOrDefault(parentSessionId: string): PermissionProfile {
+  const db = getDatabase();
+  if (!db) return DEFAULT_PROFILE;
+  // A SELECT that finds no row returns undefined (no throw). Only genuine
+  // SQL errors (missing table, corrupted DB) land in the catch — those must
+  // NOT be silently swallowed into a permissive default (fail-open risk).
   try {
-    const db = getDatabase();
-    if (!db) return DEFAULT_PROFILE;
     const row = db
       .prepare('SELECT permission_profile FROM chat_sessions WHERE id = ?')
       .get(parentSessionId) as { permission_profile?: string | null } | undefined;
     const parentProfile = row?.permission_profile;
     if (isValidProfile(parentProfile)) return parentProfile;
     return DEFAULT_PROFILE;
-  } catch {
-    return DEFAULT_PROFILE;
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    getLogger().error(
+      'Failed to read parent permission_profile; propagating to avoid fail-open',
+      err instanceof Error ? err : new Error(String(err)),
+      { parentSessionId, code },
+      LogComponent.DB,
+    );
+    throw err;
   }
 }
 
 function readDefaultFromSettings(): PermissionProfile {
+  const db = getDatabase();
+  if (!db) return DEFAULT_PROFILE;
   try {
-    const db = getDatabase();
-    if (!db) return DEFAULT_PROFILE;
     const row = db
       .prepare("SELECT value FROM settings WHERE key = 'permissionMode'")
       .get() as { value?: string } | undefined;
@@ -81,7 +92,14 @@ function readDefaultFromSettings(): PermissionProfile {
     if (!row) return DEFAULT_PROFILE;
     // 行存在但值非法 → settingsModeToProfile 自带 'default' 安全降级, 保持防御性.
     return settingsModeToProfile(row.value);
-  } catch {
-    return DEFAULT_PROFILE;
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    getLogger().error(
+      'Failed to read permissionMode setting; propagating to avoid fail-open',
+      err instanceof Error ? err : new Error(String(err)),
+      { code },
+      LogComponent.DB,
+    );
+    throw err;
   }
 }

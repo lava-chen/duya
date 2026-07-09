@@ -430,9 +430,10 @@ export interface OrchestratorDependencies {
   config?: Partial<OrchestratorConfig>;
   sessionId?: string;
   abortSignal?: AbortSignal;
-  llmComplete: (prompt: string, systemPrompt?: string) => Promise<string>;
-  llmStreamFn?: (prompt: string, systemPrompt?: string) => AsyncIterable<string>;
-  llmAgentCall?: (input: AgentCallInput) => Promise<{ content: string; toolCalls: ToolCallResult[] }>;
+  // C1: signal parameter allows Orchestrator to propagate abort to LLM calls
+  llmComplete: (prompt: string, systemPrompt?: string, signal?: AbortSignal) => Promise<string>;
+  llmStreamFn?: (prompt: string, systemPrompt?: string, signal?: AbortSignal) => AsyncIterable<string>;
+  llmAgentCall?: (input: AgentCallInput, signal?: AbortSignal) => Promise<{ content: string; toolCalls: ToolCallResult[] }>;
   toolExecute: (name: string, input: Record<string, unknown>) => Promise<ToolResult>;
   toolExecuteConcurrent: (
     calls: Array<{ name: string; input: Record<string, unknown> }>
@@ -657,7 +658,7 @@ export type ResearchEvent =
     }
   | { type: 'complexity_classified'; classification: ResearchClassification }
   | { type: 'iteration_start'; iteration: number; maxIterations: number; questions: string[] }
-  | { type: 'iteration_complete'; iteration: number; findingsCount: number; coverage: number; qualityReport: QualityReport }
+  | { type: 'iteration_complete'; iteration: number; maxIterations: number; findingsCount: number; coverage: number; qualityReport: QualityReport }
   | { type: 'early_stop'; reason: string; coverage: number; iteration: number; maxIterations: number; qualityReport: QualityReport }
   | { type: 'questions_added'; questions: ResearchQuestion[] }
   | { type: 'questions_obsoleted'; questions: ResearchQuestion[] }
@@ -674,6 +675,7 @@ export type ResearchEvent =
   | { type: 'evidence_chain_response'; requestId: string; chain: EvidenceChain }
   | { type: 'continue_research_start'; addedQuestions: ResearchQuestion[]; coverageBefore: number }
   | { type: 'error'; message: string }
+  | { type: 'research_warning'; message: string; consecutiveErrors: number; recoverable: boolean }
   | { type: 'research_stop_decision'; decision: StopDecision }
   | { type: 'research_goal_change_request'; requestId: string; currentGoal: string; proposedGoal: string; changeType: PlanDeltaType }
   // === v2: Run status & activity ===

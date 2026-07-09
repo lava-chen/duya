@@ -308,7 +308,8 @@ export class WorkerPool {
 
       // Monitor for completion
       const checkComplete = setInterval(() => {
-        const worker = this.workers.get(targetWorker!.process.pid?.toString() ?? '');
+        // workers Map is keyed by workerId, not pid — pid lookup never matches
+        const worker = this.workers.get(targetWorker!.id)
         if (!worker || worker.currentTask?.id === task.id) {
           clearInterval(checkComplete);
         } else {
@@ -414,9 +415,14 @@ export class WorkerPool {
             startTime: msg.startTime as number || Date.now(),
           });
 
-          // Mark worker as backgrounded — do NOT release it
-          worker.isIdle = false;
-          worker.currentTask = task;
+          // Release the worker immediately — the background process is now
+          // tracked by BashTaskRegistry, and bg_complete will arrive later
+          // to clean up the listeners. Keeping the worker occupied would
+          // waste a pool slot for the entire background run. cleanup() is
+          // safe to call later: it only touches currentTask when its id
+          // still matches this task, so it will not clobber a new task.
+          worker.isIdle = true;
+          worker.currentTask = null;
 
           resolve({
             taskId: task.id,
@@ -445,8 +451,10 @@ export class WorkerPool {
             startTime: msg.startTime as number || Date.now(),
           });
 
-          worker.isIdle = false;
-          worker.currentTask = task;
+          // Release the worker immediately — background process is tracked
+          // by BashTaskRegistry; bg_complete will clean up listeners later.
+          worker.isIdle = true;
+          worker.currentTask = null;
 
           resolve({
             taskId: task.id,

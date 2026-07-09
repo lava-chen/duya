@@ -114,7 +114,14 @@ export class BackgroundAgentLifecycle {
   }
 
   markDrained(taskIds: string[]): void {
-    for (const id of taskIds) this.drained.add(id)
+    for (const id of taskIds) {
+      this.drained.add(id)
+      // Clean up the task record and notified flag so the Maps/Sets
+      // don't grow unboundedly across a long-lived session with many
+      // sub-agent spawns. Once drained, the task is fully consumed.
+      this.tasks.delete(id)
+      this.notified.delete(id)
+    }
   }
 
   subscribe(taskId: string, cb: (snapshot: TaskRecord) => void): () => void {

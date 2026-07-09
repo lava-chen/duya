@@ -651,6 +651,23 @@ export class StreamingToolExecutor {
    */
   discard(): void {
     this.discarded = true
+    // Abort any in-flight tools via the shared child abort controller. This
+    // cancels worker tools (bash) through the WorkerPool abort path and
+    // non-worker tools through the per-tool abortPromise created in
+    // executeTool.
+    this.siblingAbortController.abort('discard')
+    // Mark every unfinished tool as cancelled so its tracked state settles
+    // and no further work is scheduled for it.
+    for (const tool of this.tools) {
+      if (
+        tool.status === 'queued' ||
+        tool.status === 'starting' ||
+        tool.status === 'executing' ||
+        tool.status === 'streaming'
+      ) {
+        tool.status = 'cancelled'
+      }
+    }
   }
 
   /**
@@ -1232,8 +1249,9 @@ export class StreamingToolExecutor {
       })
 
       // Set up timeout
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
+        timeoutHandle = setTimeout(() => {
           reject(new Error(`Tool execution timed out after ${this.config.maxExecutionTimeMs}ms`))
         }, this.config.maxExecutionTimeMs)
       })
@@ -1241,8 +1259,9 @@ export class StreamingToolExecutor {
       // Set up abort promise - reject when the per-tool abort controller fires.
       // This lets user interrupts cancel non-worker tools (Read, Write, Edit, etc.)
       // in addition to worker tools (bash) which are handled by WorkerPool.
+      let abortHandler: (() => void) | undefined
       const abortPromise = new Promise<never>((_, reject) => {
-        const abortHandler = () => {
+        abortHandler = () => {
           const err = new Error('AbortError')
           err.name = 'AbortError'
           reject(err)
@@ -1349,6 +1368,13 @@ export class StreamingToolExecutor {
         // to the outer catch at line ~1429 which handles AbortError and
         // retry-with-fallback for everything else.
         throw err
+      } finally {
+        // Always release the per-tool timeout timer and abort listener once
+        // the race is over. Without this the timer keeps ticking after a
+        // normal completion (kept alive by the unresolved timeoutPromise)
+        // and the abort listener accumulates one entry per tool execution.
+        if (timeoutHandle) clearTimeout(timeoutHandle)
+        if (abortHandler) toolAbortController.signal.removeEventListener('abort', abortHandler)
       }
 
       // Process results

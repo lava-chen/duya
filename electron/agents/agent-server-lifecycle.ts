@@ -17,6 +17,9 @@ const MAX_BACKOFF = 30000;
 const BACKOFF_MULTIPLIER = 2;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isShuttingDown = false;
+// M8: Track consecutive restart attempts to avoid infinite restart loops
+let restartCount = 0;
+const MAX_RESTART_ATTEMPTS = 10;
 let conductorExecutorProxy: ConductorExecutorProxy | null = null;
 
 export function setConductorExecutorProxy(proxy: ConductorExecutorProxy | null): void {
@@ -183,6 +186,10 @@ export function spawnAgentServer(): Promise<number> {
             agentServerPort = parsed.port;
             agentServerProcess = child;
             restartBackoff = 1000;
+            // M1: Reset shutdown flag so future exit events trigger restart again.
+            // M8: Reset restart counter on successful spawn.
+            isShuttingDown = false;
+            restartCount = 0;
             settled = true;
             resolve(parsed.port);
             continue;
@@ -298,6 +305,18 @@ export function spawnAgentServer(): Promise<number> {
 
 function scheduleRestart(): void {
   if (restartTimer) return;
+
+  // M8: Stop restarting after too many consecutive failures
+  if (restartCount >= MAX_RESTART_ATTEMPTS) {
+    getLogger().error(
+      'Agent Server max restart attempts reached, giving up',
+      undefined,
+      { restartCount, maxAttempts: MAX_RESTART_ATTEMPTS },
+      LogComponent.Main,
+    );
+    return;
+  }
+  restartCount++;
 
   const delay = restartBackoff;
   restartBackoff = Math.min(restartBackoff * BACKOFF_MULTIPLIER, MAX_BACKOFF);

@@ -375,17 +375,14 @@ export function getDb(): BetterSqlite3.Database {
     throw err;
   }
 
-  // Enable WAL mode for better concurrent access
-  // Try to set WAL mode, but don't fail if it doesn't work
-  // (e.g., on Windows with certain file system configurations)
-  // On Windows, WAL mode can cause issues with file locking
-  if (process.platform !== 'win32') {
-    try {
-      _db.pragma('journal_mode = WAL');
-    } catch (err) {
-      // WAL mode is optional, continue without it
-      logger.warn('Failed to set WAL mode, continuing without it', { error: err instanceof Error ? err.message : String(err) }, 'DB');
-    }
+  // Enable WAL mode for better concurrent access.
+  // Always set WAL (matches main process behavior); fall back gracefully
+  // only if the underlying SQLite build rejects the pragma.
+  try {
+    _db.pragma('journal_mode = WAL');
+  } catch (err) {
+    // WAL mode is optional, continue without it
+    logger.warn('Failed to set WAL mode, continuing without it', { error: err instanceof Error ? err.message : String(err) }, 'DB');
   }
   _db.pragma('busy_timeout = 5000');
   _db.pragma('foreign_keys = ON');
@@ -411,7 +408,8 @@ function getUserDataPath(): string {
 
 /**
  * Get the default database file path.
- * Both dev and production use APPDATA/DUYA/duya.db for consistency.
+ * Both dev and production use APPDATA/DUYA/duya-main.db for consistency
+ * with the main process (electron/db/connection.ts).
  */
 function getDefaultDbPath(): string {
   // Check if running as packaged Electron app
@@ -426,13 +424,13 @@ function getDefaultDbPath(): string {
 
   // If electron passed the database directory via env, use it
   if (isPackaged && process.env.DUYA_DB_DIR) {
-    return path.join(process.env.DUYA_DB_DIR, 'duya.db');
+    return path.join(process.env.DUYA_DB_DIR, 'duya-main.db');
   }
 
   // Use APPDATA/DUYA (or equivalent on other platforms) for both dev and prod
   // This ensures frontend and agent use the same database
   const userDataPath = getUserDataPath();
-  return path.join(userDataPath, 'DUYA', 'duya.db');
+  return path.join(userDataPath, 'DUYA', 'duya-main.db');
 }
 
 /**
@@ -443,7 +441,7 @@ function getDbPath(): string {
   // Check for custom database path from config file (highest priority)
   const configDbPath = getConfigDatabasePath();
   if (configDbPath && configDbPath.trim()) {
-    return path.join(configDbPath.trim(), 'duya.db');
+    return path.join(configDbPath.trim(), 'duya-main.db');
   }
 
   // Check for custom database path from environment variable
@@ -2016,7 +2014,9 @@ export async function replaceMessages(
   const now = Date.now();
 
   try {
-    // Check if this is a stale write (generation mismatch)
+    // Optimistic pre-check: skip the transaction entirely if the session is
+    // already gone. The authoritative generation check is the conditional
+    // UPDATE inside the transaction below.
     const session = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
     if (!session) {
       return { success: false, reason: 'session_not_found' };
@@ -2028,10 +2028,18 @@ export async function replaceMessages(
       return { success: false, reason: 'stale_generation' };
     }
 
+    let committed = false;
     const txn = db.transaction(() => {
+      // Authoritative generation check inside the transaction: only proceed
+      // if the row still has the generation we expect. If another writer
+      // bumped it in between, affected rows === 0 and we abort.
       const newGeneration = Math.max(generation, session.generation + 1);
-      db.prepare('UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ?')
-        .run(newGeneration, now, sessionId);
+      const claim = db.prepare(
+        'UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ? AND generation = ?'
+      ).run(newGeneration, now, sessionId, session.generation);
+      if (claim.changes === 0) {
+        return;
+      }
 
       db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
@@ -2130,18 +2138,28 @@ export async function replaceMessages(
           created_at: msg.timestamp || now,
         });
       }
+
+      // Extract and store image attachments inside the transaction so a
+      // failure rolls back the message writes too. Attachments are a
+      // side effect of the same logical operation; keeping them atomic
+      // prevents half-written state where messages exist without their
+      // image data.
+      try {
+        extractAndStoreAttachments(sessionId, messages);
+      } catch (err) {
+        logger.error('Failed to store attachments in transaction', err instanceof Error ? err : new Error(String(err)), { sessionId }, 'DB');
+        throw err;
+      }
+
+      committed = true;
     });
 
     txn();
 
-    // Extract and store image attachments after messages are saved.
-    // This ensures base64 image data is preserved independently of the message content.
-    // When messages are later loaded via getMessagesWithAttachments, CDN URLs
-    // will be replaced with stored base64 data.
-    try {
-      extractAndStoreAttachments(sessionId, messages);
-    } catch (err) {
-      logger.error('Failed to store attachments', err instanceof Error ? err : new Error(String(err)), { sessionId }, 'DB');
+    if (!committed) {
+      // Another writer bumped generation between our pre-check and the
+      // transactional claim. Treat as a stale write.
+      return { success: false, reason: 'stale_generation' };
     }
 
     return { success: true, messageCount: messages.length };
@@ -2289,14 +2307,11 @@ export async function appendMessages(
               : null,
             created_at: msg.timestamp || now,
           });
-          if (displayContent && insertResult.changes === 0) {
-            db.prepare(`
-              UPDATE messages
-              SET display_content = COALESCE(NULLIF(display_content, ''), ?)
-              WHERE id = ? AND session_id = ?
-            `).run(displayContent, msg.id, sessionId);
+          // Append-only: never UPDATE an existing message. Duplicate-id
+          // inserts (INSERT OR IGNORE no-op) are silently skipped.
+          if (insertResult.changes > 0) {
+            count++;
           }
-          count++;
         } catch (insertErr) {
           logger.error('Insert message failed in appendMessages', insertErr instanceof Error ? insertErr : new Error(String(insertErr)), { msgId: msg.id, role: msg.role, sessionId }, 'DB');
         }

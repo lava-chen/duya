@@ -13,6 +13,7 @@
 import type { CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
 import { COMPACTION_THRESHOLDS } from '../types.js'
 import { estimateMessagesTokens } from '../tokenBudget.js'
+import { adjustSliceBoundary } from '../compact.js'
 
 /**
  * Configuration for Session Memory Compact
@@ -466,9 +467,13 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       }
     }
 
-    // Split into messages to keep (recent) and messages to summarize (older)
-    const recentMessages = conversationMessages.slice(-this.config.maxMessagesToKeep)
-    const olderMessages = conversationMessages.slice(0, -this.config.maxMessagesToKeep)
+    // Split into messages to keep (recent) and messages to summarize (older).
+    // Adjust the boundary so we don't cut in the middle of a
+    // tool_use/tool_result round-trip (orphaned tool_result).
+    let splitIndex = Math.max(0, conversationMessages.length - this.config.maxMessagesToKeep)
+    splitIndex = adjustSliceBoundary(conversationMessages, splitIndex)
+    const recentMessages = conversationMessages.slice(splitIndex)
+    const olderMessages = conversationMessages.slice(0, splitIndex)
 
     // Calculate tokens saved
     const tokensRemoved = estimateMessagesTokens(olderMessages)
