@@ -482,6 +482,24 @@ export interface FilesAPI {
   rename: (targetPath: string, newName: string) => Promise<{ success: boolean; error?: string; newPath?: string }>
 }
 
+export interface ReferenceEntry {
+  name: string
+  relativePath: string
+  absolutePath: string
+  size: number
+  isDirectory: boolean
+  mtime: number
+  extension?: string
+}
+
+export interface ReferencesAPI {
+  list: (workingDirectory: string) => Promise<{ success: boolean; data?: ReferenceEntry[]; error?: string }>
+  pickFiles: (options?: { title?: string; defaultPath?: string }) => Promise<{ canceled: boolean; filePaths: string[] }>
+  add: (workingDirectory: string, filePaths: string[]) => Promise<{ success: boolean; data?: string[]; error?: string }>
+  delete: (workingDirectory: string, relativePath: string) => Promise<{ success: boolean; error?: string }>
+  open: (workingDirectory: string, relativePath: string) => Promise<{ success: boolean; error?: string }>
+}
+
 export interface PortStatusAPI {
   isAgentPortReady: () => boolean
   isConfigPortReady: () => boolean
@@ -975,6 +993,7 @@ export interface ElectronAPI {
   safeMode: SafeModeAPI
   skills: SkillsAPI
   files: FilesAPI
+  references: ReferencesAPI
   weixin: WeixinAccountAPI
   browserExtension: BrowserExtensionAPI
   parser: DocumentParserAPI
@@ -1809,6 +1828,17 @@ const electronAPI: ElectronAPI = {
     preview: (targetPath: string, rootPath: string) => ipcRenderer.invoke('files:preview', targetPath, rootPath),
     delete: (targetPath: string) => ipcRenderer.invoke('files:delete', targetPath),
     rename: (targetPath: string, newName: string) => ipcRenderer.invoke('files:rename', targetPath, newName),
+  },
+  references: {
+    list: (workingDirectory: string) => ipcRenderer.invoke('references:list', workingDirectory),
+    pickFiles: (options?: { title?: string; defaultPath?: string }) =>
+      ipcRenderer.invoke('references:pick-files', options),
+    add: (workingDirectory: string, filePaths: string[]) =>
+      ipcRenderer.invoke('references:add', workingDirectory, filePaths),
+    delete: (workingDirectory: string, relativePath: string) =>
+      ipcRenderer.invoke('references:delete', workingDirectory, relativePath),
+    open: (workingDirectory: string, relativePath: string) =>
+      ipcRenderer.invoke('references:open', workingDirectory, relativePath),
   },
   weixin: {
     getAccounts: () => ipcRenderer.invoke('db:weixin:getAccounts'),

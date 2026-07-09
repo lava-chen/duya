@@ -216,6 +216,8 @@ export interface PromptContext {
   researchIntent?: import('./research/types.js').ResearchTaskIntent
   /** Optional research project ID */
   researchProjectId?: string
+  /** Whether project references section is enabled */
+  referencesEnabled?: boolean
 }
 
 // ============================================================
