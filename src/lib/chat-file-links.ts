@@ -68,12 +68,39 @@ export function isSidebarPreviewFile(filePath: string): boolean {
   return SIDEBAR_PREVIEW_EXTENSIONS.has(extensionFromPath(filePath));
 }
 
+/** Extract the directory part of a path without pulling in the Node
+ *  `path` module (renderer should stay lightweight). Mirrors the
+ *  implementation in FilePreviewPanel.tsx. */
+function getDirectoryPath(filePath: string): string {
+  const idx = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'));
+  return idx > 0 ? filePath.slice(0, idx) : filePath;
+}
+
+/** Check whether `target` is inside `root` using pure string comparison
+ *  so the helper works in the renderer without the Node `path` module.
+ *  Both Windows and Unix separators are handled. */
+function isPathInsideRoot(target: string, root: string): boolean {
+  const normTarget = target.replace(/\\/g, '/').replace(/\/+$/, '');
+  const normRoot = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!normTarget.startsWith(normRoot + '/') && normTarget !== normRoot) return false;
+  return true;
+}
+
 function defaultPreviewRootForFile(resolvedPath: string, cwd?: string | null): string {
-  if (cwd && cwd.trim()) return cwd;
-  const normalized = resolvedPath.replace(/\//g, '\\');
-  const lastSeparator = normalized.lastIndexOf('\\');
-  if (lastSeparator > 0) return normalized.slice(0, lastSeparator);
-  return normalized;
+  const fileDir = getDirectoryPath(resolvedPath);
+  const cwdRaw = cwd?.trim();
+  if (!cwdRaw) return fileDir;
+
+  // When the file is inside the supplied working directory, keep the cwd
+  // as the preview root so the panel's file tree shows the project context.
+  // If the file lives elsewhere (e.g. a Read tool result pointing at another
+  // project), fall back to the file's own directory so files:preview does not
+  // reject it as "outside the project directory".
+  const inside = isPathInsideRoot(resolvedPath, cwdRaw);
+  const chosen = inside ? cwdRaw : fileDir;
+  // eslint-disable-next-line no-console
+  console.warn('[defaultPreviewRootForFile]', { resolvedPath, cwdRaw, fileDir, inside, chosen });
+  return chosen;
 }
 
 /**

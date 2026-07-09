@@ -555,7 +555,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             type="button"
             className="theme-toggle"
             onClick={toggleTheme}
-            aria-label="Toggle theme"
+            aria-label={t('sidebar.toggleThemeAria')}
           >
             {resolvedTheme === "dark" ? (
               <SunIcon size={16} weight="regular" />
@@ -567,8 +567,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
 
         <InputDialog
           isOpen={isInputDialogOpen}
-          title="Enter Project Folder Path"
-          placeholder="e.g., C:\\Users\\name\\Projects\\my-project"
+          title={t('project.enterFolderPath')}
+          placeholder={t('project.folderPathPlaceholder')}
           onConfirm={(value) => {
             setIsInputDialogOpen(false);
             handleCreateProjectFromPath(value);

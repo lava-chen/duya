@@ -49,6 +49,14 @@ export const MODULE_TOOLS = new Set(['read_module']);
  */
 export const TASK_TOOLS = new Set(['task']);
 
+/**
+ * MessageSession tool — sends a message to another session's agent and
+ * returns its response. Single canonical name (`MessageSession`)
+ * registered on the agent side (see MESSAGE_SESSION_TOOL_NAME in
+ * packages/agent/src/tool/MessageSessionTool).
+ */
+export const MESSAGE_SESSION_TOOLS = new Set(['messagesession']);
+
 /** Action values the TaskTool accepts (must mirror the input_schema in
  *  packages/agent/src/tool/TaskTool/TaskTool.ts). Used by
  *  `isTaskToolAction` to disambiguate from legacy `task` tool calls
@@ -83,6 +91,10 @@ export function isAskUserQuestionTool(name: string): boolean {
 
 export function isModuleTool(name: string): boolean {
   return MODULE_TOOLS.has(name.toLowerCase());
+}
+
+export function isMessageSessionTool(name: string): boolean {
+  return MESSAGE_SESSION_TOOLS.has(name.toLowerCase());
 }
 
 /** Returns true only when the tool *input* looks like a TaskTool call.
@@ -154,6 +166,11 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
     return { count: 1, categoryKey: 'browser' };
   }
   if (['agent', 'subagent', 'sub_agent'].includes(name)) {
+    return { count: 1, categoryKey: 'agent' };
+  }
+  // MessageSession is inter-agent messaging — bucketed with `agent`
+  // so the group summary reads naturally ("已运行 2 个 agent").
+  if (isMessageSessionTool(name)) {
     return { count: 1, categoryKey: 'agent' };
   }
   if (name === 'askuserquestion') {

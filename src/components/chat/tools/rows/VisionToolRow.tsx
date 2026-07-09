@@ -78,10 +78,18 @@ export function VisionToolRow({ tool }: VisionToolRowProps) {
   const parsed = parseVisionToolResult(tool.result);
   const analysisSnippet = parsed?.analysis.slice(0, 240) ?? '';
 
+  // Status-aware verb label — mirrors SkillToolRow / ModuleToolRow so
+  // the chrome reads "正在分析图像…" → "已调用视觉能力" / "视觉分析失败".
+  const verbKey =
+    status === 'running' ? 'streaming.toolAction.running.vision'
+    : status === 'error' ? 'streaming.toolAction.error.vision'
+    : 'streaming.toolAction.done.vision';
+
   return (
     <div>
       <ActionRowChrome
         status={status}
+        verbKey={verbKey}
         canExpand={false}
         expanded={false}
         hovered={false}

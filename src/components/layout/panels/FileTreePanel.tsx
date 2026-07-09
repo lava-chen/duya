@@ -314,9 +314,9 @@ export function FileTreePanel({ tab, embedded }: { tab?: PageTab; embedded?: boo
     openOrActivatePage("preview", {
       filePath,
       workingDirectory,
-      title: filePath.split(/[/\\]/).pop() || "预览",
+      title: filePath.split(/[/\\]/).pop() || t('panel.preview'),
     });
-  }, [openOrActivatePage, workingDirectory, embedded]);
+  }, [openOrActivatePage, workingDirectory, embedded, t]);
 
   const handleContextMenu = useCallback(
     (path: string, type: "file" | "directory", event: React.MouseEvent) => {

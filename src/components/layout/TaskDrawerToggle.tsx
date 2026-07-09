@@ -6,8 +6,10 @@ import { usePanel } from "@/hooks/usePanel";
 import { useTaskCount } from "@/hooks/useTaskCount";
 import { useConversationStore } from "@/stores/conversation-store";
 import { setTaskDrawerOpen, useTaskDrawerOpen } from "./task-drawer-store";
+import { useTranslation } from "@/hooks/useTranslation";
 
 export function TaskDrawerToggle() {
+  const { t } = useTranslation();
   const { panelOpen, panelWidth, workspaceExpanded } = usePanel();
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
   const currentView = useConversationStore((state) => state.currentView);
@@ -35,8 +37,8 @@ export function TaskDrawerToggle() {
       className={`workspace-task-toggle${taskDrawerOpen ? " active" : ""}`}
       style={position}
       onClick={() => setTaskDrawerOpen(!taskDrawerOpen)}
-      title="任务列表"
-      aria-label="任务列表"
+      title={t('panel.taskList')}
+      aria-label={t('panel.taskList')}
       aria-pressed={taskDrawerOpen}
       data-testid="task-card-trigger"
     >

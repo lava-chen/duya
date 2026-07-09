@@ -29,6 +29,7 @@ import {
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus } from '../registry';
 import { setTaskDrawerOpen } from '@/components/layout/task-drawer-store';
+import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import type { ToolAction, ToolStatus } from '../types';
 
@@ -79,29 +80,63 @@ function verbKeyFor(action: TaskAction | null, status: ToolStatus): TranslationK
 }
 
 /**
- * Pretty-print the JSON result envelope so the user can read the
- * returned task payload directly. Falls back to the raw string for
- * legacy / non-JSON payloads (e.g. the `list` action returns
- * human-readable lines, not a JSON envelope).
+ * Parse the result envelope into a structured view so the expanded body
+ * can render natural-language lines instead of a JSON dump. The `list`
+ * action returns plain text (one task per line) and is forwarded as-is.
  */
-function parseResultForDisplay(result: string | undefined): {
-  kind: 'json';
-  text: string;
-} | {
-  kind: 'raw';
-  text: string;
-} {
+type TaskResultView =
+  | { kind: 'create'; taskId: string; subject: string }
+  | { kind: 'update'; taskId: string; subject: string; status: string; notification?: string }
+  | { kind: 'stop'; taskId: string }
+  | { kind: 'output'; taskId: string; status: string; output: string; notCompleted?: boolean }
+  | { kind: 'get'; task: Record<string, unknown> }
+  | { kind: 'raw'; text: string }
+  | { kind: 'error'; message: string };
+
+function parseResultForDisplay(
+  result: string | undefined,
+  inputAction: TaskAction | null,
+): TaskResultView {
   if (!result) return { kind: 'raw', text: '' };
   const trimmed = result.trim();
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+  // `list` returns human-readable text, one task per line — forward as-is.
+  if (inputAction === 'list' || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
     return { kind: 'raw', text: result };
   }
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(trimmed);
-    return { kind: 'json', text: JSON.stringify(parsed, null, 2) };
+    parsed = JSON.parse(trimmed);
   } catch {
     return { kind: 'raw', text: result };
   }
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.error === 'string') {
+    return { kind: 'error', message: obj.error };
+  }
+  const task = (obj.task ?? {}) as Record<string, unknown>;
+  const taskId = String(task.id ?? obj.taskId ?? '');
+  const subject = typeof task.subject === 'string' ? task.subject : '';
+  const status = typeof task.status === 'string' ? task.status : (typeof obj.status === 'string' ? obj.status : '');
+
+  if (inputAction === 'create') {
+    return { kind: 'create', taskId, subject };
+  }
+  if (inputAction === 'update') {
+    const notification = typeof obj.notification === 'string' ? obj.notification : undefined;
+    return { kind: 'update', taskId, subject, status, notification };
+  }
+  if (inputAction === 'stop') {
+    return { kind: 'stop', taskId };
+  }
+  if (inputAction === 'output') {
+    const output = typeof obj.output === 'string' ? obj.output : '';
+    const notCompleted = output === '' && typeof obj.message === 'string';
+    return { kind: 'output', taskId, status, output, notCompleted };
+  }
+  if (inputAction === 'get') {
+    return { kind: 'get', task };
+  }
+  return { kind: 'raw', text: result };
 }
 
 export function TaskToolRow({ tool }: TaskToolRowProps) {
@@ -114,8 +149,8 @@ export function TaskToolRow({ tool }: TaskToolRowProps) {
     [tool.input],
   );
   const resultView = useMemo(
-    () => parseResultForDisplay(tool.result),
-    [tool.result],
+    () => parseResultForDisplay(tool.result, action),
+    [tool.result, action],
   );
 
   // Auto-open the TaskDrawer on a successful `create` or `update`
@@ -178,13 +213,12 @@ export function TaskToolRow({ tool }: TaskToolRowProps) {
             style={{ overflow: 'hidden' }}
           >
             <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
-              {/* Result body — pretty JSON for the {task: ...} envelope
-               * the create / get / update / output / stop actions all
-               * return; raw text for the `list` action which returns
-               * one task per line as a plain string. */}
-              <div className="font-mono text-[11px] tool-card-muted whitespace-pre-wrap break-all max-h-[200px] overflow-auto leading-relaxed">
-                {resultView.kind === 'json' ? resultView.text : resultView.text || '(empty)'}
-              </div>
+              {/* Result body — natural-language summary keyed off the
+               * action, so the user reads "已创建任务 #5：..." instead
+               * of {"task":{"id":5,...}}. The `list` action already
+               * returns one task per line as plain text and is shown
+               * verbatim. */}
+              <TaskResultBody view={resultView} />
 
               {/* Status badge - bottom right, matching BashToolRow */}
               <div className="mt-2 flex justify-end">
@@ -196,6 +230,104 @@ export function TaskToolRow({ tool }: TaskToolRowProps) {
       </AnimatePresence>
     </div>
   );
+}
+
+function TaskResultBody({ view }: { view: TaskResultView }) {
+  const { t } = useTranslation();
+  switch (view.kind) {
+    case 'create':
+      return (
+        <div className="text-[12px] leading-relaxed">
+          {t('streaming.toolAction.body.task.created', { id: view.taskId, subject: view.subject })}
+        </div>
+      );
+    case 'update': {
+      // Prefer the explicit completion notification when present;
+      // otherwise pick a line based on the new status.
+      if (view.notification) {
+        return <div className="text-[12px] leading-relaxed">{view.notification}</div>;
+      }
+      const key =
+        view.status === 'completed'
+          ? 'streaming.toolAction.body.task.completed'
+          : view.status === 'in_progress'
+            ? 'streaming.toolAction.body.task.started'
+            : 'streaming.toolAction.body.task.updated';
+      return (
+        <div className="text-[12px] leading-relaxed">
+          {t(key, { id: view.taskId, subject: view.subject })}
+        </div>
+      );
+    }
+    case 'stop':
+      return (
+        <div className="text-[12px] leading-relaxed">
+          {t('streaming.toolAction.body.task.stopped', { id: view.taskId })}
+        </div>
+      );
+    case 'output':
+      return (
+        <div className="text-[12px] leading-relaxed space-y-1">
+          <div className="font-medium">
+            {t('streaming.toolAction.body.task.outputHeader', { id: view.taskId })}
+          </div>
+          <div className="font-mono text-[11px] whitespace-pre-wrap break-all max-h-[160px] overflow-auto tool-card-muted rounded p-2">
+            {view.notCompleted
+              ? t('streaming.toolAction.body.task.emptyOutput')
+              : (view.output || t('streaming.toolAction.body.task.emptyOutput'))}
+          </div>
+        </div>
+      );
+    case 'get': {
+      const task = view.task;
+      const id = String(task.id ?? '');
+      const subject = typeof task.subject === 'string' ? task.subject : '';
+      const status = typeof task.status === 'string' ? task.status : '';
+      const desc = typeof task.description === 'string' ? task.description : '';
+      const owner = typeof task.owner === 'string' ? task.owner : '';
+      const blockedBy = Array.isArray(task.blockedBy) ? task.blockedBy : [];
+      return (
+        <div className="text-[12px] leading-relaxed space-y-1">
+          <div>
+            <span className="font-medium">#{id}</span>{' '}{subject}
+          </div>
+          <div className="text-muted-foreground">
+            {t('streaming.toolAction.body.task.statusLabel', { status })}
+          </div>
+          {owner && (
+            <div className="text-muted-foreground">
+              {t('streaming.toolAction.body.task.ownerLabel', { owner })}
+            </div>
+          )}
+          {blockedBy.length > 0 && (
+            <div className="text-muted-foreground">
+              {t('streaming.toolAction.body.task.descLabel', {
+                desc: `blocked by #${(blockedBy as string[]).join(', #')}`,
+              })}
+            </div>
+          )}
+          <div className="text-muted-foreground">
+            {t('streaming.toolAction.body.task.descLabel', {
+              desc: desc || t('streaming.toolAction.body.task.noDesc'),
+            })}
+          </div>
+        </div>
+      );
+    }
+    case 'error':
+      return (
+        <div className="text-[12px] leading-relaxed text-red-500">
+          {t('streaming.toolAction.body.task.errorPrefix', { message: view.message })}
+        </div>
+      );
+    case 'raw':
+    default:
+      return (
+        <div className="font-mono text-[11px] tool-card-muted whitespace-pre-wrap break-all max-h-[200px] overflow-auto leading-relaxed">
+          {view.text || t('streaming.toolAction.body.task.emptyOutput')}
+        </div>
+      );
+  }
 }
 
 function TaskStatusBadge({ status }: { status: ToolStatus }) {

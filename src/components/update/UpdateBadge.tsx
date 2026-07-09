@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { SpinnerIcon } from "@/components/icons";
+import { useTranslation } from "@/hooks/useTranslation";
 
 interface UpdateState {
   phase: "idle" | "downloading" | "progress" | "ready";
@@ -11,6 +12,7 @@ interface UpdateState {
 }
 
 export function UpdateBadge() {
+  const { t } = useTranslation();
   const [state, setState] = useState<UpdateState>({ phase: "idle" });
 
   useEffect(() => {
@@ -53,7 +55,7 @@ export function UpdateBadge() {
         <SpinnerIcon className="w-3 h-3 animate-spin" />
         {state.phase === "progress" && state.percent !== undefined
           ? `${state.percent}%`
-          : "下载更新中"}
+          : t('update.downloading')}
       </div>
     );
   }
@@ -67,7 +69,7 @@ export function UpdateBadge() {
       >
         <span>↑</span>
         <span>
-          {state.version} 已就绪，点击重启安装
+          {t('update.ready', { version: state.version ?? '' })}
         </span>
       </button>
     );

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowClockwise, ChatCircleText, Quotes, XCircle } from "@phosphor-icons/react";
+import { useTranslation } from "@/hooks/useTranslation";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -93,6 +94,7 @@ function terminalTheme() {
 }
 
 export function TerminalPanel({ tab }: Props) {
+  const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -401,7 +403,7 @@ export function TerminalPanel({ tab }: Props) {
         >
           <button type="button" onClick={handleQuoteSelection}>
             <ChatCircleText size={14} weight="regular" />
-            <span>添加到对话</span>
+            <span>{t('terminal.addToChat')}</span>
           </button>
         </div>
       )}

@@ -238,4 +238,18 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(dispatched).toHaveLength(0);
     expect(shellOpen).toHaveBeenCalledWith('E:\\build\\app.zip');
   });
+
+  it('uses cwd as preview root when the file is inside the working directory', () => {
+    openLocalArtifactTarget('E:\\project\\src\\app.ts', 'E:\\project');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.workingDirectory).toBe('E:\\project');
+  });
+
+  it('falls back to the file directory as preview root when outside cwd', () => {
+    openLocalArtifactTarget('E:\\other-project\\data.json', 'E:\\project');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.workingDirectory).toBe('E:\\other-project');
+  });
 });
