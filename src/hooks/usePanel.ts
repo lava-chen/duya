@@ -1,6 +1,8 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "@/hooks/useTranslation";
+import type { TranslationKey } from "@/i18n";
 import { getPageDescriptor, isPageId, type PageId, type PageTab } from "@/components/layout/panels/registry";
 import { useConversationStore } from "@/stores/conversation-store";
 
@@ -83,7 +85,7 @@ function panelStorageKey(sessionKey: string): string {
  * stale `localStorage` payload (e.g. after removing a page) cannot
  * crash the provider.
  */
-function loadPersistedState(sessionKey: string): PersistedPanelState | null {
+function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(panelStorageKey(sessionKey));
@@ -91,16 +93,16 @@ function loadPersistedState(sessionKey: string): PersistedPanelState | null {
     const parsed = JSON.parse(raw) as Partial<PersistedPanelState> | null;
     if (!parsed || !Array.isArray(parsed.tabs)) return null;
     const tabs: PageTab[] = [];
-    for (const t of parsed.tabs) {
-      if (!t || typeof t.id !== "string" || !isPageId(t.pageId)) continue;
+    for (const tab of parsed.tabs) {
+      if (!tab || typeof tab.id !== "string" || !isPageId(tab.pageId)) continue;
       tabs.push({
-        id: t.id,
-        pageId: t.pageId,
-        title: typeof t.title === "string" ? t.title : defaultTitle(t.pageId),
-        favicon: typeof t.favicon === "string" ? t.favicon : undefined,
+        id: tab.id,
+        pageId: tab.pageId,
+        title: typeof tab.title === "string" ? tab.title : defaultPanelTitle(t, tab.pageId),
+        favicon: typeof tab.favicon === "string" ? tab.favicon : undefined,
         params:
-          t.params && typeof t.params === "object" && !Array.isArray(t.params)
-            ? (t.params as Record<string, unknown>)
+          tab.params && typeof tab.params === "object" && !Array.isArray(tab.params)
+            ? (tab.params as Record<string, unknown>)
             : undefined,
       });
     }
@@ -198,6 +200,7 @@ function preferredPanelWidth(
 }
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const sessionKey = activeThreadId ?? HOME_PANEL_KEY;
 
@@ -207,7 +210,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   // localStorage.
   const initialRef = useRef<PersistedPanelState | null | undefined>(undefined);
   if (initialRef.current === undefined) {
-    initialRef.current = loadPersistedState(sessionKey);
+    initialRef.current = loadPersistedState(sessionKey, t);
   }
   const initial = initialRef.current ?? emptyPanelState();
 
@@ -241,7 +244,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
     savePersistedState(previousSessionKey, panelStateRef.current);
 
-    const next = loadPersistedState(sessionKey) ?? emptyPanelState();
+    const next = loadPersistedState(sessionKey, t) ?? emptyPanelState();
     currentSessionKeyRef.current = sessionKey;
     setTabs(next.tabs);
     setActiveTabId(next.activeTabId);
@@ -287,14 +290,14 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     const newTab: PageTab = {
       id,
       pageId,
-      title: typeof params?.title === "string" ? params.title : defaultTitle(pageId),
+      title: typeof params?.title === "string" ? params.title : defaultPanelTitle(t, pageId),
       params,
     };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(id);
     applyPageLayout(pageId);
     return id;
-  }, [applyPageLayout]);
+  }, [applyPageLayout, t]);
 
   const openOrActivatePage = useCallback<PanelContextValue["openOrActivatePage"]>(
     (pageId, params) => {
@@ -343,7 +346,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       const params: Record<string, unknown> = {
         filePath,
         workingDirectory,
-        title: filePath.split(/[/\\]/).pop() || "预览",
+        title: filePath.split(/[/\\]/).pop() || t('panel.preview'),
       };
       // Forward the agent's read line range so the preview panel can
       // scroll to and highlight the exact lines on first mount. The
@@ -422,7 +425,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       openOrActivatePage("office", {
         filePath,
         workingDirectory,
-        title: filePath.split(/[/\\]/).pop() || "Office",
+        title: filePath.split(/[/\\]/).pop() || t('panel.office'),
       });
     };
 
@@ -574,15 +577,8 @@ export function useOptionalPanel(): PanelContextValue | null {
   return useContext(PanelContext);
 }
 
-function defaultTitle(pageId: PageId): string {
-  switch (pageId) {
-    case "files": return "文件";
-    case "conductor": return "指挥台";
-    case "research": return "审查";
-    case "terminal": return "终端";
-    case "browser": return "浏览器";
-    case "office": return "Office";
-    case "preview": return "预览";
-    default: return pageId;
-  }
+type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
+
+function defaultPanelTitle(t: TFunc, pageId: PageId): string {
+  return t(`panel.${pageId}` as TranslationKey);
 }

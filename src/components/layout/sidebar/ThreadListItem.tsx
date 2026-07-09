@@ -7,6 +7,9 @@ import { subscribeToPhase } from "@/lib/stream-session-manager";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { StreamPhase } from "@/types/message";
 import { useSubAgents } from "@/components/chat/SubAgentPanel";
+import type { TranslationKey } from "@/i18n";
+
+type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
 const AGENT_COLORS: Record<string, string> = {
   blue: "var(--accent)",
@@ -36,7 +39,7 @@ interface ThreadListItemProps {
 
 const ACTIVE_PHASES: StreamPhase[] = ["starting", "streaming", "awaiting_permission", "persisting"];
 
-function formatTimeAgo(timestamp: number): string {
+function formatTimeAgo(t: TFunc, timestamp: number): string {
   const now = Date.now();
   const diff = now - timestamp;
   const minutes = Math.floor(diff / 60000);
@@ -44,18 +47,18 @@ function formatTimeAgo(timestamp: number): string {
   const days = Math.floor(diff / 86400000);
   const weeks = Math.floor(diff / 604800000);
 
-  if (minutes < 1) return "now";
+  if (minutes < 1) return t('time.justNow');
   if (minutes < 60) return `${minutes}m`;
   if (hours < 24) return `${hours}h`;
   if (days < 7) return `${days}d`;
   return `${weeks}w`;
 }
 
-function getThreadDisplayTitle(thread: Thread): string {
+function getThreadDisplayTitle(t: TFunc, thread: Thread): string {
   if (thread.agentType !== "sub-agent") {
-    return thread.title || "New Thread";
+    return thread.title || t('thread.newThread');
   }
-  const rawTitle = thread.agentName || thread.title || "Sub-agent";
+  const rawTitle = thread.agentName || thread.title || t('thread.subAgent');
   return rawTitle.replace(/^Sub:\s*/i, "");
 }
 
@@ -72,7 +75,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
   const buttonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const subAgents = useSubAgents(thread.id);
-  const displayTitle = getThreadDisplayTitle(thread);
+  const displayTitle = getThreadDisplayTitle(t, thread);
 
   const hasChildren = childrenThreads.length > 0;
 
@@ -203,7 +206,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
         className={`thread-item${isActive ? " active" : ""}${thread.agentType === 'sub-agent' ? " sub-agent" : ""}${hasChildren ? " has-children" : ""}`}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        title={thread.agentType === "sub-agent" ? `Agent: ${displayTitle}` : thread.title}
+        title={thread.agentType === "sub-agent" ? t('thread.agentTitle', { name: displayTitle }) : thread.title}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         role="button"
@@ -250,7 +253,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
               <span className="sub-agent-dot" style={{ color: getAgentColor(thread.agentName) }}>●</span>
             )}
             {thread.agentType === "sub-agent" && (
-              <span className="thread-item-agent-label">Agent</span>
+              <span className="thread-item-agent-label">{t('thread.agentLabel')}</span>
             )}
             <span className="thread-item-title">{displayTitle}</span>
           </>
@@ -260,7 +263,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
         {subAgents.length > 0 && !isHovered && !showMenu ? (
           <SubAgentBadges agents={subAgents} isRunning={isRunning} />
         ) : isRunning ? (
-          <span className="thread-item-running-indicator" title="Agent is running...">
+          <span className="thread-item-running-indicator" title={t('thread.running')}>
             <CircleNotchIcon size={14} weight="bold" className="animate-spin" />
           </span>
         ) : isHovered || showMenu ? (
@@ -269,13 +272,13 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
             type="button"
             className="thread-item-menu-btn"
             onClick={handleMenuClick}
-            aria-label="Thread options"
+            aria-label={t('thread.options')}
           >
             <DotsThreeIcon size={16} weight="bold" />
           </button>
         ) : (
           <span className="thread-item-time">
-            {formatTimeAgo(thread.updatedAt)}
+            {formatTimeAgo(t, thread.updatedAt)}
           </span>
         )}
       </div>

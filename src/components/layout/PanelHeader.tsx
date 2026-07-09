@@ -3,6 +3,7 @@
 
 import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { PlusIcon, XIcon } from "@phosphor-icons/react";
+import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
 import { getPageDescriptor, PAGE_REGISTRY, type PageDescriptor, type PageId } from "./panels/registry";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -16,12 +17,13 @@ interface DragState {
 /**
  * Header bar inside the side panel. Renders one of three shapes:
  *
- * - `empty` (no tabs): a "侧栏" label + `+` control.
+ * - `empty` (no tabs): a sidebar label + `+` control.
  * - `content` view: the full tab strip with drag-to-reorder, plus
  *   the `+` add button. The sidebar toggle
  *   lives in `PanelZone` so it can stay visually stable during animation.
  */
 export function PanelHeader() {
+  const { t } = useTranslation();
   const {
     tabs,
     activeTabId,
@@ -119,7 +121,7 @@ export function PanelHeader() {
   if (tabs.length === 0) {
     return (
       <div className="panel-header panel-header-empty">
-        <span className="panel-header-empty-text">侧栏</span>
+        <span className="panel-header-empty-text">{t('panel.sidebar')}</span>
         <div className="panel-header-actions">
           <div className="panel-header-add-wrap">
             <AddPageButton
@@ -181,17 +183,7 @@ export function PanelHeader() {
                 <Icon size={12} weight={active ? "fill" : "regular"} />
               )}
               <span className="panel-header-tab-title">{tab.title}</span>
-              <span
-                role="button"
-                aria-label="关闭标签"
-                className="panel-header-tab-close"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closePanel(tab.id);
-                }}
-              >
-                <XIcon size={10} weight="bold" />
-              </span>
+              <CloseTabButton tabId={tab.id} onClose={() => closePanel(tab.id)} />
             </button>
           );
         })}
@@ -223,14 +215,15 @@ const AddPageButton = forwardRef<
   HTMLButtonElement,
   { open: boolean; onClick: () => void }
 >(function AddPageButton({ open, onClick }, ref) {
+  const { t } = useTranslation();
   return (
     <button
       ref={ref}
       type="button"
       className={`panel-header-icon-btn panel-header-add-page${open ? " active" : ""}`}
       onClick={onClick}
-      title="新增页面"
-      aria-label="新增页面"
+      title={t('panel.addPage')}
+      aria-label={t('panel.addPage')}
       aria-expanded={open}
       aria-haspopup="menu"
     >
@@ -273,7 +266,9 @@ function AddPageMenuRow({
   shortcut: string | null;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation();
   const Icon = entry.icon;
+  const label = t(entry.labelKey);
 
   return (
     <button
@@ -285,18 +280,35 @@ function AddPageMenuRow({
         if (!entry.available) return;
         onSelect();
       }}
-      title={entry.available ? entry.label : `${entry.label}（未实现）`}
+      title={entry.available ? label : `${label} (${t('panel.unavailable')})`}
     >
       <span className="panel-add-menu-main">
         <span className="panel-add-menu-icon">
           <Icon size={16} weight="regular" />
         </span>
-        <span className="panel-add-menu-name">{entry.label}</span>
+        <span className="panel-add-menu-name">{label}</span>
       </span>
       <span className="panel-add-menu-meta">
         {shortcut && <span className="panel-add-menu-shortcut">{shortcut}</span>}
-        {!entry.available && <span className="panel-add-menu-hint">未实现</span>}
+        {!entry.available && <span className="panel-add-menu-hint">{t('panel.unavailable')}</span>}
       </span>
     </button>
+  );
+}
+
+function CloseTabButton({ tabId, onClose }: { tabId: string; onClose: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      role="button"
+      aria-label={t('panel.closeTab')}
+      className="panel-header-tab-close"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+    >
+      <XIcon size={10} weight="bold" />
+    </span>
   );
 }

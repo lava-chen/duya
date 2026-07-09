@@ -31,7 +31,7 @@ export function NewThreadDropdown() {
   }, []);
 
   const createThreadInProject = async (workingDirectory: string) => {
-    const projectName = workingDirectory.split(/[\\/]/).pop() || "Untitled";
+    const projectName = workingDirectory.split(/[\\/]/).pop() || t('project.untitled');
     const newThread = await createThread({ workingDirectory, projectName });
     if (newThread) {
       setActiveThread(newThread.id);
@@ -42,7 +42,7 @@ export function NewThreadDropdown() {
     try {
       if (window.electronAPI?.dialog?.openFolder) {
         const result = await window.electronAPI.dialog.openFolder({
-          title: "Select Project Folder",
+          title: t('project.selectNewProjectFolder'),
         });
 
         if (!result.canceled && result.filePaths.length > 0) {
@@ -51,7 +51,7 @@ export function NewThreadDropdown() {
           await createThreadInProject(workingDirectory);
         }
       } else {
-        const workingDirectory = prompt("Enter project folder path:");
+        const workingDirectory = prompt(t('project.enterFolderPath'));
         if (workingDirectory) {
           await createThreadInProject(workingDirectory);
         }

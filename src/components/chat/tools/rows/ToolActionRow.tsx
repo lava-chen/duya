@@ -23,6 +23,7 @@ import { renderToolResult } from '../../ToolResultRenderer';
 import {
   isAskUserQuestionTool,
   isLegacySubAgentToolAction,
+  isMessageSessionTool,
   isModuleTool,
   isTaskToolAction,
   FILE_CREATE_TOOLS,
@@ -41,9 +42,11 @@ import { FileEditToolRow } from './FileEditToolRow';
 import { ReadToolRow } from './ReadToolRow';
 import { AskUserQuestionResultRow } from './AskUserQuestionResultRow';
 import { MemoryToolRow } from './MemoryToolRow';
+import { MessageSessionToolRow } from './MessageSessionToolRow';
 import { SkillToolRow } from './SkillToolRow';
 import { ModuleToolRow } from './ModuleToolRow';
 import { TaskToolRow } from './TaskToolRow';
+import { VisionToolRow } from './VisionToolRow';
 
 interface ToolActionRowProps {
   tool: ToolAction;
@@ -76,6 +79,8 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
   // Routing TaskTool here means TaskToolRow owns the chrome summary,
   // the JSON envelope body, and the drawer auto-open trigger.
   const isTaskTool = isTaskToolAction(tool.input);
+  const isMessageSession = isMessageSessionTool(tool.name);
+  const isVisionAnalyze = tool.name.toLowerCase() === 'vision_analyze';
   const [expanded, setExpanded] = useState(false);
   // Keep all useState calls before any conditional return so React hook
   // order stays stable when routing conditions change between renders.
@@ -132,6 +137,26 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
     // ("已创建 设计杂志风...") per-action and a successful create /
     // status=completed update auto-opens the TaskDrawer.
     return <TaskToolRow tool={tool} />;
+  }
+
+  if (isMessageSession) {
+    // MessageSession returns a plain-text response from the target
+    // agent, optionally followed by a "[Target agent used tools: ...]"
+    // trailer. Route to MessageSessionToolRow so the chrome summary
+    // shows the short target id + message preview instead of the raw
+    // JSON dump, and the expanded body renders the response text +
+    // tool-call summary + status badge.
+    return <MessageSessionToolRow tool={tool} />;
+  }
+
+  if (isVisionAnalyze) {
+    // vision_analyze returns a plain-text envelope ("Image analyzed:
+    // <path>\nFormat: …\n[Question: …]\n\n<analysis>") plus an image
+    // data URL in metadata. Route to VisionToolRow so the chrome
+    // shows a status-aware verb ("已调用视觉能力" / "Used vision")
+    // and a small preview card with the analyzed image; clicking
+    // opens the full analysis in ToolImagePreviewModal.
+    return <VisionToolRow tool={tool} />;
   }
 
   const hasResult = tool.result !== undefined && tool.result !== '';

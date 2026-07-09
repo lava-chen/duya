@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ChevronDownIcon, FileIcon, FolderOpenIcon } from "@/components/icons";
+import { ReferencesPanel } from "./ReferencesPanel";
 
 interface SessionSelectorProps {
   selectedProject: { workingDirectory: string; projectName: string } | null;
@@ -29,6 +30,7 @@ export function SessionSelector({
   const { threads, projects, isHydrated } = useConversationStore();
   const { t, locale } = useTranslation();
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"threads" | "references">("threads");
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -44,6 +46,7 @@ export function SessionSelector({
   const handleSelectProject = (project: { workingDirectory: string; projectName: string }) => {
     onSelectProject(project);
     setIsProjectDropdownOpen(false);
+    setActiveTab("threads");
   };
 
   const handleNewBlankProject = () => {
@@ -132,26 +135,57 @@ export function SessionSelector({
       {/* Input area */}
       {children}
 
-      {/* Recent threads */}
-      {showRecentThreads && recentThreads.length > 0 && (
-        <div className="welcome-recent">
-          <h2>{t('chat.recentThreads')}</h2>
-          <div className="recent-list">
-            {recentThreads.map((thread) => (
-              <button
-                key={thread.id}
-                className="recent-item"
-                onClick={() => onSelectThread(thread.id)}
-              >
-                <div className="recent-item-left">
-                  <span className="recent-title">{thread.title}</span>
-                  <span className="recent-project">{thread.projectName || thread.workingDirectory}</span>
-                </div>
-                <span className="recent-date">{formatDate(thread.updatedAt)}</span>
-              </button>
-            ))}
-          </div>
+      {/* Tab strip: only shown when a project is selected */}
+      {selectedProject && (
+        <div className="welcome-tabs" role="tablist" aria-label={t('references.tab.ariaLabel')}>
+          <button
+            role="tab"
+            aria-selected={activeTab === "threads"}
+            className={`welcome-tab ${activeTab === "threads" ? "active" : ""}`}
+            onClick={() => setActiveTab("threads")}
+          >
+            {t('references.tab.threads')}
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === "references"}
+            className={`welcome-tab ${activeTab === "references" ? "active" : ""}`}
+            onClick={() => setActiveTab("references")}
+          >
+            {t('references.tab.references')}
+          </button>
         </div>
+      )}
+
+      {/* Tab panels */}
+      {selectedProject && activeTab === "references" ? (
+        <div className="welcome-tab-panel">
+          <ReferencesPanel
+            workingDirectory={selectedProject.workingDirectory}
+            projectName={selectedProject.projectName}
+          />
+        </div>
+      ) : (
+        showRecentThreads && recentThreads.length > 0 && (
+          <div className="welcome-recent">
+            <h2>{t('chat.recentThreads')}</h2>
+            <div className="recent-list">
+              {recentThreads.map((thread) => (
+                <button
+                  key={thread.id}
+                  className="recent-item"
+                  onClick={() => onSelectThread(thread.id)}
+                >
+                  <div className="recent-item-left">
+                    <span className="recent-title">{thread.title}</span>
+                    <span className="recent-project">{thread.projectName || thread.workingDirectory}</span>
+                  </div>
+                  <span className="recent-date">{formatDate(thread.updatedAt)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )
       )}
     </>
   );

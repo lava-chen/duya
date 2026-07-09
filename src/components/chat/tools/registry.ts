@@ -16,10 +16,13 @@ import {
   QuestionIcon,
   BookOpenIcon,
   ListChecksIcon,
+  TablerMessageCircleIcon,
+  EyeIcon,
 } from '@/components/icons';
 import {
   isBrowserTool,
   isModuleTool,
+  isMessageSessionTool,
 } from './classify';
 import type { ToolAction, ToolRendererDef } from './types';
 
@@ -210,6 +213,49 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
         default:
           return 'task';
       }
+    },
+  },
+  {
+    // MessageSession — sends a message to another session's agent.
+    // The registry summary only carries the message preview; the
+    // target session *title* is resolved inside MessageSessionToolRow
+    // (which has access to the conversation store + IPC fallback) so
+    // the user never sees a raw session id. This summary is used by
+    // the generic catch-all and group summary builder only.
+    match: (n) => isMessageSessionTool(n),
+    icon: TablerMessageCircleIcon,
+    labelKey: 'streaming.toolAction.label.messageSession',
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const message = typeof inp.message === 'string' ? inp.message.trim() : '';
+      if (message) {
+        return message.length > 60 ? message.slice(0, 57) + '…' : message;
+      }
+      return 'message session';
+    },
+  },
+  {
+    // vision_analyze — invokes a dedicated vision model on an image
+    // (see packages/agent/src/tool/VisionTool/VisionTool.ts). The
+    // summary shows the optional `question` (or the image filename)
+    // so the chrome reads "Used vision · check layout overlap" instead
+    // of leaking the raw tool name. The expanded preview / modal lives
+    // in VisionToolRow.
+    match: (n) => n.toLowerCase() === 'vision_analyze',
+    icon: EyeIcon,
+    labelKey: 'streaming.toolAction.label.vision',
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const question = typeof inp.question === 'string' ? inp.question.trim() : '';
+      if (question) {
+        return question.length > 60 ? question.slice(0, 57) + '…' : question;
+      }
+      const imagePath = typeof inp.image_path === 'string' ? inp.image_path : '';
+      if (imagePath) {
+        const name = imagePath.split(/[/\\]/).pop() || imagePath;
+        return name.length > 60 ? name.slice(0, 57) + '…' : name;
+      }
+      return 'vision';
     },
   },
   {

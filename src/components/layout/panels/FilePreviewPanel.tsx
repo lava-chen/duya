@@ -17,6 +17,7 @@ import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useTheme } from "@/hooks/useTheme";
+import { useTranslation } from "@/hooks/useTranslation";
 import type { PageTab } from "./registry";
 
 interface PreviewPayload {
@@ -172,6 +173,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const openButtonRef = useRef<HTMLButtonElement>(null);
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const { t } = useTranslation();
   const panel = useOptionalPanel();
   const workspaceTreeOpen = panel?.workspaceTreeOpen ?? false;
 
@@ -466,8 +468,8 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       <PanelFileTreeSplit workingDirectory={workingDirectory}>
       <div className="file-preview-empty">
         <FolderOpen size={32} weight="duotone" />
-        <strong>打开文件</strong>
-        <span>从右侧项目树中选择一个文件进行只读预览</span>
+        <strong>{t('filePreview.openFile')}</strong>
+        <span>{t('filePreview.selectFileHint')}</span>
       </div>
       </PanelFileTreeSplit>
     );
@@ -500,14 +502,14 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         <div className="file-preview-actions">
           {panel && workingDirectory && (
             <button
-              type="button"
-              className={workspaceTreeOpen ? "active" : undefined}
-              onClick={() => panel.setWorkspaceTreeOpen(!workspaceTreeOpen)}
-              title={workspaceTreeOpen ? "收起文件树" : "展开文件树"}
-              aria-label={workspaceTreeOpen ? "收起文件树" : "展开文件树"}
-              aria-pressed={workspaceTreeOpen}
-              data-testid="file-tree-toggle"
-            >
+            type="button"
+            className={workspaceTreeOpen ? "active" : undefined}
+            onClick={() => panel.setWorkspaceTreeOpen(!workspaceTreeOpen)}
+            title={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
+            aria-label={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
+            aria-pressed={workspaceTreeOpen}
+            data-testid="file-tree-toggle"
+          >
               <Files size={16} />
             </button>
           )}
@@ -527,7 +529,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               aria-expanded={openMenuOpen}
             >
               <ArrowSquareOut size={14} />
-              <span>打开</span>
+              <span>{t('filePreview.open')}</span>
               <CaretDown size={12} className={openMenuOpen ? "rotate-180" : ""} />
             </button>
             {openMenuOpen && openMenuStyle && (
@@ -543,15 +545,15 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               >
                 <button type="button" role="menuitem" onClick={handleOpenWithDefault}>
                   <ArrowSquareOut size={14} />
-                  用默认应用打开
+                  {t('filePreview.openWithDefault')}
                 </button>
                 <button type="button" role="menuitem" onClick={handleRevealInFolder}>
                   <FolderOpen size={14} />
-                  在文件夹中显示
+                  {t('filePreview.revealInFolder')}
                 </button>
                 <button type="button" role="menuitem" onClick={handleCopyPath}>
                   <Copy size={14} />
-                  复制路径
+                  {t('filePreview.copyPath')}
                 </button>
               </div>
             )}
@@ -561,16 +563,16 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
 
       <div className="file-preview-canvas" ref={canvasRef} onMouseUp={captureSelection}>
         {loading && (
-          <div className="file-preview-state"><span className="animate-pulse">正在载入预览…</span></div>
+          <div className="file-preview-state"><span className="animate-pulse">{t('filePreview.loading')}</span></div>
         )}
         {!loading && preview && !preview.success && (
-          <div className="file-preview-state file-preview-error"><WarningCircle size={20} /> {preview.error || "无法预览文件"}</div>
+          <div className="file-preview-state file-preview-error"><WarningCircle size={20} /> {preview.error || t('filePreview.error')}</div>
         )}
         {!loading && preview?.success && (preview.kind === "unsupported" || preview.tooLarge) && (
           <div className="file-preview-state">
             <FileText size={36} weight="duotone" />
-            <strong>{preview.tooLarge ? "文件太大，无法安全预览" : "此文件类型暂不支持预览"}</strong>
-            <span>仍然可以把文件加入输入框，或用系统默认应用打开。</span>
+            <strong>{preview.tooLarge ? t('filePreview.fileTooLarge') : t('filePreview.unsupportedFileType')}</strong>
+            <span>{t('filePreview.unsupportedHint')}</span>
           </div>
         )}
         {!loading && preview?.success && !preview.tooLarge && preview.kind === "image" && dataUrl && (
@@ -581,7 +583,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         )}
         {!loading && preview?.success && preview.kind === "text" && (
           <div className={`file-preview-text${MARKDOWN_EXTENSIONS.has(preview.extension ?? "") ? " markdown" : " code"}`}>
-            {preview.truncated && <div className="file-preview-truncated">仅显示前 1 MB 内容</div>}
+            {preview.truncated && <div className="file-preview-truncated">{t('filePreview.truncatedHint')}</div>}
             {MARKDOWN_EXTENSIONS.has(preview.extension ?? "") ? (
               <MarkdownRenderer className="prose dark:prose-invert max-w-none file-preview-markdown">
                 {preview.content || ""}
@@ -630,7 +632,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
             onMouseDown={(event) => event.preventDefault()}
             onClick={askDuya}
           >
-            <Sparkle size={14} weight="fill" /> 询问 DUYA
+            <Sparkle size={14} weight="fill" /> {t('filePreview.askDuya')}
           </button>
         )}
       </div>

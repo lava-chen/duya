@@ -10,6 +10,7 @@ import {
   TerminalIcon,
   type IconProps,
 } from "@phosphor-icons/react";
+import type { TranslationKey } from "@/i18n";
 import { FileTreePanel } from "./FileTreePanel";
 import { SidebarConductorView } from "./SidebarConductorView";
 import { ResearchActivityPanel } from "./ResearchActivityPanel";
@@ -30,7 +31,8 @@ export interface PageTab {
 
 export interface PageDescriptor {
   id: PageId;
-  label: string;
+  /** Translation key for the page label shown in menus and tabs. */
+  labelKey: TranslationKey;
   icon: ComponentType<IconProps>;
   multiInstance: boolean;
   available: boolean;
@@ -51,7 +53,7 @@ export interface PageDescriptor {
 export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   files: {
     id: "files",
-    label: "文件树",
+    labelKey: "panel.files",
     icon: FolderIcon,
     multiInstance: true,
     available: true,
@@ -62,7 +64,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   },
   preview: {
     id: "preview",
-    label: "预览",
+    labelKey: "panel.preview",
     icon: FileText,
     multiInstance: true,
     available: true,
@@ -73,7 +75,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   },
   conductor: {
     id: "conductor",
-    label: "Conductor",
+    labelKey: "panel.conductor",
     icon: SquaresFourIcon,
     multiInstance: true,
     available: true,
@@ -84,7 +86,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   },
   research: {
     id: "research",
-    label: "Research",
+    labelKey: "panel.research",
     icon: GlobeIcon,
     multiInstance: false,
     available: true,
@@ -94,7 +96,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   },
   terminal: {
     id: "terminal",
-    label: "终端",
+    labelKey: "panel.terminal",
     icon: TerminalIcon,
     multiInstance: true,
     available: true,
@@ -104,7 +106,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   },
   browser: {
     id: "browser",
-    label: "浏览器",
+    labelKey: "panel.browser",
     icon: GlobeIcon,
     multiInstance: true,
     available: true,
@@ -115,7 +117,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   },
   office: {
     id: "office",
-    label: "Office",
+    labelKey: "panel.office",
     icon: FileText,
     multiInstance: true,
     available: true,

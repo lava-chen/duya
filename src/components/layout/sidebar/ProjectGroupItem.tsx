@@ -156,8 +156,8 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
             className="project-group-add-btn"
             onClick={handleNewThread}
             style={{ opacity: isHovered ? 1 : 0 }}
-            aria-label="New thread"
-            title="New thread"
+            aria-label={t('thread.newThread')}
+            title={t('thread.newThread')}
           >
             <PlusIcon size={14} weight="bold" />
           </button>
@@ -169,7 +169,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
             className="project-group-menu-btn"
             onClick={handleMenuClick}
             style={{ opacity: isHovered || showMenu ? 1 : 0 }}
-            aria-label="Project options"
+            aria-label={t('project.options')}
           >
             <DotsThreeIcon size={16} weight="bold" />
           </button>

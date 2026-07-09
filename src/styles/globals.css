@@ -3565,6 +3565,383 @@ a {
   margin-left: 1rem;
 }
 
+/* Welcome tabs - Chat / Sources switch */
+.welcome-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.welcome-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.welcome-tab:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.welcome-tab.active {
+  color: var(--text);
+  background: var(--bg-canvas);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.welcome-tab-panel {
+  width: 100%;
+  max-width: 700px;
+}
+
+/* References panel */
+.references-panel {
+  width: 100%;
+  text-align: left;
+}
+
+.references-error {
+  padding: 0.7rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--error-soft);
+  border: 1px solid var(--error);
+  border-radius: 0.55rem;
+  color: var(--error);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.references-loading,
+.references-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.references-empty-title {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 0.4rem;
+}
+
+.references-empty-hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+  max-width: 440px;
+  line-height: 1.45;
+}
+
+/* "Add source" row */
+.references-add-source-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 0.6rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-bottom: 0.75rem;
+}
+
+.references-add-source-row:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--accent-soft);
+}
+
+.references-add-source-row:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.references-add-source-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--bg-canvas);
+  color: var(--text);
+}
+
+.references-add-source-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* File list */
+.references-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.references-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  transition: all 0.15s ease;
+}
+
+.references-item:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent-soft);
+}
+
+.references-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.references-item-main:disabled {
+  cursor: default;
+}
+
+.references-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.45rem;
+  background: var(--bg-canvas);
+  flex-shrink: 0;
+}
+
+.references-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.references-item-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.references-item-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.references-item-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.4rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  opacity: 0;
+}
+
+.references-item:hover .references-item-delete {
+  opacity: 1;
+}
+
+.references-item-delete:hover:not(:disabled) {
+  background: var(--error-soft);
+  color: var(--error);
+}
+
+.references-item-delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Add sources modal */
+.references-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.references-modal {
+  width: 90%;
+  max-width: 520px;
+  padding: 1.25rem;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.references-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.references-modal-header h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.references-modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.references-modal-close:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.references-modal-close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.references-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  min-height: 180px;
+  padding: 1.5rem;
+  background: var(--surface);
+  border: 2px dashed var(--border);
+  border-radius: 0.75rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.references-dropzone:hover:not(.dragging) {
+  border-color: var(--accent-soft);
+  color: var(--text);
+}
+
+.references-dropzone.dragging {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.references-dropzone span {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.references-file-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.references-modal-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 1rem;
+}
+
+.references-modal-browse {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.references-modal-browse:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--accent-soft);
+}
+
+.references-modal-browse:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Spin animation for loading icons */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
 /* ========================================
    Pasted Content Attachment Styles
    ======================================== */

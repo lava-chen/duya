@@ -14,6 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { usePanel } from "@/hooks/usePanel";
+import { useTranslation } from "@/hooks/useTranslation";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
 import type { PageTab } from "./registry";
 
@@ -97,6 +98,7 @@ function paragraphRole(paragraph: string, index: number): "title" | "meta" | "he
 }
 
 export function OfficePanel({ tab }: { tab: PageTab; embedded: boolean }) {
+  const { t } = useTranslation();
   const filePath = typeof tab.params?.filePath === "string" ? tab.params.filePath : "";
   const workingDirectory = typeof tab.params?.workingDirectory === "string" ? tab.params.workingDirectory : "";
   const kind = officeKind(filePath);
@@ -297,7 +299,7 @@ export function OfficePanel({ tab }: { tab: PageTab; embedded: boolean }) {
             style={{ left: selection.x, top: selection.y }}
             onMouseDown={(event) => event.preventDefault()}
             onClick={askDuya}
-          ><Sparkle size={14} weight="fill" /> 问问 DUYA</button>
+          ><Sparkle size={14} weight="fill" /> {t('office.askDuya')}</button>
         )}
       </div>
     </div>

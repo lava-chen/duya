@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "@/hooks/useTranslation";
 import { MAX_PANEL_RATIO, MIN_PANEL_WIDTH, usePanel } from "@/hooks/usePanel";
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
@@ -46,6 +47,7 @@ export function PanelZone() {
     workspaceExpanded,
     setWorkspaceExpanded,
   } = usePanel();
+  const { t } = useTranslation();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const currentView = useConversationStore((s) => s.currentView);
   const threads = useConversationStore((s) => s.threads);
@@ -120,8 +122,8 @@ export function PanelZone() {
             type="button"
             className={`panel-edge-toggle${panelOpen ? " active" : ""}`}
             onClick={togglePanel}
-            title={panelOpen ? "收起侧栏" : "打开侧栏"}
-            aria-label={panelOpen ? "收起侧栏" : "打开侧栏"}
+            title={panelOpen ? t('panel.closePanel') : t('panel.openPanel')}
+            aria-label={panelOpen ? t('panel.closePanel') : t('panel.openPanel')}
             aria-expanded={panelOpen}
           >
             <SidebarRightIcon size={16} stroke={1.75} />
@@ -132,8 +134,8 @@ export function PanelZone() {
               type="button"
               className="panel-edge-toggle panel-expand-toggle"
               onClick={() => setWorkspaceExpanded(!workspaceExpanded)}
-              title={workspaceExpanded ? "收起面板" : "展开面板"}
-              aria-label={workspaceExpanded ? "收起面板" : "展开面板"}
+              title={workspaceExpanded ? t('panel.collapsePanel') : t('panel.expandPanel')}
+              aria-label={workspaceExpanded ? t('panel.collapsePanel') : t('panel.expandPanel')}
               data-testid="workspace-expand"
             >
               {workspaceExpanded
@@ -206,7 +208,9 @@ function EmptyPanelLauncherRow({
   shortcut: string | null;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation();
   const Icon = entry.icon;
+  const label = t(entry.labelKey);
 
   return (
     <button
@@ -217,17 +221,17 @@ function EmptyPanelLauncherRow({
         if (!entry.available) return;
         onSelect();
       }}
-      title={entry.available ? entry.label : `${entry.label}（未实现）`}
+      title={entry.available ? label : `${label} (${t('panel.unavailable')})`}
     >
       <span className="panel-empty-launcher-main">
         <span className="panel-empty-launcher-icon">
           <Icon size={16} weight="regular" />
         </span>
-        <span className="panel-empty-launcher-name">{entry.label}</span>
+        <span className="panel-empty-launcher-name">{label}</span>
       </span>
       <span className="panel-empty-launcher-meta">
         {shortcut && <span className="panel-empty-launcher-shortcut">{shortcut}</span>}
-        {!entry.available && <span className="panel-empty-launcher-hint">未实现</span>}
+        {!entry.available && <span className="panel-empty-launcher-hint">{t('panel.unavailable')}</span>}
       </span>
     </button>
   );

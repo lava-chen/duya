@@ -158,29 +158,38 @@ export function ChatView({
   const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
   const taskDrawerOpen = useTaskDrawerOpen();
-  const { workspaceExpanded, openOrActivatePage } = usePanel();
+  const { workspaceExpanded, openOrActivatePage, tabs: panelTabs, closePanel } = usePanel();
+  // Keep a ref to the latest panel tabs so cleanup code can close conductor
+  // tabs without adding `tabs` to the dependency list of callbacks/effects
+  // that must stay stable (e.g. handleConductorChange, session loader).
+  const panelTabsRef = useRef(panelTabs);
+  useEffect(() => {
+    panelTabsRef.current = panelTabs;
+  }, [panelTabs]);
 
   // Conductor mode is independent of plan/research modes — separate state.
   // conductorCanvasId is the durable binding to the sidebar canvas; when
   // conductor is enabled and no canvas exists yet, one is created lazily.
-  const [conductorEnabled, setConductorEnabled] = useState(false);
-  const [conductorCanvasId, setConductorCanvasId] = useState<string | null>(null);
-  // Ref mirror of conductorCanvasId so `handleConductorChange` can read the
-  // latest value without depending on it in its `useCallback` deps. This
-  // keeps the callback reference stable across canvas-id changes, which
-  // prevents downstream effects in MessageInput from re-running and
-  // racing with the prop→state sync.
+  const [conductorEnabled, setConductorEnabledState] = useState(false);
+  const [conductorCanvasId, setConductorCanvasIdState] = useState<string | null>(null);
+  // Ref mirrors kept in sync with state via wrapper setters below, so
+  // `handleConductorChange` and the panel-open subscription read the latest
+  // value synchronously instead of waiting for a separate ref-mirror effect
+  // to flush. This avoids render-frame races where the auto-enable effect
+  // would observe a stale `conductorEnabledRef` (e.g. session restore sets
+  // conductorEnabled=true and then opens the panel; without synchronous
+  // updates the panel-open effect could fire before the ref caught up and
+  // double-fire handleConductorChange).
   const conductorCanvasIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    conductorCanvasIdRef.current = conductorCanvasId;
-  }, [conductorCanvasId]);
-
-  // Ref mirror of conductorEnabled so the conductor-panel-open subscription
-  // below can read the latest value without re-subscribing on every toggle.
   const conductorEnabledRef = useRef<boolean>(false);
-  useEffect(() => {
-    conductorEnabledRef.current = conductorEnabled;
-  }, [conductorEnabled]);
+  const setConductorEnabled = useCallback((next: boolean) => {
+    conductorEnabledRef.current = next;
+    setConductorEnabledState(next);
+  }, []);
+  const setConductorCanvasId = useCallback((next: string | null) => {
+    conductorCanvasIdRef.current = next;
+    setConductorCanvasIdState(next);
+  }, []);
 
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);
@@ -358,6 +367,14 @@ export function ChatView({
             } else {
               setConductorEnabled(false);
               setConductorCanvasId(null);
+              // Clean up any stale conductor panel tabs for this session.
+              // A previous bug may have persisted a conductor tab even though
+              // the session row says conductor mode is off; leaving that tab
+              // open would mount SidebarConductorView, which sets the global
+              // activeCanvasId and triggers the auto-enable subscription.
+              for (const tab of panelTabsRef.current.filter((t) => t.pageId === 'conductor')) {
+                closePanel(tab.id);
+              }
             }
           }
         })
@@ -553,14 +570,28 @@ export function ChatView({
     async (enabled: boolean, options?: { openPanel?: boolean }) => {
       if (!sessionId) return;
       const { openPanel = true } = options ?? {};
+      // Avoid redundant work when the requested state already matches the
+      // current state. This also prevents double DB writes when both the
+      // canvas-switch and tab-creation auto-enable subscriptions fire for
+      // the same user action.
+      if (enabled === conductorEnabledRef.current) return;
       setConductorEnabled(enabled);
       // Read the latest canvas id from the ref to keep this callback's deps
       // stable (see conductorCanvasIdRef comment above).
       const currentCanvasId = conductorCanvasIdRef.current;
       if (!enabled) {
+        // Clear the canvas-id binding (both local and DB) and close any open
+        // conductor panel tabs. When conductor is off the session should carry
+        // no canvas binding, and leaving a conductor tab open would keep
+        // SidebarConductorView mounted, which sets the global activeCanvasId
+        // and can re-trigger the auto-enable subscription on canvas switches.
+        setConductorCanvasId(null);
+        for (const tab of panelTabsRef.current.filter((t) => t.pageId === 'conductor')) {
+          closePanel(tab.id);
+        }
         try {
-          await window.electronAPI.session.setConductorMode(sessionId, false, currentCanvasId ?? null);
-          useConversationStore.getState().setThreadConductorBinding(sessionId, false, currentCanvasId ?? null);
+          await window.electronAPI.session.setConductorMode(sessionId, false, null);
+          useConversationStore.getState().setThreadConductorBinding(sessionId, false, null);
         } catch (err) {
           console.error('[ChatView] setConductorMode IPC failed (disable)', err);
         }
@@ -615,17 +646,27 @@ export function ChatView({
     [sessionId, openOrActivatePage],
   );
 
-  // Auto-enable conductor mode when the user opens the conductor panel
-  // from the sidebar (or switches canvases inside an open panel while
-  // conductor mode is off). Subscribes to the conductor store's
-  // `activeCanvasId` — when it transitions to a non-null value and
-  // conductor mode is currently off, call `handleConductorChange(true)`
-  // with `openPanel: false` (the panel is already open, so we must not
-  // call `openOrActivatePage` again or we'd create a duplicate tab).
+  // Auto-enable conductor mode when the user switches canvases inside an
+  // already-open conductor panel while conductor mode is off. Subscribes
+  // to the conductor store's `activeCanvasId` — when it transitions to a
+  // non-null value and conductor mode is currently off, call
+  // `handleConductorChange(true)` with `openPanel: false` (the panel is
+  // already open, so we must not call `openOrActivatePage` again or we'd
+  // create a duplicate tab).
   const conductorStoreActiveCanvasId = useConductorStore(s => s.activeCanvasId);
+  const prevSessionIdRef = useRef<string | null>(null);
   const prevStoreCanvasIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!sessionId) return;
+    // On session change, reset the canvas-id baseline so the prev canvas id
+    // from the last session does not leak in and produce a false "canvas
+    // changed" detection. Return without auto-enabling; the session-loader
+    // effect restores conductor state from the DB.
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      prevStoreCanvasIdRef.current = conductorStoreActiveCanvasId;
+      return;
+    }
     const prev = prevStoreCanvasIdRef.current;
     prevStoreCanvasIdRef.current = conductorStoreActiveCanvasId;
     if (
@@ -636,6 +677,31 @@ export function ChatView({
       void handleConductorChange(true, { openPanel: false });
     }
   }, [conductorStoreActiveCanvasId, sessionId, handleConductorChange]);
+
+  // Auto-enable conductor mode when a conductor panel tab is created while
+  // conductor mode is off. This captures the sidebar nav click path, which
+  // opens a panel tab but does not change the global activeCanvasId when
+  // the store already holds a canvas id for that canvas.
+  const prevSessionIdForTabsRef = useRef<string | null>(null);
+  const prevConductorTabCountRef = useRef(0);
+  useEffect(() => {
+    if (!sessionId) return;
+    const count = panelTabs.filter((t) => t.pageId === 'conductor').length;
+    // On session change, reset the tab-count baseline so the count from the
+    // previous session does not leak in and auto-enable conductor based on
+    // stale/dirty persisted panel state. The session-loader effect above is
+    // responsible for restoring the correct conductor state from the DB.
+    if (prevSessionIdForTabsRef.current !== sessionId) {
+      prevSessionIdForTabsRef.current = sessionId;
+      prevConductorTabCountRef.current = count;
+      return;
+    }
+    const prev = prevConductorTabCountRef.current;
+    prevConductorTabCountRef.current = count;
+    if (count > 0 && prev === 0 && !conductorEnabledRef.current) {
+      void handleConductorChange(true, { openPanel: false });
+    }
+  }, [panelTabs, sessionId, handleConductorChange]);
 
   const handleStop = useCallback(() => {
     onInterrupt?.();
