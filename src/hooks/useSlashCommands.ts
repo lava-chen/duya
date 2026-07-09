@@ -286,6 +286,8 @@ export function useSlashCommands(opts: {
           const skillItems: PopoverItem[] = (result.skills as Array<{
             name: string;
             description?: string;
+            category?: string;
+            whenToUse?: string;
             source?: string;
             userInvocable?: boolean;
             isHidden?: boolean;
@@ -293,17 +295,20 @@ export function useSlashCommands(opts: {
             skillRoot?: string;
           }>)
             .filter((s) => s.userInvocable !== false && !s.isHidden && s.enabled !== false)
-            .map((skill) => ({
-              label: `/${skill.name}`,
-              value: `/${skill.name}`,
-              description:
-                typeof skill.description === 'string' ? skill.description : '',
-              kind: 'agent_skill' as const,
-              group: 'skills' as const,
-              installedSource: skill.source === 'project' ? 'agents' : 'claude',
-              source: (skill.source as 'global' | 'project' | 'plugin' | 'installed' | 'sdk') || undefined,
-              skillRoot: typeof skill.skillRoot === 'string' ? skill.skillRoot : undefined,
-            }));
+            .map((skill) => {
+              const rawDesc = typeof skill.description === 'string' ? skill.description : '';
+              const fallbackDesc = typeof skill.whenToUse === 'string' ? skill.whenToUse : (skill.category ?? '');
+              return {
+                label: skill.name,
+                value: `/${skill.name}`,
+                description: rawDesc || fallbackDesc,
+                kind: 'agent_skill' as const,
+                group: 'skills' as const,
+                installedSource: skill.source === 'project' ? 'agents' : 'claude',
+                source: (skill.source as 'global' | 'project' | 'plugin' | 'installed' | 'sdk') || undefined,
+                skillRoot: typeof skill.skillRoot === 'string' ? skill.skillRoot : undefined,
+              };
+            });
           return [...builtIns, ...skillItems];
         }
       }
