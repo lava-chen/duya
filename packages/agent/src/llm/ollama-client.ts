@@ -293,6 +293,18 @@ export class OllamaClient implements LLMClient {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
+      // Forward external abort signal to our controller so user-initiated
+      // cancellations reach the underlying fetch call.
+      const externalSignal = options?.signal;
+      const onExternalAbort = () => controller.abort();
+      if (externalSignal) {
+        if (externalSignal.aborted) {
+          controller.abort();
+        } else {
+          externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
+      }
+
       try {
         logger.info(`[OllamaClient] Sending fetch request to ${this.baseURL}/api/chat (attempt ${retryCount + 1})`, undefined, 'OllamaClient');
         response = await fetch(`${this.baseURL}/api/chat`, {
@@ -307,12 +319,22 @@ export class OllamaClient implements LLMClient {
         logger.info(`[OllamaClient] Fetch response received: ${response.status}`, undefined, 'OllamaClient');
       } catch (fetchError) {
         clearTimeout(timeoutId);
+        if (externalSignal) {
+          externalSignal.removeEventListener('abort', onExternalAbort);
+        }
         if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          // Distinguish user-initiated abort from our timeout
+          if (externalSignal?.aborted) {
+            throw fetchError;
+          }
           throw new Error('Ollama API request timed out after 30 seconds');
         }
         throw new Error(`Ollama API request failed: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`);
       }
       clearTimeout(timeoutId);
+      if (externalSignal) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
 
       if (response.ok) {
         break; // Success, exit retry loop
@@ -322,14 +344,14 @@ export class OllamaClient implements LLMClient {
       let needsRetry = false;
 
       // Check if the error is about thinking not being supported
-      if ((errorText.includes('does not support thinking') || errorText.includes('thinking') || errorText.includes('reasoning')) && requestBody.think === true) {
+      if (errorText.includes('does not support thinking') && requestBody.think === true) {
         logger.warn(`[OllamaClient] Model ${this.model} does not support thinking, will retry without think mode`, undefined, 'OllamaClient');
         requestBody.think = false;
         needsRetry = true;
       }
 
       // Check if the error is about tools not being supported
-      if ((errorText.includes('does not support tools') || errorText.includes('tools') || errorText.includes('tool call')) && requestBody.tools) {
+      if ((errorText.includes('does not support tools') || errorText.includes('does not support tool call')) && requestBody.tools) {
         logger.warn(`[OllamaClient] Model ${this.model} does not support tools, will retry without tools`, undefined, 'OllamaClient');
         delete requestBody.tools;
         needsRetry = true;

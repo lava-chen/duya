@@ -92,6 +92,17 @@ export function calculatePersistentBackoffDelay(
 }
 
 /**
+ * Create a standard AbortError with the correct name so that
+ * isAbortError() detects it via the reliable name check rather
+ * than falling back to fragile message substring matching.
+ */
+function createAbortError(): Error {
+  const err = new Error('Aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
+/**
  * Sleep for specified duration with abort signal support
  *
  * @param ms - Milliseconds to sleep
@@ -101,7 +112,7 @@ export function calculatePersistentBackoffDelay(
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error('AbortError'));
+      reject(createAbortError());
       return;
     }
 
@@ -112,7 +123,7 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
     const onAbort = () => {
       cleanup();
-      reject(new Error('AbortError'));
+      reject(createAbortError());
     };
 
     const cleanup = () => {
@@ -145,7 +156,7 @@ export async function sleepWithHeartbeat(
 
   while (remaining > 0) {
     if (signal?.aborted) {
-      throw new Error('AbortError');
+      throw createAbortError();
     }
 
     const chunk = Math.min(remaining, chunkMs);

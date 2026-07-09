@@ -6,7 +6,7 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
@@ -17,6 +17,7 @@ import type {
 import { sanitizeWorkingDirectory } from './sanitize.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // ============================================================
 // Types
@@ -212,7 +213,9 @@ export class GrepTool extends BaseTool {
     ].filter(Boolean);
 
     try {
-      const { stdout } = await execAsync(`rg ${args.join(' ')}`, {
+      // Use execFile (no shell) so user-controlled pattern/path cannot inject
+      // shell metacharacters. Args are passed as an array, never concatenated.
+      const { stdout } = await execFileAsync('rg', args, {
         cwd: this.workingDirectory,
         maxBuffer: 50 * 1024 * 1024, // Increased buffer for large directories
         timeout: 30000, // 30 second timeout

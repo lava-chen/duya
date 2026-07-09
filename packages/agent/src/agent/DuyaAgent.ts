@@ -55,6 +55,7 @@ import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode } from '../permissions/types.js';
 import { permissionModeFromString } from '../permissions/PermissionMode.js';
 import { logger } from '../utils/logger.js';
+import { createChildAbortController } from '../abort/index.js';
 import { getAgentProfileService } from '../agent-profile/AgentProfileService.js';
 import type { AgentProfile } from '../agent-profile/types.js';
 import { resolveAllowedTools } from '../agent-profile/ToolFilter.js';
@@ -152,12 +153,32 @@ function hasRunningBackgroundTasksForSession(parentSessionId?: string): boolean 
 }
 
 async function waitForBackgroundTaskNotifications(parentSessionId?: string): Promise<string[]> {
+  const TIMEOUT_MS = 120_000
+  const startTime = Date.now()
+
   while (hasRunningBackgroundTasksForSession(parentSessionId)) {
     const drained = dequeueAllMatching(
       (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
     )
     if (drained.length > 0) {
       return drained.map((cmd) => cmd.value)
+    }
+    if (Date.now() - startTime >= TIMEOUT_MS) {
+      // Timeout: list unfinished task IDs and yield what we have so
+      // the main conversation is not blocked indefinitely.
+      const unfinishedTaskIds = backgroundAgentLifecycle
+        .getAll()
+        .filter(
+          (task) =>
+            task.parentSessionId === parentSessionId &&
+            (task.status === 'pending' || task.status === 'running'),
+        )
+        .map((task) => task.taskId)
+      logger.warn(
+        `[Agent] waitForBackgroundTaskNotifications timed out after ${TIMEOUT_MS}ms; ` +
+        `unfinished tasks: ${unfinishedTaskIds.join(', ') || '(none)'}`,
+      )
+      break
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
@@ -286,6 +307,16 @@ export class duyaAgent {
    * bypass `inferProvider(baseURL)` heuristics.
    */
   readonly runtimeConfig?: AgentOptions['runtimeConfig'];
+
+  /**
+   * Optional callback invoked after a proactive compaction replaces
+   * this.messages with a compressed set. The argument is the new
+   * message count. The caller (agent-process-entry) uses this to
+   * update its existingMessageCount and persist the compacted
+   * message list so subsequent incremental saves use the correct
+   * baseline.
+   */
+  onMessagesCompacted?: (newMessageCount: number) => void;
 
   // Phase 2A worker closure: the agent owns the long-lived MCP
   // runtime. `activeMCPRegistry` is the ToolRegistry slot that
@@ -456,20 +487,32 @@ export class duyaAgent {
       ];
 
       const result: string[] = [];
+      // Use a child abort controller linked to the agent's main
+      // abortController so user interrupts also cancel the summarizer.
+      const childController = this.abortController
+        ? createChildAbortController(this.abortController)
+        : new AbortController();
       const stream = this.llmClient.streamChat(summaryMessages, {
         systemPrompt: prompt,
         maxTokens: 4096,
         temperature: 0.3,
-        signal: new AbortController().signal,
+        signal: childController.signal,
       });
 
-      for await (const event of stream) {
-        if (event.type === 'text') {
-          result.push(event.data);
+      try {
+        for await (const event of stream) {
+          if (event.type === 'text') {
+            result.push(event.data);
+          }
+          if (event.type === 'done' || event.type === 'error') {
+            break;
+          }
         }
-        if (event.type === 'done' || event.type === 'error') {
-          break;
-        }
+      } finally {
+        // Dispose the parent handler to avoid leaking it on the
+        // main abortController's signal.
+        const disposable = childController as AbortController & { dispose?: () => void };
+        disposable.dispose?.();
       }
 
       return result.join('').trim();
@@ -490,19 +533,29 @@ export class duyaAgent {
       ];
 
       const result: string[] = [];
+      // Use a child abort controller linked to the agent's main
+      // abortController so user interrupts also cancel the review.
+      const childController = this.abortController
+        ? createChildAbortController(this.abortController)
+        : new AbortController();
       const stream = this.llmClient.streamChat(reviewMessages, {
         maxTokens: 2048,
         temperature: 0.2,
-        signal: new AbortController().signal,
+        signal: childController.signal,
       });
 
-      for await (const event of stream) {
-        if (event.type === 'text') {
-          result.push(event.data);
+      try {
+        for await (const event of stream) {
+          if (event.type === 'text') {
+            result.push(event.data);
+          }
+          if (event.type === 'done' || event.type === 'error') {
+            break;
+          }
         }
-        if (event.type === 'done' || event.type === 'error') {
-          break;
-        }
+      } finally {
+        const disposable = childController as AbortController & { dispose?: () => void };
+        disposable.dispose?.();
       }
 
       return result.join('').trim();
@@ -981,6 +1034,9 @@ export class duyaAgent {
           logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactResult.strategy}, removed=${compactResult.tokensRemoved} tokens, retained=${compactResult.tokensRetained} tokens`);
           // Update messages reference since compact() replaces this.messages
           messages = this.messages;
+          // Notify external listener so it can persist the compacted
+          // message list and update its baseline count.
+          this.onMessagesCompacted?.(this.messages.length);
         } catch (compactError) {
           const compactErrorMsg = compactError instanceof Error ? compactError.message : String(compactError);
           logger.error(`[Agent] Turn ${turnCount}: Proactive compaction failed: ${compactErrorMsg}`);
@@ -2347,6 +2403,7 @@ export class duyaAgent {
     maxMessagesToKeep?: number;
     model?: string;
   }): Promise<{ messagesCompressed: number; estimatedTokensSaved: number }> {
+    logger.warn('compressHistory is deprecated, use compactionManager.compact instead');
     if (this.messages.length === 0) {
       return { messagesCompressed: 0, estimatedTokensSaved: 0 };
     }

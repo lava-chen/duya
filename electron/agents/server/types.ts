@@ -127,12 +127,12 @@ export interface ConductorSSEEvent {
 }
 
 const VALID_TRANSITIONS: Record<SessionState, SessionState[]> = {
-  [SessionState.IDLE]: [SessionState.STREAMING],
-  [SessionState.STREAMING]: [SessionState.COMPLETING, SessionState.COMPLETED, SessionState.CRASHED, SessionState.ERROR],
-  [SessionState.COMPLETING]: [SessionState.COMPLETED, SessionState.CRASHED, SessionState.ERROR],
+  [SessionState.IDLE]: [SessionState.STREAMING, SessionState.COMPLETING],
+  [SessionState.STREAMING]: [SessionState.COMPLETING, SessionState.COMPLETED, SessionState.CRASHED, SessionState.ERROR, SessionState.IDLE],
+  [SessionState.COMPLETING]: [SessionState.COMPLETED, SessionState.CRASHED, SessionState.ERROR, SessionState.IDLE],
   [SessionState.CRASHED]: [SessionState.IDLE],
   [SessionState.ERROR]: [SessionState.IDLE],
-  [SessionState.COMPLETED]: [SessionState.STREAMING],
+  [SessionState.COMPLETED]: [SessionState.STREAMING, SessionState.COMPLETING],
 };
 
 export function isValidTransition(from: SessionState, to: SessionState): boolean {

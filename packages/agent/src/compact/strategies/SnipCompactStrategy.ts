@@ -7,6 +7,7 @@
 import type { CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
 import { COMPACTION_THRESHOLDS } from '../types.js'
 import { estimateMessagesTokens } from '../tokenBudget.js'
+import { adjustSliceBoundary } from '../compact.js'
 
 /**
  * Configuration for Snip Compact
@@ -70,12 +71,17 @@ export class SnipCompactStrategy implements CompactionStrategy {
     // Calculate tokens removed
     const tokensBefore = estimateMessagesTokens(messages)
 
-    // Keep system messages and most recent N conversation messages
-    const recentMessages = conversationMessages.slice(-this.config.maxMessagesToKeep)
-    const removedCount = messages.length - systemMessages.length - recentMessages.length
+    // Keep system messages and most recent N conversation messages.
+    // Adjust the boundary so we don't cut in the middle of a
+    // tool_use/tool_result round-trip (orphaned tool_result).
+    let splitIndex = Math.max(0, conversationMessages.length - this.config.maxMessagesToKeep)
+    splitIndex = adjustSliceBoundary(conversationMessages, splitIndex)
+    const recentMessages = conversationMessages.slice(splitIndex)
+    const olderMessages = conversationMessages.slice(0, splitIndex)
+    const removedCount = olderMessages.length
 
     // Build compressed history with a boundary marker
-    const compactedIds = conversationMessages.slice(0, -this.config.maxMessagesToKeep)
+    const compactedIds = olderMessages
       .map(m => m.id).filter((id): id is string => !!id)
     const snipNotice: Message = {
       role: 'system',
@@ -94,7 +100,7 @@ export class SnipCompactStrategy implements CompactionStrategy {
 
     // Calculate tokens retained
     const tokensRetained = estimateMessagesTokens(compressedMessages)
-    const tokensRemoved = tokensBefore - tokensRetained
+    const tokensRemoved = Math.max(0, tokensBefore - tokensRetained)
 
     return {
       messages: compressedMessages,

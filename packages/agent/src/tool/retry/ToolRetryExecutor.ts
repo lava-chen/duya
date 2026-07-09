@@ -14,6 +14,21 @@ import type {
 import { RetryAction } from './types.js'
 
 /**
+ * Tools with side effects that must not be transparently re-run after a
+ * failure (a timed-out write may have already persisted, a re-run would
+ * double-apply the change). Strategies flagged `idempotentOnly: true`
+ * skip the RETRY action for these tools and fall through to FALLBACK/ABORT.
+ */
+const NON_IDEMPOTENT_TOOLS = new Set([
+  'bash',
+  'powershell',
+  'write',
+  'edit',
+  'bash_tool',
+  'powershell_tool',
+])
+
+/**
  * Default configuration for the retry executor
  */
 const DEFAULT_CONFIG: Required<RetryExecutorConfig> = {
@@ -182,6 +197,13 @@ export class ToolRetryExecutor {
               reason: `Fallback from ${context.toolName} to ${fallbackTool}`,
             }
           }
+        }
+
+        // Skip RETRY for non-idempotent tools when the strategy requires
+        // idempotency — re-running side-effectful tools risks double
+        // execution. Continue to the next strategy (or ABORT).
+        if (strategy.idempotentOnly && NON_IDEMPOTENT_TOOLS.has(context.toolName)) {
+          continue
         }
 
         return {

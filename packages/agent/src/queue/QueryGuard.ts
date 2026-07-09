@@ -79,4 +79,12 @@ export class QueryGuard {
   }
 }
 
+// Global singleton QueryGuard instance.
+// NOTE: This singleton was created for an earlier architecture where a
+// single guard serialized all agent queries within the process. In the
+// current per-session worker model, each agent process handles one
+// session and the guard is effectively process-scoped. Kept for
+// backward compatibility with any external imports; do not remove
+// without auditing all import sites. If you need a per-session guard,
+// instantiate `new QueryGuard()` explicitly instead of using this export.
 export const queryGuard = new QueryGuard()

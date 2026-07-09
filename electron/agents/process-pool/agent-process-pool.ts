@@ -53,6 +53,8 @@ export class AgentProcessPool {
   private logger = getLogger();
   private providerReinitLock = new Map<string, boolean>();
   private unsubConfigChange: (() => void) | null = null;
+  // L1: Cached provider config snapshot to detect provider-only changes
+  private lastProviderSnapshot = '';
   private router = new MessageRouter();
 
   constructor() {
@@ -63,11 +65,28 @@ export class AgentProcessPool {
 
   private subscribeToProviderChanges(): void {
     const configManager = getConfigManager();
+    // L1: Only reinit sessions when provider configuration actually changes.
+    // Other config changes (e.g. UI settings) should not trigger a full restart.
+    this.lastProviderSnapshot = JSON.stringify(this.snapshotProviders());
     this.unsubConfigChange = configManager.onConfigChange(() => {
+      const current = JSON.stringify(this.snapshotProviders());
+      if (current === this.lastProviderSnapshot) {
+        // Provider config unchanged — skip reinit
+        return;
+      }
+      this.lastProviderSnapshot = current;
       for (const sessionId of this.running.keys()) {
         this.reinitProcess(sessionId);
       }
     });
+  }
+
+  private snapshotProviders(): unknown {
+    const configManager = getConfigManager();
+    return {
+      defaultProviderId: configManager.getConfig().defaultProviderId ?? null,
+      providers: configManager.getAllProviders(),
+    };
   }
 
   // ========================================================================
@@ -283,6 +302,13 @@ export class AgentProcessPool {
     const next = this.queue.shift();
     if (!next) return;
 
+    // M3: Skip if session already has a running process (duplicate queue entry)
+    if (this.running.has(next.sessionId)) {
+      next.resolve();
+      this.processQueue();
+      return;
+    }
+
     this.startProcess(next.sessionId)
       .then(() => next.resolve())
       .catch(err => next.reject(err));
@@ -450,9 +476,21 @@ export class AgentProcessPool {
       this.providerReinitLock.set(sessionId, true);
       const handlerSet = this.router.getHandlers(sessionId);
       if (handlerSet) {
+        // L2: Add a timeout so the handler does not leak if the process exits
+        // without sending chat:done/chat:error (e.g. crash during busy turn).
+        const timeout = setTimeout(() => {
+          handlerSet.delete(checkDone);
+          this.providerReinitLock.delete(sessionId);
+          this.logger.warn(
+            'reinitProcess: busy session handler timed out, cleaning up',
+            { sessionId },
+            LogComponent.AgentProcessPool,
+          );
+        }, 60000);
         const checkDone = (msg: ProcessMessage): void => {
           const msgType = (msg as { type?: string }).type;
           if (msgType === 'chat:done' || msgType === 'chat:error') {
+            clearTimeout(timeout);
             handlerSet.delete(checkDone);
             this.providerReinitLock.delete(sessionId);
             this.sendProviderInit(sessionId);

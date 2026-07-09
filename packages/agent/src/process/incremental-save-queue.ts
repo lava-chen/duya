@@ -58,9 +58,17 @@ export class IncrementalSaveQueue {
         if (this.pending !== null) {
           const oldPending = this.pending;
           this.pending = request;
+          // Chain both resolve AND reject so the old pending promise
+          // settles when the new request settles. Previously only
+          // resolve was chained, leaving oldPending's promise
+          // forever pending if the new request rejected.
           request.resolve = (result: AppendMessagesResult) => {
             oldPending.resolve(result);
             resolve(result);
+          };
+          request.reject = (error: Error) => {
+            oldPending.reject(error);
+            reject(error);
           };
         } else {
           this.pending = request;
@@ -71,6 +79,10 @@ export class IncrementalSaveQueue {
         request.resolve = (result: AppendMessagesResult) => {
           oldPending.resolve(result);
           resolve(result);
+        };
+        request.reject = (error: Error) => {
+          oldPending.reject(error);
+          reject(error);
         };
       } else {
         this.execute(request);
@@ -105,6 +117,13 @@ export class IncrementalSaveQueue {
 
   markFlushed(): void {
     this._isFlushed = true;
+    // Resolve any pending request so its promise does not hang
+    // forever. The executing request (if any) completes normally
+    // via execute()'s then/catch handlers.
+    if (this.pending !== null) {
+      this.pending.resolve({ success: false, count: 0 });
+      this.pending = null;
+    }
   }
 
   async flush(): Promise<void> {

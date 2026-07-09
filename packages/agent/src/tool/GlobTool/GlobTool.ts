@@ -208,7 +208,17 @@ export function isPathSafe(requestedPath: string, basePath: string): boolean {
   try {
     const resolved = path.resolve(basePath, requestedPath);
     const baseResolved = path.resolve(basePath);
-    return resolved.startsWith(baseResolved);
+    // Use path.relative to detect traversal. A bare `startsWith`
+    // would let `/foo/barbaz` pass for base `/foo/bar` because both
+    // strings start with `/foo/bar`. `path.relative` returns a path
+    // starting with `..` when the target is outside the base, an
+    // absolute path when the drives differ on Windows (e.g. C: → D:),
+    // and an empty string when the two paths are equal.
+    const rel = path.relative(baseResolved, resolved);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -317,7 +327,19 @@ export async function executeGlob(
     'vendor', 'target', 'bin', 'obj',
   ]);
 
-  async function walkDir(dir: string): Promise<void> {
+  // Hard ceiling on recursion depth. A well-formed source repo rarely
+  // exceeds 15 levels; 30 catches pathological inputs (cyclic symlink
+  // chains that survived path resolution, or arbitrarily-deep
+  // generated trees) without aborting legitimate walks. Without this
+  // cap, walkDir would follow a symlink loop until the JS stack
+  // overflowed.
+  const MAX_WALK_DEPTH = 30;
+
+  async function walkDir(dir: string, currentDepth: number = 0): Promise<void> {
+    if (currentDepth >= MAX_WALK_DEPTH) {
+      return;
+    }
+
     if (results.length >= maxResults) {
       truncated = true;
       return;
@@ -354,7 +376,7 @@ export async function executeGlob(
       }
 
       if (entry.isDirectory() && !entry.name.startsWith('.')) {
-        await walkDir(fullPath);
+        await walkDir(fullPath, currentDepth + 1);
       }
     }
   }

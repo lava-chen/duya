@@ -4,7 +4,7 @@
  * Adds input validation and security checks
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, rename } from 'node:fs/promises';
 import { resolve, isAbsolute } from 'node:path';
 import { diffLines } from 'diff';
 import type { ToolResult } from '../../types.js';
@@ -253,9 +253,18 @@ export async function executeEdit(
     // Read file content
     const content = await readFile(resolvedPath, 'utf-8');
 
+    // Normalize CRLF -> LF for matching so the line-based comparison works
+    // regardless of the file's line ending style. The original style is
+    // restored on write. Without this, a CRLF file would never match an
+    // LF old_string (lines would compare "foo\r" !== "foo").
+    const hasCRLF = content.includes('\r\n');
+    const normalizedContent = content.replace(/\r\n/g, '\n');
+    const normalizedOld = old_string.replace(/\r\n/g, '\n');
+    const normalizedNew = new_string.replace(/\r\n/g, '\n');
+
     // Count occurrences of old_string
-    const lines = content.split('\n');
-    const oldLines = old_string.split('\n');
+    const lines = normalizedContent.split('\n');
+    const oldLines = normalizedOld.split('\n');
     let occurrenceCount = 0;
     let matchStart = -1;
 
@@ -299,16 +308,27 @@ export async function executeEdit(
     let result: string;
     if (oldLines.length === 1) {
       // Single line: simple string replacement
-      result = content.replace(old_string, new_string);
+      result = normalizedContent.replace(normalizedOld, normalizedNew);
     } else {
       // Multi-line: line-based replacement
       const beforeLines = lines.slice(0, matchStart);
       const afterLines = lines.slice(matchStart + oldLines.length);
-      result = [...beforeLines, new_string, ...afterLines].join('\n');
+      result = [...beforeLines, normalizedNew, ...afterLines].join('\n');
     }
 
-    // Write file
-    await writeFile(resolvedPath, result, 'utf-8');
+    // Restore the original line ending style so we don't silently rewrite a
+    // CRLF file as LF (which would create a noisy full-file diff).
+    if (hasCRLF) {
+      result = result.replace(/\n/g, '\r\n');
+    }
+
+    // Write atomically: write to a temp file in the same directory, then
+    // rename. A crash during writeFile would otherwise leave a truncated
+    // file in place of the original. rename within the same directory is
+    // atomic on POSIX and atomic-on-same-volume on Windows.
+    const tmpPath = `${resolvedPath}.tmp.${Date.now()}`;
+    await writeFile(tmpPath, result, 'utf-8');
+    await rename(tmpPath, resolvedPath);
 
     return {
       id: toolUseId,

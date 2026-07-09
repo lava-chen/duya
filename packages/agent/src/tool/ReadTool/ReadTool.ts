@@ -52,7 +52,8 @@ import {
 } from './path-suggest.js';
 import {
   getReadStateStore,
-  getFileMtimeMs,
+  setReadState,
+  getFileFingerprint,
   type ReadState,
 } from './file-state.js';
 import { serializeParseResult } from './result-builder.js';
@@ -114,23 +115,54 @@ function parseLineRange(lineRange?: { start: number; end: number }): { start: nu
   return { start, end };
 }
 
-let sharedParser: NodeFileParser | null = null;
-function getSharedParser(): NodeFileParser {
-  if (!sharedParser) {
-    const config = getFileParserConfig();
-    sharedParser = new NodeFileParser({
-      sessionId: 'read-tool',
-      parseTimeoutMs: config.parseTimeoutMs,
-      cacheTtlMs: config.cacheTtlMs,
-      maxConcurrent: config.maxConcurrent,
-    });
+// Per-session parser instances. The previous global singleton tagged
+// every parse with sessionId='read-tool', which meant two concurrent
+// sessions shared one parser's internal cache. NodeFileParser's cache
+// key includes sessionId for some code paths (e.g. cross-session
+// permission gating) and the singleton broke that isolation. Keeping
+// one parser per real sessionId restores the intended isolation.
+//
+// The map is bounded (LRU by insertion order, see getParserForSession)
+// so a long-running agent process that spawns many sub-agent sessions
+// doesn't accumulate parsers forever. Each NodeFileParser holds its
+// own bounded cache; disposing on eviction releases that memory.
+const parserBySession = new Map<string, NodeFileParser>();
+const MAX_PARSERS = 32;
+
+function getParserForSession(sessionId: string | undefined): NodeFileParser {
+  const key = sessionId ?? 'default';
+  const existing = parserBySession.get(key);
+  if (existing) {
+    // Move-to-end so LRU order reflects recent use.
+    parserBySession.delete(key);
+    parserBySession.set(key, existing);
+    return existing;
   }
-  return sharedParser;
+  const config = getFileParserConfig();
+  const parser = new NodeFileParser({
+    sessionId: key,
+    parseTimeoutMs: config.parseTimeoutMs,
+    cacheTtlMs: config.cacheTtlMs,
+    maxConcurrent: config.maxConcurrent,
+  });
+  // Bounded LRU: evict the oldest insertion when at capacity.
+  if (parserBySession.size >= MAX_PARSERS) {
+    const oldestKey = parserBySession.keys().next().value;
+    if (oldestKey !== undefined) {
+      const oldest = parserBySession.get(oldestKey);
+      oldest?.dispose();
+      parserBySession.delete(oldestKey);
+    }
+  }
+  parserBySession.set(key, parser);
+  return parser;
 }
 
 export function _resetSharedParser(): void {
-  if (sharedParser) sharedParser.dispose();
-  sharedParser = null;
+  for (const p of parserBySession.values()) {
+    p.dispose();
+  }
+  parserBySession.clear();
 }
 
 export class ReadTool extends BaseTool {
@@ -163,8 +195,18 @@ export class ReadTool extends BaseTool {
     required: ['file_path'],
   };
 
-  constructor(private parser: NodeFileParser = getSharedParser()) {
+  constructor(private parser?: NodeFileParser) {
     super();
+  }
+
+  /**
+   * Resolve the parser for a given call. Tests may inject a parser
+   * via the constructor; production code paths go through the
+   * per-session parser cache so two concurrent sessions don't share
+   * a single parser's internal state.
+   */
+  private resolveParser(context?: ToolUseContext): NodeFileParser {
+    return this.parser ?? getParserForSession(context?.options.sessionId);
   }
 
   get interruptBehavior(): ToolInterruptBehavior {
@@ -293,7 +335,7 @@ export class ReadTool extends BaseTool {
         };
       }
 
-      const result = await this.parser.parseFile(resolved, context?.abortController?.signal);
+      const result = await this.resolveParser(context).parseFile(resolved, context?.abortController?.signal);
       const { result: text, metadata } = serializeParseResult(result, {
         maxTokens: input.max_tokens ?? DEFAULT_MAX_TOKENS,
         resolvedPath: normalizePath(resolved),
@@ -454,19 +496,26 @@ export async function readFileContent(
   try {
     const resolvedPath = expandPath(file_path, workingDirectory);
 
-    // mtime-based dedup: if the model has already read this exact
+    // mtime+size dedup: if the model has already read this exact
     // range and the file hasn't been modified, return a stub.
     // Bypass when the read itself is a partial view (line_range
     // with end != -1 means "I only want a slice" — those don't
     // dedup because the model might have meant a different slice
     // by mistake, and the stub would hide the bug).
+    //
+    // Both mtime AND size must match. mtime alone collides on fast
+    // filesystems (ext4 with tail-packing, Windows FAT, any fs with
+    // >1ms granularity) where two writes inside the same tick produce
+    // the same timestamp. A same-tick content change almost always
+    // changes the size, so requiring both eliminates the stale-return
+    // false positive without resorting to a full content hash.
     const requestedOffset = line_range?.start ?? 1;
     const requestedLimit = line_range?.end;
     const isPartialView = line_range !== undefined && line_range.end !== -1;
     if (!isPartialView) {
       const existing = getReadStateStore().get(resolvedPath);
-      const mtimeMs = getFileMtimeMs(resolvedPath);
-      if (existing && mtimeMs !== undefined && existing.timestamp === mtimeMs) {
+      const fp = getFileFingerprint(resolvedPath);
+      if (existing && fp && existing.timestamp === fp.mtimeMs && existing.size === fp.size) {
         return {
           id, name: 'read', result: FILE_UNCHANGED_STUB,
           metadata: { filePath: normalizePath(resolvedPath), unchanged: true, charCount: existing.content.length },
@@ -526,16 +575,20 @@ export async function readFileContent(
       endLine = lines.length;
     }
 
-    // Cache for next time (mtime + content)
-    const mtimeMs = getFileMtimeMs(resolvedPath);
-    if (mtimeMs !== undefined) {
+    // Cache for next time (mtime + size + content). Use setReadState
+    // instead of raw store.set so the LRU bound in file-state.ts is
+    // enforced — otherwise long-running sessions would accumulate
+    // entries without limit.
+    const fp = getFileFingerprint(resolvedPath);
+    if (fp) {
       const state: ReadState = {
         content: output,
-        timestamp: mtimeMs,
+        timestamp: fp.mtimeMs,
+        size: fp.size,
         offset: requestedOffset,
         limit: requestedLimit,
       };
-      getReadStateStore().set(resolvedPath, state);
+      setReadState(resolvedPath, state);
     }
 
     return {

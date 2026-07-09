@@ -12,20 +12,20 @@ type EnvLike = Record<string, string | undefined>;
 export const DISALLOWED_AUTO_BACKGROUND_COMMANDS: readonly string[] = ['sleep'];
 
 /**
+ * Pattern that disqualifies a command from automatic backgrounding.
+ * Matches `sleep` anywhere in the command — including inside pipelines,
+ * subshells, and `&&` chains — not just the first word. A buried
+ * `sleep 60` still means the caller wants to wait, so the previous
+ * first-word-only check would let `echo hi && sleep 120` slip through.
+ */
+const DISALLOWED_AUTO_BACKGROUND_PATTERN = /\bsleep\b/;
+
+/**
  * Decide whether a command is allowed to be auto-backgrounded.
- *
- * Only the base command is inspected. Sleep inside a pipeline or
- * subshell is OK because the surrounding command is what the user
- * actually wants to wait for.
  */
 export function isAutobackgroundingAllowed(command: string): boolean {
-  const trimmed = command.trim();
-  if (trimmed.length === 0) return true;
-
-  const first = trimmed.split(/\s+/)[0]?.toLowerCase();
-  if (!first) return true;
-
-  return !DISALLOWED_AUTO_BACKGROUND_COMMANDS.includes(first);
+  if (command.trim().length === 0) return true;
+  return !DISALLOWED_AUTO_BACKGROUND_PATTERN.test(command);
 }
 
 /**

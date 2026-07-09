@@ -97,6 +97,14 @@ export interface ResearchErrorEvent {
   timestamp: number;
 }
 
+// M1: warning event for recoverable/fatal exploration failures
+export interface ResearchWarningEvent {
+  message: string;
+  consecutiveErrors: number;
+  recoverable: boolean;
+  timestamp: number;
+}
+
 export interface ResearchComplexityEvent {
   complexity: QueryComplexity;
   maxIterations: number;
@@ -272,6 +280,7 @@ export type ResearchSSEEvent =
   | { type: 'research_synthesis_chunk'; data: ResearchSynthesisChunkEvent }
   | { type: 'research_complete'; data: ResearchCompleteEvent }
   | { type: 'research_error'; data: ResearchErrorEvent }
+  | { type: 'research_warning'; data: ResearchWarningEvent }
   | { type: 'research_complexity'; data: ResearchComplexityEvent }
   | { type: 'research_source_found'; data: ResearchSourceFoundEvent }
   | { type: 'research_source_rejected'; data: ResearchSourceRejectedEvent }
@@ -399,7 +408,7 @@ export function convertToSSEEvent(event: ResearchEvent): ExtendedResearchSSEEven
         type: 'research_iteration',
         data: {
           iteration: event.iteration,
-          maxIterations: event.iteration,
+          maxIterations: event.maxIterations,
           phase: 'complete',
           questions: [],
           findingsCount: event.findingsCount,
@@ -615,6 +624,18 @@ export function convertToSSEEvent(event: ResearchEvent): ExtendedResearchSSEEven
         type: 'research_error',
         data: {
           message: event.message,
+          timestamp,
+        },
+      };
+
+    // M1: warning event for recoverable/fatal exploration failures
+    case 'research_warning':
+      return {
+        type: 'research_warning',
+        data: {
+          message: event.message,
+          consecutiveErrors: event.consecutiveErrors,
+          recoverable: event.recoverable,
           timestamp,
         },
       };

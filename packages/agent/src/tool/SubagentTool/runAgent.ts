@@ -247,13 +247,22 @@ export async function* runAgent({
   let lastEventAt = Date.now()
   let lastPersistTime = 0
   const PERSIST_INTERVAL_MS = 3000
+  // Track how many messages have already been persisted so each periodic
+  // tick only appends the new tail. appendMessages uses INSERT OR IGNORE
+  // (dedup by message id), so re-appending everything would not create
+  // duplicate rows, but it would re-serialize the whole conversation every
+  // tick — O(n) per interval, O(n^2) over a long run. Slicing the tail
+  // keeps each tick cheap.
+  let lastPersistedIndex = 0
   const persistInterval = sessionId ? setInterval(async () => {
     const allMessages = subAgent.getMessages()
-    if (allMessages.length === 0) return
+    if (allMessages.length <= lastPersistedIndex) return
+    const newMessages = allMessages.slice(lastPersistedIndex)
     try {
-      await appendMessages(sessionId, allMessages)
+      await appendMessages(sessionId, newMessages)
+      lastPersistedIndex = allMessages.length
     } catch {
-      // periodic persist failure is non-critical
+      // periodic persist failure is non-critical; retry the same tail next tick
     }
   }, PERSIST_INTERVAL_MS) : null
 
@@ -279,7 +288,12 @@ export async function* runAgent({
       }
     }
     try {
-      setMaxListeners(0, toolUseContext.abortController.signal)
+      // Cap at 20 instead of 0 (unlimited). setMaxListeners(0) silently
+      // hides leaks where a sub-agent registers an 'abort' listener but
+      // never removes it (e.g. an exception before the finally block
+      // below). 20 is well above any realistic concurrent-sub-agent
+      // count and still preserves Node's leak warning as a safety net.
+      setMaxListeners(20, toolUseContext.abortController.signal)
     } catch {
       // Older runtimes may not support EventTarget max listener tuning.
     }
@@ -498,14 +512,26 @@ export async function* runAgent({
   if (sessionId) {
     const allMessages = subAgent.getMessages()
     if (allMessages.length > 0) {
+      // Attach token usage to the last assistant message WITHOUT mutating the
+      // original message object. The objects returned by getMessages() may be
+      // shared with the sub-agent's internal state and the UI; an in-place
+      // mutation would leak the token_usage field into those references.
+      // Build a new array with a new message object only for that entry.
+      let messagesToPersist: Message[] = [...allMessages]
       if (tokenUsage) {
-        const lastAssistant = [...allMessages].reverse().find(message => message.role === 'assistant')
-        if (lastAssistant) {
-          ;(lastAssistant as Message & { token_usage?: TokenUsage }).token_usage = tokenUsage
+        for (let i = allMessages.length - 1; i >= 0; i--) {
+          if (allMessages[i].role === 'assistant') {
+            messagesToPersist = allMessages.slice()
+            messagesToPersist[i] = {
+              ...allMessages[i],
+              token_usage: tokenUsage,
+            } as Message
+            break
+          }
         }
       }
       try {
-        const persistResult = await appendMessages(sessionId, allMessages)
+        const persistResult = await appendMessages(sessionId, messagesToPersist)
         if (!persistResult.success) {
           logger.warn('[SubAgent] failed to persist messages', {
             subAgentSessionId: sessionId,

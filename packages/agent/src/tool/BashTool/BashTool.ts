@@ -462,7 +462,9 @@ const READONLY_SAFE_COMMANDS = new Set([
   'grep', 'rg', 'ag', 'ack', 'locate', 'which', 'whereis', 'type', 'file',
   'stat', 'wc', 'sort', 'uniq', 'cut', 'tr', 'sed', 'awk',
   'git', 'svn', 'hg', 'node', 'python', 'python3', 'ruby', 'perl', 'php',
-  'curl', 'wget', 'tar', 'zip', 'unzip', 'gzip', 'gunzip',
+  // curl/wget removed: they perform network writes (downloads) and can
+  // exfiltrate data, so they must not be treated as read-only safe.
+  'tar', 'zip', 'unzip', 'gzip', 'gunzip',
   'df', 'du', 'free', 'top', 'ps', 'env', 'id', 'whoami',
   'hostname', 'uname', 'uptime', 'date', 'cal', 'lsblk', 'mount', 'umount',
 ]);
@@ -928,7 +930,10 @@ export class BashTool extends BaseTool implements ToolExecutor {
           const sandboxResult = await executeIsolated(normalizedCommand, cwd, {
             filesystem: {
               allowRead: [],
-              allowWrite: workingDirectory ? [workingDirectory] : [],
+              // Fall back to /tmp so the sandbox always has a writable
+              // scratch area; an empty allowWrite array would deny all
+              // writes, breaking commands that need any temp file.
+              allowWrite: workingDirectory ? [workingDirectory] : ['/tmp'],
               denyWrite: ['/etc', '/sys', '/proc', '/dev'],
             },
           });
@@ -977,9 +982,15 @@ export class BashTool extends BaseTool implements ToolExecutor {
         ...process.env,
         ...getWindowsEncodingEnv(),
       };
-      const sensitiveKeys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'API_KEY', 'SECRET', 'PASSWORD', 'TOKEN'];
-      for (const key of sensitiveKeys) {
-        delete sanitizedEnv[key];
+      // Match env var names containing sensitive tokens so we catch keys
+      // the previous hard-coded list missed (GITHUB_TOKEN, GITLAB_TOKEN,
+      // AWS_SECRET_ACCESS_KEY, PRIVATE_KEY, PASSPHRASE, ...). The regex
+      // runs against the var NAME, not its value.
+      const sensitivePattern = /TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|PRIVATE|CREDENTIAL/i;
+      for (const key of Object.keys(sanitizedEnv)) {
+        if (sensitivePattern.test(key)) {
+          delete sanitizedEnv[key];
+        }
       }
 
       const options: Options = {

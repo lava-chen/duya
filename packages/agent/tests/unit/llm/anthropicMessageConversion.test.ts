@@ -140,12 +140,19 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
       expect(id!.length).toBeGreaterThan(0);
     }
 
-    // All emitted IDs are distinct — no two tool_use_id values collide
-    const allIds = [...useIds, ...resultIds];
-    expect(new Set(allIds).size).toBe(allIds.length);
+    // All emitted tool_use IDs are distinct among themselves, and all
+    // tool_result IDs are distinct among themselves. Note: a tool_result's
+    // tool_use_id MUST equal its matching tool_use's id — so the union
+    // of useIds + resultIds is NOT all-distinct (each id appears twice).
+    expect(new Set(useIds).size).toBe(useIds.length);
+    expect(new Set(resultIds).size).toBe(resultIds.length);
 
-    // Each tool_use matches exactly one tool_result
+    // Each tool_use id has exactly one matching tool_result id
     expect(useIds.length).toBe(resultIds.length);
+    const useSet = new Set(useIds);
+    for (const id of resultIds) {
+      expect(useSet.has(id!)).toBe(true);
+    }
   });
 
   it('sanitizeToolId leaves valid IDs unchanged (case 3)', async () => {
@@ -369,5 +376,211 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
     // crucially there must be NO result with that orphan id anywhere.
     const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
     expect(resultIds).not.toContain('unmatched-tool');
+  });
+
+  // ===========================================================================
+  // 9. Multi-turn empty tool_use IDs must NOT collide (2013 regression)
+  //
+  // MiniMax-M3 sometimes emits empty tool_use.id values. A previous
+  // version of toAnthropicMessages used a per-message-local counter for
+  // the assistant branch, so every assistant message's first empty
+  // tool_use collapsed to `tool_synth_0` — causing ID collisions across
+  // turns. The orphan cleanup then matched a later assistant's tool_use
+  // to an earlier tool_result (same synth id), leaving the later
+  // tool_result orphaned → Anthropic 2013.
+  // ===========================================================================
+
+  it('multi-turn empty tool_use IDs do not collide (case 9)', async () => {
+    const client = makeClient();
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Run ls', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: [{ type: 'tool_use', id: '', name: 'Bash', input: { cmd: 'ls' } }], timestamp: 2 },
+      { id: 't1', role: 'tool', content: 'file1.txt', tool_call_id: '', timestamp: 3 },
+      { id: 'u2', role: 'user', content: 'Run pwd', timestamp: 4 },
+      { id: 'a2', role: 'assistant', content: [{ type: 'tool_use', id: '', name: 'Bash', input: { cmd: 'pwd' } }], timestamp: 5 },
+      { id: 't2', role: 'tool', content: '/home/user', tool_call_id: '', timestamp: 6 },
+      { id: 'u3', role: 'user', content: 'Run whoami', timestamp: 7 },
+      { id: 'a3', role: 'assistant', content: [{ type: 'tool_use', id: '', name: 'Bash', input: { cmd: 'whoami' } }], timestamp: 8 },
+      { id: 't3', role: 'tool', content: 'user', tool_call_id: '', timestamp: 9 },
+    ];
+
+    const body = await captureRequestBody(client, messages);
+    const events = flattenEvents(body.messages);
+    const useIds = events.filter((e) => e.kind === 'use').map((e) => e.id);
+    const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
+
+    // All three tool_use IDs must be distinct (no collision to tool_synth_0)
+    expect(useIds.length).toBe(3);
+    expect(new Set(useIds).size).toBe(3);
+
+    // All three tool_result IDs must be distinct
+    expect(resultIds.length).toBe(3);
+    expect(new Set(resultIds).size).toBe(3);
+
+    // Every tool_use has a matching tool_result (positional matching)
+    const useSet = new Set(useIds);
+    for (const id of resultIds) {
+      expect(useSet.has(id!)).toBe(true);
+    }
+
+    // Ordering invariant: each tool_result must come AFTER its tool_use.
+    // Build a timeline of (kind, id) and verify no result precedes its use.
+    const useIdx = new Map<string, number>();
+    let timelineCursor = 0;
+    for (const ev of events) {
+      if (ev.kind === 'use' && ev.id) {
+        useIdx.set(ev.id, timelineCursor);
+      }
+      if (ev.kind === 'result' && ev.id) {
+        const usePos = useIdx.get(ev.id);
+        expect(usePos).toBeDefined();
+        expect(usePos!).toBeLessThan(timelineCursor);
+      }
+      timelineCursor++;
+    }
+  });
+
+  // ===========================================================================
+  // 10. Duplicate non-empty tool_use IDs are renamed (safety net)
+  //
+  // A misbehaving provider/proxy could emit the SAME non-empty tool_use.id
+  // across two different calls. Step 2b renames duplicates to tool_dup_<n>.
+  // ===========================================================================
+
+  it('duplicate non-empty tool_use IDs are renamed and results stay paired (case 10)', async () => {
+    const client = makeClient();
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Run twice', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_DUP', name: 'Bash', input: { cmd: 'echo a' } }], timestamp: 2 },
+      { id: 't1', role: 'tool', content: 'a', tool_call_id: 'toolu_DUP', timestamp: 3 },
+      { id: 'u2', role: 'user', content: 'Again', timestamp: 4 },
+      { id: 'a2', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_DUP', name: 'Bash', input: { cmd: 'echo b' } }], timestamp: 5 },
+      { id: 't2', role: 'tool', content: 'b', tool_call_id: 'toolu_DUP', timestamp: 6 },
+    ];
+
+    const body = await captureRequestBody(client, messages);
+    const events = flattenEvents(body.messages);
+    const useIds = events.filter((e) => e.kind === 'use').map((e) => e.id);
+    const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
+
+    // Both pairs must remain intact after duplicate rename.
+    expect(useIds.length).toBe(2);
+    expect(resultIds.length).toBe(2);
+    expect(new Set(useIds).size).toBe(2);
+    expect(new Set(resultIds).size).toBe(2);
+
+    const useSet = new Set(useIds);
+    for (const id of resultIds) {
+      expect(useSet.has(id!)).toBe(true);
+    }
+  });
+
+  // ===========================================================================
+  // 11. Mixed empty and non-empty IDs do not collide
+  // ===========================================================================
+
+  it('mixed empty and non-empty tool_use IDs are handled correctly (case 11)', async () => {
+    const client = makeClient();
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Run', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: [{ type: 'tool_use', id: '', name: 'Bash', input: { cmd: 'a' } }], timestamp: 2 },
+      { id: 't1', role: 'tool', content: 'a-out', tool_call_id: '', timestamp: 3 },
+      { id: 'u2', role: 'user', content: 'Run with real id', timestamp: 4 },
+      { id: 'a2', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_real', name: 'Bash', input: { cmd: 'b' } }], timestamp: 5 },
+      { id: 't2', role: 'tool', content: 'b-out', tool_call_id: 'toolu_real', timestamp: 6 },
+    ];
+
+    const body = await captureRequestBody(client, messages);
+    const events = flattenEvents(body.messages);
+    const useIds = events.filter((e) => e.kind === 'use').map((e) => e.id);
+    const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
+
+    expect(useIds.length).toBe(2);
+    expect(resultIds.length).toBe(2);
+    expect(new Set(useIds).size).toBe(2);
+    expect(new Set(resultIds).size).toBe(2);
+
+    const useSet = new Set(useIds);
+    for (const id of resultIds) {
+      expect(useSet.has(id!)).toBe(true);
+    }
+    expect(useIds).toContain('toolu_real');
+  });
+
+  // ===========================================================================
+  // 12. Multiple empty tool_use IDs in a single assistant message
+  // ===========================================================================
+
+  it('multiple empty tool_use IDs in one assistant message are distinct (case 12)', async () => {
+    const client = makeClient();
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Run two commands', timestamp: 1 },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: '', name: 'Bash', input: { cmd: 'a' } },
+          { type: 'tool_use', id: '', name: 'Bash', input: { cmd: 'b' } },
+        ],
+        timestamp: 2,
+      },
+      { id: 't1', role: 'tool', content: 'a-out', tool_call_id: '', timestamp: 3 },
+      { id: 't2', role: 'tool', content: 'b-out', tool_call_id: '', timestamp: 4 },
+    ];
+
+    const body = await captureRequestBody(client, messages);
+    const events = flattenEvents(body.messages);
+    const useIds = events.filter((e) => e.kind === 'use').map((e) => e.id);
+    const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
+
+    expect(useIds.length).toBe(2);
+    expect(resultIds.length).toBe(2);
+    expect(new Set(useIds).size).toBe(2);
+    expect(new Set(resultIds).size).toBe(2);
+
+    const useSet = new Set(useIds);
+    for (const id of resultIds) {
+      expect(useSet.has(id!)).toBe(true);
+    }
+  });
+
+  // ===========================================================================
+  // 13. Uneven empty IDs — one tool_use lacks a tool_result
+  //
+  // This tests the final repairToolPairing safety net: if a provider
+  // emits an empty tool_use.id but the corresponding tool_result is
+  // missing, the orphan tool_use must be removed rather than letting
+  // the API reject the request.
+  // ===========================================================================
+
+  it('uneven empty IDs: orphan tool_use is removed by final repair (case 13)', async () => {
+    const client = makeClient();
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Run', timestamp: 1 },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: '', name: 'Bash', input: { cmd: 'a' } },
+          { type: 'tool_use', id: '', name: 'Bash', input: { cmd: 'b' } },
+        ],
+        timestamp: 2,
+      },
+      // Only one result for two tool_uses
+      { id: 't1', role: 'tool', content: 'a-out', tool_call_id: '', timestamp: 3 },
+    ];
+
+    const body = await captureRequestBody(client, messages);
+    const events = flattenEvents(body.messages);
+    const useIds = events.filter((e) => e.kind === 'use').map((e) => e.id);
+    const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
+
+    // The remaining result must still match a remaining use.
+    expect(useIds.length).toBe(resultIds.length);
+    expect(resultIds.length).toBeGreaterThan(0);
+    const useSet = new Set(useIds);
+    for (const id of resultIds) {
+      expect(useSet.has(id!)).toBe(true);
+    }
   });
 });

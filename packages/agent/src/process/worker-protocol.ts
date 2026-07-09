@@ -346,12 +346,42 @@ export type WorkerEvent =
   | CompactDoneEvent
   | CompactErrorEvent;
 
-export function sendEvent(event: Record<string, unknown>): void {
-  const payload = JSON.stringify({ ...event, _logger: 'worker' });
-  if (payload.includes('\n')) {
-    console.error('[worker-protocol] CRITICAL: sendEvent payload contains newline, event type:', event.type);
+// Bounded write queue for backpressure handling (M10)
+const writeQueue: string[] = [];
+let isDraining = false;
+
+function processWriteQueue(): void {
+  isDraining = true;
+  while (writeQueue.length > 0) {
+    const frame = writeQueue[0];
+    let canContinue = false;
+    try {
+      canContinue = process.stdout.write(frame);
+    } catch {
+      // C3: Silently ignore — worker may be exiting. Drop this frame.
+      writeQueue.shift();
+      continue;
+    }
+    writeQueue.shift();
+    if (!canContinue && writeQueue.length > 0) {
+      // M10: Wait for drain event before writing more frames
+      process.stdout.once('drain', processWriteQueue);
+      return;
+    }
   }
-  process.stdout.write(payload + '\n');
+  isDraining = false;
+}
+
+export function sendEvent(event: Record<string, unknown>): void {
+  let payload = JSON.stringify({ ...event, _logger: 'worker' });
+  // M9: Escape embedded newlines to prevent event boundary corruption
+  if (payload.includes('\n')) {
+    payload = payload.replace(/\n/g, '\\n');
+  }
+  writeQueue.push(payload + '\n');
+  if (!isDraining) {
+    processWriteQueue();
+  }
 }
 
 export async function* parseStdin(): AsyncGenerator<WorkerCommand> {

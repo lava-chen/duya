@@ -94,6 +94,16 @@ function isPersistentRetryEnabled(): boolean {
 }
 
 /**
+ * Create a standard AbortError with the correct name so that
+ * isAbortError() detects it via the reliable name check.
+ */
+function createAbortError(): Error {
+  const err = new Error('Aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
+/**
  * Wrap an async generator with retry logic
  *
  * This function wraps a streaming LLM call and automatically retries on transient failures.
@@ -126,10 +136,15 @@ export async function* withRetry<T extends SSEEvent>(
     // Check for abort
     if (fullConfig.signal?.aborted) {
       logger.debug('Abort signal received, stopping retries', undefined, 'withRetry');
-      throw new Error('AbortError');
+      throw createAbortError();
     }
 
     state.attempt++;
+
+    // Track whether we've already yielded content events. Once content
+    // has been streamed to the consumer, retrying would produce duplicate
+    // output, so we must not retry — just propagate the error.
+    let hasYieldedContent = false;
 
     try {
       logger.debug(`Attempt ${state.attempt}/${fullConfig.maxRetries + 1}`, undefined, 'withRetry');
@@ -138,6 +153,16 @@ export async function* withRetry<T extends SSEEvent>(
       const generator = operation();
 
       for await (const event of generator) {
+        // Mark that we've yielded content so we don't retry later.
+        // Content events are: text, tool_use, tool_use_started.
+        // (thinking/retry/system events are not "content" in this sense.)
+        if (
+          event.type === 'text' ||
+          event.type === 'tool_use' ||
+          event.type === 'tool_use_started'
+        ) {
+          hasYieldedContent = true;
+        }
         // Pass through all events from the underlying operation
         yield event;
       }
@@ -152,6 +177,13 @@ export async function* withRetry<T extends SSEEvent>(
       // Don't retry abort errors
       if (isAbortError(error)) {
         logger.debug('Abort error, not retrying', undefined, 'withRetry');
+        throw error;
+      }
+
+      // If we've already yielded content events, don't retry — the consumer
+      // has already seen partial output and retrying would produce duplicates.
+      if (hasYieldedContent) {
+        logger.debug('Already yielded content, not retrying to avoid duplicates', undefined, 'withRetry');
         throw error;
       }
 
@@ -328,7 +360,7 @@ export async function retryOperation<T>(
 
   while (state.attempt <= fullConfig.maxRetries) {
     if (fullConfig.signal?.aborted) {
-      throw new Error('AbortError');
+      throw createAbortError();
     }
 
     state.attempt++;

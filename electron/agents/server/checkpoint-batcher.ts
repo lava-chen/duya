@@ -1,4 +1,5 @@
 import { SessionManager } from './session-store';
+import { logger } from './logger';
 
 interface QueuedCheckpoint {
   sessionId: string;
@@ -55,7 +56,13 @@ export class CheckpointBatcher {
       try {
         this.onFlush(batch);
       } catch (err) {
-        console.error('[CheckpointBatcher] Flush handler error:', err);
+        // H1: Flush failed — re-enqueue the batch to preserve data
+        this.queue = batch.concat(this.queue);
+        logger.warn('Checkpoint flush failed, retaining batch in queue', {
+          batchSize: batch.length,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
       }
     }
   }

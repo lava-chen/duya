@@ -39,9 +39,12 @@ const workerDbRequests = new Map<string, import('child_process').ChildProcess>()
 process.on('message', (msg: Record<string, unknown>) => {
   if (msg.type === 'db:response' && typeof msg.id === 'string') {
     const workerChild = workerDbRequests.get(msg.id);
-    if (workerChild && !workerChild.killed) {
+    if (workerChild) {
+      // H5: Always delete the entry, even if the worker has exited
       workerDbRequests.delete(msg.id);
-      workerChild.send(msg);
+      if (!workerChild.killed) {
+        workerChild.send(msg);
+      }
       return;
     }
 
@@ -61,13 +64,14 @@ process.on('message', (msg: Record<string, unknown>) => {
   }
 
   if (msg.type === 'conductor:executor:rpc:response' && typeof msg.requestId === 'string') {
-    console.error(`[RPC-DEBUG] server received response: requestId=${msg.requestId}`);
     const key = `rpc:${msg.requestId}`;
     const workerChild = workerDbRequests.get(key);
-    if (workerChild && !workerChild.killed) {
+    if (workerChild) {
+      // H5: Always delete the entry, even if the worker has exited
       workerDbRequests.delete(key);
-      console.error(`[RPC-DEBUG] server→worker response: requestId=${msg.requestId}`);
-      workerChild.send(msg);
+      if (!workerChild.killed) {
+        workerChild.send(msg);
+      }
     }
   }
 });

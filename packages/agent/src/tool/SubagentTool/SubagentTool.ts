@@ -10,6 +10,7 @@
  * Enhanced: extends BaseTool with full Tool interface
  */
 
+import { createHash } from 'node:crypto';
 import { BaseTool } from '../BaseTool.js';
 import type { ToolResult, ToolUseContext, MessageContent } from '../../types.js';
 import type {
@@ -87,12 +88,12 @@ interface BackgroundSpawnRecord {
 const recentBackgroundSpawns = new Map<string, BackgroundSpawnRecord>();
 
 function hashString(value: string): string {
-  let hash = 0;
-  for (let i = 0; i < value.length; i++) {
-    hash = Math.imul(31, hash) + value.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash).toString(36);
+  // The previous hand-rolled 31-multiplier hash collided in practice
+  // (two distinct prompts sharing a `:semantic:` spawn key suppressed
+  // a legitimate second background spawn). SHA-256 truncated to 16
+  // hex chars gives a 64-bit fingerprint, which is more than enough
+  // collision resistance for an in-memory TTL map.
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
 }
 
 function pruneRecentBackgroundSpawns(now: number): void {

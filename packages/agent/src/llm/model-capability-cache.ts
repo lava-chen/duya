@@ -18,6 +18,11 @@ const PROBE_1X1_PNG_BASE64 =
 
 const PROBE_TIMEOUT_MS = 8000;
 
+// In-flight probe deduplication: when multiple concurrent callers probe
+// the same model, share a single API probe to avoid redundant requests
+// and race conditions on the cache write.
+const inflightProbes = new Map<string, Promise<boolean>>();
+
 export interface ProbeConfig {
   model: string;
   provider: 'anthropic' | 'openai' | string;
@@ -62,20 +67,37 @@ export async function detectModelCapability(config: ProbeConfig): Promise<boolea
   }
 
   // 3. API probe — detect from API response
-  const { apiKey, baseURL, provider } = config;
+  const { apiKey, baseURL } = config;
 
   if (!apiKey || !baseURL) {
     setModelCapability(modelName, false, 'default');
     return false;
   }
 
+  // Deduplicate concurrent probes for the same model so we only fire
+  // one API request even when multiple callers race on cache miss.
+  const inflight = inflightProbes.get(modelName);
+  if (inflight) {
+    return inflight;
+  }
+
+  const probePromise = (async (): Promise<boolean> => {
+    try {
+      const isMultimodal = await probeMultimodalSupport(config);
+      setModelCapability(modelName, isMultimodal, 'probe');
+      return isMultimodal;
+    } catch {
+      // Don't cache probe failures — transient errors (network, auth,
+      // rate limit) must not be persisted as "not multimodal".
+      return false;
+    }
+  })();
+
+  inflightProbes.set(modelName, probePromise);
   try {
-    const isMultimodal = await probeMultimodalSupport(config);
-    setModelCapability(modelName, isMultimodal, 'probe');
-    return isMultimodal;
-  } catch {
-    setModelCapability(modelName, false, 'default');
-    return false;
+    return await probePromise;
+  } finally {
+    inflightProbes.delete(modelName);
   }
 }
 

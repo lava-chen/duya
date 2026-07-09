@@ -58,7 +58,15 @@ async function sendDbRequest(action: string, payload: unknown): Promise<unknown>
 
     // Send request after registration is complete (next tick)
     process.nextTick(() => {
-      process.send!(request);
+      try {
+        process.send!(request);
+      } catch (err) {
+        // H4: process.send can throw if the IPC channel is closed
+        if (pendingRequests.has(id)) {
+          pendingRequests.delete(id);
+          reject(new Error(`Failed to send DB request: ${err instanceof Error ? err.message : String(err)}`));
+        }
+      }
     });
 
     // Timeout after 30 seconds

@@ -14,7 +14,7 @@
 import { spawn, ChildProcess, exec } from 'child_process';
 import { promisify } from 'util';
 import { open, unlink } from 'fs/promises';
-import { statSync, readFileSync } from 'fs';
+import { statSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { FileHandle } from 'fs/promises';
@@ -128,12 +128,23 @@ function readOutputTail(maxBytes: number): string {
     const stat = statSync(outputFilePath);
     if (stat.size === 0) return '';
     const readStart = Math.max(0, stat.size - maxBytes);
-    const buf = readFileSync(outputFilePath, { encoding: 'utf-8' });
-    // buf is the whole file; take the tail portion
-    if (buf.length > maxBytes) {
-      return `(truncated - ${stat.size} bytes total)\n\n` + buf.slice(buf.length - maxBytes);
+    // Read only the tail bytes via offset instead of slurping the whole
+    // file. Output files can grow up to MAX_OUTPUT_BYTES (500MB); loading
+    // the entire file into memory on every progress poll would be
+    // catastrophic. The previously-computed readStart was unused before.
+    const fd = openSync(outputFilePath, 'r');
+    try {
+      const length = stat.size - readStart;
+      const buf = Buffer.alloc(length);
+      const bytesRead = readSync(fd, buf, 0, length, readStart);
+      const text = buf.slice(0, bytesRead).toString('utf-8');
+      if (readStart > 0) {
+        return `(truncated - ${stat.size} bytes total)\n\n` + text;
+      }
+      return text;
+    } finally {
+      closeSync(fd);
     }
-    return buf;
   } catch {
     return '';
   }
@@ -246,6 +257,8 @@ function handleExecute(task: ExecuteTask): void {
         cleanupOutputFileQuietly();
         currentProcess = null;
         currentTaskId = null;
+        // Clear any abort marker so the Set does not retain completed task ids.
+        abortedTaskIds.delete(taskId);
 
         process.send!({
           type: 'bg_complete',
@@ -260,6 +273,7 @@ function handleExecute(task: ExecuteTask): void {
         cleanupOutputFileQuietly();
         currentProcess = null;
         currentTaskId = null;
+        abortedTaskIds.delete(taskId);
 
         process.send!({
           type: 'bg_complete',

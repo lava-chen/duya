@@ -20,7 +20,8 @@ const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 
 function debugLog(...args: unknown[]): void {
   if (DEBUG_IPC) {
-    console.log('[Agent-IPC][DEBUG]', ...args);
+    const message = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+    getLogger().debug(message, undefined, LogComponent.AgentCommunicator);
   }
 }
 
@@ -183,6 +184,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           @parent_id, @permission_profile, @agent_type, @agent_name,
           @created_at, @updated_at, 0
         )
+        ON CONFLICT(id) DO NOTHING
       `).run({
         id: p.id,
         title: p.title ?? 'New Chat',
@@ -201,6 +203,8 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         created_at: now,
         updated_at: now,
       });
+      // SELECT back so a pre-existing row (ON CONFLICT DO NOTHING) is
+      // returned instead of throwing — matches main process sessions.ts.
       return db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(p.id);
     }
 
@@ -466,14 +470,12 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
               attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
               created_at: msg.timestamp || msg.created_at || now,
             });
-            if (displayContentStr && insertResult.changes === 0) {
-              db.prepare(`
-                UPDATE messages
-                SET display_content = COALESCE(NULLIF(display_content, ''), ?)
-                WHERE id = ? AND session_id = ?
-              `).run(displayContentStr, msg.id, sessionId);
+            // Append-only: never UPDATE an existing message. If the INSERT
+            // was ignored (duplicate id), skip the count increment so the
+            // returned count reflects actually-appended rows.
+            if (insertResult.changes > 0) {
+              count++;
             }
-            count++;
           } catch (insertErr) {
             getLogger().error('message:append insert failed', insertErr instanceof Error ? insertErr : new Error(String(insertErr)), { msgId: msg.id, sessionId }, LogComponent.AgentCommunicator);
           }
@@ -518,19 +520,23 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       messages = p.messages as typeof messages;
 
       try {
-        let session = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
+        const session = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
         if (!session) {
           return { success: false, reason: 'session_not_found' };
         }
-        if (generation < session.generation) {
-                    return { success: false, reason: 'stale_generation' };
-        }
 
+        let committed = false;
         let newGeneration = 0;
 
         const txn = db.transaction(() => {
           newGeneration = Math.max(generation, session.generation + 1);
-          db.prepare('UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ?').run(newGeneration, now, sessionId);
+          // Authoritative generation check inside the transaction: claim the
+          // slot atomically. If another writer already bumped generation,
+          // affected rows === 0 and we abort without deleting anything.
+          const claim = db.prepare('UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ? AND generation = ?').run(newGeneration, now, sessionId, session.generation);
+          if (claim.changes === 0) {
+            return;
+          }
           db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
           const stmt = db.prepare(`
@@ -613,10 +619,15 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
               created_at: msg.timestamp || now,
             });
           }
+
+          committed = true;
         });
 
         try {
           txn();
+          if (!committed) {
+            return { success: false, reason: 'stale_generation' };
+          }
           const result = { success: true, newGeneration, messageCount: messages.length };
                     debugLog('message:replace success', { sessionId, ...result });
           return result;
@@ -803,6 +814,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
       `).run(p.key, p.value, now);
+      return { success: true };
     }
 
     case 'setting:getAll': {
@@ -827,6 +839,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
       `).run(p.key, JSON.stringify(p.value), now);
+      return { success: true };
     }
 
     // ==================== Permission actions ====================
@@ -1325,7 +1338,6 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     // ==================== Research Session actions (Plan 60 - Research Mode) ====================
     case 'researchSession:create': {
-      const now = Date.now();
       db.prepare(`
         INSERT INTO research_sessions (
           id, session_id, original_query, clarification, context_json,

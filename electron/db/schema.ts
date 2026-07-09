@@ -549,6 +549,14 @@ interface Migration {
 }
 
 function ensureCriticalSchema(db: BetterSqlite3Db): void {
+  // Runs on every startup, independent of the migration system. The tables
+  // and column self-repairs here are required for the app to boot at all
+  // (createSession INSERTs, canvas IPC, etc.), so they cannot rely on
+  // _schema_migrations being in sync — a DB restored from backup or a
+  // partially-applied migration set must still recover. The CREATE TABLE IF
+  // NOT EXISTS and PRAGMA-based column checks make this idempotent and cheap.
+  // New structural changes belong in a numbered migration; this function is
+  // only for boot-critical safety nets that must always pass.
   db.exec(`
     CREATE TABLE IF NOT EXISTS message_attachments (
       id TEXT PRIMARY KEY,
@@ -912,13 +920,16 @@ const migrations: Migration[] = [
           '{"type":"chat:done%',
           '{"type":"chat:error%',
         ];
+        // Soft-delete: mark legacy metadata/junk messages as 'purged' rather
+        // than hard-DELETE, preserving the append-only contract. Read paths
+        // filter status NOT IN ('superseded', 'purged').
         for (const pattern of metadataPatterns) {
           db.prepare(
-            "DELETE FROM messages WHERE content LIKE ?"
+            "UPDATE messages SET status = 'purged' WHERE content LIKE ? AND status != 'purged'"
           ).run(pattern);
         }
         db.prepare(
-          "DELETE FROM messages WHERE content LIKE '[thinking] %'"
+          "UPDATE messages SET status = 'purged' WHERE content LIKE '[thinking] %' AND status != 'purged'"
         ).run();
       } catch {
         // Cleanup is best-effort

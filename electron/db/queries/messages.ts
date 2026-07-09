@@ -63,7 +63,7 @@ export interface MessageRow {
 }
 
 const INSERT_MESSAGE_SQL = `
-  INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
+  INSERT OR IGNORE INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
   VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
 `;
 
@@ -142,7 +142,7 @@ export function addMessage(data: AddMessageInput): MessageRow {
 
 export function getMessagesBySession(sessionId: string): MessageRow[] {
   return db().prepare(
-    'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
+    "SELECT * FROM messages WHERE session_id = ? AND status NOT IN ('superseded', 'purged') ORDER BY created_at ASC, rowid ASC"
   ).all(sessionId) as MessageRow[];
 }
 
@@ -169,7 +169,7 @@ export function listMessagesBySession(
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const offset = Math.max(opts.offset ?? 0, 0);
   return db().prepare(
-    'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?'
+    "SELECT * FROM messages WHERE session_id = ? AND status NOT IN ('superseded', 'purged') ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?"
   ).all(sessionId, limit, offset) as MessageRow[];
 }
 
@@ -245,6 +245,7 @@ export function searchMessagesByContent(
  FROM messages
  WHERE session_id IN (${placeholders})
  AND content LIKE ? ESCAPE '\\'
+ AND status NOT IN ('superseded', 'purged')
  ORDER BY created_at ASC, rowid ASC
  LIMIT ?`,
  )
@@ -278,7 +279,7 @@ export function searchMessagesByContent(
 
 export function getMessageCount(sessionId: string): number {
   const result = db().prepare(
-    'SELECT COUNT(*) as count FROM messages WHERE session_id = ?'
+    "SELECT COUNT(*) as count FROM messages WHERE session_id = ? AND status NOT IN ('superseded', 'purged')"
   ).get(sessionId) as { count: number };
   return result.count;
 }
@@ -295,8 +296,11 @@ export function truncateMessagesAfter(sessionId: string, messageId: string): num
 
   if (!target) return 0;
 
+  // Soft-delete: mark superseded instead of hard DELETE so the append-only
+  // contract is preserved (content remains recoverable). Read paths filter
+  // status != 'superseded'.
   const result = db().prepare(
-    'DELETE FROM messages WHERE session_id = ? AND created_at > ?'
+    "UPDATE messages SET status = 'superseded' WHERE session_id = ? AND created_at > ? AND status != 'superseded'"
   ).run(sessionId, target.created_at);
 
   db().prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
@@ -307,11 +311,12 @@ export function truncateMessagesAfter(sessionId: string, messageId: string): num
 /**
  * Truncate messages from the target (inclusive) onward.
  *
- * Unlike `truncateMessagesAfter` (which keeps the target), this deletes the
- * target message AND everything created after it. Used by the "edit and
- * resend" flow: the old user message is removed so the edited version can be
- * appended as a fresh message — never overwriting the original (append-only
- * contract is preserved because we DELETE, not UPDATE).
+ * Unlike `truncateMessagesAfter` (which keeps the target), this marks the
+ * target message AND everything created after it as superseded. Used by the
+ * "edit and resend" flow: the old user message is logically removed so the
+ * edited version can be appended as a fresh message. The append-only
+ * contract is preserved because we soft-delete (UPDATE status) rather than
+ * hard-DELETE or overwrite the original content.
  *
  * Ties on `created_at` are resolved by also matching the target's rowid, so
  * two messages sharing the same millisecond timestamp are both handled
@@ -325,7 +330,7 @@ export function truncateMessagesFromInclusive(sessionId: string, messageId: stri
   if (!target) return 0;
 
   const result = db().prepare(
-    'DELETE FROM messages WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND rowid >= ?))'
+    "UPDATE messages SET status = 'superseded' WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND rowid >= ?)) AND status != 'superseded'"
   ).run(sessionId, target.created_at, target.created_at, target.rowid);
 
   db().prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
@@ -347,6 +352,10 @@ export function replaceMessages(
 ): ReplaceMessagesResult {
   const now = Date.now();
 
+  // Snapshot the session outside the transaction only for a fast
+  // session-not-found short-circuit. The authoritative generation
+  // check happens INSIDE the transaction via a conditional UPDATE
+  // (WHERE generation = ?) so concurrent writers cannot interleave.
   const session = db().prepare(
     'SELECT generation FROM chat_sessions WHERE id = ?'
   ).get(sessionId) as { generation: number } | undefined;
@@ -355,16 +364,21 @@ export function replaceMessages(
     return { success: false, reason: 'session_not_found' };
   }
 
-  if (generation < session.generation) {
-    return { success: false, reason: 'stale_generation' };
-  }
-
-  const newGeneration = Math.max(generation, session.generation + 1);
+  let committed = false;
+  let newGeneration = 0;
 
   try {
     db().transaction(() => {
-      db().prepare('UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ?')
-        .run(newGeneration, now, sessionId);
+      newGeneration = Math.max(generation, session.generation + 1);
+      // Atomically claim the generation slot. If another writer already
+      // bumped generation, affected rows === 0 and we abort the txn.
+      const claim = db().prepare(
+        'UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ? AND generation = ?'
+      ).run(newGeneration, now, sessionId, session.generation);
+
+      if (claim.changes === 0) {
+        return;
+      }
 
       db().prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
@@ -414,7 +428,7 @@ export function replaceMessages(
           ? (typeof msg.attachments === 'string' ? msg.attachments : JSON.stringify(msg.attachments))
           : null;
 
-        stmt.bind({
+        stmt.run({
           id: (msg.id as string) || randomUUID(),
           session_id: sessionId,
           role: roleValue,
@@ -436,11 +450,14 @@ export function replaceMessages(
           attachments,
           created_at: (msg.timestamp as number) || now,
         });
-        stmt.step();
-        stmt.reset();
       }
-      stmt.free();
+
+      committed = true;
     })();
+
+    if (!committed) {
+      return { success: false, reason: 'stale_generation' };
+    }
 
     return { success: true, newGeneration, messageCount: rawMessages.length };
   } catch (error) {

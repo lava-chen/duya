@@ -44,6 +44,13 @@ export interface RetryStrategy {
   getFallbackTool?: (context: ToolFailureContext) => string | null
   /** Whether this strategy only applies to specific tools */
   toolFilter?: (toolName: string) => boolean
+  /**
+   * When true, the RETRY action is only issued for idempotent tools.
+   * For non-idempotent tools (write/edit/bash/...), a retry could
+   * double-execute side effects, so the executor skips RETRY and falls
+   * through to FALLBACK (if available) or ABORT instead.
+   */
+  idempotentOnly?: boolean
 }
 
 /**
@@ -96,8 +103,8 @@ export interface RetryExecutorConfig {
  * Built-in error patterns for common failure scenarios
  */
 export const ERROR_PATTERNS = {
-  /** LibreOffice not available */
-  LIBREOFFICE_NOT_FOUND: /soffice|libreoffice|office/i,
+  /** LibreOffice not available — tightened to avoid matching generic "office" substrings */
+  LIBREOFFICE_NOT_FOUND: /soffice|libreoffice/i,
   /** Network timeout */
   NETWORK_TIMEOUT: /timeout|ECONNREFUSED|ENOTFOUND/i,
   /** Permission denied */
@@ -109,10 +116,12 @@ export const ERROR_PATTERNS = {
 } as const
 
 /**
- * Maps common tool failures to potential fallback tools
+ * Maps common tool failures to potential fallback tools.
+ * NOTE: web_search → grep was intentionally removed: grep searches the local
+ * filesystem, which is semantically unrelated to a web search and would
+ * silently return irrelevant local matches.
  */
 export const TOOL_FALLBACKS: Record<string, string> = {
-  web_search: 'grep',
   web_fetch: 'read',
   soffice: 'powershell',
 }

@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { getDatabase } from '../connection';
 
 type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
@@ -118,7 +119,7 @@ export function listCanvases(): ConductorCanvas[] {
     id: r.id,
     name: r.name,
     description: r.description,
-    layoutConfig: JSON.parse(r.layout_config),
+    layoutConfig: safeParseJson<Record<string, unknown>>(r.layout_config, {}),
     sortOrder: r.sort_order,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -350,13 +351,13 @@ export function getWidget(widgetId: string, canvasId: string): ConductorWidget |
     canvasId: row.canvas_id,
     kind: row.kind,
     type: row.type,
-    position: JSON.parse(row.position),
-    config: JSON.parse(row.config),
-    data: JSON.parse(row.data),
+    position: safeParseJson<Record<string, unknown>>(row.position, {}),
+    config: safeParseJson<Record<string, unknown>>(row.config, {}),
+    data: safeParseJson<Record<string, unknown>>(row.data, {}),
     dataVersion: row.data_version,
     sourceCode: row.source_code,
     state: row.state,
-    permissions: JSON.parse(row.permissions),
+    permissions: safeParseJson<Record<string, unknown>>(row.permissions, {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -446,14 +447,14 @@ export function getElement(elementId: string, canvasId: string): ConductorElemen
     id: row.id,
     canvasId: row.canvas_id,
     elementKind: row.element_kind,
-    position: JSON.parse(row.position),
-    config: JSON.parse(row.config),
-    vizSpec: row.viz_spec ? JSON.parse(row.viz_spec) : null,
+    position: safeParseJson<Record<string, unknown>>(row.position, {}),
+    config: safeParseJson<Record<string, unknown>>(row.config, {}),
+    vizSpec: safeParseJson<Record<string, unknown> | null>(row.viz_spec, null),
     sourceCode: row.source_code,
     state: row.state,
     dataVersion: row.data_version,
-    permissions: JSON.parse(row.permissions),
-    metadata: JSON.parse(row.metadata),
+    permissions: safeParseJson<Record<string, unknown>>(row.permissions, {}),
+    metadata: safeParseJson<Record<string, unknown>>(row.metadata, {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -611,16 +612,23 @@ export function mergeWidgetData(server: Record<string, unknown>, patch: Record<s
     return { data: deepMerge(server, patch, 'user'), mergedFrom: null };
   }
 
-  if (context.clientTs && Date.now() - context.clientTs > 30000) {
-    return { data: patch, mergedFrom: 'full_replace_stale' };
+  // Field-level last-writer-wins merge. Previously a patch older than 30s
+  // triggered a full replace (`{ data: patch }`) that discarded all
+  // concurrent server-side edits. Now we always merge field-by-field (server
+  // wins scalar conflicts, matching the non-stale agent path) and only
+  // annotate staleness via mergedFrom for observability — no data loss.
+  const merged = deepMerge(server, patch, 'server');
+  const isStale = context.clientTs !== undefined && Date.now() - context.clientTs > 30000;
+  const hasConflict = !isDeepStrictEqual(merged, patch);
+
+  let mergedFrom: string | null = null;
+  if (isStale && hasConflict) {
+    mergedFrom = 'stale_field_merge';
+  } else if (hasConflict) {
+    mergedFrom = 'agent_conflict';
   }
 
-  const merged = deepMerge(server, patch, 'server');
-  const hasConflict = JSON.stringify(merged) !== JSON.stringify(patch);
-  return {
-    data: merged,
-    mergedFrom: hasConflict ? 'agent_conflict' : null,
-  };
+  return { data: merged, mergedFrom };
 }
 
 export function deepMerge(server: Record<string, unknown>, patch: Record<string, unknown>, priority: 'user' | 'server'): Record<string, unknown> {

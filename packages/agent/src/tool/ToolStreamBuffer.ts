@@ -274,6 +274,42 @@ export class ToolStreamBuffer extends EventEmitter {
   }
 
   /**
+   * Finalize a tool: flush any remaining buffered output and tear down
+   * ALL per-tool state (buffers, timers, paused-flag, stats). Without
+   * this, a tool that was paused and never resumed would leave an
+   * entry in `pausedTools` forever, and a tool that errored out before
+   * its first flush would leave empty buffer/byteSize entries hanging
+   * until `clear()` was called at process shutdown.
+   *
+   * Callers should invoke this from the streaming executor's terminal
+   * path (success, error, cancel, discard) for every toolUseId that
+   * ever called `addOutput`, `pause`, or `resume`.
+   */
+  finalizeTool(toolUseId: string): FlushResult {
+    // Cancel any pending flush first so it doesn't fire after we've
+    // already torn down the state.
+    const timer = this.flushTimers.get(toolUseId);
+    if (timer) {
+      clearTimeout(timer);
+      this.flushTimers.delete(toolUseId);
+    }
+
+    const result = this.flush(toolUseId);
+
+    // Force-remove the paused flag even if the caller never resumed.
+    // `pause` discards incoming data, so any buffered items were
+    // already dropped at `addOutput` time — but the Set entry itself
+    // would otherwise persist.
+    this.pausedTools.delete(toolUseId);
+
+    // Drop stats as well; `getStats` / `getToolStats` no longer need
+    // to report a finalized tool.
+    this.cleanupStats(toolUseId);
+
+    return result;
+  }
+
+  /**
    * Flush all buffered items
    */
   flushAll(): FlushResult[] {

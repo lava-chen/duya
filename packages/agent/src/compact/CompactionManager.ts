@@ -15,6 +15,7 @@ import type {
 } from './types.js'
 import { COMPACTION_THRESHOLDS, DEFAULT_CONTEXT_WINDOW } from './types.js'
 import { TokenBudgetManager, estimateMessagesTokens } from './tokenBudget.js'
+import { logger } from '../utils/logger.js'
 import {
   MicroCompactStrategy,
   SessionMemoryCompactStrategy,
@@ -264,7 +265,7 @@ export class CompactionManager {
             skills: reinjectionInfo.skillsReinjected,
           })
         } catch (reinjectError) {
-          console.warn('Post-compact reinjection failed:', reinjectError)
+          logger.warn('Post-compact reinjection failed', { error: reinjectError instanceof Error ? reinjectError.message : String(reinjectError) })
           // Continue without reinjection
         }
       }
