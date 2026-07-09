@@ -45,11 +45,15 @@ jobs:
         run: npm ci
 
       - name: Build workspace packages
-        # The agent / gateway packages import @duya/cli/contract, which
-        # resolves through packages/cli/package.json exports to
-        # packages/cli/dist/contract/index.d.ts. A clean checkout has no
-        # dist, so tsc and esbuild both fail until the cli is built.
-        run: npm run build:cli && npm run build:agent && npm run build:gateway
+        # Build order matters on a clean checkout (no dist/):
+        # 1. cli — agent/gateway import @duya/cli/contract.
+        # 2. conductor — agent imports @duya/conductor/elements/*.
+        # 3. agent — depends on both cli and conductor dist.
+        # 4. gateway — depends on cli dist.
+        # build:agent already runs build:cli + build:conductor internally,
+        # but in the wrong order (agent before conductor), so we build
+        # conductor explicitly first.
+        run: npm run build:cli && npm run build:conductor && npm run build:agent && npm run build:gateway
 
       - name: Build application
         env:

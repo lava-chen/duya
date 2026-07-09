@@ -1,6 +1,6 @@
 {
   "name": "duya",
-  "version": "0.4.0-beta.1",
+  "version": "0.4.0-beta.2",
   "description": "AI Agent Desktop Client (Beta)",
   "author": "lava-chen",
   "private": true,
@@ -12,7 +12,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:web": "vite build",
-    "build:agent": "npm run build:cli && npm run -w @duya/agent build && npm run build:conductor",
+    "build:agent": "npm run build:cli && npm run build:conductor && npm run -w @duya/agent build",
     "build:cli": "npm run -w @duya/cli build",
     "build:conductor": "npm run -w @duya/conductor build",
     "build:gateway": "npm run -w @duya/gateway build",
