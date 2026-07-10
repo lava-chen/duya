@@ -70,6 +70,17 @@ jobs:
       - name: Build application
         run: npm run electron:build
 
+      - name: Package (macOS only)
+        # Run the full electron-builder packaging on macOS so afterPack path
+        # bugs (which only manifest inside the .app bundle) are caught on
+        # every PR, not only on release tags.
+        if: matrix.os == 'macos-latest'
+        run: npm run electron:pack:mac
+
+      - name: Verify packaged artifacts (macOS only)
+        if: matrix.os == 'macos-latest'
+        run: node scripts/verify-packaged-parity.mjs --platform mac
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
