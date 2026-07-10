@@ -29,6 +29,22 @@ export class SchemaGenerator {
       };
     });
 
+    // Merge every operation-specific field into the top-level properties map
+    // as well. Some provider/tool-call layers flatten or ignore `anyOf` and
+    // only honor top-level `properties`; without `url` / `urls` / `ref` etc.
+    // visible there, the model omits them and the action fails zod validation.
+    // The `anyOf` variants still enforce per-operation required fields for
+    // providers that do support them.
+    const mergedProperties: Record<string, unknown> = {};
+    for (const variant of variants) {
+      for (const [key, value] of Object.entries(variant.properties)) {
+        if (key === 'operation') continue;
+        if (!mergedProperties[key]) {
+          mergedProperties[key] = value;
+        }
+      }
+    }
+
     return {
       inputSchema: {
         type: 'object',
@@ -42,6 +58,7 @@ export class SchemaGenerator {
             enum: operations,
             description: 'Browser operation to perform',
           },
+          ...mergedProperties,
         },
         required: ['operation'],
       },

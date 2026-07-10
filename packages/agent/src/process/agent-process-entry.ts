@@ -589,15 +589,39 @@ function validateMessageHistory(messages: Message[]): Message[] {
     }
   }
 
-  if (unmatchedToolUseIds.size === 0 && orphanToolResultIds.size === 0) {
+  // Detect tool_result messages with empty/undefined tool_call_id.
+  // These come from providers (MiniMax-M3) returning empty tool_use.id;
+  // they can never be paired and would trigger Anthropic 2013.
+  let unpairedToolResultCount = 0;
+  for (const msg of messages) {
+    if (msg.role === 'tool' && !msg.tool_call_id) {
+      unpairedToolResultCount++;
+    }
+  }
+
+  if (unmatchedToolUseIds.size === 0 && orphanToolResultIds.size === 0 && unpairedToolResultCount === 0) {
     return messages;
   }
 
-  log(`[Agent-Process] Cleaning history: ${unmatchedToolUseIds.size} unmatched tool_use(s), ${orphanToolResultIds.size} orphan tool_result(s)`);
+  log(`[Agent-Process] Cleaning history: ${unmatchedToolUseIds.size} unmatched tool_use(s), ${orphanToolResultIds.size} orphan tool_result(s), ${unpairedToolResultCount} unpaired tool_result(s) with empty tool_call_id`);
 
   // Filter out messages with unmatched tool_uses or orphan tool_results
   const cleanedMessages: Message[] = [];
   for (const msg of messages) {
+    // Drop any tool_result message whose tool_call_id is empty/undefined.
+    // These originate from providers (notably MiniMax-M3) that occasionally
+    // return an empty `tool_use.id`; the empty string collapses to NULL in
+    // the DB (appendMessages uses `msg.tool_call_id || null`), and
+    // messageRowToMessage converts NULL back to undefined. Such a
+    // tool_result can never be paired with a tool_use — the API rejects
+    // it with 400 "tool call id is invalid (2013)". The `msg.tool_call_id`
+    // guard in the orphan check below would otherwise skip these, so we
+    // catch them explicitly here.
+    if (msg.role === 'tool' && !msg.tool_call_id) {
+      log(`[Agent-Process] Removing unpaired tool_result with empty tool_call_id (tool_name=${msg.tool_name || 'unknown'})`);
+      continue;
+    }
+
     // Drop truly orphan tool_result messages (tool_call_id has no
     // matching tool_use anywhere in the history).
     if (msg.role === 'tool' && msg.tool_call_id && orphanToolResultIds.has(msg.tool_call_id)) {
@@ -1191,20 +1215,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // Document files (pdf, docx, etc.) carry their parsed text and imageChunks
     // directly on the FileAttachment objects (path, text, extractMethod, imageChunks).
     const files = msg.options?.files;
-    console.error('[IMAGE-DETAIL] === Image Processing Start ===');
-    console.error('[IMAGE-DETAIL] Files count:', files?.length ?? 0);
-    console.error('[IMAGE-DETAIL] Files details:', files?.map(f => ({
-      name: f.name,
-      type: f.type,
-      urlPrefix: f.url?.substring(0, 30),
-      hasBase64: !!(f as unknown as Record<string, unknown>).base64,
-      urlStartsWithData: f.url?.startsWith('data:') ?? false,
-    })) ?? 'none');
 
     const docFiles = (files || []).filter(f => f.path || f.text);
     const imageFiles = (files || []).filter(f => f.type.startsWith('image/') || f.type.startsWith('img/'));
-    console.error('[IMAGE-DETAIL] docFiles count:', docFiles.length);
-    console.error('[IMAGE-DETAIL] imageFiles count:', imageFiles.length, 'types:', imageFiles.map(f => f.type));
 
     // Pre-analyze user-attached images with the configured vision model.
     // Mirrors hermes-agent design: a dedicated vision model analyzes images
@@ -1218,14 +1231,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       ? await detectModelCapability(probeConfig)
       : isModelLikelyMultimodal(mainModelName);
     log(`[Image-Processing] Model multimodal detection: ${mainModelName} → ${modelIsMultimodal} (${probeConfig ? 'probed' : 'regex-only fallback'})`);
-
-    console.error('[DEBUG] Vision config check:', {
-      hasAgent: !!agent,
-      hasAnalyzeImage: agent ? typeof (agent as Record<string, unknown>).analyzeImage === 'function' : false,
-      imageFilesCount: imageFiles.length,
-      modelIsMultimodal,
-      mainModelName,
-    });
 
     // Phase 1: Read and compress all image files once.
     // Cache base64 data to avoid double-read (vision analysis + content block).
@@ -1242,7 +1247,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     for (const file of imageFiles) {
       let base64Data = '';
       let mediaType = file.type;
-      console.error('[IMAGE-DETAIL] Processing image file:', file.name, 'url:', file.url?.substring(0, 50), 'type:', file.type);
 
       if (file.url.startsWith('data:')) {
         // Data URL path (clipboard paste / screenshot tool). Decode and
@@ -1260,7 +1264,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // fall back to the FileAttachment.type.
           const headerMediaType = /data:([^;]+)/.exec(header)?.[1];
           mediaType = headerMediaType || file.type;
-          console.error('[IMAGE-DETAIL] Decoded data: URL, buffer size:', imgBuffer.length, 'bytes');
           if (needsResizing(imgBuffer)) {
             try {
               const resized = await resizeImageBuffer(imgBuffer, TARGET_IMAGE_SIZE_BYTES);
@@ -1273,21 +1276,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             }
           } else {
             base64Data = rawBase64;
-            console.error('[IMAGE-DETAIL] Pasted image did not need resizing, base64 length:', base64Data.length);
           }
         } catch (decodeErr) {
-          console.error('[IMAGE-DETAIL] FAILED to decode data: URL:', decodeErr);
           // Last-resort fallback: keep the old behavior.
           base64Data = file.url.split(',')[1] || '';
         }
       } else if ((file as unknown as Record<string, string>).base64) {
         base64Data = (file as unknown as Record<string, string>).base64;
-        console.error('[IMAGE-DETAIL] Extracted from base64 field, length:', base64Data.length);
       } else if (file.url && !file.url.startsWith('data:') && !isCDNImageUrl(file.url)) {
-        console.error('[IMAGE-DETAIL] Trying to read file from path:', file.url);
         try {
           const imgBuffer = await readFile(file.url);
-          console.error('[IMAGE-DETAIL] File read successfully, size:', imgBuffer.length, 'bytes');
           if (needsResizing(imgBuffer)) {
             try {
               const resized = await resizeImageBuffer(imgBuffer, TARGET_IMAGE_SIZE_BYTES);
@@ -1300,33 +1298,22 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             }
           } else {
             base64Data = imgBuffer.toString('base64');
-            console.error('[IMAGE-DETAIL] Image did not need resizing, base64 length:', base64Data.length);
           }
         } catch (readErr) {
-          console.error('[IMAGE-DETAIL] FAILED to read file:', readErr);
           markReadFailed(file.name);
         }
+      } else if (isCDNImageUrl(file.url)) {
+        // CDN URLs have no local data available; skip silently.
       } else {
-        console.error('[IMAGE-DETAIL] Skipped - CDN URL or no valid source:', {
-          hasUrl: !!file.url,
-          isDataUrl: file.url?.startsWith('data:'),
-          isCDN: file.url ? isCDNImageUrl(file.url) : 'N/A'
-        });
+        markReadFailed(file.name);
       }
 
       if (base64Data) {
         imageDataCache.set(file.name, { base64: base64Data, mediaType });
-        console.error('[IMAGE-DETAIL] Cached image:', file.name, 'base64 length:', base64Data.length);
-      } else {
-        console.error('[IMAGE-DETAIL] FAILED to get base64 for:', file.name);
-        if (!isCDNImageUrl(file.url)) {
-          markReadFailed(file.name);
-        }
+      } else if (!isCDNImageUrl(file.url)) {
+        markReadFailed(file.name);
       }
     }
-    console.error('[IMAGE-DETAIL] imageDataCache entries:', imageDataCache.size);
-    console.error('[IMAGE-DETAIL] Cache keys:', [...imageDataCache.keys()]);
-    console.error('[IMAGE-DETAIL] readFailedFiles:', [...readFailedFiles]);
 
     // Phase 2: Vision pre-analysis using the configured vision model.
     // Only run this for text-only main models. When the main model can
@@ -1377,14 +1364,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     }
 
     let effectivePrompt = msg.prompt;
-    console.error('[IMAGE-DETAIL] Initial prompt length:', msg.prompt?.length ?? 0);
     if (preAnalysisText) {
       effectivePrompt = msg.prompt
         ? `${msg.prompt}\n\n--- Image Analysis (auto-generated) ---${preAnalysisText}`
         : `The user sent an image. Here is a detailed description generated by an AI vision model:\n${preAnalysisText}\n\nPlease help the user based on the image description above.`;
-      console.error('[IMAGE-DETAIL] Added preAnalysisText to prompt, length:', preAnalysisText.length);
-    } else {
-      console.error('[IMAGE-DETAIL] No preAnalysisText (vision analysis not available or failed)');
     }
 
     // Fallback: if direct pre-analysis failed for non-multimodal models,
@@ -1533,14 +1516,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
       // Phase 3: Build image content blocks using cached data.
       // Only send image blocks to multimodal-capable models.
-    console.error('[IMAGE-DETAIL] Phase 3: Building content blocks. modelIsMultimodal:', modelIsMultimodal);
-    console.error('[IMAGE-DETAIL] Files to process:', files.map(f => ({ name: f.name, type: f.type })));
-    console.error('[IMAGE-DETAIL] Available in cache:', [...imageDataCache.keys()]);
-
       for (const file of files) {
         if (file.type.startsWith('image/') || file.type.startsWith('img/')) {
           const cached = imageDataCache.get(file.name);
-          console.error('[IMAGE-DETAIL] Processing file:', file.name, 'cached:', !!cached, 'modelMultimodal:', modelIsMultimodal);
 
           if (cached) {
             if (modelIsMultimodal) {
@@ -1563,7 +1541,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           }
         }
       }
-    console.error('[IMAGE-DETAIL] Final imageBlocks count:', imageBlocks.length);
 
       // Also add document-extracted images (e.g. scanned PDF with embedded images)
       // Only for multimodal-capable models
@@ -1586,12 +1563,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
       // Assemble: text first, then images
       messageContent = [...contentBlocks, ...imageBlocks];
-      console.error('[IMAGE-DETAIL] Final messageContent:', {
-        isArray: Array.isArray(messageContent),
-        blockCount: Array.isArray(messageContent) ? messageContent.length : 0,
-        textBlockCount: contentBlocks.length,
-        imageBlockCount: imageBlocks.length,
-      });
     } else if (docFiles.some(d => d.imageChunks?.length)) {
       // No direct file attachments, but parsed documents contain extracted images
       const contentBlocks: MessageContent[] = [];
