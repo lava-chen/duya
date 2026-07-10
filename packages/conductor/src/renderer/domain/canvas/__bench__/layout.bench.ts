@@ -14,7 +14,6 @@ import { zoomToFit, viewportAwarePack } from '../layout/viewport';
 import { CanvasSpatialIndex } from '../spatialIndex';
 import { hitTest } from '../hitTest';
 import { computeSnap } from '../snap';
-import { pushAside } from '../collision';
 import type { CanvasElement } from '../../../types/conductor';
 
 function makeElement(id: string, x: number, y: number, w: number, h: number): CanvasElement {
@@ -103,15 +102,5 @@ describe('layout performance', () => {
       expect(elapsed).toBeLessThan(scenario.budget);
     });
 
-    it(`pushAside ${scenario.name} under ${scenario.budget}ms`, () => {
-      const els = generateElements(scenario.count);
-      const idx = new CanvasSpatialIndex();
-      idx.rebuild(els);
-      const start = performance.now();
-      pushAside(els[0], { dx: 1, dy: 0 }, idx, { gap: 0.25, cascade: true, maxDepth: 3 });
-      const elapsed = performance.now() - start;
-      console.log(`pushAside ${scenario.name}: ${elapsed.toFixed(2)}ms`);
-      expect(elapsed).toBeLessThan(scenario.budget);
-    });
   }
 });

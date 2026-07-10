@@ -1,8 +1,8 @@
 /**
  * R-tree spatial index for canvas elements.
  *
- * Single source of truth for all spatial queries (hit-test, collision,
- * alignment-candidate pruning). The UI layer reads from this index
+ * Single source of truth for spatial queries (hit-test, alignment-candidate
+ * pruning, and explicit layout obstacles). The UI layer reads from this index
  * instead of DOM `closest()` to avoid layout thrash on mousemove.
  *
  * Coordinates: all positions are in **grid units** (1 unit = 80px).

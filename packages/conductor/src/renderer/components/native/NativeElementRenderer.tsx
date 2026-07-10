@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import type { CanvasElement } from "../..//types/conductor";
+import type { CanvasElement, CanvasPosition } from "../..//types/conductor";
 import { StickyElement } from "./StickyElement";
 import { ConnectorElement } from "./ConnectorElement";
 import { ImageElement } from "./ImageElement";
@@ -12,7 +12,7 @@ import { NativeChrome } from "./NativeChrome";
 interface NativeElementRendererProps {
   element: CanvasElement;
   nodeType: string;
-  onPositionChange?: (id: string) => void;
+  onPositionChange?: (id: string, position: CanvasPosition) => void;
 }
 
 function UnknownNativeElement({ nodeType }: { nodeType: string }) {

@@ -59,12 +59,10 @@ const STICKY_MARKDOWN_COMPONENTS = {
 export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element }) => {
   const updateElement = useConductorStore((state) => state.updateElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
-  const selectedElementId = useConductorStore((state) => state.selectedElementId);
   const editingElementId = useConductorStore((state) => state.editingElementId);
   const setEditingElementId = useConductorStore((state) => state.setEditingElementId);
   const setUiError = useConductorStore((state) => state.setUiError);
 
-  const isSelected = selectedElementId === element.id;
   const isEditing = editingElementId === element.id;
   const color = (element.config.color as StickyColorKey) || "yellow";
   const theme = STICKY_COLORS[color] ?? STICKY_COLORS.yellow;
@@ -80,20 +78,28 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   const borderColor = borderStyleCfg?.color ?? "transparent";
   const borderStyleValue = borderStyleCfg?.style ?? "solid";
 
-  // Use the configured fontSize if provided; otherwise derive a readable
-  // default from the element height (in grid units). A 2-unit-high sticky
-  // gets 16px text; each additional unit adds 2px. This keeps Chinese
-  // characters legible when the agent creates small labels.
   const hGrid = element.position?.h ?? 3;
-  const defaultFontSize = 16 + Math.max(0, hGrid - 2) * 2;
+  const isCompactLabel = shape === "rect"
+    && hGrid <= 2
+    && text.trim().length > 0
+    && text.trim().length <= 12
+    && !text.includes("\n");
+
+  // Compact labels are the common building block for mind maps and flows.
+  // Give them stronger typography than paragraph notes. Explicit legacy
+  // values below 18px are clamped so old agent-created canvases become
+  // readable without requiring a migration.
+  const defaultFontSize = isCompactLabel
+    ? 22
+    : Math.min(26, 20 + Math.max(0, hGrid - 2) * 2);
   const configuredFontSize = element.config.fontSize as number | undefined;
   const fontSize = typeof configuredFontSize === "number" && configuredFontSize > 0
-    ? configuredFontSize
+    ? Math.max(isCompactLabel ? 20 : 18, configuredFontSize)
     : defaultFontSize;
 
   // Short shapes (diamond/ellipse) downgrade font size for long text to avoid overflow.
   const isShortShape = shape === "diamond" || shape === "ellipse";
-  const effectiveFontSize = isShortShape && text.length > 20 ? Math.max(12, fontSize - 4) : fontSize;
+  const effectiveFontSize = isShortShape && text.length > 20 ? Math.max(16, fontSize - 4) : fontSize;
 
   const [editText, setEditText] = useState(text);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -140,17 +146,10 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   }, [setEditingElementId, text]);
 
   const hasText = text.trim().length > 0;
-  const showToolbar = isSelected && !isEditing;
-
-  const startEditing = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setEditingElementId(element.id);
-  }, [element.id, setEditingElementId]);
 
   // Shape-driven outer styles.
   const borderRadius = shape === "ellipse" ? "50%" : "var(--radius-element)";
-  const padding = shape === "ellipse" ? "20px 22px" : shape === "diamond" ? "18px 20px" : "14px 16px";
+  const padding = shape === "ellipse" ? "16px 18px" : shape === "diamond" ? "16px 18px" : "10px 12px";
   const shapeRotate = shape === "diamond" ? "rotate(45deg)" : "";
   const combinedTransform = shapeRotate || "none";
   const outerBackground = bgColor ?? theme.bg;
@@ -167,6 +166,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   return (
     <div
       className="conductor-sticky-curl"
+      data-density={isCompactLabel ? "compact-label" : "note"}
       style={{
         width: "100%",
         height: "100%",
@@ -175,7 +175,8 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
         padding,
         fontSize: `${effectiveFontSize}px`,
         color: theme.text,
-        lineHeight: 1.55,
+        lineHeight: isCompactLabel ? 1.3 : 1.5,
+        fontWeight: isCompactLabel ? 600 : 400,
         wordBreak: "break-word",
         cursor: isEditing ? "text" : "default",
         userSelect: isEditing ? "text" : "none",
@@ -203,10 +204,11 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
           flex: 1,
           minHeight: 0,
           transform: contentWrapperTransform,
-          // Center content for short shapes where the usable area is smaller.
-          alignItems: isShortShape ? "center" : "stretch",
-          justifyContent: isShortShape ? "center" : "flex-start",
-          textAlign: isShortShape ? "center" : "left",
+          // Short diagram labels should read as nodes, not as mostly-empty
+          // note cards. Longer notes keep the familiar top-left flow.
+          alignItems: isShortShape || isCompactLabel ? "center" : "stretch",
+          justifyContent: isShortShape || isCompactLabel ? "center" : "flex-start",
+          textAlign: isShortShape || isCompactLabel ? "center" : "left",
         }}
       >
       {isEditing ? (
@@ -235,7 +237,8 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
             padding: 0,
             fontSize: `${effectiveFontSize}px`,
             color: theme.text,
-            lineHeight: 1.55,
+            lineHeight: isCompactLabel ? 1.3 : 1.5,
+            textAlign: isCompactLabel ? "center" : "left",
             fontFamily: "inherit",
             whiteSpace: "pre-wrap",
             overflowY: "auto",
@@ -263,45 +266,6 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
               <span style={{ color: theme.placeholder }}>Add text</span>
             )}
           </div>
-          {showToolbar && (
-            <div
-              style={{
-                position: "absolute",
-                bottom: 0,
-                left: 0,
-                right: 0,
-                display: "flex",
-                justifyContent: "center",
-                padding: "4px 0",
-                background: theme.bg,
-                pointerEvents: "auto",
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              <button
-                type="button"
-                onClick={startEditing}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 4,
-                  padding: "3px 12px",
-                  fontSize: 11,
-                  borderRadius: 5,
-                  border: "1px solid rgba(0,0,0,0.15)",
-                  background: "rgba(255,255,255,0.7)",
-                  color: theme.text,
-                  cursor: "pointer",
-                  fontWeight: 500,
-                }}
-              >
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
-                  <path d="M8.5 1.5L10.5 3.5L3.5 10.5H1.5V8.5L8.5 1.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                </svg>
-                Edit
-              </button>
-            </div>
-          )}
         </>
       )}
       </div>

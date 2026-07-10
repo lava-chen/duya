@@ -5,7 +5,6 @@ import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
 import { createNativeElement, executeAction, uploadAsset } from "..//ipc/conductor-ipc";
 import { FreeformLayer } from "./FreeformLayer";
-import { WidgetLayer } from "./WidgetLayer";
 import { ConnectorOverlay } from "./ConnectorOverlay";
 import { NativeConnectorOverlay } from "./NativeConnectorOverlay";
 import { GroupLayer } from "./GroupLayer";
@@ -14,7 +13,6 @@ import { StylePanel } from "./StylePanel";
 import { MultiSelectBar } from "./MultiSelectBar";
 import { GRID_PX } from "../domain/canvas/units";
 import { computeSnap } from "../domain/canvas/snap";
-import { pushAside } from "../domain/canvas/collision";
 import { zoomToFit } from "../domain/canvas/layout/viewport";
 import { canvasSpatialIndex } from "../stores/conductor-store";
 import type { AlignmentGuide } from "../domain/canvas/snap";
@@ -23,6 +21,7 @@ const MIN_CANVAS_WIDTH = 3200;
 const MIN_CANVAS_HEIGHT = 2400;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3;
+const MIN_READABLE_FIT_ZOOM = 0.65;
 const ZOOM_STEP = 0.1;
 const SNAP_GRID = 20;
 const DRAG_THRESHOLD = 3;
@@ -44,7 +43,7 @@ function snapToGrid(value: number, grid = SNAP_GRID): number {
 }
 
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
-  sticky: { w: 3, h: 3, zIndex: 0 },
+  sticky: { w: 3, h: 2, zIndex: 0 },
   image: { w: 5, h: 4, zIndex: 0 },
   file: { w: 4, h: 3, zIndex: 0 },
   group: { w: 0, h: 0, zIndex: -1 },
@@ -63,11 +62,6 @@ function parseCreateTool(activeTool: string | null): { type: string; extra: Reco
   } catch {
     return { type, extra: {} };
   }
-}
-
-function isWidgetKind(el: CanvasElement | undefined | null) {
-  if (!el || typeof el.elementKind !== "string") return false;
-  return el.elementKind.startsWith("widget/");
 }
 
 function isConnectorKind(el: CanvasElement | undefined | null) {
@@ -236,7 +230,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     const viewportGrid = { width: canvasViewportW / GRID_PX, height: canvasViewportH / GRID_PX };
     const result = zoomToFit(els, {
       viewport: viewportGrid,
-      minZoom: 0.2,
+      // Keep auto-fit readable. Users can still zoom farther out manually,
+      // but opening a dense board should not turn 18-22px labels into
+      // illegible single-digit screen pixels just to show every edge.
+      minZoom: MIN_READABLE_FIT_ZOOM,
       maxZoom: 1.5,
       padding: 1,
       respectMinSize: false,
@@ -320,8 +317,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     window.requestAnimationFrame(animate);
   }, [applyTransform, clampZoomHard, syncCanvasStateToStore]);
 
-  const freeformElements = elements.filter((el) => !isWidgetKind(el) && !isConnectorKind(el) && !isGroupKind(el));
-  const widgetElements = elements.filter((el) => isWidgetKind(el));
+  const freeformElements = elements.filter((el) => !isConnectorKind(el) && !isGroupKind(el));
   const hasFreeformElements = freeformElements.length > 0;
 
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
@@ -438,27 +434,21 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         },
       };
 
-      // 2. Push aside collided elements (passive collision).
-      const pushResult = pushAside(
-        proposedPrimary,
-        { dx: dxGrid, dy: dyGrid },
-        canvasSpatialIndex,
-        { gap: 0.25, cascade: true, maxDepth: 3 },
-      );
-
-      // 3. Compute alignment snap on the proposed primary.
+      // 2. Compute alignment snap on the proposed primary. Overlap is
+      // intentional: dragging one item must never rearrange unrelated
+      // content. Explicit auto-layout remains available from the toolbar.
       const snapResult = computeSnap(proposedPrimary, latestElements, { threshold: ALIGN_THRESHOLD });
 
-      // 4. Determine final primary position.
+      // 3. Determine final primary position.
       const finalX = snapResult.kind === 'alignment' ? snapResult.x : proposedPrimary.position.x;
       const finalY = snapResult.kind === 'alignment' ? snapResult.y : proposedPrimary.position.y;
       const snapDx = finalX - proposedPrimary.position.x;
       const snapDy = finalY - proposedPrimary.position.y;
 
-      // 5. Render alignment guides.
+      // 4. Render alignment guides.
       setAlignmentGuides(snapResult.kind === 'alignment' ? snapResult.guides : []);
 
-      // 6. Apply positions: dragged element + pushed-aside elements.
+      // 5. Apply positions only to the user's drag targets.
       useConductorStore.setState((state) => ({
         elements: state.elements.map((el) => {
           const target = targets.get(el.id);
@@ -473,30 +463,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               },
             };
           }
-          // Pushed-aside element: apply its moved delta.
-          const moved = pushResult.moved.find((m) => m.id === el.id);
-          if (moved) {
-            return {
-              ...el,
-              position: {
-                ...el.position,
-                x: moved.toX,
-                y: moved.toY,
-              },
-            };
-          }
           return el;
         }),
       }));
 
-      // 7. Sync spatial index for dragged + pushed elements.
+      // 6. Sync the spatial index for the dragged elements only.
       const updatedEls = useConductorStore.getState().elements;
       for (const target of d.targets) {
         const el = updatedEls.find((e) => e.id === target.id);
-        if (el) canvasSpatialIndex.upsert(el);
-      }
-      for (const moved of pushResult.moved) {
-        const el = updatedEls.find((e) => e.id === moved.id);
         if (el) canvasSpatialIndex.upsert(el);
       }
     };
@@ -626,8 +600,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     const target = e.target as HTMLElement;
 
     if (target.tagName === "IFRAME") return;
-
-    if (target.closest(".react-grid-item")) return;
 
     if (activeTool === "connector") {
       const nativeEl = elements.find((el) => {
@@ -1304,9 +1276,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
         {hasFreeformElements ? (
           <>
-            <div style={{ zIndex: 0, position: "relative" }}>
-              <WidgetLayer elements={widgetElements} readOnly={readOnly} />
-            </div>
             <GroupLayer elements={elements} />
             <div style={{ zIndex: 1, position: "absolute", inset: 0, pointerEvents: "none" }}>
               <FreeformLayer
@@ -1320,7 +1289,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             <NativeConnectorOverlay elements={elements} />
           </>
         ) : (
-          <WidgetLayer elements={widgetElements} readOnly={readOnly} />
+          <div style={{ zIndex: 1, position: "absolute", inset: 0, pointerEvents: "none" }}>
+            <FreeformLayer
+              elements={freeformElements}
+              readOnly={readOnly}
+              onPositionChange={onPositionChange}
+              onDeleteElement={onDeleteElement}
+            />
+          </div>
         )}
 
         {boxRect && boxRect.w > 2 && boxRect.h > 2 && (

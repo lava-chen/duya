@@ -16,6 +16,15 @@ class ConductorBridgeClass {
     const port = window.electronAPI?.getConductorPort?.();
     if (port) {
       this.portUnsubscribe = port.onStatePatch((data) => {
+        // Drop patches for other canvases. The main process broadcasts
+        // every canvas's patches to every subscriber; without this guard,
+        // patches from canvas A get applied to the store while canvas B
+        // is being displayed, producing "phantom" elements that vanish
+        // after a refresh (which reloads only the bound canvas).
+        const patchCanvasId = (data as { canvasId?: unknown }).canvasId;
+        if (patchCanvasId && this.canvasId && patchCanvasId !== this.canvasId) {
+          return;
+        }
         for (const handler of this.handlers) {
           try {
             handler(data);

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { ConductorWidget } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
 import { executeAction } from "..//ipc/conductor-ipc";
@@ -7,18 +8,62 @@ import { widgetRegistry, type DynamicWidgetDefinition } from "..//widgets/regist
 import { useRefineCaptureTarget } from "..//refine/useRefineCaptureTarget";
 import { RefineToolbarButton } from "..//refine/RefineToolbarButton";
 import { X, Warning, SpinnerGap, Robot } from "@phosphor-icons/react";
+import { GRID_PX } from "../domain/canvas/units";
 
 interface WidgetShellProps {
   widget: ConductorWidget;
   dynamicDef?: DynamicWidgetDefinition;
 }
 
+const CHROME_PADDING_PX = 12 + 12; // body padding on each side
+
 export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
-  const { editMode, activeCanvasId, removeWidget, agentStatus } = useConductorStore();
+  const { editMode, activeCanvasId, removeWidget, agentStatus, updateElement } = useConductorStore();
   const captureRef = useRefineCaptureTarget(widget.id);
+  const resizedRef = useRef(false);
 
   const WidgetContent = widgetRegistry.get(widget.type)?.component;
   const isAgentEditing = agentStatus === "streaming" || agentStatus === "tool_use" || agentStatus === "thinking";
+
+  // Listen to the iframe reporting its natural content height and grow the
+  // widget container to fit so no scrollbars appear.
+  useEffect(() => {
+    if (!dynamicDef?.sanitizedHtml) return;
+    const widgetId = widget.id;
+    const canvasId = widget.canvasId;
+    const handleMessage = (e: MessageEvent) => {
+      if (!e.data || typeof e.data !== "object") return;
+      if (e.data.type !== "widget:resize" || typeof e.data.height !== "number") return;
+      if (resizedRef.current) return;
+      const contentHeight = e.data.height + CHROME_PADDING_PX;
+      const currentHeightPx = widget.position.h * GRID_PX;
+      if (contentHeight > currentHeightPx + 4) {
+        const newH = Math.ceil(contentHeight / GRID_PX);
+        // Read the full element position from the store so we preserve
+        // zIndex/rotation when emitting the move action.
+        const fullPosition = useConductorStore
+          .getState()
+          .elements.find((el) => el.id === widgetId)?.position;
+        const nextPosition = fullPosition
+          ? { ...fullPosition, h: newH }
+          : { ...widget.position, h: newH, zIndex: 0, rotation: 0 };
+        updateElement(widgetId, {
+          position: nextPosition,
+        });
+        if (canvasId) {
+          executeAction({
+            action: "element.move",
+            canvasId,
+            elementId: widgetId,
+            position: nextPosition,
+          }).catch(() => {});
+        }
+        resizedRef.current = true;
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [dynamicDef?.sanitizedHtml, widget.canvasId, widget.id, widget.position, updateElement]);
 
   const handleDelete = async () => {
     if (!activeCanvasId) return;
@@ -59,7 +104,7 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
         <iframe
           srcDoc={dynamicDef.sanitizedHtml}
           sandbox="allow-scripts"
-          style={{ width: "100%", height: "100%", border: "none", pointerEvents: "none" }}
+          style={{ width: "100%", height: "100%", border: "none", pointerEvents: "auto" }}
           title="widget-dynamic"
         />
       </div>

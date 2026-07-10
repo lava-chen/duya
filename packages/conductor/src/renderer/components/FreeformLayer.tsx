@@ -6,10 +6,6 @@ import { useConductorStore } from "..//stores/conductor-store";
 import { ElementRenderer } from "./ElementRenderer";
 import { gridUnitsToPx } from "../domain/canvas/units";
 
-function isWidgetKind(element: CanvasElement): boolean {
-  return element.elementKind.startsWith("widget/");
-}
-
 function isConnectorElement(element: CanvasElement): boolean {
   return element.elementKind === "native/connector";
 }
@@ -68,6 +64,7 @@ const FreeformItem = memo(function FreeformItem({
       <ElementRenderer
         element={element}
         readOnly={readOnly}
+        selected={selected}
         onDelete={onDeleteElement}
         onPositionChange={
           onPositionChange
@@ -92,8 +89,13 @@ export const FreeformLayer: React.FC<FreeformLayerProps> = ({
   const editingElementId = useConductorStore((state) => state.editingElementId);
 
   const sorted = useMemo(() => {
+    // Render all free-form-positioned elements through a single layer so they
+    // share the same drag/resize interaction model. Widgets used to live in a
+    // separate react-grid-layout layer with grid snapping and a mismatched red
+    // placeholder; moving them here gives them the same free-form drag feel as
+    // sticky notes, plus the same alignment-snapping behavior.
     return elements
-      .filter((el) => !isWidgetKind(el) && !isConnectorElement(el) && !isGroupElement(el))
+      .filter((el) => !isConnectorElement(el) && !isGroupElement(el))
       .slice()
       .sort((a, b) => a.position.zIndex - b.position.zIndex);
   }, [elements]);

@@ -71,7 +71,8 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
                 e.dataTransfer.setData("application/x-conductor-tool", "sticky");
                 e.dataTransfer.setData("application/x-conductor-extra", JSON.stringify({ color: c.color }));
               }}
-              onMouseDown={(e) => {
+              onDragEnd={() => onClose()}
+              onClick={(e) => {
                 e.preventDefault();
                 setStickyColor(c.color);
                 onSelect("sticky", { color: c.color });

@@ -1,10 +1,12 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef } from "react";
-import type { CanvasElement } from "../..//types/conductor";
+import type { CanvasElement, CanvasPosition } from "../..//types/conductor";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { canvasTransformState } from "../CanvasArea";
 import { GRID_PX } from "../../domain/canvas/units";
+import { PencilIcon, TrashIcon } from "@/components/icons";
+import { executeAction } from "../../ipc/conductor-ipc";
 
 type HandleDirection = "nw" | "ne" | "se" | "sw";
 
@@ -14,7 +16,7 @@ const MIN_SIZE_GRID = 1;
 interface NativeChromeProps {
   element: CanvasElement;
   children: React.ReactNode;
-  onPositionChange?: (id: string) => void;
+  onPositionChange?: (id: string, position: CanvasPosition) => void;
 }
 
 export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, onPositionChange }) => {
@@ -24,9 +26,23 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
   const editingElementId = useConductorStore((state) => state.editingElementId);
   const setEditingElementId = useConductorStore((state) => state.setEditingElementId);
   const updateElement = useConductorStore((state) => state.updateElement);
+  const removeElement = useConductorStore((state) => state.removeElement);
+  const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
 
   const isSelected = selectedElementId === element.id || selectedElementIds.includes(element.id);
   const isEditing = editingElementId === element.id;
+
+  const handleDelete = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    removeElement(element.id);
+    if (activeCanvasId) {
+      executeAction({
+        action: "element.delete",
+        elementId: element.id,
+        canvasId: activeCanvasId,
+      }).catch(() => {});
+    }
+  }, [activeCanvasId, element.id, removeElement]);
 
   const resizeRef = useRef<{
     dir: HandleDirection;
@@ -178,17 +194,19 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       // Snap final size/position to whole grid units on commit so the
       // layout stays tidy after a smooth live resize.
       const el = useConductorStore.getState().elements.find((e) => e.id === element.id);
+      let finalPosition: CanvasPosition | undefined;
       if (el) {
         const snappedW = Math.max(MIN_SIZE_GRID, Math.round(el.position.w));
         const snappedH = Math.max(MIN_SIZE_GRID, Math.round(el.position.h));
         const snappedX = Math.round(el.position.x);
         const snappedY = Math.round(el.position.y);
-        updateElement(element.id, {
-          position: { ...el.position, x: snappedX, y: snappedY, w: snappedW, h: snappedH },
-        });
+        finalPosition = { ...el.position, x: snappedX, y: snappedY, w: snappedW, h: snappedH };
+        updateElement(element.id, { position: finalPosition });
       }
       resizeRef.current = null;
-      onPositionChange?.(element.id);
+      if (finalPosition) {
+        onPositionChange?.(element.id, finalPosition);
+      }
     };
 
     window.addEventListener("mousemove", handleGlobalMouseMove);
@@ -230,6 +248,92 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       onDoubleClick={handleDoubleClick}
     >
       {children}
+
+      {isSelected && !isEditing && element.elementKind === "native/sticky" && (
+        <div
+          style={{
+            position: "absolute",
+            top: -46,
+            left: "50%",
+            transform: "translateX(-50%)",
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            padding: "6px 10px",
+            background: "rgba(40, 44, 52, 0.98)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 22,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.2)",
+            pointerEvents: "auto",
+            zIndex: 20,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setEditingElementId(element.id);
+            }}
+            title="Edit"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              border: "none",
+              background: "transparent",
+              color: "#fff",
+              cursor: "pointer",
+              transition: "background var(--motion-duration-micro) var(--motion-smooth)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <PencilIcon size={16} />
+          </button>
+          <div
+            style={{
+              width: 1,
+              height: 16,
+              background: "rgba(255,255,255,0.15)",
+              margin: "0 4px",
+            }}
+          />
+          <button
+            type="button"
+            onClick={handleDelete}
+            title="Delete"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              border: "none",
+              background: "transparent",
+              color: "#fff",
+              cursor: "pointer",
+              transition: "background var(--motion-duration-micro) var(--motion-smooth)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <TrashIcon size={16} />
+          </button>
+        </div>
+      )}
 
       {isSelected && !isEditing && element.metadata?.resizeMode !== 'fixed' && (
         <>
