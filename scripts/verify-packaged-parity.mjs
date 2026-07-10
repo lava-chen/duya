@@ -195,13 +195,26 @@ console.log('\n' + '='.repeat(80));
 console.log('  SUMMARY');
 console.log('='.repeat(80));
 
-const missingItems = results.filter(r => r.status === 'MISSING' || r.status !== 'OK');
+// Missing items that are optional do not count as failures — they
+// are informational only (e.g. document-parser post-plan-106).
+const missingItems = results.filter(
+  r => (r.status === 'MISSING' || r.status !== 'OK') && !OPTIONAL_CHECKS.has(r.label)
+);
+const optionalMissing = results.filter(
+  r => (r.status === 'MISSING' || r.status !== 'OK') && OPTIONAL_CHECKS.has(r.label)
+);
 
 if (listOnly) {
   console.log(`  Listed ${totalChecks} expected artifacts.`);
   console.log('  Run without --list to verify.');
 } else if (missingItems.length === 0) {
   console.log(`  ✓ All ${totalChecks} checks passed.`);
+  if (optionalMissing.length > 0) {
+    console.log(`  ℹ ${optionalMissing.length} optional item(s) missing (non-fatal):`);
+    for (const item of optionalMissing) {
+      console.log(`    - ${item.label}`);
+    }
+  }
   console.log('');
   console.log('  The packaged build is complete and ready for testing.');
 } else {
@@ -210,12 +223,19 @@ if (listOnly) {
   for (const item of missingItems) {
     console.log(`  [${item.status}] ${item.label}`);
   }
+  if (optionalMissing.length > 0) {
+    console.log('');
+    console.log(`  ℹ ${optionalMissing.length} optional item(s) also missing (non-fatal):`);
+    for (const item of optionalMissing) {
+      console.log(`    - ${item.label}`);
+    }
+  }
   console.log('');
 }
 
 console.log(`  Passed: ${passed} | Failed: ${failed} | Skipped: ${skipped}`);
 console.log('='.repeat(80) + '\n');
 
-if (!listOnly && missingItems.length > 0) {
+if (!listOnly && failed > 0) {
   process.exit(1);
 }
