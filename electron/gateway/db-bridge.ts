@@ -46,38 +46,6 @@ export function dispatchGatewayDbAction(
         };
       }
 
-      case 'gateway:save_conversation':
-      case 'gateway_save_conversation': {
-        const p = action.payload as Record<string, unknown> | undefined;
-        if (!p) return { error: 'No payload' };
-        const threadId = p.threadId as string;
-        const title = (p.title as string) || '';
-        if (!threadId) return { error: 'Missing threadId' };
-        const now = Date.now();
-        db.prepare(`
-          INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
-        `).run(threadId, title, 'gateway', '', now, now);
-        return { result: 'ok' };
-      }
-
-      case 'gateway:save_message':
-      case 'gateway_save_message': {
-        const p = action.payload as Record<string, unknown> | undefined;
-        if (!p) return { error: 'No payload' };
-        const threadId = p.threadId as string;
-        const role = p.role as string;
-        const content = p.content as string;
-        if (!threadId || !role) return { error: 'Missing threadId or role' };
-        const now = Date.now();
-        db.prepare(`
-          INSERT INTO messages (thread_id, role, content, created_at)
-          VALUES (?, ?, ?, ?)
-        `).run(threadId, role, content, now);
-        return { result: 'ok' };
-      }
-
       case 'gateway_user:getMapping': {
         const p = action.payload as Record<string, unknown> | undefined;
         if (!p) return { error: 'No payload' };

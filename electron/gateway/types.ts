@@ -78,4 +78,10 @@ export interface GatewaySessionState {
   lastActivityAt: number;
   error?: string;
   bridgeChannel?: string;
+  /**
+   * Whether a meaningful title has already been generated from the first
+   * inbound message. Sessions start with the fallback "{platform} {timestamp}"
+   * title and are upgraded once the user sends the first message.
+   */
+  titleGenerated?: boolean;
 }

@@ -25,17 +25,21 @@ export class UserMapper {
       throw new Error(`Missing required fields: platform=${msg.platform}, platformChatId=${msg.platformChatId}`);
     }
 
-    // 1. Check existing mapping via db:request
+    // 1. Check existing mapping via db:request.
+    // db-bridge returns { result: row?.session_id ?? undefined }, and ipc-client's
+    // handleResponse unwraps the `result` field, so `existing` is the session_id
+    // string itself (or undefined) — not an object with a session_id field.
     const existing = await this.ipc.request('db:request', {
       action: 'gateway_user:getMapping',
       payload: {
         platform: msg.platform,
         platformChatId: msg.platformChatId,
       },
-    }) as { session_id?: string } | null;
+    });
 
-    if (existing?.session_id) {
-      return existing.session_id;
+    const existingSessionId = typeof existing === 'string' ? existing : undefined;
+    if (existingSessionId) {
+      return existingSessionId;
     }
 
     // 2. Request Main to create session + mapping atomically (single IPC round-trip)
@@ -52,17 +56,28 @@ export class UserMapper {
    * Get the chat ID for a session (for outbound message routing)
    */
   async getChatIdForSession(sessionId: string): Promise<{ platform: PlatformType; platformChatId: string } | null> {
+    // db-bridge returns { result: row ? JSON.stringify({ platform, platform_chat_id }) : undefined },
+    // and ipc-client's handleResponse unwraps the `result` field, so `result` is a
+    // JSON string like '{"platform":"weixin","platform_chat_id":"xxx"}' or undefined.
     const result = await this.ipc.request('db:request', {
       action: 'gateway_user:getChatForSession',
       payload: { sessionId },
-    }) as { platform: PlatformType; platform_chat_id: string } | null;
+    });
 
-    if (!result) return null;
-
-    return {
-      platform: result.platform,
-      platformChatId: result.platform_chat_id,
-    };
+    if (typeof result === 'string') {
+      try {
+        const parsed = JSON.parse(result) as { platform?: unknown; platform_chat_id?: unknown };
+        if (parsed.platform && parsed.platform_chat_id) {
+          return {
+            platform: parsed.platform as PlatformType,
+            platformChatId: parsed.platform_chat_id as string,
+          };
+        }
+      } catch {
+        // fall through to return null
+      }
+    }
+    return null;
   }
 
   /**

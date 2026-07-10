@@ -124,11 +124,31 @@ export class IpcClient {
       return;
     }
 
-    // Handle gateway:create_session:response - match by type since ID may not be echoed
+    // Handle gateway:create_session:response - match by ID first (Main echoes id),
+    // fall back to type-based match for backward compat with older Main processes.
     if (msgType === 'gateway:create_session:response') {
+      const msgId = (msg as { id?: string }).id;
       const sessionId = (msg as { sessionId?: string }).sessionId;
-      console.log('[IpcClient] gateway:create_session:response sessionId:', sessionId);
-      // Find the first pending gateway:create_session request
+      console.log('[IpcClient] gateway:create_session:response sessionId:', sessionId, 'id:', msgId);
+
+      // Prefer matching by id to avoid race conditions under concurrent session creation.
+      if (msgId) {
+        const pending = this.pendingRequests.get(msgId);
+        if (pending && pending.type === 'gateway:create_session') {
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(msgId);
+          if ((msg as { error?: string }).error) {
+            console.log('[IpcClient] Rejecting gateway:create_session due to error:', (msg as { error?: string }).error);
+            pending.reject(new Error((msg as { error?: string }).error));
+          } else {
+            console.log('[IpcClient] Resolving gateway:create_session with sessionId:', sessionId);
+            pending.resolve(sessionId);
+          }
+          return;
+        }
+      }
+
+      // Fallback: match by type (legacy Main processes that do not echo id).
       for (const [id, pending] of this.pendingRequests) {
         if (pending.type === 'gateway:create_session') {
           clearTimeout(pending.timeout);
@@ -147,8 +167,25 @@ export class IpcClient {
       return;
     }
 
-    // Handle gateway:reset_session:response
+    // Handle gateway:reset_session:response - match by ID first, fall back to type.
     if (msgType === 'gateway:reset_session:response') {
+      const msgId = (msg as { id?: string }).id;
+
+      if (msgId) {
+        const pending = this.pendingRequests.get(msgId);
+        if (pending && pending.type === 'gateway:reset_session') {
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(msgId);
+          if ((msg as { error?: string }).error) {
+            pending.reject(new Error((msg as { error?: string }).error));
+          } else {
+            pending.resolve(msg as { sessionId?: string; platformMsgId?: string });
+          }
+          return;
+        }
+      }
+
+      // Fallback: match by type.
       for (const [id, pending] of this.pendingRequests) {
         if (pending.type === 'gateway:reset_session') {
           clearTimeout(pending.timeout);
@@ -164,8 +201,20 @@ export class IpcClient {
       return;
     }
 
-    // Handle pairing responses
+    // Handle pairing responses - match by ID first, fall back to type.
     if (msgType === 'gateway:pairing:check:response') {
+      const msgId = (msg as { id?: string }).id;
+
+      if (msgId) {
+        const pending = this.pendingRequests.get(msgId);
+        if (pending && pending.type === 'gateway:pairing:check') {
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(msgId);
+          pending.resolve(msg);
+          return;
+        }
+      }
+
       for (const [id, pending] of this.pendingRequests) {
         if (pending.type === 'gateway:pairing:check') {
           clearTimeout(pending.timeout);
@@ -178,6 +227,18 @@ export class IpcClient {
     }
 
     if (msgType === 'gateway:pairing:generate:response') {
+      const msgId = (msg as { id?: string }).id;
+
+      if (msgId) {
+        const pending = this.pendingRequests.get(msgId);
+        if (pending && pending.type === 'gateway:pairing:generate') {
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(msgId);
+          pending.resolve(msg);
+          return;
+        }
+      }
+
       for (const [id, pending] of this.pendingRequests) {
         if (pending.type === 'gateway:pairing:generate') {
           clearTimeout(pending.timeout);
