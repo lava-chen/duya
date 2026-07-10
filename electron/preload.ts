@@ -559,6 +559,11 @@ export interface BrowserWebviewAPI {
   onOpenAgentTab: (callback: (sessionId: string) => void) => () => void
 }
 
+export interface BrowserCookieAPI {
+  importCookies: (browser: 'chrome' | 'edge') => Promise<{ ok: boolean; count?: number; failed?: number; error?: string }>
+  clearData: () => Promise<{ ok: boolean; error?: string }>
+}
+
 export interface DocumentParserAPI {
   parse: (filePath: string, options?: { timeout?: number }) => Promise<{
     fileHash: string
@@ -1003,6 +1008,7 @@ export interface ElectronAPI {
   weixin: WeixinAccountAPI
   browserExtension: BrowserExtensionAPI
   browserWebview: BrowserWebviewAPI
+  browserCookie: BrowserCookieAPI
   parser: DocumentParserAPI
   literature: LiteratureAPI
   agentProfile: AgentProfileAPI
@@ -1873,6 +1879,12 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('browser:open-agent-tab', handler);
       return () => ipcRenderer.removeListener('browser:open-agent-tab', handler);
     },
+  },
+  browserCookie: {
+    importCookies: (browser: 'chrome' | 'edge') =>
+      ipcRenderer.invoke('browser:import-cookies', browser),
+    clearData: () =>
+      ipcRenderer.invoke('browser:clear-browser-data'),
   },
   parser: {
     parse: (filePath, options) => ipcRenderer.invoke('parser:parse', filePath, options),
