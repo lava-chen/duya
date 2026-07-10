@@ -60,33 +60,47 @@ export const parallelFetchAction: ActionHandler<z.infer<typeof parallelFetchSche
         evaluate: data.evaluate,
       }));
 
+      let poolError: unknown = null;
       try {
         const results = await pool.investigate(tasks, data.timeoutMs ?? 30000);
-        const stats = pool.getStats();
+        const successful = results.filter(r => r.success).length;
 
-        return {
-          results: results.map(r => ({
-            id: r.id,
-            url: r.url,
-            title: r.title,
-            snapshot: r.snapshot,
-            interactiveElements: r.interactiveElements,
-            evaluateResult: r.evaluateResult,
-            success: r.success,
-            error: r.error,
-            durationMs: r.durationMs,
-          })),
-          total: results.length,
-          successful: results.filter(r => r.success).length,
-          poolStats: stats,
-          mode: 'browser_pool',
-        };
+        // If the browser backend could not process any URL (common when the
+        // built-in webview tab fails to register), fall back to static HTTP
+        // fetch so the research task still gets content.
+        if (successful > 0) {
+          const stats = pool.getStats();
+          return {
+            results: results.map(r => ({
+              id: r.id,
+              url: r.url,
+              title: r.title,
+              snapshot: r.snapshot,
+              interactiveElements: r.interactiveElements,
+              evaluateResult: r.evaluateResult,
+              success: r.success,
+              error: r.error,
+              durationMs: r.durationMs,
+            })),
+            total: results.length,
+            successful,
+            poolStats: stats,
+            mode: 'browser_pool',
+          };
+        }
       } catch (err) {
-        // Built-in/webview mode may fail if the daemon is not reachable or no
-        // webview is registered. Fall back to static HTTP fetch instead of
-        // launching an external Chromium (Playwright).
-        console.warn('[parallel_fetch] Browser pool failed, falling back to HTTP fetch:', err instanceof Error ? err.message : err);
+        poolError = err;
+      } finally {
+        pool.shutdown().catch(() => {});
       }
+
+      // Built-in/webview mode may fail if the daemon is not reachable or no
+      // webview is registered. Fall back to static HTTP fetch instead of
+      // launching an external Chromium (Playwright).
+      console.warn(
+        '[parallel_fetch] Browser pool returned no successful results, falling back to HTTP fetch:',
+        poolError instanceof Error ? poolError.message : poolError ?? 'all tasks failed',
+      );
     }
 
     // Default: fast static HTTP fetch (axios)

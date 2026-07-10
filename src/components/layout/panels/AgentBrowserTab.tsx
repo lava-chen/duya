@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, ArrowsClockwise, Robot } from "@phosphor-icons/react";
 import { BrowserBackendToggle } from "./BrowserBackendToggle";
 
@@ -24,13 +24,19 @@ interface AgentBrowserTabProps {
 }
 
 export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabProps) {
-  const webviewRef = useRef<WebviewElement | null>(null);
+  // Use state instead of a plain ref so the effect re-runs once the webview
+  // element is actually mounted by React. A callback ref alone can leave the
+  // effect running before the DOM node exists, causing us to miss `dom-ready`.
+  const [webviewNode, setWebviewNode] = useState<WebviewElement | null>(null);
+  const setWebviewRef = useCallback((node: HTMLElement | null) => {
+    setWebviewNode(node as WebviewElement | null);
+  }, []);
   const [url, setUrl] = useState("about:blank");
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
+  const [registrationError, setRegistrationError] = useState<string | null>(null);
 
-  const syncFromWebview = useCallback(() => {
-    const node = webviewRef.current;
+  const syncFromWebview = useCallback((node: WebviewElement | null) => {
     if (!node) return;
     try {
       const nextUrl = node.getURL() || "about:blank";
@@ -45,34 +51,75 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
   }, [onTitleChange]);
 
   useEffect(() => {
-    const node = webviewRef.current;
+    const node = webviewNode;
     if (!node) return;
 
     let registered = false;
 
-    const handleDomReady = () => {
+    const register = () => {
       if (registered) return;
       registered = true;
       try {
         const webContentsId = node.getWebContentsId();
         window.electronAPI.browserWebview
           .registerWebview(sessionId, webContentsId)
-          .catch(() => {});
-      } catch {
-        // getWebContentsId can throw if the guest isn't ready yet
+          .then((res: { ok?: boolean; error?: string }) => {
+            if (res?.ok === false) {
+              setRegistrationError(res.error ?? "Registration failed");
+            } else {
+              setRegistrationError(null);
+            }
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            setRegistrationError(message);
+          });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setRegistrationError(message);
       }
-      syncFromWebview();
+      syncFromWebview(node);
     };
 
-    const handleNavigate = () => syncFromWebview();
-    const handleTitle = () => syncFromWebview();
+    const handleDomReady = () => register();
+    const handleNavigate = () => syncFromWebview(node);
+    const handleTitle = () => syncFromWebview(node);
 
     node.addEventListener("dom-ready", handleDomReady as EventListener);
     node.addEventListener("did-navigate", handleNavigate as EventListener);
     node.addEventListener("did-navigate-in-page", handleNavigate as EventListener);
     node.addEventListener("page-title-updated", handleTitle as EventListener);
 
+    // dom-ready may already have fired before React ran this effect, so try
+    // to register immediately as well. getWebContentsId throws until the guest
+    // process is ready; if it throws we wait for the event.
+    try {
+      if (node.getWebContentsId()) {
+        register();
+      }
+    } catch {
+      // Guest not ready yet — dom-ready handler will retry.
+    }
+
+    // Safety net: if the event was missed or never fires, poll for readiness
+    // for a short window so the agent doesn't sit waiting on a 404 forever.
+    const pollInterval = setInterval(() => {
+      if (registered) {
+        clearInterval(pollInterval);
+        return;
+      }
+      try {
+        if (node.getWebContentsId()) {
+          register();
+          clearInterval(pollInterval);
+        }
+      } catch {
+        // Still not ready — keep waiting for dom-ready or next poll tick.
+      }
+    }, 250);
+
     return () => {
+      clearInterval(pollInterval);
       node.removeEventListener("dom-ready", handleDomReady as EventListener);
       node.removeEventListener("did-navigate", handleNavigate as EventListener);
       node.removeEventListener("did-navigate-in-page", handleNavigate as EventListener);
@@ -84,7 +131,7 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
           .catch(() => {});
       }
     };
-  }, [sessionId, syncFromWebview]);
+  }, [webviewNode, sessionId, syncFromWebview]);
 
   return (
     <div className="browser-panel">
@@ -92,7 +139,7 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
         <button
           type="button"
           className="browser-panel-icon-btn"
-          onClick={() => webviewRef.current?.goBack()}
+          onClick={() => webviewNode?.goBack()}
           disabled={!canGoBack}
           title="Back"
         >
@@ -101,7 +148,7 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
         <button
           type="button"
           className="browser-panel-icon-btn"
-          onClick={() => webviewRef.current?.goForward()}
+          onClick={() => webviewNode?.goForward()}
           disabled={!canGoForward}
           title="Forward"
         >
@@ -110,7 +157,7 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
         <button
           type="button"
           className="browser-panel-icon-btn"
-          onClick={() => webviewRef.current?.reload()}
+          onClick={() => webviewNode?.reload()}
           title="Reload"
         >
           <ArrowsClockwise size={14} />
@@ -122,11 +169,14 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
         <BrowserBackendToggle />
       </div>
 
+      {registrationError && (
+        <div className="browser-panel-error">
+          Agent browser registration failed: {registrationError}
+        </div>
+      )}
       <div className="browser-panel-frame">
         <webview
-          ref={(node) => {
-            webviewRef.current = node as WebviewElement | null;
-          }}
+          ref={setWebviewRef}
           src="about:blank"
           partition={BROWSER_PARTITION}
         />
