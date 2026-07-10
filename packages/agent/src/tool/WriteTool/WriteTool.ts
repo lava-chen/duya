@@ -28,6 +28,11 @@ import { expandPath } from '../../utils/path.js';
 const BLOCKED_PATHS_UNIX = [
   '/etc', '/system', '/boot', '/dev', '/proc', '/sys',
   '/var', '/root', '/.ssh', '/.gnupg', '/.aws', '/run',
+  // macOS symlinks: /etc -> /private/etc, /var -> /private/var.
+  // resolve() follows symlinks, so resolvedPath for "/etc/passwd" becomes
+  // "/private/etc/passwd" and would escape the "/etc" entry above. Without
+  // these entries the blocklist is a no-op on macOS.
+  '/private/etc', '/private/var', '/private/tmp', '/private/cores',
 ];
 
 const BLOCKED_PATHS_WINDOWS = [

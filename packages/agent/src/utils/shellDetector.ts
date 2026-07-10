@@ -258,6 +258,36 @@ function detectUnixShell(): ShellInfo {
 
 function detectUnixShellForFamily(family: Exclude<ShellFamilyPreference, 'auto'>): ShellInfo | null {
   if (family === 'unix') {
+    // When the caller asks for the 'unix' family (e.g. the bash shell
+    // provider), prefer an actual bash binary over the user's login shell.
+    // On macOS the default $SHELL is zsh, but the agent's prompts and
+    // quoting assume bash semantics (arrays, $0, glob). Looking up bash
+    // first avoids silently running zsh under a "bash" label, which causes
+    // subtle script incompatibilities. Falls back to the login shell and
+    // then to /bin/sh if no bash is available.
+    const bashCandidates = ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash', '/opt/homebrew/bin/bash'];
+    for (const candidate of bashCandidates) {
+      if (tryShell(candidate)) {
+        return {
+          name: 'bash',
+          path: candidate,
+          family: 'unix',
+          supportsUnixCommands: true,
+          execArg: '-c',
+        };
+      }
+    }
+    const bashInPath = findInPath('bash');
+    if (bashInPath) {
+      return {
+        name: 'bash',
+        path: bashInPath,
+        family: 'unix',
+        supportsUnixCommands: true,
+        execArg: '-c',
+      };
+    }
+    // No bash available — fall back to the user's shell / sh.
     return detectUnixShell();
   }
 
