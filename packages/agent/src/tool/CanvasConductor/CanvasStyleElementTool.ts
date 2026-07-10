@@ -25,7 +25,7 @@ export const definition: Tool = {
   description:
     'Change the visual style of an existing canvas element. ' +
     'Style fields are element-kind specific:\n' +
-    '  - native/sticky: { color, fontSize? } — color ∈ yellow|blue|green|pink|purple|gray\n' +
+    '  - native/sticky: { color, fontSize? } — color ∈ yellow|blue|green|pink|purple|gray; use 20-24px (compact labels render at 20px minimum, longer notes at 18px minimum)\n' +
     '  - native/connector: { stroke, strokeWidth?, endMarker? } — endMarker ∈ arrow|none\n' +
     '  - native/image: { borderRadius?, opacity? }\n\n' +
     'Only the supplied fields are overwritten; other config fields (text, url, etc.) are preserved. ' +

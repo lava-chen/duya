@@ -143,7 +143,7 @@ rather than writing it silently.
 config: {
   text: string,                                  // main body text
   color?: 'yellow' | 'blue' | 'green' | 'pink' | 'purple' | 'gray',
-  fontSize?: number,                             // px, default 14
+  fontSize?: number,                             // px; compact labels default 22, notes default 20+
 }
 ```
 Use `canvas_fill_content` to change `text`. Use `canvas_style_element`
@@ -235,13 +235,10 @@ skip the verify/fix loop in Section 7 for anything you build here.
 
 ### 4.3 Widget/dynamic Sizing and Density Budget
 
-The canvas viewport defaults to framing the entire 40 x 30 grid on
-screen. This creates a counter-intuitive scaling effect: **the larger a
-single widget is, the more the whole canvas zooms out to fit it, and the
-smaller its text appears.** A 36 x 20 widget looks "big" in grid units
-but renders as a tiny, unreadable card because everything is scaled down.
-A smaller widget lets the canvas stay zoomed in, so the same text
-actually looks larger.
+The canvas auto-fits content but preserves a readable zoom floor. A very
+wide composition may therefore require panning instead of shrinking into
+an unreadable overview. Oversized widgets still waste viewport space and
+weaken hierarchy, so keep their bounds tight around the content.
 
 Apply these constraints to every `widget/dynamic`:
 
@@ -284,9 +281,9 @@ diagram's internal nodes using this grid system.
 - `position.x` / `position.y` is the **top-left corner** of the
   element, in **grid units**.
 - `position.w` / `position.h` are width / height in **grid units**.
-- Default sticky size: **3 x 3** grid units (240 x 240 px) — but prefer the tighter content-matched sizes in the table below.
+- Default sticky size: **3 x 2** grid units (240 x 160 px) — but prefer the tighter content-matched sizes in the table below.
 - Keep a **1 grid unit** margin from canvas edges.
-- Leave **1 grid unit** gap between elements.
+- Leave **0.5-0.75 grid units** between related elements; use 1 unit between semantic groups.
 ### Sticky Sizing by Content
 
 Oversized stickies are a common failure mode: they force the default
@@ -295,21 +292,30 @@ content tightly:
 
 | Content | position.w | position.h | fontSize | Example |
 |---------|-----------|-----------|----------|---------|
-| 1-2 Chinese chars label | 3 | 2 | 16 | "开始" |
-| 1 short Chinese line / 3-6 chars | 3 | 2 | 16-18 | "用户登录" |
-| 2 short lines / 6-10 chars | 4 | 2 | 16 | "主菜单 / 搜索框" |
-| Standard sticky (1-2 sentences) | 4 | 3 | 18 | "明天发布 v0.2" |
-| Detailed note (2-3 lines) | 5 | 3 | 18 | "Review API 设计" |
-| Paragraph / long sentence | 5 | 4 | 18-20 | "需要补全错误处理" |
-| Wide header / section title | 6-8 | 2 | 18 | "Phase 1: 基础架构" |
+| 1-2 Chinese chars label | 2.5 | 1 | 22-24 | "开始" |
+| 1 short Chinese line / 3-6 chars | 3 | 1 | 20-22 | "用户登录" |
+| 2 short lines / 6-10 chars | 3.5 | 1.5 | 20 | "主菜单 / 搜索框" |
+| Standard sticky (1-2 sentences) | 4 | 2 | 20 | "明天发布 v0.2" |
+| Detailed note (2-3 lines) | 5 | 2.5 | 20 | "Review API 设计" |
+| Paragraph / long sentence | 5 | 3 | 20-22 | "需要补全错误处理" |
+| Section title / mind-map root | 3.5 | 1.25 | 24 | "Phase 1: 基础架构" |
 
 Rules:
 
 - Width should match content width; a 4-char label does not need w=8.
-- Height should barely clear the text. Single line → h=2. Two lines → h=2 or 3.
-- Prefer larger fontSize over a larger box. Default 14 is too small for Chinese.
-- If text does not fit in w=6-8, h=4-5, switch to widget/dynamic.
-- Leave 1 grid unit gap between stickies.
+- Height should barely clear the text. Single line → h=1. Two lines → h=1.5 or 2.
+- Prefer larger fontSize over a larger box. Compact labels auto-center at 22px; explicit values below 18px are clamped.
+- If text does not fit in w=5-7, h=3, switch to widget/dynamic.
+- Use 0.5-0.75 unit gaps inside a cluster and 1 unit between groups.
+
+### Editable mind-map density
+
+Use `canvas_batch_create` only when the user should be able to edit/move
+individual nodes. Use the root as the title; never add a separate wide title
+sticky. Root = 3.5x1.25 at 24px, first-level branch = 3x1 at 22px,
+leaf = 2.5x1 at 20px. Keep the entire cluster inside the smallest practical
+bounding box. A finished mind map meant to be read as one composition should
+instead be one `widget/dynamic` SVG/HTML element.
 
 ### Grid layout
 For N elements in a grid:

@@ -4,7 +4,7 @@
  * Creates multiple elements and connectors in a single call. Use
  * bindings (ref names) to reference previously-created elements
  * within the same batch — this is the recommended way to create
- * flowcharts, mind maps, and any multi-element layout. Each
+ * editable workbench layouts and native-node mind maps. Each
  * operation gets its own elementId; connectors can reference either
  * a ref from this batch or an existing elementId.
  *
@@ -26,12 +26,14 @@ export const TOOL_NAME = 'canvas_batch_create';
 export const definition: Tool = {
   name: TOOL_NAME,
   description:
-    'Create multiple elements and connectors in a single call. This is the PREFERRED tool for flowcharts, mind maps, and any multi-element layout. ' +
+    'Create multiple independently editable elements and connectors in a single call. Use it for workbench layouts and native-node mind maps. ' +
+    'For a finished explanatory flowchart or diagram meant to be viewed as one composition, create ONE widget/dynamic instead. ' +
     'Use bindings (ref names) to reference previously-created elements ' +
     'within the same batch. Each operation gets its own elementId; connectors can reference either a ref from ' +
-    'this batch or an existing elementId. When the user asks to draw anything with multiple parts, call this tool immediately. ' +
+    'this batch or an existing elementId. Call this immediately for editable multi-part workbench content; do not use it for a finished single-composition diagram. ' +
     'ALWAYS provide position.w and position.h for every create operation; do not omit sizes. ' +
-    'Choose based on content: short label 3x2, standard sticky 4x3, detailed card 5x4 (grid units, 1 unit = 80px).',
+    'Fractional sizes are valid. Choose based on content: compact label 2.5x1, short line 3x1, two lines 3.5x1.5, standard note 4x2. ' +
+    'Use 0.5-0.75 unit gaps for related mind-map nodes and fontSize 20-24px; never spread a short-label map across the full 40x30 canvas.',
   input_schema: {
     type: 'object',
     properties: {
@@ -68,7 +70,7 @@ export const definition: Tool = {
               description:
                 'Element position in grid units (for op=create). 1 unit = 80px. ' +
                 'Required: x, y, w, h. Always set w and h. Choose size based on content: ' +
-                'short label 3x2, standard sticky 4x3, detailed card 5x4. ' +
+                'compact label 2.5x1, short line 3x1, two lines 3.5x1.5, standard note 4x2. ' +
                 'Optional: zIndex, rotation.',
               properties: {
                 x: { type: 'number' },
@@ -311,8 +313,10 @@ async function runBatchCreateVisualReview(
 2. Elements extending beyond canvas edges (critical)
 3. Poor alignment or uneven spacing (warning)
 4. Connectors that don't clearly link their source/target (warning)
+5. Text that is too small to read at the captured viewport scale (critical)
+6. Nodes with excessive empty padding or a layout spread much wider/taller than its content needs (warning)
 
-If you find issues, describe them concisely with element IDs if visible, and suggest specific fixes (e.g. "move elem_X 2 units right"). If everything looks good, say "Looks good — no obvious issues."`;
+If you find issues, describe them concisely with element IDs if visible, and suggest specific fixes (e.g. "resize elem_X to 2.5x1 and set fontSize 22" or "move elem_X 0.5 units left"). If everything looks good, say "Looks good — readable, compact, and no obvious issues."`;
 
     const review = await analyzeImage(base64, mimeType, prompt);
 

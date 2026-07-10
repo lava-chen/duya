@@ -44,12 +44,14 @@ Notes:
 
 ### Font Size (config.fontSize)
 
-- 14  — default body text. Use unless you have a reason not to.
-- 18  — section titles, short labels (1-3 words).
-- 20  — main page title, single-word emphasis.
-- 12  — detailed notes, sub-bullets, secondary info.
+Sticky text now defaults to a larger size based on element height, so you usually do NOT need to set fontSize. Only set it when you want explicit control.
 
-Do NOT exceed 20 — larger sizes overflow the default 160x100 sticky.
+- 20  — default body text for a standard note.
+- 22  — compact labels and first-level mind-map branches.
+- 24  — root node, section title, single-word emphasis.
+- 18  — smallest supported secondary text; legacy smaller values are clamped.
+
+Do NOT go below 18 for Chinese body text. Prefer 20-24 for anything that must remain readable in an overview. Do NOT exceed 26.
 
 ### Text Content
 
@@ -60,9 +62,9 @@ Do NOT exceed 20 — larger sizes overflow the default 160x100 sticky.
 
 ### Default Sticky Size
 
-- 160w x 100h. Leave 40px gap between stickies.
-- For titles, keep 160x100 — increase fontSize instead of width.
-- For detailed notes, increase height to 140-160 instead of width.
+- Compact label: 2.5x1 grid units (200x80px). Related labels use 0.5-0.75 unit gaps.
+- Standard note: 4x2 grid units (320x160px).
+- For titles, use 3.5x1.25 and 24px; do not create a wide empty banner.
 
 ### Size-to-Content Matching (Important)
 
@@ -70,21 +72,21 @@ Do not make a sticky larger than its content. Oversized stickies force the canva
 
 | Content | Recommended grid size (w x h) | fontSize | Notes |
 |---------|-------------------------------|----------|-------|
-| 1-2 Chinese chars label | 3 x 2 | 16 | e.g. "开始" |
-| 1 short Chinese line / 3-6 chars | 3 x 2 | 16-18 | e.g. "用户登录" |
-| 2 short lines / 6-10 chars | 4 x 2 | 16 | Use slash or newline |
-| Standard sticky (1-2 sentences) | 4 x 3 | 18 | Most common |
-| Detailed note (2-3 lines) | 5 x 3 | 18 | |
-| Paragraph / long sentence | 5 x 4 | 18-20 | |
-| Wide header / section title | 6-8 x 2 | 18 | Keep height at 2 |
+| 1-2 Chinese chars label | 2.5 x 1 | 22-24 | e.g. "开始"; auto-centered |
+| 1 short Chinese line / 3-6 chars | 3 x 1 | 20-22 | e.g. "用户登录"; auto-centered |
+| 2 short lines / 6-10 chars | 3.5 x 1.5 | 20 | Use slash or newline |
+| Standard sticky (1-2 sentences) | 4 x 2 | 20 | Most common note |
+| Detailed note (2-3 lines) | 5 x 2.5 | 20 | |
+| Paragraph / long sentence | 5 x 3 | 20-22 | |
+| Section title / mind-map root | 3.5 x 1.25 | 24 | Use the root as the title |
 
 Rules:
 
 - Width should match content width. A 4-char label does not need w=8.
-- Height should barely clear the text. Single line → h=2. Two lines → h=2 or 3. Do not default to h=4+ "just in case".
-- Prefer larger fontSize over larger box. Default 14 is too small for Chinese; use 16-18 for body, 20 for titles.
-- If text does not fit in w=6-8, h=4-5, use widget/dynamic instead of shrinking fontSize below 14.
-- Leave 1 grid unit gap between stickies. Keep margins small and consistent.
+- Height should barely clear the text. Single line → h=1. Two lines → h=1.5 or 2. Do not default to h=3+ "just in case".
+- Prefer larger fontSize over a larger box. Compact labels default to 22px; do not request fontSize below 18.
+- If text does not fit in w=5-7, h=3, use widget/dynamic instead of shrinking type.
+- Leave 0.5-0.75 grid units between related nodes; use 1 unit only between semantic groups.
 `,
 
   'connector-style': `## Connector Style Guide
@@ -505,6 +507,15 @@ Mind maps use stickies for nodes and connectors with
 \`endMarker: 'none'\` (association, not flow). Default canvas:
 40 x 30 grid units. Center is (20, 15).
 
+### Readable Node Tiers
+
+- Root: 3.5x1.25, fontSize 24.
+- First-level branch: 3x1, fontSize 22.
+- Leaf: 2.5x1, fontSize 20.
+- Related-node gap: 0.5-0.75 units. Use 1 unit between branch groups.
+- The root is the title. Do not add a separate oversized title banner.
+- Keep the full map inside the smallest practical bounding box. A map may pan at the readable auto-fit floor; do not shrink type to force a full-canvas overview.
+
 ### Template 1: Radial Layout
 
 Best for: brainstorming, topic exploration, non-hierarchical ideas.
@@ -519,25 +530,17 @@ Best for: brainstorming, topic exploration, non-hierarchical ideas.
                 [S]
 \`\`\`
 
-- Center node at (20, 15) — canvas center.
-- First-level branches at radius 5, 8 positions:
-  - N  : (20, 10)
-  - NE : (24, 12)
-  - E  : (25, 15)
-  - SE : (24, 18)
-  - S  : (20, 20)
-  - SW : (16, 18)
-  - W  : (15, 15)
-  - NW : (16, 12)
-- Second-level branches extend outward at radius 10 from center:
-  - N-1 : (20, 5)
-  - NE-1: (28, 9)
-  - E-1 : (30, 15)
-  - SE-1: (28, 21)
-  - S-1 : (20, 25)
-  - SW-1: (12, 21)
-  - W-1 : (10, 15)
-  - NW-1: (12, 9)
+- Center root at (18.25, 14.5), size 3.5x1.25.
+- First-level branches use a compact radius of about 4 units:
+  - N  : (18.5, 10.5)
+  - NE : (22.5, 11.5)
+  - E  : (23.5, 14.5)
+  - SE : (22.5, 17.5)
+  - S  : (18.5, 18.5)
+  - SW : (14, 17.5)
+  - W  : (13, 14.5)
+  - NW : (14, 11.5)
+- Second-level branches extend another 3.5-4 units outward, not to the canvas edges.
 - Each second-level node connects to its first-level parent, not
   directly to center.
 
@@ -554,18 +557,17 @@ outline-style notes.
                  [Child 3]──[Grandchild 3]
 \`\`\`
 
-- Root at (1, 5), width 3.
-- Children at x=5, y spread vertically:
-  - Child 1: (5, 3)
-  - Child 2: (5, 5)
-  - Child 3: (5, 7)
-  (2 unit y stride for 3 children; adjust for more.)
+- Root at (1, 4), size 3.5x1.25.
+- Children at x=5.25, y spread vertically:
+  - Child 1: (5.25, 2.5)
+  - Child 2: (5.25, 4)
+  - Child 3: (5.25, 5.5)
+  (1.5 unit y stride for single-line children; widen only for wrapped labels.)
 - Grandchildren at x=9:
-  - Grandchild 1: (9, 3)
-  - Grandchild 2: (9, 5)
-  - Grandchild 3: (9, 7)
-- Connectors: root→child uses (4, midpoint-y), child→grandchild
-  uses (8, midpoint-y).
+  - Grandchild 1: (9, 2.5)
+  - Grandchild 2: (9, 4)
+  - Grandchild 3: (9, 5.5)
+- Connectors bind node IDs; do not allocate extra blank rows for their paths.
 
 ### Color Coding for Mind Maps
 
