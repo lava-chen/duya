@@ -10,6 +10,7 @@ import { initUpdater } from '../services/updater';
 import { wasLaunchedAsHidden } from '../services/auto-start';
 import { getNodeExecutable } from '../services/dev-detector';
 import { isHttpUrl } from '../ipc/system-handlers';
+import { setMainWindow } from '../services/browser/daemon';
 
 const logger = getLogger();
 
@@ -157,6 +158,10 @@ export async function createWindow(
 
   mainWindow = new BrowserWindow(windowOptions);
 
+  // Register the main window with the browser daemon so it can forward
+  // webview CDP commands to the renderer via IPC.
+  setMainWindow(mainWindow);
+
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     if (isHttpUrl(targetUrl)) {
       shell.openExternal(targetUrl);
@@ -280,5 +285,6 @@ export async function createWindow(
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    setMainWindow(null);
   });
 }

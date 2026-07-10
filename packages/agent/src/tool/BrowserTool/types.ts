@@ -1,3 +1,3 @@
-export type BrowserMode = 'extension' | 'playwright' | 'fallback';
+export type BrowserMode = 'extension' | 'playwright' | 'webview' | 'fallback';
 
 export type NetworkEnvironment = 'domestic' | 'overseas' | 'unknown';
