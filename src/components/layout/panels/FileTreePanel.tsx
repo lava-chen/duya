@@ -210,7 +210,7 @@ function ContextMenu({
   );
 }
 
-export function FileTreePanel({ tab, embedded }: { tab?: PageTab; embedded?: boolean }) {
+export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: PageTab; embedded?: boolean; embeddedInPreview?: boolean }) {
   const { activeThreadId, threads } = useConversationStore();
   const { t } = useTranslation();
   // Plan 220: when this component is embedded inside FilePreviewPanel
@@ -301,11 +301,13 @@ export function FileTreePanel({ tab, embedded }: { tab?: PageTab; embedded?: boo
       }));
       return;
     }
-    // Plan 220: in embedded mode (rendered inside FilePreviewPanel
-    // without a PanelProvider), fall through to a `duya:open-file`
-    // event so the parent preview panel can switch its current file
-    // instead of trying to open a new tab.
-    if (embedded) {
+    // When embedded inside FilePreviewPanel (PanelFileTreeSplit), dispatch
+    // `duya:open-file` so the parent preview panel switches its current
+    // file in place instead of opening a new tab. Note: the `embedded`
+    // prop from PanelZone is true for ALL pages (it controls header
+    // chrome), so `embeddedInPreview` distinguishes the PanelFileTreeSplit
+    // case from a standalone files-page tab.
+    if (embeddedInPreview) {
       window.dispatchEvent(new CustomEvent("duya:open-file", {
         detail: { filePath, workingDirectory },
       }));
@@ -316,7 +318,7 @@ export function FileTreePanel({ tab, embedded }: { tab?: PageTab; embedded?: boo
       workingDirectory,
       title: filePath.split(/[/\\]/).pop() || t('panel.preview'),
     });
-  }, [openOrActivatePage, workingDirectory, embedded, t]);
+  }, [openOrActivatePage, workingDirectory, embeddedInPreview, t]);
 
   const handleContextMenu = useCallback(
     (path: string, type: "file" | "directory", event: React.MouseEvent) => {

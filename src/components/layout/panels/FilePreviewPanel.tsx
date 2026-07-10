@@ -2,6 +2,7 @@
 
 import {
   ArrowSquareOut,
+  Camera,
   CaretDown,
   Copy,
   FileText,
@@ -18,6 +19,7 @@ import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useTheme } from "@/hooks/useTheme";
 import { useTranslation } from "@/hooks/useTranslation";
+import { dispatchAddAttachment } from "@/lib/add-attachment-event";
 import type { PageTab } from "./registry";
 
 interface PreviewPayload {
@@ -410,6 +412,68 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     return `data:${preview.mediaType};base64,${preview.data}`;
   }, [preview?.data, preview?.mediaType]);
 
+  // Screenshot capture: images reuse the already-decoded data URL; text
+  // (code/markdown) is captured via html2canvas. PDF iframes are
+  // cross-origin and cannot be captured — the button stays disabled.
+  const canScreenshot = !!preview?.success && !preview.tooLarge && (preview.kind === "image" || preview.kind === "text");
+
+  const handleScreenshot = useCallback(async () => {
+    const canvasEl = canvasRef.current;
+    if (!canvasEl || !preview?.success || !filePath || !canScreenshot) return;
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const attachmentId = crypto.randomUUID();
+    const fileLabel = preview.name || tab.title || "file";
+    let screenshotUrl = "";
+
+    try {
+      if (preview.kind === "image" && dataUrl) {
+        screenshotUrl = dataUrl;
+      } else if (preview.kind === "text") {
+        const html2canvas = (await import("html2canvas")).default;
+        const rect = canvasEl.getBoundingClientRect();
+        const renderCanvas = await html2canvas(canvasEl, {
+          backgroundColor: null,
+          scale: window.devicePixelRatio || 1,
+          useCORS: true,
+          logging: false,
+          width: rect.width,
+          height: rect.height,
+          windowWidth: canvasEl.scrollWidth,
+          windowHeight: canvasEl.scrollHeight,
+        });
+        screenshotUrl = renderCanvas.toDataURL("image/png");
+      }
+    } catch {
+      return;
+    }
+
+    if (!screenshotUrl) return;
+    const base64 = screenshotUrl.split(",", 2)[1] ?? "";
+    dispatchAddAttachment({
+      kind: "browser-ref",
+      reference: {
+        kind: "screenshot",
+        label: "Screenshot",
+        title: fileLabel,
+        url: filePath,
+        content: [
+          "File preview screenshot reference:",
+          `- File: ${fileLabel}`,
+          `- Path: ${filePath}`,
+          "Use the attached screenshot as visual context.",
+        ].join("\n"),
+      },
+      attachment: {
+        id: attachmentId,
+        name: `preview-screenshot-${stamp}.png`,
+        type: "image/png",
+        url: screenshotUrl,
+        size: Math.round((base64.length * 3) / 4),
+      },
+    });
+  }, [canScreenshot, dataUrl, filePath, preview, tab.title]);
+
   const language = useMemo(
     () => languageFromExtension(preview?.extension),
     [preview?.extension],
@@ -513,6 +577,16 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               <Files size={16} />
             </button>
           )}
+          <button
+            type="button"
+            className="file-preview-screenshot-btn"
+            onClick={() => void handleScreenshot()}
+            disabled={!canScreenshot || loading}
+            title={t('filePreview.screenshot')}
+            aria-label={t('filePreview.screenshot')}
+          >
+            <Camera size={16} />
+          </button>
           <div className="file-preview-open-dropdown">
             <button
               ref={openButtonRef}
@@ -561,7 +635,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         </div>
       </div>
 
-      <div className="file-preview-canvas" ref={canvasRef} onMouseUp={captureSelection}>
+      <div className={`file-preview-canvas${preview?.kind === "pdf" ? " file-preview-canvas-pdf" : ""}`} ref={canvasRef} onMouseUp={captureSelection}>
         {loading && (
           <div className="file-preview-state"><span className="animate-pulse">{t('filePreview.loading')}</span></div>
         )}
@@ -579,7 +653,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           <div className="file-preview-image-stage"><img src={dataUrl} alt={preview.name || tab.title} /></div>
         )}
         {!loading && preview?.success && !preview.tooLarge && preview.kind === "pdf" && dataUrl && (
-          <iframe className="file-preview-pdf" src={dataUrl} title={preview.name || tab.title} />
+          <iframe className="file-preview-pdf" src={`${dataUrl}#toolbar=0`} title={preview.name || tab.title} />
         )}
         {!loading && preview?.success && preview.kind === "text" && (
           <div className={`file-preview-text${MARKDOWN_EXTENSIONS.has(preview.extension ?? "") ? " markdown" : " code"}`}>

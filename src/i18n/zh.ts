@@ -909,6 +909,7 @@ const zh: Record<TranslationKey, string> = {
   'filePreview.unsupportedHint': '仍然可以把文件加入输入框，或用系统默认应用打开。',
   'filePreview.truncatedHint': '仅显示前 1 MB 内容',
   'filePreview.askDuya': '询问 DUYA',
+  'filePreview.screenshot': '截图到输入框',
 
   'office.askDuya': '问问 DUYA',
 
@@ -917,6 +918,8 @@ const zh: Record<TranslationKey, string> = {
   'project.selectFolder': '选择文件夹',
   'project.enterFolderPath': '输入项目文件夹路径',
   'project.folderPathPlaceholder': '例如：C:\\Users\\name\\Projects\\my-project',
+  'project.folderPathPlaceholderMac': '例如：~/Projects/my-project',
+  'project.folderPathPlaceholderLinux': '例如：/home/name/Projects/my-project',
   'project.options': '项目选项',
   'project.recentProjects': '最近的项目',
   'project.noRecent': '暂无最近项目',

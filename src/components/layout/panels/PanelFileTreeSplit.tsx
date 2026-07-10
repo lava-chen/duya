@@ -36,7 +36,7 @@ export function PanelFileTreeSplit({
           <div className="panel-file-tree-header">
             <PanelFileTreeToggle />
           </div>
-          <FileTreePanel tab={treeTab} embedded />
+          <FileTreePanel tab={treeTab} embedded embeddedInPreview />
         </aside>
       )}
     </div>
