@@ -22,6 +22,13 @@ export interface LLMClient {
       disableThinking?: boolean;
       signal?: AbortSignal;
       effort?: string;
+      /**
+       * Per-model output token ceiling from the capability row. MiniMax
+       * Anthropic-compatible endpoints reject `max_tokens` values above
+       * the model-specific ceiling, so this override takes precedence
+       * over the hardcoded fallbacks in `getMiniMaxAnthropicMaxTokens`.
+       */
+      maxOutputTokens?: number;
     }
   ): AsyncGenerator<SSEEvent, void, unknown>;
 

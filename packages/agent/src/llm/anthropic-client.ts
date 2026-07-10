@@ -31,6 +31,10 @@ const THINKING_TYPES = new Set(['thinking', 'redacted_thinking']);
 // total context, which is also their max_tokens ceiling.
 const MINIMAX_DEFAULT_MAX_TOKENS = 204_800;
 const MINIMAX_M3_MAX_TOKENS = 524_288;
+// Highspeed variants (e.g. MiniMax-M2.7-highspeed) advertise a 200K total
+// context but the API rejects max_tokens > 196608 (192K) with error 2013:
+//   `invalid params, model[MiniMax-M2.7-highspeed] does not support max tokens > 196608`
+const MINIMAX_HIGHSPEED_MAX_TOKENS = 196_608;
 
 /**
  * Sanitize a tool call ID for the Anthropic API.
@@ -57,6 +61,41 @@ function sanitizeToolId(toolId: string, synthCounter: number): string {
   // does not follow tool call" because two tool_use_id values would
   // point at the same logical call).
   return `tool_synth_${synthCounter.toString(36)}`;
+}
+
+/**
+ * Runtime tool_use ID synthesizer for empty/invalid IDs returned by LLM
+ * providers (notably MiniMax-M3 in multi-turn conversations).
+ *
+ * Unlike {@link sanitizeToolId} (which is used during message-history
+ * conversion and uses a positional counter), this produces a globally
+ * unique, stable ID from `crypto.randomUUID()`. The synthesized ID is
+ * written into the live `currentToolUse` object the moment a tool_use
+ * block arrives from the LLM stream, so:
+ *
+ *   - The in-memory assistant message stores the synth ID (not empty).
+ *   - The StreamingToolExecutor tracks the tool by the synth ID.
+ *   - The tool_result message carries the synth ID as `tool_call_id`.
+ *   - appendMessages writes the synth ID to DB (both the assistant
+ *     content JSON and the tool_result.tool_call_id column).
+ *   - On hot-restart, messageRowToMessage reads the synth ID back
+ *     unchanged — no UUID-substitution / NULL mismatch can occur.
+ *
+ * This breaks the "empty-ID → DB corruption → 2013 on reload" loop
+ * at its source instead of relying on the message-history repair
+ * passes to clean up afterward.
+ */
+function synthesizeRuntimeToolId(rawId: string | undefined | null): string {
+  const cleaned = (rawId || '').replace(VALID_ID_REGEX, '_');
+  if (cleaned) {
+    return cleaned;
+  }
+  // crypto.randomUUID() is available on Node 16+ as a global. Replace
+  // hyphens with underscores to stay within Anthropic's [a-zA-Z0-9_-]
+  // charset (hyphens ARE allowed, but keeping the canonical `toolu_`
+  // prefix shape avoids any provider that special-cases the prefix).
+  const rand = globalThis.crypto.randomUUID().replace(/-/g, '_');
+  return `toolu_synth_${rand}`;
 }
 
 /**
@@ -98,6 +137,12 @@ export function getMiniMaxAnthropicMaxTokens(model: string, configuredMaxTokens?
   const normalizedModel = model.trim().toLowerCase();
   if (normalizedModel === 'minimax-m3') {
     return MINIMAX_M3_MAX_TOKENS;
+  }
+  // Highspeed variants have a lower max_tokens ceiling than their base
+  // models. Check before the generic minimax-m prefix branch so the
+  // more specific case wins.
+  if (normalizedModel.includes('highspeed')) {
+    return MINIMAX_HIGHSPEED_MAX_TOKENS;
   }
   if (normalizedModel.startsWith('minimax-m')) {
     return MINIMAX_DEFAULT_MAX_TOKENS;
@@ -1005,6 +1050,7 @@ export class AnthropicClient implements LLMClient {
       tools?: Tool[];
       maxTokens?: number;
       contextWindow?: number;
+      maxOutputTokens?: number;
       temperature?: number;
       cacheRetention?: CacheRetention;
       signal?: AbortSignal;
@@ -1061,7 +1107,7 @@ export class AnthropicClient implements LLMClient {
         max: 32000,
       };
       const maxTokens = this.isMiniMax
-        ? getMiniMaxAnthropicMaxTokens(this.model, options?.contextWindow)
+        ? getMiniMaxAnthropicMaxTokens(this.model, options?.maxOutputTokens ?? options?.contextWindow)
         : options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
       const effort = options?.effort;
       const hasEffort = typeof effort === 'string' && effort.length > 0;
@@ -1122,14 +1168,45 @@ export class AnthropicClient implements LLMClient {
         }
       if (event.type === 'content_block_start') {
         if (event.content_block.type === 'tool_use') {
+          // MiniMax-M3 (and possibly other third-party Anthropic-compatible
+          // providers) occasionally return an empty `tool_use.id`. Left
+          // unchecked, the empty ID propagates into:
+          //   - the assistant message's content JSON (stored as `""`)
+          //   - the tool_result message's `tool_call_id` (stored as NULL,
+          //     because `'' || null` collapses to null in appendMessages)
+          // On hot-restart, messageRowToMessage substitutes the NULL
+          // tool_call_id with `undefined`, while the assistant tool_use
+          // block gets either a row-UUID (msg_type='tool_use') or keeps
+          // the empty string (msg_type='text'). The result is an
+          // unrecoverable pairing break that no downstream repair pass
+          // can fully clean up — and the provider rejects the next
+          // request with HTTP 400 "tool call id is invalid (2013)".
+          //
+          // Fix: synthesize a stable, globally-unique ID at the source.
+          // The synth ID flows through the in-memory assistant message,
+          // StreamingToolExecutor, tool_result.tool_call_id, and the DB
+          // write — so reload reads the same ID back. The synth ID also
+          // satisfies the Anthropic [a-zA-Z0-9_-] charset constraint.
+          const synthId = synthesizeRuntimeToolId(event.content_block.id);
+          if (synthId !== event.content_block.id) {
+            logger.warn(
+              `[AnthropicClient] Synthesized tool_use.id — provider returned empty/invalid id`,
+              {
+                toolName: event.content_block.name,
+                originalId: event.content_block.id,
+                synthId,
+              },
+              'AnthropicClient'
+            );
+          }
           currentToolUse = {
-            id: event.content_block.id,
+            id: synthId,
             name: event.content_block.name,
             input: {},
           };
           toolResultContent = '';
           lastToolPreviewSignature = '';
-          toolStartTimes.set(event.content_block.id, Date.now());
+          toolStartTimes.set(synthId, Date.now());
           yield {
             type: 'tool_use_started',
             data: currentToolUse,

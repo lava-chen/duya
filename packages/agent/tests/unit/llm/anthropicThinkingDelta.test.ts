@@ -39,4 +39,11 @@ describe('getMiniMaxAnthropicMaxTokens', () => {
     expect(getMiniMaxAnthropicMaxTokens('MiniMax-M3')).toBe(524288);
     expect(getMiniMaxAnthropicMaxTokens('MiniMax-M2.7')).toBe(204800);
   });
+
+  it('uses the lower highspeed ceiling for highspeed variants', () => {
+    // MiniMax-M2.7-highspeed: API rejects max_tokens > 196608 (error 2013).
+    expect(getMiniMaxAnthropicMaxTokens('MiniMax-M2.7-highspeed')).toBe(196608);
+    // Case-insensitive match
+    expect(getMiniMaxAnthropicMaxTokens('minimax-m2.7-HIGHSPEED')).toBe(196608);
+  });
 });

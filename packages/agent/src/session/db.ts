@@ -46,9 +46,13 @@ function serializeMessageContent(value: unknown, role?: unknown): string {
     const textBlocks = value.filter(
       (block: unknown) => (block as Record<string, unknown>).type === 'text',
     );
-    return textBlocks.length > 0
-      ? textBlocks.map((block: unknown) => (block as Record<string, string>).text || '').join('\n')
-      : JSON.stringify(value);
+    if (textBlocks.length > 0) {
+      return textBlocks.map((block: unknown) => (block as Record<string, string>).text || '').join('\n');
+    }
+    // User messages that contain only non-text blocks (e.g. image blocks with
+    // inline base64) must not have their payload serialized into messages.content.
+    // Image data belongs in the attachments / message_attachments tables.
+    return '';
   }
   return JSON.stringify(value);
 }

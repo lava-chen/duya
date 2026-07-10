@@ -1,6 +1,18 @@
 import type { FileAttachment } from '../types.js';
 
 /**
+ * Return a human-readable location for an attachment without leaking
+ * inline base64 data URLs into the prompt text. Base64 URLs are huge
+ * and render as garbage in the chat UI, so we prefer the local file
+ * path, a non-data URL, or the attachment name.
+ */
+function attachmentLocation(doc: FileAttachment): string {
+  if (doc.path) return doc.path;
+  if (doc.url && !doc.url.startsWith('data:')) return doc.url;
+  return doc.name || '(unknown)';
+}
+
+/**
  * Build a text context string from file attachments for the LLM.
  * Assembled on-the-fly from the attachments field. Never persisted to DB.
  */
@@ -21,7 +33,7 @@ export function buildAttachmentContext(attachments: FileAttachment[]): string | 
       const lines: string[] = [];
       lines.push('[System Attached File - Not Parsed]');
       lines.push(`Type: ${doc.type}`);
-      lines.push(`Path: ${doc.path || doc.url || doc.name || '(unknown)'}`);
+      lines.push(`Path: ${attachmentLocation(doc)}`);
       lines.push('Warning: This file was attached but has not been processed yet. Ask the user to wait for parsing to complete or to resend the file.');
       sections.push(lines.join('\n'));
       continue;
@@ -30,7 +42,7 @@ export function buildAttachmentContext(attachments: FileAttachment[]): string | 
     const lines: string[] = [];
     lines.push('[System Parsed File]');
     lines.push(`Type: ${doc.type}`);
-    lines.push(`Path: ${doc.path || doc.url || doc.name || '(unknown)'}`);
+    lines.push(`Path: ${attachmentLocation(doc)}`);
 
     if (isImage && !hasText) {
       lines.push('Note: This image file is attached in this message.');
