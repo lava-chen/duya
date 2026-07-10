@@ -13,6 +13,7 @@ import {
 import { usePanel } from "@/hooks/usePanel";
 import type { PageTab } from "./registry";
 import { AgentBrowserTab } from "./AgentBrowserTab";
+import { BrowserBackendToggle } from "./BrowserBackendToggle";
 
 type WebviewElement = HTMLElement & {
   canGoBack(): boolean;
@@ -482,6 +483,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
         >
           <Camera size={14} />
         </button>
+        <BrowserBackendToggle />
       </form>
 
       {(status || error) && (

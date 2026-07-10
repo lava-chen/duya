@@ -1125,6 +1125,15 @@ const en = {
   'browserExtension.useStoreInstall': 'Install from Chrome Web Store instead',
   'browserExtension.useManualInstall': 'Can\'t access store? Use manual install',
 
+  // Browser Backend Toggle (inline chip control in browser panel toolbar)
+  'browserBackend.label': 'Browser backend',
+  'browserBackend.extension': 'Extension',
+  'browserBackend.builtin': 'Built-in',
+  'browserBackend.extensionTitle': 'Use Chrome extension backend',
+  'browserBackend.extensionOffline': 'Extension not connected',
+  'browserBackend.builtinTitle': 'Use built-in browser backend',
+  'browserBackend.autoIndicator': 'Auto-resolved from availability',
+
   // Browser Advanced (built-in fallback)
   'browserAdvanced.title': 'Advanced',
   'browserAdvanced.backendMode': 'Browser Backend',

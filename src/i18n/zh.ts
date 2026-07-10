@@ -1120,6 +1120,15 @@ const zh: Record<TranslationKey, string> = {
   'browserExtension.useStoreInstall': '改从 Chrome 网上应用店安装',
   'browserExtension.useManualInstall': '无法访问商店？使用手动安装',
 
+  // Browser Backend Toggle (inline chip control in browser panel toolbar)
+  'browserBackend.label': '浏览器后端',
+  'browserBackend.extension': '扩展',
+  'browserBackend.builtin': '内置',
+  'browserBackend.extensionTitle': '使用 Chrome 扩展后端',
+  'browserBackend.extensionOffline': '扩展未连接',
+  'browserBackend.builtinTitle': '使用内置浏览器后端',
+  'browserBackend.autoIndicator': '根据可用性自动选择',
+
   // Browser Advanced (built-in fallback)
   'browserAdvanced.title': '高级',
   'browserAdvanced.backendMode': '浏览器后端',
