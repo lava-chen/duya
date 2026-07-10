@@ -1125,6 +1125,23 @@ const en = {
   'browserExtension.useStoreInstall': 'Install from Chrome Web Store instead',
   'browserExtension.useManualInstall': 'Can\'t access store? Use manual install',
 
+  // Browser Advanced (built-in fallback)
+  'browserAdvanced.title': 'Advanced',
+  'browserAdvanced.backendMode': 'Browser Backend',
+  'browserAdvanced.modeAuto': 'Auto (Recommended)',
+  'browserAdvanced.modeAutoDesc': 'Extension → Built-in browser → Static fetch',
+  'browserAdvanced.modeExtension': 'Prefer Extension',
+  'browserAdvanced.modeBuiltin': 'Prefer Built-in Browser',
+  'browserAdvanced.cookieImport': 'Cookie Import',
+  'browserAdvanced.importCookies': 'Import Cookies',
+  'browserAdvanced.importing': 'Importing...',
+  'browserAdvanced.lastImport': 'Last import',
+  'browserAdvanced.clearData': 'Clear Browser Data',
+  'browserAdvanced.clearDataConfirm': 'Clear all built-in browser data (cookies, cache, local storage)?',
+  'browserAdvanced.importSuccess': 'Imported {count} cookies ({failed} failed)',
+  'browserAdvanced.importFailed': 'Import failed: {error}',
+  'browserAdvanced.dataCleared': 'Browser data cleared',
+
   // ConfigStep
   'configStep.popular': 'Popular',
   'configStep.chinaRegion': 'China Region',

@@ -12,6 +12,7 @@ import { spawn } from 'child_process';
 import { app } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { getConfigManager, toLLMProvider } from '../../config/manager.js';
+import { getDatabase } from '../../ipc/db-handlers.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
 
@@ -506,11 +507,16 @@ export class AgentProcessPool {
 
   private sendProviderInit(sessionId: string): void {
     const configManager = getConfigManager();
-    // Per-thread pin wins over the global default. With the
-    // multi-provider model, every session can be pinned to a
-    // specific provider id via `setSessionProvider`. When the
-    // pin is null (or the pin targets a deleted provider), we
-    // fall back to the user's soft default.
+    const db = getDatabase();
+
+    let browserBackendMode: 'auto' | 'extension' | 'built-in' = 'auto';
+    try {
+      const row = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
+      if (row?.value === 'extension' || row?.value === 'built-in') {
+        browserBackendMode = row.value;
+      }
+    } catch {}
+
     const proc = this.running.get(sessionId);
     const pinnedId = proc?.providerId ?? null;
     const pinned = pinnedId ? configManager.getAllProviders()[pinnedId] : undefined;
@@ -542,6 +548,7 @@ export class AgentProcessPool {
         localeCountryCode: app.getLocaleCountryCode(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
+      browserBackendMode,
     });
   }
 

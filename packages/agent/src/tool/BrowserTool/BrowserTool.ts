@@ -9,7 +9,9 @@ import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { BaseTool } from '../BaseTool.js';
 import { BROWSER_TOOL_NAME, BROWSER_TOOL_DESCRIPTION } from './constants.js';
-import { createCDPClient, type ICDPClient } from './CDPClient.js';
+import { ExtensionCDPClient, type ICDPClient } from './CDPClient.js';
+import { WebviewCDPClient } from './WebviewCDPClient.js';
+import { resolveBackend, DEFAULT_BROWSER_CONFIG, type BrowserToolConfig } from './backend-resolver.js';
 import { SnapshotEngine } from './SnapshotEngine.js';
 import { FallbackBrowser } from './FallbackBrowser.js';
 import { ParallelFetcher } from './ParallelFetcher.js';
@@ -38,6 +40,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   private extensionAvailable = false;
   private domainBlockerConfig: DomainBlockerConfig | undefined;
   private networkEnvironment: NetworkEnvironment | undefined;
+  private config: BrowserToolConfig | null = null;
 
   constructor(domainBlockerConfig?: DomainBlockerConfig) {
     super();
@@ -64,33 +67,66 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     return this.networkEnvironment;
   }
 
+  setBrowserConfig(config: BrowserToolConfig): void {
+    this.config = config;
+  }
+
   private ensureConnection = async (): Promise<void> => {
-    console.log('[BrowserTool.ensureConnection] checking connection, cdp:', !!this.cdp, 'fallback:', !!this.fallbackBrowser);
     if (this.cdp || this.fallbackBrowser) return;
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    console.log('[BrowserTool.ensureConnection] creating new connection, sessionId:', sessionId);
+    const config = this.config ?? DEFAULT_BROWSER_CONFIG;
 
-    try {
-      const cdp = await createCDPClient(sessionId);
-      const health = await cdp.health();
-      console.log('[BrowserTool.ensureConnection] health:', health);
-      if (health.status === 'ok') {
-        this.cdp = cdp;
-        this.snapshotEngine = new SnapshotEngine(cdp);
-        this.mode = health.mode === 'extension' ? 'extension' : 'playwright';
-        this.extensionAvailable = health.mode === 'extension';
-        console.log('[BrowserTool.ensureConnection] using CDP, mode:', this.mode);
-        return;
+    // Probe extension health (with timeout). Skipped entirely in built-in mode.
+    const extensionClient = new ExtensionCDPClient(sessionId);
+    let extensionOnline = false;
+    if (config.mode !== 'built-in') {
+      try {
+        const health = await Promise.race([
+          extensionClient.health(),
+          new Promise<{ status: string }>(resolve =>
+            setTimeout(() => resolve({ status: 'timeout' }), config.extensionProbeTimeoutMs),
+          ),
+        ]);
+        extensionOnline = health.status === 'ok';
+      } catch {
+        extensionOnline = false;
       }
-    } catch (error) {
-      console.warn('[BrowserTool] Extension/Playwright mode failed:',
-        error instanceof Error ? error.message : error);
     }
 
-    this.fallbackBrowser = new FallbackBrowser();
-    this.mode = 'fallback';
-    console.log('[BrowserTool.ensureConnection] using fallback browser');
+    // Renderer availability is determined by whether we're in a headless agent
+    // process running inside Electron. When the daemon is reachable, a webview
+    // can be driven via webContents.debugger CDP.
+    const rendererAvailable = !!process.env.DUYA_DAEMON_PORT;
+
+    const backend = resolveBackend(config.mode, extensionOnline, rendererAvailable);
+
+    switch (backend) {
+      case 'extension': {
+        await extensionClient.connect();
+        this.cdp = extensionClient;
+        this.snapshotEngine = new SnapshotEngine(extensionClient);
+        this.mode = 'extension';
+        this.extensionAvailable = true;
+        return;
+      }
+      case 'webview': {
+        const webviewClient = new WebviewCDPClient(sessionId);
+        await webviewClient.connect();
+        this.cdp = webviewClient;
+        this.snapshotEngine = new SnapshotEngine(webviewClient);
+        this.mode = 'webview';
+        this.extensionAvailable = false;
+        return;
+      }
+      case 'fallback':
+      default: {
+        this.fallbackBrowser = new FallbackBrowser();
+        this.mode = 'fallback';
+        this.extensionAvailable = false;
+        return;
+      }
+    }
   };
 
   private buildContext(sessionId?: string): ActionContext {

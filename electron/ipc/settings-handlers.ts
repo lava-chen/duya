@@ -196,6 +196,18 @@ export function registerSettingsHandlers(): void {
         }
       } catch {}
 
+      // Get browser backend mode
+      let browserBackendMode: 'auto' | 'extension' | 'built-in' = 'auto';
+      try {
+        const backendRow = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
+        if (backendRow?.value) {
+          const parsed = backendRow.value;
+          if (parsed === 'extension' || parsed === 'built-in') {
+            browserBackendMode = parsed;
+          }
+        }
+      } catch {}
+
       for (const proc of status.processes) {
         const sessionRow = db?.prepare('SELECT working_directory, system_prompt FROM chat_sessions WHERE id = ?').get(proc.sessionId) as { working_directory: string; system_prompt: string } | undefined;
         const workingDirectory = sessionRow?.working_directory ?? '';
@@ -219,6 +231,7 @@ export function registerSettingsHandlers(): void {
           systemPrompt,
           blockedDomains,
           sandboxEnabled,
+          browserBackendMode,
         });
       }
 

@@ -22,6 +22,7 @@ export interface InitCommand {
   skillPaths?: string[];
   communicationPlatform?: string;
   blockedDomains?: string[];
+  browserBackendMode?: 'auto' | 'extension' | 'built-in';
   language?: string;
   sandboxEnabled?: boolean;
 }

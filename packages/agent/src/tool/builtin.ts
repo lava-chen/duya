@@ -31,6 +31,7 @@ import { webSearchTool } from './WebSearchTool/WebSearchTool.js';
 import { webFetchTool } from './WebFetchTool/WebFetchTool.js';
 import { browserTool } from './BrowserTool/BrowserTool.js';
 import type { DomainBlockerConfig } from './BrowserTool/DomainBlocker.js';
+import type { BrowserBackendMode } from './BrowserTool/backend-resolver.js';
 import { skillTool } from './SkillTool/SkillTool.js';
 import { skillManageTool } from './SkillManageTool.js';
 import { briefTool } from './BriefTool/BriefTool.js';
@@ -96,6 +97,8 @@ export function createBuiltinRegistry(
     // (not the manager itself) so the tool always sees the latest
     // connection state without re-registration.
     mcpManagerProvider?: () => import('../mcp/index.js').MCPManager | undefined;
+    // Browser backend mode: 'auto' (degradation chain) | 'extension' | 'built-in'
+    browserBackendMode?: BrowserBackendMode;
     /**
      * @deprecated Plan 224 Phase 3: canvas tools are now injected by
      * `conductorMode.tools.inject` via `applyModes` in `DuyaAgent.streamChat`.
@@ -110,6 +113,13 @@ export function createBuiltinRegistry(
 
   if (domainBlockerConfig) {
     browserTool.setDomainBlockerConfig(domainBlockerConfig);
+  }
+
+  if (options?.browserBackendMode) {
+    browserTool.setBrowserConfig({
+      mode: options.browserBackendMode,
+      extensionProbeTimeoutMs: 500,
+    });
   }
 
   // Wire the MCP resources tool to the live manager. If no provider was

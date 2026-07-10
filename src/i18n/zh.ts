@@ -1120,6 +1120,23 @@ const zh: Record<TranslationKey, string> = {
   'browserExtension.useStoreInstall': '改从 Chrome 网上应用店安装',
   'browserExtension.useManualInstall': '无法访问商店？使用手动安装',
 
+  // Browser Advanced (built-in fallback)
+  'browserAdvanced.title': '高级',
+  'browserAdvanced.backendMode': '浏览器后端',
+  'browserAdvanced.modeAuto': '自动（推荐）',
+  'browserAdvanced.modeAutoDesc': '扩展 → 内置浏览器 → 静态抓取',
+  'browserAdvanced.modeExtension': '优先扩展',
+  'browserAdvanced.modeBuiltin': '优先内置浏览器',
+  'browserAdvanced.cookieImport': 'Cookie 导入',
+  'browserAdvanced.importCookies': '导入 Cookie',
+  'browserAdvanced.importing': '导入中...',
+  'browserAdvanced.lastImport': '上次导入',
+  'browserAdvanced.clearData': '清空浏览器数据',
+  'browserAdvanced.clearDataConfirm': '确定清空内置浏览器的所有数据（Cookie、缓存、本地存储）？',
+  'browserAdvanced.importSuccess': '已导入 {count} 条 Cookie（{failed} 条失败）',
+  'browserAdvanced.importFailed': '导入失败：{error}',
+  'browserAdvanced.dataCleared': '浏览器数据已清空',
+
   // ConfigStep
   'configStep.popular': '热门',
   'configStep.chinaRegion': '中国区',

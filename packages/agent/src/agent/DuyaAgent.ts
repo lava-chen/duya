@@ -258,6 +258,7 @@ export class duyaAgent {
   private visionClient?: LLMClient; // Optional vision model client
   private visionConfig?: import('../types.js').VisionConfig; // Vision model configuration
   private blockedDomains: string[] = [];
+  private browserBackendMode: 'auto' | 'extension' | 'built-in' = 'auto';
   private researchMemoryRuntime: ResearchMemory;
   private mcpManager: MCPManager | null = null;
   /**
@@ -591,6 +592,7 @@ export class duyaAgent {
 
     // Store blocked domains for browser tool
     this.blockedDomains = options.blockedDomains ?? [];
+    this.browserBackendMode = options.browserBackendMode ?? 'auto';
     this.researchMemoryRuntime = new ResearchMemory();
   }
 
@@ -1656,6 +1658,7 @@ export class duyaAgent {
           enabledPluginIds,
           wikiAgentEnabled: options?.wikiAgentEnabled,
           mcpManagerProvider: () => this.mcpManager ?? undefined,
+          browserBackendMode: this.browserBackendMode,
         }
       );
     }
@@ -1969,6 +1972,7 @@ export class duyaAgent {
         enabledPluginIds,
         wikiAgentEnabled: options?.wikiAgentEnabled,
         mcpManagerProvider: () => this.mcpManager ?? undefined,
+        browserBackendMode: this.browserBackendMode,
       }
     );
     this.registerMCPTools(toolRegistry);
