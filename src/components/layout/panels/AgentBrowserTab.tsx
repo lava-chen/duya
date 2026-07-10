@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, ArrowsClockwise, Robot } from "@phosphor-icons/react";
+import { BrowserBackendToggle } from "./BrowserBackendToggle";
 
 type WebviewElement = HTMLElement & {
   canGoBack(): boolean;
@@ -118,6 +119,7 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
           <Robot size={13} weight="fill" />
           <input value={url} readOnly placeholder="Agent browser" spellCheck={false} />
         </label>
+        <BrowserBackendToggle />
       </div>
 
       <div className="browser-panel-frame">
