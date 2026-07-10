@@ -553,6 +553,12 @@ export interface BrowserExtensionAPI {
   denyPending: () => Promise<{ success: boolean; status?: BrowserExtensionStatus; error?: string }>
 }
 
+export interface BrowserWebviewAPI {
+  registerWebview: (sessionId: string, webContentsId: number) => Promise<{ ok: boolean; error?: string }>
+  unregisterWebview: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
+  onOpenAgentTab: (callback: (sessionId: string) => void) => () => void
+}
+
 export interface DocumentParserAPI {
   parse: (filePath: string, options?: { timeout?: number }) => Promise<{
     fileHash: string
@@ -996,6 +1002,7 @@ export interface ElectronAPI {
   references: ReferencesAPI
   weixin: WeixinAccountAPI
   browserExtension: BrowserExtensionAPI
+  browserWebview: BrowserWebviewAPI
   parser: DocumentParserAPI
   literature: LiteratureAPI
   agentProfile: AgentProfileAPI
@@ -1853,6 +1860,19 @@ const electronAPI: ElectronAPI = {
     getExtensionPath: () => ipcRenderer.invoke('browser-extension:get-path'),
     approvePending: () => ipcRenderer.invoke('browser-extension:approve-pending'),
     denyPending: () => ipcRenderer.invoke('browser-extension:deny-pending'),
+  },
+  browserWebview: {
+    registerWebview: (sessionId: string, webContentsId: number) =>
+      ipcRenderer.invoke('browser:register-webview', { sessionId, webContentsId }),
+    unregisterWebview: (sessionId: string) =>
+      ipcRenderer.invoke('browser:unregister-webview', { sessionId }),
+    onOpenAgentTab: (callback: (sessionId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) => {
+        callback(payload.sessionId);
+      };
+      ipcRenderer.on('browser:open-agent-tab', handler);
+      return () => ipcRenderer.removeListener('browser:open-agent-tab', handler);
+    },
   },
   parser: {
     parse: (filePath, options) => ipcRenderer.invoke('parser:parse', filePath, options),

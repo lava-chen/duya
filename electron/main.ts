@@ -39,6 +39,7 @@ import { registerCapabilityManagementHandlers } from './ipc/capability-managemen
 import { registerMCPInventoryHandlers } from './ipc/mcp-inventory-handlers';
 import { registerLiteratureHandlers } from './ipc/literature-handlers';
 import { registerTerminalHandlers } from './ipc/terminal-handlers';
+import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
 import { registerImportHandlers } from './import/import-handlers';
 import { getMarketplaceSyncManager } from './plugins/marketplace';
 import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
@@ -778,6 +779,7 @@ registerCapabilityManagementHandlers();
 registerMCPInventoryHandlers();
 registerLiteratureHandlers();
 registerImportHandlers();
+registerBrowserWebviewHandlers();
 
 // =============================================================================
 // Step 4.6: Start CLI API server (Phase 0 — read-only control plane)

@@ -16,7 +16,7 @@ export interface CDPResponse {
   params?: unknown;
 }
 
-export type CDPMode = 'extension' | 'playwright';
+export type CDPMode = 'extension' | 'playwright' | 'webview';
 
 export interface TabInfo {
   id?: number | string;
@@ -1263,5 +1263,7 @@ export async function createCDPClient(sessionId: string): Promise<ICDPClient> {
   console.log('[BrowserTool] Playwright mode connected - using independent browser window');
   return playwrightClient;
 }
+
+export { WebviewCDPClient, DebuggerConflict, WebviewNotReady } from './WebviewCDPClient.js';
 
 export default createCDPClient;

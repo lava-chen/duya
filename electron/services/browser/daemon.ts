@@ -22,7 +22,13 @@
 
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
+import type { BrowserWindow } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger';
+import {
+  handleWebviewCommand,
+  registerWebviewSession,
+  unregisterWebviewSession,
+} from './webview-bridge';
 
 const DEFAULT_DAEMON_PORT = 19825;
 const PORT = parseInt(process.env.DUYA_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
@@ -93,6 +99,18 @@ const ALLOWED_EXTENSION_IDS: string[] = [
 ];
 let allowedExtensionIds: string[] = [...ALLOWED_EXTENSION_IDS];
 let pendingExtensionApproval: PendingExtensionApprovalInternal | null = null;
+
+// MainWindow reference for forwarding webview CDP commands to the renderer.
+// Set by window-manager.ts after the BrowserWindow is created.
+let mainWindowRef: BrowserWindow | null = null;
+
+export function setMainWindow(win: BrowserWindow | null): void {
+  mainWindowRef = win;
+}
+
+export function getMainWindowRef(): BrowserWindow | null {
+  return mainWindowRef;
+}
 
 // ─── Logger ──────────────────────────────────────────────────────────
 
@@ -298,6 +316,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         error: err instanceof Error ? err.message : 'Invalid request',
       });
     }
+    return;
+  }
+
+  // Webview CDP command route — forwarded to renderer via IPC.
+  // Must run after the X-DUYA header check so only the Agent process
+  // (which sends X-DUYA) can invoke it.
+  if (await handleWebviewCommand(req, res, mainWindowRef)) {
     return;
   }
 
@@ -812,3 +837,13 @@ export function denyPendingExtensionApproval(reason = 'Denied by user'): { succe
   }
   return { success: true, denied: true };
 }
+
+// ─── Webview Bridge re-exports ──────────────────────────────────────
+// Re-exported here so main.ts can import all browser IPC helpers from
+// a single module (./services/browser/daemon) without reaching into
+// the internal webview-bridge module.
+
+export {
+  registerWebviewSession,
+  unregisterWebviewSession,
+} from './webview-bridge';
