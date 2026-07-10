@@ -54,6 +54,11 @@ interface ToolActionsGroupProps {
    *  so the user sees the true response time (including model thinking). */
   totalDurationMs?: number | null;
   liveStartedAt?: number | null;
+  /** Skip the collapsible summary toggle and always render the body
+   *  expanded. Used in the sub-agent session view so every tool call
+   *  shows inline (matching the main interface's expanded appearance)
+   *  instead of hiding behind a "N tools · Worked for Xs" caret. */
+  forceExpanded?: boolean;
 }
 
 export function ToolActionsGroup({
@@ -66,6 +71,7 @@ export function ToolActionsGroup({
   agentProgressEvents,
   totalDurationMs: totalDurationMsProp,
   liveStartedAt,
+  forceExpanded = false,
 }: ToolActionsGroupProps) {
   const { t } = useTranslation();
   // Build actions array from either new `actions` prop or legacy `tools` + `thinkingContent`
@@ -144,6 +150,20 @@ export function ToolActionsGroup({
           agentProgressEvents={agentProgressEvents}
           isStreaming={isStreaming}
         />
+      </div>
+    );
+  }
+
+  // Force-expanded mode (sub-agent session view): skip the collapsible
+  // summary toggle and render the body inline, matching the expanded
+  // appearance of the main interface. Every tool call shows directly
+  // instead of hiding behind a "N tools · Worked for Xs" caret.
+  if (forceExpanded) {
+    return (
+      <div className="w-full">
+        <div className="mt-0.5 border-l-2 border-border/50">
+          {renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming)}
+        </div>
       </div>
     );
   }

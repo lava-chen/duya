@@ -598,9 +598,13 @@ export function ChatView({
         return;
       }
 
+      // Session-bound canvas takes priority over the sidebar's active canvas.
+      // Otherwise switching canvases in the sidebar silently re-binds the
+      // current session to a different (often empty) canvas, and after a
+      // refresh the user's previously-created elements appear "lost".
       let canvasId: string | null =
-        useConductorStore.getState().activeCanvasId ??
         currentCanvasId ??
+        useConductorStore.getState().activeCanvasId ??
         null;
 
       const thread = useConversationStore.getState().threads.find((t) => t.id === sessionId);

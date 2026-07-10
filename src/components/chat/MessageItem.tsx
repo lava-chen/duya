@@ -760,6 +760,10 @@ function MessageItemComponent({ message, toolResults = [], onToolResult, mergedM
   const activeThreadId = useConversationStore(s => s.activeThreadId);
   const threads = useConversationStore(s => s.threads);
   const workingDirectory = threads.find(thread => thread.id === activeThreadId)?.workingDirectory;
+  // When viewing a sub-agent session the parent session id is set on the
+  // store. In that view we drop the ToolActionsGroup collapsible toggle
+  // so every tool call renders expanded (matching the main interface).
+  const isSubAgentSession = useConversationStore(s => s.parentSessionId !== null);
 
   // Build tool result map for quick lookup
   const toolResultMap = useMemo(() => {
@@ -1064,15 +1068,15 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
           {/* File & Image Attachments (PDF, DOCX, PNG, etc.) - Above message bubble */}
           {fileAttachments.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">
-              {fileAttachments.map((attachment) => (
+              {fileAttachments.map((attachment, attachmentIndex) => (
                 <FileAttachmentCard
-                  key={attachment.id}
+                  key={`file-attachment-${attachment.id ?? attachmentIndex}-${attachmentIndex}`}
                   id={attachment.id}
                   name={attachment.name}
                   thumbnail={
                     attachment.displayUrl
                     || attachment.thumbnail
-                    || (attachment.kind === 'image' ? attachment.url : undefined)
+                    || (isImageAttachment(attachment) ? attachment.url : undefined)
                   }
                   url={attachment.url}
                   width={120}
@@ -1207,6 +1211,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
               <ToolActionsGroup
                 actions={toolOnlyActions}
                 totalDurationMs={totalRoundDurationMs}
+                forceExpanded={isSubAgentSession}
               />
             )}
             <InterleavedContent actions={actions} sourceMessageId={message.id} />
@@ -1220,6 +1225,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
               <ToolActionsGroup
                 actions={actions}
                 totalDurationMs={totalRoundDurationMs}
+                forceExpanded={isSubAgentSession}
               />
             )}
             {finalText && (
