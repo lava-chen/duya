@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events';
 import { generateStealthJs } from './stealth.js';
+import { WebviewCDPClient } from './WebviewCDPClient.js';
 
 export interface CDPResponse {
   id?: number;
@@ -1238,32 +1239,76 @@ export async function fetchBlockedDomains(): Promise<string[]> {
 // ========================================================================
 
 /**
- * Create CDP client - Extension mode with Playwright fallback
+ * Create CDP client honoring the configured backend mode.
  *
- * Strategy:
- * 1. Try Extension mode first (uses user's Chrome with cookies if available)
- * 2. If Extension not available, fallback to Playwright mode (opens independent Chromium)
- * 3. Playwright mode opens a separate browser window without requiring Chrome extension
+ * - extension: only ExtensionCDPClient (user's Chrome via daemon)
+ * - built-in:  only WebviewCDPClient (DUYA sidebar webview)
+ * - auto:      Extension → Webview → Playwright
+ *
+ * This replaces the previous hardcoded extension → Playwright behavior so
+ * selecting "Built-in" in the UI never launches an external Chromium window.
  */
-export async function createCDPClient(sessionId: string): Promise<ICDPClient> {
-  // Try Extension mode first
-  const extensionClient = new ExtensionCDPClient(sessionId);
-  const health = await extensionClient.health();
+export async function createCDPClientForMode(
+  sessionId: string,
+  mode: 'auto' | 'extension' | 'built-in'
+): Promise<ICDPClient> {
+  if (mode === 'extension') {
+    const extensionClient = new ExtensionCDPClient(sessionId);
+    const health = await extensionClient.health();
+    if (health.status === 'ok') {
+      await extensionClient.connect();
+      console.log('[BrowserTool] Extension mode connected');
+      return extensionClient;
+    }
+    throw new Error('Browser backend mode is "extension" but the Chrome extension is not connected.');
+  }
 
-  if (health.status === 'ok') {
+  if (mode === 'built-in') {
+    const webviewClient = new WebviewCDPClient(sessionId);
+    const health = await webviewClient.health();
+    if (health.status === 'ok') {
+      await webviewClient.connect();
+      console.log('[BrowserTool] Built-in webview mode connected');
+      return webviewClient;
+    }
+    throw new Error(
+      'Browser backend mode is "built-in" but the DUYA webview daemon is not reachable. ' +
+      'Open the browser panel so the webview can register.'
+    );
+  }
+
+  // auto mode: try extension first, then DUYA webview, then Playwright as last resort
+  const extensionClient = new ExtensionCDPClient(sessionId);
+  const extensionHealth = await extensionClient.health();
+  if (extensionHealth.status === 'ok') {
     await extensionClient.connect();
     console.log('[BrowserTool] Extension mode connected');
     return extensionClient;
   }
 
-  // Extension not available - fallback to Playwright mode (independent browser window)
-  console.log('[BrowserTool] Extension not available, launching Playwright mode (independent Chromium)...');
+  const webviewClient = new WebviewCDPClient(sessionId);
+  const webviewHealth = await webviewClient.health();
+  if (webviewHealth.status === 'ok') {
+    await webviewClient.connect();
+    console.log('[BrowserTool] Built-in webview mode connected');
+    return webviewClient;
+  }
+
+  console.log('[BrowserTool] Extension and webview unavailable, launching Playwright mode (independent Chromium)...');
   const playwrightClient = new PlaywrightCDPClient();
   await playwrightClient.connect();
   console.log('[BrowserTool] Playwright mode connected - using independent browser window');
   return playwrightClient;
 }
 
-export { WebviewCDPClient, DebuggerConflict, WebviewNotReady } from './WebviewCDPClient.js';
+/**
+ * @deprecated Use createCDPClientForMode with an explicit mode.
+ * Kept for callers that do not yet pass a mode; behaves like auto mode.
+ */
+export async function createCDPClient(sessionId: string): Promise<ICDPClient> {
+  return createCDPClientForMode(sessionId, 'auto');
+}
+
+export { DebuggerConflict, WebviewNotReady } from './WebviewCDPClient.js';
 
 export default createCDPClient;

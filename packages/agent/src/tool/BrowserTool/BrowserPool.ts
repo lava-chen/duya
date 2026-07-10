@@ -13,9 +13,10 @@
  */
 
 import type { ICDPClient } from './CDPClient.js';
-import { createCDPClient } from './CDPClient.js';
+import { createCDPClientForMode } from './CDPClient.js';
 import { SnapshotEngine } from './SnapshotEngine.js';
 import { PlatformHookManager } from './platform-hooks/PlatformHookManager.js';
+import type { BrowserBackendMode } from './types.js';
 
 export interface InvestigationTask {
   /** Task identifier for result mapping */
@@ -99,6 +100,8 @@ export class BrowserPool {
   private semaphore = new Semaphore(MAX_CONCURRENT_SESSIONS);
   private idleTimers = new Map<string, NodeJS.Timeout>();
   private shuttingDown = false;
+
+  constructor(private readonly backendMode: BrowserBackendMode = 'auto') {}
 
   /**
    * Investigate multiple URLs in parallel.
@@ -266,8 +269,10 @@ export class BrowserPool {
       }
     }
 
-    // Create new session — prefer Extension CDP, fallback to Playwright → FallbackBrowser
-    const client = await createCDPClient(sessionId);
+    // Create new session honoring the configured backend mode.
+    // Built-in mode uses the DUYA webview (no Playwright); if the webview
+    // daemon is unreachable, the caller should fall back to HTTP fetch.
+    const client = await createCDPClientForMode(sessionId, this.backendMode);
     const snapshotEngine = new SnapshotEngine(client);
     const platformHookManager = new PlatformHookManager();
 

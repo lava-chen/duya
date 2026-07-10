@@ -158,12 +158,13 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
       snapshotEngine: this.snapshotEngine,
       fallbackBrowser: this.fallbackBrowser,
       mode: this.mode,
+      browserBackendMode: this.config?.mode ?? 'auto',
       extensionAvailable: this.extensionAvailable,
       platformHookManager: this.platformHookManager,
       checkDomainBlocked: (url: string) =>
         isUrlBlocked(url, getEffectiveBlockedDomains(this.domainBlockerConfig)),
       getBrowserPool: () => {
-        if (!this.browserPool) this.browserPool = new BrowserPool();
+        if (!this.browserPool) this.browserPool = new BrowserPool(this.config?.mode ?? 'auto');
         return this.browserPool;
       },
       sessionId,

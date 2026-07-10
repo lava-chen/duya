@@ -67,6 +67,9 @@ export function getAgentRuntimeCommand(
     DUYA_AGENT_MODE: 'true',
     SESSION_ID: sessionId,
     DUYA_SECURITY_BYPASS_SKILLS: securityBypassSkills?.join(',') || '',
+    // Agent tools need to reach the Browser Daemon for webview CDP commands.
+    // Use the port the daemon was started on (defaults to 19825).
+    DUYA_DAEMON_PORT: process.env.DUYA_DAEMON_PORT ?? '19825',
   };
 
   if (app.isPackaged) {

@@ -8,7 +8,9 @@
  *   3. fallback  — static HTTP fetch (no JS execution)
  */
 
-export type BrowserBackendMode = 'auto' | 'extension' | 'built-in';
+import type { BrowserBackendMode } from './types.js';
+
+export type { BrowserBackendMode } from './types.js';
 export type ResolvedBackend = 'extension' | 'webview' | 'fallback';
 
 export interface BrowserToolConfig {

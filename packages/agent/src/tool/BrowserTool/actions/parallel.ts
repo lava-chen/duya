@@ -47,11 +47,11 @@ const parallelFetchSchema = z.object({
 export const parallelFetchAction: ActionHandler<z.infer<typeof parallelFetchSchema>> = {
   operation: 'parallel_fetch',
   schema: parallelFetchSchema,
-  async execute(data, _ctx) {
+  async execute(data, ctx) {
     if (data.useBrowser) {
-      // Use BrowserPool → Extension CDP (preferred) or Playwright fallback
+      // Use BrowserPool honoring the configured backend mode.
       const { BrowserPool } = await import('../BrowserPool.js');
-      const pool = new BrowserPool();
+      const pool = new BrowserPool(ctx.browserBackendMode);
 
       const tasks = data.urls.map((url, index) => ({
         id: `invest_${index}`,
@@ -60,26 +60,33 @@ export const parallelFetchAction: ActionHandler<z.infer<typeof parallelFetchSche
         evaluate: data.evaluate,
       }));
 
-      const results = await pool.investigate(tasks, data.timeoutMs ?? 30000);
-      const stats = pool.getStats();
+      try {
+        const results = await pool.investigate(tasks, data.timeoutMs ?? 30000);
+        const stats = pool.getStats();
 
-      return {
-        results: results.map(r => ({
-          id: r.id,
-          url: r.url,
-          title: r.title,
-          snapshot: r.snapshot,
-          interactiveElements: r.interactiveElements,
-          evaluateResult: r.evaluateResult,
-          success: r.success,
-          error: r.error,
-          durationMs: r.durationMs,
-        })),
-        total: results.length,
-        successful: results.filter(r => r.success).length,
-        poolStats: stats,
-        mode: 'browser_pool',
-      };
+        return {
+          results: results.map(r => ({
+            id: r.id,
+            url: r.url,
+            title: r.title,
+            snapshot: r.snapshot,
+            interactiveElements: r.interactiveElements,
+            evaluateResult: r.evaluateResult,
+            success: r.success,
+            error: r.error,
+            durationMs: r.durationMs,
+          })),
+          total: results.length,
+          successful: results.filter(r => r.success).length,
+          poolStats: stats,
+          mode: 'browser_pool',
+        };
+      } catch (err) {
+        // Built-in/webview mode may fail if the daemon is not reachable or no
+        // webview is registered. Fall back to static HTTP fetch instead of
+        // launching an external Chromium (Playwright).
+        console.warn('[parallel_fetch] Browser pool failed, falling back to HTTP fetch:', err instanceof Error ? err.message : err);
+      }
     }
 
     // Default: fast static HTTP fetch (axios)

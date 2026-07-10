@@ -8,6 +8,7 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
     snapshotEngine: null,
     fallbackBrowser: null,
     mode: 'fallback',
+    browserBackendMode: 'auto',
     extensionAvailable: false,
     platformHookManager: {
       shouldApplyHooks: vi.fn().mockReturnValue(false),
