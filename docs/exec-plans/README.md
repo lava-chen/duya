@@ -206,7 +206,8 @@ Moved here when finished. Each includes:
 | [99-cli-split-and-control-plane](./completed/99-cli-split-and-control-plane.md) | CLI Split & Control Plane | 2026-06-04 |
 | [102-duya-config-into-cli](./completed/102-duya-config-into-cli.md) | Merge `duya_config` into `duya_cli` — single control-plane entry | 2026-06-04 |
 | [211-duya-agent-refactor](./completed/211-duya-agent-refactor.md) | `packages/agent/src/index.ts` Code Quality Refactor — `index.ts` 2326→226 纯 barrel,`agent/DuyaAgent.ts` 实现家,`streamChat` 拆 5 helpers + `_dispatchMode`,`_activeMode: any`→`BaseMode \| null`,`compressHistory` `@deprecated`,`console.log`→`logger` | 2026-06-16 |
-| [224-mode-architecture-unification](./completed/224-mode-architecture-unification.md) | Mode Architecture Unification — 声明式 ModeModifier 统一 Plan/Research/Conductor 三种 mode（工具/prompt/钩子声明式合并 + Registry.resolve + 三层正交 Profile/Mode/Permission + `_dispatchMode` 删除 + 前端 `activeModes: Set` 统一状态 + 互斥可视化） | 2026-07-07 |
+| [224-mode-architecture-unification](./completed/224-mode-architecture-unification.md) | Mode Architecture Unification — 声明式 ModeModifier 统一 Plan/Research/Conductor 三种 mode（工具/prompt/钩子声明式合并 + Registry.resolve + 三层正交 Profile/Mode/Permission + 前端 `activeModes: Set` 统一状态 + 互斥可视化） | 2026-07-07 |
+| [227-built-in-browser-fallback](./completed/227-built-in-browser-fallback.md) | Built-in Browser Fallback — Chrome 扩展未安装时 agent BrowserTool 降级驱动侧边栏 `<webview>`；内置/扩展/自动三种后端模式切换；Cookie 导入（DPAPI 解密）。 | 2026-07-10 |
 
 ## Tech Debt
 
