@@ -333,6 +333,7 @@ ${cdnScriptsHtml}
   ${themeDarkCss}
   html {
     width: 100%;
+    height: 100%;
     margin: 0;
     padding: 0;
     background: transparent;
@@ -342,15 +343,18 @@ ${cdnScriptsHtml}
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
   }
   body {
     width: 100%;
+    height: 100%;
     margin: 0;
     padding: 12px;
     background: transparent;
-    overflow: visible;
+    overflow: hidden;
     min-height: 0;
   }
+  ::-webkit-scrollbar { display: none; }
   .widget-root {
     width: 100%;
     padding: 0;
