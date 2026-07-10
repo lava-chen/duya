@@ -73,11 +73,12 @@ export function CronChatModal({
           toolInput: m.toolInput ?? undefined,
           parentToolCallId: m.parentToolCallId ?? undefined,
           vizSpec: m.vizSpec ?? undefined,
-          status: m.status ?? undefined,
-          seqIndex: m.seqIndex ?? undefined,
-          durationMs: m.durationMs ?? undefined,
-          subAgentId: m.subAgentId ?? undefined,
-        }));
+        status: m.status ?? undefined,
+        seqIndex: m.seqIndex ?? undefined,
+        durationMs: m.durationMs ?? undefined,
+        subAgentId: m.subAgentId ?? undefined,
+        attachments: m.attachments ?? undefined,
+      }));
         setMessages(converted);
       }
     } catch (err) {

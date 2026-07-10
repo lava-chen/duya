@@ -33,14 +33,37 @@ export function splitMessage(text: string, maxLength: number = MAX_MESSAGE_LENGT
 export function parseMessageContent(msg: {
   Content?: string;
   StrContent?: string;
-  item_list?: Array<{ type: number; text_item?: { text: string } }>;
+  item_list?: Array<{
+    type: number;
+    text_item?: { text: string };
+    voice_item?: { voice_length_ms?: number };
+    file_item?: { file_name?: string };
+    video_item?: { video_length_s?: number };
+  }>;
 }): string {
   // Support new API format with item_list
   if (msg.item_list && msg.item_list.length > 0) {
+    // Prefer explicit text_item when present
     for (const item of msg.item_list) {
       if (item.type === 1 && item.text_item?.text) {
         return item.text_item.text;
       }
+    }
+    // No text_item — synthesize a placeholder for non-text items so the
+    // upstream pipeline does not silently drop voice/file/video messages.
+    const placeholders: string[] = [];
+    for (const item of msg.item_list) {
+      if (item.type === 3) {
+        placeholders.push('[Voice message]');
+      } else if (item.type === 4) {
+        const name = item.file_item?.file_name ?? 'attachment';
+        placeholders.push(`[File: ${name}]`);
+      } else if (item.type === 5) {
+        placeholders.push('[Video message]');
+      }
+    }
+    if (placeholders.length > 0) {
+      return placeholders.join(' ');
     }
   }
   // Fall back to old format

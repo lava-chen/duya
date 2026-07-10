@@ -68,6 +68,7 @@ export function GatewayChatModal({ session, onClose }: GatewayChatModalProps) {
         seqIndex: m.seqIndex ?? undefined,
         durationMs: m.durationMs ?? undefined,
         subAgentId: m.subAgentId ?? undefined,
+        attachments: m.attachments ?? undefined,
       }));
       setMessages(converted);
     } catch (err) {

@@ -25,7 +25,7 @@ import { UserMapper } from './user-mapper.js';
 import { StreamHandler } from './stream-handler.js';
 import { PermissionBroker } from './permission-broker.js';
 import { setProxyUrl, initProxy } from './proxy-fetch.js';
-import { buildImageAttachments } from './attachment-builder.js';
+import { buildAttachments } from './attachment-builder.js';
 import { resolveDisplayConfig, type DisplayUserConfig } from './display-config.js';
 
 const ADAPTER_START_TIMEOUT_MS = 30_000;
@@ -397,11 +397,18 @@ export class GatewayManager {
       // Normal inbound message: resolve session and forward to Main
       const sessionId = await this.userMapper.getOrCreateSession(msg);
 
-      // Build image attachments from buffer and file paths
+      // Build attachments from all attachment fields (images/files/voice/video)
       const options: Record<string, unknown> = {};
-      const imageAttachments = await buildImageAttachments(msg.images, msg.imagePaths);
-      if (imageAttachments.length > 0) {
-        options.files = imageAttachments;
+      const attachments = await buildAttachments({
+        images: msg.images,
+        imagePaths: msg.imagePaths,
+        files: msg.files,
+        filePaths: msg.filePaths,
+        voicePaths: msg.voicePaths,
+        videoPaths: msg.videoPaths,
+      });
+      if (attachments.length > 0) {
+        options.files = attachments;
       }
 
       this.ipc.send({
