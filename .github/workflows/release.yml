@@ -81,6 +81,7 @@ jobs:
         # `npm run bundle:agent` historically; catch the failure here
         # with a clear error rather than letting electron-builder fail
         # in afterPack with a confusing "agent-bundle missing" message.
+        shell: bash
         run: |
           if [ ! -f packages/agent/bundle/agent-process-entry.js ]; then
             echo "::error::agent-process-entry.js missing after npm run electron:build"
