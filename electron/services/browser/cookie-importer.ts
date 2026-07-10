@@ -9,7 +9,6 @@ import { existsSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import Database from 'better-sqlite3';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 const execFileAsync = promisify(execFile);
@@ -117,6 +116,10 @@ export async function readBrowserCookies(browser: 'chrome' | 'edge'): Promise<{
   if (!cookiePath) {
     throw new Error(`Cookie file not found for ${browser}. Is it installed?`);
   }
+
+  // Dynamic import keeps better-sqlite3 off the main-process require graph on
+  // macOS/Linux (this feature is Windows-only for now).
+  const { default: Database } = await import('better-sqlite3');
 
   // Copy to temp file (browser locks the original)
   const tempPath = `${cookiePath}.duya-tmp`;
