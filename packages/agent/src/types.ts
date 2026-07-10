@@ -451,6 +451,44 @@ export interface MCPServerConfig {
    * tool as `unknown` and prompts.
    */
   source?: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
+  /**
+   * Env passthrough mode for stdio subprocesses.
+   *
+   * - `'allowlist'` (default): only safe baseline env vars (PATH, HOME,
+   *   USER, etc.) plus user-configured `env` are passed to the subprocess.
+   *   Prevents accidental secret leakage to untrusted MCP servers.
+   * - `'inherit'`: legacy mode, passes the full `process.env` plus
+   *   user-configured `env`. Reserved for trusted bundled servers that
+   *   depend on inherited env vars. Not recommended for plugin/local sources.
+   *
+   * See `buildSafeEnv` in `mcp/security.ts`.
+   */
+  envPassthrough?: 'allowlist' | 'inherit';
+  /**
+   * Sampling rate limit config. Applied when an MCP server requests
+   * `sampling/createMessage` (reverse LLM call). Defaults are conservative
+   * (10 rpm, 4096 maxTokens, 5 tool rounds) to bound the blast radius of a
+   * malicious or buggy server.
+   *
+   * See `SamplingRateLimiter` in `mcp/security.ts`.
+   */
+  sampling?: SamplingRateLimitConfig;
+}
+
+/**
+ * Sampling rate limit configuration for a single MCP server.
+ * See `mcp/security.ts` for the full semantics.
+ */
+export interface SamplingRateLimitConfig {
+  /** Max sampling requests per minute (sliding window). Default 10. */
+  maxRpm?: number;
+  /** Hard cap on maxTokens per sampling request. Default 4096. */
+  maxTokensCap?: number;
+  /**
+   * Max tool-use rounds within a single sampling request. 0 disables tool
+   * loops entirely. Default 5.
+   */
+  maxToolRounds?: number;
 }
 
 // MCP 连接状态

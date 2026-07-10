@@ -9,6 +9,7 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Tool, ToolResult, MCPServerConfig, MCPConnectionStatus } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { getCircuitBreakerManager, type CircuitBreaker } from './circuit-breaker.js';
+import { buildSafeEnv, sanitizeSecrets, scanMcpDescription } from './security.js';
 export { getCircuitBreakerManager, CircuitBreaker };
 
 /**
@@ -79,11 +80,20 @@ export class MCPClient {
 
     try {
       this.connectionStatus = 'connecting';
-      
+
+      // Security layer 1 (env allowlist): strip secrets from the subprocess
+      // environment before spawning the MCP server process. MCP servers are
+      // untrusted external code; without this, any API key / token in the
+      // agent process env leaks to them. `envPassthrough: 'inherit'` opts
+      // out for trusted bundled servers that depend on inherited env.
+      const safeEnv = buildSafeEnv(this.config.env, {
+        forceInherit: this.config.envPassthrough === 'inherit',
+      });
+
       this.transport = new StdioClientTransport({
         command: this.config.command,
         args: this.config.args,
-        env: this.config.env,
+        env: safeEnv,
       });
 
       this.client = new Client(
@@ -97,14 +107,21 @@ export class MCPClient {
       );
 
       await this.client.connect(this.transport);
-      
+
       // List available tools
       const toolsResponse = await this.client.listTools();
-      this.tools = toolsResponse.tools.map((tool: { name: string; description?: string; inputSchema?: unknown }) => ({
-        name: tool.name,
-        description: tool.description || '',
-        input_schema: tool.inputSchema as Record<string, unknown>,
-      }));
+      this.tools = toolsResponse.tools.map((tool: { name: string; description?: string; inputSchema?: unknown }) => {
+        // Security layer 3 (prompt injection scan): warn on suspicious tool
+        // descriptions. Does not block — false positives would break legit
+        // servers. The permission gate (permission-gate.ts) handles blocking
+        // based on source. Here we only observe + log.
+        scanMcpDescription(this.config.name, tool.name, tool.description || '');
+        return {
+          name: tool.name,
+          description: tool.description || '',
+          input_schema: tool.inputSchema as Record<string, unknown>,
+        };
+      });
 
       this.connectionStatus = 'connected';
       this.circuitBreaker.recordSuccess();
@@ -180,8 +197,14 @@ export class MCPClient {
     } catch (error) {
       this.circuitBreaker.recordFailure();
 
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      logger.error(`[MCP] Tool call failed: ${this.config.name}.${name} - ${errorMsg}`);
+      const rawMsg = error instanceof Error ? error.message : String(error);
+      // Security layer 2 (secret sanitization): redact credential-like
+      // patterns (ghp_*, sk-*, Bearer, token=, etc.) before the error
+      // message is returned to the LLM via ToolResult.result. Without
+      // this, a misconfigured MCP server that echoes its auth token in
+      // an error string would leak it into the conversation history.
+      const errorMsg = sanitizeSecrets(rawMsg);
+      logger.error(`[MCP] Tool call failed: ${this.config.name}.${name} - ${rawMsg}`);
       return {
         id: `${this.config.name}-${name}`,
         name: name,
