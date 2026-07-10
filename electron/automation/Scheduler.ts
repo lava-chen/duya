@@ -171,7 +171,12 @@ export class AutomationScheduler {
         if (m.type === 'chat:error') { clearTimeout(timeout); pool.removeMessageHandler(sessionId); reject(new Error(typeof m.message === 'string' ? m.message : 'chat error')); return; }
         if (m.type === 'chat:done') { clearTimeout(timeout); pool.removeMessageHandler(sessionId); resolve(chunks.join('').trim() || `completed in ${Date.now() - startedAt}ms`); }
       });
-      pool.send(sessionId, { type: 'chat:start', id: randomUUID(), sessionId, prompt: cron.prompt, options: undefined });
+      // Pass agentProfileId: 'cron' so the cron profile (deny list:
+      // AskUserQuestion/show_widget/Agent/canvas:*/mode-switch/worktree)
+      // is applied. Without this, options: undefined caused the agent to
+      // fall back to the general-purpose profile with ALL tools, including
+      // interactive ones that would hang forever in a headless cron run.
+      pool.send(sessionId, { type: 'chat:start', id: randomUUID(), sessionId, prompt: cron.prompt, options: { agentProfileId: 'cron' } });
     });
   }
 }

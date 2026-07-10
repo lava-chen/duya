@@ -9,11 +9,23 @@ export function getToolUsageSection(
   ctx: PromptContext,
   toolContributions: ToolPromptContribution[],
 ): string {
+  // NOTE: ctx.enabledTools stores the actual registered tool names, which
+  // are lowercase for file/shell tools ('read','write','edit','glob','grep',
+  // 'bash','powershell') — NOT the TOOL_NAMES constants ('Read','Write',...).
+  // The existing 'powershell' check on the next line already followed this
+  // convention. We use the same lowercase names for all has() checks here.
   const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT)
-  const hasTaskTool = ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
+  const hasTaskTool = ctx.enabledTools.has('task') || ctx.enabledTools.has('TodoWrite')
+  const hasReadTool = ctx.enabledTools.has('read')
+  const hasEditTool = ctx.enabledTools.has('edit')
+  const hasWriteTool = ctx.enabledTools.has('write')
+  const hasGlobTool = ctx.enabledTools.has('glob')
+  const hasGrepTool = ctx.enabledTools.has('grep')
+  const hasBashTool = ctx.enabledTools.has('bash')
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
   const isReplModeEnabled = ctx.isReplModeEnabled ?? false
   const hasPowerShellTool = ctx.enabledTools.has('powershell')
+  const hasAnyShellTool = hasBashTool || hasPowerShellTool
   const shellToolsLabel = hasPowerShellTool
     ? `${TOOL_NAMES.BASH} or ${TOOL_NAMES.POWERSHELL}`
     : TOOL_NAMES.BASH
@@ -31,23 +43,37 @@ ${items.map(item => ` - ${item}`).join('\n')}`
   }
 
   const providedToolSubitems = [
-    `To read files use ${TOOL_NAMES.READ} instead of cat, head, tail, or sed`,
-    `To edit files use ${TOOL_NAMES.EDIT} instead of sed or awk`,
-    `To create files use ${TOOL_NAMES.WRITE} instead of cat with heredoc or echo redirection`,
+    hasReadTool
+      ? `To read files use ${TOOL_NAMES.READ} instead of cat, head, tail, or sed`
+      : null,
+    hasEditTool
+      ? `To edit files use ${TOOL_NAMES.EDIT} instead of sed or awk`
+      : null,
+    hasWriteTool
+      ? `To create files use ${TOOL_NAMES.WRITE} instead of cat with heredoc or echo redirection`
+      : null,
     ...(hasEmbeddedSearchTools
       ? []
       : [
-          `To search for files use ${TOOL_NAMES.GLOB} instead of find or ls`,
-          `To search the content of files, use ${TOOL_NAMES.GREP} instead of grep or rg`,
+          hasGlobTool
+            ? `To search for files use ${TOOL_NAMES.GLOB} instead of find or ls`
+            : null,
+          hasGrepTool
+            ? `To search the content of files, use ${TOOL_NAMES.GREP} instead of grep or rg`
+            : null,
         ]),
-    `Reserve using ${shellToolsLabel} exclusively for system commands and terminal operations that require shell execution. Use ${TOOL_NAMES.BASH} for Unix-style shell commands and ${TOOL_NAMES.POWERSHELL} for Windows-native PowerShell commands when it is available. If you are unsure and there is a relevant dedicated tool, default to using the dedicated tool and only fallback on these shell tools when it is absolutely necessary.`,
-  ]
+    hasAnyShellTool
+      ? `Reserve using ${shellToolsLabel} exclusively for system commands and terminal operations that require shell execution. Use ${TOOL_NAMES.BASH} for Unix-style shell commands and ${TOOL_NAMES.POWERSHELL} for Windows-native PowerShell commands when it is available. If you are unsure and there is a relevant dedicated tool, default to using the dedicated tool and only fallback on these shell tools when it is absolutely necessary.`
+      : null,
+  ].filter(item => item !== null)
 
   const items = [
-    `Do NOT use ${shellToolsLabel} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL to assisting the user:`,
-    providedToolSubitems,
+    hasAnyShellTool
+      ? `Do NOT use ${shellToolsLabel} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL to assisting the user:`
+      : null,
+    providedToolSubitems.length > 0 ? providedToolSubitems : null,
     hasTaskTool
-      ? `Break down and manage your work with the ${ctx.enabledTools.has(TOOL_NAMES.TASK) ? TOOL_NAMES.TASK : TOOL_NAMES.TODO_WRITE} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`
+      ? `Break down and manage your work with the ${ctx.enabledTools.has('task') ? TOOL_NAMES.TASK : TOOL_NAMES.TODO_WRITE} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`
       : null,
     `You can call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between them, make all independent tool calls in parallel. Maximize use of parallel tool calls where possible to increase efficiency. However, if some tool calls depend on previous calls to inform dependent values, do NOT call these tools in parallel and instead call them sequentially instead. For instance, if one operation must complete before another starts, run these operations sequentially instead.`,
   ].filter(item => item !== null)

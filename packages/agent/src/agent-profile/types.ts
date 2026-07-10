@@ -40,13 +40,23 @@ export interface AgentProfile {
 
   /**
    * Which prompt system to use. Built-in values: 'general', 'code',
-   * 'research'. Subsystem values (e.g. 'conductor' from
+   * 'research', 'gateway'. Subsystem values (e.g. 'conductor' from
    * `@duya/conductor`) are registered at runtime via
    * `PromptsRegistry.register()`; the type is open (string) so the
    * agent typecheck does not need to be updated when a new system
    * lands. Defaults to 'general' if not specified.
    */
-  promptSystem?: 'general' | 'code' | 'research' | (string & {});
+  promptSystem?: 'general' | 'code' | 'research' | 'gateway' | (string & {});
+
+  /**
+   * Optional one-line identity prompt prepended to the system prompt
+   * by `buildAgentIdentityBlock`. When provided, it replaces the
+   * generic "You are a \"<name>\" agent." block so a profile can
+   * express its role in a single concise sentence. Preset-only field
+   * (not persisted to the DB); user-created profiles fall back to the
+   * generic block.
+   */
+  identityPrompt?: string;
 
   /** Whether this profile is selectable by users in the UI */
   userVisible: boolean;
@@ -140,10 +150,14 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     id: 'explore',
     name: 'Explore',
     description: 'Read-only exploration — sub-agent only',
-    allowedTools: ['file:read*', 'search:*'],
-    disallowedTools: ['file:write*', 'file:edit*', 'exec:*', 'browser:*', 'gateway:*'],
+    // Tool names must match the actual registered names (lowercase for
+    // file/shell tools): read/glob/grep. The previous patterns
+    // 'file:read*' / 'search:*' matched zero tools because the registry
+    // stores names without namespace prefixes.
+    allowedTools: ['read', 'glob', 'grep'],
+    disallowedTools: ['write', 'edit', 'bash', 'powershell', 'browser', 'canvas:*'],
     promptProfile: {
-      disableSections: ['memory', 'skills', 'sessionGuidance', 'widgetGuidelines'],
+      disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'visionGuidelines'],
     },
     userVisible: false,
     isPreset: true,
@@ -155,10 +169,10 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     id: 'plan',
     name: 'Plan',
     description: 'Planning and architecture design — sub-agent only',
-    allowedTools: ['file:read*', 'search:*'],
-    disallowedTools: ['file:write*', 'file:edit*', 'exec:*', 'browser:*', 'gateway:*'],
+    allowedTools: ['read', 'glob', 'grep'],
+    disallowedTools: ['write', 'edit', 'bash', 'powershell', 'browser', 'canvas:*'],
     promptProfile: {
-      disableSections: ['memory', 'skills', 'sessionGuidance', 'widgetGuidelines'],
+      disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'visionGuidelines'],
     },
     userVisible: false,
     isPreset: true,
@@ -169,12 +183,77 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
   {
     id: 'gateway',
     name: 'Gateway',
-    description: 'Gateway agent for handling bridge/channel messages from external platforms',
-    allowedTools: ['gateway:*', 'file:read*', 'search:*', 'shell:*'],
-    disallowedTools: ['canvas:*', 'show_widget'],
+    description: 'Relay agent for messaging channels — passes messages between users and other session agents',
+    // Gateway is a relay, not a worker. It allows ['*'] then denies:
+    //   - write/exec tools (it should delegate, not do the work)
+    //   - interactive/UI/canvas/management tools (no desktop surface)
+    //   - recursive subagent spawning (avoid runaway)
+    // MessageSession + SessionSearch are intentionally ALLOWED so the
+    // gateway can talk to other session agents — that is its core job.
+    identityPrompt:
+      'You are a "Gateway" relay agent running in a messaging channel. ' +
+      'Your job is to relay messages between the user and other session agents — ' +
+      'not to do the work yourself. Answer quick questions directly; delegate ' +
+      'anything that takes longer via MessageSession.',
+    allowedTools: ['*'],
+    disallowedTools: [
+      // Write/exec — gateway relays, does not do work itself.
+      'write', 'edit', 'bash', 'powershell',
+      // Interactive/UI/canvas — no desktop surface in a channel.
+      'canvas:*',
+      'show_widget',
+      'AskUserQuestion',
+      // Recursive subagent spawning — avoid runaway in a stateless channel.
+      'Agent',
+      // Self-management — gateway has no desktop settings UI to drive.
+      'duya_cli',
+      'skill_manage',
+      'memory',
+      'read_module',
+      'task',
+      'enter_worktree', 'exit_worktree',
+      'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
+      'team_create', 'team_delete',
+      'list_mcp_resources', 'read_mcp_resource',
+      'vision_analyze',
+      'WebSearch', 'WebFetch',
+    ],
     promptProfile: {
-      enableSections: ['generalTaskGuidance'],
-      disableSections: ['taskHandling', 'widgetGuidelines'],
+      // GatewayPromptSystem ignores generalTaskGuidance/actions/toolUsage
+      // anyway (it does not render them), but keep the overrides for
+      // clarity and in case a future caller falls back to GeneralPromptSystem.
+      disableSections: ['memory', 'memoryContent', 'sessionGuidance', 'skills', 'generalTaskGuidance', 'actions', 'toolUsage', 'agentsMd', 'outputEfficiency'],
+    },
+    promptSystem: 'gateway',
+    userVisible: false,
+    isPreset: true,
+    isEnabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+  {
+    id: 'cron',
+    name: 'Cron',
+    description: 'Cron agent for scheduled tasks — no user interaction available',
+    // Cron runs without a user to answer questions. Deny interactive/UI
+    // tools that would hang forever waiting for a response, plus recursive
+    // agent spawning and mode-switching side effects. Keep read/write/edit/
+    // shell/search tools so the cron job can perform real work.
+    allowedTools: ['*'],
+    disallowedTools: [
+      'AskUserQuestion',
+      'show_widget',
+      'Agent',
+      'canvas:*',
+      'team_create', 'team_delete',
+      'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
+      'enter_worktree', 'exit_worktree',
+    ],
+    promptProfile: {
+      // The 'actions' section repeatedly instructs "ask the user before
+      // proceeding" — in a cron context there is no user to ask, so the
+      // agent would hang. Remove it.
+      disableSections: ['actions'],
     },
     promptSystem: 'general',
     userVisible: false,
