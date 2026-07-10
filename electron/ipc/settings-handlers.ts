@@ -243,6 +243,19 @@ export function registerSettingsHandlers(): void {
     }
   });
 
+  // Live-update browser backend mode on running agents without full re-init
+  ipcMain.handle('browser:update-backend-mode', async (_event, mode: 'auto' | 'extension' | 'built-in') => {
+    try {
+      const agentPool = getAgentProcessPool();
+      agentPool.broadcastConfigUpdate({ browserBackendMode: mode });
+      return { success: true };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('browser:update-backend-mode failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Main);
+      return { success: false, reason: String(error) };
+    }
+  });
+
   // Gateway per-channel proxy configuration
   ipcMain.handle('settings:get-gateway-proxy-config', async () => {
     try {

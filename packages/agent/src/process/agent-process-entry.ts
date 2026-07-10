@@ -52,6 +52,7 @@ import type { ConductorSnapshot } from '../conductor/ConductorProfile.js';
 // and trigger TS5055 on re-builds (the .d.ts would be both an input
 // and an output of the same tsc invocation).
 import { buildSandboxImage, duyaAgent, setSandboxEnabled } from '../index.js';
+import { browserTool } from '../tool/builtin.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
@@ -2627,6 +2628,19 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         case 'reload:mcp': {
           log('[Agent-Process] Received reload:mcp');
           void reloadMCP();
+          break;
+        }
+
+        case 'config:update': {
+          const cfgMsg = msg as unknown as { browserBackendMode?: 'auto' | 'extension' | 'built-in'; blockedDomains?: string[] };
+          log('[Agent-Process] Received config:update:', cfgMsg);
+          if (cfgMsg.browserBackendMode) {
+            browserTool.setBrowserConfig({
+              mode: cfgMsg.browserBackendMode,
+              extensionProbeTimeoutMs: 500,
+            });
+            log('[Agent-Process] Browser backend mode updated:', cfgMsg.browserBackendMode);
+          }
           break;
         }
 

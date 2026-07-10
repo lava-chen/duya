@@ -341,6 +341,17 @@ export class AgentProcessPool {
     this.router.remove(sessionId, handler);
   }
 
+  /**
+   * Broadcast a runtime config update to all running agent processes.
+   * Used when a setting (e.g. browserBackendMode) changes while agents
+   * are alive — they pick it up without a full re-init.
+   */
+  broadcastConfigUpdate(payload: { browserBackendMode?: 'auto' | 'extension' | 'built-in' }): void {
+    for (const [sessionId] of this.running) {
+      this.send(sessionId, { type: 'config:update', sessionId, ...payload });
+    }
+  }
+
   // ========================================================================
   // Health Monitoring
   // ========================================================================
