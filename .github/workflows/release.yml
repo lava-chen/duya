@@ -103,7 +103,19 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --config electron-builder.yml --publish always
+        # Empty CSC_LINK (secret not set) makes electron-builder treat the
+        # empty string as a certificate file path, failing with "not a file".
+        # Unset empty signing vars and disable auto-discovery so the build
+        # proceeds unsigned instead of crashing.
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            unset CSC_LINK CSC_KEY_PASSWORD
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          [ -z "$APPLE_ID" ] && unset APPLE_ID || true
+          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && unset APPLE_APP_SPECIFIC_PASSWORD || true
+          [ -z "$APPLE_TEAM_ID" ] && unset APPLE_TEAM_ID || true
+          npx electron-builder --config electron-builder.yml --publish always
 
       - name: Verify packaged artifacts
         # Runs after the build to confirm critical files landed inside the
