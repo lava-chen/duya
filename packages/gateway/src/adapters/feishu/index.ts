@@ -562,8 +562,39 @@ export class FeishuChannel extends EventEmitter {
           return { ok: true };
         }
         case 'media': {
-          await this.sendTextMessage(chatId, `[Media not fully supported: ${reply.filePath}]`);
-          return { ok: true };
+          try {
+            // Send caption first if present
+            if (reply.caption) {
+              await this.sendTextMessage(chatId, reply.caption, reply.replyToMsgId);
+            }
+
+            const replyTo = reply.replyToMsgId;
+            const fileName = reply.filePath.split(/[\\/]/).pop() || reply.filePath;
+            let msgId = '';
+            switch (reply.mediaType) {
+              case 'photo':
+                msgId = await this.sendImageMessage(chatId, reply.filePath, replyTo);
+                break;
+              case 'document':
+                msgId = await this.sendFileMessage(chatId, reply.filePath, fileName, replyTo);
+                break;
+              case 'voice':
+                msgId = await this.sendAudioMessage(chatId, reply.filePath, 0, replyTo);
+                break;
+              case 'video':
+                // No sendVideoMessage helper; fall back to file message
+                msgId = await this.sendFileMessage(chatId, reply.filePath, fileName, replyTo);
+                break;
+              default:
+                msgId = await this.sendFileMessage(chatId, reply.filePath, fileName, replyTo);
+            }
+            return { ok: true, platformMsgId: msgId };
+          } catch (err) {
+            // Fallback to text message on media send failure
+            console.warn(`[Feishu] Media send failed for ${reply.filePath}, falling back to text`);
+            await this.sendTextMessage(chatId, `[Media send failed: ${reply.filePath}]`);
+            return { ok: false, error: String(err) };
+          }
         }
         default:
           return { ok: false, error: `Unsupported reply type: ${reply.type}` };

@@ -54,6 +54,16 @@ const DEFAULT_CHUNK_RETRY_DELAY_SECONDS = 1.0;
 const TYPING_START = 1;
 const TYPING_STOP = 2;
 
+/**
+ * Strip path separators and other unsafe chars from a filename so it can be
+ * safely embedded into a generated cache path. WeChat file names are user-
+ * supplied and could contain characters that would break path.join.
+ */
+function sanitizeFileName(name: string): string {
+  const base = path.basename(name.replace(/[\\/]/g, '_'));
+  return base.replace(/[^a-zA-Z0-9._-]/g, '_') || 'attachment';
+}
+
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
@@ -461,15 +471,42 @@ export class WeixinAdapter extends BaseAdapter {
 
     this.markWeixinDup(msgId);
 
-    const text = parseMessageContent(msg);
+    const hasTextItem = msg.item_list?.some(
+      (item) => item.type === MessageItemType.TEXT && item.text_item?.text,
+    );
+
     const isGroup = isFromGroup(msg.to_user_id ?? msg.ToUserName ?? '');
     const chatId = isGroup ? (msg.to_user_id ?? msg.ToUserName ?? senderId) : senderId;
 
-    // Download images from item_list
-    const imagePaths = await this.downloadImagesFromMessage(msg, senderId);
+    // Download all media (images/voice/files/videos) from item_list
+    const { imagePaths, voicePaths, filePaths, videoPaths } =
+      await this.downloadMediaFromMessage(msg, senderId);
 
-    // Skip if no text and no images
-    if (!text && imagePaths.length === 0) return;
+    let text = parseMessageContent(msg);
+    // Some WeChat API formats embed raw binary/base64 data in the legacy
+    // Content/StrContent field for media messages. If this message carries
+    // media but has no explicit text item, ignore that payload so it does not
+    // leak into the chat UI as garbage text.
+    if (
+      !hasTextItem &&
+      (imagePaths.length > 0 ||
+        voicePaths.length > 0 ||
+        filePaths.length > 0 ||
+        videoPaths.length > 0)
+    ) {
+      text = '';
+    }
+
+    // Skip if no text and no attachments of any kind
+    if (
+      !text &&
+      imagePaths.length === 0 &&
+      voicePaths.length === 0 &&
+      filePaths.length === 0 &&
+      videoPaths.length === 0
+    ) {
+      return;
+    }
 
     // DM policy check (async for pairing)
     const dmAllowed = await this.isDmAllowedAsync(senderId);
@@ -485,6 +522,9 @@ export class WeixinAdapter extends BaseAdapter {
       platformMsgId: msgId,
       text: text || undefined,
       imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+      voicePaths: voicePaths.length > 0 ? voicePaths : undefined,
+      filePaths: filePaths.length > 0 ? filePaths : undefined,
+      videoPaths: videoPaths.length > 0 ? videoPaths : undefined,
       ts: msg.create_time_ms ?? msg.CreateTime ? (msg.create_time_ms ?? msg.CreateTime!) * 1000 : Date.now(),
     };
 
@@ -502,14 +542,36 @@ export class WeixinAdapter extends BaseAdapter {
   }
 
   // ---------------------------------------------------------------------------
-  // Image download from Weixin CDN
+  // Media download from Weixin CDN
   // ---------------------------------------------------------------------------
 
-  private async downloadImagesFromMessage(msg: WeChatMessage, senderId: string): Promise<string[]> {
+  private async downloadMediaFromMessage(
+    msg: WeChatMessage,
+    senderId: string
+  ): Promise<{
+    imagePaths: string[];
+    voicePaths: string[];
+    filePaths: Array<{ name: string; path: string }>;
+    videoPaths: string[];
+  }> {
     const imagePaths: string[] = [];
+    const voicePaths: string[] = [];
+    const filePaths: Array<{ name: string; path: string }> = [];
+    const videoPaths: string[] = [];
     const itemList = msg.item_list ?? [];
 
+    const tmpDir = path.join(os.tmpdir(), 'duya-weixin-media');
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    const uniqueName = (prefix: string, ext: string): string =>
+      path.join(
+        tmpDir,
+        `${prefix}-${senderId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`
+      );
+
     for (const item of itemList) {
+      const itemId = item.msg_id ?? '';
+
       if (item.type === MessageItemType.IMAGE && item.image_item) {
         const imageItem = item.image_item;
         const media = imageItem.media;
@@ -529,10 +591,7 @@ export class WeixinAdapter extends BaseAdapter {
             aesKeyB64: media?.aes_key,
           });
 
-          const ext = '.jpg';
-          const tmpDir = path.join(os.tmpdir(), 'duya-weixin-media');
-          fs.mkdirSync(tmpDir, { recursive: true });
-          const filePath = path.join(tmpDir, `wx-img-${senderId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+          const filePath = uniqueName('wx-img', '.jpg');
           fs.writeFileSync(filePath, imageBuffer);
           imagePaths.push(filePath);
 
@@ -540,10 +599,97 @@ export class WeixinAdapter extends BaseAdapter {
         } catch (err) {
           console.error('[Weixin] Failed to download image:', err);
         }
+        continue;
+      }
+
+      if (item.type === MessageItemType.VOICE && item.voice_item) {
+        const media = item.voice_item.media;
+        const encryptQueryParam = media?.encrypt_query_param;
+        const aesKeyB64 = media?.aes_key;
+
+        if (!encryptQueryParam || !aesKeyB64) {
+          console.warn('[Weixin] Voice item missing media params, skipping');
+          continue;
+        }
+
+        try {
+          const voiceBuffer = await wxApi.downloadAndDecryptMedia({
+            encryptedQueryParam: encryptQueryParam,
+            aesKeyB64,
+          });
+
+          const filePath = uniqueName('wx-voice', '.mp3');
+          fs.writeFileSync(filePath, voiceBuffer);
+          voicePaths.push(filePath);
+
+          console.log(`[Weixin] Downloaded voice: ${filePath} (${voiceBuffer.length} bytes)`);
+        } catch (err) {
+          console.error('[Weixin] Failed to download voice:', err);
+        }
+        continue;
+      }
+
+      if (item.type === MessageItemType.FILE && item.file_item) {
+        const media = item.file_item.media;
+        const encryptQueryParam = media?.encrypt_query_param;
+        const aesKeyB64 = media?.aes_key;
+        const fileName = item.file_item.file_name ?? (itemId ? `file-${itemId}` : 'attachment');
+
+        if (!encryptQueryParam || !aesKeyB64) {
+          console.warn('[Weixin] File item missing media params, skipping');
+          continue;
+        }
+
+        try {
+          const fileBuffer = await wxApi.downloadAndDecryptMedia({
+            encryptedQueryParam: encryptQueryParam,
+            aesKeyB64,
+          });
+
+          const filePath = uniqueName('wx-file', '');
+          const finalPath = path.join(
+            path.dirname(filePath),
+            `${path.basename(filePath)}-${sanitizeFileName(fileName)}`
+          );
+          fs.writeFileSync(finalPath, fileBuffer);
+          filePaths.push({ name: fileName, path: finalPath });
+
+          console.log(`[Weixin] Downloaded file: ${finalPath} (${fileBuffer.length} bytes)`);
+        } catch (err) {
+          console.error('[Weixin] Failed to download file:', err);
+        }
+        continue;
+      }
+
+      if (item.type === MessageItemType.VIDEO && item.video_item) {
+        const media = item.video_item.media;
+        const encryptQueryParam = media?.encrypt_query_param;
+        const aesKeyB64 = media?.aes_key;
+
+        if (!encryptQueryParam || !aesKeyB64) {
+          console.warn('[Weixin] Video item missing media params, skipping');
+          continue;
+        }
+
+        try {
+          const videoBuffer = await wxApi.downloadAndDecryptMedia({
+            encryptedQueryParam: encryptQueryParam,
+            aesKeyB64,
+          });
+
+          const filePath = uniqueName('wx-video', '.mp4');
+          fs.writeFileSync(filePath, videoBuffer);
+          videoPaths.push(filePath);
+
+          console.log(`[Weixin] Downloaded video: ${filePath} (${videoBuffer.length} bytes)`);
+        } catch (err) {
+          console.error('[Weixin] Failed to download video:', err);
+        }
+        continue;
       }
     }
 
-    return imagePaths;
+    return { imagePaths, voicePaths, filePaths, videoPaths };
   }
 
   // ---------------------------------------------------------------------------

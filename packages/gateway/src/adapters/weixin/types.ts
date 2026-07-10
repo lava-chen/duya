@@ -14,6 +14,7 @@ export interface WeChatMessage {
   message_state: number;
   item_list: Array<{
     type: number;
+    msg_id?: string;
     text_item?: {
       text: string;
     };
@@ -23,6 +24,28 @@ export interface WeChatMessage {
         aes_key?: string;
       };
       aeskey?: string;
+    };
+    voice_item?: {
+      media?: {
+        encrypt_query_param?: string;
+        aes_key?: string;
+      };
+      voice_length_ms?: number;
+    };
+    file_item?: {
+      media?: {
+        encrypt_query_param?: string;
+        aes_key?: string;
+      };
+      file_name?: string;
+      file_size?: number;
+    };
+    video_item?: {
+      media?: {
+        encrypt_query_param?: string;
+        aes_key?: string;
+      };
+      video_length_s?: number;
     };
   }>;
   context_token?: string;

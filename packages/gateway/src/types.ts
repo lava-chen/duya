@@ -215,7 +215,7 @@ export interface GatewayStatus {
 // =============================================================================
 
 export interface StreamEvent {
-  type: 'chat:text' | 'chat:thinking' | 'chat:done' | 'chat:error' | 'chat:permission';
+  type: 'chat:text' | 'chat:thinking' | 'chat:done' | 'chat:error' | 'chat:permission' | 'chat:tool_result';
   sessionId: string;
   content?: string;
   finalContent?: string;
@@ -226,6 +226,14 @@ export interface StreamEvent {
     toolName: string;
     toolInput: Record<string, unknown>;
   };
+  /**
+   * Tool result payload (only for chat:tool_result).
+   * Convention-based extraction: any object containing mediaUrl/mediaUrls/
+   * path/filePath/fileUrl/url/attachments fields will be scanned for media
+   * paths to bridge into MediaReply outbound. String payloads are parsed
+   * for absolute file paths as a fallback.
+   */
+  toolResult?: unknown;
 }
 
 // =============================================================================
