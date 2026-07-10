@@ -755,6 +755,8 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 > - 所有写入都在事务内完成：更新业务表 → 写入 `conductor_actions` → 广播 `conductor:state:patch`。
 > - Widget Data 使用 `data_version` 乐观锁：用户写入优先，Agent 冲突时保留 `merged_from`。
 > - Undo/Redo 基于 `result_patch` 逆操作，不使用原始 `payload`。
+> - Canvas 直接拖拽只更新当前选中元素；元素重叠是合法状态，不做被动碰撞推挤。跨元素重排只能由显式 auto-layout 操作触发。
+> - 自动 zoom-to-fit 的可读性下限为 `0.65`；用户仍可手动缩放到全局下限 `0.2`。短标签按紧凑节点渲染，避免为了全局概览把文字缩成不可读尺寸。
 
 #### 数据库文件位置
 
