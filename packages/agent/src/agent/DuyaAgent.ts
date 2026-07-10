@@ -250,6 +250,7 @@ export class duyaAgent {
   private sessionId?: string; // Session ID for task persistence
   private workingDirectory?: string; // Working directory for tool execution
   private defaultWorkspaceDirectory?: string; // Default workspace directory for permission checking
+  private communicationPlatform?: import('../prompts/types.js').CommunicationPlatform; // Communication platform for prompt injection
   private permissionMode: PermissionMode = 'default'; // Permission mode for tool execution
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
   private selfImprover: SelfImprover; // Self-improvement tracker for skill creation
@@ -421,6 +422,7 @@ export class duyaAgent {
 
     this.model = options.model;
     this.runtimeConfig = options.runtimeConfig;
+    this.communicationPlatform = options.communicationPlatform;
 
     // Initialize vision model client if configured
     logger.info(`[duyaAgent] Vision config check: enabled=${options.visionConfig?.enabled}, provider=${options.visionConfig?.provider}, model=${options.visionConfig?.model}, baseURL=${options.visionConfig?.baseURL}`);
@@ -1098,6 +1100,7 @@ export class duyaAgent {
           temperature: options?.temperature ?? 1,
           signal: this.abortController.signal,
           effort: options?.effort,
+          maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
         });
         logger.info(`[Agent] Turn ${turnCount}: Stream generator created, starting iteration...`);
         for await (const event of streamGenerator) {
@@ -1696,7 +1699,19 @@ export class duyaAgent {
           logger.info(`[Agent] streamChat: Denied tools: ${filterResult.denied.join(', ')}`);
         }
       } else {
-        logger.warn(`[Agent] streamChat: Agent profile filtering resulted in no available tools`);
+        // Fail-fast: the profile's allowedTools patterns matched zero
+        // tools. Previously this only logged a warning and silently let
+        // ALL tools through — a security hole where a misconfigured
+        // allowlist became an implicit wildcard. Throw so the caller knows
+        // the profile is broken instead of running with unintended access.
+        const unmatched = filterResult.diagnostics.unmatchedPatterns;
+        throw new Error(
+          `Agent profile "${appliedProfile.id}" allowedTools matched zero tools ` +
+          `(all ${filterResult.denied.length} tools were denied). ` +
+          `Unmatched patterns: ${unmatched.length > 0 ? unmatched.join(', ') : '(none)'}. ` +
+          `This usually means allowedTools patterns don't match actual registered tool names. ` +
+          `Check packages/agent/src/agent-profile/types.ts and the tool name constants.`
+        );
       }
     }
 
@@ -1781,6 +1796,7 @@ export class duyaAgent {
         outputStyleConfig: options?.outputStyleConfig,
         researchIntent: options?.researchIntent,
         researchProjectId: options?.researchProjectId,
+        communicationPlatform: this.communicationPlatform,
       });
       const systemPromptResult = await promptSystem.buildSystemPrompt(context);
       systemPromptContent = [...systemPromptResult].join('\n\n');
@@ -2526,8 +2542,17 @@ export class duyaAgent {
 /**
  * Build the identity block prepended to the system prompt when an agent profile is applied.
  * This tells the LLM clearly what role it should play.
+ *
+ * When the profile provides `identityPrompt`, that single concise
+ * sentence is used verbatim — it lets a preset express a precise role
+ * (e.g. the gateway relay agent) without the generic name/description
+ * scaffolding. Otherwise fall back to the generic block.
  */
 function buildAgentIdentityBlock(profile: AgentProfile): string {
+  if (profile.identityPrompt) {
+    return profile.identityPrompt;
+  }
+
   const lines: string[] = [
     `You are a "${profile.name}" agent.`,
   ];

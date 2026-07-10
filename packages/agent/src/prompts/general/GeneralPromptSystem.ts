@@ -40,6 +40,7 @@ import { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
 import { getScratchpadSection } from './sections/dynamic/scratchpad.js'
 import { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
 import { getMemorySection } from './sections/dynamic/memory.js'
+import { getPlatformSection } from '../sections/dynamic/platform.js'
 
 /**
  * General Agent PromptSystem
@@ -118,6 +119,7 @@ export class GeneralPromptSystem extends PromptSystem {
     }
 
     return [
+      m('platform', () => getPlatformSection(context), 'Communication platform-specific guidance'),
       m('environment', () => getEnvironmentSection(context), 'Current directory state'),
       m('mcp', () => getMcpInstructionsSection(context), 'MCP servers can change'),
       m('sessionGuidance', () => getSessionGuidanceSection(context), 'Session-specific guidance'),

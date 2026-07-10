@@ -26,15 +26,16 @@ function findPreset(id: string) {
 }
 
 describe('PRESET_AGENT_PROFILES → resolveEnabledSections', () => {
-  it('explore disables memory, skills, sessionGuidance, widgetGuidelines', () => {
+  it('explore disables memory, skills, sessionGuidance, visionGuidelines', () => {
     const profile = findPreset('explore');
     const promptProfile = getPromptProfileForAgentProfile(profile);
     const enabled = resolveEnabledSections(promptProfile);
 
     expect(enabled.has('memory')).toBe(false);
+    expect(enabled.has('memoryContent')).toBe(false);
     expect(enabled.has('skills')).toBe(false);
     expect(enabled.has('sessionGuidance')).toBe(false);
-    expect(enabled.has('widgetGuidelines')).toBe(false);
+    expect(enabled.has('visionGuidelines')).toBe(false);
 
     // Sanity: intro/system should still be on.
     expect(enabled.has('intro')).toBe(true);
@@ -47,9 +48,10 @@ describe('PRESET_AGENT_PROFILES → resolveEnabledSections', () => {
     const enabled = resolveEnabledSections(promptProfile);
 
     expect(enabled.has('memory')).toBe(false);
+    expect(enabled.has('memoryContent')).toBe(false);
     expect(enabled.has('skills')).toBe(false);
     expect(enabled.has('sessionGuidance')).toBe(false);
-    expect(enabled.has('widgetGuidelines')).toBe(false);
+    expect(enabled.has('visionGuidelines')).toBe(false);
   });
 
   it('research disables taskHandling and actions', () => {
@@ -78,13 +80,31 @@ describe('PRESET_AGENT_PROFILES → resolveEnabledSections', () => {
     expect(enabled.has('generalTaskGuidance')).toBe(true);
   });
 
-  it('gateway disables taskHandling and widgetGuidelines', () => {
+  it('gateway disables memory, sessionGuidance, skills', () => {
     const profile = findPreset('gateway');
     const promptProfile = getPromptProfileForAgentProfile(profile);
     const enabled = resolveEnabledSections(promptProfile);
 
-    expect(enabled.has('taskHandling')).toBe(false);
-    expect(enabled.has('widgetGuidelines')).toBe(false);
+    expect(enabled.has('memory')).toBe(false);
+    expect(enabled.has('memoryContent')).toBe(false);
+    expect(enabled.has('sessionGuidance')).toBe(false);
+    expect(enabled.has('skills')).toBe(false);
+
+    // Sanity: intro/system should still be on.
+    expect(enabled.has('intro')).toBe(true);
+    expect(enabled.has('system')).toBe(true);
+  });
+
+  it('cron disables actions (no user to ask for confirmation)', () => {
+    const profile = findPreset('cron');
+    const promptProfile = getPromptProfileForAgentProfile(profile);
+    const enabled = resolveEnabledSections(promptProfile);
+
+    expect(enabled.has('actions')).toBe(false);
+    // Sanity: core sections should still be on.
+    expect(enabled.has('intro')).toBe(true);
+    expect(enabled.has('system')).toBe(true);
+    expect(enabled.has('toolUsage')).toBe(true);
   });
 
   it('code-expert has no overrides, all base sections stay enabled', () => {
