@@ -358,6 +358,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
           params.lineEnd = detail.lineEnd;
         }
       }
+      // Reset the embedded file tree to closed so the preview opens as a
+      // focused editor (per PanelFileTreeSplit design intent), not a split
+      // browser. Users can still expand it via the toolbar toggle.
+      setWorkspaceTreeOpen(false);
       openOrActivatePage("preview", params);
     };
 

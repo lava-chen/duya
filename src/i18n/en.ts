@@ -914,6 +914,7 @@ const en = {
   'filePreview.unsupportedHint': 'You can still add the file to the input box or open it with the default app.',
   'filePreview.truncatedHint': 'Showing first 1 MB',
   'filePreview.askDuya': 'Ask DUYA',
+  'filePreview.screenshot': 'Screenshot to Input',
 
   'office.askDuya': 'Ask DUYA',
 
@@ -922,6 +923,8 @@ const en = {
   'project.selectFolder': 'Select Folder',
   'project.enterFolderPath': 'Enter Project Folder Path',
   'project.folderPathPlaceholder': 'e.g., C:\\Users\\name\\Projects\\my-project',
+  'project.folderPathPlaceholderMac': 'e.g., ~/Projects/my-project',
+  'project.folderPathPlaceholderLinux': 'e.g., /home/name/Projects/my-project',
   'project.options': 'Project options',
   'project.recentProjects': 'Recent Projects',
   'project.noRecent': 'No recent projects',

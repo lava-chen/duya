@@ -468,6 +468,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         {projectGroups.length > 0 && (
           <SidebarProjectHeader
             onNewBlankProject={handleNewBlankProject}
+            onUseExistingFolder={handleOpenExistingFolder}
             onCollapseAll={collapseAllProjects}
             onExpandAll={expandAllProjects}
             allCollapsed={allCollapsed}
@@ -568,7 +569,16 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         <InputDialog
           isOpen={isInputDialogOpen}
           title={t('project.enterFolderPath')}
-          placeholder={t('project.folderPathPlaceholder')}
+          placeholder={
+            // Show a platform-appropriate path example so macOS/Linux users
+            // are not shown a Windows C:\ path. Falls back to the i18n string
+            // when the platform is unknown.
+            window.electronAPI?.versions?.platform === 'darwin'
+              ? t('project.folderPathPlaceholderMac')
+              : window.electronAPI?.versions?.platform === 'linux'
+                ? t('project.folderPathPlaceholderLinux')
+                : t('project.folderPathPlaceholder')
+          }
           onConfirm={(value) => {
             setIsInputDialogOpen(false);
             handleCreateProjectFromPath(value);
@@ -593,6 +603,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
 
 interface SidebarProjectHeaderProps {
   onNewBlankProject: () => void;
+  onUseExistingFolder: () => void;
   onCollapseAll: () => void;
   onExpandAll: () => void;
   allCollapsed: boolean;
@@ -606,6 +617,7 @@ type SubmenuPanel = 'organize' | 'sort' | null;
 
 function SidebarProjectHeader({
   onNewBlankProject,
+  onUseExistingFolder,
   onCollapseAll,
   onExpandAll,
   allCollapsed,
@@ -674,6 +686,14 @@ function SidebarProjectHeader({
           title={t('common.more')}
         >
           <DotsThreeIcon size={16} />
+        </button>
+        <button
+          type="button"
+          className="sidebar-section-action"
+          onClick={onUseExistingFolder}
+          title={t('project.useExistingFolder')}
+        >
+          <FolderOpenIcon size={14} />
         </button>
         <button
           type="button"
