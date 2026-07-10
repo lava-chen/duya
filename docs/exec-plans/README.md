@@ -105,6 +105,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [212-subagent-task-notification](./active/212-subagent-task-notification.md) | SubAgent Task-Notification Channel (claude-code-haha alignment) — `<task-notification>` XML envelope + `messageQueueManager.mode='task-notification'` + `notified` idempotency, UI 隐藏系统消息 | P1 | Implementation complete |
 | [214-agent-core-audit](./active/214-agent-core-audit.md) | Agent Core Audit — full read-only audit of agent runtime, IPC, renderer, DB, lifecycle, packaging. Phased: Phase 1 audit done, Phase 2 gated by user. | P0 | Phase 1 ✅ (audit only), Phase 2 ⏳ awaiting confirmation |
 | [222-interagent-message-session](./active/222-interagent-message-session.md) | Inter-Agent Communication — MessageSession tool for cross-session agent Q&A with cycle detection and timeout | P1 | Phase 1-9 ✅ |
+| [226-mcp-security-layer-hardening](./active/226-mcp-security-layer-hardening.md) | MCP Security Layer Hardening — env allowlist + secret sanitization + prompt injection scan + sampling rate limiter (hermes-agent alignment) | P1 | Phase 1-2 ✅, 2.5 deferred |
 
 ### Canvas V2 Whimsical 风格重设计
 
@@ -120,7 +121,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 | [81-mindmap-interaction-correction](./active/81-mindmap-interaction-correction.md) | Follow-up: root move + subtree reorder + draft node flow | P0 | 73 |
 | [223-conductor-canvas-style-and-group](./active/223-conductor-canvas-style-and-group.md) | Post-mindmap: sticky/connector 样式扩展(shape/border/stroke) + Group 元素松散绑定 + 4 个 group tool + 属性面板 | P1 | 71, 72, 73 |
-| [225-canvas-smart-layout-and-hit-test](./active/225-canvas-smart-layout-and-hit-test.md) | Canvas 智能布局 + 命中测试重做 (RBush + bin-pack + 视口感知) | P0 | Phase 1 ✅ Phase 2 ✅ |
+| [225-canvas-smart-layout-and-hit-test](./active/225-canvas-smart-layout-and-hit-test.md) | Canvas 智能布局 + 命中测试 + 可读性与直接操控优化 | P0 | Phase 1-3 ✅ Electron UI verification deferred |
 
 ### Compact System Fix Plans
 

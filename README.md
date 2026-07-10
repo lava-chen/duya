@@ -1,244 +1,496 @@
-# DUYA
+# Duya
 
 <p align="center">
- <img src="assets/icon.png" width="120" alt="DUYA Logo">
+  <img src="assets/icon.png" width="120" alt="Duya Logo">
 </p>
 
 <p align="center">
- <strong>A local-first desktop workspace for AI agents.</strong>
+  <strong>A local-first desktop AI agent for research, files, code, and visible workflows.</strong>
 </p>
 
 <p align="center">
- Browser automation, coding workflows, local tools, plugins, and agent control — in one app built for normal users, not only terminal power users.
+  Duya lets an AI agent work inside your desktop workspace — using your browser, local files, terminal, project references, plugins, skills, and MCP-style tools — while keeping important actions visible and permission-based.
 </p>
 
 <p align="center">
- <a href="https://github.com/lava-chen/duya/releases">Download</a>
- ·
- <a href="#demo">Demo</a>
- ·
- <a href="#why-duya">Why DUYA</a>
- ·
- <a href="#features">Features</a>
- ·
- <a href="#development">Development</a>
+  <a href="https://github.com/lava-chen/duya/releases">Download</a>
+  ·
+  <a href="#demo">Demo</a>
+  ·
+  <a href="#what-can-duya-do">What can Duya do?</a>
+  ·
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="#privacy-and-control">Privacy & control</a>
+  ·
+  <a href="#development">Development</a>
 </p>
 
 <p align="center">
- <a href="https://github.com/lava-chen/duya/releases">
- <img src="https://img.shields.io/github/v/release/lava-chen/duya?style=flat-square" alt="GitHub release">
- </a>
- <a href="LICENSE">
- <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License">
- </a>
- <a href="https://github.com/lava-chen/duya/actions">
- <img src="https://img.shields.io/github/actions/workflow/status/lava-chen/duya/ci.yml?style=flat-square" alt="CI">
- </a>
+  <a href="https://github.com/lava-chen/duya/releases">
+    <img src="https://img.shields.io/github/v/release/lava-chen/duya?style=flat-square" alt="GitHub release">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License">
+  </a>
+  <a href="https://github.com/lava-chen/duya/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/lava-chen/duya/ci.yml?style=flat-square" alt="CI">
+  </a>
 </p>
+
+> Duya is currently in public beta. It is usable, but still rough. Expect fast iteration, visible bugs, and frequent release notes.
 
 ---
 
 ## Demo
 
-![DUYA demo](assets/demo.gif)
+![Duya demo](assets/demo.gif)
 
-DUYA brings powerful agent workflows out of terminals, IDE extensions, and browser tabs — into a real desktop app.
+Duya is not just another chat box. It is a desktop workspace where an agent can browse, read files, edit files, run commands, inspect project references, create visual artifacts, and ask for permission before sensitive actions.
 
-It lets an AI agent work with your browser, files, terminal commands, research materials, plugins, skills, and MCP-style tools, while keeping important actions visible and approval-based.
+A good first task is:
 
-> DUYA is currently in beta. Expect rough edges, fast iteration, and frequent improvements.
-
----
-
-## Why DUYA?
-
-AI agents are becoming powerful, but most of them still feel like tools for developers.
-
-Some live in terminals. Some are tied to IDEs. Some hide tool execution behind logs. Some require config files before you can do anything useful. That makes them powerful, but also intimidating for many users.
-
-DUYA takes a different path.
-
-It brings agent workflows into a local-first desktop app with guided onboarding, visual tool execution, browser automation, local persistence, and explicit user control.
-
-The goal is not blind autonomy. The goal is controlled agency.
+```text
+Research how local-first AI agents are different from cloud agents.
+Use the browser to collect sources, then create a markdown note in this project.
+```
 
 ---
 
-## What makes DUYA different?
+## Why Duya?
 
-| Tool type | Strength | Gap DUYA tries to fill |
-| --- | --- | --- |
-| Coding agents | Great at project-level coding tasks | Often tied to terminal or IDE workflows |
-| Autonomous local agents | Powerful long-running automation | Hard to supervise without clear controls |
-| Browser chatbots | Easy to use | Limited access to local tools and real web interaction |
-| Browser automation agents | Can operate websites | Often disconnected from local workspace and agent memory |
-| DUYA | Desktop app + local tools + browser automation + visual control | A more approachable agent workspace for everyday users |
+Most AI agent tools fall into one of three buckets.
 
----
+Some are powerful but live in terminals. They are great for developers, but intimidating for normal users.
 
-## Features
+Some are chat-first. They are easy to use, but they cannot really operate inside your local workspace.
 
-### A real desktop app
+Some are cloud agents. They can run long tasks, but they often hide execution details and move sensitive work away from your own computer.
 
-DUYA is not a terminal wrapper and not another browser tab. It is a native desktop application with sessions, settings, system integration, local persistence, and visual tool cards.
+Duya takes a different path.
 
-You install it, configure your provider, and start working from a familiar app interface.
+It brings agent workflows into a local-first desktop app with visible tool execution, browser automation, file access, terminal integration, project references, plugins, skills, and permission prompts.
 
-### Strong browser automation
+The goal is not blind autonomy.
 
-Many agents can fetch web pages. DUYA is designed to use the browser more like a real user.
-
-Agents can open pages, click elements, type into inputs, scroll, manage tabs, execute browser actions, and capture screenshots. This makes DUYA useful for tasks that cannot be solved by simple HTML fetching.
-
-### Local-first agent workflows
-
-DUYA stores conversations and workspace data locally by default. Your data lives on your machine, not in a DUYA cloud service.
-
-You choose your model provider, configure your own API key, and keep control of how agents connect to external services.
-
-### Visual control over tool use
-
-When an agent wants to run a command, touch files, browse the web, or use tools, DUYA can show the action before it happens.
-
-Tool calls are displayed as visible UI cards instead of disappearing into logs. Sensitive actions can require approval, so you can inspect what the agent is about to do.
-
-### Built for beginners, extensible for power users
-
-DUYA is designed to be usable even if you have never used a terminal agent before.
-
-At the same time, advanced users can customize providers, agent profiles, plugins, skills, and MCP-style integrations to build more powerful local workflows.
-
-### Durable sessions
-
-DUYA persists conversation history and agent state locally, so your work is not tied to one fragile process. If the app restarts or a session fails, your messages should remain recoverable.
+The goal is controlled agency.
 
 ---
 
-## Screenshots
+## What can Duya do?
 
-> Replace these placeholders with real screenshots before a public launch.
+### Research with a real browser
 
-### Agent actions are visible
+Duya can use browser actions instead of only fetching static HTML.
 
-![Agent action cards](assets/screenshots/agent-run.png)
+It can open pages, click elements, type into inputs, scroll, manage tabs, capture screenshots, read network output, and use browser snapshots to understand pages.
 
-### Browser automation
+This makes it useful for research tasks where an agent needs to interact with the web like a user, not just call a search API.
 
-![Browser automation](assets/screenshots/browser-automation.png)
+Example task:
 
-### Local agent settings
+```text
+Use the browser to research three recent AI coding agent tools.
+Create a markdown comparison with links, strengths, weaknesses, and what Duya can learn from them.
+```
 
-![Agent settings](assets/screenshots/settings.png)
+### Work with local files
 
-### Plugin, skill, and MCP control
+Duya can read, search, write, and edit files in your local workspace.
 
-![Capability management](assets/screenshots/capabilities.png)
+It supports common agent coding tools such as read, grep, glob, edit, write, bash, PowerShell, and file preview surfaces. It can also open generated or modified files from tool cards.
+
+Example task:
+
+```text
+Read this project folder and create a short project brief:
+- what the project does
+- important files
+- how to run it
+- possible risks or TODOs
+```
+
+### Use project references
+
+Duya supports project-level reference files.
+
+You can curate files that should matter to the agent, such as project notes, `.duya` files, `.agents` files, `.claude` files, design docs, or task context. The agent can use these references as part of its working context instead of guessing from scattered files.
+
+Example task:
+
+```text
+Use the project references and summarize the current product direction.
+Then suggest the next three tasks for a public beta launch.
+```
+
+### Preview documents and code
+
+Duya includes workspace panels for file preview and document-oriented work.
+
+It can preview local files, source code, Office-style documents, and notebooks through the app's side panel, so you do not have to leave the agent workspace just to inspect context.
+
+Example task:
+
+```text
+Read this report draft and the source data file.
+Summarize what is missing, then suggest edits before submission.
+```
+
+### Run terminal workflows
+
+Duya integrates a terminal surface through the desktop workspace.
+
+The agent can run shell commands when permitted, inspect outputs, and use terminal results as part of the task loop. Sensitive commands can be permission-gated.
+
+Example task:
+
+```text
+Run the test suite, inspect the first failing test, and propose a minimal fix.
+Ask before editing files.
+```
+
+### Continue instructions during a run
+
+Duya includes an Agent Mailbox-style interaction model.
+
+While an agent is running, you can send follow-up instructions into the active task instead of waiting for the whole run to finish. This makes long-running tasks easier to steer.
+
+Example:
+
+```text
+Actually focus more on the onboarding flow. Ignore the payment feature for now.
+```
+
+### Create visual artifacts
+
+Duya can render widgets, diagrams, dashboards, charts, and mini visualizations inside the chat.
+
+Generated widgets are passed through a visual self-review pipeline so the agent can inspect and improve the rendered result instead of only generating raw markup.
+
+Example task:
+
+```text
+Create a visual flow diagram showing how a desktop agent should ask for permission before using local tools.
+```
+
+### Use Conductor canvas workflows
+
+Duya includes an experimental Conductor mode for canvas-based agent work.
+
+The Conductor stack supports canvas elements, smart layout, viewport-aware packing, alignment-first snapping, collision handling, auto layout tools, and agent-driven canvas operations.
+
+This is experimental, but it points toward Duya's longer-term direction: not just chatting with an agent, but coordinating tasks, artifacts, context, and visual workflows in one desktop space.
 
 ---
 
-## Download
+## What makes Duya different?
 
-DUYA is currently in beta.
-
-Download the latest installer from [Releases](https://github.com/lava-chen/duya/releases).
-
-| Platform | Installer |
-| --- | --- |
-| Windows | `.exe` |
-| macOS | `.dmg` |
-| Linux | `.AppImage` |
-
-After installation, open DUYA, choose your language, configure an AI provider, paste your API key, and start a session.
+| Type            | Good at                 | Limitation                                 | Duya's direction                               |
+| --------------- | ----------------------- | ------------------------------------------ | ---------------------------------------------- |
+| Chat assistants | Easy conversation       | Limited local action                       | Give the agent real desktop tools              |
+| Coding agents   | Codebase tasks          | Often terminal or IDE-first                | Make agent work visible in a desktop app       |
+| Browser agents  | Web interaction         | Often disconnected from files and projects | Combine browser + local workspace              |
+| Cloud agents    | Long-running tasks      | Less local control and visibility          | Keep the user's computer as the main workspace |
+| Duya            | Desktop agent workflows | Still beta                                 | Local-first, visible, permission-based agency  |
 
 ---
 
 ## Quick start
 
-1. Download DUYA from [Releases](https://github.com/lava-chen/duya/releases).
-2. Open the app.
-3. Choose your language.
-4. Add an AI provider and API key.
-5. Start chatting with an agent.
-6. Approve or deny tool actions as they appear.
+### 1. Download
 
-Your API key is stored with OS-level protection and used only when DUYA talks to your selected model provider.
+Download the latest beta from:
+
+```text
+https://github.com/lava-chen/duya/releases
+```
+
+### 2. Install
+
+Supported package targets:
+
+| Platform | Installer                           |
+| -------- | ----------------------------------- |
+| Windows  | `.exe`                              |
+| macOS    | `.dmg`                              |
+| Linux    | `.AppImage` / related Linux targets |
+
+Windows is currently the most tested path. macOS and Linux builds may need more smoke testing.
+
+### 3. Configure a model provider
+
+Open Duya and configure an AI provider.
+
+Duya supports a multi-provider setup. You can add provider credentials, choose a default provider, fetch available model lists where supported, and switch providers per workflow.
+
+Your API key is stored locally with OS-level protection and masked in the UI.
+
+### 4. Run a first task
+
+Try one of these tasks first:
+
+```text
+Use the browser to research one topic and create a markdown note.
+```
+
+```text
+Read this project folder and summarize what the project does.
+```
+
+```text
+Inspect this small codebase, run tests if needed, and suggest one safe fix.
+Ask before editing files.
+```
+
+### 5. Review tool actions
+
+When Duya uses tools, it renders visible tool cards.
+
+For sensitive operations such as terminal commands, file edits, browser actions, or permission-specific tools, Duya can ask for approval before continuing.
 
 ---
 
-## Privacy and security
+## Example tasks
 
-DUYA is designed as a local-first desktop app.
+### Research
 
-Your conversations and workspace data are stored in a local SQLite database. DUYA does not rely on cloud storage for your workspace data, and it is designed to avoid telemetry-first behavior.
+```text
+Research the current state of local-first AI agents.
+Use browser sources, compare several tools, and create a markdown note with links.
+```
 
-API keys are encrypted using OS-level protection and masked in the UI.
+### Document review
 
-Sensitive actions are controlled by permission prompts. Terminal commands, file operations, browser actions, and other tools can require approval before execution.
+```text
+Read the report in this folder.
+Find missing sections, unclear reasoning, formatting issues, and data-processing gaps.
+Return a concise revision checklist.
+```
 
-DUYA also applies guardrails around risky surfaces, including protected system paths and browser-side protections for localhost and internal network access.
+### Code task
 
-Security is not treated as a single switch. DUYA's direction is to make agent actions visible, inspectable, and controllable.
+```text
+Inspect this repository.
+Find how the app starts, identify the key modules, and suggest one small improvement.
+Do not edit files until I approve.
+```
+
+### File organization
+
+```text
+Read the files in this folder.
+Group them by purpose, summarize each group, and create a TODO list for cleanup.
+```
+
+### Visual explanation
+
+```text
+Create a diagram explaining the flow:
+user request → agent plan → tool permission → local action → artifact review.
+```
 
 ---
 
-## Vision: beyond chat
+## Privacy and control
 
-Most agent interfaces are still chat-first: you type a message, the agent replies, and tools run somewhere in the background.
+Duya is designed as a local-first desktop app.
 
-DUYA is moving toward a conductor-style interaction model.
+Your conversations and workspace data are stored locally by default. Duya does not require a Duya cloud workspace for your local agent sessions.
 
-The goal is to let users coordinate agents, tasks, browser sessions, documents, local tools, generated artifacts, and evolving context inside a shared desktop workspace — not just a message thread.
+You choose your model provider and API key. Model requests are sent to the provider you configure.
 
-Instead of treating the agent as a chatbot, DUYA treats the agent as a visible participant in an ongoing workflow.
+Tool actions are visible. Sensitive actions can require explicit approval.
+
+Duya uses local persistence so sessions, tool outputs, and task state are not tied to one fragile process.
+
+Current control surfaces include:
+
+* local SQLite-backed workspace data
+* visible tool cards
+* permission prompts for sensitive actions
+* provider credential masking
+* project-level references
+* local file preview and generated artifact inspection
+* CLI control-plane operations for advanced users
+
+Security is not treated as a single switch. Duya's direction is to make agent actions visible, inspectable, and controllable.
+
+---
+
+## Current beta status
+
+Duya is in active beta.
+
+Recently landed work includes:
+
+* multi-provider architecture
+* Agent Mailbox for in-run instruction updates
+* typed permission flow
+* Codex-aligned chat composer
+* right-side multi-tab workspace panel
+* Office and notebook preview workspaces
+* terminal panel
+* project references panel
+* plugin / skill / MCP-oriented extension layer
+* CLI control plane
+* widget rendering and visual self-review
+* Conductor canvas smart layout
+* stability audit across LLM clients, agent core, tools, worker/IPC, database, and research mode
+
+Known beta caveats:
+
+* onboarding still needs real-user testing
+* some workflows are rough or experimental
+* macOS and Linux packages may need more smoke testing
+* Conductor/canvas features are experimental
+* enterprise workspace features are not the current public-beta focus
 
 ---
 
 ## Architecture
 
-DUYA is built as a desktop application with separated UI, Electron main process, local persistence, and agent runtime packages.
+Duya is built as a desktop application with separated UI, Electron main process, local persistence, and isolated agent runtime packages.
 
 Core stack:
 
-- Electron
-- React
-- TypeScript
-- SQLite
-- browser automation backend
-- isolated agent runtime
-- plugin / skill / MCP-oriented extension layer
-- packaged app verification scripts
+* Electron
+* Vite
+* React
+* TypeScript
+* SQLite / better-sqlite3
+* child process based agent runtime
+* HTTP + SSE / IPC bridge
+* browser automation backend
+* plugin / skill / MCP-oriented extension layer
+* `@duya/agent`
+* `@duya/cli`
+* `@duya/conductor`
+* `@duya/gateway`
 
-The project is organized around a few core ideas:
+At a high level:
 
-- local-first storage
-- visible tool execution
-- approval-based sensitive actions
-- isolated agent sessions
-- extensible capability management
+```text
+Renderer UI
+  ↕
+Electron Main Process
+  ↕
+Agent Server / IPC / SQLite
+  ↕
+Isolated Agent Worker Processes
+  ↕
+Tools: browser, files, shell, memory, skills, MCP, conductor
+```
 
-For development details, see [CONTRIBUTING.md](CONTRIBUTING.md).
+This structure is designed so agent runs can be isolated, persisted, interrupted, and recovered more reliably than a single in-process chat loop.
 
 ---
 
 ## Development
 
-DUYA uses TypeScript, React, Electron, and SQLite.
+Install dependencies:
 
 ```bash
-git clone https://github.com/lava-chen/duya.git
-cd duya
 npm install
+```
+
+Run the desktop app in development:
+
+```bash
 npm run electron:dev
 ```
 
-Common commands:
+Build the app:
 
-| Command | Purpose |
-| --- | --- |
-| `npm run electron:dev` | Start DUYA in development mode |
-| `npm run electron:build` | Build the Electron app |
-| `npm run electron:pack` | Package the desktop app |
-| `npm run typecheck:all` | Run TypeScript checks |
-| `npm run test` | Run tests |
+```bash
+npm run electron:build
+```
 
---
+Package for the current platform:
+
+```bash
+npm run electron:pack
+```
+
+Run type checks:
+
+```bash
+npm run typecheck:all
+```
+
+Run tests:
+
+```bash
+npm run test
+```
+
+Useful scripts:
+
+```bash
+npm run build:agent
+npm run build:cli
+npm run build:conductor
+npm run build:gateway
+npm run electron:verify:packaged
+npm run diagnose:env
+```
+
+---
+
+## Repository structure
+
+```text
+src/                  Renderer UI
+electron/             Electron main process, IPC, local services
+packages/agent/       Agent runtime, tools, prompts, modes
+packages/cli/         Desktop control-plane CLI
+packages/conductor/   Canvas / conductor subsystem
+packages/gateway/     External channel gateway package
+scripts/              Build, bundle, packaging, diagnostics
+docs/                 Architecture, execution plans, release notes
+```
+
+---
+
+## Roadmap
+
+Near-term focus:
+
+* improve first-run onboarding
+* make the first successful task easier
+* polish browser and file workflows
+* improve error messages and recovery
+* add more real-world demo tasks
+* refine permission prompts
+* stabilize public beta packages
+
+Longer-term direction:
+
+* deeper local workflow orchestration
+* better project memory and reference management
+* stronger visual self-review loops
+* more reliable long-running tasks
+* team / workspace integration through controlled enterprise plugins
+
+---
+
+## Feedback
+
+Duya is looking for early users who are willing to test real tasks and report rough edges.
+
+The most useful feedback is:
+
+* installation failed
+* model provider setup was confusing
+* first task did not complete
+* tool permission felt unsafe or unclear
+* browser automation failed
+* file preview or file editing was confusing
+* you would not open Duya a second time, and why
+
+Open an issue, start a discussion, or contact the maintainer with a concrete task that failed.
+
+---
+
+## License
+
+MIT
