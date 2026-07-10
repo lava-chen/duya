@@ -137,7 +137,20 @@ export async function handleWebviewCommand(
       // Trigger renderer to open an agent tab for this session.
       // WebviewCDPClient will retry via HTTP polling on 404.
       if (mainWindow && !mainWindow.isDestroyed()) {
+        logger.info(
+          `Requesting agent browser tab for session ${sessionId}`,
+          undefined,
+          undefined,
+          LogComponent.BrowserDaemon,
+        );
         mainWindow.webContents.send('browser:open-agent-tab', { sessionId });
+      } else {
+        logger.warn(
+          `Cannot open agent browser tab: main window unavailable for session ${sessionId}`,
+          undefined,
+          undefined,
+          LogComponent.BrowserDaemon,
+        );
       }
       jsonResponse(res, 404, {
         id: body.id,

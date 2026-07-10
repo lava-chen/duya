@@ -11423,6 +11423,17 @@ html[data-message-font-size="large"] .prose h3 {
   color: var(--destructive);
 }
 
+.browser-panel-error {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--destructive) 10%, var(--sidebar-bg));
+  color: var(--destructive);
+  font-size: 11px;
+}
+
 .browser-panel-status-dot {
   width: 6px;
   height: 6px;
