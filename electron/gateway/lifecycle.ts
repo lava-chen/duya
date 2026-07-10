@@ -73,10 +73,10 @@ export function stopGatewayProcess(): Promise<void> {
     }
 
     setTimeout(() => {
-      if (gatewayProcess && !gatewayProcess.killed) {
+      if (proc && !proc.killed) {
         getLogger().warn('Gateway process did not terminate, sending SIGKILL', { pid }, LogComponent.Gateway);
         try {
-          gatewayProcess.kill('SIGKILL');
+          proc.kill('SIGKILL');
         } catch { /* ignore */ }
       }
     }, 5000).unref();
@@ -147,7 +147,14 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
 
   if (gatewayProcess && !gatewayProcess.killed) {
     getLogger().info('Gateway already running, stopping first', undefined, LogComponent.Gateway);
+    const oldProcess = gatewayProcess;
+    // Detach the old process's exit listener so its termination doesn't
+    // trigger onGatewayExit, which would wipe the module-level gatewayProcess
+    // ref (now pointing at the new spawn) and schedule an unwanted restart.
+    oldProcess.removeAllListeners('exit');
+    // stopGatewayProcess reads the module-level ref; call it before clearing.
     stopGatewayProcess();
+    gatewayProcess = null;
   }
 
   stopRequested = false;

@@ -19,6 +19,7 @@ import { testBridgeChannel } from '../services/network/bridge-tester';
 import { getPairingStore } from './pairing';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getGatewayProxyConfig } from '../db/queries/settings';
+import { getDefaultGatewayWorkspace, resolveGatewayWorkspace } from './config';
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
@@ -89,14 +90,146 @@ export function getSessionState(sessionId: string): GatewaySessionState | undefi
   return getSessionStates().get(sessionId);
 }
 
+const MAX_GATEWAY_TITLE_LENGTH = 50;
+const CN_STOP_WORDS = new Set([
+  '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
+  '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '看', '好',
+  '这', '他', '她', '它', '们', '那', '什么', '怎么', '如何', '哪个',
+  '这个', '那个', '这些', '那些', '可以', '需要', '应该', '能够', '可能',
+  '因为', '所以', '但是', '不过', '虽然', '如果', '的话', '而且', '或者',
+  '吧', '吗', '呢', '啊', '哦', '嗯', '哈', '呀', '嘛', '呗', '请',
+]);
+
+/**
+ * Generate a concise session title from the first inbound message.
+ * Falls back to the original prompt if it cannot produce a meaningful title.
+ */
+function generateGatewaySessionTitle(prompt: string, platform: string): string {
+  let text = prompt.trim();
+  if (!text) return `${platform} chat`;
+
+  // Strip gateway slash commands
+  if (text.startsWith('/')) {
+    const firstSpace = text.indexOf(' ');
+    text = firstSpace > 0 ? text.slice(firstSpace + 1).trim() : '';
+  }
+  if (!text) return `${platform} chat`;
+
+  // Strip common Chinese request prefixes
+  text = text
+    .replace(/^(请|帮忙|帮我|能不能|能否|可以|请帮我|能否帮我|我想|我需要|我要|我想问|我想知道|请问|想问一下|想问下)\s*/i, '')
+    .replace(/^(please\s+|can\s+you\s+|could\s+you\s+|help\s+me\s+|i\s+want\s+to\s+|i\s+need\s+to\s+|how\s+do\s+i\s+|how\s+to\s+)/i, '');
+
+  text = text.trim();
+  if (!text) return `${platform} chat`;
+
+  // Extract first sentence/phrase
+  const firstBreak = text.search(/[。！？.;!?\n]/);
+  if (firstBreak > 0) {
+    text = text.slice(0, firstBreak).trim();
+  }
+
+  // For Chinese text, try to extract the most informative clause
+  const isChinese = /[\u4e00-\u9fa5]/.test(text);
+  if (isChinese && text.length > 12) {
+    const segments = text
+      .split(/[，、]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 3);
+
+    if (segments.length > 0) {
+      const scored = segments.map((seg) => {
+        const chars = [...seg];
+        const contentChars = chars.filter((c) => !CN_STOP_WORDS.has(c));
+        const ratio = chars.length > 0 ? contentChars.length / chars.length : 0;
+        const startsWithContent = contentChars.length > 0 && chars[0] === contentChars[0];
+        return { seg, score: ratio * seg.length + (startsWithContent ? 2 : 0) };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      const best = scored[0];
+      if (best && best.score > 0) {
+        text = best.seg;
+      }
+    }
+  }
+
+  // Truncate with ellipsis
+  if (text.length > MAX_GATEWAY_TITLE_LENGTH) {
+    text = text.slice(0, MAX_GATEWAY_TITLE_LENGTH);
+    const lastSpace = text.lastIndexOf(' ');
+    if (!isChinese && lastSpace > 10) {
+      text = text.slice(0, lastSpace);
+    }
+    text = text + '…';
+  }
+
+  return text || `${platform} chat`;
+}
+
+/**
+ * Detect whether a gateway session title is still the fallback generated at
+ * session creation ("{platform} {timestamp}" or "{platform} Reset {timestamp}").
+ * This protects user-edited titles from being overwritten after a restart.
+ */
+function isFallbackGatewayTitle(title: string, platform: string): boolean {
+  if (!title) return true;
+  const lower = title.toLowerCase();
+  const prefix = `${platform.toLowerCase()} `;
+  if (!lower.startsWith(prefix)) return false;
+  const rest = title.slice(prefix.length).trim();
+  // Fallback titles always contain a locale date string with digits.
+  return /\d/.test(rest);
+}
+
+/**
+ * Update the thread/chat_sessions title for a gateway session once, using the
+ * first inbound message. This is fire-and-forget so it never blocks reply
+ * streaming.
+ */
+function maybeUpdateGatewaySessionTitle(sessionId: string, prompt: string): void {
+  const state = getSessionState(sessionId);
+  if (!state || state.titleGenerated) return;
+
+  const db = getDatabase();
+  if (!db) return;
+
+  try {
+    const platform = state.bridgeChannel || 'gateway';
+    const row = db.prepare('SELECT title FROM threads WHERE id = ?').get(sessionId) as { title: string } | undefined;
+    if (row && !isFallbackGatewayTitle(row.title, platform)) {
+      state.titleGenerated = true;
+      return;
+    }
+
+    const title = generateGatewaySessionTitle(prompt, platform);
+    const now = Date.now();
+    db.prepare(`UPDATE threads SET title = ?, updated_at = ? WHERE id = ?`).run(title, now, sessionId);
+    db.prepare(`UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?`).run(title, now, sessionId);
+    state.titleGenerated = true;
+    getLogger().debug('Gateway session title generated', { sessionId, title }, LogComponent.Gateway);
+  } catch (err) {
+    getLogger().warn('Failed to update gateway session title', err instanceof Error ? err.message : String(err), LogComponent.Gateway);
+  }
+}
+
 export function createOrResetGatewaySession(sessionId: string, channel: string): void {
   const states = getSessionStates();
 
   if (states.has(sessionId)) {
     const existing = states.get(sessionId)!;
-    if (existing.state !== 'terminating') {
-      getLogger().debug('Gateway session already exists, forwarding reset', { sessionId }, LogComponent.Gateway);
+    // Only reset if the session is in an abnormal state; do not disrupt active
+    // streams. 'terminating' and 'error' are the only abnormal states in the
+    // GatewaySessionState.state union ('starting' | 'running' | 'idle' | 'paused'
+    // | 'terminating' | 'error').
+    if (existing.state === 'terminating' || existing.state === 'error') {
+      getLogger().debug('Gateway session in abnormal state, sending reset', { sessionId, state: existing.state }, LogComponent.Gateway);
       sendToGatewayProcess({ type: 'reset', sessionId });
+    } else {
+      // Session already active and healthy; just refresh metadata, don't reset.
+      getLogger().debug('Gateway session already active, skip reset', { sessionId, state: existing.state }, LogComponent.Gateway);
+      existing.bridgeChannel = channel;
+      existing.lastActivityAt = Date.now();
+      return;
     }
   }
 
@@ -106,6 +239,7 @@ export function createOrResetGatewaySession(sessionId: string, channel: string):
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
     bridgeChannel: channel,
+    titleGenerated: false,
   });
 
   getLogger().info('Gateway session created', { sessionId, channel }, LogComponent.Gateway);
@@ -126,7 +260,10 @@ export function resetGatewaySession(sessionId: string): void {
     if (db) {
       const now = Date.now();
       db.prepare(`UPDATE threads SET updated_at = ? WHERE id = ?`).run(now, sessionId);
-      db.prepare(`DELETE FROM messages WHERE thread_id = ?`).run(sessionId);
+      // Intentionally do NOT delete messages. The messages table is
+      // append-only; resetting a gateway session creates a fresh session
+      // via the mapping update, but the previous session history must
+      // remain visible when the user opens the old session in the UI.
     }
   } catch {
     // best effort
@@ -303,6 +440,10 @@ export function handleGatewayMessage(
       const sessionId = inboundMsg.sessionId;
       const platform = inboundMsg.platform;
       const platformChatId = inboundMsg.platformChatId;
+
+      // Generate a meaningful title from the first inbound message.
+      // This is fire-and-forget and must not block the SSE forwarding below.
+      maybeUpdateGatewaySessionTitle(sessionId, inboundMsg.prompt);
 
       const providerConfig = getCachedProviderConfig();
       if (providerConfig) {
@@ -482,6 +623,10 @@ export function handleGatewayMessage(
       const sessionId = `gw-${data.platform}-${data.platformChatId}`;
       createOrResetGatewaySession(sessionId, data.platform);
 
+      // Resolve workspace from init config (reads bridge_workspace setting,
+      // falls back to ~/.duya/workspace).
+      const workingDirectory = resolveGatewayWorkspace(getOrBuildInitConfig());
+
       // Save session to threads table and chat_sessions table
       const db = getDatabase();
       if (db) {
@@ -497,7 +642,7 @@ export function handleGatewayMessage(
             INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-          `).run(sessionId, title, '', '', '', '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
+          `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
 
           // Create user mapping atomically (saves one IPC round-trip from Gateway)
           db.prepare(`
@@ -531,24 +676,41 @@ export function handleGatewayMessage(
       };
       console.log('[Main] gateway:reset_session received, platform:', data.platform);
 
-      // Use platform + platformChatId as sessionId to ensure conversation history is preserved
-      const sessionId = `gw-${data.platform}-${data.platformChatId}`;
+      const db = getDatabase();
 
-      // Find and reset existing session if any
+      // 1. Find old session id from the user mapping table (source of
+      //    truth for platform+chat → session). The in-memory states map
+      //    may have been cleared or keyed differently, so DB lookup is
+      //    more reliable.
       let oldSessionId: string | undefined;
-      const states = getSessionStates();
-      for (const [id, state] of states) {
-        if (id === sessionId) {
-          oldSessionId = id;
-          resetGatewaySession(id);
-          break;
-        }
+      if (db) {
+        const row = db.prepare(
+          'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
+        ).get(data.platform, data.platformChatId) as { session_id?: string } | undefined;
+        oldSessionId = row?.session_id;
       }
 
+      // 2. Reset old session in-memory state if it exists. Messages are
+      //    intentionally preserved so the old session remains viewable in
+      //    the UI; /new creates a fresh session by updating the mapping
+      //    below.
+      if (oldSessionId) {
+        resetGatewaySession(oldSessionId);
+      }
+
+      // 3. Generate a NEW random session id. A deterministic id
+      //    (gw-<platform>-<chatId>) would reuse the same DB rows and
+      //    the agent would still see the old context. A fresh id
+      //    guarantees a clean slate — matches the renderer IPC path
+      //    (ipcMain.handle('gateway:reset_session')).
+      const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       createOrResetGatewaySession(sessionId, data.platform);
 
+      // Resolve workspace from init config (reads bridge_workspace setting,
+      // falls back to ~/.duya/workspace).
+      const workingDirectory = resolveGatewayWorkspace(getOrBuildInitConfig());
+
       // Save new session to threads table and chat_sessions table
-      const db = getDatabase();
       if (db) {
         try {
           const now = Date.now();
@@ -563,7 +725,16 @@ export function handleGatewayMessage(
             INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-          `).run(sessionId, title, '', '', '', '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
+          `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
+          // Update the user mapping to point at the new session. Without
+          // this, getOrCreateSession would return the old session id and
+          // the reset would be invisible — the next inbound message would
+          // still route to the old session with its old context.
+          db.prepare(`
+            INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
+          `).run(`${data.platform}:${data.platformChatId}`, data.platform, data.platformUserId, data.platformChatId, sessionId, now, now);
         } catch (err) {
           getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
         }
@@ -802,13 +973,32 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
   // Load per-channel proxy configuration
   const proxyConfig = getGatewayProxyConfig();
 
+  // Read gateway workspace from DB (bridge_workspace setting). Falls back to
+  // ~/.duya/workspace when absent/empty. Never use process.cwd() — that leaks
+  // the Electron app's cwd (e.g. the dev repo path) into agent sessions.
+  const workspaceRow = db.prepare("SELECT value FROM settings WHERE key = 'bridge_workspace'").get() as { value: string } | undefined;
+  let workingDirectory: string;
+  if (workspaceRow?.value) {
+    // Settings are stored as JSON strings; plain strings also accepted.
+    try {
+      const parsed = JSON.parse(workspaceRow.value);
+      workingDirectory = typeof parsed === 'string' ? parsed : workspaceRow.value;
+    } catch {
+      workingDirectory = workspaceRow.value;
+    }
+  }
+  if (!workingDirectory || !workingDirectory.trim()) {
+    workingDirectory = getDefaultGatewayWorkspace();
+  }
+
   const config: GatewayInitConfig = {
     platforms,
     autoStart,
     proxyConfig,
+    workingDirectory,
   };
 
-  console.log('[STARTUP] getOrBuildInitConfig:', JSON.stringify({ platforms: platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!Object.keys(p.credentials).length })), autoStart }));
+  console.log('[STARTUP] getOrBuildInitConfig:', JSON.stringify({ platforms: platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!Object.keys(p.credentials).length })), autoStart, workingDirectory }));
   return config;
 }
 
@@ -1087,6 +1277,10 @@ export function registerGatewayIpcHandlers(): void {
     const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     createOrResetGatewaySession(sessionId, data.platform);
 
+    // Resolve workspace from init config (reads bridge_workspace setting,
+    // falls back to ~/.duya/workspace).
+    const workingDirectory = resolveGatewayWorkspace(getOrBuildInitConfig());
+
     // Save session to threads table and chat_sessions table
     const db = getDatabase();
     if (db) {
@@ -1103,45 +1297,9 @@ export function registerGatewayIpcHandlers(): void {
           INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
           ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-        `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
+        `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', 'env', 0, now, now);
       } catch (err) {
         getLogger().error('Failed to save gateway session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
-      }
-    }
-
-    return { sessionId, success: true };
-  });
-
-  ipcMain.handle('gateway:reset_session', (_event, data: { platform: string; platformChatId: string; platformUserId: string }) => {
-    // Find existing session for this platform+chat
-    const states = getSessionStates();
-    for (const [id, state] of states) {
-      if (state.bridgeChannel === data.platform) {
-        resetGatewaySession(id);
-      }
-    }
-    const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    createOrResetGatewaySession(sessionId, data.platform);
-
-    // Save session to threads table and chat_sessions table
-    const db = getDatabase();
-    if (db) {
-      try {
-        const now = Date.now();
-        const title = `${data.platform} Reset ${new Date().toLocaleString()}`;
-        db.prepare(`
-          INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
-        `).run(sessionId, title, 'gateway', '', now, now);
-        // Also insert into chat_sessions so messages can be persisted via replaceMessages
-        db.prepare(`
-          INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-          ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-        `).run(sessionId, title, '', '', '', '', 'active', 'chat', 'env', 0, now, now);
-      } catch (err) {
-        getLogger().error('Failed to save gateway reset session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
       }
     }
 
