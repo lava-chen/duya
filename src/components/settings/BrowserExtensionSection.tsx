@@ -21,6 +21,7 @@ import { useBrowserExtension } from '@/hooks/useBrowserExtension';
 import { useSettings } from '@/hooks/useSettings';
 import { SettingsSection, SettingsCard, SettingsRow } from '@/components/settings/ui';
 import { ExtensionConfirmDialog } from '@/components/ExtensionConfirmDialog';
+import { BrowserAdvancedSection } from './BrowserAdvancedSection';
 
 // Chrome Web Store extension URL
 const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
@@ -499,6 +500,8 @@ export default function BrowserExtensionSection() {
         )}
       </SettingsSection>
     </div>
+
+    <BrowserAdvancedSection />
 
     <ExtensionConfirmDialog
       isOpen={Boolean(health?.pendingExtensionApproval) && !confirmingExtension}

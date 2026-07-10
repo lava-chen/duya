@@ -91,6 +91,8 @@ export interface AppSettings {
   messageFontSize?: 'small' | 'medium' | 'large';
   // Browser security settings
   blockedDomains: string[];
+  // Browser backend mode: auto (degradation chain) | extension | built-in
+  browserBackendMode?: 'auto' | 'extension' | 'built-in';
   // Favorite agent profiles for quick access (max 3)
   favoriteAgentIds: string[];
   // Agent prompt language preference (e.g. 'Chinese', 'English')

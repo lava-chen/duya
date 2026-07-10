@@ -115,6 +115,7 @@ interface InitMessage {
   skillPaths?: string[];
   communicationPlatform?: string;
   blockedDomains?: string[];
+  browserBackendMode?: 'auto' | 'extension' | 'built-in';
   language?: string;
   sandboxEnabled?: boolean;
   securityScanEnabled?: boolean;
@@ -715,7 +716,7 @@ function summarizeConversationForWiki(messages: Message[], maxMessages = 12): st
 // Agent Initialization
 // ============================================================================
 
-async function initAgent(config: InitMessage['providerConfig'], workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string): Promise<void> {
+async function initAgent(config: InitMessage['providerConfig'], workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string, browserBackendMode?: 'auto' | 'extension' | 'built-in'): Promise<void> {
   // Store system prompt for use in chat
   sessionSystemPrompt = sysPrompt;
 
@@ -754,6 +755,7 @@ async function initAgent(config: InitMessage['providerConfig'], workDir?: string
     workingDirectory: workDir,
     visionConfig: config.visionConfig,
     blockedDomains,
+    browserBackendMode,
     language,
     defaultWorkspaceDirectory: defaultWorkspaceDir,
     // Phase 3: thread the runtime config into the agent. The
@@ -2449,7 +2451,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           });
           setSystemLocation(initMsg.systemLocation ?? null);
           try {
-            await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform);
+            await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform, initMsg.browserBackendMode);
 
             try {
               // Parallel: skills loading (disk I/O) + DB message loading (IPC)
