@@ -46,9 +46,12 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
     fallbackBrowser: null,
     mode: 'extension',
     extensionAvailable: true,
+    browserBackendMode: 'auto',
     platformHookManager: {
       shouldApplyHooks: vi.fn().mockReturnValue(false),
       applyPostNavigateHooks: vi.fn().mockResolvedValue(undefined),
+      hasExtractor: vi.fn().mockReturnValue(false),
+      extractContent: vi.fn().mockResolvedValue(null),
     },
     checkDomainBlocked: vi.fn().mockReturnValue(false),
     getBrowserPool: vi.fn().mockReturnValue({} as any),

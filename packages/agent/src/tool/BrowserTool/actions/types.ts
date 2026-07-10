@@ -3,7 +3,7 @@ import type { ToolResult } from '../../../types.js';
 import type { ICDPClient } from '../CDPClient.js';
 import type { SnapshotEngine } from '../SnapshotEngine.js';
 import type { FallbackBrowser } from '../FallbackBrowser.js';
-import type { BrowserMode } from '../types.js';
+import type { BrowserBackendMode, BrowserMode } from '../types.js';
 import type { PlatformContent, ExtractionOptions } from '../platform-extractors/types.js';
 
 export interface ActionContext {
@@ -11,6 +11,7 @@ export interface ActionContext {
   snapshotEngine: SnapshotEngine | null;
   fallbackBrowser: FallbackBrowser | null;
   mode: BrowserMode;
+  browserBackendMode: BrowserBackendMode;
   extensionAvailable: boolean;
   platformHookManager: {
     shouldApplyHooks(url: string): boolean;
