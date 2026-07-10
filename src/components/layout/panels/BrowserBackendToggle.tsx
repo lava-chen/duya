@@ -40,10 +40,13 @@ export function BrowserBackendToggle() {
   const isAuto = mode === "auto";
 
   const handleSelect = useCallback(
-    (next: "extension" | "built-in") => {
+    async (next: "extension" | "built-in") => {
       if (saving) return;
       if (next === "extension" && !isInstalled) return;
-      void save({ browserBackendMode: next });
+      // Persist to DB and broadcast to running agents in one go.
+      await save({ browserBackendMode: next });
+      // Live-update running agent processes without full re-init.
+      window.electronAPI?.browserBackend?.updateMode(next).catch(() => {});
     },
     [save, saving, isInstalled],
   );

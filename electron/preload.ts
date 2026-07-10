@@ -564,6 +564,10 @@ export interface BrowserCookieAPI {
   clearData: () => Promise<{ ok: boolean; error?: string }>
 }
 
+export interface BrowserBackendAPI {
+  updateMode: (mode: 'auto' | 'extension' | 'built-in') => Promise<{ success: boolean; reason?: string }>
+}
+
 export interface DocumentParserAPI {
   parse: (filePath: string, options?: { timeout?: number }) => Promise<{
     fileHash: string
@@ -1009,6 +1013,7 @@ export interface ElectronAPI {
   browserExtension: BrowserExtensionAPI
   browserWebview: BrowserWebviewAPI
   browserCookie: BrowserCookieAPI
+  browserBackend: BrowserBackendAPI
   parser: DocumentParserAPI
   literature: LiteratureAPI
   agentProfile: AgentProfileAPI
@@ -1313,6 +1318,7 @@ function getConductorPortAPI(): ConductorPortAPI | null {
     // (postMessage from did-finish-load is async). Logging on every
     // call floods the console and buries real signal.
     if (!conductorPortReady) {
+      conductorPortReady = true;
       console.warn('[preload] getConductorPortAPI: conductorPort is null (waiting for main to send the port)');
     }
     return null;
@@ -1885,6 +1891,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('browser:import-cookies', browser),
     clearData: () =>
       ipcRenderer.invoke('browser:clear-browser-data'),
+  },
+  browserBackend: {
+    updateMode: (mode: 'auto' | 'extension' | 'built-in') =>
+      ipcRenderer.invoke('browser:update-backend-mode', mode),
   },
   parser: {
     parse: (filePath, options) => ipcRenderer.invoke('parser:parse', filePath, options),

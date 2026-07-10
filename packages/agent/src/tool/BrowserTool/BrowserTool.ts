@@ -68,7 +68,30 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   }
 
   setBrowserConfig(config: BrowserToolConfig): void {
+    const modeChanged = this.config?.mode !== config.mode;
     this.config = config;
+    // If the mode changed, reset any existing connection so ensureConnection
+    // re-evaluates the backend on the next tool call. Without this, a running
+    // session that already connected via extension would keep using it even
+    // after the user switched to built-in mode.
+    if (modeChanged) {
+      this.resetConnection();
+    }
+  }
+
+  /**
+   * Tear down the current CDP/fallback connection so the next
+   * ensureConnection() re-evaluates the backend mode.
+   */
+  resetConnection(): void {
+    if (this.cdp) {
+      this.cdp.close?.().catch(() => {});
+      this.cdp = null;
+    }
+    this.fallbackBrowser = null;
+    this.snapshotEngine = null;
+    this.mode = 'fallback';
+    this.extensionAvailable = false;
   }
 
   private ensureConnection = async (): Promise<void> => {

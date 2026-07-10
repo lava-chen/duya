@@ -90,6 +90,13 @@ export interface CompactCommand {
   sessionId: string;
 }
 
+export interface ConfigUpdateCommand {
+  type: 'config:update';
+  sessionId: string;
+  browserBackendMode?: 'auto' | 'extension' | 'built-in';
+  blockedDomains?: string[];
+}
+
 export interface PermissionResolveCommand {
   type: 'permission:resolve';
   id: string;
@@ -126,6 +133,7 @@ export type WorkerCommand =
   | ChatStartCommand
   | ChatInterruptCommand
   | CompactCommand
+  | ConfigUpdateCommand
   | PermissionResolveCommand
   | DbResponseCommand
   | InteragentInvokeCommand
