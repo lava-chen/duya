@@ -31,7 +31,7 @@ function normalizePosition(pos: Partial<CanvasPosition> | null | undefined): Can
 
 function normalizeElement(el: CanvasElement): CanvasElement {
   // Defensive: patches may use `kind` (LLM-friendly alias) instead of `elementKind`.
-  // Map it so CanvasArea's isWidgetKind/isConnectorKind don't crash on undefined.
+  // Map it so canvas kind checks do not crash on an undefined legacy value.
   // Also fill defaults for any other required fields the patch may omit —
   // `summarizeElementForAgent` (backend) intentionally strips permissions,
   // state, dataVersion, metadata, timestamps, vizSpec, sourceCode, canvasId
@@ -72,7 +72,7 @@ type ModelInfo = ConductorModelInfo;
 /**
  * Shared spatial index for the active canvas. Kept in sync with
  * elements[] on every create/move/resize/delete via the store
- * actions. UI reads from this index for hit-test, collision, and
+ * actions. UI reads from this index for hit-test and
  * alignment-candidate pruning.
  *
  * Module-level (not in Zustand state) because RBush is a mutable

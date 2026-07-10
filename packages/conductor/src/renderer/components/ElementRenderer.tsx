@@ -1,16 +1,18 @@
 "use client";
 
 import React from "react";
-import type { CanvasElement } from "..//types/conductor";
+import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { getElement, getElementLabel } from "..//elements/ElementRegistry";
+import { WidgetElement } from "..//elements/WidgetElement";
 import { ElementChrome } from "./ElementChrome";
 import { NativeElementRenderer } from "./native/NativeElementRenderer";
 
 interface ElementRendererProps {
   element: CanvasElement;
   readOnly: boolean;
+  selected?: boolean;
   onDelete?: (id: string) => void;
-  onPositionChange?: (id: string) => void;
+  onPositionChange?: (id: string, position: CanvasPosition) => void;
 }
 
 function UnknownElementFallback({ element }: { element: CanvasElement }) {
@@ -47,6 +49,7 @@ function getDisplayLabel(element: CanvasElement): string {
 export const ElementRenderer: React.FC<ElementRendererProps> = ({
   element,
   readOnly,
+  selected,
   onDelete,
   onPositionChange,
 }) => {
@@ -59,20 +62,34 @@ export const ElementRenderer: React.FC<ElementRendererProps> = ({
   }
 
   const def = getElement(element.elementKind);
-  if (!def) {
+  const label = getDisplayLabel(element);
+
+  // All widget/* elements (registered or dynamic) render through WidgetElement
+  // so dynamic widgets created by agents continue to display their sourceCode.
+  const ElementComponent = element.elementKind.startsWith("widget/")
+    ? WidgetElement
+    : def?.component;
+
+  // Dynamic widgets already provide their own visual container; wrapping them
+  // in the default chrome adds an unwanted header/border. Use a minimal chrome
+  // that only shows a hover border + resize handle.
+  const variant = element.elementKind === "widget/dynamic" ? "minimal" : "default";
+
+  if (!ElementComponent) {
     return (
       <ElementChrome
+        element={element}
         label={element.elementKind}
         readOnly={readOnly}
+        selected={selected}
+        variant={variant}
         onDelete={onDelete ? () => onDelete(element.id) : undefined}
+        onPositionChange={onPositionChange}
       >
         <UnknownElementFallback element={element} />
       </ElementChrome>
     );
   }
-
-  const label = getDisplayLabel(element);
-  const ElementComponent = def.component;
 
   const content = (
     <ElementComponent element={element} readOnly={readOnly} />
@@ -80,10 +97,14 @@ export const ElementRenderer: React.FC<ElementRendererProps> = ({
 
   return (
     <ElementChrome
+      element={element}
       label={label}
       readOnly={readOnly}
       state={element.state}
+      selected={selected}
+      variant={variant}
       onDelete={onDelete ? () => onDelete(element.id) : undefined}
+      onPositionChange={onPositionChange}
     >
       {content}
     </ElementChrome>

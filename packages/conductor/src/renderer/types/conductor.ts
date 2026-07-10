@@ -100,7 +100,7 @@ export interface ElementMetadata {
   sourceActionId?: number;
   parentId?: string | null;
   childIds?: string[];
-  /** User-locked: excluded from auto-layout & push-aside. Default false. */
+  /** User-locked: excluded from explicit auto-layout. Default false. */
   locked?: boolean;
   /** Viewport-aware packing preference. Default 'mid'. */
   priority?: 'high' | 'mid' | 'low';

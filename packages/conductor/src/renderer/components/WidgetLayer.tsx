@@ -1,15 +1,19 @@
 "use client";
 
 import React, { useMemo, useCallback, useRef } from "react";
-import { ResponsiveGridLayout, useContainerWidth } from "react-grid-layout";
+import { ResponsiveGridLayout } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import { useConductorStore } from "..//stores/conductor-store";
 import { WidgetElement } from "..//elements/WidgetElement";
 import type { CanvasElement } from "..//types/conductor";
 import { executeAction } from "..//ipc/conductor-ipc";
+import { GRID_PX } from "../domain/canvas/units";
+import { canvasTransformState } from "./CanvasArea";
 
-const COLS = { lg: 12, md: 8, sm: 4 };
+const CANVAS_WIDTH_GRID = 40;
+const CANVAS_HEIGHT_GRID = 30;
+const COLS = { lg: CANVAS_WIDTH_GRID, md: CANVAS_WIDTH_GRID, sm: CANVAS_WIDTH_GRID };
 const BREAKPOINTS = { lg: 1200, md: 800, sm: 480 };
 const DEBOUNCE_MS = 600;
 
@@ -32,10 +36,35 @@ function elementToLayoutItem(el: CanvasElement, readOnly: boolean): LayoutItem {
   };
 }
 
+function createZoomStrategy(zoom: number) {
+  return {
+    type: "transform" as const,
+    scale: zoom,
+    calcStyle(pos: { left: number; top: number; width: number; height: number }) {
+      return {
+        transform: `translate3d(${pos.left}px, ${pos.top}px, 0)`,
+        width: `${pos.width}px`,
+        height: `${pos.height}px`,
+        position: "absolute" as const,
+      };
+    },
+    calcDragPosition(clientX: number, clientY: number, offsetX: number, offsetY: number) {
+      return {
+        left: (clientX - offsetX) / zoom,
+        top: (clientY - offsetY) / zoom,
+      };
+    },
+  };
+}
+
 export const WidgetLayer: React.FC<WidgetLayerProps> = ({ elements, readOnly }) => {
-  const { activeCanvasId } = useConductorStore();
-  const { width, containerRef } = useContainerWidth();
+  const { activeCanvasId, updateElement } = useConductorStore();
+  const layerRef = useRef<HTMLDivElement>(null);
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Use the module-level transform state updated synchronously in
+  // CanvasArea.applyTransform instead of the debounced store value.
+  // This keeps drag/resize tracking accurate while zoom is changing.
+  const positionStrategy = createZoomStrategy(canvasTransformState.zoom);
 
   const layout = useMemo<LayoutItem[]>(
     () => elements.map((el) => elementToLayoutItem(el, readOnly)),
@@ -77,6 +106,15 @@ export const WidgetLayer: React.FC<WidgetLayerProps> = ({ elements, readOnly }) 
   const handleDragStop = useCallback(
     (_layout: Layout, _oldItem: LayoutItem | null, newItem: LayoutItem | null) => {
       if (!activeCanvasId || !newItem) return;
+      // Sync the local store immediately so the widget does not visually
+      // snap back to its old position while waiting for the 600ms debounced
+      // IPC round-trip. Without this, the store still holds the pre-drag
+      // position and the next render pulls the widget back, only to jump
+      // forward again once the backend confirms — the "弹回再跳" symptom.
+      updateElement(newItem.i, {
+        position: { x: newItem.x, y: newItem.y, w: newItem.w, h: newItem.h, zIndex: 0, rotation: 0 },
+        updatedAt: Date.now(),
+      });
       debouncedSave(newItem.i, "element.move", {
         x: newItem.x,
         y: newItem.y,
@@ -84,12 +122,17 @@ export const WidgetLayer: React.FC<WidgetLayerProps> = ({ elements, readOnly }) 
         h: newItem.h,
       });
     },
-    [activeCanvasId, debouncedSave]
+    [activeCanvasId, debouncedSave, updateElement]
   );
 
   const handleResizeStop = useCallback(
     (_layout: Layout, _oldItem: LayoutItem | null, newItem: LayoutItem | null) => {
       if (!activeCanvasId || !newItem) return;
+      // Same immediate-sync rationale as handleDragStop.
+      updateElement(newItem.i, {
+        position: { x: newItem.x, y: newItem.y, w: newItem.w, h: newItem.h, zIndex: 0, rotation: 0 },
+        updatedAt: Date.now(),
+      });
       debouncedSave(newItem.i, "element.move", {
         x: newItem.x,
         y: newItem.y,
@@ -97,23 +140,27 @@ export const WidgetLayer: React.FC<WidgetLayerProps> = ({ elements, readOnly }) 
         h: newItem.h,
       });
     },
-    [activeCanvasId, debouncedSave]
+    [activeCanvasId, debouncedSave, updateElement]
   );
 
   return (
-    <div ref={containerRef} className="w-full h-full">
+    <div ref={layerRef} className="w-full h-full">
       <ResponsiveGridLayout
         className="layout widget-layer"
-        width={Math.max(width, 1200)}
+        // The canvas model stores position.{x,y,w,h} in grid units (1 unit = GRID_PX
+        // px). Match RGL's grid 1:1 with the canvas grid so the red drag placeholder
+        // and resize preview have the same size and position as the actual widget.
+        width={CANVAS_WIDTH_GRID * GRID_PX}
         layouts={{ lg: layout }}
         breakpoints={BREAKPOINTS}
         cols={COLS}
-        rowHeight={80}
+        rowHeight={GRID_PX}
         onLayoutChange={handleLayoutChange}
         onDragStop={handleDragStop}
         onResizeStop={handleResizeStop}
-        margin={[16, 16]}
-        containerPadding={[16, 16]}
+        margin={[0, 0]}
+        containerPadding={[0, 0]}
+        positionStrategy={positionStrategy}
       >
         {elements.map((el) => (
           <div key={el.id}>
