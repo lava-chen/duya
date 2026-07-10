@@ -86,14 +86,14 @@ export const definition: Tool = {
     '  - widget/dynamic:   HTML/SVG sourceCode for custom visual content\n\n' +
     'Position is required and uses canvas grid units (1 unit = 80px). ' +
     'ALWAYS provide w and h; do not omit them. Choose size based on content — do NOT oversize: ' +
-    'short label 3x2, 1 short Chinese line 3x2, standard sticky 4x3, detailed card 5x4. ' +
-    'Minimum usable sticky size is 3x2. For Chinese text, prefer larger fontSize and tighter boxes: ' +
-    'short label 3x2 with fontSize=16-18, standard sticky 4x3 with fontSize=18, detailed card 5x4 with fontSize=20. ' +
-    'The canvas zooms to fit the whole 40x30 grid by default, so excess whitespace shrinks everything else. ' +
+    'compact label 2.5x1, short Chinese line 3x1, two short lines 3.5x1.5, standard note 4x2. ' +
+    'Fractional grid sizes are valid. Compact labels are centered automatically and render at 22px by default. ' +
+    'Legacy fontSize values are clamped to 20px for compact labels and 18px for longer notes; for explicit control use 20-24px. ' +
+    'Auto-fit preserves a readable zoom floor, but excess whitespace still makes the board harder to scan. ' +
     'config and vizSpec are optional and can be set later. ' +
     'Returns the new elementId in the result — use it with canvas_fill_content / ' +
     'canvas_style_element / canvas_move_element to complete the element. ' +
-    'Example: { "kind": "native/sticky", "position": {"x":1,"y":1,"w":4,"h":3}, "config": {"text":"开始","fontSize":18,"color":"yellow"} }',
+    'Example: { "kind": "native/sticky", "position": {"x":1,"y":1,"w":2.5,"h":1}, "config": {"text":"开始","fontSize":22,"color":"yellow"} }',
   input_schema: {
     type: 'object',
     properties: {
@@ -109,7 +109,7 @@ export const definition: Tool = {
           'Element position in canvas grid units (1 unit = 80px). ' +
           'Required fields: x, y (top-left corner). ' +
           'Required: w, h (width/height in grid units). ' +
-          'Choose w/h based on content length; 4x3 is the standard sticky size. ' +
+          'Choose w/h based on content length; use 2.5x1 for a compact label and 4x2 for a standard note. ' +
           'Optional: zIndex, rotation.',
         properties: {
           x: { type: 'number' },

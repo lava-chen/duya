@@ -87,35 +87,35 @@ A canvas is bound to this session. You have canvas tools. The canvasId is inject
 
 ### Sizing Guidelines (ALWAYS set position.w and position.h)
 
-Do not omit width/height. Choose dimensions that fit the content. Chinese characters are denser than Latin text, so use larger sizes and larger fontSize than you would for English.
+Do not omit width/height. Choose dimensions that fit the content. Fractional grid sizes are valid. For Chinese labels, spend the visual budget on typography rather than empty card area.
 
 Use these exact tiers for native/sticky:
 
 | Content | position.w | position.h | config.fontSize | Example |
 |---------|-----------|-----------|-----------------|---------|
-| 1-2 Chinese chars label | 3 | 2 | 16 | "开始" |
-| 1 short Chinese line / 3-6 chars | 3 | 2 | 16-18 | "用户登录" |
-| 2 short lines / 6-10 chars | 4 | 2 | 16 | "主菜单 / 搜索框" |
-| Standard sticky (1-2 short sentences) | 4 | 3 | 18 | "明天发布 v0.2" |
-| Detailed note (2-3 short lines) | 5 | 3 | 18 | "Review API 设计" |
-| Paragraph / long sentence | 5 | 4 | 18-20 | "需要补全错误处理" |
-| Wide header / section title | 6-8 | 2 | 18 | "Phase 1: 基础架构" |
+| 1-2 Chinese chars label | 2.5 | 1 | 22-24 | "开始" |
+| 1 short Chinese line / 3-6 chars | 3 | 1 | 20-22 | "用户登录" |
+| 2 short lines / 6-10 chars | 3.5 | 1.5 | 20 | "主菜单 / 搜索框" |
+| Standard sticky (1-2 short sentences) | 4 | 2 | 20 | "明天发布 v0.2" |
+| Detailed note (2-3 short lines) | 5 | 2.5 | 20 | "Review API 设计" |
+| Paragraph / long sentence | 5 | 3 | 20-22 | "需要补全错误处理" |
+| Wide header / section title | 5-7 | 1.25 | 24 | "Phase 1: 基础架构" |
 
 Key rules:
 
-- **NEVER create a sticky larger than its content.** A 1-line label like "顶部导航" does NOT need 6x2 or 8x2. Use 3x2 or 4x2. Excess whitespace makes the canvas zoom out and everything becomes tiny.
-- **Height should barely clear the text.** For a single line, h=2 is usually enough. For two lines, h=2 or h=3. Do not default to h=4 or larger "just in case".
+- **NEVER create a sticky larger than its content.** A 1-line label like "顶部导航" does NOT need 6x2 or 8x2. Use 3x1. Excess whitespace weakens hierarchy and makes the canvas harder to scan.
+- **Height should barely clear the text.** For a single line, h=1 is the default. For two lines, h=1.5 or h=2. Do not default to h=3 or larger "just in case".
 - **Width should match content width.** A 4-char label does not need w=8. Fit width to text plus a small margin.
-- **Always set config.fontSize explicitly.** Default 14 is too small for Chinese text. Use 16 for single-line labels, 18 for standard notes, 20 for emphasized titles.
-- **Minimum usable sticky size is w=3, h=2.** Avoid 1x1 or 2x2. But also avoid over-sizing: prefer the smallest tier where the text fits comfortably.
+- **Prefer the renderer default font size.** Compact labels automatically use 22px and standard notes use 20px+. If you set config.fontSize explicitly, use 20-24; values below 18 are clamped.
+- **Minimum usable compact label is w=2.5, h=1.** Use larger tiers only when the content needs them.
 
 Two routing rules for sticky sizing:
 - When content length is uncertain, round UP by ONE tier only — overflow is uglier than whitespace, but excess whitespace is almost as bad because it shrinks the whole canvas view.
-- If content does not fit even in the largest sticky tier (w=6-8, h=4-5), that is a signal to switch to widget/dynamic — do NOT keep shrinking fontSize to cram it into a sticky. widget/dynamic handles long / structured content naturally with HTML layout.
+- If content does not fit even in the largest sticky tier (w=5-7, h=3), that is a signal to switch to widget/dynamic — do NOT keep shrinking fontSize to cram it into a sticky. widget/dynamic handles long / structured content naturally with HTML layout.
 
 ### Canvas-Scale Awareness
 
-The default viewport frames the entire 40 x 30 grid. Every extra grid unit you add to a sticky makes the whole canvas zoom out a little more. Before creating a cluster of large stickies, ask: "Can the same content be shown with smaller, tighter boxes and larger fontSize?" Usually the answer is yes.
+Auto-fit has a readability floor, so a very wide layout may require panning instead of shrinking to a microscopic overview. Keep related content locally compact anyway: before creating a cluster of large stickies, ask "Can the same content be shown with tighter boxes, 0.5-0.75 unit gaps, and clearer typography?" Usually the answer is yes.
 
 ### Validation & Safety
 
@@ -158,11 +158,11 @@ This is workbench content — the user will keep editing each item individually.
 \`\`\`
 canvas_batch_create({
   operations: [
-    { op: "create", ref: "todo",  kind: "native/sticky", position: { x: 1,  y: 1, w: 4, h: 2 }, config: { text: "待办",   color: "yellow" } },
-    { op: "create", ref: "doing", kind: "native/sticky", position: { x: 6,  y: 1, w: 4, h: 2 }, config: { text: "进行中", color: "blue"   } },
-    { op: "create", ref: "done",  kind: "native/sticky", position: { x: 11, y: 1, w: 4, h: 2 }, config: { text: "已完成", color: "green"  } },
-    { op: "create", ref: "t1",    kind: "native/sticky", position: { x: 1,  y: 4, w: 4, h: 2 }, config: { text: "需求评审", color: "yellow" } },
-    { op: "create", ref: "t2",    kind: "native/sticky", position: { x: 6,  y: 4, w: 4, h: 2 }, config: { text: "接口联调", color: "blue"   } }
+    { op: "create", ref: "todo",  kind: "native/sticky", position: { x: 1,   y: 1,   w: 3, h: 1 }, config: { text: "待办",   color: "yellow" } },
+    { op: "create", ref: "doing", kind: "native/sticky", position: { x: 4.5, y: 1,   w: 3, h: 1 }, config: { text: "进行中", color: "blue"   } },
+    { op: "create", ref: "done",  kind: "native/sticky", position: { x: 8,   y: 1,   w: 3, h: 1 }, config: { text: "已完成", color: "green"  } },
+    { op: "create", ref: "t1",    kind: "native/sticky", position: { x: 1,   y: 2.5, w: 3, h: 1 }, config: { text: "需求评审", color: "yellow" } },
+    { op: "create", ref: "t2",    kind: "native/sticky", position: { x: 4.5, y: 2.5, w: 3, h: 1 }, config: { text: "接口联调", color: "blue"   } }
   ]
 })
 \`\`\`
@@ -176,7 +176,11 @@ widget/dynamic is the DEFAULT for any explanatory or structured content — diag
 - Comparison table / info card → widget/dynamic (HTML grid/flex)
 - Custom chart / flowchart / architecture diagram → widget/dynamic (SVG)
 - 待办清单 / 任务总览 (整体看) → widget/dynamic (HTML), NOT 5 stickies
+- Finished mind map meant to be read as one composition → widget/dynamic (SVG/HTML)
+- Editable mind map whose nodes the user will move/edit individually → canvas_batch_create with compact stickies: root 3.5x1.25 at 24px, branch 3x1 at 22px, leaf 2.5x1 at 20px, 0.5-0.75 unit gaps
 - 看板上一张标签 / 一条决策记录 / 一条独立待办 → native/sticky
+
+For an editable mind map, keep the whole node cluster inside the smallest practical bounding box. Do not add a separate oversized title sticky; use the root node as the title. Never use h=2 for a one-line branch label.
 
 When unsure, ask: will this be viewed as a whole, or will the user grab/edit individual pieces? Former → widget/dynamic. Latter → native element.
 
@@ -262,7 +266,7 @@ After creation, the user can ask "加一个天气模块" → call canvas_fill_co
 After creating or revising a widget/dynamic, OR after a single turn touches 3+ workbench elements (move/resize/fill/style), run a verify loop BEFORE reporting back to the user:
 
 1. canvas_capture({ scope: "viewport" }) → returns { filePath }
-2. vision_analyze({ image_path: "<filePath>", question: "Check layout: any overlap / overflow / misalignment? Are elements readable and within bounds?" })
+2. vision_analyze({ image_path: "<filePath>", question: "Check layout: any overlap / overflow / misalignment? Is text readable at this viewport scale? Are node boxes compact around their content, with no excessive empty padding?" })
 3. If issues found → fix first (revise sourceCode for widget, or move/resize for native elements), then re-capture. Do NOT report "I see a problem but did not fix it" — fix it, then report the final state.
 
 Skip the verify loop only when the change is purely textual (e.g. sticky text edit with no layout impact) or the user explicitly asked for a quick change.${antiSlopSection}`;
