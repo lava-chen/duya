@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { usePanel } from "@/hooks/usePanel";
 import type { PageTab } from "./registry";
+import { AgentBrowserTab } from "./AgentBrowserTab";
 
 type WebviewElement = HTMLElement & {
   canGoBack(): boolean;
@@ -280,6 +281,23 @@ function dispatchBrowserScreenshot(dataUrl: string, pageUrl: string, title: stri
 
 export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
   const { updateTabTitle, updateTabFavicon } = usePanel();
+
+  // Agent-driven browser tab: render the AgentBrowserTab component which
+  // auto-registers its webview with the daemon for CDP command execution.
+  const agentSessionId = tab?.params?.kind === "agent"
+    ? typeof tab.params.sessionId === "string" ? tab.params.sessionId : undefined
+    : undefined;
+
+  if (agentSessionId) {
+    return (
+      <AgentBrowserTab
+        sessionId={agentSessionId}
+        onTitleChange={(title) => {
+          if (tab?.id) updateTabTitle(tab.id, title);
+        }}
+      />
+    );
+  }
 
   const initialUrl = useMemo(() => {
     const raw = tab?.params?.url;

@@ -149,6 +149,12 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       return `office::${(params?.filePath as string | undefined) ?? "__picker__"}`;
     case "preview":
       return `preview::${(params?.filePath as string | undefined) ?? "__picker__"}`;
+    case "browser":
+      // Agent tabs dedup by sessionId; manual tabs dedup by url.
+      if (params?.kind === "agent") {
+        return `browser::agent::${(params?.sessionId as string | undefined) ?? ""}`;
+      }
+      return `browser::${(params?.url as string | undefined) ?? ""}`;
     default:
       return `${pageId}::${JSON.stringify(params ?? {})}`;
   }
@@ -330,6 +336,20 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     return () => {
       window.removeEventListener("duya:open-browser-panel", handleOpenBrowserPanel as EventListener);
     };
+  }, [openOrActivatePage]);
+
+  // Listen for agent-driven browser tab requests from the daemon.
+  // When the agent issues a browser command but no webview is registered,
+  // the daemon sends 'browser:open-agent-tab' IPC to trigger tab creation.
+  useEffect(() => {
+    const cleanup = window.electronAPI?.browserWebview?.onOpenAgentTab((sessionId: string) => {
+      openOrActivatePage("browser", {
+        kind: "agent",
+        sessionId,
+        title: "Agent Browser",
+      });
+    });
+    return () => cleanup?.();
   }, [openOrActivatePage]);
 
   useEffect(() => {
