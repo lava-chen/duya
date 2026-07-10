@@ -37,6 +37,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Setup Python (macOS native modules)
+        if: matrix.os == 'macos-latest'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Setup MSVC toolchain (Windows native modules)
         if: matrix.os == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
@@ -45,15 +51,20 @@ jobs:
         run: npm ci
 
       - name: Build workspace packages
-        # Build order matters on a clean checkout (no dist/):
-        # 1. cli — agent/gateway import @duya/cli/contract.
-        # 2. conductor — agent imports @duya/conductor/elements/*.
-        # 3. agent — depends on both cli and conductor dist.
-        # 4. gateway — depends on cli dist.
-        # build:agent already runs build:cli + build:conductor internally,
-        # but in the wrong order (agent before conductor), so we build
-        # conductor explicitly first.
-        run: npm run build:cli && npm run build:conductor && npm run build:agent && npm run build:gateway
+        # Two-pass build to break the @duya/agent ↔ @duya/conductor circular
+        # dependency on a clean checkout (no dist/):
+        #   Pass 1: build:conductor may emit TS2307 for @duya/agent/* (agent
+        #           dist doesn't exist yet), but tsc still emits .d.ts with
+        #           `any` fallbacks. Errors are suppressed via `|| echo`.
+        #           Pass 1 dist may contain stale nested files from tsc's
+        #           Bundler fallback to agent source — these are cleaned.
+        #   Agent:  builds against conductor's pass-1 .d.ts (resolves via
+        #           node_modules symlink + ambient shim).
+        #   Clean:  remove conductor dist to discard pass-1 junk output.
+        #   Pass 2: rebuild conductor — agent dist now exists, all types
+        #           resolve correctly, .d.ts is regenerated with real types.
+        # build:agent already runs build:cli + the two-pass conductor + agent.
+        run: npm run build:agent && npm run build:gateway
 
       - name: Build application
         env:
@@ -83,7 +94,23 @@ jobs:
       - name: Build and Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing + notarization. When these secrets are absent
+          # the build produces an unsigned (ad-hoc) app; when present,
+          # after-sign.js notarizes the app automatically. Add these as
+          # repository secrets to enable signed macOS releases.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx electron-builder --config electron-builder.yml --publish always
+
+      - name: Verify packaged artifacts
+        # Runs after the build to confirm critical files landed inside the
+        # packaged app (catches afterPack path bugs that only manifest on
+        # macOS where resources live inside the .app bundle).
+        if: success() || failure()
+        run: node scripts/verify-packaged-parity.mjs
 
       - name: Upload artifacts (fallback)
         if: failure()

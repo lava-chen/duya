@@ -71,16 +71,13 @@ extraResources:
   - from: node_modules/node-pty/
     to: node-pty/
     filter: ["**/*"]
-  # Document parser sidecar (OPTIONAL — only present when legacy .doc
-  # fallback is needed). Post plan 106, the main path uses NodeFileParser
-  # in-process. To ship the sidecar, run `npm run build:docparser`
-  # before `electron:pack`. If the source directory is absent, electron-
-  # builder emits a warning and continues.
-  - from: build/document-parser/
-    to: document-parser/
-    filter: ["**/*"]
+  # Document parser sidecar is Windows-only (document-parser.exe is a
+  # PyInstaller Windows binary). It is declared under win.extraResources
+  # below to avoid shipping ~hundreds of MB of useless Windows binaries
+  # inside the macOS .app and Linux AppImage.
 
 afterPack: scripts/after-pack.js
+afterSign: scripts/after-sign.js
 
 # Native modules need external files available outside app.asar.
 asarUnpack:
@@ -96,6 +93,9 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
+  # Keep false here so local builds without Apple credentials succeed.
+  # Notarization is performed conditionally by scripts/after-sign.js when
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are set in CI.
   notarize: false
   target:
     - target: dmg
@@ -103,11 +103,30 @@ mac:
     - target: zip
       arch: [x64, arm64]
 
+dmg:
+  # DMG window with the standard "drag to Applications" affordance.
+  title: "${productName} ${version}"
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
 win:
   icon: assets/windows/icon.ico
   target:
     - target: nsis
       arch: [x64]
+  # Windows-only document parser sidecar (OPTIONAL). Only present when
+  # build/document-parser/ has been populated by `npm run build:docparser`.
+  # Kept here (not in the global extraResources) so macOS/Linux builds do
+  # not ship the Windows .exe/.dll/.pyd payload.
+  extraResources:
+    - from: build/document-parser/
+      to: document-parser/
+      filter: ["**/*"]
 
 nsis:
   oneClick: false

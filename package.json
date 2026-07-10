@@ -12,7 +12,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:web": "vite build",
-    "build:agent": "npm run build:cli && npm run build:conductor && npm run -w @duya/agent build",
+    "build:agent": "npm run build:cli && (npm run build:conductor || echo conductor-pass1-errors-ignored) && npm run -w @duya/agent build && npm run -w @duya/conductor clean && npm run build:conductor",
     "build:cli": "npm run -w @duya/cli build",
     "build:conductor": "npm run -w @duya/conductor build",
     "build:gateway": "npm run -w @duya/gateway build",

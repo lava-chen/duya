@@ -28,7 +28,8 @@
     }
   },
   "scripts": {
-    "build": "tsc --incremental",
+    "build": "tsc",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit"
   },

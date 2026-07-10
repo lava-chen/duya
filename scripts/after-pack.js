@@ -42,6 +42,30 @@ module.exports = async function afterPack(context) {
 
   const projectDir = process.cwd();
 
+  // Resolve the packaged resources directory in a platform-aware way.
+  // On Windows/Linux electron-builder places resources at <appOutDir>/resources
+  // (lowercase). On macOS the app is bundled as DUYA.app and resources live at
+  // <appOutDir>/DUYA.app/Contents/Resources (capital R, inside the .app bundle).
+  // Using the lowercase path on mac would write outside the .app, leaving the
+  // native module inside the bundle stale.
+  const productName = context.packager.appInfo.productName || 'DUYA';
+  function getResourcesDir() {
+    if (platform === 'mac' || platform === 'darwin') {
+      return path.join(appOutDir, `${productName}.app`, 'Contents', 'Resources');
+    }
+    return path.join(appOutDir, 'resources');
+  }
+  const RESOURCES_DIR = getResourcesDir();
+  console.log(`[afterPack] Resources directory: ${RESOURCES_DIR}`);
+  // Ensure the resources directory exists before any file operation.
+  if (!fs.existsSync(RESOURCES_DIR)) {
+    throw new Error(
+      `[afterPack] FATAL: Resources directory does not exist at ${RESOURCES_DIR}. ` +
+      `platform=${platform}, appOutDir=${appOutDir}. ` +
+      'This usually means the platform-aware path resolver is wrong.'
+    );
+  }
+
   // Step 1: Ensure better-sqlite3 is available for Electron ABI
   console.log('[afterPack] Step 1: Ensuring better-sqlite3 for Electron ABI...');
 
@@ -60,7 +84,7 @@ module.exports = async function afterPack(context) {
       }
     }
   }
-  findPrebuiltNode(path.join(appOutDir, 'resources'));
+  findPrebuiltNode(RESOURCES_DIR);
 
   if (foundPrebuilt) {
     console.log('[afterPack] Prebuilt better-sqlite3 binary already exists, skipping rebuild');
@@ -114,7 +138,7 @@ module.exports = async function afterPack(context) {
     if (fs.existsSync(rebuiltSource)) {
       console.log(`[afterPack] Rebuilt .node file: ${rebuiltSource}`);
 
-      const targetDir = path.join(appOutDir, 'resources', 'better-sqlite3', 'build', 'Release');
+      const targetDir = path.join(RESOURCES_DIR, 'better-sqlite3', 'build', 'Release');
       if (!fs.existsSync(targetDir)) {
         fs.mkdirSync(targetDir, { recursive: true });
       }
@@ -133,7 +157,7 @@ module.exports = async function afterPack(context) {
   // AGENTS.md pre-release checklist requires:
   //   release/win-unpacked/resources/better-sqlite3/build/Release/better_sqlite3.node
   const packagedNativeModule = path.join(
-    appOutDir, 'resources', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'
+    RESOURCES_DIR, 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'
   );
   if (!fs.existsSync(packagedNativeModule)) {
     throw new Error(
@@ -146,7 +170,7 @@ module.exports = async function afterPack(context) {
   // Step 2: Copy bindings dependencies to extraResources better-sqlite3
   // The better-sqlite3 package needs bindings to load the native addon
   console.log('[afterPack] Step 2: Setting up bindings for extraResources better-sqlite3...');
-  const extraResourcesBetterSqlite3 = path.join(appOutDir, 'resources', 'better-sqlite3');
+  const extraResourcesBetterSqlite3 = path.join(RESOURCES_DIR, 'better-sqlite3');
   const extraResourcesBindings = path.join(extraResourcesBetterSqlite3, 'node_modules', 'bindings');
   const extraResourcesFileUriToPath = path.join(extraResourcesBetterSqlite3, 'node_modules', 'file-uri-to-path');
 
@@ -175,7 +199,7 @@ module.exports = async function afterPack(context) {
 
   // Step 3: Verify agent-bundle exists (esbuild should have inlined all dependencies)
   console.log('[afterPack] Step 3: Verifying agent-bundle...');
-  const agentBundlePath = path.join(appOutDir, 'resources', 'agent-bundle', 'agent-process-entry.js');
+  const agentBundlePath = path.join(RESOURCES_DIR, 'agent-bundle', 'agent-process-entry.js');
   if (!fs.existsSync(agentBundlePath)) {
     // Diagnose: was the source bundle present in the workspace at all?
     // extraResources copies from packages/agent/bundle/ → release/<platform>/resources/agent-bundle/.
@@ -192,7 +216,7 @@ module.exports = async function afterPack(context) {
       sourceDiagnostic = `directory exists, entry missing — dir contents: ${fs.readdirSync(sourceBundleDir).join(', ')}`;
     }
     let packagedResourcesDiagnostic = 'missing';
-    const packagedResourcesDir = path.join(appOutDir, 'resources');
+    const packagedResourcesDir = RESOURCES_DIR;
     if (fs.existsSync(packagedResourcesDir)) {
       packagedResourcesDiagnostic = `present — subdirs: ${fs.readdirSync(packagedResourcesDir).join(', ')}`;
     }
@@ -208,7 +232,7 @@ module.exports = async function afterPack(context) {
 
   // Verify BashWorker.js exists — AGENTS.md pre-release checklist requires:
   //   release/win-unpacked/resources/agent-bundle/BashTool/BashWorker.js
-  const bashWorkerPath = path.join(appOutDir, 'resources', 'agent-bundle', 'BashTool', 'BashWorker.js');
+  const bashWorkerPath = path.join(RESOURCES_DIR, 'agent-bundle', 'BashTool', 'BashWorker.js');
   if (!fs.existsSync(bashWorkerPath)) {
     throw new Error(
       `[afterPack] FATAL: BashWorker.js not found at ${bashWorkerPath}. ` +
@@ -221,7 +245,7 @@ module.exports = async function afterPack(context) {
   // Step 4: Copy playwright package to agent-bundle node_modules
   // Playwright is marked as external in esbuild config, so it needs to be available at runtime
   console.log('[afterPack] Step 4: Copying playwright to agent-bundle...');
-  const agentBundleNodeModules = path.join(appOutDir, 'resources', 'agent-bundle', 'node_modules');
+  const agentBundleNodeModules = path.join(RESOURCES_DIR, 'agent-bundle', 'node_modules');
   const playwrightSource = path.join(projectDir, 'node_modules', 'playwright');
   const playwrightCoreSource = path.join(projectDir, 'node_modules', 'playwright-core');
 
@@ -249,7 +273,7 @@ module.exports = async function afterPack(context) {
   // legacy .doc parsing, but it is no longer built or shipped by
   // default. We only verify presence here, never copy.
   console.log('[afterPack] Step 5: Checking document-parser resources (optional)...');
-  const documentParserTarget = path.join(appOutDir, 'resources', 'document-parser');
+  const documentParserTarget = path.join(RESOURCES_DIR, 'document-parser');
   if (fs.existsSync(documentParserTarget)) {
     console.log('[afterPack] document-parser resources present (legacy .doc fallback shipped)');
   } else {
