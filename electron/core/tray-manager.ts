@@ -28,7 +28,12 @@ export function createTray(): void {
   if (fs.existsSync(iconPath)) {
     trayIcon = nativeImage.createFromPath(iconPath);
     if (process.platform === 'darwin') {
+      // macOS menu bar icons must be template images (black + alpha) so the
+      // system can recolor them for light/dark mode. Marking a colored PNG
+      // as template makes the system treat it as a silhouette; for correct
+      // rendering the asset should be a black-on-transparent PNG.
       trayIcon = trayIcon.resize({ width: 16, height: 16 });
+      trayIcon.setTemplateImage(true);
     }
   } else {
     const appIconPath = getIconPath();
@@ -36,6 +41,7 @@ export function createTray(): void {
       trayIcon = nativeImage.createFromPath(appIconPath);
       if (process.platform === 'darwin') {
         trayIcon = trayIcon.resize({ width: 16, height: 16 });
+        trayIcon.setTemplateImage(true);
       } else if (process.platform === 'win32') {
         trayIcon = trayIcon.resize({ width: 16, height: 16 });
       }

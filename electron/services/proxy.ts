@@ -34,6 +34,51 @@ export function detectWindowsSystemProxy(): string | undefined {
   return undefined;
 }
 
+/**
+ * Detect the system proxy configured in macOS System Settings
+ * (Network > Proxies). Uses `scutil --proxy`, the documented way to read
+ * the resolved system proxy configuration on macOS. Returns an
+ * `http://host:port` URL when an HTTP/HTTPS proxy is enabled, otherwise
+ * undefined.
+ */
+export function detectMacOSSystemProxy(): string | undefined {
+  if (process.platform !== 'darwin') {
+    return undefined;
+  }
+  try {
+    const { execSync } = require('child_process');
+    const output = execSync('scutil --proxy', { encoding: 'utf-8', timeout: 3000 });
+
+    // scutil --proxy emits a dictionary like:
+    //   HTTPEnable : 1
+    //   HTTPPort : 8080
+    //   HTTPProxy : 127.0.0.1
+    //   HTTPSEnable : 1
+    //   HTTPSPort : 8080
+    //   HTTPSProxy : 127.0.0.1
+    // Prefer the HTTPS proxy when enabled, then fall back to HTTP.
+    const get = (key: string): string | undefined => {
+      const m = output.match(new RegExp(`${key}\\s*:\\s*(\\S+)`));
+      return m ? m[1] : undefined;
+    };
+    const httpsEnabled = get('HTTPSEnable') === '1';
+    if (httpsEnabled) {
+      const host = get('HTTPSProxy');
+      const port = get('HTTPSPort');
+      if (host) return `http://${host}${port ? ':' + port : ''}`;
+    }
+    const httpEnabled = get('HTTPEnable') === '1';
+    if (httpEnabled) {
+      const host = get('HTTPProxy');
+      const port = get('HTTPPort');
+      if (host) return `http://${host}${port ? ':' + port : ''}`;
+    }
+  } catch {
+    // Ignore scutil errors (e.g. non-interactive session without config)
+  }
+  return undefined;
+}
+
 export function detectProxy(): string | undefined {
   const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy
     || process.env.HTTP_PROXY || process.env.http_proxy
@@ -50,7 +95,7 @@ export function detectProxy(): string | undefined {
     // Database not available, ignore
   }
 
-  return detectWindowsSystemProxy();
+  return detectWindowsSystemProxy() || detectMacOSSystemProxy();
 }
 
 export function proxyRequest(

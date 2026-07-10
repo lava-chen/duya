@@ -55,6 +55,7 @@ import { isDev, isPreviewMode, DEBUG_IPC, debugLog, setupDevMode, setupTestMode,
 import { getMainWindow, getIsQuitting, setIsQuitting, getIconPath, getRendererUrl, createWindow } from './core/window-manager';
 import { createSafeModeWindow, getSafeModeWindow } from './core/safe-mode';
 import { createTray } from './core/tray-manager';
+import { setupApplicationMenu } from './core/menu-manager';
 import { getIsShuttingDown, performGracefulShutdown } from './core/graceful-shutdown';
 import { parseSkillFrontmatter, parseAllowedTools } from './utils/skill-parser';
 import { wasLaunchedAsHidden, setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from './services/auto-start';
@@ -72,6 +73,27 @@ initGlobalErrorHandlers();
 
 const gotTheLock = acquireSingleInstanceLock();
 
+// macOS file-association / Dock drag-and-drop handling.
+// `open-file` fires when the user drops a file onto the Dock icon or
+// double-clicks an associated file in Finder. Without a handler Electron
+// silently ignores the file. `will-finish-launching` is the documented
+// moment to register the listener (it fires before ready). We queue paths
+// and forward them to the renderer once the main window is available.
+const pendingOpenFiles: string[] = [];
+app.on('will-finish-launching', () => {
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    const mainWindow = getMainWindow();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:open-file', filePath);
+    } else {
+      // Window not ready yet (e.g. app launched by dropping a file on the
+      // Dock icon). Queue and flush after the window is created.
+      pendingOpenFiles.push(filePath);
+    }
+  });
+});
+
 app.on('second-instance', () => {
   const mainWindow = getMainWindow();
   if (mainWindow) {
@@ -87,6 +109,12 @@ if (gotTheLock) {
     if (process.platform === 'win32') {
       app.setAppUserModelId('com.duya.app');
     }
+
+    // Set the application menu early so the macOS menu bar shows "DUYA"
+    // (not "Electron") and standard shortcuts (Cmd+Q/W/M, Edit copy/paste)
+    // work from the first frame. Must run after app.name is set so the
+    // macOS app-menu label reads "DUYA".
+    setupApplicationMenu();
 
     logEnvironmentDiagnostic();
 
@@ -711,6 +739,15 @@ if (gotTheLock) {
     await createWindow(handleConductorMessage);
     recapService.init(getMainWindow()!);
     createTray();
+
+    // Flush any files queued before the window was ready (macOS open-file
+    // events that arrived during cold launch from Dock/Finder).
+    const mainWindow = getMainWindow();
+    if (mainWindow && pendingOpenFiles.length > 0) {
+      for (const f of pendingOpenFiles.splice(0)) {
+        mainWindow.webContents.send('system:open-file', f);
+      }
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

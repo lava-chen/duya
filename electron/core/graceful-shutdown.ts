@@ -1,4 +1,3 @@
-import { app, BrowserWindow } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
 import { stopAgentServer } from '../agents/agent-server-lifecycle';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
@@ -144,55 +143,4 @@ export async function performGracefulShutdown(): Promise<void> {
   }
 
   logger.info('Graceful shutdown complete', undefined, 'Main');
-}
-
-export function setupShutdownHandlers(): void {
-  const logger = getLogger();
-
-  app.on('window-all-closed', async () => {
-    if (getIsShuttingDown()) return;
-
-    const SHUTDOWN_TIMEOUT_MS = 10000;
-    const shutdownPromise = performGracefulShutdown();
-
-    const forceQuitTimeout = setTimeout(() => {
-      logger.warn('window-all-closed shutdown timeout exceeded, forcing quit', undefined, 'Main');
-      app.exit(0);
-    }, SHUTDOWN_TIMEOUT_MS);
-
-    try {
-      await shutdownPromise;
-      clearTimeout(forceQuitTimeout);
-    } catch (err) {
-      logger.error('Graceful shutdown failed in window-all-closed', err instanceof Error ? err : new Error(String(err)), undefined, 'Main');
-      clearTimeout(forceQuitTimeout);
-      app.exit(1);
-    }
-
-    if (process.platform !== 'darwin') {
-      app.quit();
-    }
-  });
-
-  app.on('before-quit', (event) => {
-    if (!isShuttingDown) {
-      event.preventDefault();
-      const SHUTDOWN_TIMEOUT_MS = 10000;
-      const shutdownPromise = performGracefulShutdown();
-
-      const forceQuitTimeout = setTimeout(() => {
-        logger.warn('Global shutdown timeout exceeded, forcing quit', undefined, 'Main');
-        app.exit(0);
-      }, SHUTDOWN_TIMEOUT_MS);
-
-      shutdownPromise.then(() => {
-        clearTimeout(forceQuitTimeout);
-        app.quit();
-      }).catch((err) => {
-        logger.error('Graceful shutdown failed', err instanceof Error ? err : new Error(String(err)), undefined, 'Main');
-        clearTimeout(forceQuitTimeout);
-        app.exit(1);
-      });
-    }
-  });
 }
