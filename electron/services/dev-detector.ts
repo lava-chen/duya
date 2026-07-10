@@ -8,17 +8,35 @@ const logger = initLogger({ level: 'WARN' });
 const isDev = !app.isPackaged;
 
 export function getNodeExecutable(): string {
-  const possiblePaths = [
-    path.join(process.env.APPDATA || '', '..', 'Local', 'nvm', 'v22.17.1', 'node.exe'),
-    path.join(process.env.APPDATA || '', 'nvm4w', 'v22.17.1', 'node.exe'),
-    path.join('C:\\Program Files\\nodejs\\node.exe'),
-    path.join('C:\\Program Files (x86)\\nodejs\\node.exe'),
-  ];
+  // Platform-specific candidate lists. On Windows we look for node.exe in
+  // nvm-windows / Program Files; on macOS we look in Homebrew (Intel + ARM)
+  // and nvm locations. The binary name also differs (node.exe vs node).
+  const isMac = process.platform === 'darwin';
+  const isWin = process.platform === 'win32';
+  const exeName = isWin ? 'node.exe' : 'node';
 
+  const possiblePaths: string[] = [];
+  if (isWin) {
+    possiblePaths.push(
+      path.join(process.env.APPDATA || '', '..', 'Local', 'nvm', 'v22.17.1', 'node.exe'),
+      path.join(process.env.APPDATA || '', 'nvm4w', 'v22.17.1', 'node.exe'),
+      path.join('C:\\Program Files\\nodejs\\node.exe'),
+      path.join('C:\\Program Files (x86)\\nodejs\\node.exe'),
+    );
+  } else if (isMac) {
+    // Homebrew Apple Silicon, Homebrew Intel, then common nvm default.
+    possiblePaths.push(
+      '/opt/homebrew/bin/node',
+      '/usr/local/bin/node',
+      path.join(process.env.HOME || '', '.nvm', 'versions', 'node', 'v22.17.1', 'bin', 'node'),
+    );
+  }
+
+  // Search PATH for the platform-appropriate binary name.
   const pathEnv = process.env.PATH || '';
   const pathDirs = pathEnv.split(path.delimiter);
   for (const dir of pathDirs) {
-    const nodePath = path.join(dir, 'node.exe');
+    const nodePath = path.join(dir, exeName);
     if (fs.existsSync(nodePath)) {
       return nodePath;
     }
