@@ -11,9 +11,9 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { usePanel } from "@/hooks/usePanel";
+import { useSettings } from "@/hooks/useSettings";
 import type { PageTab } from "./registry";
 import { AgentBrowserTab } from "./AgentBrowserTab";
-import { BrowserBackendToggle } from "./BrowserBackendToggle";
 
 type WebviewElement = HTMLElement & {
   canGoBack(): boolean;
@@ -43,7 +43,7 @@ interface BrowserElementSnapshot {
 }
 
 const EMPTY_URL = "about:blank";
-const DEFAULT_URL = "http://localhost:3000/";
+const FALLBACK_HOME_URL = "https://www.google.com";
 const BROWSER_PARTITION = "persist:duya-local-browser";
 
 function normalizeBrowserAddress(raw: string): string {
@@ -300,10 +300,16 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     );
   }
 
+  const { settings } = useSettings();
+
   const initialUrl = useMemo(() => {
     const raw = tab?.params?.url;
-    return typeof raw === "string" && raw.trim() ? normalizeBrowserAddress(raw) : DEFAULT_URL;
-  }, [tab?.params]);
+    if (typeof raw === "string" && raw.trim()) {
+      return normalizeBrowserAddress(raw);
+    }
+    const homeUrl = settings.browserHomeUrl?.trim();
+    return homeUrl ? normalizeBrowserAddress(homeUrl) : FALLBACK_HOME_URL;
+  }, [tab?.params, settings.browserHomeUrl]);
 
   const webviewRef = useRef<WebviewElement | null>(null);
   const [addressValue, setAddressValue] = useState(initialUrl);
@@ -483,7 +489,6 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
         >
           <Camera size={14} />
         </button>
-        <BrowserBackendToggle />
       </form>
 
       {(status || error) && (

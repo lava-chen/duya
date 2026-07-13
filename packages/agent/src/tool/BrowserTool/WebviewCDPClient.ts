@@ -41,13 +41,28 @@ export class WebviewNotReady extends Error {
   }
 }
 
+interface FrameTree {
+  frame?: { id: string; url: string; name?: string };
+  childFrames?: FrameTree[];
+}
+
+export interface WebviewCDPClientOptions {
+  /** Keep parallel investigation tabs from repeatedly stealing the sidebar focus. */
+  background?: boolean;
+}
+
 export class WebviewCDPClient extends EventEmitter implements ICDPClient {
   private sessionId: string;
   private connected = false;
   private lastUrl = '';
   private lastTitle = '';
+  private activeTabId = 'tab_0';
+  private tabSequence = 0;
+  private readonly tabState = new Map<string, { url: string; title: string }>([
+    ['tab_0', { url: 'about:blank', title: '' }],
+  ]);
 
-  constructor(sessionId: string) {
+  constructor(sessionId: string, private readonly options: WebviewCDPClientOptions = {}) {
     super();
     this.sessionId = sessionId;
   }
@@ -86,6 +101,7 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
     await this.send('Page.enable');
     await this.send('Page.navigate', { url });
     this.lastUrl = url;
+    this.tabState.set(this.activeTabId, { url, title: '' });
     await this._waitForPageLoad();
   }
 
@@ -150,12 +166,23 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
 
       await this.send('DOM.scrollIntoViewIfNeeded', { nodeId }).catch(() => {});
       const boxResult = await this.send('DOM.getBoxModel', { nodeId }) as { model?: { content: number[] } };
-      if (boxResult?.model?.content) {
-        const [x1, y1, x2, y2] = boxResult.model.content;
-        const clip = { x: Math.round(x1), y: Math.round(y1), width: Math.round(x2 - x1), height: Math.round(y2 - y1), scale: 1 };
-        const screenshotResult = await this.send('Page.captureScreenshot', { format: 'png', clip }) as { data?: string };
-        if (screenshotResult?.data) return screenshotResult.data;
+      const contentQuad = boxResult?.model?.content;
+      if (!contentQuad || contentQuad.length < 8) {
+        throw new Error(`Element has no rendered box: ${selector}`);
       }
+      const xValues = contentQuad.filter((_, index) => index % 2 === 0);
+      const yValues = contentQuad.filter((_, index) => index % 2 === 1);
+      const x = Math.floor(Math.min(...xValues));
+      const y = Math.floor(Math.min(...yValues));
+      const width = Math.ceil(Math.max(...xValues) - x);
+      const height = Math.ceil(Math.max(...yValues) - y);
+      if (width < 1 || height < 1) {
+        throw new Error(`Element has no visible size: ${selector}. Select a visible child or omit selector for a page screenshot.`);
+      }
+      const clip = { x, y, width, height, scale: 1 };
+      const screenshotResult = await this.send('Page.captureScreenshot', { format: 'png', clip }) as { data?: string };
+      if (screenshotResult?.data) return screenshotResult.data;
+      throw new Error(`Element screenshot failed: ${selector}`);
     }
 
     const params: Record<string, unknown> = { format: 'png' };
@@ -185,39 +212,16 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
   }
 
   async click(selector: string): Promise<void> {
-    const elSelector = this._resolveSelector(selector);
-    // Try direct JS click first
-    const clicked = await this.evaluate(`
-      (() => {
-        const el = document.querySelector('${elSelector.replace(/'/g, "\\'")}');
-        if (!el) return false;
-        el.click();
-        return true;
-      })()
-    `);
-    if (clicked) return;
-
-    // Coordinate-based fallback
-    const box = await this.evaluate(`
-      (() => {
-        const el = document.querySelector('${elSelector.replace(/'/g, "\\'")}');
-        if (!el) return null;
-        const rect = el.getBoundingClientRect();
-        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-      })()
-    `) as { x: number; y: number } | null;
-
-    if (!box) throw new Error(`Element not found: ${selector}`);
-
-    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box.x, y: box.y, button: 'left', clickCount: 1 });
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x, y: box.y, button: 'left', clickCount: 1 });
+    const point = await this.getVisibleElementCenter(selector);
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
   }
 
   async type(selector: string, text: string): Promise<void> {
     await this.click(selector);
-    for (const char of text) {
-      await this.send('Input.dispatchKeyEvent', { type: 'char', text: char });
-    }
+    // Input.insertText preserves IME/unicode input and emits native input events.
+    await this.send('Input.insertText', { text });
   }
 
   async scroll(direction: 'up' | 'down' | 'left' | 'right' = 'down', amount = 300): Promise<void> {
@@ -253,6 +257,8 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
     try {
       const url = await this.evaluate('window.location.href') as string;
       this.lastUrl = url;
+      const tab = this.tabState.get(this.activeTabId);
+      if (tab) tab.url = url;
       return url;
     } catch {
       return this.lastUrl || 'about:blank';
@@ -264,6 +270,8 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
     try {
       const title = await this.evaluate('document.title') as string;
       this.lastTitle = title;
+      const tab = this.tabState.get(this.activeTabId);
+      if (tab) tab.title = title;
       return title;
     } catch {
       return this.lastTitle || '';
@@ -271,8 +279,7 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
   }
 
   async close(): Promise<void> {
-    // Detach debugger is handled by renderer when webview unmounts.
-    // Here we just reset state.
+    await this.closeWindow();
     this.connected = false;
     this.lastUrl = '';
     this.lastTitle = '';
@@ -280,8 +287,8 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
   }
 
   async closeWindow(): Promise<void> {
-    // No-op for webview mode — the webview stays in the panel.
-    // Closing the tab is a user action handled by the panel.
+    await Promise.all(Array.from(this.tabState.keys()).map((tabId) => this.closeWebviewTab(tabId)));
+    this.tabState.clear();
   }
 
   async waitForLoad(_timeout = 30000): Promise<void> {
@@ -289,15 +296,10 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
   }
 
   async hover(selector: string): Promise<void> {
-    const elSelector = this._resolveSelector(selector);
-    await this.evaluate(`
-      (() => {
-        const el = document.querySelector('${elSelector.replace(/'/g, "\\'")}');
-        if (!el) throw new Error('Element not found: ${elSelector}');
-        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
-        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, cancelable: true }));
-      })()
-    `);
+    const point = await this.getVisibleElementCenter(selector);
+    // Native input events do not surface exceptions thrown by page-level
+    // mouse handlers, while still driving the browser's real hover state.
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
   }
 
   async waitForElement(selector: string, timeoutMs = 15000): Promise<void> {
@@ -315,33 +317,68 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
 
   async selectOption(selector: string, value: string): Promise<void> {
     const elSelector = this._resolveSelector(selector);
-    await this.evaluate(`
-      (() => {
-        const e = document.querySelector('${elSelector.replace(/'/g, "\\'")}');
-        if (!e) throw new Error('Element not found');
-        e.value = '${value.replace(/'/g, "\\'")}';
-        e.dispatchEvent(new Event('change', { bubbles: true }));
-      })()
-    `);
+    await this.getVisibleElementCenter(selector);
+    // Page-level input/change handlers may throw after the native value has
+    // already changed. Keep that application exception from turning a valid
+    // selection into a CDP evaluation failure.
+    const expression = `(() => {
+      const element = document.querySelector(${JSON.stringify(elSelector)});
+      if (!(element instanceof HTMLSelectElement)) return { ok: false, error: 'Select element not found' };
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+      if (setter) setter.call(element, ${JSON.stringify(value)});
+      else element.value = ${JSON.stringify(value)};
+      try { element.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
+      try { element.dispatchEvent(new Event('change', { bubbles: true })); } catch {}
+      return { ok: true };
+    })()`;
+    const result = await this.send('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+      silent: true,
+    }) as { result?: { value?: { ok?: boolean; error?: string } }; exceptionDetails?: { text?: string } };
+    if (result.exceptionDetails) throw new Error(`JS evaluation error: ${result.exceptionDetails.text ?? 'Unknown error'}`);
+    if (!result.result?.value?.ok) throw new Error(result.result?.value?.error ?? `Could not select option: ${value}`);
   }
 
   // --- Tab Management (webview is single-tab) ---
 
   async tabs(): Promise<TabInfo[]> {
-    return [{ id: 0, url: await this.getUrl(), title: await this.getTitle(), active: true }];
+    await Promise.all([this.getUrl(), this.getTitle()]);
+    return Array.from(this.tabState.entries()).map(([id, tab]) => ({
+      id,
+      url: tab.url,
+      title: tab.title,
+      active: id === this.activeTabId,
+    }));
   }
 
-  async newTab(_url?: string): Promise<string | undefined> {
-    // Webview mode is single-tab; newTab is not supported.
-    return undefined;
+  async newTab(url?: string): Promise<string | undefined> {
+    const tabId = `tab_${++this.tabSequence}`;
+    this.tabState.set(tabId, { url: url ?? 'about:blank', title: '' });
+    await this.sendForTab(tabId, 'Page.enable');
+    if (url) await this.sendForTab(tabId, 'Page.navigate', { url });
+    return tabId;
   }
 
-  async closeTab(_target?: number | string): Promise<void> {
-    // No-op — tab closing is handled by panel UI
+  async closeTab(target?: number | string): Promise<void> {
+    const tabId = this.resolveTabId(target);
+    await this.closeWebviewTab(tabId);
+    this.tabState.delete(tabId);
+    if (this.activeTabId === tabId) {
+      this.activeTabId = this.tabState.keys().next().value ?? 'tab_0';
+      this.lastUrl = '';
+      this.lastTitle = '';
+    }
   }
 
-  async selectTab(_target: number | string): Promise<void> {
-    // No-op — single tab
+  async selectTab(target: number | string): Promise<void> {
+    const tabId = this.resolveTabId(target);
+    this.activeTabId = tabId;
+    const tab = this.tabState.get(tabId);
+    this.lastUrl = tab?.url ?? '';
+    this.lastTitle = tab?.title ?? '';
+    await this.controlWebviewTab('/webview-activate', tabId);
   }
 
   // --- File Upload ---
@@ -355,19 +392,26 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
     const queryResult = await this.send('DOM.querySelector', { nodeId: rootNodeId, selector: elSelector }) as { nodeId?: number };
     if (queryResult?.nodeId) {
       await this.send('DOM.setFileInputFiles', { nodeId: queryResult.nodeId, files });
+      return;
     }
+    throw new Error(`File input not found: ${selector}`);
   }
 
   // --- Network Capture ---
 
-  async startNetworkCapture(_pattern: string = ''): Promise<boolean> {
-    // Network capture requires Network.enable + event listening, which the
-    // current sendCommand pattern doesn't support (it's request-response only).
-    return false;
+  async startNetworkCapture(pattern: string = ''): Promise<boolean> {
+    const result = await this.postWebviewEndpoint('/webview-network-start', {
+      sessionId: this.webviewSessionId(),
+      pattern,
+    });
+    return result.ok === true;
   }
 
   async readNetworkCapture(): Promise<unknown[]> {
-    return [];
+    const result = await this.postWebviewEndpoint('/webview-network-read', {
+      sessionId: this.webviewSessionId(),
+    });
+    return Array.isArray(result.data) ? result.data : [];
   }
 
   // --- Cookies ---
@@ -385,16 +429,37 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
 
   async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string }>> {
     const tree = await this.send('Page.getFrameTree', {}) as {
-      frameTree?: { frame?: { id: string; url: string; name?: string }; childFrames?: unknown[] }
+      frameTree?: FrameTree
     };
-    const mainFrame = tree?.frameTree?.frame;
-    if (!mainFrame) return [];
-    return [{ index: 0, frameId: mainFrame.id, url: mainFrame.url, name: mainFrame.name || '' }];
+    const frames: Array<{ index: number; frameId: string; url: string; name: string }> = [];
+    const visit = (node: FrameTree | undefined) => {
+      if (!node?.frame) return;
+      frames.push({ index: frames.length, frameId: node.frame.id, url: node.frame.url, name: node.frame.name || '' });
+      node.childFrames?.forEach(visit);
+    };
+    // `iframe_evaluate` indexes iframe documents, not the page's main frame.
+    // Excluding the root makes index 0 stable and matches the tool contract.
+    tree?.frameTree?.childFrames?.forEach(visit);
+    return frames;
   }
 
-  async evaluateInFrame(js: string, _frameIndex: number): Promise<unknown> {
-    // For v1, only support main frame (index 0)
-    return this.evaluate(js);
+  async evaluateInFrame(js: string, frameIndex: number): Promise<unknown> {
+    const frame = (await this.frames())[frameIndex];
+    if (!frame) throw new Error(`Frame not found: ${frameIndex}`);
+    const world = await this.send('Page.createIsolatedWorld', {
+      frameId: frame.frameId,
+      worldName: `duya-browser-tool-${frame.frameId}-${Date.now()}`,
+      grantUniveralAccess: false,
+    }) as { executionContextId?: number };
+    if (!world.executionContextId) throw new Error(`Could not create execution context for frame: ${frameIndex}`);
+    const result = await this.send('Runtime.evaluate', {
+      expression: js,
+      contextId: world.executionContextId,
+      returnByValue: true,
+      awaitPromise: true,
+    }) as { result?: { value?: unknown }; exceptionDetails?: { text?: string } };
+    if (result.exceptionDetails) throw new Error(`JS evaluation error: ${result.exceptionDetails.text ?? 'Unknown error'}`);
+    return result.result?.value;
   }
 
   // --- Raw CDP ---
@@ -412,14 +477,92 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
     return selector;
   }
 
+  private async getVisibleElementCenter(selector: string): Promise<{ x: number; y: number }> {
+    const resolvedSelector = this._resolveSelector(selector);
+    const documentResult = await this.send('DOM.getDocument', {}) as { root?: { nodeId?: number } };
+    const rootNodeId = documentResult.root?.nodeId;
+    if (!rootNodeId) throw new Error('Could not get document root');
+
+    const queryResult = await this.send('DOM.querySelector', {
+      nodeId: rootNodeId,
+      selector: resolvedSelector,
+    }) as { nodeId?: number };
+    const nodeId = queryResult.nodeId;
+    if (!nodeId) throw new Error(`Element not found: ${selector}`);
+
+    await this.send('DOM.scrollIntoViewIfNeeded', { nodeId }).catch(() => {});
+    const boxResult = await this.send('DOM.getBoxModel', { nodeId }) as { model?: { content?: number[] } };
+    const contentQuad = boxResult.model?.content;
+    if (!contentQuad || contentQuad.length < 8) throw new Error(`Element has no rendered box: ${selector}`);
+    const xValues = contentQuad.filter((_, index) => index % 2 === 0);
+    const yValues = contentQuad.filter((_, index) => index % 2 === 1);
+    const minX = Math.min(...xValues);
+    const maxX = Math.max(...xValues);
+    const minY = Math.min(...yValues);
+    const maxY = Math.max(...yValues);
+    if (maxX - minX < 1 || maxY - minY < 1) throw new Error(`Element has no visible size: ${selector}`);
+    return { x: minX + (maxX - minX) / 2, y: minY + (maxY - minY) / 2 };
+  }
+
+  private webviewSessionId(tabId = this.activeTabId): string {
+    // Keep the default tab using the plain sessionId so the renderer's
+    // AgentBrowserTab registration (which registers sessionId) continues
+    // to match. Extra tabs use the namespaced form.
+    return tabId === 'tab_0' ? this.sessionId : `${this.sessionId}::${tabId}`;
+  }
+
+  private resolveTabId(target?: number | string): string {
+    if (target === undefined) return this.activeTabId;
+    if (typeof target === 'string' && this.tabState.has(target)) return target;
+    const index = typeof target === 'number' ? target : Number.parseInt(target, 10);
+    const tabId = Array.from(this.tabState.keys())[index];
+    if (!tabId) throw new Error(`Tab not found: ${String(target)}`);
+    return tabId;
+  }
+
+  private async sendForTab(tabId: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const response = await this.sendCommand({ method, params }, tabId);
+    if (response.error) throw new Error(`CDP error: ${response.error.message} (code ${response.error.code})`);
+    return response.result;
+  }
+
+  private async postWebviewEndpoint(pathname: string, body: Record<string, unknown>): Promise<{ ok?: boolean; data?: unknown[]; error?: string }> {
+    const response = await this.requestDaemon(pathname, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      timeout: 15000,
+    });
+    if (!response.ok) throw new Error(`Webview endpoint failed (${response.status}): ${await response.text()}`);
+    return response.json() as Promise<{ ok?: boolean; data?: unknown[]; error?: string }>;
+  }
+
+  private async controlWebviewTab(pathname: '/webview-close' | '/webview-activate', tabId: string): Promise<void> {
+    const result = await this.postWebviewEndpoint(pathname, { sessionId: this.webviewSessionId(tabId) });
+    if (result.ok !== true) throw new Error(result.error ?? 'Webview tab control failed');
+  }
+
+  private async closeWebviewTab(tabId: string): Promise<void> {
+    try {
+      await this.controlWebviewTab('/webview-close', tabId);
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes('404')) throw err;
+    }
+  }
+
   /**
    * Send a CDP command to the daemon's /webview-command endpoint.
    * Retries on 404 (webview not yet registered) up to 10 seconds.
    * Throws DebuggerConflict immediately if the renderer reports DevTools is open.
    */
-  private async sendCommand(command: { method: string; params: Record<string, unknown> }): Promise<CDPResponse> {
+  private async sendCommand(command: { method: string; params: Record<string, unknown> }, tabId = this.activeTabId): Promise<CDPResponse> {
     const id = generateId();
-    const body = { id, sessionId: this.sessionId, ...command };
+    const body = {
+      id,
+      sessionId: this.webviewSessionId(tabId),
+      ...(this.options.background ? { background: true } : {}),
+      ...command,
+    };
 
     const maxRetries = 20;
     const retryDelayMs = 500;

@@ -2,10 +2,28 @@
  * Cookie Writer — writes ElectronCookie[] to the persist:duya-local-browser partition.
  */
 
-import { session } from 'electron';
+import { session, type DownloadItem, type Event } from 'electron';
+import * as path from 'path';
+import { getSetting } from '../../db/queries/settings';
 import type { ElectronCookie } from './cookie-importer';
 
 const PARTITION = 'persist:duya-local-browser';
+
+function getConfiguredDownloadPath(): string | undefined {
+  const raw = getSetting('browserDownloadPath');
+  return raw?.trim() || undefined;
+}
+
+export function attachBrowserDownloadHandler(): void {
+  const ses = session.fromPartition(PARTITION);
+  ses.on('will-download', (event: Event, item: DownloadItem) => {
+    const configuredPath = getConfiguredDownloadPath();
+    if (configuredPath) {
+      const fileName = item.getFilename();
+      item.setSavePath(path.join(configuredPath, fileName));
+    }
+  });
+}
 
 export async function writeCookiesToPartition(cookies: ElectronCookie[]): Promise<number> {
   const ses = session.fromPartition(PARTITION);

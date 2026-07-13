@@ -93,6 +93,10 @@ export interface AppSettings {
   blockedDomains: string[];
   // Browser backend mode: auto (degradation chain) | extension | built-in
   browserBackendMode?: 'auto' | 'extension' | 'built-in';
+  // Built-in browser default home URL
+  browserHomeUrl?: string;
+  // Built-in browser default download directory
+  browserDownloadPath?: string;
   // Favorite agent profiles for quick access (max 3)
   favoriteAgentIds: string[];
   // Agent prompt language preference (e.g. 'Chinese', 'English')

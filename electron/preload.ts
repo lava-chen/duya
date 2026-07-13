@@ -556,11 +556,14 @@ export interface BrowserExtensionAPI {
 export interface BrowserWebviewAPI {
   registerWebview: (sessionId: string, webContentsId: number) => Promise<{ ok: boolean; error?: string }>
   unregisterWebview: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
-  onOpenAgentTab: (callback: (sessionId: string) => void) => () => void
+  closeAgentBrowser: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
+  onOpenAgentTab: (callback: (sessionId: string, focus: boolean) => void) => () => void
+  onCloseAgentTab: (callback: (sessionId: string) => void) => () => void
+  onActivateAgentTab: (callback: (sessionId: string, focus: boolean) => void) => () => void
 }
 
 export interface BrowserCookieAPI {
-  importCookies: (browser: 'chrome' | 'edge') => Promise<{ ok: boolean; count?: number; failed?: number; error?: string }>
+  importCookies: (browser: 'chrome' | 'edge', profile?: string) => Promise<{ ok: boolean; count?: number; failed?: number; unsupported?: number; source?: 'extension'; error?: string; errorCode?: 'COOKIE_DATABASE_BUSY' }>
   clearData: () => Promise<{ ok: boolean; error?: string }>
 }
 
@@ -909,6 +912,8 @@ export interface ElectronAPI {
     openFolder: (options?: { defaultPath?: string; title?: string }) =>
       Promise<{ canceled: boolean; filePaths: string[] }>
     openOfficeFiles: (options?: { defaultPath?: string; title?: string }) =>
+      Promise<{ canceled: boolean; filePaths: string[] }>
+    selectDownloadFolder: (options?: { defaultPath?: string; title?: string }) =>
       Promise<{ canceled: boolean; filePaths: string[] }>
   }
   shell: {
@@ -1533,6 +1538,7 @@ const electronAPI: ElectronAPI = {
   dialog: {
     openFolder: (options) => ipcRenderer.invoke('dialog:open-folder', options),
     openOfficeFiles: (options) => ipcRenderer.invoke('dialog:open-office-files', options),
+    selectDownloadFolder: (options) => ipcRenderer.invoke('dialog:select-download-folder', options),
   },
   shell: {
     openPath: (folderPath) => ipcRenderer.invoke('shell:open-path', folderPath),
@@ -1878,17 +1884,29 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('browser:register-webview', { sessionId, webContentsId }),
     unregisterWebview: (sessionId: string) =>
       ipcRenderer.invoke('browser:unregister-webview', { sessionId }),
-    onOpenAgentTab: (callback: (sessionId: string) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) => {
-        callback(payload.sessionId);
+    closeAgentBrowser: (sessionId: string) =>
+      ipcRenderer.invoke('browser:close-agent-browser', { sessionId }),
+    onOpenAgentTab: (callback: (sessionId: string, focus: boolean) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { sessionId: string; focus?: boolean }) => {
+        callback(payload.sessionId, payload.focus !== false);
       };
       ipcRenderer.on('browser:open-agent-tab', handler);
       return () => ipcRenderer.removeListener('browser:open-agent-tab', handler);
     },
+    onCloseAgentTab: (callback: (sessionId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) => callback(payload.sessionId);
+      ipcRenderer.on('browser:close-agent-tab', handler);
+      return () => ipcRenderer.removeListener('browser:close-agent-tab', handler);
+    },
+    onActivateAgentTab: (callback: (sessionId: string, focus: boolean) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { sessionId: string; focus?: boolean }) => callback(payload.sessionId, payload.focus !== false);
+      ipcRenderer.on('browser:activate-agent-tab', handler);
+      return () => ipcRenderer.removeListener('browser:activate-agent-tab', handler);
+    },
   },
   browserCookie: {
-    importCookies: (browser: 'chrome' | 'edge') =>
-      ipcRenderer.invoke('browser:import-cookies', browser),
+    importCookies: (browser: 'chrome' | 'edge', profile?: string) =>
+      ipcRenderer.invoke('browser:import-cookies', browser, profile),
     clearData: () =>
       ipcRenderer.invoke('browser:clear-browser-data'),
   },

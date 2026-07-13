@@ -40,12 +40,19 @@ export interface PageDescriptor {
   preferredWidth?: number;
   /**
    * Fraction of the workspace row this page should claim when opened.
-   * When set, the panel ignores `MIN_CHAT_WIDTH` (chat width is
-   * `workspace * (1 - ratio)`) and the desired width is
+   * The main chat column remains protected by its minimum width, even
+   * when the panel uses a ratio-driven default.
    * `workspace * ratio`. Mutually exclusive with `preferredWidth` —
    * the ratio wins when both are present.
    */
   widthRatio?: number;
+  /** Maximum share of the workspace this page can claim while resizing. */
+  maxWidthRatio?: number;
+  /**
+   * Absolute width ceiling. `null` opts out of the shared ceiling for pages
+   * whose intended size is proportion-based, such as the browser.
+   */
+  maxWidth?: number | null;
   defaultExpanded: boolean;
   component: ComponentType<{ tab: PageTab; embedded: boolean }>;
 }
@@ -111,7 +118,9 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: true,
     available: true,
     minWidth: 460,
-    preferredWidth: 760,
+    widthRatio: 2 / 3,
+    maxWidthRatio: 2 / 3,
+    maxWidth: null,
     defaultExpanded: false,
     component: BrowserPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },

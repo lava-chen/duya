@@ -2,24 +2,28 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import {
+  GlobeIcon,
   ChromeIcon,
   CheckCircleIcon,
   CopyIcon,
   ExternalLinkIcon,
-  WarningIcon,
-  PlugIcon,
   InfoIcon,
   SpinnerGapIcon,
   ArrowsClockwiseIcon,
   PlusIcon,
   XIcon,
-  ChevronDownIcon,
   FolderOpenIcon,
+  ChevronDownIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useBrowserExtension } from '@/hooks/useBrowserExtension';
 import { useSettings } from '@/hooks/useSettings';
-import { SettingsSection, SettingsCard, SettingsRow } from '@/components/settings/ui';
+import {
+  SettingsSection,
+  SettingsCard,
+  SettingsRow,
+  SettingsToggle,
+} from '@/components/settings/ui';
 import { ExtensionConfirmDialog } from '@/components/ExtensionConfirmDialog';
 import { BrowserAdvancedSection } from './BrowserAdvancedSection';
 
@@ -61,6 +65,8 @@ export default function BrowserExtensionSection() {
   const [domainError, setDomainError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
 
+  const extensionEnabled = settings.browserBackendMode !== 'built-in';
+
   useEffect(() => {
     if (settings.blockedDomains) {
       setBlockedDomains(settings.blockedDomains);
@@ -98,6 +104,16 @@ export default function BrowserExtensionSection() {
     }, 3000);
     return () => clearInterval(timer);
   }, [status, checkExtension]);
+
+  const handleToggleExtension = useCallback(async (enabled: boolean) => {
+    const newMode = enabled ? 'auto' : 'built-in';
+    await save({ browserBackendMode: newMode });
+    try {
+      await window.electronAPI?.browserBackend?.updateMode(newMode);
+    } catch {
+      // Persisted already; the agent will pick it up on next init if live update fails.
+    }
+  }, [save]);
 
   const handleApprovePendingExtension = useCallback(async () => {
     if (!window.electronAPI?.browserExtension?.approvePending) return;
@@ -174,58 +190,38 @@ export default function BrowserExtensionSection() {
     switch (status) {
       case 'checking':
         return {
-          icon: <SpinnerGapIcon size={20} className="animate-spin" />,
           text: t('browserExtension.checking'),
-          subtext: t('browserExtension.statusDesc'),
           color: 'text-muted-foreground',
-          bgColor: 'bg-muted',
-          borderColor: 'border-border/50',
           dotColor: 'bg-muted-foreground',
-          glow: '',
+          pulse: true,
         };
       case 'connected':
         return {
-          icon: <PlugIcon size={20} />,
           text: t('browserExtension.connected'),
-          subtext: t('browserExtension.statusDesc'),
           color: 'text-green-500',
-          bgColor: 'bg-green-500/10',
-          borderColor: 'border-green-500/30',
           dotColor: 'bg-green-500',
-          glow: 'shadow-[0_0_20px_rgba(34,197,94,0.15)]',
+          pulse: false,
         };
       case 'disconnected':
         return {
-          icon: <PlugIcon size={20} />,
           text: t('browserExtension.notInstalled'),
-          subtext: t('browserExtension.statusDesc'),
           color: 'text-yellow-500',
-          bgColor: 'bg-yellow-500/10',
-          borderColor: 'border-yellow-500/30',
           dotColor: 'bg-yellow-500',
-          glow: '',
+          pulse: false,
         };
       case 'error':
         return {
-          icon: <WarningIcon size={20} />,
           text: t('browserExtension.error'),
-          subtext: t('browserExtension.statusDesc'),
           color: 'text-destructive',
-          bgColor: 'bg-destructive/10',
-          borderColor: 'border-destructive/30',
           dotColor: 'bg-destructive',
-          glow: '',
+          pulse: false,
         };
       default:
         return {
-          icon: <SpinnerGapIcon size={20} className="animate-spin" />,
           text: t('browserExtension.checking'),
-          subtext: t('browserExtension.statusDesc'),
           color: 'text-muted-foreground',
-          bgColor: 'bg-muted',
-          borderColor: 'border-border/50',
           dotColor: 'bg-muted-foreground',
-          glow: '',
+          pulse: true,
         };
     }
   };
@@ -234,284 +230,257 @@ export default function BrowserExtensionSection() {
 
   return (
     <>
-    <div className="settings-section">
-      {/* Hero Status Card */}
-      <SettingsCard
-        className={`mb-6 overflow-hidden transition-all duration-500 ${statusConfig.glow} ${
-          isInstalled ? 'border-green-500/20' : 'border-border/50'
-        }`}
-      >
-        <div className="p-5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div
-                className={`w-12 h-12 rounded-xl flex items-center justify-center ${statusConfig.bgColor} ${statusConfig.color} border ${statusConfig.borderColor} transition-all duration-300`}
-              >
-                {statusConfig.icon}
+      <div className="settings-section">
+        {/* Page header */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold tracking-tight text-foreground" style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}>
+            {t('browserExtension.pageTitle')}
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            {t('browserExtension.pageDescription')}
+          </p>
+        </div>
+
+        {/* Built-in browser toggle / primary control */}
+        <SettingsCard className="mb-8">
+          <div className="flex items-center gap-4 px-4 py-4">
+            <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-accent/10 text-accent shrink-0">
+              <GlobeIcon size={22} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-foreground">
+                {t('browserExtension.builtinBrowser')}
               </div>
-              <div>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className={`w-2 h-2 rounded-full ${statusConfig.dotColor} ${status === 'checking' ? 'animate-pulse' : ''}`} />
-                  <span className="text-[15px] font-semibold tracking-tight text-foreground">
-                    {statusConfig.text}
-                  </span>
-                </div>
-                <span className="text-xs leading-relaxed text-muted-foreground">{statusConfig.subtext}</span>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                {t('browserExtension.builtinBrowserDesc')}
               </div>
             </div>
-            <button
-              onClick={checkExtension}
-              disabled={status === 'checking'}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-surface border border-border/50 text-foreground hover:bg-muted transition-all disabled:opacity-50"
-              title={t('browserExtension.refresh')}
-            >
-              <ArrowsClockwiseIcon size={14} className={status === 'checking' ? 'animate-spin' : ''} />
-              <span>{t('browserExtension.refresh')}</span>
-            </button>
-          </div>
-          {lastChecked && (
-            <div className="mt-3 text-[11px] font-mono text-muted-foreground">
-              {t('browserExtension.lastChecked')}: {lastChecked.toLocaleTimeString()}
-            </div>
-          )}
-        </div>
-      </SettingsCard>
-
-      {/* Connected State - Connection Details Only */}
-      {isInstalled && health && (
-        <SettingsSection title={t('browserExtension.connectionDetails')}>
-          <SettingsCard>
-            {[
-              { label: t('browserExtension.daemon'), value: health.daemonRunning ? t('browserExtension.daemonRunning') : t('browserExtension.daemonStopped'), ok: health.daemonRunning },
-              { label: t('browserExtension.extension'), value: health.extensionConnected ? t('browserExtension.extensionConnected') : t('browserExtension.extensionDisconnected'), ok: health.extensionConnected },
-              { label: t('browserExtension.port'), value: String(health.port), ok: true },
-              { label: t('browserExtension.pending'), value: String(health.pendingCommands), ok: health.pendingCommands === 0 },
-              ...(health.extensionVersion ? [{ label: t('browserExtension.version'), value: health.extensionVersion, ok: true }] : []),
-            ].map((item, idx) => (
-              <SettingsRow
-                key={idx}
-                label={<span className="text-sm text-muted-foreground">{item.label}</span>}
-              >
-                <span className="text-sm font-medium flex items-center gap-1.5 text-foreground">
-                  <span className={`w-1.5 h-1.5 rounded-full ${item.ok ? 'bg-green-500' : 'bg-destructive'}`} />
-                  {item.value}
-                </span>
-              </SettingsRow>
-            ))}
-          </SettingsCard>
-        </SettingsSection>
-      )}
-
-      {/* Installation Guide */}
-      {!isInstalled && (
-        <div className="space-y-4">
-          <div className="flex items-start gap-3 p-4 rounded-xl bg-surface/50 border border-border/50">
-            <InfoIcon size={16} className="shrink-0 mt-0.5 text-accent" />
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              {t('browserExtension.installDesc')}
-            </p>
-          </div>
-
-          {/* Chrome Web Store Install - Primary */}
-          {!showManualInstall && (
-            <>
-              <SettingsSection title={t('browserExtension.storeInstallTitle') || 'Install from Chrome Web Store'}>
-                <SettingsCard>
-                  {[
-                    t('browserExtension.storeStep1') || 'Click the "Install from Chrome Web Store" button below',
-                    t('browserExtension.storeStep2') || 'Click "Add to Chrome" on the DUYA Browser Bridge page',
-                    t('browserExtension.storeStep3') || 'Confirm by clicking "Add extension" in the popup',
-                    t('browserExtension.storeStep4') || 'Return here and click "Refresh" to verify connection',
-                  ].map((step, idx) => (
-                    <div key={idx} className="flex items-start gap-3 px-4 py-3">
-                      <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold bg-accent/10 text-accent shrink-0">
-                        {idx + 1}
-                      </div>
-                      <span className="text-sm leading-relaxed text-foreground pt-0.5">{step}</span>
-                    </div>
-                  ))}
-                </SettingsCard>
-              </SettingsSection>
-
-              <button
-                onClick={handleOpenChromeStore}
-                className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
-              >
-                <ChromeIcon size={18} />
-                {t('browserExtension.openChromeStore') || 'Install from Chrome Web Store'}
-                <ExternalLinkIcon size={14} />
-              </button>
-            </>
-          )}
-
-          {/* Manual Install - Collapsible */}
-          {showManualInstall && (
-            <>
-              <SettingsSection title={t('browserExtension.manualInstallTitle') || 'Manual Installation'}>
-                <SettingsCard>
-                  {[
-                    t('browserExtension.step1') || 'Open Chrome and go to chrome://extensions/',
-                    t('browserExtension.step2') || 'Enable "Developer mode" toggle in the top right corner',
-                    t('browserExtension.step3') || 'Click "Load unpacked" at the top of the page',
-                    t('browserExtension.step4') || 'Select the extension folder shown below',
-                    t('browserExtension.step5') || 'Verify the extension appears in your extensions list',
-                  ].map((step, idx) => (
-                    <div key={idx} className="flex items-start gap-3 px-4 py-3">
-                      <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold bg-accent/10 text-accent shrink-0">
-                        {idx + 1}
-                      </div>
-                      <span className="text-sm leading-relaxed text-foreground pt-0.5">{step}</span>
-                    </div>
-                  ))}
-                </SettingsCard>
-              </SettingsSection>
-
-              <SettingsSection title={t('browserExtension.extensionPath')}>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 px-4 py-3 rounded-lg text-xs font-mono truncate bg-surface border border-border/50 text-foreground">
-                    {extensionPath || '<DUYA_INSTALL_DIR>/extension/'}
-                  </code>
-                  <button
-                    onClick={handleCopyPath}
-                    disabled={!extensionPath}
-                    className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
-                    title={t('common.copy')}
-                  >
-                    {copied ? <CheckCircleIcon size={16} className="text-green-500" /> : <CopyIcon size={16} className="text-muted-foreground" />}
-                  </button>
-                  <button
-                    onClick={handleOpenFolder}
-                    disabled={!extensionPath}
-                    className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
-                    title="Open folder"
-                  >
-                    <FolderOpenIcon size={16} className="text-muted-foreground" />
-                  </button>
-                </div>
-              </SettingsSection>
-
-              <button
-                onClick={handleOpenExtensions}
-                className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
-              >
-                <ChromeIcon size={18} />
-                {t('browserExtension.openChrome')}
-                <ExternalLinkIcon size={14} />
-              </button>
-            </>
-          )}
-
-          {/* Toggle between store and manual install */}
-          <button
-            onClick={() => setShowManualInstall(!showManualInstall)}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs transition-colors"
-            style={{ 
-              color: 'var(--muted)',
-              backgroundColor: 'var(--surface)',
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = 'var(--surface-hover)')
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.backgroundColor = 'var(--surface)')
-            }
-          >
-            <ChevronDownIcon 
-              size={14} 
-              className={`transition-transform duration-200 ${showManualInstall ? 'rotate-180' : ''}`}
-            />
-            {showManualInstall 
-              ? (t('browserExtension.useStoreInstall') || 'Install from Chrome Web Store instead')
-              : (t('browserExtension.useManualInstall') || 'Can\'t access store? Use manual install')
-            }
-          </button>
-        </div>
-      )}
-
-      {/* Browser Security Section */}
-      <SettingsSection
-        title={t('settings.security.browserSecurityTitle')}
-        description={t('settings.security.browserSecurityDescription')}
-        className="mt-8"
-      >
-        <SettingsCard divided={false}>
-          <div className="px-4 py-3.5">
-            <div className="flex items-center gap-2 mb-3">
-              <input
-                type="text"
-                value={newDomain}
-                onChange={(e) => { setNewDomain(e.target.value); setDomainError(null); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleAddDomain(); }}
-                placeholder={t('settings.security.domainPlaceholder')}
-                disabled={settingsLoading}
-                className="flex-1 px-3 py-2 rounded-lg border text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent border-border/50 disabled:opacity-50"
+            <div className="shrink-0">
+              <SettingsToggle
+                label=""
+                checked={true}
+                onCheckedChange={() => {}}
+                disabled={true}
               />
-              <button
-                onClick={handleAddDomain}
-                disabled={settingsLoading}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
-              >
-                <PlusIcon size={14} />
-                {t('settings.security.addDomain')}
-              </button>
             </div>
-            {domainError && (
-              <p className="text-xs text-destructive mb-2">{domainError}</p>
-            )}
-            {blockedDomains.length > 0 ? (
-              <div className="space-y-1.5">
-                {blockedDomains.map((domain) => (
-                  <div
-                    key={domain}
-                    className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface border border-border/50 text-sm text-foreground"
-                  >
-                    <span className="font-mono text-xs">{domain}</span>
-                    <button
-                      onClick={() => handleRemoveDomain(domain)}
-                      disabled={settingsLoading}
-                      className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all disabled:opacity-50"
-                      title={t('settings.security.removeDomain')}
-                    >
-                      <XIcon size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground py-2">
-                {t('settings.security.noBlockedDomains')}
-              </p>
-            )}
           </div>
         </SettingsCard>
 
-        {isDirty && (
-          <div className="mt-4 flex items-center justify-end gap-3">
-            <span className="text-xs text-muted-foreground">{t('settings.security.unsavedChanges')}</span>
-            <button
-              onClick={handleSaveDomains}
+        {/* General: backend mode + data management */}
+        <SettingsSection
+          title={t('browserExtension.generalTitle')}
+          description={t('browserExtension.generalDescription')}
+        >
+          <SettingsCard className="mb-4">
+            <SettingsToggle
+              label={t('browserExtension.extensionEnabled')}
+              description={t('browserExtension.extensionEnabledDesc')}
+              checked={extensionEnabled}
+              onCheckedChange={handleToggleExtension}
               disabled={saving}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
-            >
-              {saving && <SpinnerGapIcon size={14} className="animate-spin" />}
-              {saving ? t('settings.security.saving') : t('settings.security.saveChanges')}
-            </button>
-          </div>
-        )}
-      </SettingsSection>
-    </div>
+            />
+          </SettingsCard>
 
-    <BrowserAdvancedSection />
+          <BrowserAdvancedSection />
+        </SettingsSection>
 
-    <ExtensionConfirmDialog
-      isOpen={Boolean(health?.pendingExtensionApproval) && !confirmingExtension}
-      extName={health?.pendingExtensionApproval?.extensionName ?? 'Unknown Extension'}
-      extId={health?.pendingExtensionApproval?.extensionId ?? 'unknown'}
-      version={health?.pendingExtensionApproval?.extensionVersion ?? null}
-      onApprove={() => { void handleApprovePendingExtension(); }}
-      onDeny={() => { void handleDenyPendingExtension(); }}
-    />
+        {/* Browser Extension Section - simplified and moved to the back */}
+        <SettingsSection
+          title={t('browserExtension.title')}
+          description={t('browserExtension.statusDesc')}
+          className="mt-8"
+        >
+          <SettingsCard className="mb-4">
+            <SettingsRow
+              label={
+                <span className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${statusConfig.dotColor} ${statusConfig.pulse ? 'animate-pulse' : ''}`} />
+                  <span className="text-sm font-medium text-foreground">{statusConfig.text}</span>
+                </span>
+              }
+              action={
+                <button
+                  onClick={checkExtension}
+                  disabled={status === 'checking'}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-surface border border-border/50 text-foreground hover:bg-muted transition-all disabled:opacity-50"
+                  title={t('browserExtension.refresh')}
+                >
+                  <ArrowsClockwiseIcon size={14} className={status === 'checking' ? 'animate-spin' : ''} />
+                  {t('browserExtension.refresh')}
+                </button>
+              }
+            />
+            {lastChecked && (
+              <div className="px-4 pb-3 text-[11px] font-mono text-muted-foreground">
+                {t('browserExtension.lastChecked')}: {lastChecked.toLocaleTimeString()}
+              </div>
+            )}
+          </SettingsCard>
+
+          {!isInstalled && (
+            <div className="space-y-4">
+              <div className="flex items-start gap-3 p-4 rounded-xl bg-surface/50 border border-border/50">
+                <InfoIcon size={16} className="shrink-0 mt-0.5 text-accent" />
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {t('browserExtension.installDesc')}
+                </p>
+              </div>
+
+              {!showManualInstall && (
+                <button
+                  onClick={handleOpenChromeStore}
+                  className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
+                >
+                  <ChromeIcon size={18} />
+                  {t('browserExtension.openChromeStore')}
+                  <ExternalLinkIcon size={14} />
+                </button>
+              )}
+
+              {showManualInstall && (
+                <>
+                  <SettingsSection title={t('browserExtension.extensionPath')}>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 px-4 py-3 rounded-lg text-xs font-mono truncate bg-surface border border-border/50 text-foreground">
+                        {extensionPath || '<DUYA_INSTALL_DIR>/extension/'}
+                      </code>
+                      <button
+                        onClick={handleCopyPath}
+                        disabled={!extensionPath}
+                        className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
+                        title={t('common.copy')}
+                      >
+                        {copied ? <CheckCircleIcon size={16} className="text-green-500" /> : <CopyIcon size={16} className="text-muted-foreground" />}
+                      </button>
+                      <button
+                        onClick={handleOpenFolder}
+                        disabled={!extensionPath}
+                        className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
+                        title="Open folder"
+                      >
+                        <FolderOpenIcon size={16} className="text-muted-foreground" />
+                      </button>
+                    </div>
+                  </SettingsSection>
+
+                  <button
+                    onClick={handleOpenExtensions}
+                    className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
+                  >
+                    <ChromeIcon size={18} />
+                    {t('browserExtension.openChrome')}
+                    <ExternalLinkIcon size={14} />
+                  </button>
+                </>
+              )}
+
+              <button
+                onClick={() => setShowManualInstall(!showManualInstall)}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs transition-colors"
+                style={{
+                  color: 'var(--muted)',
+                  backgroundColor: 'var(--surface)',
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.backgroundColor = 'var(--surface-hover)')
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.backgroundColor = 'var(--surface)')
+                }
+              >
+                <ChevronDownIcon
+                  size={14}
+                  className={`transition-transform duration-200 ${showManualInstall ? 'rotate-180' : ''}`}
+                />
+                {showManualInstall
+                  ? (t('browserExtension.useStoreInstall'))
+                  : (t('browserExtension.useManualInstall'))}
+              </button>
+            </div>
+          )}
+        </SettingsSection>
+
+        {/* Browser Security Section */}
+        <SettingsSection
+          title={t('settings.security.browserSecurityTitle')}
+          description={t('settings.security.browserSecurityDescription')}
+          className="mt-8"
+        >
+          <SettingsCard divided={false}>
+            <div className="px-4 py-3.5">
+              <div className="flex items-center gap-2 mb-3">
+                <input
+                  type="text"
+                  value={newDomain}
+                  onChange={(e) => { setNewDomain(e.target.value); setDomainError(null); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleAddDomain(); }}
+                  placeholder={t('settings.security.domainPlaceholder')}
+                  disabled={settingsLoading}
+                  className="flex-1 px-3 py-2 rounded-lg border text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent border-border/50 disabled:opacity-50"
+                />
+                <button
+                  onClick={handleAddDomain}
+                  disabled={settingsLoading}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
+                >
+                  <PlusIcon size={14} />
+                  {t('settings.security.addDomain')}
+                </button>
+              </div>
+              {domainError && (
+                <p className="text-xs text-destructive mb-2">{domainError}</p>
+              )}
+              {blockedDomains.length > 0 ? (
+                <div className="space-y-1.5">
+                  {blockedDomains.map((domain) => (
+                    <div
+                      key={domain}
+                      className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface border border-border/50 text-sm text-foreground"
+                    >
+                      <span className="font-mono text-xs">{domain}</span>
+                      <button
+                        onClick={() => handleRemoveDomain(domain)}
+                        disabled={settingsLoading}
+                        className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all disabled:opacity-50"
+                        title={t('settings.security.removeDomain')}
+                      >
+                        <XIcon size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground py-2">
+                  {t('settings.security.noBlockedDomains')}
+                </p>
+              )}
+            </div>
+          </SettingsCard>
+
+          {isDirty && (
+            <div className="mt-4 flex items-center justify-end gap-3">
+              <span className="text-xs text-muted-foreground">{t('settings.security.unsavedChanges')}</span>
+              <button
+                onClick={handleSaveDomains}
+                disabled={saving}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
+              >
+                {saving && <SpinnerGapIcon size={14} className="animate-spin" />}
+                {saving ? t('settings.security.saving') : t('settings.security.saveChanges')}
+              </button>
+            </div>
+          )}
+        </SettingsSection>
+      </div>
+
+      <ExtensionConfirmDialog
+        isOpen={Boolean(health?.pendingExtensionApproval) && !confirmingExtension}
+        extName={health?.pendingExtensionApproval?.extensionName ?? 'Unknown Extension'}
+        extId={health?.pendingExtensionApproval?.extensionId ?? 'unknown'}
+        version={health?.pendingExtensionApproval?.extensionVersion ?? null}
+        onApprove={() => { void handleApprovePendingExtension(); }}
+        onDeny={() => { void handleDenyPendingExtension(); }}
+      />
     </>
-
   );
 }

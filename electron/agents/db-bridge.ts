@@ -2311,6 +2311,9 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'mailbox:edit': {
       const existing = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id) as Record<string, unknown> | undefined;
       if (!existing) return null;
+      if (existing.status === 'applied' && existing.applied_summary === 'queued_for_next_agent_turn') {
+        return existing;
+      }
       if (existing.status !== 'pending') return null;
       if (existing.edit_locked_at !== null) return null;
 
@@ -2359,19 +2362,20 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       if (!existing) return null;
       if (existing.status !== 'pending') return null;
 
-      const source = String(existing.source ?? 'ui');
-      const guidedSource = source.endsWith(':guide') ? source : `${source}:guide`;
+      const now = Date.now();
       db.prepare(`
         UPDATE agent_mailbox
-        SET source = @source
+        SET status = 'applied',
+            apply_mode = 'promote_to_user_message',
+            applied_at = @now,
+            applied_at_checkpoint = 'after_current_run',
+            applied_summary = 'queued_for_next_agent_turn',
+            claim_expires_at = NULL
         WHERE id = @id AND status = 'pending'
-      `).run({ id: p.id, source: guidedSource });
+      `).run({ id: p.id, now });
 
       const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
-      try {
-        const { emitMailEdited } = require('../messaging/mailbox-broadcaster');
-        emitMailEdited(row as Record<string, unknown>, existing.content as string);
-      } catch { /* broadcaster may not be available */ }
+      emitMailboxEvent('emitMailApplied', row);
       return row;
     }
 
