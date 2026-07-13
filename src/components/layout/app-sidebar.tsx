@@ -34,7 +34,7 @@ import {
   CornersOutIcon,
   NotePencilIcon,
 } from "@/components/icons";
-import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectFilter } from "@/stores/conversation-store";
+import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectGroupBy } from "@/stores/conversation-store";
 import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
@@ -159,8 +159,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       expandAllProjects,
       projectSortBy,
       setProjectSortBy,
-      projectFilter,
-      setProjectFilter,
+      projectGroupBy,
+      setProjectGroupBy,
     } = useConversationStore();
     const panel = useOptionalPanel();
     const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
@@ -311,9 +311,10 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     };
 
     // Group threads by project (only main threads, sub-agents are nested under parents)
-    const { projectGroups, noProjectThreads, threadChildren } = useMemo(() => {
+    const { projectGroups, noProjectThreads, flatThreads, threadChildren } = useMemo(() => {
       const groups = new Map<string, Thread[]>();
       const childrenMap = new Map<string, Thread[]>();
+      const mainThreads: Thread[] = [];
 
       for (const thread of threads) {
         // Sub-agent sessions without a parent are malformed/orphaned. Do not
@@ -328,6 +329,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           addChildThread(childrenMap, thread);
           continue;
         }
+
+        mainThreads.push(thread);
         const key = thread.workingDirectory || "__no_project__";
         if (!groups.has(key)) {
           groups.set(key, []);
@@ -338,8 +341,13 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       const noProjectThreads = groups.get("__no_project__") || [];
       groups.delete("__no_project__");
 
-      const RECENT_DAYS = 14;
-      const recentThreshold = Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000;
+      const sortThreads = (items: Thread[]) => {
+        return [...items].sort((a, b) => {
+          if (projectSortBy === 'priority') return b.createdAt - a.createdAt;
+          if (projectSortBy === 'lastActivity') return b.updatedAt - a.updatedAt;
+          return a.title.localeCompare(b.title);
+        });
+      };
 
       const projectGroups: ProjectGroup[] = Array.from(groups.entries())
         .map(([wd, groupThreads]) => {
@@ -354,22 +362,19 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             isExpanded: !collapsedProjects.has(wd),
           };
         })
-        .filter((group) => {
-          if (projectFilter === 'all') return true;
-          return group.lastActivity >= recentThreshold;
-        })
         .sort((a, b) => {
-          if (projectSortBy === 'lastActivity') {
-            return b.lastActivity - a.lastActivity;
-          }
-          if (projectSortBy === 'createdAt') {
-            return b.createdAt - a.createdAt;
-          }
+          if (projectSortBy === 'priority') return b.createdAt - a.createdAt;
+          if (projectSortBy === 'lastActivity') return b.lastActivity - a.lastActivity;
           return a.projectName.localeCompare(b.projectName);
         });
 
-      return { projectGroups, noProjectThreads, threadChildren: childrenMap };
-    }, [threads, projectSortBy, projectFilter, collapsedProjects]);
+      return {
+        projectGroups,
+        noProjectThreads: sortThreads(noProjectThreads),
+        flatThreads: sortThreads(mainThreads),
+        threadChildren: childrenMap,
+      };
+    }, [threads, projectSortBy, collapsedProjects]);
 
     const allCollapsed = useMemo(
       () => projectGroups.length > 0 && projectGroups.every((p) => collapsedProjects.has(p.workingDirectory)),
@@ -465,7 +470,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           })}
         </nav>
 
-        {projectGroups.length > 0 && (
+        {flatThreads.length > 0 && (
           <SidebarProjectHeader
             onNewBlankProject={handleNewBlankProject}
             onUseExistingFolder={handleOpenExistingFolder}
@@ -474,13 +479,13 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             allCollapsed={allCollapsed}
             projectSortBy={projectSortBy}
             onProjectSortBy={setProjectSortBy}
-            projectFilter={projectFilter}
-            onProjectFilter={setProjectFilter}
+            projectGroupBy={projectGroupBy}
+            onProjectGroupBy={setProjectGroupBy}
           />
         )}
 
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-          {projectGroups.length > 0 && (
+          {projectGroupBy === 'byProject' && projectGroups.length > 0 && (
             <div className="project-list">
               {projectGroups.map((project) => {
                 const projectThreads = threads.filter(
@@ -499,7 +504,20 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             </div>
           )}
 
-          {noProjectThreads.length > 0 && (
+          {projectGroupBy === 'singleList' && flatThreads.length > 0 && (
+            <div className="thread-list">
+              {flatThreads.map((thread) => (
+                <ThreadListItem
+                  key={thread.id}
+                  thread={thread}
+                  isActive={thread.id === activeThreadId}
+                  childrenThreads={threadChildren.get(thread.id) || []}
+                />
+              ))}
+            </div>
+          )}
+
+          {projectGroupBy === 'byProject' && noProjectThreads.length > 0 && (
             <>
               <div className="sidebar-section-label">{t('common.noProject')}</div>
               <div className="thread-list">
@@ -515,7 +533,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             </>
           )}
 
-          {projectGroups.length === 0 && noProjectThreads.length === 0 && (
+          {flatThreads.length === 0 && (
             <div className="empty-state">
               <p>{t('common.noProjectsYet')}</p>
               <div className="flex flex-col gap-2 mt-3">
@@ -609,11 +627,9 @@ interface SidebarProjectHeaderProps {
   allCollapsed: boolean;
   projectSortBy: ProjectSortBy;
   onProjectSortBy: (sortBy: ProjectSortBy) => void;
-  projectFilter: ProjectFilter;
-  onProjectFilter: (filter: ProjectFilter) => void;
+  projectGroupBy: ProjectGroupBy;
+  onProjectGroupBy: (groupBy: ProjectGroupBy) => void;
 }
-
-type SubmenuPanel = 'organize' | 'sort' | null;
 
 function SidebarProjectHeader({
   onNewBlankProject,
@@ -623,12 +639,11 @@ function SidebarProjectHeader({
   allCollapsed,
   projectSortBy,
   onProjectSortBy,
-  projectFilter,
-  onProjectFilter,
+  projectGroupBy,
+  onProjectGroupBy,
 }: SidebarProjectHeaderProps) {
   const { t } = useTranslation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [openSubmenu, setOpenSubmenu] = useState<SubmenuPanel>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -637,7 +652,6 @@ function SidebarProjectHeader({
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setIsMenuOpen(false);
-        setOpenSubmenu(null);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -646,7 +660,6 @@ function SidebarProjectHeader({
 
   const closeMenu = () => {
     setIsMenuOpen(false);
-    setOpenSubmenu(null);
   };
 
   const handleToggleAll = () => {
@@ -662,7 +675,7 @@ function SidebarProjectHeader({
     const rect = menuButtonRef.current.getBoundingClientRect();
     return {
       top: rect.bottom + 6,
-      left: rect.right - 180,
+      left: rect.right - 160,
     };
   }, [isMenuOpen]);
 
@@ -706,71 +719,52 @@ function SidebarProjectHeader({
 
         {isMenuOpen && (
           <div className="sidebar-project-menu" style={menuPosition}>
-            <div
-              className="sidebar-project-menu-item has-submenu"
-              onMouseEnter={() => setOpenSubmenu('organize')}
-              onMouseLeave={() => setOpenSubmenu((prev) => (prev === 'organize' ? null : prev))}
-            >
-              <SquaresFourIcon size={15} />
-              <span className="flex-1">{t('project.organizeSidebar')}</span>
-              <CaretRightIcon size={12} />
-              {openSubmenu === 'organize' && (
-                <div className="sidebar-project-submenu">
-                  <button
-                    type="button"
-                    className="sidebar-project-menu-item"
-                    onClick={() => { onProjectFilter('all'); closeMenu(); }}
-                  >
-                    <span className="flex-1">{t('project.filterAll')}</span>
-                    {projectFilter === 'all' && <CheckIcon size={14} />}
-                  </button>
-                  <button
-                    type="button"
-                    className="sidebar-project-menu-item"
-                    onClick={() => { onProjectFilter('recent'); closeMenu(); }}
-                  >
-                    <span className="flex-1">{t('project.filterRecent')}</span>
-                    {projectFilter === 'recent' && <CheckIcon size={14} />}
-                  </button>
-                </div>
-              )}
+            <div className="sidebar-project-menu-section">
+              <span className="sidebar-project-menu-section-title">{t('project.organize')}</span>
+              <button
+                type="button"
+                className="sidebar-project-menu-item"
+                onClick={() => { onProjectGroupBy('byProject'); closeMenu(); }}
+              >
+                {projectGroupBy === 'byProject' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+                <span>{t('project.byProject')}</span>
+              </button>
+              <button
+                type="button"
+                className="sidebar-project-menu-item"
+                onClick={() => { onProjectGroupBy('singleList'); closeMenu(); }}
+              >
+                {projectGroupBy === 'singleList' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+                <span>{t('project.inOneList')}</span>
+              </button>
             </div>
-            <div
-              className="sidebar-project-menu-item has-submenu"
-              onMouseEnter={() => setOpenSubmenu('sort')}
-              onMouseLeave={() => setOpenSubmenu((prev) => (prev === 'sort' ? null : prev))}
-            >
-              <ClockCounterClockwiseIcon size={15} />
-              <span className="flex-1">{t('project.sortBy')}</span>
-              <CaretRightIcon size={12} />
-              {openSubmenu === 'sort' && (
-                <div className="sidebar-project-submenu">
-                  <button
-                    type="button"
-                    className="sidebar-project-menu-item"
-                    onClick={() => { onProjectSortBy('lastActivity'); closeMenu(); }}
-                  >
-                    <span className="flex-1">{t('project.sortLastUpdated')}</span>
-                    {projectSortBy === 'lastActivity' && <CheckIcon size={14} />}
-                  </button>
-                  <button
-                    type="button"
-                    className="sidebar-project-menu-item"
-                    onClick={() => { onProjectSortBy('createdAt'); closeMenu(); }}
-                  >
-                    <span className="flex-1">{t('project.sortCreatedAt')}</span>
-                    {projectSortBy === 'createdAt' && <CheckIcon size={14} />}
-                  </button>
-                  <button
-                    type="button"
-                    className="sidebar-project-menu-item"
-                    onClick={() => { onProjectSortBy('name'); closeMenu(); }}
-                  >
-                    <span className="flex-1">{t('project.sortName')}</span>
-                    {projectSortBy === 'name' && <CheckIcon size={14} />}
-                  </button>
-                </div>
-              )}
+            <div className="sidebar-project-menu-divider" />
+            <div className="sidebar-project-menu-section">
+              <span className="sidebar-project-menu-section-title">{t('project.sortBy')}</span>
+              <button
+                type="button"
+                className="sidebar-project-menu-item"
+                onClick={() => { onProjectSortBy('priority'); closeMenu(); }}
+              >
+                {projectSortBy === 'priority' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+                <span>{t('project.priority')}</span>
+              </button>
+              <button
+                type="button"
+                className="sidebar-project-menu-item"
+                onClick={() => { onProjectSortBy('lastActivity'); closeMenu(); }}
+              >
+                {projectSortBy === 'lastActivity' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+                <span>{t('project.lastUpdated')}</span>
+              </button>
+              <button
+                type="button"
+                className="sidebar-project-menu-item"
+                onClick={() => { onProjectSortBy('manual'); closeMenu(); }}
+              >
+                {projectSortBy === 'manual' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+                <span>{t('project.manualSort')}</span>
+              </button>
             </div>
           </div>
         )}

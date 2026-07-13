@@ -56,8 +56,8 @@ export interface ProjectGroup {
   isExpanded: boolean;
 }
 
-export type ProjectSortBy = 'lastActivity' | 'createdAt' | 'name';
-export type ProjectFilter = 'all' | 'recent';
+export type ProjectSortBy = 'priority' | 'lastActivity' | 'manual';
+export type ProjectGroupBy = 'byProject' | 'singleList';
 
 // View types for state-driven UI
 export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor' | 'memory';
@@ -106,7 +106,7 @@ interface ConversationState {
   expandedThreads: Set<string>; // Thread IDs whose children are visible in sidebar
   parentSessionId: string | null; // Parent session ID when viewing a sub-agent
   projectSortBy: ProjectSortBy; // Sidebar project sort order
-  projectFilter: ProjectFilter; // Sidebar project filter
+  projectGroupBy: ProjectGroupBy; // Sidebar project grouping mode
 
   // Actions
   setCurrentView: (view: ViewType) => void;
@@ -144,7 +144,7 @@ interface ConversationState {
   collapseAllProjects: () => void;
   expandAllProjects: () => void;
   setProjectSortBy: (sortBy: ProjectSortBy) => void;
-  setProjectFilter: (filter: ProjectFilter) => void;
+  setProjectGroupBy: (groupBy: ProjectGroupBy) => void;
   toggleThreadExpanded: (threadId: string) => void;
   loadFromDatabase: () => Promise<void>;
   loadThreadMessages: (threadId: string, options?: { force?: boolean }) => Promise<void>;
@@ -242,7 +242,7 @@ export const useConversationStore = create<ConversationState>()(
       expandedThreads: new Set<string>(),
       parentSessionId: null,
       projectSortBy: 'lastActivity',
-      projectFilter: 'all',
+      projectGroupBy: 'byProject',
       lastSyncAt: 0, // Initialize to 0 to force first sync
 
       setCurrentView: (view) => set({ currentView: view }),
@@ -699,7 +699,7 @@ export const useConversationStore = create<ConversationState>()(
 
       setProjectSortBy: (sortBy) => set({ projectSortBy: sortBy }),
 
-      setProjectFilter: (filter) => set({ projectFilter: filter }),
+      setProjectGroupBy: (groupBy) => set({ projectGroupBy: groupBy }),
 
       toggleThreadExpanded: (threadId) => {
         set((state) => {
@@ -867,26 +867,39 @@ export const useConversationStore = create<ConversationState>()(
         collapsedProjects: Array.from(state.collapsedProjects),
         expandedThreads: Array.from(state.expandedThreads),
         projectSortBy: state.projectSortBy,
-        projectFilter: state.projectFilter,
+        projectGroupBy: state.projectGroupBy,
         lastSyncAt: state.lastSyncAt,
       }),
       onRehydrateStorage: () => (state) => {
         // Mark hydration complete and restore collapsedProjects Set
         if (state) {
-          (state as ConversationState).isHydrated = true;
-          if (Array.isArray((state as ConversationState).collapsedProjects)) {
-            (state as ConversationState).collapsedProjects = new Set(
-              (state as ConversationState).collapsedProjects as unknown as string[]
-            );
+          const s = state as ConversationState;
+          s.isHydrated = true;
+          if (Array.isArray(s.collapsedProjects)) {
+            s.collapsedProjects = new Set(s.collapsedProjects as unknown as string[]);
           }
-          if (Array.isArray((state as ConversationState).expandedThreads)) {
-            (state as ConversationState).expandedThreads = new Set(
-              (state as ConversationState).expandedThreads as unknown as string[]
-            );
+          if (Array.isArray(s.expandedThreads)) {
+            s.expandedThreads = new Set(s.expandedThreads as unknown as string[]);
           }
           // Ensure lastSyncAt is initialized
-          if (!(state as ConversationState).lastSyncAt) {
-            (state as ConversationState).lastSyncAt = 0;
+          if (!s.lastSyncAt) {
+            s.lastSyncAt = 0;
+          }
+          // Migrate old sort/group state to the new model
+          const legacySort = s.projectSortBy as unknown as string;
+          if (legacySort === 'createdAt') {
+            s.projectSortBy = 'priority';
+          } else if (legacySort === 'name') {
+            s.projectSortBy = 'manual';
+          } else if (!['priority', 'lastActivity', 'manual'].includes(legacySort)) {
+            s.projectSortBy = 'lastActivity';
+          }
+          const legacyGroup = (s as unknown as Record<string, unknown>).projectFilter as string | undefined;
+          if (legacyGroup && !s.projectGroupBy) {
+            s.projectGroupBy = 'byProject';
+          }
+          if (!['byProject', 'singleList'].includes(s.projectGroupBy)) {
+            s.projectGroupBy = 'byProject';
           }
         }
       },
