@@ -15,6 +15,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,6 +28,22 @@ const forcePlatform = args.includes('--platform')
   : null;
 const listOnly = args.includes('--list');
 const platform = forcePlatform || os.platform();
+
+/**
+ * Detect the architecture of a Mach-O binary on macOS.
+ * Returns 'arm64', 'x64', or 'unknown'.
+ */
+function getBinaryArch(filePath) {
+  if (platform !== 'darwin' && platform !== 'mac') return 'unknown';
+  try {
+    const output = execSync(`file -b "${filePath}"`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    if (output.includes('arm64') || output.includes('aarch64')) return 'arm64';
+    if (output.includes('x86_64') || output.includes('x86-64')) return 'x64';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 function getReleaseDir() {
   const base = path.join(PROJECT_ROOT, 'release');
@@ -68,6 +85,9 @@ const CHECKS = {
 
   // better-sqlite3 native module (extraResources)
   'better-sqlite3/build/Release/better_sqlite3.node': [path.join(RESOURCES, 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'), false],
+
+  // node-pty native module (extraResources) — used by terminal feature
+  'node-pty/build/Release/': [path.join(RESOURCES, 'node-pty', 'build', 'Release'), true],
 
   // Assets (extraResources)
   'assets/ directory': [path.join(RESOURCES, 'assets'), true],
@@ -187,6 +207,35 @@ for (const [label, [filePath, isDir]] of Object.entries(CHECKS)) {
     }
   } else {
     failed++;
+  }
+}
+
+// =============================================================================
+// Native module architecture verification (macOS only)
+// Catches cross-compile bugs where arm64 binaries end up in x64 packages
+// =============================================================================
+if (!listOnly && (platform === 'darwin' || platform === 'mac')) {
+  const hostArch = os.arch() === 'arm64' ? 'arm64' : 'x64';
+  console.log('\n  ▸ Native module architecture');
+  const nativeModules = [
+    {
+      name: 'better-sqlite3',
+      path: path.join(RESOURCES, 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
+      critical: true,
+    },
+  ];
+
+  for (const mod of nativeModules) {
+    if (!fs.existsSync(mod.path)) continue; // Already reported as missing above
+    const binArch = getBinaryArch(mod.path);
+    const archOk = binArch === hostArch;
+    const icon = archOk ? '✓' : '✗';
+    console.log(`    ${icon} ${mod.name}: ${binArch} (host: ${hostArch})`);
+    if (!archOk) {
+      failed++;
+      console.error(`      → FATAL: ${mod.name} binary is ${binArch} but host is ${hostArch}`);
+      console.error(`      → The packaged app will crash on launch. Rebuild for the correct architecture.`);
+    }
   }
 }
 
