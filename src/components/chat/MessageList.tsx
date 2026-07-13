@@ -711,19 +711,30 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     if (!container || navigatorItems.length === 0) return;
 
     const containerTop = container.getBoundingClientRect().top;
-    let bestId = navigatorItems[0].targetMessageId;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    const viewportLimit = container.clientHeight + 160;
+    const readingLineOffset = 180; // reading position inside the message list viewport
+    const visibleAnchors: { id: string; top: number }[] = [];
 
     for (const item of navigatorItems) {
       const el = container.querySelector(`[data-message-id="${item.targetMessageId}"]`);
       if (!el) continue;
       const top = el.getBoundingClientRect().top - containerTop;
-      if (top < -160 || top > viewportLimit) continue;
-      const distance = Math.abs(top - 72);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestId = item.targetMessageId;
+      visibleAnchors.push({ id: item.targetMessageId, top });
+    }
+
+    if (visibleAnchors.length === 0) return;
+
+    // Sort by vertical position so we can find the last user message that has
+    // scrolled past the reading line. This correctly attributes long assistant
+    // replies to the user turn that started the round, even when the reply
+    // fills most of the viewport.
+    visibleAnchors.sort((a, b) => a.top - b.top);
+
+    let bestId = visibleAnchors[0].id;
+    for (const anchor of visibleAnchors) {
+      if (anchor.top <= readingLineOffset) {
+        bestId = anchor.id;
+      } else {
+        break;
       }
     }
 
