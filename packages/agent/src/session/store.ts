@@ -138,6 +138,7 @@ export class SessionStoreManager {
       session_id: this.currentSessionId,
       role: message.role,
       content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+      token_usage: message.tokenUsage ? JSON.stringify(message.tokenUsage) : undefined,
       msg_type: message.msg_type,
       thinking: message.thinking,
       tool_name: message.tool_name,

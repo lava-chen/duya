@@ -79,6 +79,28 @@ function panelStorageKey(sessionKey: string): string {
   return `${PANEL_STORAGE_PREFIX}${sessionKey}`;
 }
 
+function isTransientAgentBrowserTab(tab: PageTab): boolean {
+  return tab.pageId === "browser" && tab.params?.kind === "agent";
+}
+
+/**
+ * Agent browser guests belong to a live tool process, not to a conversation's
+ * saved layout. Persisting them recreates an empty webview when returning to a
+ * thread and lets stale tool retries revive a browser the user already closed.
+ */
+export function persistablePanelState(state: PersistedPanelState): PersistedPanelState {
+  const tabs = state.tabs.filter((tab) => !isTransientAgentBrowserTab(tab));
+  const removedOnlyTransientAgentTabs = tabs.length === 0 && state.tabs.length > 0;
+  return {
+    ...state,
+    tabs,
+    activeTabId: tabs.some((tab) => tab.id === state.activeTabId) ? state.activeTabId : null,
+    panelOpen: removedOnlyTransientAgentTabs ? false : state.panelOpen,
+    panelView: removedOnlyTransientAgentTabs ? "picker" : state.panelView,
+    workspaceExpanded: removedOnlyTransientAgentTabs ? false : state.workspaceExpanded,
+  };
+}
+
 /**
  * Read previously-persisted panel state. Validates `pageId` values
  * against the live registry and silently drops unknown entries so a
@@ -93,9 +115,10 @@ function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState |
     const parsed = JSON.parse(raw) as Partial<PersistedPanelState> | null;
     if (!parsed || !Array.isArray(parsed.tabs)) return null;
     const tabs: PageTab[] = [];
+    let droppedTransientAgentTab = false;
     for (const tab of parsed.tabs) {
       if (!tab || typeof tab.id !== "string" || !isPageId(tab.pageId)) continue;
-      tabs.push({
+      const normalizedTab: PageTab = {
         id: tab.id,
         pageId: tab.pageId,
         title: typeof tab.title === "string" ? tab.title : defaultPanelTitle(t, tab.pageId),
@@ -104,7 +127,12 @@ function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState |
           tab.params && typeof tab.params === "object" && !Array.isArray(tab.params)
             ? (tab.params as Record<string, unknown>)
             : undefined,
-      });
+      };
+      if (isTransientAgentBrowserTab(normalizedTab)) {
+        droppedTransientAgentTab = true;
+        continue;
+      }
+      tabs.push(normalizedTab);
     }
     return {
       tabs,
@@ -113,9 +141,11 @@ function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState |
         tabs.some((t) => t.id === parsed.activeTabId)
           ? parsed.activeTabId
           : null,
-      panelOpen: !!parsed.panelOpen,
-      panelView: parsed.panelView === "picker" ? "picker" : "content",
-      workspaceExpanded: parsed.workspaceExpanded === true,
+      panelOpen: droppedTransientAgentTab && tabs.length === 0 ? false : !!parsed.panelOpen,
+      panelView: droppedTransientAgentTab && tabs.length === 0
+        ? "picker"
+        : parsed.panelView === "picker" ? "picker" : "content",
+      workspaceExpanded: droppedTransientAgentTab && tabs.length === 0 ? false : parsed.workspaceExpanded === true,
       workspaceTreeOpen: parsed.workspaceTreeOpen === true,
     };
   } catch {
@@ -126,7 +156,7 @@ function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState |
 function savePersistedState(sessionKey: string, state: PersistedPanelState): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(panelStorageKey(sessionKey), JSON.stringify(state));
+    window.localStorage.setItem(panelStorageKey(sessionKey), JSON.stringify(persistablePanelState(state)));
   } catch {
     // Quota / private mode — fail silently, the in-memory state still works.
   }
@@ -160,8 +190,12 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
   }
 }
 
-function clampPanelWidth(width: number): number {
-  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
+function panelMaxWidth(maxWidth?: number | null): number {
+  return maxWidth === null ? Number.POSITIVE_INFINITY : maxWidth ?? MAX_PANEL_WIDTH;
+}
+
+function clampPanelWidth(width: number, maxWidth?: number | null): number {
+  return Math.min(panelMaxWidth(maxWidth), Math.max(MIN_PANEL_WIDTH, width));
 }
 
 function getWorkspaceWidth(): number {
@@ -170,38 +204,53 @@ function getWorkspaceWidth(): number {
   return workspace?.getBoundingClientRect().width ?? window.innerWidth;
 }
 
-function preferredPanelWidth(
-  width: number | undefined,
-  minWidth: number,
-  widthRatio?: number,
-): number {
+export interface PanelWidthOptions {
+  workspaceWidth: number;
+  preferredWidth?: number;
+  minWidth: number;
+  widthRatio?: number;
+  maxWidthRatio?: number;
+  maxWidth?: number | null;
+}
+
+export function resolvePanelWidth({
+  workspaceWidth,
+  preferredWidth,
+  minWidth,
+  widthRatio,
+  maxWidthRatio,
+  maxWidth,
+}: PanelWidthOptions): number {
   // Undefined preferred width falls back to the page's minimum, so we never
   // propagate NaN into setPanelWidth (CSS would silently drop `NaNpx`).
-  const fallback = clampPanelWidth(minWidth);
-  const workspaceWidth = getWorkspaceWidth();
+  const maximumWidth = panelMaxWidth(maxWidth);
+  const fallback = clampPanelWidth(minWidth, maxWidth);
 
   let desired: number;
   if (typeof widthRatio === "number" && Number.isFinite(widthRatio) && widthRatio > 0) {
     // Ratio-driven sizing: panel claims `widthRatio` of the workspace and
-    // the chat column gets the rest. Ignore `width` so callers can't
+    // the chat column gets the rest. Ignore `preferredWidth` so callers can't
     // accidentally pass a fixed pixel value and override the ratio.
-    desired = clampPanelWidth(workspaceWidth * widthRatio);
+    desired = clampPanelWidth(workspaceWidth * widthRatio, maxWidth);
   } else {
-    desired = clampPanelWidth(typeof width === "number" && Number.isFinite(width) ? width : minWidth);
+    desired = clampPanelWidth(
+      typeof preferredWidth === "number" && Number.isFinite(preferredWidth) ? preferredWidth : minWidth,
+      maxWidth,
+    );
   }
 
-  const maxByRatio = workspaceWidth * MAX_PANEL_RATIO;
-  // When a page declares `widthRatio`, the chat column width is derived
-  // from the ratio itself, so the chat-minimum cap is meaningless and
-  // would actually fight the ratio (e.g. ratio=0.6 on a 1180px workspace
-  // wants panel=708, but `MIN_CHAT_WIDTH=680` would clamp to 500).
-  const maxWithChat =
-    typeof widthRatio === "number" && Number.isFinite(widthRatio) && widthRatio > 0
-      ? Number.POSITIVE_INFINITY
-      : Math.max(minWidth, workspaceWidth - MIN_CHAT_WIDTH);
+  const ratioCap =
+    typeof maxWidthRatio === "number" && Number.isFinite(maxWidthRatio) && maxWidthRatio > 0
+      ? maxWidthRatio
+      : MAX_PANEL_RATIO;
+  const maxByRatio = workspaceWidth * ratioCap;
+  // The chat column is always protected. When the two minimum widths cannot
+  // coexist, the responsive layout overlays the panel instead of squeezing
+  // the chat below this minimum.
+  const maxWithChat = workspaceWidth - MIN_CHAT_WIDTH;
 
-  // The tightest of: page minimum, ratio cap, chat-minimum cap.
-  const upperBound = Math.min(maxByRatio, maxWithChat);
+  // The tightest of: page ceiling, ratio cap, and chat-minimum cap.
+  const upperBound = Math.min(maximumWidth, maxByRatio, maxWithChat);
   return Math.max(fallback, Math.min(desired, upperBound));
 }
 
@@ -270,7 +319,14 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
   const applyPageLayout = useCallback((pageId: PageId) => {
     const descriptor = getPageDescriptor(pageId);
-    const nextWidth = preferredPanelWidth(descriptor.preferredWidth, descriptor.minWidth, descriptor.widthRatio);
+    const nextWidth = resolvePanelWidth({
+      workspaceWidth: getWorkspaceWidth(),
+      preferredWidth: descriptor.preferredWidth,
+      minWidth: descriptor.minWidth,
+      widthRatio: descriptor.widthRatio,
+      maxWidthRatio: descriptor.maxWidthRatio,
+      maxWidth: descriptor.maxWidth,
+    });
     setPanelWidth(nextWidth);
     setWorkspaceExpandedState(descriptor.defaultExpanded);
     setPanelOpen(true);
@@ -342,11 +398,36 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   // When the agent issues a browser command but no webview is registered,
   // the daemon sends 'browser:open-agent-tab' IPC to trigger tab creation.
   useEffect(() => {
-    const cleanup = window.electronAPI?.browserWebview?.onOpenAgentTab((sessionId: string) => {
-      openOrActivatePage("browser", {
+    const cleanup = window.electronAPI?.browserWebview?.onOpenAgentTab((sessionId: string, focus: boolean) => {
+      const existing = tabsRef.current.find(
+        (tab) => tab.pageId === "browser" && tab.params?.kind === "agent" && tab.params.sessionId === sessionId,
+      );
+      if (existing) {
+        if (focus) openOrActivatePage("browser", existing.params);
+        return;
+      }
+
+      const params = {
         kind: "agent",
         sessionId,
         title: "Agent Browser",
+      };
+      const hasVisibleAgentBrowser = tabsRef.current.some(
+        (tab) => tab.pageId === "browser" && tab.params?.kind === "agent",
+      );
+      if (!focus && hasVisibleAgentBrowser) {
+        // Parallel investigations need real independent WebViews, but switching
+        // the active sidebar tab for every session makes the UI visibly flicker.
+        setTabs((previous) => [...previous, {
+          id: genId(),
+          pageId: "browser",
+          title: "Agent Browser",
+          params,
+        }]);
+        return;
+      }
+      openOrActivatePage("browser", {
+        ...params,
       });
     });
     return () => cleanup?.();
@@ -460,6 +541,16 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, [openOrActivatePage]);
 
   const closePanel = useCallback<PanelContextValue["closePanel"]>((tabId) => {
+    const closingTab = tabsRef.current.find((tab) => tab.id === tabId);
+    if (
+      closingTab?.pageId === "browser" &&
+      closingTab.params?.kind === "agent" &&
+      typeof closingTab.params.sessionId === "string"
+    ) {
+      // A visible close is authoritative: suppress in-flight tool retries so
+      // they cannot recreate a blank agent browser after this tab disappears.
+      void window.electronAPI?.browserWebview?.closeAgentBrowser(closingTab.params.sessionId).catch(() => {});
+    }
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === tabId);
       if (idx === -1) return prev;
@@ -493,6 +584,26 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       setPanelView("content");
     }
   }, [applyPageLayout]);
+
+  useEffect(() => {
+    const api = window.electronAPI?.browserWebview;
+    const findAgentTab = (sessionId: string) => tabsRef.current.find(
+      (tab) => tab.pageId === "browser" && tab.params?.kind === "agent" && tab.params.sessionId === sessionId,
+    );
+    const stopClose = api?.onCloseAgentTab((sessionId) => {
+      const tab = findAgentTab(sessionId);
+      if (tab) closePanel(tab.id);
+    });
+    const stopActivate = api?.onActivateAgentTab((sessionId, focus) => {
+      if (!focus) return;
+      const tab = findAgentTab(sessionId);
+      if (tab) activateTab(tab.id);
+    });
+    return () => {
+      stopClose?.();
+      stopActivate?.();
+    };
+  }, [activateTab, closePanel]);
 
   const updateTabTitle = useCallback<PanelContextValue["updateTabTitle"]>((tabId, title) => {
     const nextTitle = title.trim();

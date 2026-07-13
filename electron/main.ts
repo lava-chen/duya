@@ -18,6 +18,7 @@ import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
 import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds } from './services/browser/daemon';
+import { attachBrowserDownloadHandler } from './services/browser/cookie-writer';
 import { getAutomationScheduler, initAutomationScheduler } from './automation/Scheduler';
 import { initLogger, getLogger, LogComponent } from './logging/index';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, cleanupUpdater } from './services/updater';
@@ -313,6 +314,7 @@ if (gotTheLock) {
       ));
       setAllowedExtensionIds(normalizedExtensionIds);
       await startBrowserDaemon();
+      attachBrowserDownloadHandler();
     } catch (error) {
       logger.error('Failed to start Browser Daemon', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }

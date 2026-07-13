@@ -2,53 +2,91 @@
 
 import { useState, useCallback } from 'react';
 import {
-  ChevronDownIcon,
   CookieIcon,
   TrashIcon,
   SpinnerGapIcon,
   CheckCircleIcon,
   WarningIcon,
+  GlobeIcon,
+  FolderOpenIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSettings } from '@/hooks/useSettings';
-import { SettingsSection, SettingsCard } from '@/components/settings/ui';
+import { SettingsSection, SettingsCard, SettingsRow } from '@/components/settings/ui';
 
-type BackendMode = 'auto' | 'extension' | 'built-in';
+type CookieBrowser = 'chrome' | 'edge';
+
+function isValidHttpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 export function BrowserAdvancedSection() {
   const { t } = useTranslation();
-  const { settings, save, saving } = useSettings();
-  const [expanded, setExpanded] = useState(false);
+  const { settings, saving, save } = useSettings();
 
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ count: number; failed: number } | null>(null);
+  const [cookieBrowser, setCookieBrowser] = useState<CookieBrowser>('chrome');
+  const [cookieProfile, setCookieProfile] = useState('Default');
+  const [importResult, setImportResult] = useState<{ count: number; failed: number; unsupported: number; source?: 'extension' } | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [importErrorCode, setImportErrorCode] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [cleared, setCleared] = useState(false);
+  const [homeUrlDraft, setHomeUrlDraft] = useState(settings.browserHomeUrl ?? '');
+  const [homeUrlError, setHomeUrlError] = useState<string | null>(null);
 
-  const mode = settings.browserBackendMode ?? 'auto';
+  const handleSaveHomeUrl = useCallback(async () => {
+    const trimmed = homeUrlDraft.trim();
+    if (!isValidHttpUrl(trimmed)) {
+      setHomeUrlError(t('browserAdvanced.homeUrlInvalid'));
+      return;
+    }
+    await save({ browserHomeUrl: trimmed });
+    setHomeUrlError(null);
+  }, [homeUrlDraft, save, t]);
 
-  const handleModeChange = useCallback(async (newMode: BackendMode) => {
-    await save({ browserBackendMode: newMode });
+  const handleSelectDownloadFolder = useCallback(async () => {
+    const result = await window.electronAPI?.dialog?.selectDownloadFolder({
+      defaultPath: settings.browserDownloadPath,
+    });
+    if (result && !result.canceled && result.filePaths.length > 0) {
+      await save({ browserDownloadPath: result.filePaths[0] });
+    }
+  }, [save, settings.browserDownloadPath]);
+
+  const handleClearDownloadFolder = useCallback(async () => {
+    await save({ browserDownloadPath: '' });
   }, [save]);
 
   const handleImportCookies = useCallback(async () => {
     setImporting(true);
     setImportResult(null);
     setImportError(null);
+    setImportErrorCode(null);
     try {
-      const result = await window.electronAPI?.browserCookie?.importCookies('chrome');
+      const result = await window.electronAPI?.browserCookie?.importCookies(cookieBrowser, cookieProfile.trim() || 'Default');
       if (result?.ok) {
-        setImportResult({ count: result.count ?? 0, failed: result.failed ?? 0 });
+        setImportResult({
+          count: result.count ?? 0,
+          failed: result.failed ?? 0,
+          unsupported: result.unsupported ?? 0,
+          source: result.source,
+        });
       } else {
         setImportError(result?.error ?? 'Unknown error');
+        setImportErrorCode(result?.errorCode ?? null);
       }
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setImporting(false);
     }
-  }, []);
+  }, [cookieBrowser, cookieProfile]);
 
   const handleClearData = useCallback(async () => {
     const confirmed = window.confirm(t('browserAdvanced.clearDataConfirm'));
@@ -71,69 +109,83 @@ export function BrowserAdvancedSection() {
   return (
     <SettingsSection
       title={t('browserAdvanced.title')}
+      description={t('browserAdvanced.description')}
       className="mt-8"
-      action={
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-surface border border-border/50 text-foreground hover:bg-muted transition-all"
-        >
-          <ChevronDownIcon
-            size={14}
-            className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
-          />
-        </button>
-      }
     >
-      {expanded && (
-        <div className="space-y-4">
-          {/* Backend mode */}
-          <SettingsCard>
-            <div className="px-4 py-3">
-              <div className="text-sm font-semibold text-foreground mb-3">
-                {t('browserAdvanced.backendMode')}
-              </div>
-              <div className="space-y-2">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="radio"
-                    checked={mode === 'auto'}
-                    onChange={() => handleModeChange('auto')}
-                    disabled={saving}
-                    className="mt-0.5"
-                  />
-                  <div>
-                    <span className="text-sm text-foreground">{t('browserAdvanced.modeAuto')}</span>
-                    <span className="block text-xs text-muted-foreground mt-0.5">
-                      {t('browserAdvanced.modeAutoDesc')}
-                    </span>
-                  </div>
-                </label>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="radio"
-                    checked={mode === 'extension'}
-                    onChange={() => handleModeChange('extension')}
-                    disabled={saving}
-                    className="mt-0.5"
-                  />
-                  <span className="text-sm text-foreground">{t('browserAdvanced.modeExtension')}</span>
-                </label>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="radio"
-                    checked={mode === 'built-in'}
-                    onChange={() => handleModeChange('built-in')}
-                    disabled={saving}
-                    className="mt-0.5"
-                  />
-                  <span className="text-sm text-foreground">{t('browserAdvanced.modeBuiltin')}</span>
-                </label>
-              </div>
+      <div className="space-y-4">
+        {/* Home URL */}
+        <SettingsCard>
+          <SettingsRow
+            label={
+              <span className="flex items-center gap-2.5">
+                <GlobeIcon size={18} className="text-muted-foreground" />
+                <span className="text-sm font-medium text-foreground">{t('browserAdvanced.homeUrl')}</span>
+              </span>
+            }
+          />
+          <div className="px-4 pb-3.5">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={homeUrlDraft}
+                onChange={(e) => {
+                  setHomeUrlDraft(e.target.value);
+                  setHomeUrlError(null);
+                }}
+                onBlur={handleSaveHomeUrl}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveHomeUrl(); }}
+                placeholder="https://www.google.com"
+                disabled={saving}
+                className="flex-1 px-3 py-2 rounded-lg border text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent border-border/50 disabled:opacity-50"
+              />
             </div>
-          </SettingsCard>
+            {homeUrlError && (
+              <p className="mt-2 text-xs text-destructive">{homeUrlError}</p>
+            )}
+            <p className="mt-2 text-xs text-muted-foreground">{t('browserAdvanced.homeUrlDesc')}</p>
+          </div>
+        </SettingsCard>
 
-          {/* Cookie import */}
-          <SettingsCard>
+        {/* Download path */}
+        <SettingsCard>
+          <SettingsRow
+            label={
+              <span className="flex items-center gap-2.5">
+                <FolderOpenIcon size={18} className="text-muted-foreground" />
+                <span className="text-sm font-medium text-foreground">{t('browserAdvanced.downloadPath')}</span>
+              </span>
+            }
+            action={
+              <div className="flex items-center gap-2">
+                {settings.browserDownloadPath && (
+                  <button
+                    onClick={handleClearDownloadFolder}
+                    disabled={saving}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-surface border border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted transition-all disabled:opacity-50"
+                  >
+                    {t('browserAdvanced.resetDefault')}
+                  </button>
+                )}
+                <button
+                  onClick={handleSelectDownloadFolder}
+                  disabled={saving}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
+                >
+                  {t('browserAdvanced.change')}
+                </button>
+              </div>
+            }
+          />
+          <div className="px-4 pb-3.5">
+            <code className="block w-full px-3 py-2 rounded-lg text-xs font-mono truncate bg-surface border border-border/50 text-foreground">
+              {settings.browserDownloadPath || t('browserAdvanced.defaultDownloadPath')}
+            </code>
+            <p className="mt-2 text-xs text-muted-foreground">{t('browserAdvanced.downloadPathDesc')}</p>
+          </div>
+        </SettingsCard>
+
+        {/* Cookie import */}
+        <SettingsCard>
             <div className="px-4 py-3.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
@@ -151,53 +203,87 @@ export function BrowserAdvancedSection() {
                   {importing ? t('browserAdvanced.importing') : t('browserAdvanced.importCookies')}
                 </button>
               </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <label className="text-xs text-muted-foreground">
+                  {t('browserAdvanced.cookieSource')}
+                  <select
+                    value={cookieBrowser}
+                    onChange={(event) => setCookieBrowser(event.target.value as CookieBrowser)}
+                    disabled={importing}
+                    className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground"
+                  >
+                    <option value="chrome">Google Chrome</option>
+                    <option value="edge">Microsoft Edge</option>
+                  </select>
+                </label>
+                <label className="text-xs text-muted-foreground">
+                  {t('browserAdvanced.cookieProfile')}
+                  <input
+                    value={cookieProfile}
+                    onChange={(event) => setCookieProfile(event.target.value)}
+                    disabled={importing}
+                    placeholder="Default"
+                    className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground"
+                  />
+                </label>
+              </div>
               {importResult && (
                 <div className="mt-2 flex items-center gap-1.5 text-xs text-green-500">
                   <CheckCircleIcon size={12} />
                   {t('browserAdvanced.importSuccess', {
                     count: importResult.count,
-                    failed: importResult.failed,
+                    failed: importResult.failed + importResult.unsupported,
                   })}
+                  {importResult.source === 'extension' && ` ${t('browserAdvanced.importLiveSource')}`}
                 </div>
               )}
-              {importError && (
+              {(importError || importErrorCode) && (
                 <div className="mt-2 flex items-center gap-1.5 text-xs text-destructive">
                   <WarningIcon size={12} />
-                  {t('browserAdvanced.importFailed', { error: importError })}
+                  {importErrorCode === 'COOKIE_DATABASE_BUSY'
+                    ? t('browserAdvanced.importSourceBusy', {
+                      browser: cookieBrowser === 'chrome' ? 'Google Chrome' : 'Microsoft Edge',
+                    })
+                    : t('browserAdvanced.importFailed', { error: importError ?? 'Unknown error' })}
+                </div>
+              )}
+              {importResult && importResult.unsupported > 0 && (
+                <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-500">
+                  <WarningIcon size={12} />
+                  {t('browserAdvanced.importUnsupported', { count: importResult.unsupported })}
                 </div>
               )}
             </div>
           </SettingsCard>
 
-          {/* Clear data */}
-          <SettingsCard>
-            <div className="px-4 py-3.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <TrashIcon size={18} className="text-muted-foreground" />
-                  <span className="text-sm font-medium text-foreground">
-                    {t('browserAdvanced.clearData')}
-                  </span>
-                </div>
-                <button
-                  onClick={handleClearData}
-                  disabled={clearing}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-all disabled:opacity-50"
-                >
-                  {clearing && <SpinnerGapIcon size={12} className="animate-spin" />}
+        {/* Clear data */}
+        <SettingsCard>
+          <div className="px-4 py-3.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <TrashIcon size={18} className="text-muted-foreground" />
+                <span className="text-sm font-medium text-foreground">
                   {t('browserAdvanced.clearData')}
-                </button>
+                </span>
               </div>
-              {cleared && (
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-green-500">
-                  <CheckCircleIcon size={12} />
-                  {t('browserAdvanced.dataCleared')}
-                </div>
-              )}
+              <button
+                onClick={handleClearData}
+                disabled={clearing}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-all disabled:opacity-50"
+              >
+                {clearing && <SpinnerGapIcon size={12} className="animate-spin" />}
+                {t('browserAdvanced.clearData')}
+              </button>
             </div>
-          </SettingsCard>
-        </div>
-      )}
+            {cleared && (
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-green-500">
+                <CheckCircleIcon size={12} />
+                {t('browserAdvanced.dataCleared')}
+              </div>
+            )}
+          </div>
+        </SettingsCard>
+      </div>
     </SettingsSection>
   );
 }

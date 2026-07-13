@@ -272,7 +272,7 @@ export class BrowserPool {
     // Create new session honoring the configured backend mode.
     // Built-in mode uses the DUYA webview (no Playwright); if the webview
     // daemon is unreachable, the caller should fall back to HTTP fetch.
-    const client = await createCDPClientForMode(sessionId, this.backendMode);
+    const client = await createCDPClientForMode(sessionId, this.backendMode, { background: true });
     const snapshotEngine = new SnapshotEngine(client);
     const platformHookManager = new PlatformHookManager();
 

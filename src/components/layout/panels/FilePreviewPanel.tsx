@@ -11,7 +11,7 @@ import {
   Sparkle,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vs, vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
@@ -152,6 +152,71 @@ function languageFromExtension(extension?: string): string {
 }
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
+
+/** Memoized text/code preview body. Isolates the expensive
+ *  SyntaxHighlighter / MarkdownRenderer from selection, menu, and
+ *  focus-line state changes in the parent so they don't trigger a
+ *  full re-parse of the code on every mouseup or dropdown toggle. */
+const PreviewTextContent = memo(function PreviewTextContent({
+  content,
+  extension,
+  language,
+  isDark,
+  truncatedHint,
+  lineProps,
+}: {
+  content: string;
+  extension?: string;
+  language: string;
+  isDark: boolean;
+  truncatedHint: string;
+  lineProps: (lineNumber: number) => object;
+}) {
+  const isMarkdown = MARKDOWN_EXTENSIONS.has(extension ?? "");
+  return (
+    <div className={`file-preview-text${isMarkdown ? " markdown" : " code"}`}>
+      {truncatedHint && <div className="file-preview-truncated">{truncatedHint}</div>}
+      {isMarkdown ? (
+        <MarkdownRenderer className="prose dark:prose-invert max-w-none file-preview-markdown">
+          {content}
+        </MarkdownRenderer>
+      ) : (
+        <SyntaxHighlighter
+          language={language}
+          style={isDark ? vscDarkPlus : vs}
+          wrapLines
+          showLineNumbers
+          startingLineNumber={1}
+          lineProps={lineProps}
+          customStyle={{
+            margin: 0,
+            padding: 0,
+            background: "transparent",
+            fontSize: "13px",
+            lineHeight: "1.65",
+            minHeight: "100%",
+          }}
+          codeTagProps={{
+            style: {
+              fontFamily: "var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace)",
+            },
+          }}
+          lineNumberStyle={{
+            minWidth: "36px",
+            paddingRight: "12px",
+            paddingLeft: "8px",
+            textAlign: "right",
+            color: isDark ? "#6e7681" : "#6e7681",
+            background: "transparent",
+            userSelect: "none",
+          }}
+        >
+          {content}
+        </SyntaxHighlighter>
+      )}
+    </div>
+  );
+});
 
 export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const propFilePath = typeof tab.params?.filePath === "string" ? tab.params.filePath : "";
@@ -656,47 +721,14 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           <iframe className="file-preview-pdf" src={`${dataUrl}#toolbar=0`} title={preview.name || tab.title} />
         )}
         {!loading && preview?.success && preview.kind === "text" && (
-          <div className={`file-preview-text${MARKDOWN_EXTENSIONS.has(preview.extension ?? "") ? " markdown" : " code"}`}>
-            {preview.truncated && <div className="file-preview-truncated">{t('filePreview.truncatedHint')}</div>}
-            {MARKDOWN_EXTENSIONS.has(preview.extension ?? "") ? (
-              <MarkdownRenderer className="prose dark:prose-invert max-w-none file-preview-markdown">
-                {preview.content || ""}
-              </MarkdownRenderer>
-            ) : (
-              <SyntaxHighlighter
-                language={language}
-                style={isDark ? vscDarkPlus : vs}
-                wrapLines
-                showLineNumbers
-                startingLineNumber={1}
-                lineProps={lineProps}
-                customStyle={{
-                  margin: 0,
-                  padding: 0,
-                  background: "transparent",
-                  fontSize: "13px",
-                  lineHeight: "1.65",
-                  minHeight: "100%",
-                }}
-                codeTagProps={{
-                  style: {
-                    fontFamily: "var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace)",
-                  },
-                }}
-                lineNumberStyle={{
-                  minWidth: "36px",
-                  paddingRight: "12px",
-                  paddingLeft: "8px",
-                  textAlign: "right",
-                  color: isDark ? "#6e7681" : "#6e7681",
-                  background: "transparent",
-                  userSelect: "none",
-                }}
-              >
-                {preview.content || ""}
-              </SyntaxHighlighter>
-            )}
-          </div>
+          <PreviewTextContent
+            content={preview.content || ""}
+            extension={preview.extension}
+            language={language}
+            isDark={isDark}
+            truncatedHint={preview.truncated ? t('filePreview.truncatedHint') : ""}
+            lineProps={lineProps}
+          />
         )}
         {selection && (
           <button

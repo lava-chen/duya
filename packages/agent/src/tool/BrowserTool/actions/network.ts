@@ -3,6 +3,7 @@ import type { ActionHandler, ActionContext } from './types.js';
 
 const networkStartSchema = z.object({
   pattern: z.string().optional().default('').describe('URL pattern to filter captured requests'),
+  url: z.string().url().optional().describe('Optional URL to navigate after capture is armed, avoiding a monitoring race'),
 });
 
 export const networkStartAction: ActionHandler<z.infer<typeof networkStartSchema>> = {
@@ -13,7 +14,10 @@ export const networkStartAction: ActionHandler<z.infer<typeof networkStartSchema
       return { error: 'Network capture not available in fallback mode', mode: 'fallback' };
     }
     const started = await ctx.cdp.startNetworkCapture(data.pattern);
-    return { started, pattern: data.pattern, mode: ctx.mode };
+    if (started && data.url) {
+      await ctx.cdp.navigate(data.url);
+    }
+    return { started, pattern: data.pattern, navigated: data.url ?? null, mode: ctx.mode };
   },
 };
 

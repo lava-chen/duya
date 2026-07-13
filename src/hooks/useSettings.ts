@@ -49,6 +49,10 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     blockedDomains: [],
     // Browser backend mode
     browserBackendMode: 'auto' as const,
+    // Built-in browser default home URL
+    browserHomeUrl: 'https://www.google.com',
+    // Built-in browser default download directory
+    browserDownloadPath: undefined,
     // Favorite agent profiles for quick access (max 3)
     favoriteAgentIds: ['general-purpose', 'code-expert', 'plan'],
     // Agent prompt language preference
@@ -154,7 +158,12 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       messageFontSize: (raw.messageFontSize as AppSettings['messageFontSize']) || defaults.messageFontSize,
       // Browser security settings
       blockedDomains: raw.blockedDomains ? JSON.parse(raw.blockedDomains) : defaults.blockedDomains,
+// Browser backend mode
       browserBackendMode: (raw.browserBackendMode as 'auto' | 'extension' | 'built-in') ?? defaults.browserBackendMode,
+      // Built-in browser default home URL
+      browserHomeUrl: raw.browserHomeUrl || defaults.browserHomeUrl,
+      // Built-in browser default download directory
+      browserDownloadPath: raw.browserDownloadPath || defaults.browserDownloadPath,
       // Favorite agent profiles for quick access (max 3)
       favoriteAgentIds: raw.favoriteAgentIds ? JSON.parse(raw.favoriteAgentIds) : defaults.favoriteAgentIds,
       // Agent prompt language preference
@@ -238,6 +247,10 @@ export function useSettings(): {
     blockedDomains: [],
     // Browser backend mode
     browserBackendMode: 'auto' as const,
+    // Built-in browser default home URL
+    browserHomeUrl: 'https://www.google.com',
+    // Built-in browser default download directory
+    browserDownloadPath: undefined,
     // Favorite agent profiles for quick access (max 3)
     favoriteAgentIds: ['general-purpose', 'code-expert', 'plan'],
     // Agent prompt language preference

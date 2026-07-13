@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
-import { MAX_PANEL_RATIO, MIN_PANEL_WIDTH, usePanel } from "@/hooks/usePanel";
+import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_CHAT_WIDTH, MIN_PANEL_WIDTH, usePanel } from "@/hooks/usePanel";
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
 import { ResizeHandle } from "./ResizeHandle";
@@ -14,8 +14,6 @@ import {
 } from "./task-drawer-store";
 import { ArrowsInSimple, ArrowsOutSimple } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
-
-const MIN_CHAT_WIDTH = 680;
 
 // `office` and `research` are passive surfaces — they are opened by
 // events (`duya:open-office-panel`) or by `ResearchModePanel` once a
@@ -57,8 +55,13 @@ export function PanelZone() {
   const isSessionView = currentView === "chat" && !!activeThreadId;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  const browserTabs = tabs.filter((tab) => tab.pageId === "browser");
   const activeDescriptor = activeTab ? getPageDescriptor(activeTab.pageId) : null;
   const activePanelMinWidth = activeDescriptor?.minWidth ?? 340;
+  const activePanelMaxWidth = activeDescriptor?.maxWidth === null
+    ? Number.POSITIVE_INFINITY
+    : activeDescriptor?.maxWidth ?? MAX_PANEL_WIDTH;
+  const activePanelMaxRatio = activeDescriptor?.maxWidthRatio ?? MAX_PANEL_RATIO;
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const cwd = activeThread?.workingDirectory ?? undefined;
   const zoneStyle = {
@@ -95,13 +98,13 @@ export function PanelZone() {
       const nextWidth = resizeStartWidthRef.current - delta;
       const workspace = document.querySelector(".app-workspace-row");
       const workspaceWidth = workspace?.getBoundingClientRect().width ?? window.innerWidth;
-      const maxByRatio = workspaceWidth * MAX_PANEL_RATIO;
-      const maxWithChat = Math.max(activePanelMinWidth, workspaceWidth - MIN_CHAT_WIDTH);
-      const upperBound = Math.min(maxByRatio, maxWithChat);
+      const maxByRatio = workspaceWidth * activePanelMaxRatio;
+      const maxWithChat = workspaceWidth - MIN_CHAT_WIDTH;
+      const upperBound = Math.min(activePanelMaxWidth, maxByRatio, maxWithChat);
       const lowerBound = Math.max(MIN_PANEL_WIDTH, activePanelMinWidth);
       setPanelWidth(Math.max(lowerBound, Math.min(nextWidth, upperBound)));
     },
-    [activePanelMinWidth, setPanelWidth]
+    [activePanelMaxRatio, activePanelMaxWidth, activePanelMinWidth, setPanelWidth]
   );
 
   useEffect(() => {
@@ -165,15 +168,28 @@ export function PanelZone() {
       >
         {tabs.length > 0 && <PanelHeader />}
         <div className="sidebar-panel-content">
-          {activeTab ? (
+          {browserTabs.map((browserTab) => {
+            const BrowserComponent = getPageDescriptor(browserTab.pageId).component;
+            const isActive = browserTab.id === activeTabId;
+            return (
+              <div
+                key={browserTab.id}
+                className={`sidebar-panel-browser-tab${isActive ? " active" : ""}`}
+                aria-hidden={!isActive}
+              >
+                <BrowserComponent tab={browserTab} embedded />
+              </div>
+            );
+          })}
+          {activeTab && activeTab.pageId !== "browser" ? (
             (() => {
               const desc = getPageDescriptor(activeTab.pageId);
               const Component = desc.component;
               return <Component tab={activeTab} embedded />;
             })()
-          ) : (
+          ) : !activeTab ? (
             <EmptyPanelLauncher onSelect={openPage} />
-          )}
+          ) : null}
         </div>
       </div>
     </div>

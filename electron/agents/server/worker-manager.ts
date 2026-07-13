@@ -5,6 +5,26 @@ import { SessionManager } from './session-store';
 import { SessionState } from './types';
 import { workerLogger } from './logger';
 
+export function createWorkerEnvironment(
+  sessionId: string,
+  maxMemoryMB: number,
+  betterSqlite3Path: string,
+): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    SESSION_ID: sessionId,
+    DUYA_AGENT_MODE: 'true',
+    DUYA_AGENT_SERVER: 'true',
+    // The BrowserTool uses this as the signal that it can open and drive the
+    // built-in WebView through the Browser Daemon. Omitting it silently routes
+    // Agent Server workers to static fallback mode.
+    DUYA_DAEMON_PORT: process.env.DUYA_DAEMON_PORT ?? '19825',
+    DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || betterSqlite3Path,
+    DUYA_CUSTOM_DB_PATH: process.env.DUYA_CUSTOM_DB_PATH,
+    NODE_OPTIONS: `--max-old-space-size=${maxMemoryMB}`,
+  };
+}
+
 export class WorkerManager {
   private workers = new Map<string, ChildProcess>();
   private sessionManager: SessionManager;
@@ -36,15 +56,11 @@ export class WorkerManager {
 
     const maxMemoryMB = parseInt(process.env.DUYA_WORKER_MAX_MEMORY_MB || '2048', 10);
 
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      SESSION_ID: sessionId,
-      DUYA_AGENT_MODE: 'true',
-      DUYA_AGENT_SERVER: 'true',
-      DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || this.resolveBetterSqlite3Path(),
-      DUYA_CUSTOM_DB_PATH: process.env.DUYA_CUSTOM_DB_PATH,
-      NODE_OPTIONS: `--max-old-space-size=${maxMemoryMB}`,
-    };
+    const env = createWorkerEnvironment(
+      sessionId,
+      maxMemoryMB,
+      this.resolveBetterSqlite3Path(),
+    );
 
     const child = fork(workerPath, [], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'] as any,

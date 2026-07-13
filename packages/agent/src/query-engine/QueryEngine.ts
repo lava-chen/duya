@@ -178,6 +178,17 @@ export class QueryEngine {
 
       // Add assistant response to session
       const messages = this.agent.getMessages();
+
+      // Attach the final token usage to the last assistant message so the
+      // DB-persisted canonical message carries token_usage for the context
+      // ring. Only mutate the in-memory message; addMessage serializes it.
+      if (totalTokenUsage.input_tokens > 0 || totalTokenUsage.output_tokens > 0) {
+        const lastAssistant = messages.filter((m) => m.role === 'assistant').pop();
+        if (lastAssistant) {
+          lastAssistant.tokenUsage = totalTokenUsage;
+        }
+      }
+
       for (const msg of messages.slice(-2)) {
         await this.sessionManager.addMessage(msg);
       }

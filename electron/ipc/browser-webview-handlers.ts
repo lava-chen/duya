@@ -6,6 +6,7 @@
  * Channels (renderer -> main, invoke):
  *   - browser:register-webview   ({ sessionId, webContentsId }) -> { ok }
  *   - browser:unregister-webview ({ sessionId })                -> { ok }
+ *   - browser:close-agent-browser ({ sessionId })               -> { ok }
  *
  * Channels (main -> renderer, event):
  *   - browser:open-agent-tab     ({ sessionId }) — sent by the daemon when
@@ -16,7 +17,11 @@
  */
 
 import { ipcMain } from 'electron';
-import { registerWebviewSession, unregisterWebviewSession } from '../services/browser/daemon';
+import {
+  closeWebviewSessionByUser,
+  registerWebviewSession,
+  unregisterWebviewSession,
+} from '../services/browser/daemon';
 import { getLogger, LogComponent } from '../logging/logger';
 
 const logger = getLogger();
@@ -56,6 +61,17 @@ export function registerBrowserWebviewHandlers(): void {
       }
 
       unregisterWebviewSession(payload.sessionId);
+      return { ok: true };
+    },
+  );
+
+  ipcMain.handle(
+    'browser:close-agent-browser',
+    (_event, payload: UnregisterWebviewPayload) => {
+      if (typeof payload?.sessionId !== 'string') {
+        return { ok: false, error: 'Invalid payload' };
+      }
+      closeWebviewSessionByUser(payload.sessionId);
       return { ok: true };
     },
   );

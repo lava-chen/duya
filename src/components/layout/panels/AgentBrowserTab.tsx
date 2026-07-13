@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, ArrowsClockwise, Robot } from "@phosphor-icons/react";
-import { BrowserBackendToggle } from "./BrowserBackendToggle";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, ArrowsClockwise, CircleNotch, Robot } from "@phosphor-icons/react";
 
 type WebviewElement = HTMLElement & {
   canGoBack(): boolean;
@@ -32,9 +31,18 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
     setWebviewNode(node as WebviewElement | null);
   }, []);
   const [url, setUrl] = useState("about:blank");
+  const [title, setTitle] = useState("");
+  const [loading, setLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [registrationError, setRegistrationError] = useState<string | null>(null);
+
+  // Keep the latest title callback in a ref so the effect/sync handlers don't
+  // re-run when the parent passes a new inline function on every render.
+  const onTitleChangeRef = useRef(onTitleChange);
+  useEffect(() => {
+    onTitleChangeRef.current = onTitleChange;
+  }, [onTitleChange]);
 
   const syncFromWebview = useCallback((node: WebviewElement | null) => {
     if (!node) return;
@@ -42,13 +50,14 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
       const nextUrl = node.getURL() || "about:blank";
       const nextTitle = node.getTitle() || "";
       setUrl(nextUrl);
+      setTitle(nextTitle);
       setCanGoBack(node.canGoBack());
       setCanGoForward(node.canGoForward());
-      if (nextTitle) onTitleChange?.(nextTitle);
+      if (nextTitle) onTitleChangeRef.current?.(nextTitle);
     } catch {
       // Webview can throw while it is being attached or torn down.
     }
-  }, [onTitleChange]);
+  }, []);
 
   useEffect(() => {
     const node = webviewNode;
@@ -84,8 +93,15 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
     const handleDomReady = () => register();
     const handleNavigate = () => syncFromWebview(node);
     const handleTitle = () => syncFromWebview(node);
+    const handleStart = () => setLoading(true);
+    const handleStop = () => {
+      setLoading(false);
+      syncFromWebview(node);
+    };
 
     node.addEventListener("dom-ready", handleDomReady as EventListener);
+    node.addEventListener("did-start-loading", handleStart as EventListener);
+    node.addEventListener("did-stop-loading", handleStop as EventListener);
     node.addEventListener("did-navigate", handleNavigate as EventListener);
     node.addEventListener("did-navigate-in-page", handleNavigate as EventListener);
     node.addEventListener("page-title-updated", handleTitle as EventListener);
@@ -121,6 +137,8 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
     return () => {
       clearInterval(pollInterval);
       node.removeEventListener("dom-ready", handleDomReady as EventListener);
+      node.removeEventListener("did-start-loading", handleStart as EventListener);
+      node.removeEventListener("did-stop-loading", handleStop as EventListener);
       node.removeEventListener("did-navigate", handleNavigate as EventListener);
       node.removeEventListener("did-navigate-in-page", handleNavigate as EventListener);
       node.removeEventListener("page-title-updated", handleTitle as EventListener);
@@ -135,7 +153,7 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
 
   return (
     <div className="browser-panel">
-      <div className="browser-panel-toolbar">
+      <div className="browser-panel-toolbar browser-agent-toolbar">
         <button
           type="button"
           className="browser-panel-icon-btn"
@@ -164,9 +182,14 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
         </button>
         <label className="browser-panel-address">
           <Robot size={13} weight="fill" />
-          <input value={url} readOnly placeholder="Agent browser" spellCheck={false} />
+          <input value={url} readOnly placeholder="Agent browser" spellCheck={false} title={title || url} />
         </label>
-        <BrowserBackendToggle />
+        {loading && (
+          <span className="browser-agent-activity" title="Agent is waiting for this page">
+            <CircleNotch size={14} className="animate-spin" />
+            <span>Agent</span>
+          </span>
+        )}
       </div>
 
       {registrationError && (

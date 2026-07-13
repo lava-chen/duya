@@ -41,6 +41,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   private domainBlockerConfig: DomainBlockerConfig | undefined;
   private networkEnvironment: NetworkEnvironment | undefined;
   private config: BrowserToolConfig | null = null;
+  private currentSessionId: string | null = null;
 
   constructor(domainBlockerConfig?: DomainBlockerConfig) {
     super();
@@ -92,16 +93,25 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     this.snapshotEngine = null;
     this.mode = 'fallback';
     this.extensionAvailable = false;
+    this.currentSessionId = null;
   }
 
-  private ensureConnection = async (): Promise<void> => {
+  private ensureConnection = async (sessionId?: string): Promise<void> => {
+    const resolvedSessionId = sessionId || `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    // If the session has changed, tear down the existing connection so the
+    // next command targets the correct webview / extension tab.
+    if (this.currentSessionId !== null && this.currentSessionId !== resolvedSessionId) {
+      this.resetConnection();
+    }
+
     if (this.cdp || this.fallbackBrowser) return;
 
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    this.currentSessionId = resolvedSessionId;
     const config = this.config ?? DEFAULT_BROWSER_CONFIG;
 
     // Probe extension health (with timeout). Skipped entirely in built-in mode.
-    const extensionClient = new ExtensionCDPClient(sessionId);
+    const extensionClient = new ExtensionCDPClient(resolvedSessionId);
     let extensionOnline = false;
     if (config.mode !== 'built-in') {
       try {
@@ -134,7 +144,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
         return;
       }
       case 'webview': {
-        const webviewClient = new WebviewCDPClient(sessionId);
+        const webviewClient = new WebviewCDPClient(resolvedSessionId);
         await webviewClient.connect();
         this.cdp = webviewClient;
         this.snapshotEngine = new SnapshotEngine(webviewClient);
@@ -180,8 +190,9 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     }
 
     try {
-      await this.ensureConnection();
-      const ctx = this.buildContext(context?.options?.sessionId);
+      const sessionId = context?.options?.sessionId;
+      await this.ensureConnection(sessionId);
+      const ctx = this.buildContext(sessionId);
       console.log('[BrowserTool.execute] built context, about to execute:', operation);
       const result = await this.actionRegistry.execute(operation, input, ctx);
 

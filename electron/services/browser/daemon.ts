@@ -26,6 +26,8 @@ import type { BrowserWindow } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger';
 import {
   handleWebviewCommand,
+  handleWebviewNetworkCommand,
+  handleWebviewTabControl,
   registerWebviewSession,
   unregisterWebviewSession,
 } from './webview-bridge';
@@ -323,6 +325,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // Must run after the X-DUYA header check so only the Agent process
   // (which sends X-DUYA) can invoke it.
   if (await handleWebviewCommand(req, res, mainWindowRef)) {
+    return;
+  }
+  if (await handleWebviewNetworkCommand(req, res)) {
+    return;
+  }
+  if (await handleWebviewTabControl(req, res, mainWindowRef)) {
     return;
   }
 
@@ -758,6 +766,54 @@ export function isExtensionConnected(): boolean {
   return extensionWs?.readyState === WebSocket.OPEN;
 }
 
+export interface LiveExtensionCookieExport {
+  browser: 'chrome' | 'edge';
+  cookies: unknown[];
+}
+
+/**
+ * Read cookies from a verified extension's browser profile. This is an
+ * explicit settings action, used only as a fallback when Windows locks the
+ * Chromium SQLite database. The cookie values stay in memory and are never
+ * included in daemon logs.
+ */
+export async function exportLiveExtensionCookies(): Promise<LiveExtensionCookieExport> {
+  if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
+    throw new Error('Browser extension is not connected');
+  }
+
+  const id = `cookie-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const result = await new Promise<unknown>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error('Browser extension cookie export timed out'));
+    }, 15000);
+    pending.set(id, { resolve, reject, timer });
+    try {
+      extensionWs?.send(JSON.stringify({ id, action: 'export_cookies' }));
+    } catch (error) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+
+  const response = result as {
+    ok?: unknown;
+    error?: unknown;
+    data?: { browser?: unknown; cookies?: unknown };
+  };
+  if (response.ok !== true) {
+    throw new Error(typeof response.error === 'string' ? response.error : 'Browser extension cookie export failed');
+  }
+  const browser = response.data?.browser;
+  const cookies = response.data?.cookies;
+  if ((browser !== 'chrome' && browser !== 'edge') || !Array.isArray(cookies)) {
+    throw new Error('Browser extension returned an invalid cookie export');
+  }
+  return { browser, cookies };
+}
+
 export interface BrowserExtensionStatus {
   daemonRunning: boolean;
   extensionConnected: boolean;
@@ -844,6 +900,7 @@ export function denyPendingExtensionApproval(reason = 'Denied by user'): { succe
 // the internal webview-bridge module.
 
 export {
+  closeWebviewSessionByUser,
   registerWebviewSession,
   unregisterWebviewSession,
 } from './webview-bridge';

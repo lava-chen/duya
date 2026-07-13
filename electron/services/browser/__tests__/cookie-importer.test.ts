@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createCipheriv, randomBytes } from 'node:crypto';
 
 // cookie-importer calls getLogger() at module load time, which touches
 // app.isPackaged. Mock the logger so the module loads in a pure test env.
@@ -13,7 +14,7 @@ vi.mock('../../../logging/logger', () => ({
   LogComponent: new Proxy({}, { get: (_t, p) => String(p) }),
 }));
 
-import { mapChromeCookieToElectron, isCookieExpired } from '../cookie-importer';
+import { decryptCookieValue, mapChromeCookieToElectron, mapLiveBrowserCookies, isCookieExpired } from '../cookie-importer';
 
 describe('mapChromeCookieToElectron', () => {
   it('maps a secure cookie with https url', () => {
@@ -71,5 +72,53 @@ describe('isCookieExpired', () => {
   it('returns false for future expiration', () => {
     const futureUtc = (Date.now() + 86400000) * 1000 + 11644473600000000; // tomorrow
     expect(isCookieExpired(futureUtc)).toBe(false);
+  });
+});
+
+describe('mapLiveBrowserCookies', () => {
+  it('maps extension cookies without persisting their raw export', () => {
+    expect(mapLiveBrowserCookies([{
+      name: 'session',
+      value: 'live-value',
+      domain: '.example.com',
+      path: '/',
+      secure: true,
+      httpOnly: true,
+      sameSite: 'lax',
+      expirationDate: Date.now() / 1000 + 3600,
+    }])).toEqual([expect.objectContaining({
+      url: 'https://example.com',
+      domain: '.example.com',
+      sameSite: 'lax',
+    })]);
+  });
+
+  it('drops malformed and expired extension cookies', () => {
+    expect(mapLiveBrowserCookies([
+      { name: 'missing-domain', value: 'x' },
+      { name: 'expired', value: 'x', domain: 'example.com', path: '/', expirationDate: 1 },
+    ])).toEqual([]);
+  });
+});
+
+describe('decryptCookieValue', () => {
+  it('decrypts Chromium v10 AES-GCM cookie values with the profile key', async () => {
+    const key = randomBytes(32);
+    const nonce = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, nonce);
+    const ciphertext = Buffer.concat([cipher.update('signed-in'), cipher.final()]);
+    const encrypted = Buffer.concat([
+      Buffer.from('v10'),
+      nonce,
+      ciphertext,
+      cipher.getAuthTag(),
+    ]);
+
+    await expect(decryptCookieValue(encrypted, key)).resolves.toBe('signed-in');
+  });
+
+  it('does not misreport app-bound v20 records as plaintext imports', async () => {
+    await expect(decryptCookieValue(Buffer.from('v20not-importable'), null))
+      .rejects.toThrow('APP_BOUND_ENCRYPTION');
   });
 });

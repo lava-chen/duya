@@ -51,8 +51,6 @@ const PRIVATE_IPV4_RANGES: IPRange[] = [
   { start: ipv4ToBigInt('192.0.2.0'), end: ipv4ToBigInt('192.0.2.255'), label: 'documentation-192.0.2' },
   { start: ipv4ToBigInt('198.51.100.0'), end: ipv4ToBigInt('198.51.100.255'), label: 'documentation-198.51.100' },
   { start: ipv4ToBigInt('203.0.113.0'), end: ipv4ToBigInt('203.0.113.255'), label: 'documentation-203.0.113' },
-  // Benchmarking
-  { start: ipv4ToBigInt('198.18.0.0'), end: ipv4ToBigInt('198.19.255.255'), label: 'benchmarking' },
   // Multicast
   { start: ipv4ToBigInt('224.0.0.0'), end: ipv4ToBigInt('239.255.255.255'), label: 'multicast' },
   // Reserved

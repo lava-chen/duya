@@ -97,6 +97,9 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
       title: snapshot.title,
       status: 'loaded',
       mode: 'fallback',
+      compactSnapshot: snapshot.snapshot,
+      interactiveElements: snapshot.interactiveElements,
+      truncated: snapshot.truncated,
       note: 'Running in fallback mode (no Extension). Interactive features unavailable.',
     };
   },

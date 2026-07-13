@@ -30,7 +30,7 @@ import {
   checkDatabaseSizeWarning,
 } from '../db/index';
 import type { DbInitResult, DatabaseStats } from '../db/index';
-import { emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
+import { emitMailApplied, emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
 import { uploadAsset as conductorUploadAsset } from '../conductor/asset-service';
 
 // Re-export lifecycle functions for backward compatibility
@@ -2481,6 +2481,11 @@ export function registerMailboxHandlers(): void {
     const database = getDb();
     const existing = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id) as Record<string, unknown> | undefined;
     if (!existing) return null;
+    // A previous renderer may have committed the row before its IPC response
+    // failed. Returning the same row makes a retry enqueue it exactly once.
+    if (existing.status === 'applied' && existing.applied_summary === 'queued_for_next_agent_turn') {
+      return existing;
+    }
     if (existing.status !== 'pending') return null;
     if (existing.edit_locked_at !== null) return null;
 
@@ -2525,16 +2530,28 @@ export function registerMailboxHandlers(): void {
     if (!existing) return null;
     if (existing.status !== 'pending') return null;
 
-    const source = String(existing.source ?? 'ui');
-    const guidedSource = source.endsWith(':guide') ? source : `${source}:guide`;
+    const now = Date.now();
     database.prepare(`
       UPDATE agent_mailbox
-      SET source = @source
+      SET status = 'applied',
+          apply_mode = 'promote_to_user_message',
+          applied_at = @now,
+          applied_at_checkpoint = 'after_current_run',
+          applied_summary = 'queued_for_next_agent_turn',
+          claim_expires_at = NULL
       WHERE id = @id AND status = 'pending'
-    `).run({ id: data.id, source: guidedSource });
+    `).run({ id: data.id, now });
 
     const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
-    emitMailEdited(row as Record<string, unknown>, existing.content as string);
+    try {
+      emitMailApplied(row as Record<string, unknown>);
+    } catch (error) {
+      dbLogger.warn(
+        'Failed to broadcast mailbox queue promotion',
+        { mailboxId: data.id, error: error instanceof Error ? error.message : String(error) },
+        LogComponent.DB,
+      );
+    }
     return row;
   });
 

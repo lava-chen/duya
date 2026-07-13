@@ -84,6 +84,8 @@ export interface Message {
   compactedMessageIds?: string[];
   /** Unique ID of the compact boundary this summary belongs to */
   compactBoundaryId?: string;
+  /** Token usage for this message (set by the query engine before persistence). */
+  tokenUsage?: TokenUsage;
 }
 
 // Assistant 消息

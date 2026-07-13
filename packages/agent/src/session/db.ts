@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import type { Message, MessageContent, SessionInfo, FileAttachment } from '../types.js';
+import type { Message, MessageContent, SessionInfo, FileAttachment, TokenUsage } from '../types.js';
 import { getConfigDatabasePath } from '../config/index.js';
 import * as ipcDbClient from '../ipc/db-client.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -1920,6 +1920,15 @@ export function messageRowToMessage(row: MessageRow, attachmentMap?: Map<string,
     }
   }
 
+  let tokenUsage: TokenUsage | undefined;
+  if (row.token_usage) {
+    try {
+      tokenUsage = JSON.parse(row.token_usage) as TokenUsage;
+    } catch {
+      // ignore parse errors
+    }
+  }
+
   return {
     id: row.id,
     role: row.role,
@@ -1938,6 +1947,7 @@ export function messageRowToMessage(row: MessageRow, attachmentMap?: Map<string,
     duration_ms: row.duration_ms ?? undefined,
     sub_agent_id: row.sub_agent_id || undefined,
     attachments: parsedAttachments,
+    tokenUsage,
   };
 }
 

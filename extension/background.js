@@ -35,7 +35,7 @@ let automationWindowId = null;
 const IDLE_TIMEOUT = 60000; // 60s idle timeout
 
 /**
- * @typedef {{ tabId: number; idleTimer: ReturnType<typeof setTimeout> | null }} SessionState
+ * @typedef {{ tabId: number; tabIds: Set<number>; idleTimer: ReturnType<typeof setTimeout> | null }} SessionState
  */
 
 /** @type {Map<string, SessionState>} */
@@ -53,15 +53,18 @@ async function getOrCreateSessionTab(sessionId) {
   // Return existing tab for this session
   const existing = sessionTabs.get(sessionId);
   if (existing) {
-    try {
-      await chrome.tabs.get(existing.tabId);
-      resetSessionIdleTimer(sessionId);
-      return existing.tabId;
-    } catch {
-      // Tab was closed externally, clean up and recreate
-      sessionTabs.delete(sessionId);
-      attachedTabs.delete(String(existing.tabId));
+    for (const tabId of [existing.tabId, ...existing.tabIds]) {
+      try {
+        await chrome.tabs.get(tabId);
+        existing.tabId = tabId;
+        resetSessionIdleTimer(sessionId);
+        return tabId;
+      } catch {
+        existing.tabIds.delete(tabId);
+        attachedTabs.delete(String(tabId));
+      }
     }
+    sessionTabs.delete(sessionId);
   }
 
   // Ensure automation window exists
@@ -82,7 +85,7 @@ async function getOrCreateSessionTab(sessionId) {
     throw new Error('Failed to create session tab: no tab id');
   }
 
-  sessionTabs.set(sessionId, { tabId, idleTimer: null });
+  sessionTabs.set(sessionId, { tabId, tabIds: new Set([tabId]), idleTimer: null });
 
   console.log(`[DUYA Bridge] Created session tab ${tabId} for session "${sessionId}"`);
 
@@ -101,6 +104,22 @@ async function getOrCreateSessionTab(sessionId) {
 
   resetSessionIdleTimer(sessionId);
   return tabId;
+}
+
+async function createAdditionalSessionTab(sessionId, url) {
+  const existing = sessionTabs.get(sessionId);
+  if (!existing) {
+    const tabId = await getOrCreateSessionTab(sessionId);
+    if (url) await chrome.tabs.update(tabId, { url });
+    return tabId;
+  }
+  const windowId = await getOrCreateAutomationWindow();
+  if (!windowId) throw new Error('Failed to create automation window');
+  const tab = await chrome.tabs.create({ windowId, url: url || 'about:blank', active: false });
+  if (!tab.id) throw new Error('Failed to create browser tab');
+  existing.tabIds.add(tab.id);
+  resetSessionIdleTimer(sessionId);
+  return tab.id;
 }
 
 /**
@@ -155,7 +174,7 @@ async function closeSessionTab(sessionId) {
   const session = sessionTabs.get(sessionId);
   if (!session) return;
 
-  const { tabId } = session;
+  const tabIds = Array.from(session.tabIds);
 
   // Clean up timer
   if (session.idleTimer) {
@@ -163,19 +182,10 @@ async function closeSessionTab(sessionId) {
   }
 
   // Detach debugger
-  try {
-    await chrome.debugger.detach({ tabId });
-  } catch {
-    // May not be attached
-  }
-  attachedTabs.delete(String(tabId));
-
-  // Close the tab
-  try {
-    await chrome.tabs.remove(tabId);
-    console.log(`[DUYA Bridge] Session tab ${tabId} closed for session "${sessionId}"`);
-  } catch {
-    // Already gone
+  for (const tabId of tabIds) {
+    try { await chrome.debugger.detach({ tabId }); } catch {}
+    attachedTabs.delete(String(tabId));
+    try { await chrome.tabs.remove(tabId); } catch {}
   }
 
   sessionTabs.delete(sessionId);
@@ -192,6 +202,27 @@ async function closeSessionTab(sessionId) {
   }
 }
 
+async function closeOwnedSessionTab(sessionId, tabId) {
+  const session = sessionTabs.get(sessionId);
+  if (!session || !session.tabIds.has(tabId)) {
+    throw new Error(`Tab ${tabId} does not belong to session "${sessionId}"`);
+  }
+
+  session.tabIds.delete(tabId);
+  if (session.tabId === tabId) {
+    session.tabId = session.tabIds.values().next().value;
+  }
+  try { await chrome.debugger.detach({ tabId }); } catch {}
+  attachedTabs.delete(String(tabId));
+  try { await chrome.tabs.remove(tabId); } catch {}
+
+  if (session.tabIds.size === 0) {
+    await closeSessionTab(sessionId);
+  } else {
+    resetSessionIdleTimer(sessionId);
+  }
+}
+
 /**
  * Validate that a tabId belongs to a session.
  */
@@ -200,7 +231,7 @@ function validateTabOwnership(tabId, sessionId) {
 
   const session = sessionTabs.get(sessionId);
   if (!session) return false;
-  if (session.tabId !== tabId) return false;
+  if (!session.tabIds.has(tabId)) return false;
 
   resetSessionIdleTimer(sessionId);
   return true;
@@ -209,15 +240,16 @@ function validateTabOwnership(tabId, sessionId) {
 // Clean up when a session tab is closed externally (e.g. user closes it)
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const [sessionId, session] of sessionTabs) {
-    if (session.tabId === tabId) {
-      if (session.idleTimer) {
-        clearTimeout(session.idleTimer);
-      }
-      attachedTabs.delete(String(tabId));
+    if (!session.tabIds.has(tabId)) continue;
+    session.tabIds.delete(tabId);
+    attachedTabs.delete(String(tabId));
+    if (session.tabId === tabId) session.tabId = session.tabIds.values().next().value;
+    if (session.tabIds.size === 0) {
+      if (session.idleTimer) clearTimeout(session.idleTimer);
       sessionTabs.delete(sessionId);
-      console.log(`[DUYA Bridge] Session tab ${tabId} removed externally for session "${sessionId}"`);
-      break;
     }
+    console.log(`[DUYA Bridge] Session tab ${tabId} removed externally for session "${sessionId}"`);
+    break;
   }
 });
 
@@ -229,7 +261,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
       if (session.idleTimer) {
         clearTimeout(session.idleTimer);
       }
-      attachedTabs.delete(String(session.tabId));
+      for (const tabId of session.tabIds) attachedTabs.delete(String(tabId));
     }
     sessionTabs.clear();
     automationWindowId = null;
@@ -517,6 +549,10 @@ async function handleCommand(msg) {
         await handleCookies(id, msg);
         break;
 
+      case 'export_cookies':
+        await handleCookieExport(id);
+        break;
+
       case 'set-file-input':
         await handleSetFileInput(id, msg);
         break;
@@ -685,7 +721,7 @@ async function isUrlBlocked(url) {
 // ─── Navigation ──────────────────────────────────────────────────────
 
 async function handleNavigate(id, msg) {
-  const { url, sessionId } = msg;
+  const { url, sessionId, tabId } = msg;
 
   if (!url) {
     sendResult(id, { ok: false, error: 'Missing url' });
@@ -699,8 +735,17 @@ async function handleNavigate(id, msg) {
     return;
   }
 
-  // Get or create tab for this session
-  const targetTabId = await getOrCreateSessionTab(sessionId);
+  const session = sessionTabs.get(sessionId);
+  if (tabId && (!session || !session.tabIds.has(tabId))) {
+    sendResult(id, { ok: false, error: `Tab ${tabId} does not belong to session "${sessionId}"` });
+    return;
+  }
+  const targetTabId = tabId || await getOrCreateSessionTab(sessionId);
+  const targetSession = sessionTabs.get(sessionId);
+  if (targetSession) {
+    targetSession.tabId = targetTabId;
+    resetSessionIdleTimer(sessionId);
+  }
 
   // Navigate in the session tab
   await chrome.tabs.update(targetTabId, { url });
@@ -759,19 +804,22 @@ async function handleNavigate(id, msg) {
 
 async function handleTabs(id, msg) {
   const op = msg.op || 'list';
+  const sessionId = msg.sessionId;
+
+  if (!sessionId) {
+    sendResult(id, { ok: false, error: 'Missing sessionId for tab management' });
+    return;
+  }
 
   if (op === 'list') {
-    // Only list tabs in the automation window that belong to active sessions
-    if (automationWindowId && sessionTabs.size > 0) {
+    const session = sessionTabs.get(sessionId);
+    if (automationWindowId && session) {
       try {
         const tabs = await chrome.tabs.query({ windowId: automationWindowId });
-        const sessionTabIds = new Set(
-          Array.from(sessionTabs.values()).map(s => s.tabId)
-        );
         sendResult(id, {
           ok: true,
           data: tabs
-            .filter(t => sessionTabIds.has(t.id))
+            .filter(t => session.tabIds.has(t.id))
             .map(t => ({
               id: t.id,
               url: t.url,
@@ -789,15 +837,9 @@ async function handleTabs(id, msg) {
   }
 
   if (op === 'new') {
-    const sessionId = msg.sessionId;
-    if (!sessionId) {
-      sendResult(id, { ok: false, error: 'Missing sessionId for tabs new' });
-      return;
-    }
-    const tabId = await getOrCreateSessionTab(sessionId);
-    if (msg.url) {
+    const tabId = await createAdditionalSessionTab(sessionId, msg.url);
+    if (msg.url && sessionTabs.get(sessionId)?.tabIds.has(tabId)) {
       try {
-        await chrome.tabs.update(tabId, { url: msg.url });
         await waitForTabLoad(tabId, 15000);
         try { await attachTab(tabId); } catch {}
       } catch (error) {
@@ -814,11 +856,6 @@ async function handleTabs(id, msg) {
   }
 
   if (op === 'select') {
-    const sessionId = msg.sessionId;
-    if (!sessionId) {
-      sendResult(id, { ok: false, error: 'Missing sessionId for tabs select' });
-      return;
-    }
     const targetTabId = typeof msg.tabId === 'number'
       ? msg.tabId
       : parseInt(msg.tabId, 10);
@@ -831,9 +868,13 @@ async function handleTabs(id, msg) {
       sendResult(id, { ok: false, error: `No session "${sessionId}"` });
       return;
     }
-    // Re-bind the session to the requested tab. The agent owns the new tabId
-    // for this session, so subsequent commands will validate against it.
+    if (!session.tabIds.has(targetTabId)) {
+      sendResult(id, { ok: false, error: `Tab ${targetTabId} does not belong to session "${sessionId}"` });
+      return;
+    }
     session.tabId = targetTabId;
+    resetSessionIdleTimer(sessionId);
+    try { await chrome.tabs.update(targetTabId, { active: true }); } catch {}
     try { await attachTab(targetTabId); } catch {}
     try {
       const tab = await chrome.tabs.get(targetTabId);
@@ -845,12 +886,17 @@ async function handleTabs(id, msg) {
   }
 
   if (op === 'close') {
-    const sessionId = msg.sessionId;
-    if (!sessionId) {
-      sendResult(id, { ok: false, error: 'Missing sessionId for tabs close' });
+    const session = sessionTabs.get(sessionId);
+    if (!session) {
+      sendResult(id, { ok: false, error: `No session "${sessionId}"` });
       return;
     }
-    await closeSessionTab(sessionId);
+    const targetTabId = msg.tabId ?? session.tabId;
+    if (!session.tabIds.has(targetTabId)) {
+      sendResult(id, { ok: false, error: `Tab ${targetTabId} does not belong to session "${sessionId}"` });
+      return;
+    }
+    await closeOwnedSessionTab(sessionId, targetTabId);
     sendResult(id, { ok: true });
     return;
   }
@@ -1162,6 +1208,33 @@ async function handlePressKey(id, msg) {
 
 // ─── Cookies ──────────────────────────────────────────────────────────
 
+async function handleCookieExport(id) {
+  // This action can only arrive through DUYA's verified localhost daemon and
+  // is initiated by the user from Settings. Do not log cookie values.
+  try {
+    const cookies = await chrome.cookies.getAll({});
+    const browser = /\bEdg\//.test(navigator.userAgent) ? 'edge' : 'chrome';
+    sendResult(id, {
+      ok: true,
+      data: {
+        browser,
+        cookies: cookies.map((cookie) => ({
+          name: cookie.name,
+          value: cookie.value,
+          domain: cookie.domain,
+          path: cookie.path,
+          secure: cookie.secure,
+          httpOnly: cookie.httpOnly,
+          expirationDate: cookie.expirationDate,
+          sameSite: cookie.sameSite,
+        })),
+      },
+    });
+  } catch (error) {
+    sendResult(id, { ok: false, error: error?.message ?? String(error) });
+  }
+}
+
 async function handleCookies(id, msg) {
   const { tabId, domain, url } = msg;
   if (!tabId) {
@@ -1269,9 +1342,6 @@ async function handleNetworkCaptureStart(id, msg) {
   const debuggee = await getOrAttachTab(tabId);
 
   try {
-    // Make sure Network domain is enabled (it should be from attachTab)
-    await chrome.debugger.sendCommand(debuggee, 'Network.enable');
-
     const capture = { entries: [], pattern, regex: null };
     if (pattern) {
       try {
@@ -1282,6 +1352,10 @@ async function handleNetworkCaptureStart(id, msg) {
       }
     }
     networkCaptures.set(String(tabId), capture);
+
+    // Register before enabling Network: Chromium may emit cached or
+    // service-worker requests while the domain is being enabled.
+    await chrome.debugger.sendCommand(debuggee, 'Network.enable');
 
     // Listen for all network events through the global onEvent listener
     // (we dispatch in the handler below).

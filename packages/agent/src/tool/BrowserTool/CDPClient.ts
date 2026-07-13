@@ -144,6 +144,7 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
     const response = await this.sendCommand({
       action: 'navigate',
       url,
+      ...(this.tabId !== null && { tabId: this.tabId }),
     }) as { data?: { tabId?: number; url?: string; title?: string }; error?: string };
 
     if (response.error) {
@@ -634,22 +635,17 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
   async hover(selector: string): Promise<void> {
     if (!this.tabId) throw new Error('No active tab');
     const elSelector = this.resolveSelector(selector);
-    await this.sendCommand({
-      action: 'cdp',
-      tabId: this.tabId,
-      method: 'Runtime.evaluate',
-      params: {
-        expression: `
-          (()=>{
-            const el=document.querySelector('${elSelector.replace(/'/g, "\\'")}');
-            if(!el)throw new Error('Element not found: ${elSelector}');
-            el.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,cancelable:true}));
-            el.dispatchEvent(new MouseEvent('mouseenter',{bubbles:false,cancelable:true}));
-          })()
-        `,
-        awaitPromise: true,
-      },
-    });
+    const point = await this.evaluate(`
+      (() => {
+        const el = document.querySelector('${elSelector.replace(/'/g, "\\'")}');
+        if (!el) throw new Error('Element not found: ${elSelector}');
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) return null;
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      })()
+    `) as { x: number; y: number } | null;
+    if (!point) throw new Error(`Element has no visible size: ${selector}`);
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
   }
 
   async waitForElement(selector: string, timeoutMs = 15000): Promise<void> {
@@ -1250,7 +1246,8 @@ export async function fetchBlockedDomains(): Promise<string[]> {
  */
 export async function createCDPClientForMode(
   sessionId: string,
-  mode: 'auto' | 'extension' | 'built-in'
+  mode: 'auto' | 'extension' | 'built-in',
+  options: { background?: boolean } = {},
 ): Promise<ICDPClient> {
   if (mode === 'extension') {
     const extensionClient = new ExtensionCDPClient(sessionId);
@@ -1264,7 +1261,7 @@ export async function createCDPClientForMode(
   }
 
   if (mode === 'built-in') {
-    const webviewClient = new WebviewCDPClient(sessionId);
+    const webviewClient = new WebviewCDPClient(sessionId, options);
     const health = await webviewClient.health();
     if (health.status === 'ok') {
       await webviewClient.connect();
@@ -1286,7 +1283,7 @@ export async function createCDPClientForMode(
     return extensionClient;
   }
 
-  const webviewClient = new WebviewCDPClient(sessionId);
+  const webviewClient = new WebviewCDPClient(sessionId, options);
   const webviewHealth = await webviewClient.health();
   if (webviewHealth.status === 'ok') {
     await webviewClient.connect();
