@@ -236,7 +236,7 @@ async function handlePostChat(
       const freeMem = os.freemem();
       const usedRatio = (totalMem - freeMem) / totalMem;
 
-      const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.95');
+      const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.98');
       if (usedRatio > MEMORY_THRESHOLD) {
         logger.warn('System memory usage high, rejecting chat', { usedRatio, totalMem, freeMem, sessionId });
         revertStreamingLock();
@@ -1086,7 +1086,7 @@ async function lazySpawnWorkerForCompact(
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
   const usedRatio = (totalMem - freeMem) / totalMem;
-  const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.95');
+  const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.98');
   if (usedRatio > MEMORY_THRESHOLD) {
     logger.warn('System memory usage high, rejecting compact lazy-spawn', { usedRatio, sessionId });
     sendJson(res, 503, { error: 'System memory usage is high', retryAfterSec: 30 });
