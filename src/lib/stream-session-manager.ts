@@ -2490,27 +2490,11 @@ class StreamSessionManager {
     this.notifyTokenUsageListeners(sessionId, s.tokenUsage);
     this.notifyListeners(sessionId);
 
-    // Update the last assistant message in the store with tokenUsage
-    const messages = useConversationStore.getState().messages[sessionId];
-    if (messages && messages.length > 0) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg.role === 'assistant') {
-        const updatedMessage = {
-          ...lastMsg,
-          tokenUsage: s.tokenUsage,
-        };
-        useConversationStore.setState((state) => ({
-          messages: {
-            ...state.messages,
-            [sessionId]: state.messages[sessionId].map((m, i) =>
-              i === messages.length - 1 ? updatedMessage : m
-            ),
-          },
-        }));
-        // Sync to database
-        useConversationStore.getState().syncMessageToDatabase(sessionId, updatedMessage);
-      }
-    }
+    // Do NOT write tokenUsage into the frontend message store here.
+    // During streaming the message array does not yet contain the current
+    // assistant message, so this would attach usage to the *previous*
+    // assistant. The authoritative token_usage is written by the agent
+    // process when it persists the canonical assistant message.
   }
 
   private handleDoneEvent(sessionId: string, streamId: string): void {
@@ -2600,29 +2584,11 @@ class StreamSessionManager {
       }
     }
 
-    // If we have tokenUsage and finalMessageContent, update the assistant message in the store.
-    // Do NOT sync to database here — the agent is the authoritative source for message
-    // persistence. Saving the optimistic message would create a duplicate row with a
-    // different ID (optimistic-text-xxx vs agent's crypto.randomUUID()).
-    // App.tsx will call loadThreadMessages() to reload canonical messages from DB.
-    if (s.tokenUsage && s.finalMessageContent) {
-      const messages = useConversationStore.getState().messages[sessionId];
-      if (messages && messages.length > 0) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg.role === 'assistant') {
-          useConversationStore.setState((state) => ({
-            messages: {
-              ...state.messages,
-              [sessionId]: state.messages[sessionId].map((m, i) =>
-                i === messages.length - 1
-                  ? { ...m, tokenUsage: s.tokenUsage }
-                  : m
-              ),
-            },
-          }));
-        }
-      }
-    }
+    // Do NOT write tokenUsage into the frontend message store here.
+    // The optimistic assistant message has a different id than the
+    // canonical DB row, and the message array does not yet contain the
+    // current assistant message. The authoritative token_usage is written
+    // by the agent process; App.tsx reloads canonical messages from DB.
 
     console.log(`[stream-session-manager] handleDbPersistedEvent DONE: ${sessionId.slice(0, 8)}, elapsed=${(performance.now() - startTime).toFixed(1)}ms`);
   }
