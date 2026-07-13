@@ -563,7 +563,7 @@ export interface BrowserWebviewAPI {
 }
 
 export interface BrowserCookieAPI {
-  importCookies: (browser: 'chrome' | 'edge', profile?: string) => Promise<{ ok: boolean; count?: number; failed?: number; unsupported?: number; source?: 'extension'; error?: string; errorCode?: 'COOKIE_DATABASE_BUSY' }>
+  importCookies: (browser: 'chrome' | 'edge', profile?: string) => Promise<{ ok: boolean; count?: number; failed?: number; unsupported?: number; source?: 'extension'; error?: string; errorCode?: 'COOKIE_DATABASE_BUSY' | 'APP_BOUND_EXTENSION_UNAVAILABLE' }>
   clearData: () => Promise<{ ok: boolean; error?: string }>
 }
 

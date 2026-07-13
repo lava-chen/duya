@@ -1170,8 +1170,12 @@ const zh: Record<TranslationKey, string> = {
   'browserAdvanced.clearDataConfirm': '确定清空内置浏览器的所有数据（Cookie、缓存、本地存储）？',
   'browserAdvanced.importSuccess': '已导入 {count} 条 Cookie（{failed} 条失败）',
   'browserAdvanced.importFailed': '导入失败：{error}',
-  'browserAdvanced.importSourceBusy': '{browser} 正在使用 Cookie 数据库。请完全关闭浏览器（包括后台进程）后重试。',
+  'browserAdvanced.importSourceBusy': '{browser} 正在使用 Cookie 数据库。连接 DUYA Browser Bridge 扩展后可免关闭浏览器导入；否则请完全关闭浏览器（包括后台进程）后重试。',
   'browserAdvanced.importUnsupported': '{count} 条应用绑定 Cookie 无法导入',
+  'browserAdvanced.importExtensionHint': '连接 DUYA Browser Bridge 扩展后，可在 Chrome 运行时完整导入应用绑定 Cookie，无需关闭浏览器。',
+  'browserAdvanced.importAppBoundUnavailable': '部分 Cookie 受浏览器应用绑定保护，需要已连接的扩展才能完整导入。',
+  'browserAdvanced.openExtensions': '打开 Chrome 扩展程序',
+  'browserAdvanced.refreshExtension': '刷新扩展状态',
   'browserAdvanced.dataCleared': '浏览器数据已清空',
 
   // ConfigStep
