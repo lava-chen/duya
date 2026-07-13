@@ -2,9 +2,9 @@
 /**
  * electron-builder afterPack hook.
  *
- * Rebuilds better-sqlite3 for Electron ABI and copies it to extraResources.
- * The agent bundle is built with esbuild (bundle: true) so runtime dependencies
- * are inlined — no node_modules copying is needed.
+ * Rebuilds better-sqlite3 and node-pty for Electron ABI and copies them to
+ * extraResources. The agent bundle is built with esbuild (bundle: true) so
+ * runtime dependencies are inlined — no node_modules copying is needed.
  */
 const fs = require('fs');
 const path = require('path');
@@ -25,6 +25,39 @@ function copyDirRecursive(src, dest) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
+}
+
+/**
+ * Detect the architecture of a Mach-O / ELF / PE binary.
+ * Returns a normalized arch string ('arm64', 'x64', 'ia32') or 'unknown'.
+ *
+ * On macOS we use the `file` command which reports the Mach-O slice arch.
+ * On Linux/Windows we fall back to 'unknown' (rebuild check is skipped).
+ */
+function getBinaryArch(filePath) {
+  try {
+    const output = execSync(`file -b "${filePath}"`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    if (output.includes('arm64') || output.includes('aarch64')) return 'arm64';
+    if (output.includes('x86_64') || output.includes('x86-64')) return 'x64';
+    if (output.includes('i386') || output.includes('i686')) return 'ia32';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * Check if a native .node file's architecture matches the target arch.
+ * On non-macOS platforms we can't easily detect, so return true (skip check).
+ */
+function isArchMatch(filePath, targetArch) {
+  if (process.platform !== 'darwin') return true;
+  const binaryArch = getBinaryArch(filePath);
+  const match = binaryArch === targetArch;
+  if (!match) {
+    console.log(`[afterPack] Architecture mismatch: ${filePath} is ${binaryArch}, need ${targetArch}`);
+  }
+  return match;
 }
 
 module.exports = async function afterPack(context) {
@@ -66,10 +99,14 @@ module.exports = async function afterPack(context) {
     );
   }
 
-  // Step 1: Ensure better-sqlite3 is available for Electron ABI
-  console.log('[afterPack] Step 1: Ensuring better-sqlite3 for Electron ABI...');
+  // Step 1: Ensure better-sqlite3 is available for Electron ABI and correct arch
+  console.log(`[afterPack] Step 1: Ensuring better-sqlite3 for Electron ABI (arch=${archName})...`);
 
-  // Check if electron-builder already provided a prebuilt binary
+  // Check if electron-builder already provided a prebuilt binary with the
+  // CORRECT architecture. extraResources copies node_modules/better-sqlite3/
+  // which contains the HOST machine's arch — if cross-compiling (e.g. building
+  // x64 on an arm64 Mac), the copied binary will have the wrong arch and must
+  // be rebuilt.
   let foundPrebuilt = false;
   function findPrebuiltNode(dir) {
     if (!fs.existsSync(dir)) return;
@@ -79,17 +116,22 @@ module.exports = async function afterPack(context) {
       if (entry.isDirectory()) {
         findPrebuiltNode(fullPath);
       } else if (entry.name === 'better_sqlite3.node') {
-        console.log(`[afterPack] Found prebuilt binary: ${fullPath}`);
-        foundPrebuilt = true;
+        const archOk = isArchMatch(fullPath, archName);
+        if (archOk) {
+          console.log(`[afterPack] Found prebuilt binary with correct arch: ${fullPath}`);
+          foundPrebuilt = true;
+        } else {
+          console.log(`[afterPack] Found prebuilt binary but wrong arch, will rebuild: ${fullPath}`);
+        }
       }
     }
   }
   findPrebuiltNode(RESOURCES_DIR);
 
   if (foundPrebuilt) {
-    console.log('[afterPack] Prebuilt better-sqlite3 binary already exists, skipping rebuild');
+    console.log('[afterPack] Prebuilt better-sqlite3 binary with correct arch exists, skipping rebuild');
   } else {
-    console.log('[afterPack] No prebuilt binary found, attempting rebuild...');
+    console.log('[afterPack] No suitable prebuilt binary found, attempting rebuild...');
     let rebuildSucceeded = false;
     try {
       const rebuildCmd = `npx electron-rebuild -f -o better-sqlite3 -v ${electronVersion} -a ${archName}`;
@@ -195,6 +237,71 @@ module.exports = async function afterPack(context) {
     } else {
       console.warn('[afterPack] file-uri-to-path not found in project node_modules, skipping...');
     }
+  }
+
+  // Step 2.5: Ensure node-pty native module has correct architecture
+  // node-pty is a native module (like better-sqlite3) that must match the
+  // target arch. extraResources copies node_modules/node-pty/ which contains
+  // the HOST machine's arch — if cross-compiling, the copied binary will
+  // have the wrong arch and the terminal feature will crash at runtime.
+  console.log(`[afterPack] Step 2.5: Ensuring node-pty for correct arch (${archName})...`);
+  const packagedNodePtyDir = path.join(RESOURCES_DIR, 'node-pty');
+  if (fs.existsSync(packagedNodePtyDir)) {
+    // Find all .node files under node-pty and check their arch
+    let nodePtyArchOk = true;
+    function findNodePtyBinaries(dir) {
+      if (!fs.existsSync(dir)) return;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          findNodePtyBinaries(fullPath);
+        } else if (entry.name.endsWith('.node')) {
+          const archOk = isArchMatch(fullPath, archName);
+          if (!archOk) nodePtyArchOk = false;
+        }
+      }
+    }
+    findNodePtyBinaries(packagedNodePtyDir);
+
+    if (!nodePtyArchOk) {
+      console.log('[afterPack] node-pty binary has wrong arch, rebuilding...');
+      try {
+        const rebuildCmd = `npx electron-rebuild -f -o node-pty -v ${electronVersion} -a ${archName}`;
+        console.log(`[afterPack] Running: ${rebuildCmd}`);
+        execSync(rebuildCmd, {
+          cwd: projectDir,
+          stdio: 'inherit',
+          timeout: 300000,
+        });
+        console.log('[afterPack] node-pty rebuild completed successfully');
+
+        // Copy rebuilt .node files to packaged resources
+        const rebuiltNodePtyDir = path.join(projectDir, 'node_modules', 'node-pty', 'build', 'Release');
+        if (fs.existsSync(rebuiltNodePtyDir)) {
+          const targetDir = path.join(packagedNodePtyDir, 'build', 'Release');
+          if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+          }
+          const nodeFiles = fs.readdirSync(rebuiltNodePtyDir).filter(f => f.endsWith('.node'));
+          for (const nodeFile of nodeFiles) {
+            const src = path.join(rebuiltNodePtyDir, nodeFile);
+            const dst = path.join(targetDir, nodeFile);
+            fs.copyFileSync(src, dst);
+            console.log(`[afterPack] Copied rebuilt ${nodeFile} to ${dst}`);
+          }
+        }
+      } catch (err) {
+        console.error('[afterPack] Failed to rebuild node-pty:', err.message);
+        // node-pty is not critical for app startup (terminal is lazy-loaded),
+        // so we warn but don't fail the build
+        console.warn('[afterPack] WARNING: node-pty rebuild failed — terminal feature may not work');
+      }
+    } else {
+      console.log('[afterPack] node-pty binary arch is correct, skipping rebuild');
+    }
+  } else {
+    console.log('[afterPack] node-pty not found in resources, skipping (terminal feature will be unavailable)');
   }
 
   // Step 3: Verify agent-bundle exists (esbuild should have inlined all dependencies)
