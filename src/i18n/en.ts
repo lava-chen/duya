@@ -1175,8 +1175,12 @@ const en = {
   'browserAdvanced.clearDataConfirm': 'Clear all built-in browser data (cookies, cache, local storage)?',
   'browserAdvanced.importSuccess': 'Imported {count} cookies ({failed} failed)',
   'browserAdvanced.importFailed': 'Import failed: {error}',
-  'browserAdvanced.importSourceBusy': '{browser} is using its cookie database. Fully close it, including background processes, then try again.',
+  'browserAdvanced.importSourceBusy': '{browser} is using its cookie database. Connect the DUYA Browser Bridge extension to import without closing the browser; otherwise fully close it, including background processes, then try again.',
   'browserAdvanced.importUnsupported': '{count} app-bound cookies could not be imported',
+  'browserAdvanced.importExtensionHint': 'Connect the DUYA Browser Bridge extension to fully import app-bound cookies while Chrome is running, without closing the browser.',
+  'browserAdvanced.importAppBoundUnavailable': 'Some cookies are protected by browser app-binding and require a connected extension to import fully.',
+  'browserAdvanced.openExtensions': 'Open Chrome Extensions',
+  'browserAdvanced.refreshExtension': 'Refresh Extension Status',
   'browserAdvanced.dataCleared': 'Browser data cleared',
 
   // ConfigStep
