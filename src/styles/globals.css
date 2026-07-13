@@ -549,7 +549,7 @@ a {
   z-index: 18;
   width: 28px;
   height: 0;
-  margin-left: 16px;
+  margin-left: 6px;
   overflow: visible;
 }
 
@@ -868,12 +868,12 @@ a {
 
 .sidebar-project-menu {
   position: fixed;
-  padding: 6px 0;
-  border-radius: 0.5rem;
-  background: var(--bg-canvas);
+  padding: 4px 0;
+  border-radius: 0.4rem;
+  background: var(--surface-solid);
   border: 1px solid var(--border);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.15);
-  min-width: 180px;
+  min-width: 150px;
   z-index: 100;
 }
 
@@ -884,12 +884,12 @@ a {
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.45rem;
   width: calc(100% - 8px);
   margin: 0 4px;
-  padding: 0.45rem 0.7rem;
-  border-radius: 0.35rem;
-  font-size: 0.82rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.3rem;
+  font-size: 0.78rem;
   text-align: left;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
@@ -912,7 +912,26 @@ a {
 .sidebar-project-menu-divider {
   height: 1px;
   background: var(--border);
-  margin: 0.35rem 0.7rem;
+  margin: 0.25rem 0.6rem;
+}
+
+.sidebar-project-menu-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-project-menu-section-title {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  padding: 0.25rem 0.6rem 0.1rem;
+  user-select: none;
+}
+
+.sidebar-project-menu-check {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 
 .sidebar-project-submenu {
@@ -5824,6 +5843,18 @@ a {
   flex-direction: column;
 }
 
+/* Browser guests are stateful. Keep every browser tab mounted so switching
+   tabs restores its own page instead of constructing a fresh webview. */
+.sidebar-panel-browser-tab {
+  display: none;
+  height: 100%;
+  min-height: 0;
+}
+
+.sidebar-panel-browser-tab.active {
+  display: block;
+}
+
 /* File tree panel (embedded inside the sidebar panel) */
 .file-tree-panel-embedded {
   display: flex;
@@ -8449,22 +8480,6 @@ html[data-message-font-size="large"] .prose h3 {
   color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
 }
 
-.mailbox-bubble-action--guide span {
-  font-size: 0;
-  line-height: 1;
-}
-
-.mailbox-bubble-action--guide span::after {
-  content: "引导";
-  font-size: 0.86rem;
-}
-
-.mailbox-bubble-guided {
-  color: var(--muted);
-  font-size: 0.82rem;
-  white-space: nowrap;
-}
-
 .mailbox-bubble-action:hover {
   background: color-mix(in srgb, var(--surface-hover) 72%, transparent);
 }
@@ -8539,15 +8554,6 @@ html[data-message-font-size="large"] .prose h3 {
   gap: 0.25rem;
   padding: 0;
   border-radius: 0;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
-
-.mailbox-bubble-action--guide span::after {
-  font-size: 0.75rem;
-}
-
-.mailbox-bubble-guided {
   color: var(--muted);
   font-size: 0.75rem;
 }
@@ -10221,6 +10227,26 @@ html[data-message-font-size="large"] .prose h3 {
   }
 }
 
+/* A browser needs 460px while chat keeps a 680px readable minimum. Below
+   their combined width, keep chat intact and let the browser float over it. */
+@container (max-width: 1140px) {
+  .panel-zone-open[data-page-id="browser"]:not(.panel-zone-expanded) {
+    position: absolute;
+    z-index: 40;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(var(--panel-zone-width), calc(100% - 48px));
+    height: 100%;
+    flex-basis: auto;
+    box-shadow: -16px 0 34px rgba(0, 0, 0, 0.18);
+  }
+
+  .panel-zone-open[data-page-id="browser"]:not(.panel-zone-expanded) .sidebar-panel-inner {
+    width: 100% !important;
+  }
+}
+
 .panel-zone .resize-handle {
   position: absolute;
   left: -3px;
@@ -11345,6 +11371,21 @@ html[data-message-font-size="large"] .prose h3 {
   padding: 5px 7px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--sidebar-bg) 92%, var(--surface) 8%);
+}
+
+.browser-agent-toolbar {
+  grid-template-columns: repeat(3, 24px) minmax(120px, 1fr) auto;
+}
+
+.browser-agent-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .browser-panel-icon-btn {
