@@ -186,13 +186,31 @@ function validateMessageHistory(messages: Message[]): Message[] {
     }
   }
 
-  if (unmatchedToolUseIds.size === 0) {
+  const orphanToolResultIds = new Set<string>();
+  for (const id of toolResultIds) {
+    if (!toolUseIds.has(id)) {
+      orphanToolResultIds.add(id);
+    }
+  }
+
+  let unpairedToolResultCount = 0;
+  for (const msg of messages) {
+    if (msg.role === 'tool' && !msg.tool_call_id) {
+      unpairedToolResultCount++;
+    }
+  }
+
+  if (unmatchedToolUseIds.size === 0 && orphanToolResultIds.size === 0 && unpairedToolResultCount === 0) {
     return messages;
   }
 
   const cleanedMessages: Message[] = [];
   for (const msg of messages) {
-    if (msg.role === 'tool' && msg.tool_call_id && !toolUseIds.has(msg.tool_call_id)) {
+    if (msg.role === 'tool' && !msg.tool_call_id) {
+      continue;
+    }
+
+    if (msg.role === 'tool' && msg.tool_call_id && orphanToolResultIds.has(msg.tool_call_id)) {
       continue;
     }
 
@@ -204,6 +222,11 @@ function validateMessageHistory(messages: Message[]): Message[] {
       const filteredContent = msg.content.filter((block) => {
         if (block.type === 'tool_use' && 'id' in block && typeof block.id === 'string') {
           if (unmatchedToolUseIds.has(block.id)) {
+            return false;
+          }
+        }
+        if (block.type === 'tool_result' && 'tool_use_id' in block && typeof block.tool_use_id === 'string') {
+          if (orphanToolResultIds.has(block.tool_use_id)) {
             return false;
           }
         }

@@ -532,6 +532,93 @@ function applyRequestDisplayContent(messages: readonly Message[], displayContent
 // Message History Validation
 // ============================================================================
 
+function getToolUseIds(message: Message): string[] {
+  if (message.role !== 'assistant') return [];
+  if (message.msg_type === 'tool_use' && message.tool_call_id) {
+    return [message.tool_call_id];
+  }
+  if (!Array.isArray(message.content)) return [];
+  return message.content.flatMap((block) => (
+    block.type === 'tool_use' && 'id' in block && typeof block.id === 'string' && block.id
+      ? [block.id]
+      : []
+  ));
+}
+
+function getToolResultIds(message: Message): string[] {
+  if (message.role === 'tool' && message.tool_call_id) {
+    return [message.tool_call_id];
+  }
+  if (!Array.isArray(message.content)) return [];
+  return message.content.flatMap((block) => (
+    block.type === 'tool_result' && 'tool_use_id' in block && typeof block.tool_use_id === 'string' && block.tool_use_id
+      ? [block.tool_use_id]
+      : []
+  ));
+}
+
+/**
+ * Canonicalize complete tool rounds before a restored session is reused.
+ *
+ * Some Anthropic-compatible providers require all tool results to be the next
+ * user turn after their assistant tool call. A queued notification may have
+ * been persisted between the two; this is recoverable by moving the
+ * notification after the completed tool round.
+ */
+function reorderCompleteToolRounds(messages: Message[]): Message[] {
+  const reordered: Message[] = [];
+  let repairedRounds = 0;
+
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    const pendingIds = new Set(getToolUseIds(message));
+    if (pendingIds.size === 0) {
+      reordered.push(message);
+      continue;
+    }
+
+    const unresolvedIds = new Set(pendingIds);
+    const resultMessages: Message[] = [];
+    const deferredMessages: Message[] = [];
+    let resultEndIndex = -1;
+
+    for (let cursor = index + 1; cursor < messages.length && unresolvedIds.size > 0; cursor++) {
+      const candidate = messages[cursor];
+      if (candidate.role === 'assistant') break;
+
+      const matchingIds = getToolResultIds(candidate).filter((id) => unresolvedIds.has(id));
+      if (matchingIds.length > 0) {
+        matchingIds.forEach((id) => unresolvedIds.delete(id));
+        resultMessages.push(candidate);
+        resultEndIndex = cursor;
+      } else {
+        deferredMessages.push(candidate);
+      }
+    }
+
+    if (unresolvedIds.size > 0 || resultEndIndex === -1) {
+      reordered.push(message);
+      continue;
+    }
+
+    const alreadyOrdered = resultEndIndex === index + 1 && deferredMessages.length === 0;
+    reordered.push(message);
+    if (alreadyOrdered) {
+      reordered.push(messages[resultEndIndex]);
+    } else {
+      reordered.push(...resultMessages, ...deferredMessages);
+      repairedRounds++;
+    }
+    index = resultEndIndex;
+  }
+
+  if (repairedRounds > 0) {
+    log(`[Agent-Process] Reordered ${repairedRounds} persisted tool round(s) to restore tool_use -> tool_result ordering`);
+  }
+
+  return repairedRounds > 0 ? reordered : messages;
+}
+
 /**
  * Validates and cleans up message history to ensure tool_use/tool_result pairs are complete.
  * 
@@ -602,7 +689,7 @@ function validateMessageHistory(messages: Message[]): Message[] {
   }
 
   if (unmatchedToolUseIds.size === 0 && orphanToolResultIds.size === 0 && unpairedToolResultCount === 0) {
-    return messages;
+    return reorderCompleteToolRounds(messages);
   }
 
   log(`[Agent-Process] Cleaning history: ${unmatchedToolUseIds.size} unmatched tool_use(s), ${orphanToolResultIds.size} orphan tool_result(s), ${unpairedToolResultCount} unpaired tool_result(s) with empty tool_call_id`);
@@ -671,8 +758,9 @@ function validateMessageHistory(messages: Message[]): Message[] {
     }
   }
 
-  log(`[Agent-Process] Cleaned message history: ${messages.length} -> ${cleanedMessages.length} messages`);
-  return cleanedMessages;
+  const orderedMessages = reorderCompleteToolRounds(cleanedMessages);
+  log(`[Agent-Process] Cleaned message history: ${messages.length} -> ${orderedMessages.length} messages`);
+  return orderedMessages;
 }
 
 function extractFinalAssistantText(messages: Message[]): string {
@@ -2484,8 +2572,23 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 }
                 let existingMessages = existingRows.map(row => messageRowToMessage(row, attachmentMap, parsedDocMap));
 
-                // Validate and clean up incomplete tool_use/tool_result pairs
-                existingMessages = validateMessageHistory(existingMessages);
+                // Validate and repair incomplete or out-of-order tool rounds
+                // before the history is ever sent back to a provider. Persist
+                // successful repairs so a legacy bad row cannot poison this
+                // session again after the worker restarts.
+                const validatedMessages = validateMessageHistory(existingMessages);
+                if (validatedMessages !== existingMessages) {
+                  const repairResult = await messageDb.replace(sessionId!, validatedMessages, 0) as {
+                    success?: boolean;
+                    reason?: string;
+                  };
+                  if (repairResult.success) {
+                    log(`[Agent-Process] Repaired persisted message history for session ${sessionId}`);
+                  } else {
+                    warn(`[Agent-Process] Could not persist repaired message history for session ${sessionId}: ${repairResult.reason ?? 'unknown error'}`);
+                  }
+                }
+                existingMessages = validatedMessages;
 
                 agent.setMessages(existingMessages);
                 existingMessageCount = existingMessages.length;
