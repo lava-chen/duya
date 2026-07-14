@@ -22,8 +22,7 @@ interface MessageListProps {
   onScrollStateChange?: (isNearBottom: boolean) => void;
   error?: string | null;
   sessionId: string;
-  onRewindToMessage?: (messageId: string) => void;
-  onEditMessage?: (messageId: string) => void;
+  onEditSend?: (messageId: string, text: string) => void;
 }
 
 interface GroupedMessage {
@@ -115,16 +114,16 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   isAlwaysRendered,
   cachedHeight,
   onHeightChange,
-  onRewindToMessage,
-  onEditMessage,
+  isEditable,
+  onEditSend,
 }: {
   group: GroupedMessage;
   scrollRoot: React.RefObject<HTMLDivElement | null>;
   isAlwaysRendered: boolean;
   cachedHeight?: number;
   onHeightChange: (messageId: string, height: number) => void;
-  onRewindToMessage?: (messageId: string) => void;
-  onEditMessage?: (messageId: string) => void;
+  isEditable?: boolean;
+  onEditSend?: (messageId: string, text: string) => void;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [isNearViewport, setIsNearViewport] = useState(isAlwaysRendered);
@@ -185,6 +184,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
     <div
       ref={rowRef}
       data-message-id={group.message.id}
+      className="transition-[min-height] duration-200 ease-out"
       style={shouldRender ? undefined : { minHeight: estimatedHeight }}
     >
       {shouldRender ? (
@@ -192,8 +192,8 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
           message={group.message}
           toolResults={group.toolResults}
           mergedMessages={group.mergedMessages}
-          onRewindToMessage={onRewindToMessage}
-          onEditMessage={onEditMessage}
+          isEditable={isEditable}
+          onEditSend={onEditSend}
         />
       ) : null}
     </div>
@@ -204,8 +204,8 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   && toolResultsEqual(prev.group.toolResults, next.group.toolResults)
   && prev.isAlwaysRendered === next.isAlwaysRendered
   && prev.cachedHeight === next.cachedHeight
-  && prev.onRewindToMessage === next.onRewindToMessage
-  && prev.onEditMessage === next.onEditMessage
+  && prev.isEditable === next.isEditable
+  && prev.onEditSend === next.onEditSend
 ));
 
 interface MessageNavigatorItem {
@@ -473,8 +473,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   onScrollStateChange,
   error,
   sessionId,
-  onRewindToMessage,
-  onEditMessage,
+  onEditSend,
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -674,6 +673,16 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
     return result;
   }, [messages]);
+
+  // Only the last user message in the conversation is editable.
+  const lastUserMessageId = useMemo(() => {
+    for (let i = groupedMessages.length - 1; i >= 0; i -= 1) {
+      if (groupedMessages[i].message.role === 'user') {
+        return groupedMessages[i].message.id;
+      }
+    }
+    return null;
+  }, [groupedMessages]);
 
   const navigatorItems = useMemo(
     () => buildNavigatorItems(groupedMessages, activeMessageId),
@@ -881,8 +890,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             isAlwaysRendered={index >= groupedMessages.length - ALWAYS_RENDER_TRAILING_ROWS}
             cachedHeight={rowHeightsRef.current.get(group.message.id)}
             onHeightChange={handleRowHeightChange}
-            onRewindToMessage={onRewindToMessage}
-            onEditMessage={onEditMessage}
+            isEditable={group.message.role === 'user' && group.message.id === lastUserMessageId}
+            onEditSend={onEditSend}
           />
         ))}
 

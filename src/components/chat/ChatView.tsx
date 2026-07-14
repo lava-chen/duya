@@ -50,7 +50,7 @@ interface ChatViewProps {
    * 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生.
    * 第一个参数 permissionMode 保留签名兼容 (App.handleSendMessage 还在声明), 但不使用.
    */
-  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string, conductorMode?: boolean) => void;
+  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string, conductorMode?: boolean, queuedMailboxId?: string) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
   hasQueuedMessages?: boolean;
@@ -197,7 +197,6 @@ export function ChatView({
   const setThreadModel = useConversationStore(s => s.setThreadModel);
   const addProjectFolder = useConversationStore(s => s.addProjectFolder);
   const setActiveThread = useConversationStore(s => s.setActiveThread);
-  const rewindToMessage = useConversationStore(s => s.rewindToMessage);
   const deleteMessageAndAfter = useConversationStore(s => s.deleteMessageAndAfter);
   const sendMailbox = useMailboxStore(s => s.send);
 
@@ -265,10 +264,6 @@ export function ChatView({
   const lastUserContentRef = useRef<string>('');
   const lastFilesRef = useRef<FileAttachment[] | undefined>(undefined);
   const lastOutputStyleRef = useRef<{ name: string; prompt: string; keepCodingInstructions?: boolean } | null | undefined>(undefined);
-  // Edit-and-resend: when non-null, the next `handleSend` deletes this message
-  // (and everything after it) before sending the edited content. Set by
-  // `handleEditMessage`, cleared on send or session change.
-  const editingMessageIdRef = useRef<string | null>(null);
   const permissionProfile = permissionMode === 'bypass' ? 'full_access' : permissionMode === 'auto' ? 'auto' : 'default';
 
   // Permission system
@@ -525,35 +520,36 @@ export function ChatView({
       lastFilesRef.current = files;
       lastOutputStyleRef.current = outputStyleConfig;
       if (isStreaming) {
-        void sendMailbox({
+        const queuedRow = await sendMailbox({
           sessionId,
           content,
           kind: 'followup',
           submittedDuringRunId: sessionId,
           attachments: files,
         });
-        return;
-      }
-      // Edit-and-resend: if the user clicked "edit" on a previous user
-      // message, delete that message (and everything after it) before
-      // sending the edited content as a fresh message. This preserves the
-      // append-only contract — we never UPDATE the original, only DELETE +
-      // re-append. The ref is cleared before the async delete so a concurrent
-      // send can't double-truncate.
-      const editingId = editingMessageIdRef.current;
-      if (editingId) {
-        editingMessageIdRef.current = null;
-        try {
-          await deleteMessageAndAfter(sessionId, editingId);
-        } catch (err) {
-          console.error('[ChatView] edit-and-resend: deleteMessageAndAfter failed', err);
+        if (queuedRow && !queuedRow.id.startsWith('optimistic-')) {
+          const { modelName: actualModel } = parseModelName(sessionModel || '');
+          onSendMessage(
+            content,
+            permissionMode ?? undefined,
+            actualModel,
+            files,
+            agentProfileId,
+            outputStyleConfig,
+            mode,
+            effort,
+            displayContent,
+            conductorEnabled,
+            queuedRow.id,
+          );
         }
+        return;
       }
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled);
     },
-    [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, deleteMessageAndAfter]
+    [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort, conductorEnabled]
   );
 
   // Toggle conductor mode for the current session. On enable, resolve the
@@ -745,42 +741,20 @@ export function ChatView({
     }
   }, [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId, effort]);
 
-  const handleRewindToMessage = useCallback((messageId: string) => {
-    if (isStreaming) return;
-    const targetIndex = messages.findIndex(m => m.id === messageId);
-    if (targetIndex === -1 || targetIndex === messages.length - 1) return;
-    const confirmed = window.confirm('回退到此消息后，该消息之后的所有对话将被删除，是否继续？');
-    if (!confirmed) return;
-    rewindToMessage(sessionId, messageId);
-  }, [isStreaming, messages, sessionId, rewindToMessage]);
-
-  // Edit-and-resend: load a previous user message's text into the input box
-  // for editing. The next `handleSend` will delete the original message (and
-  // everything after it) before sending the edited version. Dispatches a
-  // `duya:edit-message` event that MessageInput listens for (same pattern as
-  // `conductor:forward-message`).
-  const handleEditMessage = useCallback((messageId: string) => {
-    if (isStreaming) return;
-    const target = messages.find(m => m.id === messageId);
-    if (!target || target.role !== 'user') return;
-    // Prefer displayContent (the pure user-typed text, without attachment
-    // bodies or pre-analysis). Fall back to content for older messages that
-    // predate the displayContent field.
-    const source = target.displayContent !== undefined ? target.displayContent : target.content;
-    let text = '';
-    if (typeof source === 'string') {
-      text = source;
-    } else if (Array.isArray(source)) {
-      text = source
-        .filter((b): b is { type: 'text'; text: string } =>
-          !!b && typeof b === 'object' && (b as Record<string, unknown>).type === 'text'
-          && typeof (b as Record<string, unknown>).text === 'string')
-        .map(b => b.text)
-        .join('');
+  // Inline edit-and-resend: delete the target user message (and everything
+  // after it), then send the edited text as a fresh message. Only the last
+  // user message is editable (enforced by MessageList via isEditable).
+  const handleEditSend = useCallback(async (messageId: string, text: string) => {
+    if (isStreaming || !text.trim() || !sessionId) return;
+    try {
+      await deleteMessageAndAfter(sessionId, messageId);
+    } catch (err) {
+      console.error('[ChatView] edit-and-resend: deleteMessageAndAfter failed', err);
+      return;
     }
-    editingMessageIdRef.current = messageId;
-    window.dispatchEvent(new CustomEvent('duya:edit-message', { detail: { content: text } }));
-  }, [isStreaming, messages]);
+    const { modelName: actualModel } = parseModelName(sessionModel || '');
+    onSendMessage(text, permissionMode ?? undefined, actualModel, undefined, agentProfileId, lastOutputStyleRef.current, undefined, effort, text, conductorEnabled);
+  }, [isStreaming, sessionId, deleteMessageAndAfter, parseModelName, sessionModel, permissionMode, onSendMessage, agentProfileId, effort, conductorEnabled]);
 
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
@@ -1032,8 +1006,7 @@ export function ChatView({
               onForceStop={handleStop}
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
-              onRewindToMessage={handleRewindToMessage}
-              onEditMessage={handleEditMessage}
+              onEditSend={handleEditSend}
             />
           </div>
         )}

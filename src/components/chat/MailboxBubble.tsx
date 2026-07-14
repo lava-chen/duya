@@ -3,7 +3,7 @@
  *
  * Compact single-row layout that sits inline in the MailboxPanel body.
  * Designed as a "stash table" row: kind chip + content + per-row actions
- * (guide, delete, more). Edit is reachable from the more menu.
+ * (guide current run, delete, more). Edit is reachable from the more menu.
  *
  * Visual contract:
  *   - 2px left accent strip in the kind color (visual differentiation)
@@ -20,18 +20,19 @@
 import React, { useState, useCallback } from 'react';
 import { Pencil, Trash, DotsThree, ArrowBendDownRight, X } from '@phosphor-icons/react';
 import type { MailboxRow, MailboxKind } from '@/stores/mailbox-store';
+import { useTranslation } from '@/hooks/useTranslation';
 
 // =============================================================================
 // Kind label mapping (kept for accessibility / title attrs; not rendered
 // as a chip anymore — the row is intentionally chip-less).
 // =============================================================================
 
-const KIND_LABELS: Record<MailboxKind, string> = {
-  followup: 'Follow-up',
-  correction: 'Correction',
-  constraint: 'Constraint',
-  stop: 'Stop',
-  abort_and_replace: 'Replace',
+const KIND_LABEL_KEYS: Record<MailboxKind, 'mailbox.composer.kindFollowup' | 'mailbox.composer.kindCorrection' | 'mailbox.composer.kindConstraint' | 'mailbox.composer.stop' | 'mailbox.bubble.replace'> = {
+  followup: 'mailbox.composer.kindFollowup',
+  correction: 'mailbox.composer.kindCorrection',
+  constraint: 'mailbox.composer.kindConstraint',
+  stop: 'mailbox.composer.stop',
+  abort_and_replace: 'mailbox.bubble.replace',
 };
 
 const KIND_COLORS: Record<MailboxKind, string> = {
@@ -50,7 +51,7 @@ interface MailboxBubbleProps {
   row: MailboxRow;
   onEdit: (id: string, patch: { content?: string; kind?: MailboxKind }) => void;
   onCancel: (id: string) => void;
-  onGuide?: (row: MailboxRow) => void;
+  onGuide?: (row: MailboxRow) => void | Promise<void>;
   onMore?: (row: MailboxRow) => void;
 }
 
@@ -65,11 +66,12 @@ export function MailboxBubble({
   onGuide,
   onMore,
 }: MailboxBubbleProps) {
+  const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(row.content);
   const isPending = row.status === 'pending';
   const isCancelled = row.status === 'cancelled';
-  const isGuided = row.source.endsWith(':guide');
+  const isGuided = row.applyMode === 'runtime_instruction';
 
   const handleSaveEdit = useCallback(() => {
     if (editContent.trim() && editContent !== row.content) {
@@ -91,7 +93,7 @@ export function MailboxBubble({
   }, [row, onMore]);
 
   const kindColor = KIND_COLORS[row.kind] ?? 'var(--muted)';
-  const kindLabel = KIND_LABELS[row.kind] ?? row.kind;
+  const kindLabel = t(KIND_LABEL_KEYS[row.kind] ?? 'mailbox.composer.kindFollowup');
 
   // Editing replaces the whole row with an input. Compact, inline.
   if (isEditing) {
@@ -117,14 +119,14 @@ export function MailboxBubble({
           onClick={handleSaveEdit}
           className="mailbox-bubble-save"
         >
-          Save
+          {t('mailbox.bubble.save')}
         </button>
         <button
           type="button"
           onClick={() => setIsEditing(false)}
           className="mailbox-bubble-action"
-          title="Cancel edit"
-          aria-label="Cancel edit"
+          title={t('mailbox.bubble.cancelEdit')}
+          aria-label={t('mailbox.bubble.cancelEdit')}
         >
           <X size={13} />
         </button>
@@ -156,23 +158,23 @@ export function MailboxBubble({
             type="button"
             onClick={handleGuide}
             className="mailbox-bubble-action mailbox-bubble-action--guide"
-            title="Guide — let the agent absorb this message at the next checkpoint"
-            aria-label="Guide"
+            title={t('mailbox.bubble.guideHint')}
+            aria-label={t('mailbox.guide')}
           >
             <ArrowBendDownRight size={13} />
-            <span>引导</span>
+            <span>{t('mailbox.guide')}</span>
           </button>
         )}
         {isPending && isGuided && (
-          <span className="mailbox-bubble-guided">引导中</span>
+          <span className="mailbox-bubble-guided">{t('mailbox.bubble.guiding')}</span>
         )}
         {isPending && (
           <button
             type="button"
             onClick={handleCancel}
             className="mailbox-bubble-action mailbox-bubble-action--danger"
-            title="Delete from queue"
-            aria-label="Delete"
+            title={t('mailbox.bubble.delete')}
+            aria-label={t('mailbox.bubble.delete')}
           >
             <Trash size={13} />
           </button>
@@ -181,8 +183,8 @@ export function MailboxBubble({
           type="button"
           onClick={handleMore}
           className="mailbox-bubble-action"
-          title="More actions"
-          aria-label="More actions"
+          title={t('mailbox.more')}
+          aria-label={t('mailbox.more')}
         >
           <DotsThree size={13} weight="bold" />
         </button>
@@ -199,8 +201,8 @@ export function MailboxBubble({
               setIsEditing(true);
             }}
             className="mailbox-bubble-action"
-            title="Edit content"
-            aria-label="Edit"
+            title={t('mailbox.bubble.edit')}
+            aria-label={t('mailbox.bubble.edit')}
           >
             <Pencil size={13} />
           </button>
