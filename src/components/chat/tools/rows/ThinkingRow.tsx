@@ -19,7 +19,7 @@ interface ThinkingRowProps {
 }
 
 export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
-  const [expanded, setExpanded] = useState(!!isStreaming);
+  const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
 
   const summary = (() => {

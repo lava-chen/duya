@@ -607,33 +607,6 @@ export function MessageInput({
     };
     window.addEventListener('conductor:forward-message', handleForwardMessage as EventListener);
 
-    // Edit-and-resend: ChatView dispatches this when the user clicks the
-    // edit button on a previous user message. We populate the input box
-    // with the message's text so the user can edit it. The truncate-then-
-    // resend logic lives in ChatView.handleSend (keyed off editingMessageIdRef);
-    // MessageInput only handles the text population here.
-    const handleEditMessage = (e: Event) => {
-      const detail = (e as CustomEvent<{ content?: string }>).detail;
-      if (typeof detail?.content !== 'string') return;
-      setInputValue(detail.content);
-      prePasteValueRef.current = detail.content;
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus();
-        adjustTextareaHeight();
-        // Move cursor to end so the user can immediately append/append edits.
-        const el = textareaRef.current;
-        if (el) {
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          range.collapse(false);
-          const selection = window.getSelection();
-          selection?.removeAllRanges();
-          selection?.addRange(range);
-        }
-      });
-    };
-    window.addEventListener('duya:edit-message', handleEditMessage as EventListener);
-
     return () => {
       window.removeEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
       window.removeEventListener('file-tree-add-to-input', legacyFileTree as EventListener);
@@ -641,7 +614,6 @@ export function MessageInput({
       window.removeEventListener('browser-add-to-input', legacyBrowser as EventListener);
       window.removeEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
       window.removeEventListener('conductor:forward-message', handleForwardMessage as EventListener);
-      window.removeEventListener('duya:edit-message', handleEditMessage as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachments, onConductorChange]);

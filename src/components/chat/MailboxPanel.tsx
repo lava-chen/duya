@@ -26,12 +26,6 @@ import { MailboxBubble } from "./MailboxBubble";
 interface MailboxPanelProps {
   sessionId: string;
   /**
-   * Optional callback when a row's "guide" button is pressed. The agent
-   * should pick up the row and inject it into its flow at the next
-   * appropriate checkpoint.
-   */
-  onGuide?: (row: MailboxRow) => void;
-  /**
    * Optional callback for the "more" menu on a single row (reclassify, etc).
    */
   onMore?: (row: MailboxRow) => void;
@@ -48,7 +42,6 @@ const VISIBLE_STATUSES: MailboxStatus[] = ["pending", "observed"];
 
 export function MailboxPanel({
   sessionId,
-  onGuide,
   onMore,
   rowsOverride,
 }: MailboxPanelProps) {
@@ -88,11 +81,10 @@ export function MailboxPanel({
   );
 
   const handleGuide = useCallback(
-    (row: MailboxRow) => {
-      void guide(row.id);
-      onGuide?.(row);
+    async (row: MailboxRow) => {
+      await guide(row.id);
     },
-    [guide, onGuide],
+    [guide],
   );
 
   if (visibleRows.length === 0) return null;

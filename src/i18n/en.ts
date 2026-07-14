@@ -335,7 +335,8 @@ const en = {
   'mailbox.bubble.replace': 'Replace',
   'mailbox.bubble.save': 'Save',
   'mailbox.bubble.cancelEdit': 'Cancel edit',
-  'mailbox.bubble.guideHint': 'Queue this message for the next agent turn',
+  'mailbox.bubble.guideHint': 'Let the agent absorb this during the current run',
+  'mailbox.bubble.guiding': 'Guiding',
   'mailbox.bubble.delete': 'Delete from queue',
   'mailbox.bubble.edit': 'Edit message',
 

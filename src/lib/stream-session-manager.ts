@@ -315,6 +315,8 @@ interface StartStreamParams {
    * Injected into the agent's ToolUseContext.conductorCanvasId.
    */
   conductorCanvasId?: string;
+  /** Mailbox row backing a user message queued while another run is active. */
+  queuedMailboxId?: string;
 }
 
 interface StartStreamResult {
@@ -754,6 +756,7 @@ class StreamSessionManager {
   private conductorSessions: Map<string, ConductorSessionState> = new Map();
   private researchSessions: Map<string, ResearchSessionState> = new Map();
   private pendingMessages: Map<string, StartStreamParams[]> = new Map();
+  private drainingQueuedSessions = new Set<string>();
   private textEmitInterval = 300; // Increased from 100ms to reduce UI flickering
   private idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
   private debugIpc = typeof process !== 'undefined' && process.env?.DUYA_DEBUG_IPC === 'true';
@@ -1087,6 +1090,17 @@ class StreamSessionManager {
   }
 
   clearQueuedMessages(sessionId: string): void {
+    const queue = this.pendingMessages.get(sessionId) ?? [];
+    const cancelMailbox = typeof window !== 'undefined'
+      ? window.electronAPI?.mailbox?.cancel
+      : undefined;
+    if (cancelMailbox) {
+      for (const item of queue) {
+        if (item.queuedMailboxId) {
+          void cancelMailbox(item.queuedMailboxId, 'queued_messages_cleared');
+        }
+      }
+    }
     this.pendingMessages.set(sessionId, []);
   }
 
@@ -1096,12 +1110,55 @@ class StreamSessionManager {
   }
 
   private autoStartQueuedStream(sessionId: string): void {
-    const queue = this.pendingMessages.get(sessionId);
-    if (!queue || queue.length === 0) return;
-    const next = queue.shift()!;
-    this.pendingMessages.set(sessionId, queue);
+    if (this.drainingQueuedSessions.has(sessionId)) return;
+    this.drainingQueuedSessions.add(sessionId);
+
     setTimeout(() => {
-      void this.startStream(next);
+      void (async () => {
+        try {
+          const queue = this.pendingMessages.get(sessionId);
+          while (queue && queue.length > 0) {
+            const next = queue.shift()!;
+            this.pendingMessages.set(sessionId, queue);
+
+            if (next.queuedMailboxId) {
+              const promoteQueued = typeof window !== 'undefined'
+                ? window.electronAPI?.mailbox?.promoteQueued
+                : undefined;
+              if (promoteQueued) {
+                const promoted = await promoteQueued(next.queuedMailboxId);
+                if (!promoted) {
+                  // The row was cancelled or already absorbed as in-run
+                  // guidance. Do not send it again as a separate turn.
+                  continue;
+                }
+
+                const row = promoted as Record<string, unknown>;
+                if (typeof row.content === 'string') {
+                  next.content = row.content;
+                  next.displayContent = row.content;
+                }
+                if (typeof row.attachments_json === 'string') {
+                  try {
+                    const attachments = JSON.parse(row.attachments_json) as FileAttachment[];
+                    if (Array.isArray(attachments)) next.files = attachments;
+                  } catch {
+                    // Keep the originally queued attachments if the stored
+                    // representation cannot be decoded.
+                  }
+                }
+              }
+            }
+
+            await this.startStream(next);
+            return;
+          }
+        } catch (error) {
+          console.error('[stream-session-manager] Failed to start queued message:', error);
+        } finally {
+          this.drainingQueuedSessions.delete(sessionId);
+        }
+      })();
     }, 0);
   }
 

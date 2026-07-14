@@ -8,7 +8,8 @@ import {
   CopyIcon,
   CheckIcon,
   NotePencilIcon,
-  ArrowCounterClockwiseIcon,
+  ArrowUpIcon,
+  XIcon,
   FileTextIcon,
   ExternalLinkIcon,
   CaretDownIcon,
@@ -131,10 +132,11 @@ interface MessageItemProps {
   onToolResult?: (toolUseId: string, approved: boolean) => void;
   // Messages merged from the same round (thinking + tool_use + text)
   mergedMessages?: Message[];
-  onRewindToMessage?: (messageId: string) => void;
-  // Edit-and-resend: load this user message into the input box for editing.
-  // Only meaningful for role=user messages.
-  onEditMessage?: (messageId: string) => void;
+  // Inline edit: only the last user message is editable.
+  isEditable?: boolean;
+  // Called when the user edits and sends. The parent deletes the message
+  // (and everything after it) then re-sends the edited text.
+  onEditSend?: (messageId: string, text: string) => void;
 }
 
 function parseMessageContent(content: string | unknown[], msgType?: string): {
@@ -746,12 +748,14 @@ function messageItemPropsEqual(prev: MessageItemProps, next: MessageItemProps): 
     && toolResultsEqual(prev.toolResults, next.toolResults)
     && messagesEqual(prev.mergedMessages, next.mergedMessages)
     && prev.onToolResult === next.onToolResult
-    && prev.onRewindToMessage === next.onRewindToMessage
-    && prev.onEditMessage === next.onEditMessage;
+    && prev.isEditable === next.isEditable
+    && prev.onEditSend === next.onEditSend;
 }
 
-function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], onRewindToMessage, onEditMessage }: MessageItemProps) {
+function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], isEditable, onEditSend }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState('');
   // Preview modal state
   const [previewAttachment, setPreviewAttachment] = useState<FileAttachment | null>(null);
   const [previewPastedContent, setPreviewPastedContent] = useState<{ id: string; content: string; preview: string } | null>(null);
@@ -971,6 +975,38 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     setPreviewPastedContent(null);
   };
 
+  // Inline edit: extract the user-typed text from the message, populate the
+  // edit textarea, and switch to editing mode. Prefers displayContent (pure
+  // user text without attachment bodies) over content.
+  const handleStartEdit = () => {
+    const source = message.displayContent !== undefined ? message.displayContent : message.content;
+    let text = '';
+    if (typeof source === 'string') {
+      text = source;
+    } else if (Array.isArray(source)) {
+      text = source
+        .filter((b): b is { type: 'text'; text: string } =>
+          !!b && typeof b === 'object' && (b as Record<string, unknown>).type === 'text'
+          && typeof (b as Record<string, unknown>).text === 'string')
+        .map(b => b.text)
+        .join('');
+    }
+    setEditText(text);
+    setIsEditing(true);
+  };
+
+  const handleEditSend = () => {
+    const trimmed = editText.trim();
+    if (!trimmed) return;
+    onEditSend?.(message.id, trimmed);
+    setIsEditing(false);
+  };
+
+  const handleEditCancel = () => {
+    setIsEditing(false);
+    setEditText('');
+  };
+
   const isUser = message.role === 'user';
   const hasPastedContents = allPastedContents.length > 0;
   // P2-β: surface the "Stopped" badge when App.tsx.handleInterrupt
@@ -1133,44 +1169,77 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
               ))}
             </div>
           )}
-          {userBrowserReferences.text && (
-          <div
-            className="rounded-2xl rounded-tr-sm px-4 py-2.5"
-            style={{ backgroundColor: 'rgba(0, 0, 0, 0.06)' }}
-          >
-            <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text)' }}>{userBrowserReferences.text}</p>
-          </div>
-          )}
-          <div className="flex justify-end items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            <span className="text-[11px] text-muted-foreground/60 tabular-nums">
-              {formatMessageTime(message.timestamp, t, locale)}
-            </span>
-            <button
-              onClick={copyToClipboard}
-              className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
-              title="Copy message"
+          {isEditing ? (
+            <div
+              className="rounded-2xl rounded-tr-sm border overflow-hidden transition-all duration-200"
+              style={{ backgroundColor: 'var(--surface-solid)', borderColor: 'var(--border)', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
             >
-              {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-            </button>
-            {onEditMessage && (
-              <button
-                onClick={() => onEditMessage(message.id)}
-                className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
-                title={locale === 'zh' ? '编辑并重新发送' : 'Edit and resend'}
-              >
-                <NotePencilIcon size={12} />
-              </button>
-            )}
-            {onRewindToMessage && (
-              <button
-                onClick={() => onRewindToMessage(message.id)}
-                className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
-                title="回退到此处"
-              >
-                <ArrowCounterClockwiseIcon size={12} />
-              </button>
-            )}
-          </div>
+              <textarea
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleEditSend();
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    handleEditCancel();
+                  }
+                }}
+                autoFocus
+                className="w-full bg-transparent text-sm px-4 py-2.5 outline-none resize-none"
+                style={{ color: 'var(--text)', minHeight: '60px', maxHeight: '240px' }}
+                rows={3}
+              />
+              <div className="flex justify-end items-center gap-2 px-3 pb-2.5 pt-0.5">
+                <button
+                  onClick={handleEditCancel}
+                  className="px-2.5 py-1 text-xs rounded-md transition-colors text-[var(--muted)] hover:bg-[var(--surface-hover)]"
+                >
+                  {locale === 'zh' ? '取消' : 'Cancel'}
+                </button>
+                <button
+                  onClick={handleEditSend}
+                  className="px-2.5 py-1 text-xs rounded-md transition-colors bg-[var(--text)] text-[var(--bg-canvas)] hover:opacity-90"
+                >
+                  {locale === 'zh' ? '发送' : 'Send'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {userBrowserReferences.text && (
+                <div
+                  className="rounded-2xl rounded-tr-sm px-4 py-2.5"
+                  style={{ backgroundColor: 'rgba(0, 0, 0, 0.06)' }}
+                >
+                  <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text)' }}>{userBrowserReferences.text}</p>
+                </div>
+              )}
+              <div className="flex justify-end items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+                  {formatMessageTime(message.timestamp, t, locale)}
+                </span>
+                <button
+                  onClick={copyToClipboard}
+                  className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
+                  title="Copy message"
+                >
+                  {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                </button>
+                {isEditable && onEditSend && (
+                  <button
+                    onClick={handleStartEdit}
+                    className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
+                    title={locale === 'zh' ? '编辑并重新发送' : 'Edit and resend'}
+                  >
+                    <NotePencilIcon size={12} />
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Preview Modal */}

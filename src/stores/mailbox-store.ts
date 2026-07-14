@@ -127,7 +127,8 @@ interface MailboxState {
     constraintsJson?: string;
   }) => Promise<MailboxRow | null>;
   edit: (id: string, patch: { content?: string; kind?: MailboxKind }) => Promise<void>;
-  guide: (id: string) => Promise<void>;
+  /** Mark a queued row for in-run pickup at the next safe checkpoint. */
+  guide: (id: string) => Promise<MailboxRow | null>;
   cancel: (id: string, reason?: string) => Promise<void>;
   list: (sessionId: string, opts?: { status?: MailboxStatus[]; limit?: number }) => Promise<void>;
 
@@ -256,28 +257,19 @@ export const useMailboxStore = create<MailboxState>()((set, get) => ({
 
   guide: async (id) => {
     const electronAPI = window.electronAPI;
-    if (!electronAPI?.mailbox?.guide) return;
-
-    const existing = Array.from(get().bySession.values())
-      .map(sessionMap => sessionMap.get(id))
-      .find((row): row is MailboxRow => Boolean(row));
-
-    if (existing && existing.status === 'pending') {
-      get()._upsertRow({ ...existing, source: 'ui:guide' });
-    }
+    if (!electronAPI?.mailbox?.guide) return null;
 
     try {
       const result = await electronAPI.mailbox.guide(id);
       if (result) {
         const row = dbRowToMailboxRow(result as Record<string, unknown>);
         get()._upsertRow(row);
+        return row;
       }
     } catch (error) {
-      if (existing) {
-        get()._upsertRow(existing);
-      }
       console.error('[MailboxStore] guide failed:', error);
     }
+    return null;
   },
 
   cancel: async (id, reason) => {

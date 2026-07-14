@@ -333,7 +333,8 @@ const zh: Record<TranslationKey, string> = {
   'mailbox.bubble.replace': '替换',
   'mailbox.bubble.save': '保存',
   'mailbox.bubble.cancelEdit': '取消编辑',
-  'mailbox.bubble.guideHint': '将此消息排入下一轮 Agent 对话',
+  'mailbox.bubble.guideHint': '让 Agent 在当前任务的安全时机吸收这条消息',
+  'mailbox.bubble.guiding': '引导中',
   'mailbox.bubble.delete': '从队列中删除',
   'mailbox.bubble.edit': '编辑消息',
 

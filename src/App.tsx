@@ -364,6 +364,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       effort?: string,
       displayContent?: string,
       conductorMode?: boolean,
+      queuedMailboxId?: string,
     ) => {
       if (!activeThreadId) return;
 
@@ -403,6 +404,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           effort,
           conductorMode,
           conductorCanvasId,
+          queuedMailboxId,
         });
         return;
       }
