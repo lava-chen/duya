@@ -1,22 +1,5 @@
-import { registerWidget } from "./registry";
-import { TaskListDefinition } from "./TaskListWidget";
-import { NotePadDefinition } from "./NotePadWidget";
-import { PomodoroDefinition } from "./PomodoroWidget";
-import { NewsBoardDefinition } from "./NewsBoardWidget";
-import { MetricCardDefinition } from "./MetricCardWidget";
-import { ImageCardDefinition } from "./ImageCardWidget";
-import { DataTableDefinition } from "./DataTableWidget";
-import { GroupBoxDefinition } from "./GroupBoxWidget";
-import { DividerDefinition } from "./DividerWidget";
-import { QuickActionDefinition } from "./QuickActionWidget";
-
-registerWidget(TaskListDefinition);
-registerWidget(NotePadDefinition);
-registerWidget(PomodoroDefinition);
-registerWidget(NewsBoardDefinition);
-registerWidget(MetricCardDefinition);
-registerWidget(ImageCardDefinition);
-registerWidget(DataTableDefinition);
-registerWidget(GroupBoxDefinition);
-registerWidget(DividerDefinition);
-registerWidget(QuickActionDefinition);
+// Builtin widget registry is intentionally empty. The conductor canvas now
+// uses native free-form elements (sticky, image, file, connector, group)
+// and agent-created dynamic widgets only. The registry infrastructure is
+// kept for dynamic widget rendering via WidgetShell/WidgetElement.
+export {};
