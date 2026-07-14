@@ -202,7 +202,7 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
   // 5. Scenario B — tool_use → user → tool_result (the production 2013 trigger)
   // ===========================================================================
 
-  it('keeps tool_use and tool_result intact when a user message sits between them (case 5)', async () => {
+  it('moves an intervening user message after its tool result (case 5)', async () => {
     const client = makeClient();
     const messages: Message[] = [
       { id: 'u1', role: 'user', content: 'Run ls', timestamp: 1 },
@@ -239,6 +239,22 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
       expect(useSet.has(id!)).toBe(true);
     }
 
+    // MiniMax requires tool_result blocks to be the immediate next user turn
+    // after their assistant tool_use. The deferred notification must not sit
+    // between the call and its result (the old global-ID-only check allowed
+    // exactly that invalid sequence and triggered provider error 2013).
+    const toolCallMessageIndex = body.messages.findIndex((message: any) =>
+      message.role === 'assistant' &&
+      Array.isArray(message.content) &&
+      message.content.some((block: any) => block.type === 'tool_use' && block.id === 'toolu_B_1')
+    );
+    const followingUserMessage = body.messages[toolCallMessageIndex + 1];
+    expect(followingUserMessage.role).toBe('user');
+    expect(followingUserMessage.content[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'toolu_B_1',
+    });
+
     // The task-notification text survived the round-trip (the message
     // body wasn't dropped along with its tool blocks).
     const allText = events
@@ -252,7 +268,7 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
   // 6. Scenario D — mixed text+tool_use with intervening user message
   // ===========================================================================
 
-  it('keeps mixed text+tool_use across intervening user message (case 6)', async () => {
+  it('keeps mixed text and restores strict tool-result ordering (case 6)', async () => {
     const client = makeClient();
     const messages: Message[] = [
       { id: 'u1', role: 'user', content: 'Investigate', timestamp: 1 },
@@ -293,6 +309,17 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
     const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
     expect(useIds).toContain('toolu_D_1');
     expect(resultIds).toContain('toolu_D_1');
+
+    const toolCallMessageIndex = body.messages.findIndex((message: any) =>
+      message.role === 'assistant' &&
+      Array.isArray(message.content) &&
+      message.content.some((block: any) => block.type === 'tool_use' && block.id === 'toolu_D_1')
+    );
+    const followingUserMessage = body.messages[toolCallMessageIndex + 1];
+    expect(followingUserMessage.content[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'toolu_D_1',
+    });
   });
 
   // ===========================================================================

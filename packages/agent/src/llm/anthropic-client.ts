@@ -559,15 +559,114 @@ function repairToolPairing(messages: MessageParam[]): MessageParam[] {
 }
 
 /**
+ * Move deferred user messages out of an in-flight tool round.
+ *
+ * Anthropic-compatible providers require the tool_result blocks for an
+ * assistant tool_use message to be the next user turn. A background task
+ * notification can otherwise land between the call and its result. Merely
+ * checking that both IDs exist somewhere in history is insufficient: MiniMax
+ * rejects that sequence with error 2013.
+ */
+function normalizeToolResultOrdering(messages: MessageParam[]): MessageParam[] {
+  const normalized: MessageParam[] = [];
+  let reorderedRounds = 0;
+
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    const pendingIds = new Set<string>();
+    if (message.role === 'assistant' && Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (typeof block === 'object' && block !== null && (block as { type?: string }).type === 'tool_use') {
+          const id = (block as { id?: string }).id;
+          if (id) pendingIds.add(id);
+        }
+      }
+    }
+
+    if (pendingIds.size === 0) {
+      normalized.push(message);
+      continue;
+    }
+
+    const unresolvedIds = new Set(pendingIds);
+    const resultBlocks: ContentBlockParam[] = [];
+    const deferred: MessageParam[] = [];
+    let resultEndIndex = -1;
+
+    for (let cursor = index + 1; cursor < messages.length && unresolvedIds.size > 0; cursor++) {
+      const candidate = messages[cursor];
+      if (candidate.role === 'assistant') {
+        break;
+      }
+
+      if (candidate.role === 'user' && Array.isArray(candidate.content)) {
+        const matchingResults = candidate.content.filter((block) => {
+          if (typeof block !== 'object' || block === null || (block as { type?: string }).type !== 'tool_result') {
+            return false;
+          }
+          const toolUseId = (block as { tool_use_id?: string }).tool_use_id;
+          return toolUseId !== undefined && unresolvedIds.has(toolUseId);
+        }) as ContentBlockParam[];
+
+        if (matchingResults.length > 0) {
+          for (const block of matchingResults) {
+            const toolUseId = (block as { tool_use_id?: string }).tool_use_id;
+            if (toolUseId) unresolvedIds.delete(toolUseId);
+          }
+          resultBlocks.push(...matchingResults);
+          resultEndIndex = cursor;
+
+          const remainingContent = candidate.content.filter((block) => !matchingResults.includes(block));
+          if (remainingContent.length > 0) {
+            deferred.push({ ...candidate, content: remainingContent });
+          }
+          continue;
+        }
+      }
+
+      deferred.push(candidate);
+    }
+
+    // Leave incomplete rounds to repairToolPairing, which safely drops the
+    // unpaired blocks. Reordering only complete rounds avoids fabricating a
+    // tool result or moving unrelated later conversation into the round.
+    if (unresolvedIds.size > 0 || resultEndIndex === -1) {
+      normalized.push(message);
+      continue;
+    }
+
+    const alreadyAdjacent = resultEndIndex === index + 1 && deferred.length === 0;
+    normalized.push(message);
+    if (alreadyAdjacent) {
+      normalized.push(messages[resultEndIndex]);
+    } else {
+      normalized.push({ role: 'user', content: resultBlocks });
+      normalized.push(...deferred);
+      reorderedRounds++;
+    }
+    index = resultEndIndex;
+  }
+
+  if (reorderedRounds > 0) {
+    logger.warn(
+      `[toAnthropicMessages] Reordered ${reorderedRounds} tool round(s) so tool_result blocks immediately follow tool_use`,
+    );
+  }
+
+  return normalized;
+}
+
+/**
  * Convert duya Message[] to Anthropic MessageParam[]
  *
  * Implements hermes-agent equivalent logic with the following pipeline:
  * 1. Convert all messages to Anthropic format, sanitizing tool IDs
  * 2. Strip orphaned tool_use blocks (no matching tool_result)
  * 3. Strip orphaned tool_result blocks (no matching tool_use)
- * 4. Merge consecutive same-role messages
- * 5. Handle thinking blocks according to endpoint type
- * 6. Final tool pairing repair (safety net)
+ * 4. Restore strict tool_use -> tool_result ordering
+ * 5. Merge consecutive same-role messages
+ * 6. Handle thinking blocks according to endpoint type
+ * 7. Final tool pairing repair (safety net)
  *
  * @param messages - The messages to convert
  * @param baseURL - The API base URL (used to detect third-party endpoints)
@@ -874,20 +973,25 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
     );
   }
 
-  // Step 3: Strip orphaned tool_results (no matching tool_use). This is
+  // Step 3: Restore provider-required ordering for complete tool rounds.
+  // A global ID match alone is not enough: MiniMax rejects a task
+  // notification between tool_use and tool_result with error 2013.
+  const ordered = normalizeToolResultOrdering(result);
+
+  // Step 4: Strip orphaned tool_results (no matching tool_use). This is
   // now mostly redundant with the bidirectional cleanup above, but
   // stripOrphanToolResults still runs as a final safety net — it
   // operates on the post-cleanup result and guards against any edge
   // case the per-entry pass missed.
-  const strippedResults = stripOrphanToolResults(result);
+  const strippedResults = stripOrphanToolResults(ordered);
 
-  // Step 4: Merge consecutive same-role messages
+  // Step 5: Merge consecutive same-role messages
   const merged = mergeConsecutiveRoles(strippedResults);
 
-  // Step 5: Handle thinking blocks according to endpoint type
+  // Step 6: Handle thinking blocks according to endpoint type
   const withThinkingHandled = handleThinkingBlocks(merged, baseURL);
 
-  // Step 6: Final tool pairing repair. This is the last safety net
+  // Step 7: Final tool pairing repair. This is the last safety net
   // before the request goes to the API. It removes any remaining
   // unmatched tool_use/tool_result blocks and logs the exact IDs and
   // positions so we can diagnose the root cause.
@@ -1450,16 +1554,19 @@ export class AnthropicClient implements LLMClient {
       .filter((block): block is Anthropic.TextBlock => block.type === 'text')
       .map(b => b.text);
 
-    const usageRecord = response.usage as unknown as Record<string, number>;
+    const usage = response.usage;
+    const usageRecord = usage as unknown as Record<string, number> | undefined;
 
     return {
       content: textBlocks.join('\n'),
-      usage: {
-        input_tokens: response.usage.input_tokens,
-        output_tokens: response.usage.output_tokens,
-        cache_hit_tokens: usageRecord.cache_read_input_tokens,
-        cache_creation_tokens: usageRecord.cache_creation_input_tokens,
-      },
+      usage: usage
+        ? {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_hit_tokens: usageRecord?.cache_read_input_tokens,
+            cache_creation_tokens: usageRecord?.cache_creation_input_tokens,
+          }
+        : undefined,
     };
   }
 
