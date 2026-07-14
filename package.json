@@ -48,6 +48,9 @@
     "test:e2e:ipc": "npx playwright test --config=e2e/playwright.config.ts --project=ipc",
     "build:electron": "node scripts/build-electron.mjs",
     "pack:extension": "node scripts/pack-extension.mjs",
+    "showcase": "node scripts/showcase/showcase.mjs",
+    "showcase:gif": "node scripts/showcase/showcase.mjs --gif",
+    "showcase:compose-gif": "node scripts/showcase/compose-gif.mjs",
     "postinstall": "electron-builder install-app-deps",
     "rebuild": "electron-rebuild"
   },
@@ -74,6 +77,7 @@
     "electron": "^28.2.0",
     "electron-builder": "^24.9.1",
     "esbuild": "^0.27.7",
+    "gifenc": "^1.0.3",
     "jsdom": "^29.1.1",
     "postcss": "^8.5.9",
     "tailwindcss": "^4.2.2",

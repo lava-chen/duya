@@ -1,0 +1,35 @@
+{
+  "comment": "Mock tasks used by scripts/showcase to trigger tool cards without a real LLM/provider. Each scenario file references one task by id. The actual fixture execution happens inside Electron showcase mode (added later).",
+  "tasks": [
+    {
+      "id": "research-browser-demo",
+      "scenario": "02-research-browser",
+      "prompt": "Research the current state of local-first AI agents. Use the browser to collect sources, then write a short markdown note in this project.",
+      "expectedToolCards": [
+        { "type": "browser.open", "label": "Opening research page" },
+        { "type": "browser.snapshot", "label": "Snapshot of local-first AI agent roundup" },
+        { "type": "browser.extract", "label": "Extracting key quotes" },
+        { "type": "file.write", "label": "Writing research note" }
+      ]
+    },
+    {
+      "id": "file-edit-demo",
+      "scenario": "03-files-edit",
+      "prompt": "Read src/components/Button.tsx, find the unused props, and propose a minimal patch. Ask before editing.",
+      "expectedToolCards": [
+        { "type": "file.read", "label": "Reading Button.tsx" },
+        { "type": "edit.diff", "label": "Proposing patch (3 lines)" },
+        { "type": "permission.ask", "label": "Ask before edit" }
+      ]
+    },
+    {
+      "id": "permission-demo",
+      "scenario": "05-permission-prompt",
+      "prompt": "Run `npm run test` and report the first failing case.",
+      "expectedToolCards": [
+        { "type": "bash.run", "label": "npm run test" },
+        { "type": "permission.ask", "label": "Approve shell command" }
+      ]
+    }
+  ]
+}
