@@ -4,23 +4,10 @@ import React, { useMemo } from "react";
 import type { CanvasElement } from "../types/conductor";
 import { useConductorStore } from "../stores/conductor-store";
 import { updateElementContent } from "../ipc/conductor-ipc";
-import { STICKY_COLORS, STICKY_COLOR_KEYS } from "./native/sticky-colors";
 import { GRID_PX } from "../domain/canvas/units";
 const PANEL_WIDTH = 320;
-// Height reserved for the StylePanel when visible. ObjectAgentPrompt adds this
-// to its vertical offset so the two panels stack without overlapping.
-// Sized to fit the tallest variant (connector: 4 rows).
-export const STYLE_PANEL_HEIGHT = 130;
 // Vertical gap between the element's bottom edge and the StylePanel.
 const STYLE_PANEL_OFFSET = 14;
-// Vertical gap between StylePanel and ObjectAgentPrompt.
-export const STYLE_PANEL_STACK_GAP = 8;
-
-// Sticky color palette — derived from the shared module so this stays in sync
-// with StickyElement.tsx and CanvasToolbar.tsx.
-const STICKY_COLOR_SWATCHES: { key: string; hex: string }[] = STICKY_COLOR_KEYS.map(
-  (key) => ({ key, hex: STICKY_COLORS[key].bg }),
-);
 
 // Connector / group color palette.
 const NEUTRAL_COLOR_SWATCHES: { key: string; hex: string }[] = [
@@ -30,19 +17,6 @@ const NEUTRAL_COLOR_SWATCHES: { key: string; hex: string }[] = [
   { key: "#3B82F6", hex: "#3B82F6" }, // blue
   { key: "#10B981", hex: "#10B981" }, // green
   { key: "#F59E0B", hex: "#F59E0B" }, // orange
-];
-
-const SHAPES: { value: "rect" | "diamond" | "ellipse"; label: string }[] = [
-  { value: "rect", label: "Rect" },
-  { value: "diamond", label: "Diamond" },
-  { value: "ellipse", label: "Ellipse" },
-];
-
-const BORDER_STYLES: { value: "none" | "solid" | "dashed" | "dotted"; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "solid", label: "Solid" },
-  { value: "dashed", label: "Dashed" },
-  { value: "dotted", label: "Dotted" },
 ];
 
 const STROKE_STYLES: { value: "solid" | "dashed" | "dotted"; label: string }[] = [
@@ -55,10 +29,9 @@ const LINE_WIDTHS: number[] = [1, 2, 4];
 
 /**
  * Returns true when the StylePanel should render for the given element kind.
- * Exported so ObjectAgentPrompt can decide whether to push itself down.
  */
-export function isStylePanelKind(kind: string | undefined): boolean {
-  return kind === "native/sticky" || kind === "native/connector" || kind === "native/group";
+function isStylePanelKind(kind: string | undefined): boolean {
+  return kind === "native/connector" || kind === "native/group";
 }
 
 export function StylePanel() {
@@ -109,7 +82,6 @@ export function StylePanel() {
       onClick={(event) => event.stopPropagation()}
     >
       <div className="conductor-style-panel flex flex-col gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--sidebar-bg)] px-2 py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.32)]">
-        {kind === "native/sticky" && <StickyStyleChips element={single} />}
         {kind === "native/connector" && <ConnectorStyleChips element={single} />}
         {kind === "native/group" && <GroupStyleChips element={single} />}
       </div>
@@ -213,7 +185,7 @@ function ColorRow({ label, swatches, current, onPick }: ColorRowProps) {
  * element config in the store and persists the merge-patch via IPC.
  * Mirrors the save pattern in StickyElement.tsx.
  */
-function useStyleUpdate(element: CanvasElement) {
+export function useStyleUpdate(element: CanvasElement) {
   const updateElement = useConductorStore((state) => state.updateElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
   const setUiError = useConductorStore((state) => state.setUiError);
@@ -230,68 +202,6 @@ function useStyleUpdate(element: CanvasElement) {
     };
     return apply;
   }, [element.config, element.id, updateElement, activeCanvasId, setUiError]);
-}
-
-// ---- sticky ----
-
-function StickyStyleChips({ element }: { element: CanvasElement }) {
-  const apply = useStyleUpdate(element);
-
-  const shape = (element.config.shape as "rect" | "diamond" | "ellipse" | undefined) || "rect";
-  const bgColor = element.config.bgColor as string | undefined;
-  const borderStyleCfg = element.config.borderStyle as
-    | { color?: string; width?: number; style?: "solid" | "dashed" | "dotted" }
-    | undefined;
-  const borderStyleKey: "none" | "solid" | "dashed" | "dotted" =
-    !borderStyleCfg || !borderStyleCfg.width ? "none" : borderStyleCfg.style ?? "solid";
-
-  // Swatches use STICKY_COLOR hexes; current is bgColor if set, else fall back
-  // to the legacy color key's hex so the active swatch reflects the visible bg.
-  const legacyColorKey = (element.config.color as string | undefined) || "yellow";
-  const legacyHex =
-    STICKY_COLOR_SWATCHES.find((s) => s.key === legacyColorKey)?.hex ?? STICKY_COLOR_SWATCHES[0].hex;
-  const currentBg = bgColor ?? legacyHex;
-
-  const setShape = (value: "rect" | "diamond" | "ellipse") => apply({ shape: value });
-  const setBgColor = (hex: string) => apply({ bgColor: hex });
-  const setBorderStyle = (value: "none" | "solid" | "dashed" | "dotted") => {
-    if (value === "none") {
-      apply({ borderStyle: { width: 0, style: "solid", color: "transparent" } });
-    } else {
-      const width = borderStyleCfg?.width && borderStyleCfg.width > 0 ? borderStyleCfg.width : 2;
-      const color =
-        borderStyleCfg?.color && borderStyleCfg.color !== "transparent"
-          ? borderStyleCfg.color
-          : "#333333";
-      apply({ borderStyle: { width, style: value, color } });
-    }
-  };
-
-  return (
-    <>
-      <div className="flex items-center gap-1.5">
-        <span className="w-12 flex-shrink-0 text-[10px] uppercase tracking-wide text-[var(--muted)]">Shape</span>
-        <div className="flex gap-1">
-          {SHAPES.map((s) => (
-            <Chip key={s.value} active={shape === s.value} onClick={() => setShape(s.value)} title={s.label}>
-              {s.label}
-            </Chip>
-          ))}
-        </div>
-      </div>
-      <ColorRow label="Fill" swatches={STICKY_COLOR_SWATCHES} current={currentBg} onPick={setBgColor} />
-      <div className="flex items-center gap-1.5">
-        <span className="w-12 flex-shrink-0 text-[10px] uppercase tracking-wide text-[var(--muted)]">Border</span>
-        <div className="flex gap-1">
-          {BORDER_STYLES.map((b) => (
-            <Chip key={b.value} active={borderStyleKey === b.value} onClick={() => setBorderStyle(b.value)} title={b.label}>
-              {b.label}
-            </Chip>
-          ))}
-        </div>
-      </div>
-    </>
-  );
 }
 
 // ---- connector ----

@@ -8,7 +8,6 @@ import { FreeformLayer } from "./FreeformLayer";
 import { ConnectorOverlay } from "./ConnectorOverlay";
 import { NativeConnectorOverlay } from "./NativeConnectorOverlay";
 import { GroupLayer } from "./GroupLayer";
-import { ObjectAgentPrompt } from "./ObjectAgentPrompt";
 import { StylePanel } from "./StylePanel";
 import { MultiSelectBar } from "./MultiSelectBar";
 import { GRID_PX } from "../domain/canvas/units";
@@ -355,9 +354,11 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     const def = NATIVE_DEFAULTS[type] || { w: 4, h: 3, zIndex: 0 };
     const pxW = def.w * GRID_PX;
     const pxH = def.h * GRID_PX;
+    // canvasX/canvasY are canvas-perspective pixels; CanvasPosition.x/y
+    // are persisted in grid units (1 unit = GRID_PX), so divide back.
     const position: CanvasPosition = {
-      x: snapToGrid(canvasX - pxW / 2),
-      y: snapToGrid(canvasY - pxH / 2),
+      x: snapToGrid(canvasX - pxW / 2) / GRID_PX,
+      y: snapToGrid(canvasY - pxH / 2) / GRID_PX,
       w: def.w,
       h: def.h,
       zIndex: def.zIndex,
@@ -380,9 +381,11 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const def = NATIVE_DEFAULTS[asset.kind] || { w: 4, h: 3, zIndex: 0 };
       const pxW = def.w * GRID_PX;
       const pxH = def.h * GRID_PX;
+      // canvasX/canvasY are canvas-perspective pixels; CanvasPosition.x/y
+      // are persisted in grid units (1 unit = GRID_PX), so divide back.
       const position: CanvasPosition = {
-        x: snapToGrid(canvasX - pxW / 2),
-        y: snapToGrid(canvasY - pxH / 2),
+        x: snapToGrid(canvasX - pxW / 2) / GRID_PX,
+        y: snapToGrid(canvasY - pxH / 2) / GRID_PX,
         w: def.w,
         h: def.h,
         zIndex: def.zIndex,
@@ -1408,9 +1411,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
       <div data-capture-ignore>
         <StylePanel />
-      </div>
-      <div data-capture-ignore>
-        <ObjectAgentPrompt />
       </div>
       <div data-capture-ignore>
         <MultiSelectBar />

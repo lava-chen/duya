@@ -3,38 +3,15 @@ import type { ElementDefinition } from "./ElementRegistry";
 import { ElementKind } from "..//types/conductor";
 import { WidgetElement } from "./WidgetElement";
 
+// Builtin element registry is intentionally minimal. The conductor canvas
+// renders native elements (sticky, image, file, connector, group) directly
+// through NativeElementRenderer, and agent-created dynamic widgets through
+// WidgetElement. Legacy widget/* builtin types have been removed.
 const widgetElements: ElementDefinition[] = [
   {
-    elementKind: ElementKind["widget/task-list"],
+    elementKind: ElementKind["widget/dynamic"],
     renderMode: "react",
-    label: "Task List",
-    component: WidgetElement,
-    defaultSize: { w: 4, h: 3 },
-    minSize: { w: 2, h: 2 },
-    defaultConfig: {},
-  },
-  {
-    elementKind: ElementKind["widget/note-pad"],
-    renderMode: "react",
-    label: "Note Pad",
-    component: WidgetElement,
-    defaultSize: { w: 4, h: 3 },
-    minSize: { w: 2, h: 2 },
-    defaultConfig: {},
-  },
-  {
-    elementKind: ElementKind["widget/pomodoro"],
-    renderMode: "react",
-    label: "Pomodoro",
-    component: WidgetElement,
-    defaultSize: { w: 3, h: 2 },
-    minSize: { w: 2, h: 2 },
-    defaultConfig: {},
-  },
-  {
-    elementKind: ElementKind["widget/news-board"],
-    renderMode: "react",
-    label: "News Board",
+    label: "Dynamic Widget",
     component: WidgetElement,
     defaultSize: { w: 4, h: 3 },
     minSize: { w: 2, h: 2 },
