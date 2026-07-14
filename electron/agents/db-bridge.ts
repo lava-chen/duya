@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { markMailboxForGuidance, promoteQueuedMailbox } from '../db/mailbox-transitions';
 import { getDatabase } from '../ipc/db-handlers';
 import { getConfigManager, type ApiProvider } from '../config/manager';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
@@ -2358,23 +2359,18 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     case 'mailbox:guide': {
-      const existing = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id) as Record<string, unknown> | undefined;
-      if (!existing) return null;
-      if (existing.status !== 'pending') return null;
+      const guided = markMailboxForGuidance(db, p.id as string);
+      if (!guided) return null;
+      try {
+        const { emitMailEdited } = require('../messaging/mailbox-broadcaster');
+        emitMailEdited(guided.row, guided.previousContent);
+      } catch { /* broadcaster may not be available */ }
+      return guided.row;
+    }
 
-      const now = Date.now();
-      db.prepare(`
-        UPDATE agent_mailbox
-        SET status = 'applied',
-            apply_mode = 'promote_to_user_message',
-            applied_at = @now,
-            applied_at_checkpoint = 'after_current_run',
-            applied_summary = 'queued_for_next_agent_turn',
-            claim_expires_at = NULL
-        WHERE id = @id AND status = 'pending'
-      `).run({ id: p.id, now });
-
-      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
+    case 'mailbox:promoteQueued': {
+      const row = promoteQueuedMailbox(db, p.id as string);
+      if (!row) return null;
       emitMailboxEvent('emitMailApplied', row);
       return row;
     }
@@ -2432,7 +2428,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           SELECT id, priority, created_at, status, claim_attempts
           FROM agent_mailbox
           WHERE session_id = @sessionId
-            AND (source LIKE '%:guide' OR kind IN ('stop', 'abort_and_replace'))
+            AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace'))
             AND (
               status = 'pending'
               OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
@@ -2465,7 +2461,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           WHERE session_id = @sessionId
             AND priority = @priority
             AND created_at <= @windowEnd
-            AND (source LIKE '%:guide' OR kind IN ('stop', 'abort_and_replace'))
+            AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace'))
             AND (
               status = 'pending'
               OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)

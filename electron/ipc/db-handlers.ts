@@ -32,6 +32,7 @@ import {
 import type { DbInitResult, DatabaseStats } from '../db/index';
 import { emitMailApplied, emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
 import { uploadAsset as conductorUploadAsset } from '../conductor/asset-service';
+import { markMailboxForGuidance, promoteQueuedMailbox } from '../db/mailbox-transitions';
 
 // Re-export lifecycle functions for backward compatibility
 export {
@@ -2526,32 +2527,17 @@ export function registerMailboxHandlers(): void {
 
   ipcMain.handle('mailbox:guide', (_event, data: { id: string }) => {
     const database = getDb();
-    const existing = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id) as Record<string, unknown> | undefined;
-    if (!existing) return null;
-    if (existing.status !== 'pending') return null;
+    const guided = markMailboxForGuidance(database, data.id);
+    if (!guided) return null;
+    emitMailEdited(guided.row, guided.previousContent);
+    return guided.row;
+  });
 
-    const now = Date.now();
-    database.prepare(`
-      UPDATE agent_mailbox
-      SET status = 'applied',
-          apply_mode = 'promote_to_user_message',
-          applied_at = @now,
-          applied_at_checkpoint = 'after_current_run',
-          applied_summary = 'queued_for_next_agent_turn',
-          claim_expires_at = NULL
-      WHERE id = @id AND status = 'pending'
-    `).run({ id: data.id, now });
-
-    const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
-    try {
-      emitMailApplied(row as Record<string, unknown>);
-    } catch (error) {
-      dbLogger.warn(
-        'Failed to broadcast mailbox queue promotion',
-        { mailboxId: data.id, error: error instanceof Error ? error.message : String(error) },
-        LogComponent.DB,
-      );
-    }
+  ipcMain.handle('mailbox:promoteQueued', (_event, data: { id: string }) => {
+    const database = getDb();
+    const row = promoteQueuedMailbox(database, data.id);
+    if (!row) return null;
+    emitMailApplied(row);
     return row;
   });
 

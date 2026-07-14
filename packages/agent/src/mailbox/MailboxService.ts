@@ -116,7 +116,7 @@ export class MailboxService {
         SELECT id, priority, created_at, status, claim_attempts
         FROM agent_mailbox
         WHERE session_id = @sessionId
-          AND (source LIKE '%:guide' OR kind IN ('stop', 'abort_and_replace'))
+          AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace'))
           AND (
             status = 'pending'
             OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
@@ -145,7 +145,7 @@ export class MailboxService {
         WHERE session_id = @sessionId
           AND priority = @priority
           AND created_at <= @windowEnd
-          AND (source LIKE '%:guide' OR kind IN ('stop', 'abort_and_replace'))
+          AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace'))
           AND (
             status = 'pending'
             OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)

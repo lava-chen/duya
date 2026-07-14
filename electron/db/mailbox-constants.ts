@@ -55,7 +55,7 @@ export const MAILBOX_APPLY_MODES = [
 export type MailboxApplyMode = typeof MAILBOX_APPLY_MODES[number];
 
 /** Valid sources for a mailbox row. */
-export const MAILBOX_SOURCES = ['ui', 'ui:guide', 'api', 'api:guide', 'system'] as const;
+export const MAILBOX_SOURCES = ['ui', 'api', 'system'] as const;
 export type MailboxSource = typeof MAILBOX_SOURCES[number];
 
 /** Valid `cancelled_by` values. */
