@@ -188,7 +188,7 @@ async function waitForBackgroundTaskNotifications(parentSessionId?: string): Pro
 }
 
 type RuntimeMailboxDecision =
-  | { action: 'continue' }
+  | { action: 'continue'; absorbed: boolean }
   | { action: 'soft_stop'; summary: string }
   | { action: 'hard_replace'; replacement: string };
 
@@ -1048,7 +1048,12 @@ export class duyaAgent {
         }
       }
 
-      const mailboxDecision = await this._claimMailboxBeforeModelTurn(runId, messages, seqIndex);
+      const mailboxDecision = await this._claimMailboxAtCheckpoint(
+        runId,
+        messages,
+        seqIndex,
+        'before_model_turn',
+      );
       if (mailboxDecision.action === 'soft_stop') {
         const stopMessage = mailboxDecision.summary || 'Stopped as requested.';
         messages.push({
@@ -1370,6 +1375,30 @@ export class duyaAgent {
             continue
           }
 
+          // A message can arrive while the model is producing its final text.
+          // Re-check before finalising so in-run guidance is not limited to
+          // tool-heavy flows that naturally create another model turn.
+          const finalMailboxDecision = await this._claimMailboxAtCheckpoint(
+            runId,
+            messages,
+            seqIndex,
+            'before_final_answer',
+          );
+          if (finalMailboxDecision.action === 'hard_replace') {
+            messages.push({
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: `<runtime-user-replacement>\n${finalMailboxDecision.replacement || 'The user replaced the previous instruction.'}\n</runtime-user-replacement>`,
+              timestamp: Date.now(),
+              seq_index: seqIndex,
+              metadata: { mailboxRuntimeInstruction: true },
+            });
+            continue;
+          }
+          if (finalMailboxDecision.action === 'continue' && finalMailboxDecision.absorbed) {
+            continue;
+          }
+
           // Update this.messages BEFORE yielding done event
           // so API route can retrieve the final state
           this.messages = persistableMessages(messages);
@@ -1507,13 +1536,14 @@ export class duyaAgent {
   // implementation. Helpers are private; they are not part of the public
   // surface and may be reorganized freely.
 
-  private async _claimMailboxBeforeModelTurn(
+  private async _claimMailboxAtCheckpoint(
     runId: string,
     messages: Message[],
     seqIndex: number,
+    checkpoint: 'before_model_turn' | 'before_final_answer',
   ): Promise<RuntimeMailboxDecision> {
     if (!this.sessionId) {
-      return { action: 'continue' };
+      return { action: 'continue', absorbed: false };
     }
 
     let claim: RuntimeMailboxClaim;
@@ -1521,18 +1551,18 @@ export class duyaAgent {
       claim = await mailboxDb.claimBatch({
         sessionId: this.sessionId,
         runId,
-        checkpoint: 'before_model_turn',
+        checkpoint,
         limit: 10,
       }) as RuntimeMailboxClaim;
     } catch (err) {
       logger.warn(
-        `[AgentMailbox] before_model_turn claim failed: ${err instanceof Error ? err.message : String(err)}`
+        `[AgentMailbox] ${checkpoint} claim failed: ${err instanceof Error ? err.message : String(err)}`
       );
-      return { action: 'continue' };
+      return { action: 'continue', absorbed: false };
     }
 
     if (!claim.rows.length) {
-      return { action: 'continue' };
+      return { action: 'continue', absorbed: false };
     }
 
     const applyRow = async (row: MailboxRow, index: number, summary: string): Promise<void> => {
@@ -1542,7 +1572,7 @@ export class duyaAgent {
         id: row.id,
         claimToken,
         mode: chooseMailboxApplyMode(row),
-        checkpoint: 'before_model_turn',
+        checkpoint,
         summary,
       });
     };
@@ -1561,7 +1591,7 @@ export class duyaAgent {
 
     const usableRows = claim.rows.filter((row) => row.content.trim().length > 0);
     if (!usableRows.length) {
-      return { action: 'continue' };
+      return { action: 'continue', absorbed: false };
     }
 
     for (const row of usableRows) {
@@ -1580,8 +1610,8 @@ export class duyaAgent {
       },
     });
 
-    logger.info(`[AgentMailbox] absorbed ${usableRows.length} row(s) before model turn`);
-    return { action: 'continue' };
+    logger.info(`[AgentMailbox] absorbed ${usableRows.length} row(s) at ${checkpoint}`);
+    return { action: 'continue', absorbed: true };
   }
 
   /**
