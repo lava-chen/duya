@@ -703,6 +703,7 @@ export interface MailboxAPI {
   }) => Promise<unknown>;
   edit: (id: string, patch: { content?: string; kind?: string }) => Promise<unknown>;
   guide: (id: string) => Promise<unknown>;
+  promoteQueued: (id: string) => Promise<unknown>;
   cancel: (id: string, reason?: string) => Promise<unknown>;
   list: (sessionId: string, opts?: { status?: string[]; limit?: number }) => Promise<unknown[]>;
   listForSession: (sessionId: string) => Promise<unknown[]>;
@@ -1981,6 +1982,7 @@ const electronAPI: ElectronAPI = {
     },
     edit: (id, patch) => ipcRenderer.invoke('mailbox:edit', { id, ...patch }),
     guide: (id) => ipcRenderer.invoke('mailbox:guide', { id }),
+    promoteQueued: (id) => ipcRenderer.invoke('mailbox:promoteQueued', { id }),
     cancel: (id, reason) => ipcRenderer.invoke('mailbox:cancel', { id, reason }),
     list: (sessionId, opts) => ipcRenderer.invoke('mailbox:list', { sessionId, ...opts }),
     listForSession: (sessionId) => ipcRenderer.invoke('mailbox:listForSession', { sessionId }),

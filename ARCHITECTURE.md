@@ -916,6 +916,24 @@ duya/
 | **自动更新** | electron-updater 集成，支持检查/下载/安装 | ✅ 已实现 |
 | **浏览器扩展** | 浏览器守护进程 + 扩展通信 | ✅ 已实现 |
 
+## 运行中用户消息：排队与引导
+
+运行中再次发送用户消息有两条互斥的消费路径：
+
+- **排队**：renderer 先写 `agent_mailbox`，同时把带 `queuedMailboxId` 的
+  `StartStreamParams` 放入 `stream-session-manager.pendingMessages`。当前 run 的
+  `done/error` 到达后，manager 按 FIFO 调用 `mailbox:promoteQueued`，再以新的
+  `role=user` turn 启动下一条。已取消或已被 agent 吸收的行会被跳过，避免重复。
+- **引导**：`mailbox:guide` 只给仍为 `pending` 的行标记
+  `apply_mode=runtime_instruction`，不提前标记为 `applied`。Agent 在
+  `before_model_turn` 和 `before_final_answer` 两个安全 checkpoint 执行
+  `claimBatch`，把内容作为临时 runtime user guidance 注入当前 run；该临时包装
+  不会持久化到普通消息历史。
+
+关键文件：`src/components/chat/ChatView.tsx`、
+`src/lib/stream-session-manager.ts`、`electron/db/mailbox-transitions.ts`、
+`packages/agent/src/agent/DuyaAgent.ts`。
+
 ## Profile / Mode / Permission 三层正交（Plan 224）
 
 DUYA 的"agent 配置"由三个正交层组合而成。每一层独立选择、互不干扰，最终在 `streamChat` 入口合成为一个完整的运行时配置。
