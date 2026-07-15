@@ -28,5 +28,7 @@ Use the \`SessionSearch\` tool proactively when:
 
 Search with concrete identifiers from the request: feature name, subsystem, file, error, plan title, or decision term. Prefer the repository's current plan/spec and code when they already answer the question. Search past sessions to recover missing context, not as a ritual on every task.
 
+When a Recent Session Directory is present, treat it only as a discovery index. Start with \`scope="same_project"\` for project work. Use \`scope="other_projects"\` only when the request plausibly depends on work from another project. Do not contact sessions solely because they are recent.
+
 Results are summarized evidence, not current truth. Verify any drift-prone claim against the workspace before acting. If a recovered decision materially changes the task, record it in the canonical project artifact instead of leaving it only in chat history.`;
 }
