@@ -254,6 +254,14 @@ export function MessageInput({
   // Tracks the last known conductor slot state to prevent sync loops
   // between the `conductorEnabled` prop and `activeModes`.
   const conductorSlotRef = useRef<boolean>(false);
+  // Mirror activeModes in a ref so handleToggleMode can read the latest
+  // value synchronously without adding activeModes to its dependency
+  // array. This also lets us call onConductorChange OUTSIDE the
+  // setActiveModes updater — calling a parent setState from inside an
+  // updater runs during render and throws "Cannot update a component
+  // while rendering a different component".
+  const activeModesRef = useRef<Set<ModeModifierId>>(activeModes);
+  activeModesRef.current = activeModes;
 
   // Sync conductor slot from the prop (DB is the source of truth for
   // session-level conductor). When the parent passes a new
@@ -283,21 +291,24 @@ export function MessageInput({
   // is handled by explicitly calling `onConductorChange` here (user action)
   // rather than via an effect, to avoid the render-frame race described above.
   const handleToggleMode = useCallback((mode: ModeModifierId) => {
-    setActiveModes((prev) => {
-      // Block activation if it conflicts with an already-active mode.
-      if (!prev.has(mode) && isModeExcludedByActive(prev, mode)) {
-        return prev;
-      }
-      const next = toggleModeInSet(prev, mode);
-      // Persist conductor changes to the parent (DB) immediately. We compare
-      // against `prev` (not `next`) to detect the actual toggle direction.
-      if (mode === 'conductor') {
-        const willEnable = !prev.has('conductor');
-        conductorSlotRef.current = willEnable;
-        onConductorChange?.(willEnable);
-      }
-      return next;
-    });
+    const prev = activeModesRef.current;
+    // Block activation if it conflicts with an already-active mode.
+    if (!prev.has(mode) && isModeExcludedByActive(prev, mode)) {
+      return;
+    }
+    const next = toggleModeInSet(prev, mode);
+    // Persist conductor changes to the parent (DB) immediately. We compare
+    // against `prev` (not `next`) to detect the actual toggle direction.
+    // NOTE: onConductorChange MUST be called outside the setActiveModes
+    // updater — updaters run during render, and calling a parent setState
+    // from inside one throws "Cannot update a component while rendering a
+    // different component".
+    if (mode === 'conductor') {
+      const willEnable = !prev.has('conductor');
+      conductorSlotRef.current = willEnable;
+      onConductorChange?.(willEnable);
+    }
+    setActiveModes(next);
     textareaRef.current?.focus();
   }, [onConductorChange]);
 

@@ -31,6 +31,10 @@ export function SidebarConductorView({
     elements,
     updateElement,
     removeElement,
+    pendingChatFocusElementId,
+    clearPendingChatFocus,
+    centerOnElement,
+    setSelectedElementId,
   } = useConductorStore();
 
   // When mounted as a registry page, tab is provided and the canvas is
@@ -133,6 +137,20 @@ export function SidebarConductorView({
     },
     [activeCanvasId, removeElement]
   );
+
+  // Fulfill chat-initiated element focus requests. When a user clicks a
+  // canvas tool-use row in the chat, the row stores the target element id
+  // in pendingChatFocusElementId and opens the conductor panel. This
+  // effect waits until the element is present in the canvas (snapshot may
+  // still be loading) and then selects + centers it.
+  useEffect(() => {
+    if (!pendingChatFocusElementId) return;
+    const el = elements.find((e) => e.id === pendingChatFocusElementId);
+    if (!el) return;
+    setSelectedElementId(pendingChatFocusElementId);
+    centerOnElement(pendingChatFocusElementId);
+    clearPendingChatFocus();
+  }, [pendingChatFocusElementId, elements, centerOnElement, setSelectedElementId, clearPendingChatFocus]);
 
   if (isLoading) {
     return (

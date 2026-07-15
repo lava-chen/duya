@@ -188,5 +188,8 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   if (isModuleTool(name)) {
     return { count: 1, categoryKey: 'module' };
   }
+  if (name.startsWith('canvas_')) {
+    return { count: 1, categoryKey: 'canvas' };
+  }
   return { count: 1, categoryKey: 'tools' };
 }

@@ -97,6 +97,10 @@ import {
   CaretDownIcon as ChevronDownIcon,
   CaretUpIcon as ChevronUpIcon,
   StarIcon,
+  TextBolderIcon,
+  TextItalicIcon,
+  TextUnderlineIcon,
+  TextStrikethroughIcon,
   // Bridge icons
   WifiHighIcon,
   TelegramLogoIcon,
@@ -224,6 +228,10 @@ export {
   ChevronDownIcon,
   ChevronUpIcon,
   StarIcon,
+  TextBolderIcon,
+  TextItalicIcon,
+  TextUnderlineIcon,
+  TextStrikethroughIcon,
   // Bridge icons
   WifiHighIcon,
   TelegramLogoIcon,
