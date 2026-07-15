@@ -1,7 +1,7 @@
 import * as http from 'http';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import { ChildProcess } from 'child_process';
+import { ChildProcess, execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { SessionManager } from './session-store';
@@ -24,6 +24,45 @@ import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 export function detectReferencesEnabled(workingDirectory?: string): boolean {
   if (!workingDirectory) return false;
   return existsSync(join(workingDirectory, '.duya', 'references'));
+}
+
+/**
+ * Return the amount of memory that is effectively available for new work.
+ *
+ * On macOS, Node's `os.freemem()` only reports pages that are completely free,
+ * which ignores the large pool of inactive/speculative/purgeable pages that the
+ * kernel can reclaim on demand. This makes the memory ratio look dangerously
+ * high on Intel and Apple Silicon Macs even when memory pressure is moderate.
+ *
+ * `vm_stat` reports the same counters Activity Monitor uses, so we include
+ * free + inactive + speculative + purgeable pages as "available". On non-macOS
+ * platforms we fall back to `os.freemem()`.
+ */
+function getAvailableMemory(): number {
+  if (process.platform !== 'darwin') {
+    return os.freemem();
+  }
+
+  try {
+    const output = execSync('vm_stat', { encoding: 'utf8', timeout: 1000 });
+    const pageSizeMatch = output.match(/page size of (\d+) bytes/);
+    const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 16384;
+
+    const parsePages = (label: string): number => {
+      const match = output.match(new RegExp(`${label}:\\s+(\\d+)\\.`));
+      return match ? parseInt(match[1], 10) : 0;
+    };
+
+    const free = parsePages('Pages free');
+    const inactive = parsePages('Pages inactive');
+    const speculative = parsePages('Pages speculative');
+    const purgeable = parsePages('Pages purgeable');
+
+    return (free + inactive + speculative + purgeable) * pageSize;
+  } catch {
+    // If vm_stat fails for any reason, fall back to the conservative value.
+    return os.freemem();
+  }
 }
 
 export interface RouterDeps {
@@ -233,12 +272,12 @@ async function handlePostChat(
       }
 
       const totalMem = os.totalmem();
-      const freeMem = os.freemem();
-      const usedRatio = (totalMem - freeMem) / totalMem;
+      const availableMem = getAvailableMemory();
+      const usedRatio = (totalMem - availableMem) / totalMem;
 
       const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.98');
       if (usedRatio > MEMORY_THRESHOLD) {
-        logger.warn('System memory usage high, rejecting chat', { usedRatio, totalMem, freeMem, sessionId });
+        logger.warn('System memory usage high, rejecting chat', { usedRatio, totalMem, availableMem, sessionId });
         revertStreamingLock();
         res.writeHead(503, 'Service Unavailable', {
           'Content-Type': 'application/json',
@@ -1084,11 +1123,12 @@ async function lazySpawnWorkerForCompact(
 
   // Memory / concurrency guards — same as handlePostChat.
   const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const usedRatio = (totalMem - freeMem) / totalMem;
+  const availableMem = getAvailableMemory();
+  const usedRatio = (totalMem - availableMem) / totalMem;
+
   const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.98');
   if (usedRatio > MEMORY_THRESHOLD) {
-    logger.warn('System memory usage high, rejecting compact lazy-spawn', { usedRatio, sessionId });
+    logger.warn('System memory usage high, rejecting compact lazy-spawn', { usedRatio, totalMem, availableMem, sessionId });
     sendJson(res, 503, { error: 'System memory usage is high', retryAfterSec: 30 });
     return { ok: false };
   }
