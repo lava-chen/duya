@@ -74,6 +74,7 @@ export { getSkillsMetadataSection } from './sections/dynamic/skillsMetadata.js'
 export { getLanguageSection } from './sections/dynamic/language.js'
 export { getScratchpadSection } from './sections/dynamic/scratchpad.js'
 export { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
+export { getRecentSessionsSection } from './sections/dynamic/recentSessionsSection.js'
 export {
   getAgentsMdSection,
   initializeAgentsMd,

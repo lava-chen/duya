@@ -10,6 +10,7 @@ import * as db from './db.js';
 
 // Re-export db functions for direct access
 export * from './db.js';
+export * from './recent-session-directory.js';
 
 // Re-export store exports
 export { SessionStoreManager, sessionStore } from './store.js';

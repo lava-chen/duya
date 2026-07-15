@@ -28,6 +28,7 @@ import {
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { getAgentsMdManager } from '../../agentsmd/index.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
+import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 
 export class ResearchPromptSystem extends PromptSystem {
   constructor(profile?: PromptProfile) {
@@ -82,6 +83,13 @@ export class ResearchPromptSystem extends PromptSystem {
             'Visual tasks require rendered-output verification',
           )
         : null,
+      isSectionEnabled(this.profile, 'recentSessions')
+        ? volatilePromptSection(
+            'recentSessions',
+            () => getRecentSessionsSection(context),
+            'Recent session metadata can change between turns',
+          )
+        : null,
     ].filter((section): section is PromptSection => section !== null)
   }
 
@@ -109,6 +117,7 @@ export class ResearchPromptSystem extends PromptSystem {
   override buildContext(options: PromptBuildContextOptions): PromptContext {
     const workingDirectory = options.workingDirectory || process.cwd()
     return {
+      sessionId: options.sessionId,
       workingDirectory,
       additionalWorkingDirectories: options.additionalWorkingDirectories,
       platform: process.platform,

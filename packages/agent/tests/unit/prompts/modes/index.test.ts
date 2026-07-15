@@ -38,6 +38,7 @@ describe('prompt modes', () => {
       expect(full.enable).toContain('projectContinuity');
       expect(full.enable).toContain('environment');
       expect(full.enable).toContain('sessionSearch');
+      expect(full.enable).toContain('recentSessions');
       expect(full.disable).toEqual([]);
     });
 
@@ -51,6 +52,7 @@ describe('prompt modes', () => {
       expect(minimal.disable).toContain('skills');
       expect(minimal.disable).toContain('sessionGuidance');
       expect(minimal.disable).toContain('projectContinuity');
+      expect(minimal.disable).toContain('recentSessions');
     });
 
     it('bare mode should retain project instructions without main-agent continuity', () => {
@@ -63,6 +65,7 @@ describe('prompt modes', () => {
       expect(bare.disable).toContain('skills');
       expect(bare.disable).toContain('sessionGuidance');
       expect(bare.disable).toContain('projectContinuity');
+      expect(bare.disable).toContain('recentSessions');
       expect(bare.disable).toContain('toneAndStyle');
     });
 
@@ -94,6 +97,7 @@ describe('prompt modes', () => {
       expect(enabled.has('agentsMd')).toBe(true);
       expect(enabled.has('projectGrounding')).toBe(true);
       expect(enabled.has('projectContinuity')).toBe(true);
+      expect(enabled.has('recentSessions')).toBe(true);
       expect(enabled.has('environment')).toBe(true);
     });
 
@@ -118,6 +122,7 @@ describe('prompt modes', () => {
       expect(enabled.has('mcp')).toBe(false);
       expect(enabled.has('sessionGuidance')).toBe(false);
       expect(enabled.has('projectContinuity')).toBe(false);
+      expect(enabled.has('recentSessions')).toBe(false);
     });
 
     it('bare mode should not have toneAndStyle', () => {
@@ -136,6 +141,7 @@ describe('prompt modes', () => {
       expect(enabled.has('memory')).toBe(false);
       expect(enabled.has('skills')).toBe(false);
       expect(enabled.has('sessionGuidance')).toBe(false);
+      expect(enabled.has('recentSessions')).toBe(false);
     });
 
     it('coding overlay should add taskHandling and outputEfficiency', () => {

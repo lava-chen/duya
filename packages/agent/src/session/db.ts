@@ -1246,6 +1246,18 @@ export function listSessions(): ChatSession[] {
   return stmt.all() as ChatSession[];
 }
 
+/**
+ * Async session listing for code that must work in both the Electron agent
+ * subprocess (IPC) and standalone/local database modes.
+ */
+export async function listSessionsAsync(): Promise<ChatSession[]> {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return await getIpcClient()!.sessionDb.list() as ChatSession[];
+  }
+
+  return listSessions();
+}
+
 // ============================================================
 // Message CRUD Operations
 // ============================================================

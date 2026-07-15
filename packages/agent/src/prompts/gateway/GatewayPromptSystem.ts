@@ -40,6 +40,7 @@ import { getToneAndStyleSection } from '../general/sections/static/toneAndStyle.
 // Reused dynamic sections
 import { getPlatformSection } from '../sections/dynamic/platform.js'
 import { getLanguageSection } from '../general/sections/dynamic/language.js'
+import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 
 export class GatewayPromptSystem extends PromptSystem {
   constructor(profile?: PromptProfile) {
@@ -71,6 +72,11 @@ export class GatewayPromptSystem extends PromptSystem {
         () => getLanguageSection(context),
         'Language preference',
       ),
+      volatilePromptSection(
+        'recentSessions',
+        () => getRecentSessionsSection(context),
+        'Recent session metadata can change between turns',
+      ),
     ]
   }
 
@@ -98,6 +104,7 @@ export class GatewayPromptSystem extends PromptSystem {
       : process.cwd()
 
     return {
+      sessionId: options.sessionId,
       workingDirectory,
       additionalWorkingDirectories: options.additionalWorkingDirectories,
       platform: process.platform,
