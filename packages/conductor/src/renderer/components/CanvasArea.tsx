@@ -11,10 +11,18 @@ import { GroupLayer } from "./GroupLayer";
 import { StylePanel } from "./StylePanel";
 import { MultiSelectBar } from "./MultiSelectBar";
 import { GRID_PX } from "../domain/canvas/units";
+import {
+  autoDirection,
+  computeBezierPath,
+  computeElbowRoutePoints,
+  computeRoundedElbowPath,
+  selectAutoAnchors,
+} from "../domain/canvas/connector-renderer";
 import { computeSnap } from "../domain/canvas/snap";
 import { zoomToFit } from "../domain/canvas/layout/viewport";
 import { canvasSpatialIndex } from "../stores/conductor-store";
 import type { AlignmentGuide } from "../domain/canvas/snap";
+import type { ConnectorRoutingMode } from "../types/canvas-node";
 
 const MIN_CANVAS_WIDTH = 3200;
 const MIN_CANVAS_HEIGHT = 2400;
@@ -43,12 +51,23 @@ function snapToGrid(value: number, grid = SNAP_GRID): number {
 
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
   sticky: { w: 3, h: 2, zIndex: 0 },
+  text: { w: 10, h: 2, zIndex: 0 },
   image: { w: 5, h: 4, zIndex: 0 },
   file: { w: 4, h: 3, zIndex: 0 },
+  link: { w: 4, h: 1, zIndex: 0 },
   group: { w: 0, h: 0, zIndex: -1 },
 };
 
+function sanitizeZoom(z: number): number {
+  return Number.isFinite(z) && z > 0 ? z : 1;
+}
+
+function sanitizePan(v: number): number {
+  return Number.isFinite(v) ? v : 0;
+}
+
 export const canvasTransformState = { panX: 0, panY: 0, zoom: 1 };
+(window as any).canvasTransformState = canvasTransformState;
 
 function parseCreateTool(activeTool: string | null): { type: string; extra: Record<string, unknown> } | null {
   if (!activeTool?.startsWith("create:")) return null;
@@ -62,6 +81,82 @@ function parseCreateTool(activeTool: string | null): { type: string; extra: Reco
     return { type, extra: {} };
   }
 }
+
+function parseCreateLinkTool(activeTool: string | null): Record<string, unknown> | null {
+  const parsed = parseCreateTool(activeTool);
+  if (!parsed || parsed.type !== "link") return null;
+  return parsed.extra;
+}
+
+function parseConnectorTool(activeTool: string | null): ConnectorRoutingMode | null {
+  if (activeTool === "connector" || activeTool === "connector:elbow") return "elbow";
+  if (activeTool === "connector:curve") return "curve";
+  return null;
+}
+
+const CreateLinkPreview: React.FC<{ x: number; y: number; content: Record<string, unknown> }> = ({
+  x,
+  y,
+  content,
+}) => {
+  const linkType = content.linkType === "session" || content.linkType === "canvas" ? content.linkType : "url";
+  const icon = linkType === "url" ? "🌐" : linkType === "session" ? "💬" : "🎨";
+  const title =
+    typeof content.title === "string" && content.title
+      ? content.title
+      : typeof content.url === "string" && content.url
+        ? content.url.replace(/^https?:\/\//, "").replace(/^www\./, "")
+        : typeof content.targetId === "string" && content.targetId
+          ? content.targetId.slice(0, 8)
+          : "Link";
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: x,
+        top: y,
+        transform: "translate(-50%, -50%)",
+        pointerEvents: "none",
+        zIndex: 10000,
+        opacity: 0.9,
+      }}
+    >
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "7px 12px",
+          borderRadius: 999,
+          border: "1px solid var(--conductor-border)",
+          background: "var(--surface)",
+          boxShadow: "var(--shadow-hovering)",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "var(--text-primary)",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: "50%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 12,
+            background: "var(--conductor-accent-soft)",
+          }}
+        >
+          {icon}
+        </span>
+        <span style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+      </div>
+    </div>
+  );
+};
 
 function isConnectorKind(el: CanvasElement | undefined | null) {
   if (!el || typeof el.elementKind !== "string") return false;
@@ -131,9 +226,16 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     sourcePx: { x: number; y: number };
     mouseX: number;
     mouseY: number;
+    routingMode: ConnectorRoutingMode;
   } | null>(null);
   const connectorDraftRef = useRef(connectorDraft);
   connectorDraftRef.current = connectorDraft;
+
+  const [createPreview, setCreatePreview] = useState<{
+    clientX: number;
+    clientY: number;
+    content: Record<string, unknown>;
+  } | null>(null);
 
   const dragRef = useRef<{
     elementId: string;
@@ -183,7 +285,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   const userZoomLockRef = useRef(false);
 
   const applyTransform = useCallback(() => {
-    const { panX, panY, zoom } = transformRef.current;
+    let { panX, panY, zoom } = transformRef.current;
+    zoom = sanitizeZoom(zoom);
+    panX = sanitizePan(panX);
+    panY = sanitizePan(panY);
+    transformRef.current.zoom = zoom;
+    transformRef.current.panX = panX;
+    transformRef.current.panY = panY;
     const el = canvasElRef.current;
     if (el) {
       el.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
@@ -210,7 +318,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       clearTimeout(syncTimerRef.current);
     }
     syncTimerRef.current = setTimeout(() => {
-      const { panX, panY, zoom } = transformRef.current;
+      let { panX, panY, zoom } = transformRef.current;
+      zoom = sanitizeZoom(zoom);
+      panX = sanitizePan(panX);
+      panY = sanitizePan(panY);
+      transformRef.current.zoom = zoom;
+      transformRef.current.panX = panX;
+      transformRef.current.panY = panY;
       const store = useConductorStore.getState();
       if (store.canvasZoom !== zoom) {
         setCanvasZoom(zoom);
@@ -237,10 +351,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       padding: 1,
       respectMinSize: false,
     });
-    transformRef.current.zoom = result.zoom;
+    transformRef.current.zoom = sanitizeZoom(result.zoom);
     // Pan to center the fitted bbox. panX/panY are in px.
-    transformRef.current.panX = result.panX * GRID_PX;
-    transformRef.current.panY = result.panY * GRID_PX;
+    transformRef.current.panX = sanitizePan(result.panX * GRID_PX);
+    transformRef.current.panY = sanitizePan(result.panY * GRID_PX);
     applyTransform();
     syncCanvasStateToStore();
   }, [applyTransform, syncCanvasStateToStore]);
@@ -290,6 +404,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   // Spring zoom back to hard bounds (called on release when in elastic zone)
   const springZoomToHard = useCallback(() => {
     const currentZoom = transformRef.current.zoom;
+    if (!Number.isFinite(currentZoom)) {
+      transformRef.current.zoom = 1;
+      applyTransform();
+      syncCanvasStateToStore();
+      return;
+    }
     const targetZoom = clampZoomHard(currentZoom);
     if (Math.abs(currentZoom - targetZoom) < 0.001) return;
 
@@ -369,6 +489,26 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       await createNativeElement(activeCanvasId, type, position, extra);
       setUiError(null);
       setActiveTool(null);
+
+      // For text elements, auto-select and enter edit mode right after
+      // creation so the user can type immediately. The new element arrives
+      // via an async state patch; defer to next tick so the store has it.
+      if (type === "text") {
+        setTimeout(() => {
+          const store = useConductorStore.getState();
+          // Find the freshly created native/text element closest to the
+          // creation position (most recent createdAt wins on ties).
+          const candidates = store.elements.filter(
+            (e) => e.elementKind === "native/text",
+          );
+          if (candidates.length === 0) return;
+          const newest = candidates.reduce((a, b) =>
+            (b.createdAt ?? 0) > (a.createdAt ?? 0) ? b : a,
+          );
+          store.setSelectedElementId(newest.id);
+          store.setEditingElementId(newest.id);
+        }, 0);
+      }
     } catch (err) {
       setUiError(`Create ${type} failed: ${err instanceof Error ? err.message : err}`);
     }
@@ -479,6 +619,31 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
 
     const handleGlobalMove = (e: MouseEvent) => {
+      const p = panRef.current;
+      if (p?.active) {
+        const dx = e.clientX - p.startX;
+        const dy = e.clientY - p.startY;
+        transformRef.current.panX = Math.round(p.startPanX + dx);
+        transformRef.current.panY = Math.round(p.startPanY + dy);
+
+        // Track velocity for inertia
+        const now = performance.now();
+        const dt = now - p.lastTime;
+        if (dt > 0) {
+          const vx = (e.clientX - p.lastX) / dt * 16; // px per frame (~16ms)
+          const vy = (e.clientY - p.lastY) / dt * 16;
+          // Smooth velocity (exponential moving average)
+          p.velocityX = p.velocityX * 0.6 + vx * 0.4;
+          p.velocityY = p.velocityY * 0.6 + vy * 0.4;
+        }
+        p.lastX = e.clientX;
+        p.lastY = e.clientY;
+        p.lastTime = now;
+
+        applyTransform();
+        return;
+      }
+
       const d = dragRef.current;
       if (d) {
         if (!d.moved) {
@@ -543,6 +708,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
         if (target) {
           try {
+            const sourceEl = elements.find((el) => el.id === cd.sourceId);
+            const { sourceAnchor, targetAnchor } = sourceEl
+              ? selectAutoAnchors(sourceEl, target, elements)
+              : { sourceAnchor: "center", targetAnchor: "center" };
             await createNativeElement(activeCanvasId, "connector", {
               x: 0,
               y: 0,
@@ -551,10 +720,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               zIndex: 10,
               rotation: 0,
             }, {
-              source: { nodeId: cd.sourceId, anchorId: "center" },
-              target: { nodeId: target.id, anchorId: "center" },
+              source: { nodeId: cd.sourceId, anchorId: sourceAnchor },
+              target: { nodeId: target.id, anchorId: targetAnchor },
               curvature: 0.4,
-              routingMode: "bezier",
+              routingMode: cd.routingMode,
             });
           } catch (err) {
             setUiError(`Create connector failed: ${err instanceof Error ? err.message : err}`);
@@ -604,7 +773,30 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
     if (target.tagName === "IFRAME") return;
 
-    if (activeTool === "connector") {
+    // Pan has highest priority among canvas interactions so modifier keys
+    // and space-bar override element drag / connector draw even when the
+    // pointer starts on top of an element.
+    if (e.ctrlKey || e.metaKey || e.button === 1 || spaceHeldRef.current) {
+      e.preventDefault();
+      cancelInertia();
+      panRef.current = {
+        active: true,
+        startX: e.clientX,
+        startY: e.clientY,
+        startPanX: transformRef.current.panX,
+        startPanY: transformRef.current.panY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        lastTime: performance.now(),
+        velocityX: 0,
+        velocityY: 0,
+      };
+      setHostCursor("grabbing");
+      return;
+    }
+
+    const connectorMode = parseConnectorTool(activeTool);
+    if (connectorMode) {
       const nativeEl = elements.find((el) => {
         const domEl = document.getElementById(`native-el-${el.id}`);
         return domEl?.contains(target);
@@ -618,6 +810,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           sourcePx: elementCenterPx(nativeEl),
           mouseX: canvas.x,
           mouseY: canvas.y,
+          routingMode: connectorMode,
         });
         return;
       }
@@ -674,25 +867,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       return;
     }
 
-    if (e.ctrlKey || e.metaKey || e.button === 1 || spaceHeldRef.current) {
-      e.preventDefault();
-      cancelInertia();
-      panRef.current = {
-        active: true,
-        startX: e.clientX,
-        startY: e.clientY,
-        startPanX: transformRef.current.panX,
-        startPanY: transformRef.current.panY,
-        lastX: e.clientX,
-        lastY: e.clientY,
-        lastTime: performance.now(),
-        velocityX: 0,
-        velocityY: 0,
-      };
-      setHostCursor("grabbing");
-      return;
-    }
-
     const isOnBareCanvas =
       target === e.currentTarget ||
       target.classList.contains("canvas-inner") ||
@@ -729,31 +903,20 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     setSelectedElementId,
     setHostCursor,
     toggleElementSelection,
+    cancelInertia,
   ]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (panRef.current?.active) {
-      const dx = e.clientX - panRef.current.startX;
-      const dy = e.clientY - panRef.current.startY;
-      transformRef.current.panX = Math.round(panRef.current.startPanX + dx);
-      transformRef.current.panY = Math.round(panRef.current.startPanY + dy);
-
-      // Track velocity for inertia
-      const now = performance.now();
-      const dt = now - panRef.current.lastTime;
-      if (dt > 0) {
-        const vx = (e.clientX - panRef.current.lastX) / dt * 16; // px per frame (~16ms)
-        const vy = (e.clientY - panRef.current.lastY) / dt * 16;
-        // Smooth velocity (exponential moving average)
-        panRef.current.velocityX = panRef.current.velocityX * 0.6 + vx * 0.4;
-        panRef.current.velocityY = panRef.current.velocityY * 0.6 + vy * 0.4;
-      }
-      panRef.current.lastX = e.clientX;
-      panRef.current.lastY = e.clientY;
-      panRef.current.lastTime = now;
-
-      applyTransform();
-      return;
+    // Pan is handled by the global window mousemove listener so it continues
+    // even when the cursor leaves the viewport.
+    const linkExtra = parseCreateLinkTool(activeTool);
+    if (linkExtra) {
+      setCreatePreview((prev) => {
+        if (prev && prev.clientX === e.clientX && prev.clientY === e.clientY) return prev;
+        return { clientX: e.clientX, clientY: e.clientY, content: linkExtra };
+      });
+    } else if (createPreview) {
+      setCreatePreview(null);
     }
 
     if (isBoxSelecting && boxStartRef.current) {
@@ -768,7 +931,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       setBoxRect({ x: Math.min(sx, cx), y: Math.min(sy, cy), w: Math.abs(cx - sx), h: Math.abs(cy - sy) });
       return;
     }
-  }, [isBoxSelecting, applyTransform]);
+  }, [isBoxSelecting, activeTool, createPreview]);
 
   const handleMouseUp = useCallback(() => {
     if (isBoxSelecting && boxRect && boxRect.w > 4 && boxRect.h > 4) {
@@ -789,31 +952,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     setBoxRect(null);
     boxStartRef.current = null;
 
-    if (panRef.current?.active) {
-      // Start inertia if velocity is significant
-      const vx = panRef.current.velocityX;
-      const vy = panRef.current.velocityY;
-      panRef.current = null;
-      setHostCursor(spaceHeldRef.current ? "grab" : "default");
-
-      if (Math.abs(vx) > 2 || Math.abs(vy) > 2) {
-        startInertia(vx, vy);
-      } else {
-        syncCanvasStateToStore();
-      }
-    }
-
-    // Spring zoom back to hard bounds if in elastic zone
-    const currentZoom = transformRef.current.zoom;
-    if (currentZoom < MIN_ZOOM || currentZoom > MAX_ZOOM) {
-      springZoomToHard();
-    }
-
-    // Reset dragging state
+    // Reset dragging state. Pan end/inertia is handled by the global mouseup.
     if (isDragging) {
       setIsDragging(false);
     }
-  }, [isBoxSelecting, boxRect, freeformElements, setSelectedElementIds, syncCanvasStateToStore, setHostCursor, startInertia, springZoomToHard, isDragging]);
+
+    setCreatePreview(null);
+  }, [isBoxSelecting, boxRect, freeformElements, setSelectedElementIds, isDragging]);
 
   const handleWheel = useCallback((e: WheelEvent) => {
     const host = viewportRef.current;
@@ -830,7 +975,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       // Smooth zoom: 0.0015 factor gives ~14% change per mouse-wheel notch
       // (deltaY≈100) and stays responsive on trackpad pinch (deltaY≈1-5).
       const zoomFactor = Math.exp(-e.deltaY * 0.0015);
-      const nextZoom = clampZoomElastic(zoom * zoomFactor);
+      const nextZoom = sanitizeZoom(clampZoomElastic(zoom * zoomFactor));
       if (Math.abs(nextZoom - zoom) < 0.001) return;
 
       const anchorX = e.clientX - rect.left;
@@ -897,14 +1042,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const { zoom, panX, panY } = transformRef.current;
       const host = viewportRef.current;
       if (!host) return;
-      const nextZoom = clampZoomHard(zoom + KEYBOARD_ZOOM_STEP);
+      const nextZoom = sanitizeZoom(clampZoomHard(zoom + KEYBOARD_ZOOM_STEP));
       const cx = host.clientWidth / 2;
       const cy = host.clientHeight / 2;
       const canvasX = (cx - panX) / zoom;
       const canvasY = (cy - panY) / zoom;
       transformRef.current.zoom = nextZoom;
-      transformRef.current.panX = Math.round(cx - canvasX * nextZoom);
-      transformRef.current.panY = Math.round(cy - canvasY * nextZoom);
+      transformRef.current.panX = sanitizePan(Math.round(cx - canvasX * nextZoom));
+      transformRef.current.panY = sanitizePan(Math.round(cy - canvasY * nextZoom));
       applyTransform();
       syncCanvasStateToStore();
       return;
@@ -914,14 +1059,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const { zoom, panX, panY } = transformRef.current;
       const host = viewportRef.current;
       if (!host) return;
-      const nextZoom = clampZoomHard(zoom - KEYBOARD_ZOOM_STEP);
+      const nextZoom = sanitizeZoom(clampZoomHard(zoom - KEYBOARD_ZOOM_STEP));
       const cx = host.clientWidth / 2;
       const cy = host.clientHeight / 2;
       const canvasX = (cx - panX) / zoom;
       const canvasY = (cy - panY) / zoom;
       transformRef.current.zoom = nextZoom;
-      transformRef.current.panX = Math.round(cx - canvasX * nextZoom);
-      transformRef.current.panY = Math.round(cy - canvasY * nextZoom);
+      transformRef.current.panX = sanitizePan(Math.round(cx - canvasX * nextZoom));
+      transformRef.current.panY = sanitizePan(Math.round(cy - canvasY * nextZoom));
       applyTransform();
       syncCanvasStateToStore();
       return;
@@ -929,6 +1074,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     if ((e.ctrlKey || e.metaKey) && e.key === "0") {
       e.preventDefault();
       transformRef.current.zoom = 1;
+      transformRef.current.panX = 0;
+      transformRef.current.panY = 0;
       applyTransform();
       syncCanvasStateToStore();
       return;
@@ -958,7 +1105,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     const toolMap: Record<string, string> = {
       v: "select",
       n: "sticky",
-      c: "connector",
+      c: "connector:elbow",
     };
     const tool = toolMap[e.key.toLowerCase()];
     if (tool) {
@@ -1182,6 +1329,28 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
   }, [setCanvasViewportSize, runZoomToFit]);
 
+  // Recover from any corrupted transform state (e.g. NaN zoom from a
+  // previous bug or anomalous wheel event). This also ensures the initial
+  // render reflects the store rather than stale transform defaults.
+  useEffect(() => {
+    const store = useConductorStore.getState();
+    let needsSync = false;
+    if (!Number.isFinite(store.canvasZoom) || store.canvasZoom <= 0) {
+      setCanvasZoom(1);
+      needsSync = true;
+    }
+    if (!Number.isFinite(transformRef.current.zoom) || transformRef.current.zoom <= 0) {
+      transformRef.current.zoom = 1;
+      transformRef.current.panX = 0;
+      transformRef.current.panY = 0;
+      needsSync = true;
+    }
+    if (needsSync) {
+      applyTransform();
+      syncCanvasStateToStore();
+    }
+  }, [applyTransform, setCanvasZoom, syncCanvasStateToStore]);
+
   useEffect(() => {
     const host = viewportRef.current;
     if (!host) return;
@@ -1199,7 +1368,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       if (panRef.current?.active) return "grabbing";
       return "grab";
     }
-    if (activeTool === "connector") return "crosshair";
+    if (parseConnectorTool(activeTool)) return "crosshair";
     if (parseCreateTool(activeTool)) return "copy";
     if (panRef.current?.active) return "grabbing";
     if (isBoxSelecting) return "crosshair";
@@ -1225,7 +1394,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     }
     const { zoom } = transformRef.current;
     const zoomFactor = Math.exp(-e.deltaY * 0.0015);
-    const nextZoom = clampZoomHard(zoom * zoomFactor);
+    const nextZoom = sanitizeZoom(clampZoomHard(zoom * zoomFactor));
     if (Math.abs(nextZoom - zoom) < 0.001) return;
 
     const host = viewportRef.current;
@@ -1235,8 +1404,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     const canvasX = (cx - transformRef.current.panX) / zoom;
     const canvasY = (cy - transformRef.current.panY) / zoom;
     transformRef.current.zoom = nextZoom;
-    transformRef.current.panX = Math.round(cx - canvasX * nextZoom);
-    transformRef.current.panY = Math.round(cy - canvasY * nextZoom);
+    transformRef.current.panX = sanitizePan(Math.round(cx - canvasX * nextZoom));
+    transformRef.current.panY = sanitizePan(Math.round(cy - canvasY * nextZoom));
     applyTransform();
     syncCanvasStateToStore();
   }, [applyTransform, syncCanvasStateToStore, clampZoomHard]);
@@ -1343,15 +1512,26 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               zIndex: 9999,
             }}
           >
-            <line
-              x1={connectorDraft.sourcePx.x}
-              y1={connectorDraft.sourcePx.y}
-              x2={connectorDraft.mouseX}
-              y2={connectorDraft.mouseY}
+            <path
+              d={connectorDraft.routingMode === "elbow"
+                ? computeRoundedElbowPath(computeElbowRoutePoints(
+                    connectorDraft.sourcePx,
+                    autoDirection(connectorDraft.sourcePx, { x: connectorDraft.mouseX, y: connectorDraft.mouseY }),
+                    { x: connectorDraft.mouseX, y: connectorDraft.mouseY },
+                    autoDirection({ x: connectorDraft.mouseX, y: connectorDraft.mouseY }, connectorDraft.sourcePx),
+                  ))
+                : computeBezierPath(
+                    connectorDraft.sourcePx,
+                    autoDirection(connectorDraft.sourcePx, { x: connectorDraft.mouseX, y: connectorDraft.mouseY }),
+                    { x: connectorDraft.mouseX, y: connectorDraft.mouseY },
+                    autoDirection({ x: connectorDraft.mouseX, y: connectorDraft.mouseY }, connectorDraft.sourcePx),
+                  )}
+              fill="none"
               stroke="var(--conductor-accent)"
               strokeWidth={2}
               strokeDasharray="6 3"
               strokeLinecap="round"
+              strokeLinejoin="round"
             />
             <circle
               cx={connectorDraft.sourcePx.x}
@@ -1362,6 +1542,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               strokeWidth={2}
             />
           </svg>
+        )}
+
+        {createPreview && (
+          <CreateLinkPreview x={createPreview.clientX} y={createPreview.clientY} content={createPreview.content} />
         )}
       </div>
 

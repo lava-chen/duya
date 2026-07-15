@@ -9,6 +9,15 @@ import { PencilIcon, TrashIcon, CaretDownIcon } from "@/components/icons";
 import { executeAction } from "../../ipc/conductor-ipc";
 import { useStyleUpdate } from "../StylePanel";
 import { STICKY_COLORS, STICKY_COLOR_KEYS, type StickyColorKey } from "./sticky-colors";
+import { useTranslation } from "@/hooks/useTranslation";
+import type { TranslationKey } from "@/i18n";
+import {
+  CapsuleToolbar,
+  CAPSULE_BTN_BASE,
+  CAPSULE_BTN_ACTIVE,
+  CAPSULE_DIVIDER,
+} from "../toolbar/CapsuleToolbar";
+import { TextSelectionToolbar } from "./TextSelectionToolbar";
 
 type HandleDirection = "nw" | "ne" | "se" | "sw";
 
@@ -17,10 +26,10 @@ const MIN_SIZE_GRID = 1;
 
 type StickyShape = "rect" | "diamond" | "ellipse";
 
-const SHAPES: { value: StickyShape; label: string; icon: React.ReactNode }[] = [
+const SHAPES: { value: StickyShape; labelKey: TranslationKey; icon: React.ReactNode }[] = [
   {
     value: "rect",
-    label: "Rect",
+    labelKey: "conductor.toolbar.shapeRect",
     icon: (
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ display: "block" }}>
         <rect x="2.5" y="3.5" width="11" height="9" rx="2" stroke="currentColor" strokeWidth="1.5" />
@@ -29,7 +38,7 @@ const SHAPES: { value: StickyShape; label: string; icon: React.ReactNode }[] = [
   },
   {
     value: "diamond",
-    label: "Diamond",
+    labelKey: "conductor.toolbar.shapeDiamond",
     icon: (
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ display: "block" }}>
         <rect
@@ -47,7 +56,7 @@ const SHAPES: { value: StickyShape; label: string; icon: React.ReactNode }[] = [
   },
   {
     value: "ellipse",
-    label: "Ellipse",
+    labelKey: "conductor.toolbar.shapeEllipse",
     icon: (
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ display: "block" }}>
         <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.5" />
@@ -56,11 +65,11 @@ const SHAPES: { value: StickyShape; label: string; icon: React.ReactNode }[] = [
   },
 ];
 
-const BORDER_STYLES: { value: "none" | "solid" | "dashed" | "dotted"; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "solid", label: "Solid" },
-  { value: "dashed", label: "Dashed" },
-  { value: "dotted", label: "Dotted" },
+const BORDER_STYLES: { value: "none" | "solid" | "dashed" | "dotted"; labelKey: TranslationKey }[] = [
+  { value: "none", labelKey: "conductor.toolbar.borderNone" },
+  { value: "solid", labelKey: "conductor.toolbar.borderSolid" },
+  { value: "dashed", labelKey: "conductor.toolbar.borderDashed" },
+  { value: "dotted", labelKey: "conductor.toolbar.borderDotted" },
 ];
 
 function StickySelectionToolbar({
@@ -72,6 +81,7 @@ function StickySelectionToolbar({
   onEdit: () => void;
   onDelete: (e: React.MouseEvent) => void;
 }) {
+  const { t } = useTranslation();
   const apply = useStyleUpdate(element);
   const [colorOpen, setColorOpen] = useState(false);
   const colorMenuRef = useRef<HTMLDivElement>(null);
@@ -116,83 +126,39 @@ function StickySelectionToolbar({
     setColorOpen(false);
   };
 
-  const toolbarBtnBase: React.CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: 28,
-    height: 28,
-    borderRadius: "50%",
-    border: "none",
-    background: "transparent",
-    color: "rgba(255,255,255,0.85)",
-    cursor: "pointer",
-    transition: "background var(--motion-duration-micro) var(--motion-smooth)",
-  };
-
-  const activeBtnStyle: React.CSSProperties = {
-    background: "var(--conductor-accent)",
-    color: "#fff",
-  };
-
-  const dividerStyle: React.CSSProperties = {
-    width: 1,
-    height: 16,
-    background: "rgba(255,255,255,0.12)",
-    margin: "0 4px",
-  };
-
   return (
-    <div
-      style={{
-        position: "absolute",
-        top: -52,
-        left: "50%",
-        transform: "translateX(-50%)",
-        display: "flex",
-        alignItems: "center",
-        gap: 2,
-        padding: "5px 8px",
-        background: "rgba(40, 44, 52, 0.98)",
-        border: "1px solid rgba(255,255,255,0.12)",
-        borderRadius: 24,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.2)",
-        pointerEvents: "auto",
-        zIndex: 20,
-      }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
+    <CapsuleToolbar>
       {SHAPES.map((s) => (
         <button
           key={s.value}
           type="button"
-          title={s.label}
+          title={t(s.labelKey)}
           onClick={() => setShape(s.value)}
           style={{
-            ...toolbarBtnBase,
-            ...(shape === s.value ? activeBtnStyle : {}),
+            ...CAPSULE_BTN_BASE,
+            ...(shape === s.value ? CAPSULE_BTN_ACTIVE : {}),
           }}
           onMouseEnter={(e) => {
             if (shape !== s.value) e.currentTarget.style.background = "rgba(255,255,255,0.1)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background =
-              shape === s.value ? (activeBtnStyle.background as string) : "transparent";
+              shape === s.value ? (CAPSULE_BTN_ACTIVE.background as string) : "transparent";
           }}
         >
           {s.icon}
         </button>
       ))}
 
-      <div style={dividerStyle} />
+      <div style={CAPSULE_DIVIDER} />
 
       <div style={{ position: "relative" }} ref={colorMenuRef}>
         <button
           type="button"
-          title="Fill"
+          title={t("conductor.toolbar.fill")}
           onClick={() => setColorOpen((v: boolean) => !v)}
           style={{
-            ...toolbarBtnBase,
+            ...CAPSULE_BTN_BASE,
             width: "auto",
             padding: "0 6px",
             borderRadius: 14,
@@ -255,7 +221,7 @@ function StickySelectionToolbar({
         )}
       </div>
 
-      <div style={dividerStyle} />
+      <div style={CAPSULE_DIVIDER} />
 
       {BORDER_STYLES.map((b) => {
         const active = borderKey === b.value;
@@ -263,6 +229,7 @@ function StickySelectionToolbar({
           <button
             key={b.value}
             type="button"
+            title={t(b.labelKey)}
             onClick={() => setBorder(b.value)}
             style={{
               height: 24,
@@ -283,18 +250,18 @@ function StickySelectionToolbar({
               e.currentTarget.style.background = active ? "var(--conductor-accent)" : "transparent";
             }}
           >
-            {b.label}
+            {t(b.labelKey)}
           </button>
         );
       })}
 
-      <div style={dividerStyle} />
+      <div style={CAPSULE_DIVIDER} />
 
       <button
         type="button"
-        title="Edit"
+        title={t("conductor.toolbar.edit")}
         onClick={onEdit}
-        style={toolbarBtnBase}
+        style={CAPSULE_BTN_BASE}
         onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
@@ -302,15 +269,15 @@ function StickySelectionToolbar({
       </button>
       <button
         type="button"
-        title="Delete"
+        title={t("conductor.toolbar.delete")}
         onClick={onDelete}
-        style={toolbarBtnBase}
+        style={CAPSULE_BTN_BASE}
         onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
         <TrashIcon size={16} />
       </button>
-    </div>
+    </CapsuleToolbar>
   );
 }
 
@@ -353,6 +320,9 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     origH: number;
     origX: number;
     origY: number;
+    origZIndex: number;
+    origRotation: number;
+    resizeMode: string;
     rafId: number | null;
     lastMouseX: number;
     lastMouseY: number;
@@ -379,11 +349,14 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       origH: element.position.h,
       origX: element.position.x,
       origY: element.position.y,
+      origZIndex: element.position.zIndex,
+      origRotation: element.position.rotation ?? 0,
+      resizeMode: (element.metadata?.resizeMode as string) ?? 'free',
       rafId: null,
       lastMouseX: e.clientX,
       lastMouseY: e.clientY,
     };
-  }, [element.position]);
+  }, [element.position, element.metadata]);
 
   useEffect(() => {
     const flushResizeFrame = () => {
@@ -441,9 +414,8 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       }
 
       // Aspect-ratio lock for resizeMode='ratio' (Shift toggles free).
-      const resizeMode = element.metadata?.resizeMode ?? 'free';
       const shiftHeld = (window.event as MouseEvent | null)?.shiftKey ?? false;
-      if (resizeMode === 'ratio' && !shiftHeld && (r.dir === 'nw' || r.dir === 'ne' || r.dir === 'se' || r.dir === 'sw')) {
+      if (r.resizeMode === 'ratio' && !shiftHeld && (r.dir === 'nw' || r.dir === 'ne' || r.dir === 'se' || r.dir === 'sw')) {
         const origRatio = r.origW / r.origH;
         const newRatio = newW / newH;
         if (Math.abs(newRatio - origRatio) > 0.001) {
@@ -466,11 +438,12 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
 
       updateElement(element.id, {
         position: {
-          ...element.position,
           x: newX,
           y: newY,
           w: newW,
           h: newH,
+          zIndex: r.origZIndex,
+          rotation: r.origRotation,
         },
       });
     };
@@ -516,7 +489,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       window.removeEventListener("mousemove", handleGlobalMouseMove);
       window.removeEventListener("mouseup", handleGlobalMouseUp);
     };
-  }, [element.id, element.position, onPositionChange, updateElement]);
+  }, [element.id, onPositionChange, updateElement]);
 
   const handleStyle: React.CSSProperties = {
     position: "absolute",
@@ -556,6 +529,10 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
           onEdit={() => setEditingElementId(element.id)}
           onDelete={handleDelete}
         />
+      )}
+
+      {isSelected && !isEditing && element.elementKind === "native/text" && (
+        <TextSelectionToolbar element={element} />
       )}
 
       {isSelected && !isEditing && element.metadata?.resizeMode !== 'fixed' && (

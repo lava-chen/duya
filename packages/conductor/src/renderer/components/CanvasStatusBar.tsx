@@ -17,7 +17,8 @@ export function CanvasStatusBar() {
   const { undo, redo, canUndo, canRedo, agentStatus, canvasZoom, setConductorSettingsOpen } =
     useConductorStore();
 
-  const zoomPercent = Math.round(canvasZoom * 100);
+  const safeZoom = Number.isFinite(canvasZoom) && canvasZoom > 0 ? canvasZoom : 1;
+  const zoomPercent = Math.round(safeZoom * 100);
 
   return (
     <div className="relative h-10 px-3 flex items-center gap-2 flex-shrink-0">

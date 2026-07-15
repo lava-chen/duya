@@ -2,6 +2,7 @@
 
 import React from "react";
 import type { CanvasElement } from "..//types/conductor";
+import { GRID_PX, autoDirection, computeBezierPath } from "..//domain/canvas/connector-renderer";
 
 interface ConnectorOverlayProps {
   elements: CanvasElement[];
@@ -9,14 +10,15 @@ interface ConnectorOverlayProps {
 
 function getElementCenter(el: CanvasElement): { x: number; y: number } {
   return {
-    x: el.position.x + el.position.w * 40,
-    y: el.position.y + el.position.h * 40,
+    x: el.position.x * GRID_PX + (el.position.w * GRID_PX) / 2,
+    y: el.position.y * GRID_PX + (el.position.h * GRID_PX) / 2,
   };
 }
 
 export const ConnectorOverlay: React.FC<ConnectorOverlayProps> = ({ elements }) => {
   const connectors = elements.filter(
-    (el) => el.elementKind === "native/connector"
+    (el) => el.elementKind === "native/connector" &&
+      !(el.config.source && el.config.target)
   );
 
   if (connectors.length === 0) return null;
@@ -30,21 +32,22 @@ export const ConnectorOverlay: React.FC<ConnectorOverlayProps> = ({ elements }) 
         width: "100%",
         height: "100%",
         pointerEvents: "none",
-        zIndex: 2,
+        zIndex: 0,
       }}
     >
       <defs>
         <marker
           id="arrowhead"
-          markerWidth="10"
-          markerHeight="7"
-          refX="10"
-          refY="3.5"
+          markerWidth="6"
+          markerHeight="4.5"
+          refX="6"
+          refY="2.25"
           orient="auto"
+          markerUnits="userSpaceOnUse"
         >
           <polygon
-            points="0 0, 10 3.5, 0 7"
-            fill="var(--accent)"
+            points="0 0, 6 2.25, 0 4.5"
+            fill="currentColor"
           />
         </marker>
       </defs>
@@ -65,18 +68,26 @@ export const ConnectorOverlay: React.FC<ConnectorOverlayProps> = ({ elements }) 
 
         const sourcePos = getElementCenter(sourceEl);
         const targetPos = getElementCenter(targetEl);
+        const pathD = computeBezierPath(
+          sourcePos,
+          autoDirection(sourcePos, targetPos),
+          targetPos,
+          autoDirection(targetPos, sourcePos),
+          0.4,
+        );
 
         return (
-          <line
+          <path
             key={conn.id}
-            x1={sourcePos.x}
-            y1={sourcePos.y}
-            x2={targetPos.x}
-            y2={targetPos.y}
+            d={pathD}
+            fill="none"
             stroke="var(--accent)"
             strokeWidth={2}
+            strokeLinecap="round"
             strokeDasharray={style === "dashed" ? "6 3" : undefined}
             markerEnd={arrow ? "url(#arrowhead)" : undefined}
+            color="var(--accent)"
+            style={{ pointerEvents: "none" }}
           />
         );
       })}

@@ -14,7 +14,7 @@ const stroke = {
 };
 
 export const ELEMENT_ICONS: Record<
-  "sticky" | "connector" | "media" | "select",
+  "sticky" | "connector" | "media" | "select" | "link" | "text",
   ReactNode
 > = {
   sticky: (
@@ -43,10 +43,25 @@ export const ELEMENT_ICONS: Record<
     </svg>
   ),
 
+  link: (
+    <svg viewBox="0 0 24 24" fill="none" style={iconStyle}>
+      <path d="M10 13.5a4.5 4.5 0 0 0 6.4 0l2.1-2.1a4.5 4.5 0 1 0-6.4-6.4l-1.1 1.1" {...stroke} />
+      <path d="M14 10.5a4.5 4.5 0 0 0-6.4 0l-2.1 2.1a4.5 4.5 0 1 0 6.4 6.4l1.1-1.1" {...stroke} />
+    </svg>
+  ),
+
   select: (
     <svg viewBox="0 0 24 24" fill="none" style={iconStyle}>
       <path d="M6.3 4.8 18.3 11 13 13.2l-2.2 5z" fill="currentColor" fillOpacity="0.2" {...stroke} />
       <path d="m12.9 13.1 4.2 4.2" {...stroke} />
+    </svg>
+  ),
+
+  text: (
+    <svg viewBox="0 0 24 24" fill="none" style={iconStyle}>
+      <path d="M5 6.5h14" {...stroke} />
+      <path d="M12 6.5v11" {...stroke} />
+      <path d="M9 17.5h6" {...stroke} />
     </svg>
   ),
 };
