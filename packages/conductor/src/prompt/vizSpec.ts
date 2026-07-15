@@ -57,6 +57,7 @@ vizSpec format:
 {
   "sourceId": "element-uuid-1",
   "targetId": "element-uuid-2",
+  "routingMode": "elbow",
   "label": "depends on",
   "strokeStyle": "solid",
   "color": "#7C5CFF",
@@ -66,6 +67,7 @@ vizSpec format:
 \`\`\`
 
 Style fields (all optional, top-level):
+- **routingMode**: "elbow" | "curve" — default "elbow". Use elbow for every editable architecture map, dependency graph, flowchart, and mind map. Curve is opt-in only when explicitly requested for an organic relation.
 - **strokeStyle**: "solid" | "dashed" | "dotted" — default "solid".
   - Use "dashed" for conditional/optional branches.
   - Use "dotted" for weak/implicit relations.
@@ -76,6 +78,11 @@ Style fields (all optional, top-level):
 Examples:
 - Conditional branch: strokeStyle="dashed", arrowEnd=false
 - Bidirectional relation: arrowStart=true, arrowEnd=true
+
+For fan-out/fan-in, align siblings in one row or column and create
+direct elbow connectors for every semantic relation. Matching anchor
+sides make their orthogonal segments overlap into a shared trunk/bus
+with short branches. Never chain siblings together to fake the bus.
 
 ### native/image — Image Elements
 

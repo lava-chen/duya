@@ -14,6 +14,7 @@ import { executeAction } from "..//ipc/conductor-ipc";
 import {
   autoSelectAttachment,
   GRID_PX,
+  snapElbowSegmentCoordinate,
   simplifyOrthogonalPoints,
 } from "..//domain/canvas/connector-renderer";
 import {
@@ -334,16 +335,51 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     };
     const onMove = (moveEvent: PointerEvent) => {
       const cursor = toCanvasPoint(moveEvent);
-      const points = basePoints.map((point) => ({ ...point }));
-      if (orientation === "horizontal") {
-        points[segmentIndex].y = cursor.y;
-        points[segmentIndex + 1].y = cursor.y;
-      } else {
-        points[segmentIndex].x = cursor.x;
-        points[segmentIndex + 1].x = cursor.x;
-      }
-      const stateCurrent = useConductorStore.getState().elements.find((element) => element.id === connectorId);
+      const state = useConductorStore.getState();
+      const stateCurrent = state.elements.find((element) => element.id === connectorId);
       if (!stateCurrent) return;
+      const points = basePoints.map((point) => ({ ...point }));
+      const candidateRoutes: Point[][] = [];
+      for (const candidate of state.elements) {
+        if (candidate.id === connectorId || candidate.elementKind !== "native/connector") continue;
+        const candidateSource = candidate.config.source as ConnectorEndpoint | undefined;
+        const candidateTarget = candidate.config.target as ConnectorEndpoint | undefined;
+        const candidateSourceNode = candidateSource
+          ? state.elements.find((element) => element.id === candidateSource.nodeId)
+          : null;
+        const candidateTargetNode = candidateTarget
+          ? state.elements.find((element) => element.id === candidateTarget.nodeId)
+          : null;
+        if (!candidateSourceNode || !candidateTargetNode) continue;
+        const candidateData = getComputedConnectorData(
+          candidate,
+          state.elements,
+          candidateSourceNode.position,
+          candidateTargetNode.position,
+        );
+        if (candidateData?.routingMode === "elbow" && candidateData.elbowPoints) {
+          candidateRoutes.push(candidateData.elbowPoints);
+        }
+      }
+      const zoom = Number.isFinite(canvasTransformState.zoom) && canvasTransformState.zoom > 0
+        ? canvasTransformState.zoom
+        : 1;
+      const proposedCoordinate = orientation === "horizontal" ? cursor.y : cursor.x;
+      const snap = snapElbowSegmentCoordinate(
+        proposedCoordinate,
+        orientation,
+        points[segmentIndex],
+        points[segmentIndex + 1],
+        candidateRoutes,
+        12 / zoom,
+      );
+      if (orientation === "horizontal") {
+        points[segmentIndex].y = snap.coordinate;
+        points[segmentIndex + 1].y = snap.coordinate;
+      } else {
+        points[segmentIndex].x = snap.coordinate;
+        points[segmentIndex + 1].x = snap.coordinate;
+      }
       const waypoints = simplifyOrthogonalPoints(points).slice(1, -1);
       updateElement(connectorId, { config: { ...stateCurrent.config, routingMode: "elbow", waypoints } });
     };

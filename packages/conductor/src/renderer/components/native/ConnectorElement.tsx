@@ -22,6 +22,7 @@ import {
   getAnchorPosition,
   getBezierControlPoints,
   getConnectorEndpoint,
+  getConnectorArrowGeometry,
   getPolylineMidpoint,
 } from "../..//domain/canvas/connector-renderer";
 
@@ -239,21 +240,6 @@ function markerUrl(prefix: string, marker: ConnectorMarker): string | undefined 
     : `url(#${prefix}-${marker})`;
 }
 
-function getArrowGeometry(tip: Point, center: Point) {
-  const dx = center.x - tip.x;
-  const dy = center.y - tip.y;
-  const length = Math.hypot(dx, dy) || 1;
-  const inward = { x: dx / length, y: dy / length };
-  const perpendicular = { x: -inward.y, y: inward.x };
-  const base = { x: tip.x - inward.x * 11, y: tip.y - inward.y * 11 };
-  const notch = { x: tip.x - inward.x * 5.2, y: tip.y - inward.y * 5.2 };
-  return {
-    left: { x: base.x + perpendicular.x * 5.4, y: base.y + perpendicular.y * 5.4 },
-    right: { x: base.x - perpendicular.x * 5.4, y: base.y - perpendicular.y * 5.4 },
-    notch,
-  };
-}
-
 function ConnectorArrow({
   marker,
   tip,
@@ -268,7 +254,7 @@ function ConnectorArrow({
   testId: string;
 }) {
   if (marker !== "arrow" && marker !== "open-arrow") return null;
-  const { left, right, notch } = getArrowGeometry(tip, center);
+  const { left, right } = getConnectorArrowGeometry(tip, center);
   if (marker === "open-arrow") {
     return (
       <path
@@ -276,7 +262,7 @@ function ConnectorArrow({
         d={`M ${left.x} ${left.y} L ${tip.x} ${tip.y} L ${right.x} ${right.y}`}
         fill="none"
         stroke={color}
-        strokeWidth={2.5}
+        strokeWidth={2.2}
         strokeLinecap="round"
         strokeLinejoin="round"
         style={{ pointerEvents: "none" }}
@@ -286,10 +272,11 @@ function ConnectorArrow({
   return (
     <path
       data-testid={testId}
-      d={`M ${tip.x} ${tip.y} L ${left.x} ${left.y} L ${notch.x} ${notch.y} L ${right.x} ${right.y} Z`}
+      d={`M ${tip.x} ${tip.y} L ${left.x} ${left.y} L ${right.x} ${right.y} Z`}
       fill={color}
       stroke={color}
-      strokeWidth={0.8}
+      strokeWidth={0.7}
+      strokeLinecap="round"
       strokeLinejoin="round"
       style={{ pointerEvents: "none" }}
     />

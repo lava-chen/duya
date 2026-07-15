@@ -348,6 +348,111 @@ export function simplifyOrthogonalPoints(points: Point[]): Point[] {
   return simplified;
 }
 
+export type OrthogonalSegmentOrientation = 'horizontal' | 'vertical';
+
+export interface ElbowSegmentSnapResult {
+  coordinate: number;
+  snapped: boolean;
+}
+
+export interface ConnectorArrowGeometry {
+  left: Point;
+  right: Point;
+}
+
+export function getConnectorArrowGeometry(
+  tip: Point,
+  center: Point,
+  headLength = 9,
+  halfWidth = 4.6,
+): ConnectorArrowGeometry {
+  const dx = center.x - tip.x;
+  const dy = center.y - tip.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const inward = { x: dx / length, y: dy / length };
+  const perpendicular = { x: -inward.y, y: inward.x };
+  const base = {
+    x: tip.x - inward.x * headLength,
+    y: tip.y - inward.y * headLength,
+  };
+  return {
+    left: {
+      x: base.x + perpendicular.x * halfWidth,
+      y: base.y + perpendicular.y * halfWidth,
+    },
+    right: {
+      x: base.x - perpendicular.x * halfWidth,
+      y: base.y - perpendicular.y * halfWidth,
+    },
+  };
+}
+
+function intervalGap(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+  const aMin = Math.min(aStart, aEnd);
+  const aMax = Math.max(aStart, aEnd);
+  const bMin = Math.min(bStart, bEnd);
+  const bMax = Math.max(bStart, bEnd);
+  return Math.max(0, Math.max(aMin, bMin) - Math.min(aMax, bMax));
+}
+
+/**
+ * Snap a dragged elbow segment onto a nearby parallel segment.
+ *
+ * The coordinate is in canvas pixels. Callers should divide the desired
+ * screen-space threshold by the current zoom before passing it here.
+ */
+export function snapElbowSegmentCoordinate(
+  proposedCoordinate: number,
+  orientation: OrthogonalSegmentOrientation,
+  movingStart: Point,
+  movingEnd: Point,
+  candidateRoutes: Point[][],
+  threshold = 12,
+): ElbowSegmentSnapResult {
+  let bestCoordinate = proposedCoordinate;
+  let bestDistance = Infinity;
+  let bestAlongGap = Infinity;
+  const movingAlongStart = orientation === 'horizontal' ? movingStart.x : movingStart.y;
+  const movingAlongEnd = orientation === 'horizontal' ? movingEnd.x : movingEnd.y;
+
+  for (const route of candidateRoutes) {
+    for (let index = 0; index < route.length - 1; index += 1) {
+      const start = route[index];
+      const end = route[index + 1];
+      if (!isFinitePoint(start) || !isFinitePoint(end)) continue;
+      const isHorizontal = Math.abs(start.y - end.y) < 0.01;
+      const isVertical = Math.abs(start.x - end.x) < 0.01;
+      if ((orientation === 'horizontal' && !isHorizontal) ||
+          (orientation === 'vertical' && !isVertical)) continue;
+
+      const candidateCoordinate = orientation === 'horizontal' ? start.y : start.x;
+      const distance = Math.abs(candidateCoordinate - proposedCoordinate);
+      if (distance > threshold) continue;
+
+      const candidateAlongStart = orientation === 'horizontal' ? start.x : start.y;
+      const candidateAlongEnd = orientation === 'horizontal' ? end.x : end.y;
+      const alongGap = intervalGap(
+        movingAlongStart,
+        movingAlongEnd,
+        candidateAlongStart,
+        candidateAlongEnd,
+      );
+      if (alongGap > threshold) continue;
+
+      if (distance < bestDistance || (Math.abs(distance - bestDistance) < 0.01 && alongGap < bestAlongGap)) {
+        bestCoordinate = candidateCoordinate;
+        bestDistance = distance;
+        bestAlongGap = alongGap;
+      }
+    }
+  }
+
+  return {
+    coordinate: bestCoordinate,
+    snapped: bestDistance !== Infinity,
+  };
+}
+
 function orthogonalizePoints(points: Point[]): Point[] {
   if (points.length < 2) return points;
   const result: Point[] = [points[0]];
