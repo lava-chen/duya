@@ -12,6 +12,7 @@ const VALID_ELEMENT_KINDS = new Set([
   'native/file',
   'native/connector',
   'native/group',
+  'native/link',
   'widget/task-list',
   'widget/note-pad',
   'widget/pomodoro',
@@ -24,6 +25,9 @@ const VALID_ELEMENT_KINDS = new Set([
 // both files together when the palette changes.
 const STICKY_COLORS = new Set(['yellow', 'blue', 'green', 'pink', 'purple', 'gray']);
 const CONNECTOR_END_MARKERS = new Set(['arrow', 'none']);
+const CONNECTOR_MARKERS = new Set(['none', 'arrow', 'open-arrow', 'circle', 'diamond', 'bar']);
+const CONNECTOR_ROUTING_MODES = new Set(['elbow', 'curve', 'bezier', 'straight']);
+const CONNECTOR_STROKE_STYLES = new Set(['solid', 'dashed', 'dotted']);
 
 // Canvas bounds in grid units (1 unit = 80 px). Matches the renderer
 // constant so clamping and DB clamping agree.
@@ -144,6 +148,26 @@ export function validateKindConfig(kind: string, config: Record<string, unknown>
     }
   }
 
+  if (kind === 'native/link') {
+    const linkType = config.linkType;
+    if (linkType !== undefined && !['url', 'session', 'canvas'].includes(linkType as string)) {
+      checks.push(fail('link linkType must be one of: url, session, canvas'));
+    }
+    const expandedSize = config.expandedSize;
+    if (expandedSize !== undefined) {
+      if (!isRecord(expandedSize)) {
+        checks.push(fail('link expandedSize must be an object with w and h'));
+      } else {
+        if (!isFiniteNumber(expandedSize.w)) {
+          checks.push(fail('link expandedSize.w must be a finite number'));
+        }
+        if (!isFiniteNumber(expandedSize.h)) {
+          checks.push(fail('link expandedSize.h must be a finite number'));
+        }
+      }
+    }
+  }
+
   if (kind === 'widget/dynamic') {
     // sourceCode is required for widget/dynamic, but it's a top-level field in the tool input,
     // not in config. Validate config is an object (optional metadata).
@@ -192,6 +216,51 @@ export function validateConnectorShape(config: Record<string, unknown>): Validat
   const curvature = config.curvature;
   if (curvature !== undefined && (!isFiniteNumber(curvature) || (curvature as number) < 0)) {
     checks.push(fail('connector curvature must be a non-negative finite number'));
+  }
+
+  const routingMode = config.routingMode;
+  if (routingMode !== undefined && (typeof routingMode !== 'string' || !CONNECTOR_ROUTING_MODES.has(routingMode))) {
+    checks.push(fail(`connector routingMode must be one of: ${Array.from(CONNECTOR_ROUTING_MODES).join(', ')}`));
+  }
+
+  for (const field of ['startMarker', 'endMarker'] as const) {
+    const marker = config[field];
+    if (marker !== undefined && (typeof marker !== 'string' || !CONNECTOR_MARKERS.has(marker))) {
+      checks.push(fail(`connector ${field} must be one of: ${Array.from(CONNECTOR_MARKERS).join(', ')}`));
+    }
+  }
+
+  const strokeStyle = config.strokeStyle;
+  if (strokeStyle !== undefined && (typeof strokeStyle !== 'string' || !CONNECTOR_STROKE_STYLES.has(strokeStyle))) {
+    checks.push(fail(`connector strokeStyle must be one of: ${Array.from(CONNECTOR_STROKE_STYLES).join(', ')}`));
+  }
+
+  const label = config.label;
+  if (label !== undefined && typeof label !== 'string') {
+    checks.push(fail('connector label must be a string'));
+  }
+
+  const waypoints = config.waypoints;
+  if (waypoints !== undefined) {
+    if (!Array.isArray(waypoints)) {
+      checks.push(fail('connector waypoints must be an array of {x, y} points'));
+    } else if (waypoints.some((point) => !isRecord(point) || !isFiniteNumber(point.x) || !isFiniteNumber(point.y))) {
+      checks.push(fail('connector waypoint coordinates must be finite numbers'));
+    }
+  }
+
+  const curveControlOffsets = config.curveControlOffsets;
+  if (curveControlOffsets !== undefined) {
+    if (!isRecord(curveControlOffsets)) {
+      checks.push(fail('connector curveControlOffsets must contain source and target points'));
+    } else {
+      for (const field of ['source', 'target'] as const) {
+        const point = curveControlOffsets[field];
+        if (!isRecord(point) || !isFiniteNumber(point.x) || !isFiniteNumber(point.y)) {
+          checks.push(fail(`connector curveControlOffsets.${field} must contain finite x and y numbers`));
+        }
+      }
+    }
   }
 
   return combine(...checks);

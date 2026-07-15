@@ -12,6 +12,7 @@ Create any element on the canvas. Supports these kinds:
 - **native/connector** — Connection line between two elements with sourceId and targetId
 - **native/image** — Image element (assetId or url)
 - **native/file** — File attachment element (assetId, fileName, mimeType)
+- **native/link** — Link card referencing a URL, DUYA session, or DUYA canvas (linkType, url/targetId, title, description, expanded?)
 
 Parameters: canvasId, kind, position {x, y, w, h, zIndex} (all in **grid units**, 1 unit = 80 px on screen), vizSpec (kind-specific), config`,
 

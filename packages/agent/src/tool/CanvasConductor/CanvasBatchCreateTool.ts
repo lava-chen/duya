@@ -105,6 +105,22 @@ export const definition: Tool = {
                 'Connector target (for op=connect). Can be a ref name from ' +
                 'this batch or an existing elementId.',
             },
+            routingMode: {
+              type: 'string',
+              enum: ['elbow', 'curve'],
+              description: 'Connector route (for op=connect). Elbow is best for process flows; curve for associations.',
+            },
+            label: {
+              type: 'string',
+              description: 'Optional text shown on the connector.',
+            },
+            strokeStyle: {
+              type: 'string',
+              enum: ['solid', 'dashed', 'dotted'],
+            },
+            color: { type: 'string' },
+            startMarker: { type: 'string', enum: ['none', 'arrow', 'open-arrow', 'circle', 'diamond', 'bar'] },
+            endMarker: { type: 'string', enum: ['none', 'arrow', 'open-arrow', 'circle', 'diamond', 'bar'] },
           },
           required: ['op'],
         },
@@ -190,7 +206,12 @@ export const executor: ToolExecutor = {
           source: op.source,
           target: op.target,
           curvature: op.curvature,
-          routingMode: 'bezier',
+          routingMode: op.routingMode ?? 'elbow',
+          label: op.label,
+          strokeStyle: op.strokeStyle,
+          color: op.color,
+          startMarker: op.startMarker,
+          endMarker: op.endMarker,
           style: op.style,
         };
         const validation = validateConnectorShape(config);
