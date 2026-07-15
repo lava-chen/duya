@@ -446,6 +446,7 @@ export class duyaAgent {
     }
 
     this.promptManager = options.promptManager || new PromptManager({
+      sessionId: options.sessionId,
       workingDirectory: options.workingDirectory,
       communicationPlatform: options.communicationPlatform,
       modelId: options.model,
@@ -1822,6 +1823,7 @@ export class duyaAgent {
     } else {
       const enabledToolNames = tools.map((t) => t.name);
       const context = promptSystem.buildContext({
+        sessionId: this.sessionId,
         workingDirectory: this.workingDirectory,
         modelId: this.model,
         modelName: this.model,

@@ -33,7 +33,8 @@ export const definition: Tool = {
     'this batch or an existing elementId. Call this immediately for editable multi-part workbench content; do not use it for a finished single-composition diagram. ' +
     'ALWAYS provide position.w and position.h for every create operation; do not omit sizes. ' +
     'Fractional sizes are valid. Choose based on content: compact label 2.5x1, short line 3x1, two lines 3.5x1.5, standard note 4x2. ' +
-    'Use 0.5-0.75 unit gaps for related mind-map nodes and fontSize 20-24px; never spread a short-label map across the full 40x30 canvas.',
+    'Use 0.5-0.75 unit gaps for related mind-map nodes and fontSize 20-24px; never spread a short-label map across the full 40x30 canvas. ' +
+    'Default every connector to routingMode="elbow". For architecture and framework diagrams, align siblings in rows or columns so their elbow connectors visually share one clean trunk/bus with short branches. Use curve only when the user explicitly requests an organic curved relation.',
   input_schema: {
     type: 'object',
     properties: {
@@ -108,7 +109,7 @@ export const definition: Tool = {
             routingMode: {
               type: 'string',
               enum: ['elbow', 'curve'],
-              description: 'Connector route (for op=connect). Elbow is best for process flows; curve for associations.',
+              description: 'Connector route (for op=connect). Defaults to elbow for all editable diagrams; curve is opt-in only for an explicitly requested organic curved relation.',
             },
             label: {
               type: 'string',
@@ -336,6 +337,9 @@ async function runBatchCreateVisualReview(
 4. Connectors that don't clearly link their source/target (warning)
 5. Text that is too small to read at the captured viewport scale (critical)
 6. Nodes with excessive empty padding or a layout spread much wider/taller than its content needs (warning)
+7. Curve connectors used without an explicit organic-style reason (warning)
+8. Dense fan-out/fan-in drawn as many independent long lines instead of aligned elbow routes with a shared trunk/bus and short branches (warning)
+9. Unnecessary connector crossings or connectors passing through unrelated nodes (warning)
 
 If you find issues, describe them concisely with element IDs if visible, and suggest specific fixes (e.g. "resize elem_X to 2.5x1 and set fontSize 22" or "move elem_X 0.5 units left"). If everything looks good, say "Looks good — readable, compact, and no obvious issues."`;
 

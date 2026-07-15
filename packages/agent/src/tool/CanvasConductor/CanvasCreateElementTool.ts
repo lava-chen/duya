@@ -21,13 +21,14 @@ import { trackCreatedElement } from './freshness.js';
 
 export const TOOL_NAME = 'canvas_create_element';
 
-function normalizeConnectorEndpoint(value: unknown): { nodeId: string } | undefined {
+function normalizeConnectorEndpoint(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === 'string') {
     return value ? { nodeId: value } : undefined;
   }
   if (value && typeof value === 'object' && 'nodeId' in value) {
-    const nodeId = (value as { nodeId?: string }).nodeId;
-    return nodeId ? { nodeId } : undefined;
+    const endpoint = value as Record<string, unknown>;
+    const nodeId = endpoint.nodeId;
+    return typeof nodeId === 'string' && nodeId ? { ...endpoint, nodeId } : undefined;
   }
   return undefined;
 }
@@ -37,6 +38,7 @@ function normalizeConnectorConfig(config: Record<string, unknown>): Record<strin
     ...config,
     source: normalizeConnectorEndpoint(config.source) ?? config.source,
     target: normalizeConnectorEndpoint(config.target) ?? config.target,
+    routingMode: config.routingMode ?? 'elbow',
   };
 }
 
@@ -82,7 +84,7 @@ export const definition: Tool = {
     '  - native/sticky:    { text, color? }  — a colored note with text\n' +
     '  - native/image:     { url, fileName? } — image from a URL\n' +
     '  - native/file:      { fileName, mimeType?, url? } — file attachment\n' +
-    '  - native/connector: { source, target, routingMode?: "elbow"|"curve", label?, color?, strokeStyle?, startMarker?, endMarker? } — editable connector between two elements\n' +
+    '  - native/connector: { source, target, routingMode?: "elbow"|"curve", label?, color?, strokeStyle?, startMarker?, endMarker? } — editable connector between two elements; routingMode defaults to "elbow". Use curve only when the user explicitly requests an organic curved relation.\n' +
     '  - native/link:      { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description? } — reference card\n' +
     '  - widget/dynamic:   HTML/SVG sourceCode for custom visual content\n\n' +
     'Position is required and uses canvas grid units (1 unit = 80px). ' +

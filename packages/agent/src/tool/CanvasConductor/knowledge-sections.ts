@@ -92,11 +92,22 @@ Rules:
   'connector-style': `## Connector Style Guide
 
 Connectors are \`native/connector\` elements. The visual style lives in
-\`config\`: stroke, strokeWidth, endMarker. The geometry lives in
-\`position\`: { x, y } (the line's anchor point — typically the
-midpoint of the source's right edge for left-to-right flow).
+\`config\`: routingMode, color, strokeStyle, startMarker, endMarker,
+and label. Connector width is fixed so diagrams keep one visual rhythm;
+do not set or recommend a stroke width. Endpoints attach to source and
+target nodes, and the renderer computes the path from their positions.
 
-### Stroke Colors (config.stroke, hex)
+### Routing Mode
+
+- **Elbow is the default for every editable canvas diagram**, including
+  architecture maps, dependency graphs, flowcharts, and mind maps.
+- Curve is opt-in only when the user explicitly asks for an organic
+  curved relation, or when a sparse one-to-one association clearly
+  benefits from a curve.
+- In batch connect operations, set \`routingMode: 'elbow'\` explicitly.
+  Do not rely on curves to hide an unorganized layout.
+
+### Colors (config.color, hex)
 
 | Hex       | Meaning                                | When to use                          |
 |-----------|----------------------------------------|--------------------------------------|
@@ -108,44 +119,46 @@ midpoint of the source's right edge for left-to-right flow).
 For mind-map association links, default #333333 is fine; do not
 color-code unless the user asks.
 
-### Stroke Width (config.strokeWidth)
+### Markers (config.startMarker / config.endMarker)
 
-- 1 — default. Use for all standard connectors.
-- 2 — emphasized. Use for the main path of a flowchart, or to
-      highlight a critical transition.
-- 3 — thick / highlight. Reserve for the single most important
-      arrow on the canvas. More than one stroke-3 connector
-      dilutes the effect.
+- 'arrow' — default end marker for directed relationships.
+- 'open-arrow' — lighter directional emphasis.
+- 'circle' / 'diamond' / 'bar' — semantic endpoint variants.
+- 'none' — default start marker; also use as the end marker for
+  undirected associations.
 
-### End Marker (config.endMarker)
+### Shared Trunk / Bus Routing
 
-- 'arrow' — default for flowcharts and any directed relationship.
-- 'none'  — use for mind-map associations, undirected links, or
-            visual grouping where direction does not matter.
+Use Whimsical-style fan-out and fan-in for architecture diagrams:
 
-### Curvature
-
-The canvas auto-routes connectors between source and target
-elements; you do not set a curvature field directly. To influence
-the visual path:
-
-- Place source and target on the same horizontal or vertical line
-  for a clean straight segment.
-- For L-shaped routes, place target diagonally offset — the canvas
-  draws an orthogonal elbow.
-- Avoid placing intermediates between source and target; the
-  connector should not pass over other stickies.
+- Center the parent above a child group for top-down flow, or beside
+  it for left-to-right flow.
+- Put sibling nodes on one aligned row or column with even spacing.
+- Top-down: parent bottom → one common horizontal trunk → short
+  vertical drops into each child top.
+- Left-to-right: parent right → one common vertical trunk → short
+  horizontal branches into each child left edge.
+- Create a direct parent-to-child elbow connector for every relation.
+  When nodes share anchor sides and alignment, their overlapping
+  orthogonal segments visually form the clean shared trunk/bus.
+- Fan-in uses the same pattern in reverse: align the sources and center
+  the target on the group axis.
+- Never connect siblings to each other just to simulate a bus. The
+  semantic source/target relation must remain correct.
+- Split dense graphs into semantic levels or groups before adding more
+  routes. A readable hierarchy beats a web of crossing lines.
 
 ### Layout Rules
 
 - Connectors should NOT cross unnecessarily. If two connectors
   must cross, reroute one by repositioning its endpoint.
+- Keep every connector family on consistent anchor sides: bottom-to-top
+  for vertical hierarchy, right-to-left for horizontal hierarchy.
+- Keep trunks outside node bounds and use short terminal branches; no
+  connector may pass through an unrelated node.
 - A connector's source and target must both exist before creation.
-- Create all stickies first in one batch, then create connectors
-  using the returned elementIds.
-- Default connector position: midpoint between source and target,
-  e.g. for source at (40,40,160,100) and target at (260,40,160,100),
-  connector position is (200, 90).
+- Prefer one \`canvas_batch_create\`: create nodes with refs, then use
+  those refs in connect operations later in the same batch.
 `,
 
   'widget-usage': `## Widget Modules (for widget/dynamic sourceCode)
@@ -477,6 +490,31 @@ x=1   [Step 1]   y=1
   e.g. connector 1 at (2.5, 5).
 - Good when horizontal space is tight but vertical is plentiful.
 
+### Template 4: Architecture Fan-out / Shared Bus
+
+Best for: frameworks, module trees, service layers, ownership maps,
+and any one-to-many or many-to-one relationship.
+
+\`\`\`
+                 [Parent]
+                    |
+          +---------+---------+
+          |         |         |
+       [Child A] [Child B] [Child C]
+\`\`\`
+
+- Center the parent over the child group.
+- Put every child on the same y coordinate and use even horizontal
+  spacing. For horizontal flow, rotate the pattern: same x coordinate
+  with a vertical trunk.
+- Connect the parent directly to each child with
+  \`routingMode: 'elbow'\`. Matching bottom-to-top anchor sides make
+  the routes overlap into one shared trunk with short drops.
+- Repeat the pattern per semantic level instead of drawing long
+  diagonal links across multiple levels.
+- For a dense architecture, create several small organized buses by
+  module or layer rather than one global bus crossing the whole canvas.
+
 ### Color Coding for Flowcharts
 
 | Node role          | Color  |
@@ -491,11 +529,10 @@ x=1   [Step 1]   y=1
 ### Workflow
 
 1. Plan node positions on paper / in your head before calling tools.
-2. Create ALL stickies in ONE turn (parallel canvas_create_element
-   calls). Capture returned elementIds.
-3. In the NEXT turn, create connectors using the captured IDs.
-   Do NOT attempt to create a connector in the same turn as its
-   endpoints — you won't have the IDs yet.
+2. Create all nodes and connectors in one \`canvas_batch_create\` call.
+   Give each node a ref, then use those refs as connector endpoints.
+3. Set every connector to \`routingMode: 'elbow'\`; align sibling rows
+   or columns before relying on a shared trunk/bus.
 4. Optional: call canvas_capture to verify layout.
 5. If a node is misaligned, use canvas_move_element (not delete +
    recreate).
@@ -504,7 +541,9 @@ x=1   [Step 1]   y=1
   'mindmap-layout': `## Mind Map Layout Templates
 
 Mind maps use stickies for nodes and connectors with
-\`endMarker: 'none'\` (association, not flow). Default canvas:
+\`endMarker: 'none'\` (association, not flow) and
+\`routingMode: 'elbow'\` by default. Use curves only when the user
+explicitly requests an organic radial style. Default canvas:
 40 x 30 grid units. Center is (20, 15).
 
 ### Readable Node Tiers
@@ -591,8 +630,8 @@ All descendants of a branch inherit the branch's color.
   direction).
 - Connector stroke: default #333333 for all (do not color-code
   connectors — color comes from the nodes).
-- Connector strokeWidth: 1 (keep mind-map links visually quieter
-  than flowchart arrows).
+- Connector routingMode: 'elbow'. Curve remains opt-in for an
+  explicitly requested organic radial style.
 - Keep labels SHORT: 2-4 words per node. Long labels clutter the
   radial pattern — split into a parent + child instead.
 

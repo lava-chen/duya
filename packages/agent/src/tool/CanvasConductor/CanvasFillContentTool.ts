@@ -30,7 +30,7 @@ export const definition: Tool = {
     '  - native/sticky: { text, color? }\n' +
     '  - native/image: { url, fileName? }\n' +
     '  - native/file: { fileName, mimeType?, url? }\n' +
-    '  - native/connector: { source, target, routingMode?, label?, waypoints?, curveControlOffsets? }\n' +
+    '  - native/connector: { source, target, routingMode?, label?, waypoints?, curveControlOffsets? }; keep routingMode="elbow" unless the user explicitly requests an organic curve\n' +
     '  - native/link: { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description?, expanded?, expandedSize? }\n' +
     '  - widget/dynamic: pass sourceCode (top-level) to revise the HTML/SVG\n\n' +
     'Only the supplied fields are overwritten; other config fields are preserved. ' +
