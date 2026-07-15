@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { computeSnap } from '../snap';
+import {
+  getConnectorArrowGeometry,
+  snapElbowSegmentCoordinate,
+} from '../connector-renderer';
 import type { CanvasElement } from '../../../types/conductor';
 
 function makeElement(id: string, x: number, y: number, w: number, h: number): CanvasElement {
@@ -87,5 +91,44 @@ describe('computeSnap', () => {
     if (result.kind === 'alignment') {
       expect(result.x).toBe(5);
     }
+  });
+});
+
+describe('connector direct-manipulation geometry', () => {
+  it('snaps a dragged elbow segment exactly onto a nearby parallel route', () => {
+    const result = snapElbowSegmentCoordinate(
+      103,
+      'horizontal',
+      { x: 40, y: 103 },
+      { x: 260, y: 103 },
+      [[{ x: 0, y: 100 }, { x: 320, y: 100 }]],
+      12,
+    );
+
+    expect(result).toEqual({ coordinate: 100, snapped: true });
+  });
+
+  it('does not snap parallel segments that are visually unrelated', () => {
+    const result = snapElbowSegmentCoordinate(
+      103,
+      'horizontal',
+      { x: 40, y: 103 },
+      { x: 260, y: 103 },
+      [[{ x: 500, y: 100 }, { x: 680, y: 100 }]],
+      12,
+    );
+
+    expect(result).toEqual({ coordinate: 103, snapped: false });
+  });
+
+  it('builds a compact symmetric convex arrow base', () => {
+    const geometry = getConnectorArrowGeometry(
+      { x: 100, y: 50 },
+      { x: 120, y: 50 },
+    );
+
+    expect(geometry.left.x).toBe(91);
+    expect(geometry.right.x).toBe(91);
+    expect([geometry.left.y, geometry.right.y].sort((a, b) => a - b)).toEqual([45.4, 54.6]);
   });
 });

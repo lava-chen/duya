@@ -183,6 +183,7 @@ export class ConductorPromptSystem extends PromptSystem {
         : process.cwd();
 
     return {
+      sessionId: options.sessionId,
       workingDirectory,
       platform: process.platform,
       shell: getShellForPrompt(),
