@@ -600,6 +600,23 @@ tool guidance, and grounding while leaving long-horizon integration ownership
 with the coordinating agent. `SessionSearch` is tool-aware evidence recovery;
 repository plans and specifications remain the durable source of truth.
 
+#### Recent session directory (Plan 229)
+
+Full, tool-capable prompt profiles can include a volatile directory of recent
+root sessions: up to five from the current project and three from other
+projects. `recent-session-directory.ts` normalizes project paths, folds child
+and subagent sessions into their root, excludes the current root lineage, and
+sanitizes title/project metadata. It never injects message bodies or absolute
+working-directory paths.
+
+The directory is an untrusted discovery index. Agents use scoped
+`SessionSearch` (`same_project`, `other_projects`, or `all`) to recover evidence
+before acting. `MessageSession` remains an explicit follow-up for one clearly
+relevant session, with a focused minimal-mode request; recency alone never
+triggers cross-session contact. Minimal and bare prompt profiles do not receive
+the directory. The same query model backs the dynamic prompt and no-query
+`SessionSearch`, including Electron agent subprocesses through async DB IPC.
+
 #### PromptManager 使用
 
 ```typescript
@@ -1089,3 +1106,7 @@ DUYA now includes a Phase 1 CronJob foundation in Electron Main Process:
 ## Conductor connector geometry
 
 Connector records persist semantic geometry rather than SVG paths. Each endpoint stores `nodeId`, a side `anchorId`, and an optional normalized `edgePosition` so attachments can move continuously along node edges. Elbow routes persist editable waypoints; curve routes persist endpoint-relative control offsets. The renderer recomputes paths from current node bounds and constrains terminal tangents and custom arrowheads toward each attached node center. Connector stroke width is fixed at 2.5 px; users can change routing, stroke pattern, color, markers, and label text.
+
+Agent-created editable diagrams default to elbow routing. Architecture fan-out/fan-in guidance aligns sibling nodes and uses direct semantic connectors whose overlapping orthogonal segments form a shared trunk/bus with short terminal branches; curve routing is an explicit organic-style exception.
+
+Dragging an internal elbow segment uses zoom-aware screen-space snapping against nearby parallel segments from other elbow connectors. Only spatially related segment ranges participate, so shared trunks can become exactly collinear without pulling toward unrelated routes. Default arrow markers use compact convex geometry aligned toward the attached node center; the connector stroke continues underneath the filled head so the terminal reads as one integrated shape.

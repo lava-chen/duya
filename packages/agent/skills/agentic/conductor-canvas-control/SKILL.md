@@ -182,20 +182,25 @@ Use `canvas_fill_content` only — files have no visual style fields.
 #### native/connector — arrow / line between two elements
 ```ts
 config: {
-  source: string,         // element id at the start
-  target: string,         // element id at the end
-  stroke?: string,        // CSS color
-  strokeWidth?: number,   // px
-  endMarker?: 'arrow' | 'none',
+  source: string | { nodeId: string, anchorId?: string, edgePosition?: number },
+  target: string | { nodeId: string, anchorId?: string, edgePosition?: number },
+  routingMode?: 'elbow' | 'curve', // defaults to elbow
+  label?: string,
+  color?: string,
+  strokeStyle?: 'solid' | 'dashed' | 'dotted',
+  startMarker?: 'none' | 'arrow' | 'open-arrow' | 'circle' | 'diamond' | 'bar',
+  endMarker?: 'none' | 'arrow' | 'open-arrow' | 'circle' | 'diamond' | 'bar',
 }
 ```
-Use `canvas_fill_content` to change `source` / `target` (rewire).
-Use `canvas_style_element` to change `stroke` / `strokeWidth` /
-`endMarker`.
+Use `canvas_fill_content` to change `source` / `target`, route geometry,
+or label. Use `canvas_style_element` to change color, stroke pattern,
+or markers. Connector width is fixed and must not be offered as a
+style choice.
  
-Connectors are for wiring together independent workspace objects (e.g.
-linking a decision sticky to the todo it resolved). They are not the
-tool for drawing a diagram's internal arrows — see 4.2.
+Connectors are for wiring independently editable workspace objects,
+including editable architecture/framework diagrams. Use one
+`widget/dynamic` instead only when the diagram is intentionally a single
+immutable composition rather than a set of addressable nodes.
  
 #### widget/task-list, widget/note-pad, widget/pomodoro, widget/news-board
 Each has its own content fields; read the current config via
@@ -205,11 +210,11 @@ is usually a better fit than a stack of individual to-do stickies.
  
 ### 4.2 Deliverable-mode element
  
-#### widget/dynamic — the default for anything explanatory or structured
+#### widget/dynamic — the default for single-composition deliverables
  
-Use `widget/dynamic` with `sourceCode` (HTML or SVG) as the **default**,
-not a fallback, for:
-- Architecture / framework diagrams, flowcharts
+Use `widget/dynamic` with `sourceCode` (HTML or SVG) as the default for:
+- Architecture / framework diagrams and flowcharts that are meant to
+  remain one composition rather than independently editable nodes
 - Comparison tables, timelines, dashboards
 - Any content whose value is a single coherent composition someone
   will look at as a whole, rather than grab individual pieces of
@@ -284,6 +289,24 @@ diagram's internal nodes using this grid system.
 - Default sticky size: **3 x 2** grid units (240 x 160 px) — but prefer the tighter content-matched sizes in the table below.
 - Keep a **1 grid unit** margin from canvas edges.
 - Leave **0.5-0.75 grid units** between related elements; use 1 unit between semantic groups.
+
+### Elbow-first organized routing
+
+- Default every editable connector to `routingMode: 'elbow'`, including
+  architecture maps, dependency graphs, flowcharts, and mind maps.
+- Curve is opt-in only when the user explicitly asks for an organic
+  curved relation.
+- For one-to-many top-down flow, center the parent above an evenly
+  spaced child row. Connect parent bottom to each child top so the elbow
+  routes overlap into one horizontal trunk with short vertical drops.
+- For left-to-right flow, align children in one column and connect
+  parent right to child left so routes share one vertical trunk with
+  short horizontal branches.
+- Fan-in is the same pattern reversed. Never connect siblings to fake
+  the bus; preserve direct semantic source-to-target relations.
+- Keep each family on consistent anchor sides, split dense graphs into
+  levels/groups, and move nodes until connectors stop crossing or
+  passing through unrelated elements.
 ### Sticky Sizing by Content
 
 Oversized stickies are a common failure mode: they force the default

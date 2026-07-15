@@ -164,6 +164,7 @@ Moved here when finished. Each includes:
 | Plan | Description | Completed |
 |------|-------------|-----------|
 | [226-agent-harness-project-grounding](./completed/226-agent-harness-project-grounding.md) | Agent Harness Project Grounding — scoped AGENTS.md、计划/规格恢复、调查门槛、跨 session/agent 连续性与提示词 profile 一致性 | 2026-07-15 |
+| [229-recent-session-directory](./completed/229-recent-session-directory.md) | Recent Session Directory — project-aware discovery, scoped SessionSearch, and guarded MessageSession follow-up | 2026-07-15 |
 | [02-context-compaction-system](./completed/02-context-compaction-system.md) | Context Compression 系统 | 2026-04-09 |
 | [skill-system](./completed/skill-system.md) | Skill System Phase 2 | 2026-04-09 |
 | [cli-tool-fix](./completed/cli-tool-fix.md) | CLI 工具调用问题修复 | 2026-04-09 |
