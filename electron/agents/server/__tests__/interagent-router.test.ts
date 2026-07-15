@@ -263,3 +263,62 @@ describe('InteragentRouter.waitForReady dual-channel', () => {
     expect(directError!.message).toMatch(/still loading skills/);
   });
 });
+
+
+describe('InteragentRouter minimal-mode tool allowlist', () => {
+  it('forwards the lowercase allowlist to chat:start in minimal mode', async () => {
+    const deps = createMockDeps({ sessionState: SessionState.IDLE });
+    const router = new InteragentRouter(deps);
+    const result = await router.handleInvoke(createParams({ mode: 'minimal' }));
+    expect(result).toEqual({ ok: true });
+
+    const sendCommand = deps.workerManager.sendCommand as unknown as ReturnType<typeof vi.fn>;
+    expect(sendCommand).toHaveBeenCalled();
+    const chatStartCall = sendCommand.mock.calls.find(
+      (call) => typeof call[1] === 'object' && call[1] !== null && (call[1] as { type?: string }).type === 'chat:start',
+    );
+    expect(chatStartCall).toBeDefined();
+    const command = chatStartCall![1] as {
+      type: string;
+      options: { allowedTools?: string[]; permissionModeOverride?: string };
+    };
+    expect(command.options.allowedTools).toEqual(['read', 'grep', 'glob']);
+    // Every entry must match the agent registry exactly (case-sensitive).
+    expect(command.options.allowedTools?.every((n) => n === n.toLowerCase())).toBe(true);
+  });
+
+  it('does NOT pass allowedTools in full mode (target gets its default toolset)', async () => {
+    const deps = createMockDeps({ sessionState: SessionState.IDLE });
+    const router = new InteragentRouter(deps);
+    const result = await router.handleInvoke(createParams({ mode: 'full' }));
+    expect(result).toEqual({ ok: true });
+
+    const sendCommand = deps.workerManager.sendCommand as unknown as ReturnType<typeof vi.fn>;
+    const chatStartCall = sendCommand.mock.calls.find(
+      (call) => typeof call[1] === 'object' && call[1] !== null && (call[1] as { type?: string }).type === 'chat:start',
+    );
+    expect(chatStartCall).toBeDefined();
+    const command = chatStartCall![1] as {
+      options: { allowedTools?: string[]; permissionModeOverride?: string };
+    };
+    expect(command.options.allowedTools).toBeUndefined();
+    // full mode must NOT bypass permissions — that is a minimal-only affordance.
+    expect(command.options.permissionModeOverride).toBeUndefined();
+  });
+
+  it('sets permissionModeOverride to bypassPermissions in minimal mode only', async () => {
+    const deps = createMockDeps({ sessionState: SessionState.IDLE });
+    const router = new InteragentRouter(deps);
+    const result = await router.handleInvoke(createParams({ mode: 'minimal' }));
+    expect(result).toEqual({ ok: true });
+
+    const sendCommand = deps.workerManager.sendCommand as unknown as ReturnType<typeof vi.fn>;
+    const chatStartCall = sendCommand.mock.calls.find(
+      (call) => typeof call[1] === 'object' && call[1] !== null && (call[1] as { type?: string }).type === 'chat:start',
+    );
+    const command = chatStartCall![1] as {
+      options: { permissionModeOverride?: string };
+    };
+    expect(command.options.permissionModeOverride).toBe('bypassPermissions');
+  });
+});
