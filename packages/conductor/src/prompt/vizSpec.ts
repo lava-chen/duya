@@ -12,6 +12,7 @@ The conductor canvas supports a minimal element set:
 - **native/connector** — Connection line between elements
 - **native/image** — Image element (assetId or url)
 - **native/file** — File attachment element (assetId, fileName, mimeType)
+- **native/link** — Link card referencing a URL, DUYA session, or DUYA canvas
 - **native/group** — Loose-binding group frame around member elements
 - **widget/task-list** — Structured task list widget
 - **widget/note-pad** — Plain-text note pad widget
@@ -58,7 +59,6 @@ vizSpec format:
   "targetId": "element-uuid-2",
   "label": "depends on",
   "strokeStyle": "solid",
-  "lineWidth": 2,
   "color": "#7C5CFF",
   "arrowStart": false,
   "arrowEnd": true
@@ -69,7 +69,6 @@ Style fields (all optional, top-level):
 - **strokeStyle**: "solid" | "dashed" | "dotted" — default "solid".
   - Use "dashed" for conditional/optional branches.
   - Use "dotted" for weak/implicit relations.
-- **lineWidth**: number — default 2.
 - **color**: CSS color string — default var(--text-secondary).
 - **arrowStart**: boolean — default false. Set true for bidirectional relations.
 - **arrowEnd**: boolean — default true. Set false for conditional branches with no outcome.
@@ -105,6 +104,34 @@ vizSpec format:
   "size": 102400
 }
 \`\`\`
+
+### native/link — Link Cards
+
+Use for: referencing external URLs, DUYA sessions, or DUYA canvases on the canvas.
+
+vizSpec format:
+\`\`\`json
+{
+  "linkType": "url",
+  "url": "https://react.dev",
+  "title": "React Documentation",
+  "description": "The library for web and native user interfaces."
+}
+\`\`\`
+
+Config fields:
+- **linkType** (required): \`"url"\` | \`"session"\` | \`"canvas"\`.
+- **url** (url only): absolute external URL.
+- **targetId** (session/canvas only): UUID of the referenced session or canvas.
+- **title** (optional): display title; falls back to domain or target id.
+- **description** (optional): short description shown in the expanded card.
+- **expanded** (optional): \`true\` renders the rich card, \`false\` renders the compact chip. Default \`false\`.
+- **expandedSize** (optional): \`{ w, h }\` in grid units, remembered when the user resizes the expanded card.
+
+Examples:
+- External URL: \`{ "linkType": "url", "url": "https://example.com" }\`
+- Session link: \`{ "linkType": "session", "targetId": "session-uuid" }\`
+- Canvas link: \`{ "linkType": "canvas", "targetId": "canvas-uuid" }\`
 
 ### native/group — Group Frames
 

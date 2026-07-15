@@ -82,7 +82,8 @@ export const definition: Tool = {
     '  - native/sticky:    { text, color? }  — a colored note with text\n' +
     '  - native/image:     { url, fileName? } — image from a URL\n' +
     '  - native/file:      { fileName, mimeType?, url? } — file attachment\n' +
-    '  - native/connector: { source, target } — bezier connector between two elements\n' +
+    '  - native/connector: { source, target, routingMode?: "elbow"|"curve", label?, color?, strokeStyle?, startMarker?, endMarker? } — editable connector between two elements\n' +
+    '  - native/link:      { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description? } — reference card\n' +
     '  - widget/dynamic:   HTML/SVG sourceCode for custom visual content\n\n' +
     'Position is required and uses canvas grid units (1 unit = 80px). ' +
     'ALWAYS provide w and h; do not omit them. Choose size based on content — do NOT oversize: ' +
@@ -101,7 +102,7 @@ export const definition: Tool = {
         type: 'string',
         description:
           'Element kind. One of: "native/sticky", "native/image", "native/file", ' +
-          '"native/connector", "widget/dynamic".',
+          '"native/connector", "native/link", "widget/dynamic".',
       },
       position: {
         type: 'object',
