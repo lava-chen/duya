@@ -71,8 +71,10 @@ function applyDefaultDimensions(
   }
   const defaults: Record<string, { w: number; h: number }> = {
     'native/sticky': { w: 4, h: 3 },
+    'native/text': { w: 10, h: 2 },
     'native/image': { w: 5, h: 4 },
     'native/file': { w: 4, h: 3 },
+    'native/link': { w: 4, h: 1 },
     'native/connector': { w: 0, h: 0 },
     'native/group': { w: 0, h: 0 },
     'widget/dynamic': { w: 5, h: 4 },
@@ -359,6 +361,15 @@ export class ConductorDbService {
         const memberIds = Array.isArray(cfg.memberIds) ? cfg.memberIds : [];
         return `members: ${memberIds.length}`;
       }
+      case 'native/link': {
+        const linkType = cfg.linkType === 'session' || cfg.linkType === 'canvas' ? cfg.linkType : 'url';
+        const target =
+          (typeof cfg.url === 'string' && cfg.url) ||
+          (typeof cfg.targetId === 'string' && cfg.targetId) ||
+          '';
+        const title = typeof cfg.title === 'string' ? cfg.title : '';
+        return truncate(`${linkType}: ${title || target || 'untitled'}`, 60);
+      }
       default: {
         if (elementKind.startsWith('widget/')) {
           const title =
@@ -453,6 +464,7 @@ export class ConductorDbService {
     if (kind === 'native/connector') return 'Connectors';
     if (kind === 'native/image') return 'Images';
     if (kind === 'native/file') return 'Files';
+    if (kind === 'native/link') return 'Links';
     if (kind === 'native/group') return 'Groups';
     if (kind.startsWith('widget/')) return 'Widgets';
     return 'Other';
@@ -703,11 +715,18 @@ export class ConductorDbService {
           const connectorPosition = { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 };
           const curvature = (op.curvature as number) ?? 0.4;
           const style = (op.style as Record<string, unknown>) ?? {};
+          const routingMode = op.routingMode === 'curve' ? 'curve' : 'elbow';
           const connectorConfig = {
             source: { nodeId: sourceId },
             target: { nodeId: targetId },
             curvature,
-            routingMode: 'bezier',
+            routingMode,
+            label: typeof op.label === 'string' ? op.label : undefined,
+            strokeStyle: typeof op.strokeStyle === 'string' ? op.strokeStyle : undefined,
+            lineWidth: typeof op.lineWidth === 'number' ? op.lineWidth : undefined,
+            color: typeof op.color === 'string' ? op.color : undefined,
+            startMarker: typeof op.startMarker === 'string' ? op.startMarker : undefined,
+            endMarker: typeof op.endMarker === 'string' ? op.endMarker : undefined,
             style,
           };
 
@@ -1297,10 +1316,23 @@ export class ConductorDbService {
     const rawTarget = payload.target;
     const curvature = (payload.curvature as number) || 0.4;
     const style = (payload.style as Record<string, unknown>) || {};
+    const routingMode = payload.routingMode === 'curve' ? 'curve' : 'elbow';
 
     const source = this.normalizeConnectorEndpoint(rawSource) ?? (rawSource as Record<string, unknown>);
     const target = this.normalizeConnectorEndpoint(rawTarget) ?? (rawTarget as Record<string, unknown>);
-    const config = { source, target, curvature, routingMode: 'bezier', style };
+    const config = {
+      source,
+      target,
+      curvature,
+      routingMode,
+      label: typeof payload.label === 'string' ? payload.label : undefined,
+      strokeStyle: typeof payload.strokeStyle === 'string' ? payload.strokeStyle : undefined,
+      lineWidth: typeof payload.lineWidth === 'number' ? payload.lineWidth : undefined,
+      color: typeof payload.color === 'string' ? payload.color : undefined,
+      startMarker: typeof payload.startMarker === 'string' ? payload.startMarker : undefined,
+      endMarker: typeof payload.endMarker === 'string' ? payload.endMarker : undefined,
+      style,
+    };
     const shapeValidation = validateConnectorShape(config);
     if (!shapeValidation.valid) {
       return {
@@ -1570,4 +1602,3 @@ export class ConductorDbService {
   }
 
 }
-

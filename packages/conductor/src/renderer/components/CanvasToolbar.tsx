@@ -5,10 +5,13 @@ import { useConductorStore } from "..//stores/conductor-store";
 import { ELEMENT_ICONS } from "./toolbar/element-icons";
 import { uploadAsset } from "..//ipc/conductor-ipc";
 import { STICKY_COLORS, STICKY_COLOR_KEYS } from "./native/sticky-colors";
+import { LinkCreateDialog } from "./LinkCreateDialog";
+import type { LinkContent } from "..//types/canvas-node";
+import { ArrowElbowDownRight, BezierCurve } from "@phosphor-icons/react";
 
 type ToolId =
   | "select" | "sticky"
-  | "connector" | "media";
+  | "connector" | "media" | "link" | "text";
 
 interface Tool {
   id: ToolId;
@@ -22,8 +25,10 @@ interface Tool {
 const TOOLS: Tool[] = [
   { id: "select", icon: ELEMENT_ICONS.select, label: "Select", shortcut: "V", group: 0 },
   { id: "sticky", icon: ELEMENT_ICONS.sticky, label: "Sticky note", shortcut: "N", group: 1, hasSubmenu: true },
-  { id: "connector", icon: ELEMENT_ICONS.connector, label: "Connector", shortcut: "C", group: 1 },
+  { id: "text", icon: ELEMENT_ICONS.text, label: "Text", shortcut: "T", group: 1 },
+  { id: "connector", icon: ELEMENT_ICONS.connector, label: "Connector", shortcut: "C", group: 1, hasSubmenu: true },
   { id: "media", icon: ELEMENT_ICONS.media, label: "Media", shortcut: "M", group: 1 },
+  { id: "link", icon: ELEMENT_ICONS.link, label: "Link", shortcut: "L", group: 1 },
 ];
 
 // Sticky color palette — derived from the shared module so the toolbar preview
@@ -91,6 +96,29 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
     );
   }
 
+  if (toolId === "connector") {
+    return (
+      <div ref={ref} className={baseClass} style={{ top: anchorY }}>
+        <button
+          type="button"
+          onClick={() => onSelect("connector", { routingMode: "elbow" })}
+          className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text)] hover:bg-[var(--surface-hover)]"
+        >
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--conductor-accent-soft)] text-[var(--conductor-accent)]"><ArrowElbowDownRight size={17} weight="bold" /></span>
+          <span><strong className="block font-semibold">Elbow</strong><span className="text-[10px] text-[var(--muted)]">Orthogonal, rounded corners</span></span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelect("connector", { routingMode: "curve" })}
+          className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text)] hover:bg-[var(--surface-hover)]"
+        >
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--conductor-accent-soft)] text-[var(--conductor-accent)]"><BezierCurve size={17} weight="bold" /></span>
+          <span><strong className="block font-semibold">Curve</strong><span className="text-[10px] text-[var(--muted)]">Editable Bézier handles</span></span>
+        </button>
+      </div>
+    );
+  }
+
   return null;
 }
 
@@ -150,16 +178,25 @@ interface ToolButtonProps {
   onDragStart: (e: React.DragEvent, toolId: string) => void;
 }
 
+function isNonDraggableTool(id: ToolId): boolean {
+  return id === "connector" || id === "select" || id === "media" || id === "link";
+}
+
+// `text` is draggable like `sticky`: drag from toolbar to canvas creates the
+// element at the drop position. Click + click-on-canvas also works via the
+// default `create:text` activeTool flow.
+
 function ToolButton({ tool, isActive, isSubmenuOpen, onClick, onDragStart }: ToolButtonProps) {
+  const nonDraggable = isNonDraggableTool(tool.id);
   return (
     <div className="relative">
       <ToolbarTooltip label={tool.label} shortcut={tool.shortcut}>
         <button
           type="button"
-          draggable={tool.id !== "connector" && tool.id !== "select" && tool.id !== "media"}
+          draggable={!nonDraggable}
           onClick={(e) => onClick(tool, e)}
           onDragStart={(e) => {
-            if (tool.id === "connector" || tool.id === "select" || tool.id === "media") {
+            if (nonDraggable) {
               e.preventDefault();
               return;
             }
@@ -184,6 +221,7 @@ export function CanvasToolbar() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [openSubmenu, setOpenSubmenu] = useState<ToolId | null>(null);
   const [submenuAnchorY, setSubmenuAnchorY] = useState(0);
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
 
   const handleDragStart = useCallback((e: React.DragEvent, toolId: string) => {
     e.dataTransfer.effectAllowed = "copy";
@@ -191,7 +229,12 @@ export function CanvasToolbar() {
   }, []);
 
   const handleSubmenuSelect = useCallback((type: string, extra?: Record<string, unknown>) => {
-    setActiveTool(createToolValue(type, extra));
+    if (type === "connector") {
+      const routingMode = extra?.routingMode === "curve" ? "curve" : "elbow";
+      setActiveTool(`connector:${routingMode}`);
+    } else {
+      setActiveTool(createToolValue(type, extra));
+    }
     setOpenSubmenu(null);
   }, [setActiveTool]);
 
@@ -212,6 +255,10 @@ export function CanvasToolbar() {
     }
   }, [activeCanvasId, setActiveTool, setUiError]);
 
+  const startCreateLink = useCallback((content: LinkContent) => {
+    setActiveTool(createToolValue("link", content as unknown as Record<string, unknown>));
+  }, [setActiveTool]);
+
   const handleClick = useCallback((tool: Tool, e: React.MouseEvent) => {
     if (tool.hasSubmenu) {
       if (barRef.current) {
@@ -226,11 +273,6 @@ export function CanvasToolbar() {
       return;
     }
 
-    if (tool.id === "connector") {
-      setActiveTool(activeTool === "connector" ? null : "connector");
-      return;
-    }
-
     if (tool.id === "select") {
       setActiveTool(null);
       return;
@@ -238,6 +280,11 @@ export function CanvasToolbar() {
 
     if (tool.id === "media") {
       fileInputRef.current?.click();
+      return;
+    }
+
+    if (tool.id === "link") {
+      setLinkDialogOpen(true);
       return;
     }
 
@@ -264,7 +311,7 @@ export function CanvasToolbar() {
           <div className="flex flex-col items-center gap-1.5">
             {tools.map((tool) => {
               const isActive = tool.id === "connector"
-                ? activeTool === "connector"
+                ? Boolean(activeTool?.startsWith("connector:"))
                 : activeTool === tool.id || Boolean(activeTool?.startsWith(`create:${tool.id}`));
               const isSubmenuOpen = openSubmenu === tool.id;
 
@@ -304,6 +351,12 @@ export function CanvasToolbar() {
           }
           e.target.value = "";
         }}
+      />
+
+      <LinkCreateDialog
+        open={linkDialogOpen}
+        onClose={() => setLinkDialogOpen(false)}
+        onConfirm={startCreateLink}
       />
     </div>
   );

@@ -159,6 +159,15 @@ interface ConductorState {
   pendingFocusElementId: string | null;
   clearPendingFocus: () => void;
 
+  /**
+   * Element id requested by an external consumer (e.g. a chat tool-use
+   * row) to be focused once the canvas is visible and the element is
+   * loaded. SidebarConductorView watches this and applies the focus.
+   */
+  pendingChatFocusElementId: string | null;
+  setPendingChatFocusElementId: (elementId: string | null) => void;
+  clearPendingChatFocus: () => void;
+
   // Unified canvas contents getter
   getCanvasContents: () => CanvasElement[];
 
@@ -264,6 +273,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   canvasViewportW: 0,
   canvasViewportH: 0,
   pendingFocusElementId: null,
+  pendingChatFocusElementId: null,
 
   setCanvases: (canvases) => set({ canvases }),
 
@@ -953,6 +963,11 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   },
 
   clearPendingFocus: () => set({ pendingFocusElementId: null }),
+
+  setPendingChatFocusElementId: (elementId) =>
+    set({ pendingChatFocusElementId: elementId }),
+
+  clearPendingChatFocus: () => set({ pendingChatFocusElementId: null }),
 
   getCanvasContents: () => {
     const { elements, widgets } = get();

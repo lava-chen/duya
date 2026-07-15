@@ -272,6 +272,104 @@ test.describe.serial('Connector element', () => {
   });
 });
 
+// ─── Spec: Link — IPC create + config round-trip ───────────────────────
+
+test.describe.serial('Link element', () => {
+  let app: DuyaApp;
+  let canvasId: string;
+
+  test.beforeAll(async () => {
+    app = await launchDuya({ namespace: 'cond-link' });
+    const { page } = app;
+    await navigateToConductor(page, 'cond-link');
+    canvasId = await getCanvasId(page);
+    await deleteAllElements(page, canvasId);
+  });
+
+  test.afterAll(async () => {
+    if (app) await closeDuya(app.app);
+  });
+
+  test('IPC: create URL link appears in snapshot with correct config', async () => {
+    const result = await invokeApi<{ success: boolean; elementId: string }>(
+      app.page,
+      'conductor.action',
+      {
+        action: 'element.create_native',
+        canvasId,
+        nodeType: 'link',
+        position: { x: 200, y: 200, w: 4, h: 1, zIndex: 0, rotation: 0 },
+        content: {
+          linkType: 'url',
+          url: 'https://example.com',
+          title: 'Example',
+          description: 'An example site',
+          expanded: false,
+        },
+        style: {},
+      },
+    );
+    expect(result.success).toBe(true);
+    expect(result.elementId).toBeTruthy();
+
+    const after = await waitForElementCount(app.page, canvasId, 1);
+    const link = after[0];
+    expect(link.elementKind).toBe('native/link');
+    const cfg = link.config as Record<string, unknown>;
+    expect(cfg.linkType).toBe('url');
+    expect(cfg.url).toBe('https://example.com');
+    expect(cfg.title).toBe('Example');
+    expect(cfg.expanded).toBe(false);
+  });
+
+  test('IPC: create session link and expand it persists expandedSize', async () => {
+    await deleteAllElements(app.page, canvasId);
+
+    const createResult = await invokeApi<{ success: boolean; elementId: string }>(
+      app.page,
+      'conductor.action',
+      {
+        action: 'element.create_native',
+        canvasId,
+        nodeType: 'link',
+        position: { x: 200, y: 200, w: 4, h: 1, zIndex: 0, rotation: 0 },
+        content: {
+          linkType: 'session',
+          targetId: 'session-test-123',
+          title: 'Test Session',
+          expanded: false,
+        },
+        style: {},
+      },
+    );
+    expect(createResult.success).toBe(true);
+
+    const updateResult = await invokeApi<{ success: boolean }>(app.page, 'conductor.action', {
+      action: 'element.update',
+      canvasId,
+      elementId: createResult.elementId,
+      position: { x: 200, y: 200, w: 6, h: 4, zIndex: 0, rotation: 0 },
+      config: {
+        linkType: 'session',
+        targetId: 'session-test-123',
+        title: 'Test Session',
+        expanded: true,
+        expandedSize: { w: 6, h: 4 },
+      },
+    });
+    expect(updateResult.success).toBe(true);
+
+    const after = await waitForElementCount(app.page, canvasId, 1);
+    const cfg = after[0].config as Record<string, unknown>;
+    expect(cfg.linkType).toBe('session');
+    expect(cfg.targetId).toBe('session-test-123');
+    expect(cfg.expanded).toBe(true);
+    const expandedSize = cfg.expandedSize as { w: number; h: number };
+    expect(expandedSize.w).toBe(6);
+    expect(expandedSize.h).toBe(4);
+  });
+});
+
 // ─── Spec: Widget — IPC create appears in snapshot ─────────────────────
 
 test.describe.serial('Widget element', () => {

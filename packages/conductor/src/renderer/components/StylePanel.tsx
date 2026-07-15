@@ -25,13 +25,15 @@ const STROKE_STYLES: { value: "solid" | "dashed" | "dotted"; label: string }[] =
   { value: "dotted", label: "Dotted" },
 ];
 
-const LINE_WIDTHS: number[] = [1, 2, 4];
 
 /**
  * Returns true when the StylePanel should render for the given element kind.
  */
 function isStylePanelKind(kind: string | undefined): boolean {
-  return kind === "native/connector" || kind === "native/group";
+  // Connectors use the path-aware floating toolbar rendered by
+  // NativeConnectorOverlay; the generic position-based panel would anchor at
+  // (0, 0) because connectors intentionally have no persisted bounding box.
+  return kind === "native/group";
 }
 
 export function StylePanel() {
@@ -210,14 +212,12 @@ function ConnectorStyleChips({ element }: { element: CanvasElement }) {
   const apply = useStyleUpdate(element);
 
   const strokeStyle = (element.config.strokeStyle as "solid" | "dashed" | "dotted" | undefined) || "solid";
-  const lineWidth = Number(element.config.lineWidth ?? 2);
   const color = (element.config.color as string | undefined) || "#6B7280";
   const arrowStart = (element.config.arrowStart as boolean) || false;
   const arrowEnd = element.config.arrowEnd as boolean | undefined;
   const arrowEndResolved = arrowEnd ?? true;
 
   const setStrokeStyle = (value: "solid" | "dashed" | "dotted") => apply({ strokeStyle: value });
-  const setLineWidth = (value: number) => apply({ lineWidth: value });
   const setColor = (hex: string) => apply({ color: hex });
   const toggleArrowStart = () => apply({ arrowStart: !arrowStart });
   const toggleArrowEnd = () => apply({ arrowEnd: !arrowEndResolved });
@@ -230,16 +230,6 @@ function ConnectorStyleChips({ element }: { element: CanvasElement }) {
           {STROKE_STYLES.map((s) => (
             <Chip key={s.value} active={strokeStyle === s.value} onClick={() => setStrokeStyle(s.value)} title={s.label}>
               {s.label}
-            </Chip>
-          ))}
-        </div>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <span className="w-12 flex-shrink-0 text-[10px] uppercase tracking-wide text-[var(--muted)]">Width</span>
-        <div className="flex gap-1">
-          {LINE_WIDTHS.map((w) => (
-            <Chip key={w} active={lineWidth === w} onClick={() => setLineWidth(w)} title={`${w}px`}>
-              {w}
             </Chip>
           ))}
         </div>

@@ -7,6 +7,8 @@ import { ConnectorElement } from "./ConnectorElement";
 import { ImageElement } from "./ImageElement";
 import { FileElement } from "./FileElement";
 import { GroupElement } from "./GroupElement";
+import { LinkElement } from "./LinkElement";
+import { TextElement } from "./TextElement";
 import { NativeChrome } from "./NativeChrome";
 
 interface NativeElementRendererProps {
@@ -29,6 +31,8 @@ const elementMap: Record<string, React.ComponentType<{ element: CanvasElement }>
   image: ImageElement,
   file: FileElement,
   group: GroupElement,
+  link: LinkElement,
+  text: TextElement,
 };
 
 export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({
@@ -49,7 +53,9 @@ export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({
   if (
     element.elementKind === "native/sticky" ||
     element.elementKind === "native/image" ||
-    element.elementKind === "native/file"
+    element.elementKind === "native/file" ||
+    element.elementKind === "native/link" ||
+    element.elementKind === "native/text"
   ) {
     return (
       <NativeChrome element={element} onPositionChange={onPositionChange}>

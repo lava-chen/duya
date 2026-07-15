@@ -1,64 +1,178 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { CanvasElement } from "..//types/conductor";
-import type { AnchorId, ConnectorEndpoint, Point } from "..//types/canvas-node";
+import type {
+  ConnectorEndpoint,
+  ConnectorMarker,
+  ConnectorRoutingMode,
+  CurveControlOffsets,
+  Point,
+} from "..//types/canvas-node";
 import { useConductorStore, getAbsolutePosition } from "..//stores/conductor-store";
 import { executeAction } from "..//ipc/conductor-ipc";
-import { autoSelectAnchor, GRID_PX } from "..//domain/canvas/connector-renderer";
-import { ConnectorPath, getComputedConnectorData } from "./native/ConnectorElement";
+import {
+  autoSelectAttachment,
+  GRID_PX,
+  simplifyOrthogonalPoints,
+} from "..//domain/canvas/connector-renderer";
+import {
+  ConnectorPath,
+  getComputedConnectorData,
+  resolveConnectorMarkers,
+  resolveConnectorRoutingMode,
+} from "./native/ConnectorElement";
 import { canvasTransformState } from "./CanvasArea";
 
 interface NativeConnectorOverlayProps {
   elements: CanvasElement[];
 }
 
-type DragState = {
-  connectorId: string;
-  endpoint: "source" | "target";
+type DragState =
+  | { kind: "endpoint"; connectorId: string; endpoint: "source" | "target" }
+  | { kind: "curve-control"; connectorId: string; control: "source" | "target" }
+  | { kind: "elbow-segment"; connectorId: string; segmentIndex: number };
+
+const MARKER_OPTIONS: { value: ConnectorMarker; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "arrow", label: "Arrow" },
+  { value: "open-arrow", label: "Open" },
+  { value: "circle", label: "Circle" },
+  { value: "diamond", label: "Diamond" },
+  { value: "bar", label: "Bar" },
+];
+
+const TOOLBAR_BUTTON: React.CSSProperties = {
+  height: 30,
+  border: 0,
+  borderRadius: 7,
+  padding: "0 10px",
+  color: "#E7ECF5",
+  background: "transparent",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
 };
 
-const PRESET_COLORS = ["#7C5CFF", "#00A3FF", "#13B981", "#F59E0B", "#EF4444", "#1F2937"];
-const PRESET_WIDTHS = [2, 3, 4];
+const TOOLBAR_SELECT: React.CSSProperties = {
+  height: 30,
+  border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: 7,
+  padding: "0 7px",
+  color: "#E7ECF5",
+  background: "#253246",
+  fontSize: 12,
+  outline: "none",
+};
 
-export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({
-  elements,
-}) => {
+function ConnectorToolbar({
+  connector,
+  labelDraft,
+  onLabelDraftChange,
+  onPatch,
+}: {
+  connector: CanvasElement;
+  labelDraft: string;
+  onLabelDraftChange: (value: string) => void;
+  onPatch: (patch: Record<string, unknown>) => void;
+}) {
+  const routingMode = resolveConnectorRoutingMode(connector.config);
+  const strokeStyle = (connector.config.strokeStyle as "solid" | "dashed" | "dotted" | undefined) ?? "solid";
+  const legacyStyle = connector.config.style as Record<string, unknown> | undefined;
+  const color = (connector.config.color as string | undefined) ?? (legacyStyle?.stroke as string | undefined) ?? "#8793A3";
+  const { startMarker, endMarker } = resolveConnectorMarkers(connector.config);
+
+  const routeButton = (mode: ConnectorRoutingMode): React.CSSProperties => ({
+    ...TOOLBAR_BUTTON,
+    background: routingMode === mode ? "#8C4EFF" : "transparent",
+  });
+
+  return (
+    <div
+      style={{
+        pointerEvents: "auto",
+        minHeight: 44,
+        borderRadius: 12,
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        padding: "0 8px",
+        background: "rgba(24, 34, 49, 0.97)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        boxShadow: "0 10px 30px rgba(8, 14, 24, 0.32)",
+        color: "#E7ECF5",
+        fontSize: 12,
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <button type="button" title="Elbow connector" style={routeButton("elbow")} onClick={() => onPatch({ routingMode: "elbow" })}>Elbow</button>
+      <button type="button" title="Curved connector" style={routeButton("curve")} onClick={() => onPatch({ routingMode: "curve" })}>Curve</button>
+      <span style={{ width: 1, height: 24, background: "rgba(255,255,255,0.12)", margin: "0 2px" }} />
+      <select aria-label="Line style" title="Line style" value={strokeStyle} style={TOOLBAR_SELECT} onChange={(event) => onPatch({ strokeStyle: event.target.value })}>
+        <option value="solid">Solid</option>
+        <option value="dashed">Dashed</option>
+        <option value="dotted">Dotted</option>
+      </select>
+      <label title="Line color" style={{ width: 28, height: 28, borderRadius: 8, background: color, border: "2px solid rgba(255,255,255,0.7)", overflow: "hidden", cursor: "pointer", flexShrink: 0 }}>
+        <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#8793A3"} onChange={(event) => onPatch({ color: event.target.value })} style={{ width: 36, height: 36, opacity: 0, cursor: "pointer" }} />
+      </label>
+      <select aria-label="Start marker" title="Start marker" value={startMarker} style={{ ...TOOLBAR_SELECT, width: 90 }} onChange={(event) => onPatch({ startMarker: event.target.value })}>
+        {MARKER_OPTIONS.map((option) => <option key={option.value} value={option.value}>S · {option.label}</option>)}
+      </select>
+      <select aria-label="End marker" title="End marker" value={endMarker} style={{ ...TOOLBAR_SELECT, width: 90 }} onChange={(event) => onPatch({ endMarker: event.target.value })}>
+        {MARKER_OPTIONS.map((option) => <option key={option.value} value={option.value}>E · {option.label}</option>)}
+      </select>
+      <input
+        type="text"
+        aria-label="Connector label"
+        value={labelDraft}
+        placeholder="Add text"
+        onChange={(event) => onLabelDraftChange(event.target.value)}
+        onBlur={(event) => onPatch({ label: event.target.value })}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+        style={{ width: 124, height: 30, border: "1px solid rgba(255,255,255,0.12)", borderRadius: 7, padding: "0 9px", color: "#E7ECF5", background: "rgba(255,255,255,0.06)", fontSize: 12, outline: "none" }}
+      />
+    </div>
+  );
+}
+
+export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ elements }) => {
   const selectedElementId = useConductorStore((state) => state.selectedElementId);
   const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
   const updateElement = useConductorStore((state) => state.updateElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
-
   const [hoveredConnectorId, setHoveredConnectorId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [dragPoint, setDragPoint] = useState<Point | null>(null);
+  const [labelDraft, setLabelDraft] = useState("");
 
   const connectors = useMemo(
-    () => elements.filter((el) => el.elementKind === "native/connector"),
+    () => elements.filter((element) => element.elementKind === "native/connector"),
     [elements]
   );
-
   const selectedConnector = useMemo(
-    () => connectors.find((c) => c.id === selectedElementId) ?? null,
+    () => connectors.find((connector) => connector.id === selectedElementId) ?? null,
     [connectors, selectedElementId]
   );
+  useEffect(() => {
+    setLabelDraft(typeof selectedConnector?.config.label === "string" ? selectedConnector.config.label : "");
+  }, [selectedConnector?.id, selectedConnector?.config.label]);
 
   const selectedData = useMemo(() => {
     if (!selectedConnector) return null;
     const source = selectedConnector.config.source as ConnectorEndpoint | undefined;
     const target = selectedConnector.config.target as ConnectorEndpoint | undefined;
-    const sourceNode = source ? elements.find((e) => e.id === source.nodeId) : null;
-    const targetNode = target ? elements.find((e) => e.id === target.nodeId) : null;
+    const sourceNode = source ? elements.find((element) => element.id === source.nodeId) : null;
+    const targetNode = target ? elements.find((element) => element.id === target.nodeId) : null;
     if (!sourceNode || !targetNode) return null;
     return getComputedConnectorData(selectedConnector, elements, sourceNode.position, targetNode.position);
   }, [selectedConnector, elements]);
 
-  const handleConnectorClick = useCallback(
-    (connectorId: string) => {
-      setSelectedElementId(selectedElementId === connectorId ? null : connectorId);
-    },
-    [selectedElementId, setSelectedElementId]
-  );
+  const handleConnectorClick = useCallback((connectorId: string) => {
+    setSelectedElementId(selectedElementId === connectorId ? null : connectorId);
+  }, [selectedElementId, setSelectedElementId]);
 
   const persistConfig = useCallback(async (element: CanvasElement, nextConfig: Record<string, unknown>) => {
     if (!activeCanvasId) return;
@@ -71,53 +185,38 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({
         config: nextConfig,
       });
     } catch {
-      // no-op: bridge patch will eventually reconcile state
+      // The bridge patch will reconcile state if persistence fails transiently.
     }
   }, [activeCanvasId, updateElement]);
 
-  const patchSelectedConnector = useCallback(
-    (patch: {
-      routingMode?: "bezier" | "straight";
-      curvature?: number;
-      style?: { stroke?: string; strokeWidth?: number; endMarker?: "arrow" | "none" };
-    }) => {
-      if (!selectedConnector) return;
-      const style = (selectedConnector.config.style as Record<string, unknown> | undefined) ?? {};
-      const nextConfig: Record<string, unknown> = {
-        ...selectedConnector.config,
-        ...patch,
-        style: {
-          ...style,
-          ...(patch.style ?? {}),
-        },
-      };
-      void persistConfig(selectedConnector, nextConfig);
-    },
-    [selectedConnector, persistConfig]
-  );
+  const patchSelectedConnector = useCallback((patch: Record<string, unknown>) => {
+    if (!selectedConnector) return;
+    void persistConfig(selectedConnector, { ...selectedConnector.config, ...patch });
+  }, [selectedConnector, persistConfig]);
 
   const toCanvasPoint = useCallback((event: PointerEvent | React.PointerEvent): Point => {
     const host = document.querySelector(".canvas-area") as HTMLElement | null;
     if (!host) return { x: 0, y: 0 };
     const rect = host.getBoundingClientRect();
-    const { panX, panY, zoom } = canvasTransformState;
+    const zoom = Number.isFinite(canvasTransformState.zoom) && canvasTransformState.zoom > 0
+      ? canvasTransformState.zoom
+      : 1;
     return {
-      x: (event.clientX - rect.left - panX) / zoom,
-      y: (event.clientY - rect.top - panY) / zoom,
+      x: (event.clientX - rect.left - canvasTransformState.panX) / zoom,
+      y: (event.clientY - rect.top - canvasTransformState.panY) / zoom,
     };
   }, []);
 
   const hitTestNode = useCallback((point: Point, skipNodeId: string): CanvasElement | null => {
-    const nodes = elements.filter((el) => el.elementKind.startsWith("native/") && el.elementKind !== "native/connector");
+    const nodes = elements.filter((element) => element.elementKind.startsWith("native/") && element.elementKind !== "native/connector");
     for (const node of nodes) {
       if (node.id === skipNodeId) continue;
       const gridAbs = getAbsolutePosition(node, elements);
-      const abs = { x: gridAbs.x * GRID_PX, y: gridAbs.y * GRID_PX };
-      const w = node.position.w * GRID_PX;
-      const h = node.position.h * GRID_PX;
-      if (point.x >= abs.x && point.x <= abs.x + w && point.y >= abs.y && point.y <= abs.y + h) {
-        return node;
-      }
+      const x = gridAbs.x * GRID_PX;
+      const y = gridAbs.y * GRID_PX;
+      const width = node.position.w * GRID_PX;
+      const height = node.position.h * GRID_PX;
+      if (point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height) return node;
     }
     return null;
   }, [elements]);
@@ -125,43 +224,10 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({
   const handleEndpointPointerDown = useCallback((connectorId: string, endpoint: "source" | "target", _point: Point, event: React.PointerEvent<SVGCircleElement>) => {
     event.stopPropagation();
     event.preventDefault();
-
-    const connector = connectors.find((c) => c.id === connectorId);
+    const connector = connectors.find((candidate) => candidate.id === connectorId);
     if (!connector) return;
-    setDragState({ connectorId, endpoint });
+    setDragState({ kind: "endpoint", connectorId, endpoint });
     setDragPoint(toCanvasPoint(event));
-
-    const onMove = (e: PointerEvent) => {
-      setDragPoint(toCanvasPoint(e));
-    };
-
-    const onUp = (e: PointerEvent) => {
-      const state = useConductorStore.getState();
-      const current = state.elements.find((el) => el.id === connectorId);
-      if (!current) {
-        cleanup();
-        return;
-      }
-
-      const source = current.config.source as ConnectorEndpoint;
-      const target = current.config.target as ConnectorEndpoint;
-      const movingEndpoint = endpoint === "source" ? source : target;
-      const fixedEndpoint = endpoint === "source" ? target : source;
-      const dropPoint = toCanvasPoint(e);
-      const candidate = hitTestNode(dropPoint, fixedEndpoint.nodeId);
-
-      if (candidate) {
-        const anchorId = autoSelectAnchor(dropPoint, candidate, state.elements) as AnchorId;
-        const nextEndpoint: ConnectorEndpoint = { nodeId: candidate.id, anchorId };
-        const nextConfig = {
-          ...current.config,
-          [endpoint]: nextEndpoint,
-        } as Record<string, unknown>;
-        void persistConfig(current, nextConfig);
-      }
-
-      cleanup();
-    };
 
     const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
@@ -169,141 +235,188 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({
       setDragState(null);
       setDragPoint(null);
     };
-
+    const onMove = (moveEvent: PointerEvent) => setDragPoint(toCanvasPoint(moveEvent));
+    const onUp = (upEvent: PointerEvent) => {
+      const state = useConductorStore.getState();
+      const current = state.elements.find((element) => element.id === connectorId);
+      if (!current) return cleanup();
+      const source = current.config.source as ConnectorEndpoint;
+      const target = current.config.target as ConnectorEndpoint;
+      const fixedEndpoint = endpoint === "source" ? target : source;
+      const dropPoint = toCanvasPoint(upEvent);
+      const candidate = hitTestNode(dropPoint, fixedEndpoint.nodeId);
+      if (candidate) {
+        const attachment = autoSelectAttachment(dropPoint, candidate, state.elements);
+        const nextEndpoint: ConnectorEndpoint = { nodeId: candidate.id, ...attachment };
+        void persistConfig(current, { ...current.config, [endpoint]: nextEndpoint });
+      }
+      cleanup();
+    };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   }, [connectors, hitTestNode, persistConfig, toCanvasPoint]);
 
-  const dragPreview = useMemo(() => {
-    if (!dragState || !dragPoint) return null;
-    const connector = connectors.find((c) => c.id === dragState.connectorId);
-    if (!connector) return null;
+  const handleCurveControlPointerDown = useCallback((connectorId: string, control: "source" | "target", _point: Point, event: React.PointerEvent<SVGCircleElement>) => {
+    event.stopPropagation();
+    event.preventDefault();
+    setDragState({ kind: "curve-control", connectorId, control });
 
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setDragState(null);
+    };
+    const onMove = (moveEvent: PointerEvent) => {
+      const state = useConductorStore.getState();
+      const current = state.elements.find((element) => element.id === connectorId);
+      if (!current) return;
+      const source = current.config.source as ConnectorEndpoint | undefined;
+      const target = current.config.target as ConnectorEndpoint | undefined;
+      const sourceNode = source ? state.elements.find((element) => element.id === source.nodeId) : null;
+      const targetNode = target ? state.elements.find((element) => element.id === target.nodeId) : null;
+      if (!sourceNode || !targetNode) return;
+      const data = getComputedConnectorData(current, state.elements, sourceNode.position, targetNode.position);
+      if (!data) return;
+      const cursor = toCanvasPoint(moveEvent);
+      const endpointPoint = control === "source" ? data.srcPoint : data.tgtPoint;
+      const endpointCenter = control === "source" ? data.sourceCenter : data.targetCenter;
+      const outwardX = endpointPoint.x - endpointCenter.x;
+      const outwardY = endpointPoint.y - endpointCenter.y;
+      const outwardLength = Math.hypot(outwardX, outwardY) || 1;
+      const outward = { x: outwardX / outwardLength, y: outwardY / outwardLength };
+      const cursorOffset = { x: cursor.x - endpointPoint.x, y: cursor.y - endpointPoint.y };
+      const tension = Math.max(24, cursorOffset.x * outward.x + cursorOffset.y * outward.y);
+      const constrainedOffset = { x: outward.x * tension, y: outward.y * tension };
+      const existing = current.config.curveControlOffsets as CurveControlOffsets | undefined;
+      const fallback: CurveControlOffsets = {
+        source: data.sourceControl
+          ? { x: data.sourceControl.x - data.srcPoint.x, y: data.sourceControl.y - data.srcPoint.y }
+          : { x: 40, y: 0 },
+        target: data.targetControl
+          ? { x: data.targetControl.x - data.tgtPoint.x, y: data.targetControl.y - data.tgtPoint.y }
+          : { x: -40, y: 0 },
+      };
+      const nextOffsets: CurveControlOffsets = {
+        source: existing?.source ?? fallback.source,
+        target: existing?.target ?? fallback.target,
+        [control]: constrainedOffset,
+      };
+      updateElement(connectorId, { config: { ...current.config, routingMode: "curve", curveControlOffsets: nextOffsets } });
+    };
+    const onUp = () => {
+      const current = useConductorStore.getState().elements.find((element) => element.id === connectorId);
+      if (current) void persistConfig(current, current.config);
+      cleanup();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [persistConfig, toCanvasPoint, updateElement]);
+
+  const handleElbowSegmentPointerDown = useCallback((connectorId: string, segmentIndex: number, orientation: "horizontal" | "vertical", event: React.PointerEvent<SVGRectElement>) => {
+    event.stopPropagation();
+    event.preventDefault();
+    const current = useConductorStore.getState().elements.find((element) => element.id === connectorId);
+    if (!current) return;
+    const source = current.config.source as ConnectorEndpoint | undefined;
+    const target = current.config.target as ConnectorEndpoint | undefined;
+    const sourceNode = source ? elements.find((element) => element.id === source.nodeId) : null;
+    const targetNode = target ? elements.find((element) => element.id === target.nodeId) : null;
+    if (!sourceNode || !targetNode) return;
+    const data = getComputedConnectorData(current, elements, sourceNode.position, targetNode.position);
+    const basePoints = data?.elbowPoints?.map((point) => ({ ...point }));
+    if (!basePoints || !basePoints[segmentIndex + 1]) return;
+    setDragState({ kind: "elbow-segment", connectorId, segmentIndex });
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setDragState(null);
+    };
+    const onMove = (moveEvent: PointerEvent) => {
+      const cursor = toCanvasPoint(moveEvent);
+      const points = basePoints.map((point) => ({ ...point }));
+      if (orientation === "horizontal") {
+        points[segmentIndex].y = cursor.y;
+        points[segmentIndex + 1].y = cursor.y;
+      } else {
+        points[segmentIndex].x = cursor.x;
+        points[segmentIndex + 1].x = cursor.x;
+      }
+      const stateCurrent = useConductorStore.getState().elements.find((element) => element.id === connectorId);
+      if (!stateCurrent) return;
+      const waypoints = simplifyOrthogonalPoints(points).slice(1, -1);
+      updateElement(connectorId, { config: { ...stateCurrent.config, routingMode: "elbow", waypoints } });
+    };
+    const onUp = () => {
+      const stateCurrent = useConductorStore.getState().elements.find((element) => element.id === connectorId);
+      if (stateCurrent) void persistConfig(stateCurrent, stateCurrent.config);
+      cleanup();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [elements, persistConfig, toCanvasPoint, updateElement]);
+
+  const dragPreview = useMemo(() => {
+    if (dragState?.kind !== "endpoint" || !dragPoint) return null;
+    const connector = connectors.find((candidate) => candidate.id === dragState.connectorId);
+    if (!connector) return null;
     const source = connector.config.source as ConnectorEndpoint | undefined;
     const target = connector.config.target as ConnectorEndpoint | undefined;
-    if (!source || !target) return null;
-
-    const sourceNode = elements.find((e) => e.id === source.nodeId);
-    const targetNode = elements.find((e) => e.id === target.nodeId);
+    const sourceNode = source ? elements.find((element) => element.id === source.nodeId) : null;
+    const targetNode = target ? elements.find((element) => element.id === target.nodeId) : null;
     if (!sourceNode || !targetNode) return null;
-
     const computed = getComputedConnectorData(connector, elements, sourceNode.position, targetNode.position);
     if (!computed) return null;
-
     return dragState.endpoint === "source"
       ? { from: dragPoint, to: computed.tgtPoint }
       : { from: computed.srcPoint, to: dragPoint };
   }, [dragState, dragPoint, connectors, elements]);
 
   if (connectors.length === 0) return null;
-
-  const selectedStyle = (selectedConnector?.config.style as Record<string, unknown> | undefined) ?? {};
-  const selectedEndMarker = (selectedStyle.endMarker as "arrow" | "none" | undefined) ?? "arrow";
+  const toolbarWidth = 636;
   const toolbarX = selectedData?.midPoint.x ?? 0;
-  const toolbarY = selectedData ? selectedData.midPoint.y - 56 : 0;
+  const toolbarY = selectedData ? selectedData.midPoint.y - 62 : 0;
 
   return (
     <>
-      <svg
-        className="native-connector-overlay"
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          pointerEvents: "none",
-          zIndex: 6,
-          overflow: "visible",
-        }}
-      >
-        <defs>
-          <marker
-            id="native-connector-arrowhead"
-            markerWidth="12"
-            markerHeight="12"
-            refX="10"
-            refY="6"
-            orient="auto-start-reverse"
-          >
-            <path
-              d="M 1 1 Q 6 6 1 11 L 10 6 Z"
-              fill="#8C4EFF"
-              stroke="#8C4EFF"
-              strokeWidth="1"
-              strokeLinejoin="round"
-            />
-          </marker>
-        </defs>
-
-        {connectors.map((conn) => (
+      <svg className="native-connector-overlay" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 0, overflow: "visible" }}>
+        {connectors.map((connector) => (
           <ConnectorPath
-            key={conn.id}
-            connector={conn}
+            key={connector.id}
+            connector={connector}
             elements={elements}
-            isSelected={selectedElementId === conn.id}
-            isHovered={hoveredConnectorId === conn.id}
+            isSelected={selectedElementId === connector.id}
+            isHovered={hoveredConnectorId === connector.id}
+            layer="visual"
             onHover={setHoveredConnectorId}
             onClick={handleConnectorClick}
-            onEndpointPointerDown={handleEndpointPointerDown}
           />
         ))}
+      </svg>
+
+      <svg className="native-connector-controls" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 6, overflow: "visible" }}>
+        {selectedConnector && (
+          <ConnectorPath
+            connector={selectedConnector}
+            elements={elements}
+            isSelected
+            layer="controls"
+            onEndpointPointerDown={handleEndpointPointerDown}
+            onCurveControlPointerDown={handleCurveControlPointerDown}
+            onElbowSegmentPointerDown={handleElbowSegmentPointerDown}
+          />
+        )}
 
         {dragPreview && (
           <g style={{ pointerEvents: "none" }}>
-            <path
-              d={`M ${dragPreview.from.x} ${dragPreview.from.y} L ${dragPreview.to.x} ${dragPreview.to.y}`}
-              fill="none"
-              stroke="#8C4EFF"
-              strokeWidth={2}
-              strokeDasharray="6 4"
-              strokeLinecap="round"
-              opacity={0.85}
-            />
-            <circle cx={dragPreview.from.x} cy={dragPreview.from.y} r={6} fill="#FFFFFF" stroke="#8C4EFF" strokeWidth={2} />
+            <path d={`M ${dragPreview.from.x} ${dragPreview.from.y} L ${dragPreview.to.x} ${dragPreview.to.y}`} fill="none" stroke="var(--conductor-accent)" strokeWidth={2} strokeDasharray="6 4" strokeLinecap="round" opacity={0.85} />
+            <circle cx={dragPreview.from.x} cy={dragPreview.from.y} r={6} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2} />
           </g>
         )}
 
         {selectedConnector && selectedData && !dragState && (
-          <foreignObject x={toolbarX - 170} y={toolbarY} width={340} height={46} style={{ overflow: "visible", pointerEvents: "none" }}>
-            <div
-              style={{
-                pointerEvents: "auto",
-                height: 40,
-                borderRadius: 12,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "0 10px",
-                background: "rgba(20, 28, 45, 0.92)",
-                boxShadow: "0 8px 28px rgba(12, 18, 34, 0.28)",
-                color: "#E7ECF5",
-                fontSize: 12,
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              <button onClick={() => patchSelectedConnector({ routingMode: "straight" })} style={{ color: "#E7ECF5" }}>Straight</button>
-              <button onClick={() => patchSelectedConnector({ routingMode: "bezier", curvature: 0.4 })} style={{ color: "#E7ECF5" }}>Curve</button>
-
-              {PRESET_WIDTHS.map((w) => (
-                <button key={w} onClick={() => patchSelectedConnector({ style: { strokeWidth: w } })} style={{ color: "#E7ECF5" }}>{w}px</button>
-              ))}
-
-              {PRESET_COLORS.map((color) => (
-                <button
-                  key={color}
-                  onClick={() => patchSelectedConnector({ style: { stroke: color } })}
-                  style={{ width: 16, height: 16, borderRadius: 999, background: color, border: "1px solid rgba(255,255,255,0.35)" }}
-                  aria-label={`Set color ${color}`}
-                />
-              ))}
-
-              <button
-                onClick={() => patchSelectedConnector({ style: { endMarker: selectedEndMarker === "arrow" ? "none" : "arrow" } })}
-                style={{ color: "#E7ECF5" }}
-              >
-                {selectedEndMarker === "arrow" ? "Arrow On" : "Arrow Off"}
-              </button>
-            </div>
+          <foreignObject x={toolbarX - toolbarWidth / 2} y={toolbarY} width={toolbarWidth} height={50} style={{ overflow: "visible", pointerEvents: "none" }}>
+            <ConnectorToolbar connector={selectedConnector} labelDraft={labelDraft} onLabelDraftChange={setLabelDraft} onPatch={patchSelectedConnector} />
           </foreignObject>
         )}
       </svg>

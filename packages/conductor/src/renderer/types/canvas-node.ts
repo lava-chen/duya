@@ -8,6 +8,7 @@ export const NodeType = {
   image: 'image',
   file: 'file',
   group: 'group',
+  link: 'link',
 } as const;
 export type NodeType = (typeof NodeType)[keyof typeof NodeType];
 
@@ -36,14 +37,34 @@ export type Direction = (typeof Direction)[keyof typeof Direction];
 export interface ConnectorEndpoint {
   nodeId: string;
   anchorId: AnchorId;
+  /** Normalized position along the selected edge (0..1). Defaults to 0.5. */
+  edgePosition?: number;
+}
+
+export type ConnectorRoutingMode = 'elbow' | 'curve';
+export type ConnectorMarker = 'none' | 'arrow' | 'open-arrow' | 'circle' | 'diamond' | 'bar';
+
+export interface CurveControlOffsets {
+  source: Point;
+  target: Point;
 }
 
 export interface ConnectorContent {
   source: ConnectorEndpoint;
   target: ConnectorEndpoint;
   curvature?: number;
-  routingMode: 'bezier' | 'straight';
+  /**
+   * `bezier` and `straight` are accepted by the renderer for legacy data.
+   * New connectors persist only the user-facing elbow / curve modes.
+   */
+  routingMode: ConnectorRoutingMode | 'bezier' | 'straight';
+  label?: string;
+  labelPosition?: number;
+  /** Elbow bend topology in canvas pixels. The generated SVG path is never persisted. */
   waypoints?: Point[];
+  /** Curve handles stored as endpoint-relative vectors so node moves keep the curve stable. */
+  curveControlOffsets?: CurveControlOffsets;
+  cornerRadius?: number;
   style?: {
     stroke?: string;
     strokeWidth?: number;
@@ -52,10 +73,11 @@ export interface ConnectorContent {
   // New top-level style fields (preferred over nested `style` for new data).
   // Fall back to `style.*` for backward compat when unset.
   strokeStyle?: 'solid' | 'dashed' | 'dotted';  // default: "solid"
-  lineWidth?: number;                            // default: 2
   color?: string;                                // default: var(--text-secondary)
   arrowStart?: boolean;                          // default: false
   arrowEnd?: boolean;                            // default: true
+  startMarker?: ConnectorMarker;                 // default: "none"
+  endMarker?: ConnectorMarker;                   // default: "arrow"
 }
 
 export interface ShapeContent {
@@ -130,6 +152,18 @@ export interface GroupContent {
   memberIds: string[];
 }
 
+export interface LinkContent {
+  linkType: 'url' | 'session' | 'canvas';
+  title?: string;
+  description?: string;
+  url?: string;
+  faviconUrl?: string;
+  siteName?: string;
+  targetId?: string;
+  expanded?: boolean;
+  expandedSize?: { w: number; h: number };
+}
+
 export type NodeContent =
   | { kind: 'sticky' } & StickyContent
   | { kind: 'shape' } & ShapeContent
@@ -139,4 +173,5 @@ export type NodeContent =
   | { kind: 'frame' } & FrameContent
   | { kind: 'image' } & ImageContent
   | { kind: 'file' } & FileContent
-  | { kind: 'group' } & GroupContent;
+  | { kind: 'group' } & GroupContent
+  | { kind: 'link' } & LinkContent;

@@ -7,6 +7,8 @@ import type { CanvasElement } from "../..//types/conductor";
 import { updateElementContent } from "../..//ipc/conductor-ipc";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { STICKY_COLORS, type StickyColorKey } from "./sticky-colors";
+import { FloatingTextToolbar } from "./FloatingTextToolbar";
+import { looksLikeHtml, textToHtml, htmlToText } from "./text-html";
 
 const STICKY_MARKDOWN_COMPONENTS = {
   h1: ({ children, ...props }: any) => (
@@ -101,24 +103,29 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   const isShortShape = shape === "diamond" || shape === "ellipse";
   const effectiveFontSize = isShortShape && text.length > 20 ? Math.max(16, fontSize - 4) : fontSize;
 
-  const [editText, setEditText] = useState(text);
-  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [editHtml, setEditHtml] = useState(textToHtml(text));
+  const contentEditableRef = useRef<HTMLDivElement>(null);
   // Guards against double-handling when Escape triggers blur during unmount.
   const exitModeRef = useRef<"save" | "cancel" | null>(null);
 
   useEffect(() => {
-    setEditText(text);
+    setEditHtml(textToHtml(text));
   }, [element.id, text]);
 
   useEffect(() => {
     if (isEditing) {
       exitModeRef.current = null;
-      if (editTextareaRef.current) {
-        editTextareaRef.current.focus();
+      if (contentEditableRef.current) {
+        contentEditableRef.current.focus();
         // Place caret at end so typing appends rather than prepends.
-        const ta = editTextareaRef.current;
-        const len = ta.value.length;
-        ta.setSelectionRange(len, len);
+        const selection = window.getSelection();
+        if (selection) {
+          const range = document.createRange();
+          range.selectNodeContents(contentEditableRef.current);
+          range.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
       }
     }
   }, [isEditing]);
@@ -126,22 +133,24 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   const save = useCallback(() => {
     if (exitModeRef.current !== null) return;
     exitModeRef.current = "save";
-    const trimmed = editText.trim();
-    if (trimmed !== text) {
-      const newConfig = { ...element.config, text: trimmed };
+    const nextHtml = contentEditableRef.current?.innerHTML ?? editHtml;
+    // Strip empty editor placeholder before comparing/saving.
+    const normalized = htmlToText(nextHtml);
+    if (normalized !== text.trim()) {
+      const newConfig = { ...element.config, text: normalized };
       updateElement(element.id, { config: newConfig });
       if (activeCanvasId) {
-        updateElementContent(element.id, activeCanvasId, { text: trimmed })
+        updateElementContent(element.id, activeCanvasId, { text: normalized })
           .catch((err) => setUiError(`Save sticky failed: ${err instanceof Error ? err.message : err}`));
       }
     }
     setEditingElementId(null);
-  }, [activeCanvasId, editText, element.config, element.id, setEditingElementId, setUiError, text, updateElement]);
+  }, [activeCanvasId, editHtml, element.config, element.id, setEditingElementId, setUiError, text, updateElement]);
 
   const cancel = useCallback(() => {
     if (exitModeRef.current !== null) return;
     exitModeRef.current = "cancel";
-    setEditText(text);
+    setEditHtml(textToHtml(text));
     setEditingElementId(null);
   }, [setEditingElementId, text]);
 
@@ -212,39 +221,44 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
         }}
       >
       {isEditing ? (
-        <textarea
-          ref={editTextareaRef}
-          value={editText}
-          onChange={(e) => setEditText(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              cancel();
-            }
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              save();
-            }
-          }}
-          style={{
-            flex: 1,
-            width: "100%",
-            resize: "none",
-            border: "none",
-            outline: "none",
-            background: "transparent",
-            padding: 0,
-            fontSize: `${effectiveFontSize}px`,
-            color: theme.text,
-            lineHeight: isCompactLabel ? 1.3 : 1.5,
-            textAlign: isCompactLabel ? "center" : "left",
-            fontFamily: "inherit",
-            whiteSpace: "pre-wrap",
-            overflowY: "auto",
-          }}
-          placeholder="Write markdown…"
-        />
+        <>
+          <div
+            ref={contentEditableRef}
+            contentEditable
+            suppressContentEditableWarning
+            onInput={() => setEditHtml(contentEditableRef.current?.innerHTML ?? "")}
+            onBlur={save}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                cancel();
+              }
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                save();
+              }
+            }}
+            style={{
+              flex: 1,
+              width: "100%",
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              padding: 0,
+              fontSize: `${effectiveFontSize}px`,
+              color: theme.text,
+              lineHeight: isCompactLabel ? 1.3 : 1.5,
+              textAlign: isCompactLabel ? "center" : "left",
+              fontFamily: "inherit",
+              overflowY: "auto",
+              wordBreak: "break-word",
+              userSelect: "text",
+              cursor: "text",
+            }}
+            dangerouslySetInnerHTML={{ __html: editHtml }}
+          />
+          <FloatingTextToolbar container={contentEditableRef.current} />
+        </>
       ) : (
         <>
           <div
@@ -256,12 +270,16 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
             className="sticky-markdown-content"
           >
             {hasText ? (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={STICKY_MARKDOWN_COMPONENTS}
-              >
-                {text}
-              </ReactMarkdown>
+              looksLikeHtml(text) ? (
+                <div dangerouslySetInnerHTML={{ __html: text }} />
+              ) : (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={STICKY_MARKDOWN_COMPONENTS}
+                >
+                  {text}
+                </ReactMarkdown>
+              )
             ) : (
               <span style={{ color: theme.placeholder }}>Add text</span>
             )}
