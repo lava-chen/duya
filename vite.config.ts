@@ -118,6 +118,12 @@ export default defineConfig({
     // dev server without falling back to a file:// error page. Set
     // DUYA_VITE_HOST to override (e.g. "0.0.0.0" for LAN testing).
     host: process.env.DUYA_VITE_HOST ?? '127.0.0.1',
+    watch: {
+      // The E2E runner creates per-namespace userData directories under
+      // the repo root; watching them races with locked Chromium cache
+      // files and can crash the dev server on Windows.
+      ignored: ['**/.e2e-userdata/**', '**/node_modules/**', '**/dist/**'],
+    },
     // Kick off dep optimization + transform of the entry / hot
     // modules as soon as the server boots, not when the browser
     // first requests them. Cuts the perceived "cold start" by the
