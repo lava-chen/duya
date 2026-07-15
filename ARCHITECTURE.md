@@ -577,6 +577,29 @@ export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY_
 // [Static Sections] + BOUNDARY + [Dynamic Sections]
 ```
 
+#### Project-grounded harness invariants (Plan 226)
+
+Workspace-capable prompt profiles share two governance layers before their
+role-specific instructions:
+
+- `projectGrounding` requires scoped `AGENTS.md` discovery, bounded plan/spec
+  recovery, runtime-path confirmation, dirty-worktree protection, and a clear
+  sufficiency gate before mutation.
+- `projectContinuity` is enabled for coordinating/full agents and defines the
+  canonical plan, checkpoint, handoff, and reconciliation contract for work
+  spanning sessions or agents.
+
+`AgentsMdManager.refreshForTask()` reloads resolved project instructions at a
+prompt-build boundary and invalidates the cached section only when the snapshot
+changes. Full, minimal, and bare workspace profiles retain `agentsMd`; profiles
+without a project workspace explicitly disable the project sections.
+
+Subagent role prompts are composed with the shared minimal harness rather than
+replacing it. This preserves project rules, environment constraints, language,
+tool guidance, and grounding while leaving long-horizon integration ownership
+with the coordinating agent. `SessionSearch` is tool-aware evidence recovery;
+repository plans and specifications remain the durable source of truth.
+
 #### PromptManager 使用
 
 ```typescript
@@ -1062,3 +1085,7 @@ DUYA now includes a Phase 1 CronJob foundation in Electron Main Process:
 - Sidebar adds **Automation** navigation.
 - Minimal view: `src/components/automation/AutomationView.tsx`
 - Renderer IPC wrapper: `src/lib/automation-ipc.ts`
+
+## Conductor connector geometry
+
+Connector records persist semantic geometry rather than SVG paths. Each endpoint stores `nodeId`, a side `anchorId`, and an optional normalized `edgePosition` so attachments can move continuously along node edges. Elbow routes persist editable waypoints; curve routes persist endpoint-relative control offsets. The renderer recomputes paths from current node bounds and constrains terminal tangents and custom arrowheads toward each attached node center. Connector stroke width is fixed at 2.5 px; users can change routing, stroke pattern, color, markers, and label text.
