@@ -256,7 +256,7 @@ const optionalMissing = results.filter(
 if (listOnly) {
   console.log(`  Listed ${totalChecks} expected artifacts.`);
   console.log('  Run without --list to verify.');
-} else if (missingItems.length === 0) {
+} else if (failed === 0) {
   console.log(`  ✓ All ${totalChecks} checks passed.`);
   if (optionalMissing.length > 0) {
     console.log(`  ℹ ${optionalMissing.length} optional item(s) missing (non-fatal):`);
@@ -267,9 +267,16 @@ if (listOnly) {
   console.log('');
   console.log('  The packaged build is complete and ready for testing.');
 } else {
-  console.log(`  ✗ ${missingItems.length} issues found out of ${totalChecks} checks:`);
+  // failed may include checks that never landed in `results` — e.g. the
+  // native-module arch mismatch increments `failed` but only logs to
+  // stdout. Recompute the row list so the SUMMARY matches the exit code
+  // (the old branch printed "All N checks passed" while exiting 1).
+  const failedRows = results.filter(
+    r => r.status !== 'OK' && !OPTIONAL_CHECKS.has(r.label)
+  );
+  console.log(`  ✗ ${failed} check(s) failed out of ${totalChecks}:`);
   console.log('');
-  for (const item of missingItems) {
+  for (const item of failedRows) {
     console.log(`  [${item.status}] ${item.label}`);
   }
   if (optionalMissing.length > 0) {
