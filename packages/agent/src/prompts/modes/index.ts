@@ -22,22 +22,42 @@ export const DEFAULT_PROMPT_PROFILE: PromptProfile = { base: 'full' }
 
 /**
  * Default section sets for each base mode
- * Sections: intro, system, taskHandling, actions, toolUsage, toneAndStyle, outputEfficiency,
- *           memory, skills, mcp, sessionGuidance, agentsMd
+ * Project instructions and grounding are execution invariants for every
+ * workspace-capable base mode. Profiles that do not operate on a workspace
+ * (for example gateway) disable them explicitly.
  */
 export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig> = {
   full: {
-    enable: ['intro', 'system', 'taskHandling', 'actions', 'toolUsage', 'toneAndStyle', 'outputEfficiency', 'memory', 'skills', 'mcp', 'sessionGuidance', 'widgetGuidelines', 'visionGuidelines', 'platform'],
+    enable: [
+      'intro', 'system', 'projectGrounding', 'projectContinuity', 'agentsMd',
+      'taskHandling', 'actions', 'toolUsage', 'toneAndStyle', 'outputEfficiency',
+      'visualVerification',
+      'memory', 'memoryContent', 'skills', 'mcp', 'sessionGuidance', 'sessionSearch',
+      'widgetGuidelines', 'visionGuidelines', 'platform', 'environment',
+      'language', 'outputStyle', 'scratchpad',
+    ],
     disable: [],
   },
   minimal: {
-    enable: ['intro', 'system', 'taskHandling', 'actions', 'toolUsage', 'toneAndStyle', 'outputEfficiency', 'agentsMd'],
-    disable: ['memory', 'skills', 'sessionGuidance', 'widgetGuidelines', 'conductorCanvas'],
+    enable: [
+      'intro', 'system', 'projectGrounding', 'agentsMd', 'actions', 'toolUsage',
+      'visualVerification', 'environment', 'language',
+    ],
+    disable: [
+      'projectContinuity', 'memory', 'memoryContent', 'skills',
+      'sessionGuidance', 'sessionSearch', 'widgetGuidelines', 'conductorCanvas',
+    ],
   },
   bare: {
-    // bare still retains essential guardrails
-    enable: ['intro', 'system', 'actions', 'toolUsage'],
-    disable: ['memory', 'skills', 'sessionGuidance', 'agentsMd', 'toneAndStyle'],
+    // Bare is lean, but project constraints and environment remain safety rails.
+    enable: [
+      'intro', 'system', 'projectGrounding', 'agentsMd', 'actions', 'toolUsage',
+      'environment', 'language',
+    ],
+    disable: [
+      'projectContinuity', 'memory', 'memoryContent', 'skills',
+      'sessionGuidance', 'sessionSearch', 'toneAndStyle',
+    ],
   },
 }
 

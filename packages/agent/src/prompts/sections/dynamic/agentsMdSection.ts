@@ -26,15 +26,12 @@ export function getAgentsMdSection(ctx: PromptContext): string | null {
 }
 
 /**
- * Initialize AGENTS.md for a session.
- * This should be called once at session start.
+ * Refresh AGENTS.md at a task/prompt-build boundary.
+ * Returns true when the effective instruction snapshot changed.
  */
-export async function initializeAgentsMd(workingDirectory: string): Promise<void> {
+export async function initializeAgentsMd(workingDirectory: string): Promise<boolean> {
   const manager = getAgentsMdManager()
-
-  if (!manager.isLoadedForPath(workingDirectory)) {
-    await manager.loadForSession(workingDirectory)
-  }
+  return manager.refreshForTask(workingDirectory)
 }
 
 /**
@@ -76,4 +73,3 @@ You can customize your behavior using AGENTS.md files. These files provide instr
 
 Later files override earlier files. Local > Project > User > Managed.`
 }
-

@@ -57,6 +57,10 @@ export type { ResearchTaskIntent, ResearchPromptRuntimeContext } from './researc
 export { getSystemSection } from './sections/system.js'
 export { getGeneralTaskGuidanceSection } from './sections/generalTaskGuidance.js'
 export { getTaskHandlingSection } from './sections/taskHandling.js'
+export {
+  getProjectContinuitySection,
+  getProjectGroundingSection,
+} from './sections/projectGrounding.js'
 export { getActionsSection } from './sections/actions.js'
 export { getToolUsageSection } from './sections/toolUsage.js'
 export { getToneAndStyleSection } from './sections/toneAndStyle.js'
