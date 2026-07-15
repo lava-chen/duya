@@ -45,6 +45,7 @@ import { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
 import { getScratchpadSection } from './sections/dynamic/scratchpad.js'
 import { getMemorySection } from './sections/dynamic/memory.js'
 import { getSessionSearchSection } from '../sections/dynamic/sessionSearchSection.js'
+import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 
 /**
@@ -135,6 +136,7 @@ export class CodePromptSystem extends PromptSystem {
       m('outputStyle', () => getOutputStyleSection(context), 'Custom output style'),
       m('scratchpad', () => getScratchpadSection(context), 'Scratchpad directory'),
       m('sessionSearch', () => getSessionSearchSection(context), 'Past-session decisions may be relevant to the current task'),
+      m('recentSessions', () => getRecentSessionsSection(context), 'Recent session metadata can change between turns'),
       m('visualVerification', () => getVisualVerificationSection(context), 'Visual tasks require rendered-output verification'),
     ].filter((s): s is PromptSection => s !== null)
   }
@@ -221,6 +223,7 @@ export class CodePromptSystem extends PromptSystem {
       : process.cwd()
 
     return {
+      sessionId: options.sessionId,
       workingDirectory,
       additionalWorkingDirectories: options.additionalWorkingDirectories,
       platform: process.platform,

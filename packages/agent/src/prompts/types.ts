@@ -32,6 +32,7 @@ export const TOOL_NAMES = {
   ASK_USER_QUESTION: 'AskUserQuestion',
   DISCOVER_SKILLS: 'DiscoverSkills',
   SESSION_SEARCH: 'SessionSearch',
+  MESSAGE_SESSION: 'MessageSession',
   SLEEP: 'Sleep',
   VISION: 'vision_analyze',
 } as const
@@ -161,6 +162,8 @@ export type CommunicationPlatform =
  * Contains all the runtime information needed to build dynamic sections.
  */
 export interface PromptContext {
+  /** Current chat session ID */
+  sessionId?: string
   /** Current working directory */
   workingDirectory: string
   /** Additional working directories */
@@ -300,6 +303,8 @@ export interface ToolPromptContribution {
  * Options for creating a PromptManager instance.
  */
 export interface PromptManagerOptions {
+  /** Current chat session ID */
+  sessionId?: string
   /** Default working directory for the agent */
   workingDirectory?: string
   /** Additional working directories */
@@ -347,6 +352,7 @@ export interface PromptManagerOptions {
  * Used by PromptSystem.buildContext() to create the context for each turn.
  */
 export interface PromptBuildContextOptions {
+  sessionId?: string
   workingDirectory?: string
   additionalWorkingDirectories?: string[]
   modelId?: string

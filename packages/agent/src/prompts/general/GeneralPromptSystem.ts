@@ -44,6 +44,7 @@ import { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
 import { getScratchpadSection } from './sections/dynamic/scratchpad.js'
 import { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
 import { getSessionSearchSection } from '../sections/dynamic/sessionSearchSection.js'
+import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 import { getMemorySection } from './sections/dynamic/memory.js'
 import { getPlatformSection } from '../sections/dynamic/platform.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
@@ -137,6 +138,7 @@ export class GeneralPromptSystem extends PromptSystem {
       m('scratchpad', () => getScratchpadSection(context), 'Scratchpad directory'),
       m('visionGuidelines', () => getVisionGuidelinesSection(context), 'Vision tool guidelines'),
       m('sessionSearch', () => getSessionSearchSection(context), 'Past-session decisions may be relevant to the current task'),
+      m('recentSessions', () => getRecentSessionsSection(context), 'Recent session metadata can change between turns'),
       m('visualVerification', () => getVisualVerificationSection(context), 'Visual tasks require rendered-output verification'),
     ].filter((s): s is PromptSection => s !== null)
   }
@@ -223,6 +225,7 @@ export class GeneralPromptSystem extends PromptSystem {
       : process.cwd()
 
     return {
+      sessionId: options.sessionId,
       workingDirectory,
       additionalWorkingDirectories: options.additionalWorkingDirectories,
       platform: process.platform,

@@ -32,7 +32,7 @@ export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig>
       'intro', 'system', 'projectGrounding', 'projectContinuity', 'agentsMd',
       'taskHandling', 'actions', 'toolUsage', 'toneAndStyle', 'outputEfficiency',
       'visualVerification',
-      'memory', 'memoryContent', 'skills', 'mcp', 'sessionGuidance', 'sessionSearch',
+      'memory', 'memoryContent', 'skills', 'mcp', 'sessionGuidance', 'sessionSearch', 'recentSessions',
       'widgetGuidelines', 'visionGuidelines', 'platform', 'environment',
       'language', 'outputStyle', 'scratchpad',
     ],
@@ -45,7 +45,7 @@ export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig>
     ],
     disable: [
       'projectContinuity', 'memory', 'memoryContent', 'skills',
-      'sessionGuidance', 'sessionSearch', 'widgetGuidelines', 'conductorCanvas',
+      'sessionGuidance', 'sessionSearch', 'recentSessions', 'widgetGuidelines', 'conductorCanvas',
     ],
   },
   bare: {
@@ -56,7 +56,7 @@ export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig>
     ],
     disable: [
       'projectContinuity', 'memory', 'memoryContent', 'skills',
-      'sessionGuidance', 'sessionSearch', 'toneAndStyle',
+      'sessionGuidance', 'sessionSearch', 'recentSessions', 'toneAndStyle',
     ],
   },
 }

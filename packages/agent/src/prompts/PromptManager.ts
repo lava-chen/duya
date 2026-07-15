@@ -51,6 +51,7 @@ import { getLanguageSection } from './sections/dynamic/language.js'
 import { getScratchpadSection } from './sections/dynamic/scratchpad.js'
 import { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
 import { getSessionSearchSection } from './sections/dynamic/sessionSearchSection.js'
+import { getRecentSessionsSection } from './sections/dynamic/recentSessionsSection.js'
 import { getMemorySection } from './sections/dynamic/memorySection.js'
 import { getMemoryContextSection } from './sections/dynamic/memoryContextSection.js'
 import { getWidgetGuidelinesSection } from './sections/dynamic/widgetGuidelines.js'
@@ -182,6 +183,7 @@ export class PromptManager {
       maybeVolatile('skills', () => getSkillsMetadataSection(context), 'Skills can be loaded/unloaded dynamically'),
       maybeVolatile('scratchpad', () => getScratchpadSection(context), 'Scratchpad directory configuration'),
       maybeVolatile('sessionSearch', () => getSessionSearchSection(context), 'Session search guidance for recalling past conversations'),
+      maybeVolatile('recentSessions', () => getRecentSessionsSection(context), 'Recent session metadata can change between turns'),
       maybeVolatile('memoryContext', () => getMemoryContextSection(context), 'Memory prefetch based on user query'),
       maybeVolatile('widgetGuidelines', () => getWidgetGuidelinesSection(context), 'Widget creation guidelines for generative UI'),
       maybeVolatile('visionGuidelines', () => getVisionGuidelinesSection(context), 'Vision tool guidelines for image analysis'),
@@ -281,6 +283,7 @@ export class PromptManager {
       : process.cwd()
 
     const context: PromptContext = {
+      sessionId: this.options.sessionId,
       workingDirectory,
       additionalWorkingDirectories: this.options.additionalWorkingDirectories,
       platform: process.platform,
