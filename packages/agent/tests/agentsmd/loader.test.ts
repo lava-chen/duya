@@ -13,6 +13,7 @@ import {
   stripHtmlComments,
 } from '../../src/agentsmd/loader.js'
 import type { AgentsMdConfig } from '../../src/agentsmd/types.js'
+import { createAgentsMdManager } from '../../src/agentsmd/manager.js'
 
 describe('agentsmd loader', () => {
   let tempDir: string
@@ -46,9 +47,9 @@ describe('agentsmd loader', () => {
         },
       })
 
-      expect(files.length).toBeGreaterThan(0)
-      expect(files[0].type).toBe('Project')
-      expect(files[0].content).toContain('This is a test project')
+      const projectFile = files.find(file => file.path === path.join(tempDir, 'AGENTS.md'))
+      expect(projectFile?.type).toBe('Project')
+      expect(projectFile?.content).toContain('This is a test project')
     })
 
     it('should load .duya/AGENTS.md', async () => {
@@ -151,10 +152,13 @@ describe('agentsmd loader', () => {
         },
       })
 
-      // Should have both files, with src level later (higher priority)
-      expect(files.length).toBe(2)
-      expect(files[0].content).toContain('Root Level')
-      expect(files[1].content).toContain('Src Level')
+      // Ignore real ancestor instructions outside this isolated fixture.
+      const fixtureFiles = files.filter(file => file.path.startsWith(tempDir))
+
+      // Should have both fixture files, with src level later (higher priority)
+      expect(fixtureFiles.length).toBe(2)
+      expect(fixtureFiles[0].content).toContain('Root Level')
+      expect(fixtureFiles[1].content).toContain('Src Level')
     })
   })
 
@@ -178,6 +182,29 @@ describe('agentsmd loader', () => {
     it('should return empty string for no files', () => {
       const prompt = buildAgentsMdPrompt([])
       expect(prompt).toBe('')
+    })
+  })
+
+  describe('AgentsMdManager task refresh', () => {
+    it('refreshes changed project instructions between task boundaries', async () => {
+      const agentsPath = path.join(tempDir, 'AGENTS.md')
+      fs.writeFileSync(agentsPath, '# Rules\n\nUse the first rule.')
+      const manager = createAgentsMdManager({
+        enableManaged: false,
+        enableUser: false,
+        enableProject: true,
+        enableLocal: false,
+      })
+
+      expect(await manager.refreshForTask(tempDir)).toBe(true)
+      expect(manager.buildAgentsMdPrompt()).toContain('Use the first rule')
+      expect(await manager.refreshForTask(tempDir)).toBe(false)
+
+      fs.writeFileSync(agentsPath, '# Rules\n\nUse the updated rule.')
+
+      expect(await manager.refreshForTask(tempDir)).toBe(true)
+      expect(manager.buildAgentsMdPrompt()).toContain('Use the updated rule')
+      expect(manager.buildAgentsMdPrompt()).not.toContain('Use the first rule')
     })
   })
 

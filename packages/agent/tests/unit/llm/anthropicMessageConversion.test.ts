@@ -610,4 +610,49 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
       expect(useSet.has(id!)).toBe(true);
     }
   });
+
+  it('retries MiniMax 2013 with a synthetic failed tool result (case 14)', async () => {
+    const client = makeClient();
+    const requests: any[] = [];
+    const sdkClient = (client as any).client;
+    vi.spyOn(sdkClient.messages, 'stream').mockImplementation(async (params: any) => {
+      requests.push(params);
+      if (requests.length === 1) {
+        throw new Error('400 {"error":{"type":"invalid_request_error","message":"invalid params, 400 (2013)"}}');
+      }
+      return {
+        on: () => {},
+        finalMessage: () => Promise.resolve({
+          id: 'recovered', type: 'message', role: 'assistant', model: 'MiniMax-M3',
+          content: [], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => ({ value: undefined, done: true }),
+            return: async () => ({ value: undefined, done: true }),
+          };
+        },
+      } as any;
+    });
+
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Run the task', timestamp: 1 },
+      {
+        id: 'a1', role: 'assistant', timestamp: 2,
+        content: [{ type: 'tool_use', id: 'missing-result', name: 'Bash', input: { command: 'dir' } }],
+      },
+    ];
+
+    for await (const _event of client.streamChat(messages, { systemPrompt: 'test', tools: [] })) {
+      // Drain the recovered stream.
+    }
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1].max_tokens).toBe(8192);
+    expect(requests[1].thinking).toBeUndefined();
+    const recoveredEvents = flattenEvents(requests[1].messages);
+    expect(recoveredEvents).toContainEqual({ kind: 'use', id: 'missing-result' });
+    expect(recoveredEvents).toContainEqual({ kind: 'result', id: 'missing-result' });
+    expect(JSON.stringify(requests[1].messages)).toContain('synthesized during conversation recovery');
+  });
 });

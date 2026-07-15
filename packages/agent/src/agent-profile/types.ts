@@ -119,7 +119,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     name: 'Code',
     description: 'Code development and software engineering',
     allowedTools: ['*'],
-    disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'memory', 'SessionSearch'],
+    disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'memory'],
     promptSystem: 'code',
     userVisible: true,
     isPreset: true,
@@ -222,7 +222,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       // GatewayPromptSystem ignores generalTaskGuidance/actions/toolUsage
       // anyway (it does not render them), but keep the overrides for
       // clarity and in case a future caller falls back to GeneralPromptSystem.
-      disableSections: ['memory', 'memoryContent', 'sessionGuidance', 'skills', 'generalTaskGuidance', 'actions', 'toolUsage', 'agentsMd', 'outputEfficiency'],
+      disableSections: ['memory', 'memoryContent', 'sessionGuidance', 'skills', 'generalTaskGuidance', 'actions', 'toolUsage', 'agentsMd', 'projectGrounding', 'projectContinuity', 'outputEfficiency'],
     },
     promptSystem: 'gateway',
     userVisible: false,
@@ -291,6 +291,8 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
         'skills',
         'sessionGuidance',
         'agentsMd',
+        'projectGrounding',
+        'projectContinuity',
         'widgetGuidelines',
         'visionGuidelines',
         'actions',

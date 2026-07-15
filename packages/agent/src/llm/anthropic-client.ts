@@ -35,6 +35,10 @@ const MINIMAX_M3_MAX_TOKENS = 524_288;
 // context but the API rejects max_tokens > 196608 (192K) with error 2013:
 //   `invalid params, model[MiniMax-M2.7-highspeed] does not support max tokens > 196608`
 const MINIMAX_HIGHSPEED_MAX_TOKENS = 196_608;
+// Used only for a single recovery request after MiniMax returns its generic
+// 2013 invalid-parameters error. It avoids retrying an already-invalid payload
+// with the largest possible output reservation.
+const MINIMAX_RECOVERY_MAX_TOKENS = 8_192;
 
 /**
  * Sanitize a tool call ID for the Anthropic API.
@@ -671,7 +675,11 @@ function normalizeToolResultOrdering(messages: MessageParam[]): MessageParam[] {
  * @param messages - The messages to convert
  * @param baseURL - The API base URL (used to detect third-party endpoints)
  */
-function toAnthropicMessages(messages: Message[], baseURL?: string): MessageParam[] {
+function toAnthropicMessages(
+  messages: Message[],
+  baseURL?: string,
+  synthesizeMissingToolResults = false,
+): MessageParam[] {
   // Step 1: Convert all messages to Anthropic format, sanitizing tool IDs.
   //
   // We thread TWO independent global counters through the whole pass:
@@ -767,6 +775,50 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
         },
       });
     }
+  }
+
+  // Recovery mode is deliberately additive: do not discard an assistant's
+  // tool_use just because a worker crashed before its result was persisted.
+  // Instead, synthesize an explicit failed result. That restores the provider
+  // protocol without claiming the tool actually completed, and lets the model
+  // continue from a truthful state on the retry.
+  if (synthesizeMissingToolResults) {
+    const existingResultIds = new Set<string>();
+    for (const entry of converted) {
+      for (const id of entry.toolResultIds) existingResultIds.add(id);
+    }
+
+    const repaired: typeof converted = [];
+    let synthesizedCount = 0;
+    for (const entry of converted) {
+      repaired.push(entry);
+      if (entry.originalRole !== 'assistant' || entry.toolCallIds.length === 0) continue;
+
+      const missingIds = entry.toolCallIds.filter((id) => !existingResultIds.has(id));
+      if (missingIds.length === 0) continue;
+
+      synthesizedCount += missingIds.length;
+      repaired.push({
+        originalRole: 'tool',
+        toolCallIds: [],
+        toolResultIds: missingIds,
+        param: {
+          role: 'user',
+          content: missingIds.map((toolUseId) => ({
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: '<tool_error>Tool execution did not complete. This result was synthesized during conversation recovery.</tool_error>',
+            is_error: true,
+          })) as ContentBlockParam[],
+        },
+      });
+    }
+    if (synthesizedCount > 0) {
+      logger.warn(
+        `[toAnthropicMessages] Synthesized ${synthesizedCount} missing tool_result block(s) for recovery`,
+      );
+    }
+    converted.splice(0, converted.length, ...repaired);
   }
 
   // Step 2: Bidirectional orphan cleanup using GLOBAL id matching.
@@ -998,6 +1050,11 @@ function toAnthropicMessages(messages: Message[], baseURL?: string): MessagePara
   const repaired = repairToolPairing(withThinkingHandled);
 
   return repaired;
+}
+
+function isMiniMaxInvalidParameters2013(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b2013\b/.test(message) && /invalid params|invalid_request_error/i.test(message);
 }
 
 /**
@@ -1245,8 +1302,41 @@ export class AnthropicClient implements LLMClient {
       );
       logger.debug('Stream created successfully', undefined, 'AnthropicClient');
     } catch (streamError) {
-      logger.error('Failed to create stream', streamError instanceof Error ? streamError : new Error(String(streamError)), undefined, 'AnthropicClient');
-      throw streamError;
+      if (!this.isMiniMax || !isMiniMaxInvalidParameters2013(streamError) || options?.signal?.aborted) {
+        logger.error('Failed to create stream', streamError instanceof Error ? streamError : new Error(String(streamError)), undefined, 'AnthropicClient');
+        throw streamError;
+      }
+
+      // MiniMax sometimes reduces malformed history to the unhelpful generic
+      // `invalid params, 400 (2013)`. Recover once before exposing an error:
+      // synthesize missing failed tool results, remove cache directives, omit
+      // optional thinking, and reserve a conservative output budget.
+      anthropicMessages = toAnthropicMessages(messages, this.baseURL, true);
+      logger.warn(
+        '[AnthropicClient] MiniMax returned 2013; retrying once with repaired tool history and conservative request parameters',
+        { messageCount: anthropicMessages.length },
+        'AnthropicClient',
+      );
+      try {
+        stream = await this.client.messages.stream(
+          {
+            model: this.model,
+            max_tokens: Math.min(
+              getMiniMaxAnthropicMaxTokens(this.model, options?.maxOutputTokens ?? options?.contextWindow),
+              MINIMAX_RECOVERY_MAX_TOKENS,
+            ),
+            temperature: options?.temperature ?? 1,
+            system: options?.systemPrompt || '',
+            messages: anthropicMessages,
+            tools: tools?.length ? tools : undefined,
+          },
+          options?.signal ? { signal: options.signal } : undefined,
+        );
+        logger.info('MiniMax 2013 recovery retry created stream successfully', undefined, 'AnthropicClient');
+      } catch (recoveryError) {
+        logger.error('MiniMax 2013 recovery retry failed', recoveryError instanceof Error ? recoveryError : new Error(String(recoveryError)), undefined, 'AnthropicClient');
+        throw recoveryError;
+      }
     }
     logger.debug('Starting to read events', undefined, 'AnthropicClient');
 
@@ -1509,6 +1599,8 @@ export class AnthropicClient implements LLMClient {
       });
 
       this.reportCacheObservation(normalizedUsage, options);
+
+      logger.info(`[AnthropicClient] Yielding result event: input=${accumulatedUsage.input_tokens}, output=${accumulatedUsage.output_tokens}, cache_hit=${accumulatedUsage.cache_hit_tokens}, cache_creation=${accumulatedUsage.cache_creation_tokens}`, undefined, 'AnthropicClient');
 
       yield {
         type: 'result',

@@ -34,7 +34,7 @@ describe('AgentProfileService', () => {
       const code = service.get('code-expert');
       expect(code).toBeDefined();
       expect(code?.name).toBe('Code');
-      expect(code?.allowedTools).toContain('file:*');
+      expect(code?.allowedTools).toContain('*');
       expect(code?.userVisible).toBe(true);
     });
 

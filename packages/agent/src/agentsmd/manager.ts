@@ -1,27 +1,29 @@
 /**
  * AGENTS.md Manager
  *
- * Central orchestrator for AGENTS.md file loading with frozen snapshot pattern.
- * Implements caching to preserve prompt caching behavior.
+ * Central orchestrator for AGENTS.md file loading with task-scoped snapshots.
+ * Refreshes at prompt-build boundaries while preserving stable prompt content
+ * when the effective instruction set has not changed.
  */
 
 import type { AgentsFileInfo, AgentsMdConfig } from './types.js'
 import { DEFAULT_AGENTS_MD_CONFIG } from './types.js'
 import { loadAgentsMdFiles, buildAgentsMdPrompt } from './loader.js'
+import { logger } from '../utils/logger.js'
 
 // =============================================================================
 // AgentsMd Manager
 // =============================================================================
 
 export class AgentsMdManager {
-  // Frozen snapshot for system prompt
+  // Current task snapshot for system prompt
   private _snapshot: AgentsFileInfo[] = []
   private _snapshotPrompt: string = ''
 
   // Configuration
   private _config: AgentsMdConfig
 
-  // Project path for this session
+  // Project path for the current snapshot
   private _projectPath: string = ''
 
   // Initialized flag
@@ -43,35 +45,46 @@ export class AgentsMdManager {
 
   /**
    * Initialize the AGENTS.md system for a session.
-   * Captures frozen snapshots — called once at session start.
+   * Kept for compatibility with callers that initialize once.
    */
   async loadForSession(projectPath: string): Promise<void> {
-    this._projectPath = projectPath
+    await this.refreshForTask(projectPath)
+  }
 
-    // Load all AGENTS.md files
+  /**
+   * Refresh the resolved instruction snapshot at a task/prompt-build boundary.
+   * Returns true only when the effective prompt changed.
+   */
+  async refreshForTask(projectPath: string): Promise<boolean> {
     const files = await loadAgentsMdFiles({
       cwd: projectPath,
       config: this._config,
     })
+    const prompt = buildAgentsMdPrompt(files)
+    const changed =
+      !this._initialized ||
+      this._projectPath !== projectPath ||
+      this._snapshotPrompt !== prompt
 
-    // Capture frozen snapshot
+    this._projectPath = projectPath
+
     this._snapshot = files
-    this._snapshotPrompt = buildAgentsMdPrompt(files)
+    this._snapshotPrompt = prompt
 
     this._initialized = true
 
-    // Log summary
-    const typeCounts = this._getTypeCounts()
-    console.log(
-      `[AgentsMd] Loaded ${files.length} files:`,
-      Object.entries(typeCounts)
-        .map(([type, count]) => `${type}=${count}`)
-        .join(', '),
-    )
+    if (changed) {
+      logger.info('Project instruction snapshot refreshed', {
+        fileCount: files.length,
+        typeCounts: this._getTypeCounts(),
+      }, 'AgentsMd')
+    }
+
+    return changed
   }
 
   /**
-   * Get the frozen AGENTS.md prompt for system prompt injection.
+   * Get the current task's AGENTS.md prompt for system prompt injection.
    */
   buildAgentsMdPrompt(): string {
     return this._snapshotPrompt
