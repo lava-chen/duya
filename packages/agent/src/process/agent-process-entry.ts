@@ -1822,8 +1822,33 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       if (Date.now() - lastIncrementalSave > INCREMENTAL_SAVE_INTERVAL) {
         lastIncrementalSave = Date.now();
         const currentMessages = agent.getMessages();
-        const newMessages = currentMessages.slice(existingMessageCount);
+        let newMessages = currentMessages.slice(existingMessageCount);
         applyRequestDisplayContent(newMessages, msg.options?.displayContent);
+        // Attach the latest tokenUsage to the last assistant message before
+        // persisting. Without this, the incremental save may persist the last
+        // assistant message before the final save attaches token_usage — and
+        // appendMessages uses INSERT OR IGNORE, so the token_usage would be
+        // lost forever (the context ring would show no data).
+        if (tokenUsage && newMessages.length > 0) {
+          const lastAssistant = [...newMessages].reverse().find(m => m.role === 'assistant');
+          if (lastAssistant) {
+            (lastAssistant as Record<string, unknown>).token_usage = tokenUsage;
+          }
+        }
+        // Do not persist the trailing assistant message until we know its
+        // token usage. Because appendMessages uses INSERT OR IGNORE, an
+        // assistant message saved without token_usage can never be updated,
+        // which breaks the context ring. Tool results that follow the
+        // assistant are also held back so they stay adjacent to their
+        // assistant message.
+        const trailingAssistantRevIndex = [...newMessages].reverse().findIndex(m => m.role === 'assistant');
+        if (trailingAssistantRevIndex >= 0) {
+          const trailingAssistantIndex = newMessages.length - 1 - trailingAssistantRevIndex;
+          const trailingAssistant = newMessages[trailingAssistantIndex];
+          if (!(trailingAssistant as Record<string, unknown>).token_usage) {
+            newMessages = newMessages.slice(0, trailingAssistantIndex);
+          }
+        }
         if (newMessages.length > 0) {
           incrementalSaveQueue.trigger(newMessages).then(result => {
             debugLog('incremental save', { success: result.success, messageCount: newMessages.length });
@@ -1848,6 +1873,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
       if (event.type === 'result' && event.data) {
         tokenUsage = event.data as { input_tokens: number; output_tokens: number; total_tokens?: number };
+        log(`[Agent-Process] Received result event, tokenUsage set: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}`);
       }
       const agentMsg = convertSSEToAgentMessage(event);
       if (agentMsg) {
@@ -1882,17 +1908,24 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // Mark incremental queue as flushed and wait for any pending saves to complete
     incrementalSaveQueue.markFlushed();
     await incrementalSaveQueue.flush();
+    log(`[Agent-Process] Stream ended, tokenUsage present=${!!tokenUsage}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
     if (agentMessages.length > 0) {
       if (tokenUsage) {
         const lastAssistant = [...agentMessages].reverse().find(m => m.role === 'assistant');
         if (lastAssistant) {
           (lastAssistant as Record<string, unknown>).token_usage = tokenUsage;
+          log(`[Agent-Process] Attached token_usage to last assistant message: id=${lastAssistant.id}`);
+        } else {
+          warn('[Agent-Process] No assistant message found to attach token_usage');
         }
+      } else {
+        warn('[Agent-Process] No tokenUsage received during stream');
       }
       try {
         const newMessages = agentMessages.slice(existingMessageCount);
         applyRequestDisplayContent(newMessages, msg.options?.displayContent);
-        log(`[Agent-Process] Appending ${newMessages.length} new messages to DB for session ${msg.sessionId} (${agentMessages.length} total)`);
+        const lastNewAssistant = [...newMessages].reverse().find(m => m.role === 'assistant');
+        log(`[Agent-Process] Appending ${newMessages.length} new messages to DB for session ${msg.sessionId} (${agentMessages.length} total), lastNewAssistant token_usage present=${!!(lastNewAssistant && (lastNewAssistant as Record<string, unknown>).token_usage)}`);
         const result = await appendMessages(msg.sessionId, newMessages);
         log(`[Agent-Process] DB persist result: success=${result.success}, count=${result.count}`);
 

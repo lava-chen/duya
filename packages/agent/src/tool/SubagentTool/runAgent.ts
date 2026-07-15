@@ -21,6 +21,7 @@ import { PromptManager } from '../../prompts/PromptManager.js'
 import { appendMessages } from '../../session/db.js'
 import type { TokenUsage } from '../../types.js'
 import { logger } from '../../utils/logger.js'
+import { composeSubagentSystemPrompt } from './promptComposition.js'
 
 export interface RunAgentParams {
   agentDefinition: AgentDefinition
@@ -128,8 +129,9 @@ export async function* runAgent({
   const parentSessionId = toolUseContext.options.sessionId
   const workingDirectory = toolUseContext.options.workingDirectory ?? process.cwd()
 
-  // Resolve the agent's system prompt
-  const systemPrompt = getAgentSystemPrompt(agentDefinition, toolUseContext)
+  // Resolve the role-specific prompt. Shared project governance is composed
+  // after tool resolution so tool-aware harness sections stay accurate.
+  const roleSystemPrompt = getAgentSystemPrompt(agentDefinition, toolUseContext)
 
   logger.info('[SubAgent] runAgent starting', {
     agentId,
@@ -202,19 +204,6 @@ export async function* runAgent({
     promptProfile,
   })
 
-  // Create a new agent instance for the sub-agent
-  const subAgent = new duyaAgent({
-    apiKey,
-    baseURL: toolUseContext.options.baseURL,
-    model: agentModel,
-    authStyle: toolUseContext.options.authStyle,
-    provider: toolUseContext.options.provider,
-    systemPrompt,
-    workingDirectory,
-    sessionId,
-    promptManager: subAgentPromptManager,
-  })
-
   // Create real tool registry with actual tool executors
   const { createBuiltinRegistry } = await import('../builtin.js')
   const registry = createBuiltinRegistry()
@@ -227,6 +216,27 @@ export async function* runAgent({
   // Prevent recursive agent calls - exclude the Agent tool from sub-agents
   // to avoid infinite recursion where a sub-agent spawns another sub-agent
   toolsToUse = toolsToUse.filter(t => t.name !== 'Agent')
+
+  const harnessPrompt = [
+    ...await subAgentPromptManager.buildSystemPrompt(
+      new Set(toolsToUse.map(tool => tool.name)),
+    ),
+  ].join('\n\n')
+  const systemPrompt = composeSubagentSystemPrompt(roleSystemPrompt, harnessPrompt)
+
+  // The explicit systemPrompt replaces DuyaAgent's normal prompt path, so it
+  // must already contain both the agent role and the shared project harness.
+  const subAgent = new duyaAgent({
+    apiKey,
+    baseURL: toolUseContext.options.baseURL,
+    model: agentModel,
+    authStyle: toolUseContext.options.authStyle,
+    provider: toolUseContext.options.provider,
+    systemPrompt,
+    workingDirectory,
+    sessionId,
+    promptManager: subAgentPromptManager,
+  })
 
   logger.info('[SubAgent] streamChat starting', {
     agentId,
