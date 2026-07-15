@@ -18,6 +18,7 @@ import {
   ListChecksIcon,
   TablerMessageCircleIcon,
   EyeIcon,
+  SquaresFourIcon,
 } from '@/components/icons';
 import {
   isBrowserTool,
@@ -256,6 +257,35 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
         return name.length > 60 ? name.slice(0, 57) + '…' : name;
       }
       return 'vision';
+    },
+  },
+  {
+    // Canvas Conductor — thirteen canvas_* tools grouped under one
+    // renderer. The dedicated CanvasConductorToolRow supplies the
+    // per-tool verb and summary; this entry is the registry fallback
+    // for the group summary builder and any path that bypasses the row.
+    match: (n) => n.toLowerCase().startsWith('canvas_'),
+    icon: SquaresFourIcon,
+    labelKey: 'streaming.toolAction.label.canvas',
+    getSummary: (input, name?: string) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const toolBase = (name || '').replace(/^canvas_/, '');
+      // Batch create: surface the number of operations.
+      if (toolBase === 'batch_create') {
+        const ops = inp.operations;
+        const count = Array.isArray(ops) ? ops.length : 0;
+        return count > 0 ? `${count} elements` : 'batch create';
+      }
+      // Single create: surface the element kind.
+      if (toolBase === 'create_element' && typeof inp.kind === 'string') {
+        return inp.kind;
+      }
+      // Delete / fill / style / move / resize: surface the target element.
+      const targetId = typeof inp.elementId === 'string' ? inp.elementId : (typeof inp.ref === 'string' ? inp.ref : '');
+      if (targetId) {
+        return targetId.length > 24 ? targetId.slice(0, 21) + '…' : targetId;
+      }
+      return toolBase || 'canvas';
     },
   },
   {

@@ -47,6 +47,7 @@ import { SkillToolRow } from './SkillToolRow';
 import { ModuleToolRow } from './ModuleToolRow';
 import { TaskToolRow } from './TaskToolRow';
 import { VisionToolRow } from './VisionToolRow';
+import { CanvasConductorToolRow } from './CanvasConductorToolRow';
 
 interface ToolActionRowProps {
   tool: ToolAction;
@@ -81,6 +82,7 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
   const isTaskTool = isTaskToolAction(tool.input);
   const isMessageSession = isMessageSessionTool(tool.name);
   const isVisionAnalyze = tool.name.toLowerCase() === 'vision_analyze';
+  const isCanvasConductor = tool.name.toLowerCase().startsWith('canvas_');
   const [expanded, setExpanded] = useState(false);
   // Keep all useState calls before any conditional return so React hook
   // order stays stable when routing conditions change between renders.
@@ -157,6 +159,13 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
     // and a small preview card with the analyzed image; clicking
     // opens the full analysis in ToolImagePreviewModal.
     return <VisionToolRow tool={tool} />;
+  }
+
+  if (isCanvasConductor) {
+    // Canvas Conductor tools (canvas_*) are rendered by a dedicated
+    // row that maps each tool to a per-action verb and summary so the
+    // user sees "正在绘制画布元素" instead of the raw JSON payload.
+    return <CanvasConductorToolRow tool={tool} />;
   }
 
   const hasResult = tool.result !== undefined && tool.result !== '';
