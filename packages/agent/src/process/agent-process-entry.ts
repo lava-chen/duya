@@ -805,9 +805,16 @@ function summarizeConversationForWiki(messages: Message[], maxMessages = 12): st
 // Agent Initialization
 // ============================================================================
 
-async function initAgent(config: InitMessage['providerConfig'], workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string, browserBackendMode?: 'auto' | 'extension' | 'built-in'): Promise<void> {
+async function initAgent(config: InitMessage['providerConfig'] | null | undefined, workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string, browserBackendMode?: 'auto' | 'extension' | 'built-in'): Promise<void> {
   // Store system prompt for use in chat
   sessionSystemPrompt = sysPrompt;
+
+  // Guard: providerConfig can be null when no provider is configured.
+  // Without this, accessing config.model throws and crashes the worker,
+  // which surfaces as a misleading "initialization timeout" after 30s.
+  if (!config) {
+    throw new Error('No provider config available. Please configure an API provider in Settings.');
+  }
 
   // Store model name for multimodal detection
   mainModelName = config.model;
