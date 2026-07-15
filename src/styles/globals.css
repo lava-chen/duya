@@ -483,6 +483,20 @@ html[data-font="system"] .message-content li {
   max-width: 100%;
 }
 
+/* Inside markdown tables, keep inline code on one line so narrow columns
+ * don't force each character onto its own line. Tables scroll horizontally
+ * via overflow-x-auto when content is wide. */
+.message-content td code,
+.message-content th code,
+.prose td code,
+.prose th code,
+.prose-sm td code,
+.prose-sm th code {
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
 /* Keep dark theme inline code background as before */
 [data-theme="dark"] .prose code,
 [data-theme="dark"] .prose-sm code,

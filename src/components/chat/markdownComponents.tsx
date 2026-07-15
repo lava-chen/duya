@@ -158,10 +158,10 @@ export const markdownComponents = {
     <tr className="border-b border-foreground/20 last:border-b-0">{children}</tr>
   ),
   th: ({ children }: { children?: React.ReactNode }) => (
-    <th className="px-3 py-2 font-semibold text-foreground text-left">{children}</th>
+    <th className="px-3 py-2 font-semibold text-foreground text-left min-w-[120px]">{children}</th>
   ),
   td: ({ children }: { children?: React.ReactNode }) => (
-    <td className="px-3 py-2 text-foreground align-top">{children}</td>
+    <td className="px-3 py-2 text-foreground align-top min-w-[120px]">{children}</td>
   ),
   strong: ({ children }: { children?: React.ReactNode }) => (
     <strong className="font-semibold text-foreground">{children}</strong>
