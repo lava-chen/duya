@@ -129,3 +129,45 @@ implementation image was available for a side-by-side comparison.
   then compare them against the source images at the same viewport.
 
 final result: blocked
+
+---
+
+# Conductor Connector De-cluttering Design QA
+
+- Source visual truth: `C:/Users/lavachen/AppData/Local/Temp/codex-clipboard-6d7d6ef6-d47e-4722-a66a-1c32fd056b82.png`
+- Implementation screenshot: unavailable
+- Intended viewport: 1266 x 581 focused canvas region
+- State: dense dependency canvas with several connectors entering processor nodes
+
+## Full-View Comparison
+
+The source capture shows two connector renderers drawing the same logical edges, connector paths painted above node cards, and automatic endpoints converging at edge midpoints. Code changes remove the duplicate native connector pass, move visible paths below the node layer, retain editing controls above nodes, and distribute automatic attachments along shared edges.
+
+## Focused Comparison
+
+Blocked. The Product Design in-app browser runtime is unavailable in this session, and standalone Playwright requires explicit user approval. No post-fix implementation capture is available for the required combined visual comparison.
+
+## Comparison History
+
+- Earlier P1: duplicate legacy and native connector paths produced mismatched arrows and center-to-center lines through cards. Fixed by restricting `ConnectorOverlay` to legacy records without `config.source/target`.
+- Earlier P1: all connector visuals rendered above cards. Fixed by splitting the native connector underlay from the above-node editing controls.
+- Earlier P2: multiple automatic endpoints overlapped at 50% of the same edge. Fixed by stable per-edge endpoint distribution while preserving manually dragged `edgePosition` values.
+
+## Required Fidelity Surfaces
+
+- Fonts and typography: unchanged; connector paths now render behind node text.
+- Spacing and layout rhythm: automatic endpoint positions are distributed from 18% to 82% along a shared edge.
+- Colors and visual tokens: unchanged; existing connector and selection tokens are retained.
+- Image quality and asset fidelity: not applicable; this change uses the existing vector connector renderer and icon system.
+- Copy and content: unchanged.
+
+## Findings
+
+- No structural P0/P1 issue remains in tests or type checking.
+- Visual fidelity cannot be certified without a rendered post-fix capture.
+
+## Follow-Up Polish
+
+- Capture the same dense canvas state in Electron and compare it with the source at the same crop and zoom.
+
+final result: blocked
