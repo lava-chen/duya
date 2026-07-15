@@ -24,6 +24,7 @@ describe('SessionSearchTool', () => {
       expect(tool.input_schema.properties).toHaveProperty('query');
       expect(tool.input_schema.properties).toHaveProperty('limit');
       expect(tool.input_schema.properties).toHaveProperty('roleFilter');
+      expect(tool.input_schema.properties).toHaveProperty('scope');
     });
   });
 

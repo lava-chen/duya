@@ -199,6 +199,7 @@ export async function* runAgent({
 
   // Create a PromptManager with the appropriate profile for this subagent
   const subAgentPromptManager = new PromptManager({
+    sessionId,
     workingDirectory,
     modelId: agentModel,
     promptProfile,

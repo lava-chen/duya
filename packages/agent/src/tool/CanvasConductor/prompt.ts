@@ -69,7 +69,7 @@ A canvas is bound to this session. You have canvas tools. The canvasId is inject
 
 - native/sticky:    config = { text: string, color?: 'yellow'|'blue'|'green'|'pink'|'purple'|'gray', fontSize?: number }
   - Color keys map to diagram module classes: yellow→.s-chk (Amber), blue→.s-proc, green→.s-agent, pink→.s-err (Red, name kept for back-compat), purple→.s-msg, gray→.s-sub.
-- native/connector: config = { source: elementId, target: elementId, routingMode?: 'elbow'|'curve', label?: string, color?: string, strokeStyle?: 'solid'|'dashed'|'dotted', startMarker?: 'none'|'arrow'|'open-arrow'|'circle'|'diamond'|'bar', endMarker?: same }. Prefer elbow for process flows and curve for associations / mind maps.
+- native/connector: config = { source: elementId, target: elementId, routingMode?: 'elbow'|'curve', label?: string, color?: string, strokeStyle?: 'solid'|'dashed'|'dotted', startMarker?: 'none'|'arrow'|'open-arrow'|'circle'|'diamond'|'bar', endMarker?: same }. Default to routingMode: 'elbow' for every editable diagram, including architecture maps and mind maps. Curve is opt-in only when the user explicitly requests an organic curved relation. For fan-out/fan-in, align sibling nodes and create direct elbow connectors so overlapping orthogonal segments form one shared trunk/bus with short branches; never chain siblings together to fake a bus.
 - native/image:     config = { url: string, fileName?: string }
 - native/file:      config = { fileName: string, mimeType?: string, url?: string }
 - widget/dynamic: agent-generated HTML/SVG. Requires \`sourceCode\` field (HTML or SVG string).

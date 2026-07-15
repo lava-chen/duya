@@ -13,7 +13,7 @@
  */
 
 import { BaseTool } from '../BaseTool.js';
-import type { ToolResult, Message } from '../../types.js';
+import type { ToolResult, Message, ToolUseContext } from '../../types.js';
 import type { MessageRow } from '../../session/db.js';
 import { SESSION_SEARCH_TOOL_NAME } from './constants.js';
 import { DESCRIPTION } from './prompt.js';
@@ -22,6 +22,14 @@ import { AnthropicClient } from '../../llm/anthropic-client.js';
 import { OpenAIClient } from '../../llm/openai-client.js';
 import type { LLMClient } from '../../llm/base.js';
 import type BetterSqlite3 from 'better-sqlite3';
+import {
+  loadRecentSessionDirectory,
+  matchesSessionDirectoryScope,
+  sanitizeSessionMetadata,
+  type RecentSessionDirectory,
+  type RecentSessionDirectoryEntry,
+  type SessionDirectoryScope,
+} from '../../session/recent-session-directory.js';
 
 /**
  * Configuration for the auxiliary LLM used to summarize search results.
@@ -34,23 +42,10 @@ export interface SummaryLLMConfig {
   baseURL?: string;
 }
 
-interface SessionSearchResult {
-  sessionId: string;
-  title: string;
-  created_at: number;
-  updated_at: number;
-  snippet: string;
-}
-
-interface SearchResult {
-  sessionId: string;
-  title: string;
-  date: string;
-  snippet: string;
-}
-
 interface SessionMatchInfo {
   sessionId: string;
+  title: string;
+  projectName: string;
   source: string;
   sessionStarted: number;
   model?: string;
@@ -58,6 +53,8 @@ interface SessionMatchInfo {
 
 interface SessionSummary {
   sessionId: string;
+  title: string;
+  projectName: string;
   when: string;
   source: string;
   model?: string;
@@ -288,12 +285,18 @@ export class SessionSearchTool extends BaseTool {
       },
       limit: {
         type: 'number',
-        description: 'Maximum number of results to return (default: 3, max: 5)',
+        description: 'Maximum matching sessions to return (per project group in recent mode; default: 3, max: 5)',
         default: 3,
       },
       roleFilter: {
         type: 'string',
         description: 'Optional: only search messages from specific roles (comma-separated). E.g. "user,assistant" to skip tool outputs.',
+      },
+      scope: {
+        type: 'string',
+        enum: ['same_project', 'other_projects', 'all'],
+        default: 'all',
+        description: 'Limit results to the current project, other projects, or all sessions.',
       },
     },
   };
@@ -327,9 +330,16 @@ export class SessionSearchTool extends BaseTool {
     return this.summaryLLMConfig;
   }
 
+  private parseScope(value: unknown): SessionDirectoryScope {
+    return value === 'same_project' || value === 'other_projects' || value === 'all'
+      ? value
+      : 'all';
+  }
+
   async execute(
     input: Record<string, unknown>,
-    _workingDirectory?: string,
+    workingDirectory?: string,
+    context?: ToolUseContext,
   ): Promise<ToolResult> {
     // Defensive: coerce limit to safe integer
     let limitRaw = input.limit ?? 3;
@@ -344,20 +354,37 @@ export class SessionSearchTool extends BaseTool {
 
     const query = (input.query as string | undefined)?.trim();
     const roleFilter = (input.roleFilter as string | undefined)?.trim();
+    const scope = this.parseScope(input.scope);
+    const currentSessionId = context?.options?.sessionId || this.currentSessionId;
+    const currentWorkingDirectory = workingDirectory || context?.options?.workingDirectory || '';
 
     try {
       if (!query) {
         // No query - return recent sessions
-        const recent = this.getRecentSessions(limit);
+        const recent = await loadRecentSessionDirectory({
+          currentSessionId,
+          workingDirectory: currentWorkingDirectory,
+          sameProjectLimit: scope === 'other_projects' ? 0 : limit,
+          otherProjectLimit: scope === 'same_project' ? 0 : limit,
+          sameProjectLookbackMs: Number.POSITIVE_INFINITY,
+          otherProjectLookbackMs: Number.POSITIVE_INFINITY,
+        });
         return {
           id: crypto.randomUUID(),
           name: this.name,
-          result: this.formatRecentSessions(recent),
+          result: this.formatRecentSessions(recent, scope),
         };
       }
 
       // Search with query via FTS5
-      const results = await this.searchSessions(query, limit, roleFilter);
+      const results = await this.searchSessions(
+        query,
+        limit,
+        roleFilter,
+        scope,
+        currentWorkingDirectory,
+        currentSessionId,
+      );
 
       if (results.length === 0) {
         return {
@@ -391,13 +418,17 @@ export class SessionSearchTool extends BaseTool {
   private resolveToParent(sessionId: string, db: BetterSqlite3.Database): string {
     const visited = new Set<string>();
     let sid = sessionId;
-    const stmt = db.prepare('SELECT parent_session_id FROM chat_sessions WHERE id = ?');
+    const stmt = db.prepare('SELECT parent_id, parent_session_id FROM chat_sessions WHERE id = ?');
     while (sid && !visited.has(sid)) {
       visited.add(sid);
       try {
-        const row = stmt.get(sid) as { parent_session_id?: string } | undefined;
-        if (row?.parent_session_id) {
-          sid = row.parent_session_id;
+        const row = stmt.get(sid) as {
+          parent_id?: string | null;
+          parent_session_id?: string | null;
+        } | undefined;
+        const parentId = row?.parent_id ?? row?.parent_session_id;
+        if (parentId) {
+          sid = parentId;
         } else {
           break;
         }
@@ -411,19 +442,32 @@ export class SessionSearchTool extends BaseTool {
   /**
    * Get the root session ID of current session lineage
    */
-  private getCurrentSessionRoot(db: BetterSqlite3.Database): string | null {
-    if (!this.currentSessionId) return null;
-    return this.resolveToParent(this.currentSessionId, db);
+  private getCurrentSessionRoot(
+    db: BetterSqlite3.Database,
+    currentSessionId: string | null,
+  ): string | null {
+    if (!currentSessionId) return null;
+    return this.resolveToParent(currentSessionId, db);
   }
 
   /**
    * Deduplicate rows by resolved parent session, exclude current lineage.
    */
   private deduplicateAndExcludeRows(
-    rows: Array<{ sessionId: string; sessionStarted: number; model?: string }>,
+    rows: Array<{
+      sessionId: string;
+      title: string;
+      projectName?: string;
+      workingDirectory?: string;
+      sessionStarted: number;
+      model?: string;
+    }>,
     limit: number,
     db: BetterSqlite3.Database,
     currentRoot: string | null,
+    currentSessionId: string | null,
+    scope: SessionDirectoryScope,
+    workingDirectory: string,
   ): SessionMatchInfo[] {
     const seenSessions = new Map<string, SessionMatchInfo>();
     for (const row of rows) {
@@ -431,11 +475,14 @@ export class SessionSearchTool extends BaseTool {
       const resolvedSid = this.resolveToParent(rawSid, db);
 
       if (currentRoot && resolvedSid === currentRoot) continue;
-      if (this.currentSessionId && rawSid === this.currentSessionId) continue;
+      if (currentSessionId && rawSid === currentSessionId) continue;
+      if (!matchesSessionDirectoryScope(row.workingDirectory, workingDirectory, scope)) continue;
 
       if (!seenSessions.has(resolvedSid)) {
         seenSessions.set(resolvedSid, {
           sessionId: resolvedSid,
+          title: sanitizeSessionMetadata(row.title, 'Untitled'),
+          projectName: sanitizeSessionMetadata(row.projectName, 'Unknown project'),
           source: 'cli',
           sessionStarted: row.sessionStarted,
           model: row.model,
@@ -455,9 +502,12 @@ export class SessionSearchTool extends BaseTool {
     query: string,
     limit: number,
     roleFilter?: string,
+    scope: SessionDirectoryScope = 'all',
+    workingDirectory: string = '',
+    currentSessionId: string | null = null,
   ): Promise<SessionMatchInfo[]> {
     const db = getDb();
-    const currentRoot = this.getCurrentSessionRoot(db);
+    const currentRoot = this.getCurrentSessionRoot(db, currentSessionId);
 
     // Parse role filter
     const roleList = roleFilter
@@ -472,6 +522,8 @@ export class SessionSearchTool extends BaseTool {
         SELECT
           s.id as sessionId,
           s.title,
+          s.project_name as projectName,
+          s.working_directory as workingDirectory,
           s.created_at as sessionStarted,
           s.model
         FROM messages_fts
@@ -491,21 +543,40 @@ export class SessionSearchTool extends BaseTool {
       }
 
       sql += ` ORDER BY rank LIMIT ?`;
-      params.push(limit * 3); // Fetch more to account for filtering
+      params.push(limit * 8); // Fetch more to account for lineage and project filtering
 
       const stmt = db.prepare(sql);
       const rows = stmt.all(...params) as Array<{
         sessionId: string;
         title: string;
+        projectName?: string;
+        workingDirectory?: string;
         sessionStarted: number;
         model?: string;
       }>;
 
-      return this.deduplicateAndExcludeRows(rows, limit, db, currentRoot);
+      return this.deduplicateAndExcludeRows(
+        rows,
+        limit,
+        db,
+        currentRoot,
+        currentSessionId,
+        scope,
+        workingDirectory,
+      );
     } catch (error) {
       // FTS5 not available or error - fall back to LIKE search
       console.warn('[SessionSearch] FTS5 search failed, falling back to LIKE search:', error instanceof Error ? error.message : String(error));
-      return this.searchSessionsFallback(query, limit, roleList, db, currentRoot);
+      return this.searchSessionsFallback(
+        query,
+        limit,
+        roleList,
+        db,
+        currentRoot,
+        currentSessionId,
+        scope,
+        workingDirectory,
+      );
     }
   }
 
@@ -518,6 +589,9 @@ export class SessionSearchTool extends BaseTool {
     roleList: string[] | null,
     db: BetterSqlite3.Database,
     currentRoot: string | null,
+    currentSessionId: string | null,
+    scope: SessionDirectoryScope,
+    workingDirectory: string,
   ): SessionMatchInfo[] {
     const likeQuery = `%${query}%`;
 
@@ -525,6 +599,8 @@ export class SessionSearchTool extends BaseTool {
       SELECT DISTINCT
         s.id as sessionId,
         s.title,
+        s.project_name as projectName,
+        s.working_directory as workingDirectory,
         s.created_at as sessionStarted,
         s.model
       FROM messages m
@@ -541,99 +617,71 @@ export class SessionSearchTool extends BaseTool {
     }
 
     sql += ` ORDER BY s.updated_at DESC LIMIT ?`;
-    params.push(limit * 3);
+    params.push(limit * 8);
 
     const stmt = db.prepare(sql);
     const rows = stmt.all(...params) as Array<{
       sessionId: string;
       title: string;
+      projectName?: string;
+      workingDirectory?: string;
       sessionStarted: number;
       model?: string;
     }>;
 
-    return this.deduplicateAndExcludeRows(rows, limit, db, currentRoot);
-  }
-
-  /**
-   * Get recent sessions without search
-   */
-  private getRecentSessions(limit: number): SearchResult[] {
-    const db = getDb();
-    const currentRoot = this.getCurrentSessionRoot(db);
-
-    const sql = `
-      SELECT
-        s.id as sessionId,
-        s.title,
-        s.created_at,
-        s.updated_at,
-        substr(m.content, 1, 200) as snippet
-      FROM chat_sessions s
-      LEFT JOIN messages m ON s.id = m.session_id
-        AND m.rowid = (
-          SELECT rowid FROM messages
-          WHERE session_id = s.id AND role = 'user'
-          ORDER BY created_at DESC LIMIT 1
-        )
-      WHERE s.is_deleted = 0
-      ORDER BY s.updated_at DESC
-      LIMIT ?
-    `;
-
-    const stmt = db.prepare(sql);
-    const rows = stmt.all(limit * 2) as SessionSearchResult[]; // Fetch extra to account for filtering
-
-    const results: SearchResult[] = [];
-    for (const row of rows) {
-      // SQL aliases this column as `sessionId` (see SELECT above); reading
-      // `row.id` here silently yields undefined, which propagates as
-      // `Session ID: undefined` and missing sessionId in the JSON envelope.
-      const resolvedSid = this.resolveToParent(row.sessionId, db);
-
-      // Skip current session lineage
-      if (currentRoot && resolvedSid === currentRoot) continue;
-      if (this.currentSessionId && row.sessionId === this.currentSessionId) continue;
-
-      results.push({
-        sessionId: row.sessionId,
-        title: row.title || 'Untitled',
-        date: new Date(row.updated_at).toLocaleDateString(),
-        snippet: row.snippet ? row.snippet.slice(0, 100) + '...' : 'No messages',
-      });
-
-      if (results.length >= limit) break;
-    }
-
-    return results;
+    return this.deduplicateAndExcludeRows(
+      rows,
+      limit,
+      db,
+      currentRoot,
+      currentSessionId,
+      scope,
+      workingDirectory,
+    );
   }
 
   /**
    * Format recent sessions as readable output
    */
-  private formatRecentSessions(sessions: SearchResult[]): string {
-    if (sessions.length === 0) {
+  private formatRecentSessions(
+    directory: RecentSessionDirectory,
+    scope: SessionDirectoryScope,
+  ): string {
+    const groups: Array<{ title: string; sessions: RecentSessionDirectoryEntry[] }> = [];
+    if (scope !== 'other_projects') {
+      groups.push({ title: 'Same Project', sessions: directory.sameProject });
+    }
+    if (scope !== 'same_project') {
+      groups.push({ title: 'Other Projects', sessions: directory.otherProjects });
+    }
+
+    if (groups.every(group => group.sessions.length === 0)) {
       return 'No recent sessions found.';
     }
 
-    const lines = ['## Recent Sessions\n'];
-    for (const s of sessions) {
-      lines.push(`### "${s.title}" (${s.date})`);
-      lines.push(`Session ID: ${s.sessionId}`);
-      lines.push(`Last activity: ${s.snippet}`);
-      lines.push('');
-      // Machine-readable JSON envelope alongside the markdown so the
-      // sessionId survives even when downstream tooling parses the
-      // output as plain text without preserving the "Session ID:" line.
-      lines.push('```json');
-      lines.push(JSON.stringify({
-        sessionId: s.sessionId,
-        title: s.title,
-        date: s.date,
-      }, null, 2));
-      lines.push('```');
-      lines.push('');
+    const lines = ['<session-directory>', '## Recent Sessions', ''];
+    for (const group of groups) {
+      lines.push(`### ${group.title}`);
+      if (group.sessions.length === 0) {
+        lines.push('No recent sessions in this scope.', '');
+        continue;
+      }
+
+      for (const session of group.sessions) {
+        lines.push(`- "${session.title}" — ${session.projectName}`);
+        lines.push('```json');
+        lines.push(JSON.stringify({
+          sessionId: session.sessionId,
+          title: session.title,
+          project: session.projectName,
+          updatedAt: formatTimestamp(session.updatedAt),
+          childSessions: session.childCount,
+        }, null, 2));
+        lines.push('```', '');
+      }
     }
 
+    lines.push('</session-directory>');
     return lines.join('\n');
   }
 
@@ -700,6 +748,8 @@ export class SessionSearchTool extends BaseTool {
         const summary = await this.summarizeSessionWithRetry(conversationText, query, matchInfo);
         return {
           sessionId,
+          title: matchInfo.title,
+          projectName: matchInfo.projectName,
           when: formatTimestamp(matchInfo.sessionStarted),
           source: matchInfo.source,
           model: matchInfo.model,
@@ -799,7 +849,9 @@ export class SessionSearchTool extends BaseTool {
     lines.push(`Search query: "${query}"\n`);
 
     for (const s of summaries) {
-      lines.push(`### Session: ${s.sessionId}`);
+      lines.push(`### ${s.title}`);
+      lines.push(`- **Session ID**: ${s.sessionId}`);
+      lines.push(`- **Project**: ${s.projectName}`);
       lines.push(`- **When**: ${s.when}`);
       lines.push(`- **Source**: ${s.source}`);
       if (s.model) {
@@ -813,6 +865,8 @@ export class SessionSearchTool extends BaseTool {
       lines.push('```json');
       lines.push(JSON.stringify({
         sessionId: s.sessionId,
+        title: s.title,
+        project: s.projectName,
         when: s.when,
         source: s.source,
         model: s.model ?? null,
