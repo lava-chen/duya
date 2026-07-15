@@ -34,25 +34,35 @@ describe('prompt modes', () => {
       expect(full.enable).toContain('mcp');
       expect(full.enable).toContain('sessionGuidance');
       expect(full.enable).toContain('agentsMd');
+      expect(full.enable).toContain('projectGrounding');
+      expect(full.enable).toContain('projectContinuity');
+      expect(full.enable).toContain('environment');
+      expect(full.enable).toContain('sessionSearch');
       expect(full.disable).toEqual([]);
     });
 
-    it('minimal mode should only have essential sections', () => {
+    it('minimal mode should keep essential project grounding without coordinator governance', () => {
       const minimal = DEFAULT_BASE_SECTION_SETS.minimal;
-      expect(minimal.enable).toEqual(['intro', 'system', 'actions', 'toolUsage']);
+      expect(minimal.enable).toEqual([
+        'intro', 'system', 'projectGrounding', 'agentsMd', 'actions',
+        'toolUsage', 'visualVerification', 'environment', 'language',
+      ]);
       expect(minimal.disable).toContain('memory');
       expect(minimal.disable).toContain('skills');
       expect(minimal.disable).toContain('sessionGuidance');
-      expect(minimal.disable).toContain('agentsMd');
+      expect(minimal.disable).toContain('projectContinuity');
     });
 
-    it('bare mode should have essential sections without toneAndStyle', () => {
+    it('bare mode should retain project instructions without main-agent continuity', () => {
       const bare = DEFAULT_BASE_SECTION_SETS.bare;
-      expect(bare.enable).toEqual(['intro', 'system', 'actions', 'toolUsage']);
+      expect(bare.enable).toEqual([
+        'intro', 'system', 'projectGrounding', 'agentsMd', 'actions',
+        'toolUsage', 'environment', 'language',
+      ]);
       expect(bare.disable).toContain('memory');
       expect(bare.disable).toContain('skills');
       expect(bare.disable).toContain('sessionGuidance');
-      expect(bare.disable).toContain('agentsMd');
+      expect(bare.disable).toContain('projectContinuity');
       expect(bare.disable).toContain('toneAndStyle');
     });
 
@@ -82,6 +92,9 @@ describe('prompt modes', () => {
       expect(enabled.has('mcp')).toBe(true);
       expect(enabled.has('sessionGuidance')).toBe(true);
       expect(enabled.has('agentsMd')).toBe(true);
+      expect(enabled.has('projectGrounding')).toBe(true);
+      expect(enabled.has('projectContinuity')).toBe(true);
+      expect(enabled.has('environment')).toBe(true);
     });
 
     it('minimal mode should only enable essential sections', () => {
@@ -92,6 +105,10 @@ describe('prompt modes', () => {
       expect(enabled.has('system')).toBe(true);
       expect(enabled.has('actions')).toBe(true);
       expect(enabled.has('toolUsage')).toBe(true);
+      expect(enabled.has('projectGrounding')).toBe(true);
+      expect(enabled.has('agentsMd')).toBe(true);
+      expect(enabled.has('environment')).toBe(true);
+      expect(enabled.has('language')).toBe(true);
 
       expect(enabled.has('taskHandling')).toBe(false);
       expect(enabled.has('toneAndStyle')).toBe(false);
@@ -100,7 +117,7 @@ describe('prompt modes', () => {
       expect(enabled.has('skills')).toBe(false);
       expect(enabled.has('mcp')).toBe(false);
       expect(enabled.has('sessionGuidance')).toBe(false);
-      expect(enabled.has('agentsMd')).toBe(false);
+      expect(enabled.has('projectContinuity')).toBe(false);
     });
 
     it('bare mode should not have toneAndStyle', () => {
@@ -111,6 +128,9 @@ describe('prompt modes', () => {
       expect(enabled.has('system')).toBe(true);
       expect(enabled.has('actions')).toBe(true);
       expect(enabled.has('toolUsage')).toBe(true);
+      expect(enabled.has('projectGrounding')).toBe(true);
+      expect(enabled.has('agentsMd')).toBe(true);
+      expect(enabled.has('environment')).toBe(true);
 
       expect(enabled.has('toneAndStyle')).toBe(false);
       expect(enabled.has('memory')).toBe(false);

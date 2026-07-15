@@ -29,6 +29,10 @@ import { getActionsSection } from './sections/static/actions.js'
 import { getToolUsageSection } from './sections/static/toolUsage.js'
 import { getToneAndStyleSection } from './sections/static/toneAndStyle.js'
 import { getOutputEfficiencySection } from './sections/static/outputEfficiency.js'
+import {
+  getProjectContinuitySection,
+  getProjectGroundingSection,
+} from '../sections/projectGrounding.js'
 
 // Dynamic sections
 import { getEnvironmentSection } from './sections/dynamic/environment.js'
@@ -40,6 +44,8 @@ import { getLanguageSection } from './sections/dynamic/language.js'
 import { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
 import { getScratchpadSection } from './sections/dynamic/scratchpad.js'
 import { getMemorySection } from './sections/dynamic/memory.js'
+import { getSessionSearchSection } from '../sections/dynamic/sessionSearchSection.js'
+import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 
 /**
  * Code Agent PromptSystem
@@ -89,6 +95,8 @@ export class CodePromptSystem extends PromptSystem {
     const sections: PromptSection[] = [
       m('intro', () => getIntroSection(context)),
       m('system', () => getSystemSection(context)),
+      m('projectGrounding', () => getProjectGroundingSection(context)),
+      m('projectContinuity', () => getProjectContinuitySection(context)),
       m('taskHandling', () => getTaskHandlingSection(context)),
       m('actions', () => getActionsSection(context)),
       m('toolUsage', () => getToolUsageSection(context, this.getToolContributions())),
@@ -126,6 +134,8 @@ export class CodePromptSystem extends PromptSystem {
       m('language', () => getLanguageSection(context), 'Language preference'),
       m('outputStyle', () => getOutputStyleSection(context), 'Custom output style'),
       m('scratchpad', () => getScratchpadSection(context), 'Scratchpad directory'),
+      m('sessionSearch', () => getSessionSearchSection(context), 'Past-session decisions may be relevant to the current task'),
+      m('visualVerification', () => getVisualVerificationSection(context), 'Visual tasks require rendered-output verification'),
     ].filter((s): s is PromptSection => s !== null)
   }
 
@@ -137,8 +147,12 @@ export class CodePromptSystem extends PromptSystem {
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
   ): Promise<SystemPrompt> {
-    // Initialize AGENTS.md
-    await initializeAgentsMd(context.workingDirectory)
+    if (
+      isSectionEnabled(this.profile, 'agentsMd') &&
+      await initializeAgentsMd(context.workingDirectory)
+    ) {
+      this.cache.delete('agentsMd')
+    }
 
     const staticSections = this.getStaticSections(context)
     const dynamicSections = this.getDynamicSections(context)

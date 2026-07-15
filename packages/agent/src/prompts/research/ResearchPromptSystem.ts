@@ -21,6 +21,13 @@ import { getOutputFormatPromptSection } from './sections/outputFormat.js'
 import { getMemoryWriteProposalPromptSection } from './sections/memoryWriteProposal.js'
 import { getToneAndStylePromptSection } from './sections/toneAndStyle.js'
 import type { ResearchTaskIntent } from './types.js'
+import {
+  getProjectContinuitySection,
+  getProjectGroundingSection,
+} from '../sections/projectGrounding.js'
+import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
+import { getAgentsMdManager } from '../../agentsmd/index.js'
+import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 
 export class ResearchPromptSystem extends PromptSystem {
   constructor(profile?: PromptProfile) {
@@ -38,6 +45,9 @@ export class ResearchPromptSystem extends PromptSystem {
     }
 
     return [
+      m('projectGrounding', () => getProjectGroundingSection(_context)),
+      m('projectContinuity', () => getProjectContinuitySection(_context)),
+      m('agentsMd', () => getAgentsMdManager().buildAgentsMdPrompt()),
       // Research-specific sections are not gated by isSectionEnabled — they
       // exist outside the generic section registry. Override `getProfile` /
       // bespoke gating here if you need to disable a research-specific block.
@@ -65,10 +75,23 @@ export class ResearchPromptSystem extends PromptSystem {
         () => getOutputFormatPromptSection(intent),
         'Intent-specific output format',
       ),
-    ]
+      isSectionEnabled(this.profile, 'visualVerification')
+        ? volatilePromptSection(
+            'visualVerification',
+            () => getVisualVerificationSection(context),
+            'Visual tasks require rendered-output verification',
+          )
+        : null,
+    ].filter((section): section is PromptSection => section !== null)
   }
 
   override async buildSystemPrompt(context: PromptContext): Promise<SystemPrompt> {
+    if (isSectionEnabled(this.profile, 'agentsMd')) {
+      const agentsMdChanged = await initializeAgentsMd(context.workingDirectory)
+      if (agentsMdChanged) {
+        this.cache.delete('agentsMd')
+      }
+    }
     const staticSections = this.getStaticSections(context)
     const dynamicSections = this.getDynamicSections(context)
     const { staticContent, dynamicContent } = await this.resolveSections(staticSections, dynamicSections)

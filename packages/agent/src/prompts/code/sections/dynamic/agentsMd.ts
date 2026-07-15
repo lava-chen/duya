@@ -6,11 +6,7 @@ import { getAgentsMdManager } from '../../../../agentsmd/index.js'
 
 export async function initializeAgentsMd(workingDirectory: string): Promise<void> {
   const manager = getAgentsMdManager()
-
-  // Use the manager's loadForSession method
-  if (!manager.isLoadedForPath(workingDirectory)) {
-    await manager.loadForSession(workingDirectory)
-  }
+  await manager.refreshForTask(workingDirectory)
 }
 
 export function getAgentsMdSection(): string | null {

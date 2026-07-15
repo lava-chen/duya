@@ -33,6 +33,10 @@ import { getIntroSection } from './sections/intro.js'
 import { getSystemSection } from './sections/system.js'
 import { getGeneralTaskGuidanceSection } from './sections/generalTaskGuidance.js'
 import { getTaskHandlingSection } from './sections/taskHandling.js'
+import {
+  getProjectContinuitySection,
+  getProjectGroundingSection,
+} from './sections/projectGrounding.js'
 import { getActionsSection } from './sections/actions.js'
 import { getToolUsageSection } from './sections/toolUsage.js'
 import { getToneAndStyleSection } from './sections/toneAndStyle.js'
@@ -51,6 +55,7 @@ import { getMemorySection } from './sections/dynamic/memorySection.js'
 import { getMemoryContextSection } from './sections/dynamic/memoryContextSection.js'
 import { getWidgetGuidelinesSection } from './sections/dynamic/widgetGuidelines.js'
 import { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
+import { getVisualVerificationSection } from './sections/dynamic/visualVerification.js'
 // Conductor canvas section is owned by `@duya/conductor` and is registered
 // into the prompt system via `registerConductor()` at host startup. The
 // section itself is shared between the conductor's own
@@ -124,7 +129,10 @@ export class PromptManager {
 
     // Initialize AGENTS.md only when enabled for this profile
     if (isSectionEnabled(this.profile, 'agentsMd')) {
-      await initializeAgentsMd(context.workingDirectory)
+      const agentsMdChanged = await initializeAgentsMd(context.workingDirectory)
+      if (agentsMdChanged) {
+        this.cache.delete('agentsMd')
+      }
     }
 
     // Resolve enabled sections based on profile
@@ -146,6 +154,8 @@ export class PromptManager {
     const staticSections: PromptSection[] = [
       maybeCached('intro', () => getIntroSection(context)),
       maybeCached('system', () => getSystemSection(context)),
+      maybeCached('projectGrounding', () => getProjectGroundingSection(context)),
+      maybeCached('projectContinuity', () => getProjectContinuitySection(context)),
       maybeCached('generalTaskGuidance', () => getGeneralTaskGuidanceSection(context)),
       ...(keepCodingInstructions && enabledSectionNames.has('taskHandling')
         ? [cachedPromptSection('taskHandling', () => getTaskHandlingSection(context))]
@@ -154,7 +164,7 @@ export class PromptManager {
       maybeCached('toolUsage', () => getToolUsageSection(context, this.getToolContributions())),
       maybeCached('toneAndStyle', () => getToneAndStyleSection(context)),
       maybeCached('outputEfficiency', () => getOutputEfficiencySection(context)),
-      // AGENTS.md: project and user instructions (frozen at session start)
+      // AGENTS.md: project and user instructions (refreshed at task boundaries)
       maybeCached('agentsMd', () => getAgentsMdManager().buildAgentsMdPrompt()),
       // Memory: guidance + actual memory content (frozen at session start)
       maybeCached('memory', () => getMemorySection(context)),
@@ -175,6 +185,7 @@ export class PromptManager {
       maybeVolatile('memoryContext', () => getMemoryContextSection(context), 'Memory prefetch based on user query'),
       maybeVolatile('widgetGuidelines', () => getWidgetGuidelinesSection(context), 'Widget creation guidelines for generative UI'),
       maybeVolatile('visionGuidelines', () => getVisionGuidelinesSection(context), 'Vision tool guidelines for image analysis'),
+      maybeVolatile('visualVerification', () => getVisualVerificationSection(context), 'Visual tasks require rendered-output verification'),
       maybeVolatile('conductorCanvas', async () => {
         // Lazy load to break the build-time cycle with @duya/conductor.
         // The conductor's own ConductorPromptSystem uses the same factory

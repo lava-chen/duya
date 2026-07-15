@@ -31,6 +31,7 @@ export const TOOL_NAMES = {
   TODO_WRITE: 'TodoWrite',
   ASK_USER_QUESTION: 'AskUserQuestion',
   DISCOVER_SKILLS: 'DiscoverSkills',
+  SESSION_SEARCH: 'SessionSearch',
   SLEEP: 'Sleep',
   VISION: 'vision_analyze',
 } as const
