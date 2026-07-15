@@ -168,8 +168,9 @@ function generateGatewaySessionTitle(prompt: string, platform: string): string {
 
 /**
  * Detect whether a gateway session title is still the fallback generated at
- * session creation ("{platform} {timestamp}" or "{platform} Reset {timestamp}").
- * This protects user-edited titles from being overwritten after a restart.
+ * session creation ("{platform} {timestamp}", "{platform} Reset {timestamp}",
+ * or "{platform} chat"). This protects user-edited titles from being
+ * overwritten after a restart.
  */
 function isFallbackGatewayTitle(title: string, platform: string): boolean {
   if (!title) return true;
@@ -177,35 +178,44 @@ function isFallbackGatewayTitle(title: string, platform: string): boolean {
   const prefix = `${platform.toLowerCase()} `;
   if (!lower.startsWith(prefix)) return false;
   const rest = title.slice(prefix.length).trim();
-  // Fallback titles always contain a locale date string with digits.
-  return /\d/.test(rest);
+  // Fallback titles are either generic placeholders or contain a timestamp with digits.
+  return /^(chat|reset)(\s+|$)/i.test(rest) || /\d/.test(rest);
 }
 
 /**
  * Update the thread/chat_sessions title for a gateway session once, using the
  * first inbound message. This is fire-and-forget so it never blocks reply
  * streaming.
+ *
+ * The function does not rely on in-memory session state: after a Main process
+ * restart the state map is empty, but the DB mapping still exists and inbound
+ * messages keep arriving. We derive the platform from the inbound message and
+ * regenerate the title whenever the stored title is still a fallback.
  */
-function maybeUpdateGatewaySessionTitle(sessionId: string, prompt: string): void {
-  const state = getSessionState(sessionId);
-  if (!state || state.titleGenerated) return;
-
+function maybeUpdateGatewaySessionTitle(sessionId: string, prompt: string, platform: string): void {
   const db = getDatabase();
   if (!db) return;
 
   try {
-    const platform = state.bridgeChannel || 'gateway';
     const row = db.prepare('SELECT title FROM threads WHERE id = ?').get(sessionId) as { title: string } | undefined;
     if (row && !isFallbackGatewayTitle(row.title, platform)) {
-      state.titleGenerated = true;
+      const state = getSessionState(sessionId);
+      if (state) state.titleGenerated = true;
       return;
     }
 
     const title = generateGatewaySessionTitle(prompt, platform);
     const now = Date.now();
-    db.prepare(`UPDATE threads SET title = ?, updated_at = ? WHERE id = ?`).run(title, now, sessionId);
+    // Upsert so the title is persisted even if the threads row is missing.
+    db.prepare(`
+      INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
+    `).run(sessionId, title, 'gateway', '', now, now);
     db.prepare(`UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?`).run(title, now, sessionId);
-    state.titleGenerated = true;
+
+    const state = getSessionState(sessionId);
+    if (state) state.titleGenerated = true;
     getLogger().debug('Gateway session title generated', { sessionId, title }, LogComponent.Gateway);
   } catch (err) {
     getLogger().warn('Failed to update gateway session title', err instanceof Error ? err.message : String(err), LogComponent.Gateway);
@@ -443,7 +453,7 @@ export function handleGatewayMessage(
 
       // Generate a meaningful title from the first inbound message.
       // This is fire-and-forget and must not block the SSE forwarding below.
-      maybeUpdateGatewaySessionTitle(sessionId, inboundMsg.prompt);
+      maybeUpdateGatewaySessionTitle(sessionId, inboundMsg.prompt, platform);
 
       const providerConfig = getCachedProviderConfig();
       if (providerConfig) {
