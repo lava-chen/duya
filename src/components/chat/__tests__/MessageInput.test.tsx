@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 // Heavy modules that MessageInput transitively imports. We mock them out
@@ -31,10 +31,16 @@ vi.mock('@/components/icons', () => ({
   FileTextIcon: () => null,
   ExternalLinkIcon: () => null,
   CaretDownIcon: () => null,
+  TelescopeIcon: () => null,
+  PlusIcon: () => null,
 }));
 
 vi.mock('@/components/chat/ModelSelector', () => ({
-  ModelSelector: () => null,
+  ModelSelector: ({ onSelect }: { onSelect: (model: string) => void }) => (
+    <button type="button" onClick={() => onSelect('[DeepSeek] deepseek-v4-flash')}>
+      choose DeepSeek
+    </button>
+  ),
 }));
 
 vi.mock('@/components/chat/PermissionModeSelector', () => ({
@@ -76,8 +82,12 @@ vi.mock('@/hooks/useTranslation', () => ({
   }),
 }));
 
+const mocks = vi.hoisted(() => ({
+  listProvidersIPC: vi.fn(),
+}));
+
 vi.mock('@/lib/ipc-client', () => ({
-  listProvidersIPC: vi.fn().mockResolvedValue([]),
+  listProvidersIPC: mocks.listProvidersIPC,
   listOutputStylesIPC: vi.fn().mockResolvedValue([]),
   saveDraftIPC: vi.fn().mockResolvedValue(undefined),
   getDraftIPC: vi.fn().mockResolvedValue(''),
@@ -92,5 +102,28 @@ describe('MessageInput (Plan 220 smoke test)', () => {
     // AttachmentBar should be present (the empty-state still emits the
     // element via the mocked component).
     expect(screen.getByTestId('attachment-bar')).toBeInTheDocument();
+  });
+
+  it('reports the selected model together with its provider', async () => {
+    mocks.listProvidersIPC.mockResolvedValue([
+      {
+        id: 'deepseek',
+        name: 'DeepSeek',
+        providerType: 'anthropic',
+        hasApiKey: true,
+        options: JSON.stringify({ enabled_models: ['deepseek-v4-flash'] }),
+      },
+    ]);
+    const onModelChange = vi.fn();
+
+    render(<MessageInput onSend={() => {}} onModelChange={onModelChange} />);
+
+    await waitFor(() => expect(mocks.listProvidersIPC).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'choose DeepSeek' }));
+
+    expect(onModelChange).toHaveBeenCalledWith(
+      '[DeepSeek] deepseek-v4-flash',
+      'deepseek',
+    );
   });
 });

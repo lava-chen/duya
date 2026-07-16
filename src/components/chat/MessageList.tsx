@@ -76,6 +76,14 @@ function estimateMessageRowHeight(group: GroupedMessage): number {
   );
 }
 
+function hasRenderableAssistantContent(message: Message): boolean {
+  if (message.msgType === 'tool_use' || message.msgType === 'thinking' || message.msgType === 'viz') {
+    return true;
+  }
+  if (message.tool_call_id || message.toolName || message.vizSpec) return true;
+  return estimateContentLength(message.content) > 0;
+}
+
 function toolResultsEqual(
   a: import('@/types').ToolResultInfo[],
   b: import('@/types').ToolResultInfo[],
@@ -671,7 +679,15 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       }
     }
 
-    return result;
+    // A few persistence paths create empty assistant placeholders after an
+    // interrupted stream. They render only a timestamp/copy icon, producing
+    // the stray time labels visible in the transcript.
+    return result.filter((group) => (
+      group.message.role !== 'assistant'
+      || group.toolResults.length > 0
+      || [group.message, ...(group.mergedMessages ?? [])]
+        .some(hasRenderableAssistantContent)
+    ));
   }, [messages]);
 
   // Only the last user message in the conversation is editable.
