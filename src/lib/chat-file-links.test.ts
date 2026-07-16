@@ -99,26 +99,46 @@ describe('chat-file-links / isLocalhostUrl', () => {
 });
 
 describe('chat-file-links / resolveLocalFilePath', () => {
-  it('joins relative paths onto cwd (with normalized backslashes)', () => {
-    // The helper normalizes forward slashes in the input into the
-    // platform separator, then joins against cwd with a single
-    // backslash — so the result for a POSIX-style input is a
-    // backslash-separated absolute path.
+  it('joins relative paths onto a Windows cwd with backslashes', () => {
     expect(resolveLocalFilePath('foo.html', 'E:\\projects\\duya'))
       .toBe('E:\\projects\\duya\\foo.html');
-    // Leading "./" stays in the joined path — the helper doesn't strip it.
     expect(resolveLocalFilePath('./foo.html', 'E:\\projects\\duya'))
       .toBe('E:\\projects\\duya\\.\\foo.html');
+  });
+
+  it('joins relative paths onto a Unix cwd with forward slashes', () => {
+    expect(resolveLocalFilePath('foo.html', '/Users/duya/project'))
+      .toBe('/Users/duya/project/foo.html');
+    expect(resolveLocalFilePath('./foo.html', '/Users/duya/project'))
+      .toBe('/Users/duya/project/./foo.html');
   });
 
   it('preserves absolute Windows paths', () => {
     expect(resolveLocalFilePath('E:\\foo\\bar.html', 'C:\\elsewhere'))
       .toBe('E:\\foo\\bar.html');
+    expect(resolveLocalFilePath('E:/foo/bar.html', 'C:\\elsewhere'))
+      .toBe('E:\\foo\\bar.html');
+  });
+
+  it('preserves absolute Unix paths', () => {
+    expect(resolveLocalFilePath('/Users/duya/Downloads/_整理方案.md'))
+      .toBe('/Users/duya/Downloads/_整理方案.md');
+    expect(resolveLocalFilePath('/Users/duya/Downloads/_整理方案.md', 'E:\\project'))
+      .toBe('/Users/duya/Downloads/_整理方案.md');
   });
 
   it('strips a trailing :line[:col] suffix before resolving', () => {
     expect(resolveLocalFilePath('foo.html:42', 'E:\\projects\\duya'))
       .toBe('E:\\projects\\duya\\foo.html');
+    expect(resolveLocalFilePath('foo.html:42', '/Users/duya/project'))
+      .toBe('/Users/duya/project/foo.html');
+  });
+
+  it('resolves file:// URLs to the host filesystem path', () => {
+    expect(resolveLocalFilePath('file:///Users/duya/Downloads/_整理方案.md'))
+      .toBe('/Users/duya/Downloads/_整理方案.md');
+    expect(resolveLocalFilePath('file:///C:/Users/duya/file.html'))
+      .toBe('C:\\Users\\duya\\file.html');
   });
 });
 
@@ -205,11 +225,25 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(dispatched[0].detail.url).toBe('E:\\projects\\page.html');
   });
 
+  it('routes .html to duya:open-browser-panel on Unix', () => {
+    openLocalArtifactTarget('/Users/duya/projects/page.html');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-browser-panel');
+    expect(dispatched[0].detail.url).toBe('/Users/duya/projects/page.html');
+  });
+
   it('routes .docx to duya:open-office-panel', () => {
     openLocalArtifactTarget('E:\\reports\\plan.docx');
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].event).toBe('duya:open-office-panel');
     expect(dispatched[0].detail.filePath).toBe('E:\\reports\\plan.docx');
+  });
+
+  it('routes .docx to duya:open-office-panel on Unix', () => {
+    openLocalArtifactTarget('/Users/duya/reports/plan.docx');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-office-panel');
+    expect(dispatched[0].detail.filePath).toBe('/Users/duya/reports/plan.docx');
   });
 
   it('routes source code files to duya:open-file-preview-panel', () => {
@@ -219,11 +253,25 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(dispatched[0].detail.filePath).toBe('E:\\src\\app.ts');
   });
 
+  it('routes source code files to duya:open-file-preview-panel on Unix', () => {
+    openLocalArtifactTarget('/Users/duya/src/app.ts');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.filePath).toBe('/Users/duya/src/app.ts');
+  });
+
   it('routes markdown to duya:open-file-preview-panel', () => {
     openLocalArtifactTarget('E:\\docs\\README.md');
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
     expect(dispatched[0].detail.filePath).toBe('E:\\docs\\README.md');
+  });
+
+  it('routes markdown to duya:open-file-preview-panel on Unix', () => {
+    openLocalArtifactTarget('/Users/duya/docs/_整理方案.md');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.filePath).toBe('/Users/duya/docs/_整理方案.md');
   });
 
   it('falls through to openLocalFileTarget for non-previewable extensions', () => {
@@ -239,6 +287,16 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(shellOpen).toHaveBeenCalledWith('E:\\build\\app.zip');
   });
 
+  it('falls through to openLocalFileTarget for non-previewable extensions on Unix', () => {
+    const shellOpen = vi.fn().mockResolvedValue('');
+    (window as unknown as { electronAPI: { shell: { openPath: typeof shellOpen } } }).electronAPI = {
+      shell: { openPath: shellOpen },
+    };
+    openLocalArtifactTarget('/Users/duya/build/app.zip');
+    expect(dispatched).toHaveLength(0);
+    expect(shellOpen).toHaveBeenCalledWith('/Users/duya/build/app.zip');
+  });
+
   it('uses cwd as preview root when the file is inside the working directory', () => {
     openLocalArtifactTarget('E:\\project\\src\\app.ts', 'E:\\project');
     expect(dispatched).toHaveLength(1);
@@ -246,10 +304,24 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(dispatched[0].detail.workingDirectory).toBe('E:\\project');
   });
 
+  it('uses cwd as preview root when the file is inside the working directory on Unix', () => {
+    openLocalArtifactTarget('/Users/duya/project/src/app.ts', '/Users/duya/project');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.workingDirectory).toBe('/Users/duya/project');
+  });
+
   it('falls back to the file directory as preview root when outside cwd', () => {
     openLocalArtifactTarget('E:\\other-project\\data.json', 'E:\\project');
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
     expect(dispatched[0].detail.workingDirectory).toBe('E:\\other-project');
+  });
+
+  it('falls back to the file directory as preview root when outside cwd on Unix', () => {
+    openLocalArtifactTarget('/Users/other-project/data.json', '/Users/duya/project');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.workingDirectory).toBe('/Users/other-project');
   });
 });

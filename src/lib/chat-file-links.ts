@@ -97,10 +97,7 @@ function defaultPreviewRootForFile(resolvedPath: string, cwd?: string | null): s
   // project), fall back to the file's own directory so files:preview does not
   // reject it as "outside the project directory".
   const inside = isPathInsideRoot(resolvedPath, cwdRaw);
-  const chosen = inside ? cwdRaw : fileDir;
-  // eslint-disable-next-line no-console
-  console.warn('[defaultPreviewRootForFile]', { resolvedPath, cwdRaw, fileDir, inside, chosen });
-  return chosen;
+  return inside ? cwdRaw : fileDir;
 }
 
 /**
@@ -141,14 +138,34 @@ export function resolveLocalFilePath(value: string, cwd?: string | null): string
       clean = clean.replace(/^file:\/\/\/?/i, '');
     }
   }
-  clean = clean.replace(/\//g, '\\');
-  if (/^[a-zA-Z]:[\\/]/.test(clean) || clean.startsWith('\\\\')) {
+
+  const isWindowsAbsolute = (p: string) => /^[a-zA-Z]:[\\/]|^\\\\/.test(p);
+  const isUnixAbsolute = (p: string) => p.startsWith('/');
+
+  // Windows absolute path: normalize to backslashes and return as-is.
+  if (isWindowsAbsolute(clean)) {
+    return clean.replace(/\//g, '\\');
+  }
+
+  // Unix absolute path: normalize to forward slashes and return as-is.
+  if (isUnixAbsolute(clean)) {
+    return clean.replace(/\\/g, '/');
+  }
+
+  // Relative path: derive the separator from cwd when available.
+  if (cwd) {
+    const cwdRaw = cwd.trim();
+    const separator = isWindowsAbsolute(cwdRaw) ? '\\' : '/';
+    const normalizedCwd = cwdRaw.replace(/[\\/]+$/, '');
+    const normalizedClean = clean.replace(/^[\\/]+/, '').replace(/\\/g, separator).replace(/\//g, separator);
+    return `${normalizedCwd}${separator}${normalizedClean}`;
+  }
+
+  // No cwd: keep the input's dominant separator style.
+  if (clean.includes('\\') && !clean.includes('/')) {
     return clean;
   }
-  if (cwd) {
-    return `${cwd.replace(/[\\/]+$/, '')}\\${clean.replace(/^[\\/]+/, '')}`;
-  }
-  return clean;
+  return clean.replace(/\\/g, '/');
 }
 
 export function openLocalFileTarget(filePath: string, cwd?: string | null): void {
