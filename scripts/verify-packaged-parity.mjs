@@ -8,6 +8,7 @@
  *   node scripts/verify-packaged-parity.mjs                    # auto-detect platform
  *   node scripts/verify-packaged-parity.mjs --platform win     # force Windows
  *   node scripts/verify-packaged-parity.mjs --platform mac     # force macOS
+ *   node scripts/verify-packaged-parity.mjs --platform mac --arch arm64
  *   node scripts/verify-packaged-parity.mjs --platform linux   # force Linux
  *   node scripts/verify-packaged-parity.mjs --list             # list all expected files
  */
@@ -26,8 +27,17 @@ const args = process.argv.slice(2);
 const forcePlatform = args.includes('--platform')
   ? args[args.indexOf('--platform') + 1]
   : null;
+const forceArch = args.includes('--arch')
+  ? args[args.indexOf('--arch') + 1]
+  : null;
 const listOnly = args.includes('--list');
 const platform = forcePlatform || os.platform();
+
+if (forceArch && forceArch !== 'arm64' && forceArch !== 'x64') {
+  throw new Error(`Unsupported architecture: ${forceArch}. Expected arm64 or x64.`);
+}
+
+const targetArch = forceArch || (os.arch() === 'arm64' ? 'arm64' : 'x64');
 
 /**
  * Detect the architecture of a Mach-O binary on macOS.
@@ -52,7 +62,8 @@ function getReleaseDir() {
     return path.join(base, 'win-unpacked');
   }
   if (platform === 'darwin' || platform === 'mac') {
-    return path.join(base, 'mac', 'DUYA.app', 'Contents');
+    const outputDir = targetArch === 'arm64' ? 'mac-arm64' : 'mac';
+    return path.join(base, outputDir, 'DUYA.app', 'Contents');
   }
   if (platform === 'linux') {
     return path.join(base, 'linux-unpacked');
@@ -161,6 +172,9 @@ function checkExists(filePath, isDir = false) {
 console.log('\n' + '='.repeat(80));
 console.log('  DUYA Packaged Build Verification');
 console.log(`  Platform: ${platform}`);
+if (platform === 'darwin' || platform === 'mac') {
+  console.log(`  Target architecture: ${targetArch}`);
+}
 console.log(`  Release Dir: ${getReleaseDir()}`);
 console.log(`  Resources: ${RESOURCES}`);
 console.log('='.repeat(80) + '\n');
@@ -215,7 +229,6 @@ for (const [label, [filePath, isDir]] of Object.entries(CHECKS)) {
 // Catches cross-compile bugs where arm64 binaries end up in x64 packages
 // =============================================================================
 if (!listOnly && (platform === 'darwin' || platform === 'mac')) {
-  const hostArch = os.arch() === 'arm64' ? 'arm64' : 'x64';
   console.log('\n  ▸ Native module architecture');
   const nativeModules = [
     {
@@ -228,12 +241,12 @@ if (!listOnly && (platform === 'darwin' || platform === 'mac')) {
   for (const mod of nativeModules) {
     if (!fs.existsSync(mod.path)) continue; // Already reported as missing above
     const binArch = getBinaryArch(mod.path);
-    const archOk = binArch === hostArch;
+    const archOk = binArch === targetArch;
     const icon = archOk ? '✓' : '✗';
-    console.log(`    ${icon} ${mod.name}: ${binArch} (host: ${hostArch})`);
+    console.log(`    ${icon} ${mod.name}: ${binArch} (target: ${targetArch})`);
     if (!archOk) {
       failed++;
-      console.error(`      → FATAL: ${mod.name} binary is ${binArch} but host is ${hostArch}`);
+      console.error(`      → FATAL: ${mod.name} binary is ${binArch} but target is ${targetArch}`);
       console.error(`      → The packaged app will crash on launch. Rebuild for the correct architecture.`);
     }
   }

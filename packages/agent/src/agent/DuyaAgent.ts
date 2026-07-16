@@ -143,6 +143,11 @@ import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
 import type { CompactOptions } from '../compact/types.js';
 
+export function filterToolsByAllowedTools(tools: Tool[], allowedTools: readonly string[]): Tool[] {
+  const allowedSet = new Set(allowedTools);
+  return tools.filter((tool) => allowedSet.has(tool.name));
+}
+
 function hasRunningBackgroundTasksForSession(parentSessionId?: string): boolean {
   if (!parentSessionId) return false
   return backgroundAgentLifecycle.getAll().some(
@@ -1698,11 +1703,16 @@ export class duyaAgent {
 
     // Layer 0: caller-supplied allowlist (interagent minimal mode)
     if (options?.allowedTools?.length) {
-      const allowedSet = new Set(options.allowedTools);
-      tools = tools.filter((t) => allowedSet.has(t.name));
+      tools = filterToolsByAllowedTools(tools, options.allowedTools);
       logger.info(
         `[Agent] streamChat: Filtered tools by allowedTools allowlist, ${tools.length}/${allTools.length} enabled`
       );
+      if (tools.length === 0) {
+        logger.warn(
+          `[Agent] streamChat: allowedTools allowlist matched zero tools. ` +
+          `Configured names: ${options.allowedTools.join(', ')}`
+        );
+      }
     }
 
     // Layer 1: caller-supplied denylist

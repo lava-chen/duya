@@ -67,15 +67,23 @@ interface MessageInputProps {
     displayContent?: string,
     conductorMode?: boolean,
   ) => void;
-  onCommand?: (command: string) => void;
+  onRecapRequest?: () => Promise<{
+    success: boolean;
+    recap: string | null;
+    error?: string;
+  }>;
   onStop?: () => void;
   disabled?: boolean;
   isStreaming?: boolean;
   hasQueuedMessages?: boolean;
   sessionId?: string;
   modelName?: string;
-  onModelChange?: (model: string) => void;
-  onProviderChange?: (providerId: string) => void;
+  /**
+   * The provider is resolved from the selected option at the same time as
+   * the model. Keeping the pair together prevents a model switch from being
+   * persisted with the previous provider.
+   */
+  onModelChange?: (model: string, providerId?: string) => void;
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
   permissionMode?: PermissionMode | null;
@@ -176,7 +184,7 @@ function EffortSelector({ value, onChange }: EffortSelectorProps) {
 
 export function MessageInput({
   onSend,
-  onCommand,
+  onRecapRequest,
   onStop,
   disabled = false,
   isStreaming = false,
@@ -184,7 +192,6 @@ export function MessageInput({
   sessionId,
   modelName,
   onModelChange,
-  onProviderChange,
   effort,
   onEffortChange,
   permissionMode = 'ask',
@@ -934,19 +941,10 @@ export function MessageInput({
 
   // Handle model change
   const handleModelChange = useCallback((modelId: string) => {
-    console.log('[MessageInput] handleModelChange called:', modelId);
     setSelectedModel(modelId);
-    onModelChange?.(modelId);
-    // Also notify parent about the provider ID for this model
     const providerId = modelProviderMap.get(modelId);
-    console.log('[MessageInput] providerId from map:', providerId, 'map size:', modelProviderMap.size);
-    if (providerId) {
-      console.log('[MessageInput] calling onProviderChange with:', providerId);
-      onProviderChange?.(providerId);
-    } else {
-      console.warn('[MessageInput] No providerId found for model:', modelId);
-    }
-  }, [onModelChange, onProviderChange, modelProviderMap]);
+    onModelChange?.(modelId, providerId);
+  }, [onModelChange, modelProviderMap]);
 
   // Handle effort change
   const handleEffortChange = useCallback((value: string) => {
@@ -965,6 +963,17 @@ export function MessageInput({
     },
     [adjustTextareaHeight, handleSlashInputChange],
   );
+
+  const requestRecap = useCallback(async () => {
+    if (onRecapRequest) {
+      return onRecapRequest();
+    }
+    if (!sessionId) {
+      return { success: false, recap: null, error: '暂无活动对话。' };
+    }
+    const result = await window.electronAPI?.recap.request(sessionId);
+    return result ?? { success: false, recap: null, error: '对话回顾不可用。' };
+  }, [onRecapRequest, sessionId]);
 
   const handlePasteEvent = useCallback(
     async (e: React.ClipboardEvent<HTMLDivElement>) => {
@@ -1132,7 +1141,7 @@ export function MessageInput({
           return;
         }
         if (cmd === '/recap') {
-          onCommand?.(cmd);
+          void requestRecap();
           clearDraft();
           setInputValue('');
           clearAttachments();
@@ -1171,7 +1180,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onCommand, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, permissionUpdatePending],
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, permissionUpdatePending, requestRecap],
   );
 
   const handleKeyDown = useCallback(
@@ -1298,14 +1307,7 @@ export function MessageInput({
             );
           }}
           onAddFiles={() => fileInputRef.current?.click()}
-          // Action commands (/recap)
-          onExecuteAction={(action) => {
-            if (onExecuteCommand) {
-              onExecuteCommand(action);
-            } else if (onCommand) {
-              onCommand(action);
-            }
-          }}
+          onRequestRecap={requestRecap}
           // Mode state (unified activeModes set, plan 224 Phase 5)
           activeModes={activeModes}
           onToggleMode={handleToggleMode}

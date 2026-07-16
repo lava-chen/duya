@@ -113,14 +113,10 @@ jobs:
         # Empty CSC_LINK (secret not set) makes electron-builder treat the
         # empty string as a certificate file path, failing with "not a file".
         # Unset empty signing vars and disable auto-discovery so the build
-        # proceeds unsigned instead of crashing. On macOS arm64 runners
-        # `electron-builder --mac` defaults to arch=x64; after-pack then
-        # cross-compiles better_sqlite3 from arm64 to x64, which
-        # verify-packaged-parity flags as FATAL (binary x64 but host arm64).
-        # Pinning --arm64 on arm64 runners and --x64 on Intel keeps the
-        # packaged binary aligned with the runner CPU and the verify step
-        # green. Apple Silicon (arm64) is the supported target; Intel Macs
-        # are no longer published from this CI matrix.
+        # proceeds unsigned instead of crashing. The macOS target config
+        # deliberately produces both arm64 and x64 artifacts from the Apple
+        # Silicon runner; afterPack receives the target architecture for each
+        # pass and rebuilds its native modules accordingly.
         run: |
           if [ -z "$CSC_LINK" ]; then
             unset CSC_LINK CSC_KEY_PASSWORD
@@ -130,13 +126,7 @@ jobs:
           [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && unset APPLE_APP_SPECIFIC_PASSWORD || true
           [ -z "$APPLE_TEAM_ID" ] && unset APPLE_TEAM_ID || true
           if [ "${{ matrix.platform }}" = "mac" ]; then
-            HOST_ARCH="$(uname -m)"
-            if [ "$HOST_ARCH" = "arm64" ]; then
-              ARCH_FLAG="--arm64"
-            else
-              ARCH_FLAG="--x64"
-            fi
-            npx electron-builder --mac $ARCH_FLAG --config electron-builder.yml --publish always
+            npx electron-builder --mac --config electron-builder.yml --publish always
           else
             npx electron-builder --config electron-builder.yml --publish always
           fi
@@ -146,7 +136,14 @@ jobs:
         # packaged app (catches afterPack path bugs that only manifest on
         # macOS where resources live inside the .app bundle).
         if: success() || failure()
-        run: node scripts/verify-packaged-parity.mjs
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            node scripts/verify-packaged-parity.mjs --platform mac --arch arm64
+            node scripts/verify-packaged-parity.mjs --platform mac --arch x64
+          else
+            node scripts/verify-packaged-parity.mjs
+          fi
 
       - name: Upload artifacts (fallback)
         if: failure()
