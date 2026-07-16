@@ -26,8 +26,14 @@ import {
 } from './denialTracking.js'
 import { classifyAction } from './yoloClassifier.js'
 import { recordAutoModeDenial } from './autoModeDenials.js'
+import { isAutoModeAllowlistedTool } from './classifierDecision.js'
 import type { LLMClient } from '../llm/base.js'
 import type { Message } from '../types.js'
+import { checkSecurity, isReadOnlyCommand } from '../tool/BashTool/BashTool.js'
+import {
+  checkPowerShellSecurity,
+  isReadOnlyPowerShellCommand,
+} from '../tool/PowerShellTool/security.js'
 import * as path from 'path'
 
 const PERMISSION_RULE_SOURCES = [
@@ -173,6 +179,22 @@ function createPermissionRequestMessage(
 const AUTO_REJECT_MESSAGE = (toolName: string) =>
   `Permission to use ${toolName} was denied. Permission prompts are not available in this context.`
 
+const LOW_RISK_BROWSER_OPERATIONS = new Set([
+  'navigate',
+  'snapshot',
+  'scroll',
+  'hover',
+  'wait',
+  'screenshot',
+  'go_back',
+  'parallel_fetch',
+  'tabs_list',
+  'tabs_new',
+  'tabs_close',
+  'tabs_select',
+  'close_window',
+]);
+
 export interface ToolPermissionCheckContext {
   getAppState: () => {
     toolPermissionContext: ToolPermissionContext
@@ -278,9 +300,23 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 6. Auto mode: use AI classifier instead of prompting user
+    // 6. Auto mode: locally allow clearly low-risk actions before invoking the
+    // LLM classifier. This keeps normal exploration such as `ls`, `pwd`,
+    // `git status`, `Get-ChildItem`, browser navigation, and browser snapshots
+    // from being rejected by an unavailable or overly conservative classifier.
     const isAutoMode = appState.toolPermissionContext.mode === 'auto';
+    if (isAutoMode && isLocallySafeAutoModeAction(toolName, input)) {
+      return {
+        behavior: 'allow',
+        decisionReason: {
+          type: 'safetyCheck',
+          reason: `${toolName} action is locally classified as low-risk in auto mode.`,
+          classifierApprovable: false,
+        },
+      };
+    }
 
+    // 7. Auto mode: use AI classifier instead of prompting user
     if (isAutoMode && context.llmClient && context.classifierModel) {
       const denialState =
         appState.denialTracking ??
@@ -378,6 +414,62 @@ function summarizeToolInput(toolName: string, input: Record<string, unknown>): s
     return `${toolName}: ${input.path}`;
   }
   return toolName;
+}
+
+function isLocallySafeAutoModeAction(
+  toolName: string,
+  input: Record<string, unknown>,
+): boolean {
+  if (isAutoModeAllowlistedTool(toolName)) {
+    return true;
+  }
+
+  if (isLowRiskBrowserOperation(toolName, input)) {
+    return true;
+  }
+
+  if (typeof input.command !== 'string') {
+    return false;
+  }
+
+  if (toolName === 'Bash' || toolName === 'bash') {
+    const securityResult = checkSecurity(input.command);
+    return (
+      securityResult.safe &&
+      !securityResult.requiresApproval &&
+      isReadOnlyCommand(input.command)
+    );
+  }
+
+  if (toolName === 'powershell' || toolName === 'PowerShell') {
+    const securityResult = checkPowerShellSecurity(input.command);
+    return (
+      securityResult.safe &&
+      !securityResult.requiresApproval &&
+      isReadOnlyPowerShellCommand(input.command)
+    );
+  }
+
+  return false;
+}
+
+function isLowRiskBrowserOperation(
+  toolName: string,
+  input: Record<string, unknown>,
+): boolean {
+  if (toolName !== 'browser') {
+    return false;
+  }
+
+  if (typeof input.operation !== 'string') {
+    return false;
+  }
+
+  if (input.operation === 'parallel_fetch' && typeof input.evaluate === 'string' && input.evaluate.trim()) {
+    return false;
+  }
+
+  return LOW_RISK_BROWSER_OPERATIONS.has(input.operation);
 }
 
 /**
