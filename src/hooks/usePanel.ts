@@ -281,6 +281,14 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   const panelStateRef = useRef<PersistedPanelState>(initial);
   panelStateRef.current = { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen };
 
+  // Tracks the active thread id for IPC handlers that are set up once but
+  // need to know whether an incoming agent-browser request belongs to the
+  // session the user is currently viewing.
+  const activeThreadIdRef = useRef(activeThreadId);
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
+
   const tabsRef = useRef<PageTab[]>(tabs);
   useEffect(() => {
     tabsRef.current = tabs;
@@ -301,7 +309,14 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
     const next = loadPersistedState(sessionKey, t) ?? emptyPanelState();
     currentSessionKeyRef.current = sessionKey;
-    setTabs(next.tabs);
+
+    // Live agent browser tabs belong to a running tool process, not to a
+    // conversation's saved layout. Destroying them on switch would unregister
+    // the webview from the daemon, so the agent's next browser command would
+    // fail (404) and re-create the tab in whatever session is now visible —
+    // popping the sidebar in the wrong session. Keep them mounted instead.
+    const preservedAgentTabs = tabsRef.current.filter(isTransientAgentBrowserTab);
+    setTabs([...next.tabs, ...preservedAgentTabs]);
     setActiveTabId(next.activeTabId);
     setPanelOpen(next.panelOpen);
     setPanelView(next.panelView);
@@ -399,11 +414,15 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   // the daemon sends 'browser:open-agent-tab' IPC to trigger tab creation.
   useEffect(() => {
     const cleanup = window.electronAPI?.browserWebview?.onOpenAgentTab((sessionId: string, focus: boolean) => {
+      const isActiveSession = sessionId === activeThreadIdRef.current;
       const existing = tabsRef.current.find(
         (tab) => tab.pageId === "browser" && tab.params?.kind === "agent" && tab.params.sessionId === sessionId,
       );
       if (existing) {
-        if (focus) openOrActivatePage("browser", existing.params);
+        // Only focus/open the sidebar when the agent belongs to the session
+        // the user is currently viewing. Other sessions' agent browsers stay
+        // mounted (so the tool keeps working) but never auto-open the sidebar.
+        if (focus && isActiveSession) openOrActivatePage("browser", existing.params);
         return;
       }
 
@@ -415,9 +434,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       const hasVisibleAgentBrowser = tabsRef.current.some(
         (tab) => tab.pageId === "browser" && tab.params?.kind === "agent",
       );
-      if (!focus && hasVisibleAgentBrowser) {
-        // Parallel investigations need real independent WebViews, but switching
-        // the active sidebar tab for every session makes the UI visibly flicker.
+      // Mount the webview without stealing the sidebar when:
+      //   - the agent runs in a session the user isn't viewing, OR
+      //   - the tool explicitly requested a background tab and one is already visible.
+      if (!isActiveSession || (!focus && hasVisibleAgentBrowser)) {
         setTabs((previous) => [...previous, {
           id: genId(),
           pageId: "browser",
@@ -596,6 +616,11 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     });
     const stopActivate = api?.onActivateAgentTab((sessionId, focus) => {
       if (!focus) return;
+      // The daemon sends activate on every browser command. Only steal the
+      // sidebar focus when the agent belongs to the session the user is
+      // viewing — otherwise the sidebar would pop open in every session the
+      // user switches to while a background agent is browsing.
+      if (sessionId !== activeThreadIdRef.current) return;
       const tab = findAgentTab(sessionId);
       if (tab) activateTab(tab.id);
     });
