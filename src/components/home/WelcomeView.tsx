@@ -124,12 +124,11 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     [selectedProject, createThread, onSelectThread, permissionMode, sessionModel, providerId, parseModelName]
   );
 
-  const handleModelChange = useCallback((model: string) => {
+  const handleModelChange = useCallback((model: string, nextProviderId?: string) => {
     setSessionModel(model);
-  }, []);
-
-  const handleProviderChange = useCallback((pid: string) => {
-    setProviderId(pid);
+    if (nextProviderId) {
+      setProviderId(nextProviderId);
+    }
   }, []);
 
   const handlePermissionModeChange = useCallback((mode: PermissionMode) => {
@@ -154,7 +153,6 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
               isStreaming={false}
               modelName={sessionModel}
               onModelChange={handleModelChange}
-              onProviderChange={handleProviderChange}
               permissionMode={permissionMode}
               onPermissionModeChange={handlePermissionModeChange}
               placeholder={t('chat.describeWhatToBuild')}

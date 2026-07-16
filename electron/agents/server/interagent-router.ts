@@ -73,7 +73,14 @@ export interface InteragentRouterDeps {
 }
 
 const MAX_CONCURRENT_WORKERS = 16;
-const MINIMAL_ALLOWED_TOOLS = ['Read', 'Grep', 'Glob'];
+// Tool names MUST match the lowercase names registered in the agent
+// registry (packages/agent/src/tool/*Tool.ts), since DuyaAgent._resolveTools
+// filters with a strict Set.has(t.name) comparison (DuyaAgent.ts:1702).
+// Previously this list was uppercase ('Read'/'Grep'/'Glob'), which caused
+// the minimal-mode filter to match zero tools, leaving the target agent
+// with an empty toolset and triggering a chat:error on first turn. The
+// caller surfaced this as "Tool result missing due to internal error".
+const MINIMAL_ALLOWED_TOOLS = ['read', 'grep', 'glob'];
 
 export interface InvokeParams {
   id: string;
@@ -334,6 +341,24 @@ export class InteragentRouter {
     this.subscribeToTargetStdout(targetSessionId, id, callerSessionId, child, onExit);
 
     // 8. Send chat:start with mode-based toolset filtering
+    // Pre-flight sanity check: catch a misconfigured MINIMAL_ALLOWED_TOOLS
+    // at the server side instead of waiting for the target worker to emit
+    // chat:error on first turn. If any entry in the allowlist is not
+    // lowercase, the strict Set.has() filter in DuyaAgent._resolveTools
+    // (DuyaAgent.ts:1702) will silently drop it, leaving the target with
+    // an empty toolset. Warn now so the regression is visible in
+    // worker.log without needing to attach a debugger.
+    if (mode === 'minimal') {
+      const nonLowercase = MINIMAL_ALLOWED_TOOLS.filter((n) => n !== n.toLowerCase());
+      if (nonLowercase.length > 0) {
+        workerLogger.warn(
+          'Interagent minimal mode: MINIMAL_ALLOWED_TOOLS contains non-lowercase entries. ' +
+          'These will not match the agent registry (Set.has is case-sensitive). ' +
+          'Offending names: ' + nonLowercase.join(', '),
+          { invokeId: id, targetSessionId },
+        );
+      }
+    }
     const chatStartCommand: Record<string, unknown> = {
       type: 'chat:start',
       sessionId: targetSessionId,

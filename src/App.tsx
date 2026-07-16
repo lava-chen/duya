@@ -31,9 +31,23 @@ type BootSplashPhase = StartupLandingPhase;
 const ACTIVE_LIKE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 const isActiveLike = (phase: StreamPhase) => ACTIVE_LIKE_PHASES.includes(phase);
 
+const DEFAULT_THREAD_TITLES = new Set(['New Thread', 'New Chat', '新对话', '开始新对话']);
+
+function deriveProvisionalTitle(content: string): string | null {
+  const normalized = content
+    .replace(/^\s*#{1,6}\s*/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length < 4) return null;
+  return normalized.slice(0, 48).trim();
+}
+
 function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
   const messages: Message[] = [];
   const now = Date.now();
+  const interruptedMetadata = snapshot.phase === 'aborted'
+    ? { interrupted: true }
+    : undefined;
 
   if (snapshot.streamingThinkingContent) {
     messages.push({
@@ -43,6 +57,7 @@ function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
       timestamp: now - 2,
       msgType: 'thinking',
       thinking: snapshot.streamingThinkingContent,
+      metadata: interruptedMetadata,
     });
   }
 
@@ -57,6 +72,7 @@ function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
       toolInput: toolUse.input ? JSON.stringify(toolUse.input) : null,
       tool_call_id: toolUse.id,
       name: toolUse.name,
+      metadata: interruptedMetadata,
     });
   }
 
@@ -70,6 +86,7 @@ function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
       parentToolCallId: result.tool_use_id,
       tool_call_id: result.tool_use_id,
       status: result.is_error ? 'error' : 'done',
+      metadata: interruptedMetadata,
     });
   }
 
@@ -80,6 +97,7 @@ function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
       role: 'assistant',
       content: textContent,
       timestamp: now,
+      metadata: interruptedMetadata,
     });
   }
 
@@ -162,6 +180,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     loadThreadMessages,
     isHydrated,
     markMessageInterrupted,
+    updateThreadTitle,
   } = useConversationStore();
   const { settings } = useSettings();
   const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
@@ -267,7 +286,9 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       // Do NOT call loadThreadMessages here — db_persisted event is the authoritative
       // signal that messages have been persisted and will trigger the DB reload.
       if (wasActive && !isActive) {
-        if (!snapshot.dbPersisted?.success) {
+        // An interrupt can race a successful persistence acknowledgement that
+        // only contains completed tool history, not the last streamed text.
+        if (snapshot.phase === 'aborted' || !snapshot.dbPersisted?.success) {
           const optimistic = buildOptimisticMessages(snapshot);
           if (optimistic.length > 0) {
             const store = useConversationStore.getState();
@@ -380,6 +401,10 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       // non-default provider still uses the active provider's config
       // and the user sees the active provider's rate-limit error.
       const activeThread = useConversationStore.getState().threads.find((t) => t.id === activeThreadId);
+      const provisionalTitle = deriveProvisionalTitle(plainContent);
+      if (activeThread && DEFAULT_THREAD_TITLES.has(activeThread.title) && provisionalTitle) {
+        updateThreadTitle(activeThreadId, provisionalTitle);
+      }
       const sessionProviderId = activeThread?.providerId;
       // Conductor canvas binding lives on the session row; read it here so
       // both enqueueMessage and startStream carry the durable canvasId.
@@ -479,7 +504,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         });
       });
     },
-    [activeThreadId, addMessage, settings.titleGenerationModel, wikiAgentEnabled],
+    [activeThreadId, addMessage, settings.titleGenerationModel, updateThreadTitle, wikiAgentEnabled],
   );
 
   const handleInterrupt = useCallback(() => {
@@ -495,7 +520,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       if (threadMessages && threadMessages.length > 0) {
         for (let i = threadMessages.length - 1; i >= 0; i--) {
           const m = threadMessages[i];
-          if (m.role === 'assistant') {
+          if (m.role === 'assistant'
+            && (!streamingSnapshot?.startedAt || m.timestamp >= streamingSnapshot.startedAt)) {
             markMessageInterrupted(activeThreadId, m.id);
             break;
           }
@@ -516,7 +542,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
 
     // First press while idle: no-op
     lastCancelTimeRef.current = now;
-  }, [activeThreadId, isStreaming, messages, markMessageInterrupted]);
+  }, [activeThreadId, isStreaming, messages, markMessageInterrupted, streamingSnapshot]);
 
   const threadMessages = activeThreadId ? (messages[activeThreadId] ?? []) : [];
   const chatEverMountedRef = useRef(false);
