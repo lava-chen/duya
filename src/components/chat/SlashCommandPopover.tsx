@@ -34,6 +34,18 @@ interface ThinkingEffortOption {
   description: string;
 }
 
+interface RecapRequestResult {
+  success: boolean;
+  recap: string | null;
+  error?: string;
+}
+
+type RecapViewState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'ready'; recap: string }
+  | { status: 'error'; error: string };
+
 const THINKING_EFFORT_OPTIONS: ThinkingEffortOption[] = [
   { value: null, label: 'Auto', description: 'Default thinking level' },
   { value: 'low', label: 'Low', description: 'Quick responses' },
@@ -64,8 +76,8 @@ interface SlashCommandPopoverProps {
   onToggleMcpServer: (name: string, enabled: boolean) => void;
   onAddFiles: () => void;
 
-  // Action commands (/recap)
-  onExecuteAction: (action: string) => void;
+  // Session action sub-views
+  onRequestRecap: () => Promise<RecapRequestResult>;
 
   // Mode state — unified activeModes set (plan 224 Phase 5).
   // Toggling a mode applies mutual-exclusion rules (see `toggleModeInSet`).
@@ -108,7 +120,7 @@ export function SlashCommandPopover({
   onToggleMcpServer,
   onAddFiles,
 
-  onExecuteAction,
+  onRequestRecap,
 
   activeModes,
   onToggleMode,
@@ -121,6 +133,7 @@ export function SlashCommandPopover({
   onFocusTextarea,
 }: SlashCommandPopoverProps) {
   const [subView, setSubView] = useState<SettingsSubmenu | null>(null);
+  const [recapState, setRecapState] = useState<RecapViewState>({ status: 'idle' });
   // The actual scrollable container is the outer .command-menu-popover div
   // (it owns overflow-y-auto + maxHeight). listboxRef points to that element
   // so we can keep selected rows visible without scrollIntoView side effects.
@@ -132,6 +145,23 @@ export function SlashCommandPopover({
   //              the highlighted row visible.
   const lastSelectSource = useRef<'mouse' | 'keyboard'>('mouse');
 
+  const requestRecap = useCallback(async () => {
+    setRecapState({ status: 'loading' });
+    try {
+      const result = await onRequestRecap();
+      if (result.success && result.recap) {
+        setRecapState({ status: 'ready', recap: result.recap });
+        return;
+      }
+      setRecapState({
+        status: 'error',
+        error: result.error ?? '无法生成对话回顾。',
+      });
+    } catch {
+      setRecapState({ status: 'error', error: '无法生成对话回顾。' });
+    }
+  }, [onRequestRecap]);
+
   // -----------------------------------------------------------------------
   // Item click handler — dispatches by kind
   // -----------------------------------------------------------------------
@@ -141,9 +171,10 @@ export function SlashCommandPopover({
         if (item.value === '__add_files') {
           onAddFiles();
           onClosePopover();
+        } else if (item.value === '/recap') {
+          setSubView('recap');
+          void requestRecap();
         } else {
-          // /recap
-          onExecuteAction(item.value);
           onClosePopover();
         }
         return;
@@ -179,7 +210,7 @@ export function SlashCommandPopover({
         onInsertItem(item);
         return;
     }
-  }, [onAddFiles, onClosePopover, onExecuteAction, onInsertItem, onToggleMode, activeModes]);
+  }, [onAddFiles, onClosePopover, onInsertItem, onToggleMode, activeModes, requestRecap]);
 
   // -----------------------------------------------------------------------
   // Keyboard handler (for main view only)
@@ -458,6 +489,7 @@ export function SlashCommandPopover({
       thinking: 'Thinking',
       style: 'Output style',
       mcp: 'MCP',
+      recap: '回顾对话',
     }[subView];
 
     return (
@@ -636,6 +668,39 @@ export function SlashCommandPopover({
                   </div>
                 );
               })
+            )}
+          </section>
+        )}
+
+        {subView === 'recap' && (
+          <section className="px-2.5 pb-2 pt-1">
+            {recapState.status === 'loading' && (
+              <div className="py-2 text-[12px]" role="status" style={{ color: 'var(--command-menu-muted)' }}>
+                正在生成回顾…
+              </div>
+            )}
+            {recapState.status === 'ready' && (
+              <div
+                className="py-1.5 text-[12px] leading-5 whitespace-pre-wrap"
+                style={{ color: 'var(--text)' }}
+              >
+                {recapState.recap}
+              </div>
+            )}
+            {recapState.status === 'error' && (
+              <div className="py-2 text-[12px]" role="alert" style={{ color: 'var(--danger)' }}>
+                {recapState.error}
+              </div>
+            )}
+            {recapState.status !== 'loading' && (
+              <button
+                type="button"
+                onClick={() => void requestRecap()}
+                className="command-menu-row mt-2 rounded-md px-2 py-1 text-[11px]"
+                style={{ color: 'var(--accent)' }}
+              >
+                {recapState.status === 'ready' ? '重新生成回顾' : '生成回顾'}
+              </button>
             )}
           </section>
         )}

@@ -19,7 +19,7 @@ export type PopoverItemKind =
 
 export type PopoverItemGroup = 'attachments' | 'mode' | 'settings' | 'skills';
 
-export type SettingsSubmenu = 'thinking' | 'style' | 'mcp';
+export type SettingsSubmenu = 'thinking' | 'style' | 'mcp' | 'recap';
 
 export interface PopoverItem {
   label: string;

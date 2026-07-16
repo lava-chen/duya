@@ -1533,6 +1533,10 @@ class StreamSessionManager {
           this.handleTokenUsageEvent(sessionId, streamId, event.data as { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number } | undefined);
           break;
 
+        case 'context_usage':
+          this.handleContextUsageEvent(sessionId, streamId, event.data as { usedTokens?: number; contextWindow?: number; percentFull?: number } | undefined);
+          break;
+
         case 'research_phase':
           this.handleResearchPhaseEvent(sessionId, event.data as { from: string; to: string; timestamp: number } | undefined);
           break;
@@ -1733,6 +1737,8 @@ class StreamSessionManager {
         this.handleTitleGeneratedEvent(state.sessionId, streamId, data as { title?: string });
       } else if (normalizedType === 'token_usage') {
         this.handleTokenUsageEvent(state.sessionId, streamId, data as { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number });
+      } else if (normalizedType === 'context_usage') {
+        this.handleContextUsageEvent(state.sessionId, streamId, data as { usedTokens?: number; contextWindow?: number; percentFull?: number });
       } else if (normalizedType === 'status') {
         this.handleStatusEvent(state.sessionId, streamId, data as { message?: string; status?: string });
       }
@@ -2552,6 +2558,27 @@ class StreamSessionManager {
     // assistant message, so this would attach usage to the *previous*
     // assistant. The authoritative token_usage is written by the agent
     // process when it persists the canonical assistant message.
+  }
+
+  private handleContextUsageEvent(
+    sessionId: string,
+    streamId: string,
+    data: { usedTokens?: number; contextWindow?: number; percentFull?: number } | undefined,
+  ): void {
+    const state = this.sessions.get(sessionId);
+    if (!state || !this.isCurrentStream(sessionId, streamId) || !data) return;
+
+    const contextWindow = data.contextWindow ?? 0;
+    const usedTokens = data.usedTokens ?? 0;
+    if (contextWindow <= 0 || usedTokens < 0) return;
+
+    state.contextUsage = {
+      usedTokens,
+      contextWindow,
+      percentFull: data.percentFull ?? (usedTokens / contextWindow) * 100,
+    };
+    this.notifyContextUsageListeners(sessionId, state.contextUsage);
+    this.notifyListeners(sessionId);
   }
 
   private handleDoneEvent(sessionId: string, streamId: string): void {
