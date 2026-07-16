@@ -1,10 +1,10 @@
 // ThinkingRow — collapsible row for the agent's "thinking" content.
 //
-// The summary is derived from the content: a leading bold span
-// (`**…**`) or first markdown heading wins, otherwise we fall back to
-// "Thinking..." (while streaming) or "Thought" (once stable). The
-// expanded body is a verbatim dump of the thinking content inside a
-// left-bordered block.
+// While streaming, the collapsed row shows a live preview of the actual
+// thinking text (paced by the adaptive typewriter) instead of a generic
+// "Thinking..." label. Clicking the row expands the full content inside a
+// left-bordered block. For stable rows we still prefer an explicit bold
+// span or heading as the summary, falling back to a one-line preview.
 
 'use client';
 
@@ -12,23 +12,44 @@ import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { BrainIcon, CaretRightIcon } from '@/components/icons';
 import { Shimmer } from '../../Shimmer';
+import { useAdaptiveTypewriter } from '@/hooks/useAdaptiveTypewriter';
 
 interface ThinkingRowProps {
   content: string;
   isStreaming?: boolean;
 }
 
+const PREVIEW_MAX_LENGTH = 120;
+
+function makePreview(text: string): string {
+  const plain = text
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (plain.length <= PREVIEW_MAX_LENGTH) return plain;
+  return plain.slice(0, PREVIEW_MAX_LENGTH).replace(/\s+\S*$/, '') + '…';
+}
+
 export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
 
+  const streamedContent = useAdaptiveTypewriter(content, !!isStreaming);
+  const previewSource = isStreaming ? streamedContent : content;
+
   const summary = (() => {
+    if (isStreaming) {
+      return makePreview(previewSource) || 'Thinking...';
+    }
     const boldMatch = content.match(/\*\*(.+?)\*\*/);
     if (boldMatch) return boldMatch[1];
     const headingMatch = content.match(/^#{1,4}\s+(.+)$/m);
     if (headingMatch) return headingMatch[1];
-    return isStreaming ? 'Thinking...' : 'Thought';
+    return makePreview(content) || 'Thought';
   })();
+
+  const displayedContent = isStreaming ? streamedContent : content;
 
   return (
     <div>
@@ -48,7 +69,11 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
           <BrainIcon size={14} className="shrink-0 text-muted-foreground" />
         )}
         <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
-          {isStreaming ? <Shimmer duration={1.5}>{summary}</Shimmer> : summary}
+          {isStreaming && summary === 'Thinking...' ? (
+            <Shimmer duration={1.5}>{summary}</Shimmer>
+          ) : (
+            summary
+          )}
         </span>
       </button>
       <AnimatePresence initial={false}>
@@ -61,7 +86,7 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
             style={{ overflow: 'hidden' }}
           >
             <div className="ml-4 px-2 py-1.5 text-xs text-muted-foreground/70 border-l-2 border-border/30 prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
-              {content}
+              {displayedContent}
             </div>
           </motion.div>
         )}
