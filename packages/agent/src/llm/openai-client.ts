@@ -11,6 +11,17 @@ import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
 import { extractToolInputPreview, hasToolInputPreview } from './tool-input-preview.js';
 
+const OPENAI_FUNCTION_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+/**
+ * OpenAI-compatible APIs reject a complete request when any function name
+ * contains unsupported characters. MCP tool names are external input, so only
+ * expose names that the wire protocol can represent.
+ */
+export function filterOpenAICompatibleTools(tools: Tool[]): Tool[] {
+  return tools.filter((tool) => OPENAI_FUNCTION_NAME_PATTERN.test(tool.name));
+}
+
 /**
  * Parse message content that may be stored as a stringified JSON array in the DB.
  * When messages are stored to DB, array content is JSON-stringified.
@@ -367,8 +378,23 @@ export class OpenAIClient implements LLMClient {
       signal?: AbortSignal;
     }
   ): AsyncGenerator<SSEEvent, void, unknown> {
-    // Determine if we should try tools based on whether tools are provided and supported
-    const shouldTryTools = options?.tools && options.tools.length > 0 && this.supportsTools !== false;
+    const requestedTools = options?.tools ?? [];
+    const compatibleTools = filterOpenAICompatibleTools(requestedTools);
+    const invalidToolNames = requestedTools
+      .filter((tool) => !OPENAI_FUNCTION_NAME_PATTERN.test(tool.name))
+      .map((tool) => tool.name);
+    if (invalidToolNames.length > 0) {
+      logger.warn(
+        '[OpenAIClient] Excluded tools with invalid OpenAI-compatible names',
+        { invalidToolNames },
+        'OpenAIClient',
+      );
+    }
+
+    // Determine if we should try tools based on whether any compatible tools
+    // are provided and supported. An invalid external MCP tool must not reject
+    // the entire model request.
+    const shouldTryTools = compatibleTools.length > 0 && this.supportsTools !== false;
 
     logger.info(`[OpenAIClient] streamChat started, model=${this.model}, shouldTryTools=${shouldTryTools}, supportsTools=${this.supportsTools}`, undefined, 'OpenAIClient');
 
@@ -389,7 +415,7 @@ export class OpenAIClient implements LLMClient {
 
     // Convert tools to OpenAI format
     const tools = shouldTryTools
-      ? options?.tools?.map((tool) => ({
+      ? compatibleTools.map((tool) => ({
           type: 'function' as const,
           function: {
             name: tool.name,
