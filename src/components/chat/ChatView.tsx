@@ -25,6 +25,8 @@ import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useMailboxStore } from '@/stores/mailbox-store';
+import { useShallow } from 'zustand/react/shallow';
+import type { MailboxRow } from '@/stores/mailbox-store';
 import type { FileAttachment } from '@/types/message';
 import { SubAgentPanel } from './SubAgentPanel';
 import { MailboxPanel } from './MailboxPanel';
@@ -199,6 +201,36 @@ export function ChatView({
   const setActiveThread = useConversationStore(s => s.setActiveThread);
   const deleteMessageAndAfter = useConversationStore(s => s.deleteMessageAndAfter);
   const sendMailbox = useMailboxStore(s => s.send);
+  const mailboxRows = useMailboxStore(
+    useShallow(state => state.getBySession(sessionId)),
+  );
+
+  // Mailbox rows are deliberately not persisted in the normal transcript
+  // until their checkpoint permits it. Render them as transient user bubbles
+  // meanwhile, so a queued or guided instruction is visible immediately.
+  const mailboxMessages = useMemo(() => {
+    const persistedMessageIds = new Set(messages.map(message => message.id));
+    const isVisible = (row: MailboxRow) => {
+      if (row.status === 'pending' || row.status === 'observed') return true;
+      return row.status === 'applied'
+        && isStreaming
+        && (!row.resultingUserMsgId || !persistedMessageIds.has(row.resultingUserMsgId));
+    };
+
+    return mailboxRows
+      .filter(isVisible)
+      .map((row): Message => ({
+        id: `mailbox-${row.id}`,
+        role: 'user',
+        content: row.content,
+        timestamp: row.createdAt,
+      }));
+  }, [isStreaming, mailboxRows, messages]);
+
+  const renderedMessages = useMemo(
+    () => [...messages, ...mailboxMessages],
+    [mailboxMessages, messages],
+  );
 
   const selectedProject = useMemo(() => {
     const thread = storeThreads.find(t => t.id === sessionId);
@@ -424,33 +456,24 @@ export function ChatView({
   }, [sessionProviderId, sessionModel, parseModelName]);
 
   // Handle model change - persist to session AND global settings
-  const handleModelChange = useCallback((model: string) => {
+  const handleModelChange = useCallback((model: string, providerId?: string) => {
     setSessionModel(model);
+    if (providerId) {
+      setSessionProviderId(providerId);
+    }
     // Save pure model name to session (parse UI format if needed).
     // The store action re-syncs the row to the DB, so the call below
     // covers what an inline updateThreadIPC used to do, plus the
     // in-memory store update that App.handleSendMessage reads.
     if (sessionId) {
       const { modelName } = parseModelName(model);
-      setThreadModel(sessionId, modelName, sessionProviderId);
+      setThreadModel(sessionId, modelName, providerId || sessionProviderId);
     }
     // Save to global settings for cross-session memory (keep UI format for display consistency)
     if (model) {
       saveSettings({ lastSelectedModel: model }).catch(console.error);
     }
   }, [sessionId, saveSettings, parseModelName, setThreadModel, sessionProviderId]);
-
-  // Handle provider change - persist provider ID to session.
-  // Mirror to the store so App.handleSendMessage reads the new
-  // providerId without an extra DB round-trip. Without this, the
-  // worker keeps using the previous provider's API key/baseURL even
-  // though the user just picked a different provider.
-  const handleProviderChange = useCallback((providerId: string) => {
-    if (sessionId && providerId) {
-      const { modelName } = parseModelName(sessionModel);
-      setThreadModel(sessionId, modelName, providerId);
-    }
-  }, [sessionId, sessionModel, parseModelName, setThreadModel]);
 
   // Handle permission mode change - persist to session.
   // 改为 async + 设置 permissionUpdatePending, 防止用户切 mode 后立即发送, 出现 row 未落库就发消息的竞态.
@@ -774,12 +797,18 @@ export function ChatView({
     });
   }, [sessionId, loadThreadMessages]);
 
-  const handleRecapCommand = useCallback(async (command: string) => {
-    if (command === '/recap' && sessionId) {
+  const requestRecap = useCallback(async () => {
+    if (!sessionId) {
+      return { success: false, recap: null, error: '暂无活动对话。' };
+    }
+    try {
       const result = await window.electronAPI?.recap.request(sessionId);
       if (result?.success && result.recap) {
         setRecap({ text: result.recap, receivedAt: Date.now(), sessionId });
       }
+      return result ?? { success: false, recap: null, error: '对话回顾不可用。' };
+    } catch {
+      return { success: false, recap: null, error: '生成对话回顾失败。' };
     }
   }, [sessionId]);
 
@@ -943,7 +972,7 @@ export function ChatView({
                   <SkillReviewIndicator sessionId={sessionId} />
                   <MessageInput
                     onSend={handleSend}
-                    onCommand={handleRecapCommand}
+                    onRecapRequest={requestRecap}
                     onStop={handleStop}
                     disabled={false}
                     isStreaming={isStreaming}
@@ -951,7 +980,6 @@ export function ChatView({
                     sessionId={sessionId}
                     modelName={sessionModel}
                     onModelChange={handleModelChange}
-                    onProviderChange={handleProviderChange}
                     effort={effort}
                     onEffortChange={setEffort}
                     permissionMode={permissionMode}
@@ -1001,7 +1029,7 @@ export function ChatView({
             )}
             <MessageList
               ref={messageListRef}
-              messages={messages}
+              messages={renderedMessages}
               isStreaming={isStreaming}
               onForceStop={handleStop}
               onScrollStateChange={handleScrollStateChange}
@@ -1080,7 +1108,7 @@ export function ChatView({
             ) : (
               <MessageInput
                 onSend={handleSend}
-                onCommand={handleRecapCommand}
+                onRecapRequest={requestRecap}
                 onStop={handleStop}
                 disabled={false}
                 isStreaming={isStreaming}
@@ -1088,7 +1116,6 @@ export function ChatView({
                 sessionId={sessionId}
                 modelName={sessionModel}
                 onModelChange={handleModelChange}
-                onProviderChange={handleProviderChange}
                 effort={effort}
                 onEffortChange={setEffort}
                 permissionMode={permissionMode}
@@ -1123,11 +1150,12 @@ export function ChatView({
               />
 
               {/* Right: Context Usage Ring */}
-              {messages.length > 0 && (
+              {(messages.length > 0 || contextUsage) && (
                 <ContextUsageRing
                   messages={messages}
                   modelName={sessionModel}
                   contextWindow={capabilityContextWindow}
+                  streamingContextUsage={contextUsage}
                   onCompress={handleCompact}
                   isCompacting={isCompacting}
                 />

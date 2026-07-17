@@ -39,6 +39,9 @@ function createSkillChip(skillName: string): HTMLSpanElement {
   chip.style.fontWeight = '700';
   chip.style.cursor = 'pointer';
   chip.style.userSelect = 'none';
+  // Treat the selected skill as one inline control rather than editable text.
+  // Backspace/Delete handling below removes this entire node at once.
+  chip.contentEditable = 'false';
   chip.dataset.skillChip = skillName;
   chip.title = `Open ${skillName} skill source`;
 
@@ -63,6 +66,35 @@ function createSkillChip(skillName: string): HTMLSpanElement {
     dispatchOpenSkillPreview(skillName);
   });
   return chip;
+}
+
+function getAdjacentSkillChip(
+  editor: HTMLDivElement,
+  direction: 'backward' | 'forward',
+): HTMLElement | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+
+  const range = selection.getRangeAt(0);
+  if (!range.collapsed || !editor.contains(range.endContainer)) return null;
+
+  let sibling: ChildNode | null = null;
+  if (range.endContainer === editor) {
+    sibling = direction === 'backward'
+      ? editor.childNodes[range.endOffset - 1] ?? null
+      : editor.childNodes[range.endOffset] ?? null;
+  } else if (range.endContainer.nodeType === Node.TEXT_NODE) {
+    const text = range.endContainer.textContent ?? '';
+    if (direction === 'backward' && range.endOffset === 0) {
+      sibling = range.endContainer.previousSibling;
+    } else if (direction === 'forward' && range.endOffset === text.length) {
+      sibling = range.endContainer.nextSibling;
+    }
+  }
+
+  return sibling instanceof HTMLElement && sibling.dataset.skillChip
+    ? sibling
+    : null;
 }
 
 // Extract user-typed text from the editable element.
@@ -155,6 +187,40 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       }
     }, [buildContent, onChange]);
 
+    const removeAdjacentSkillChip = useCallback((direction: 'backward' | 'forward'): boolean => {
+      const el = innerRef.current;
+      if (!el || !getAdjacentSkillChip(el, direction)) return false;
+
+      lastValue.current = '';
+      onChange('');
+      buildContent(el, '');
+      return true;
+    }, [buildContent, onChange]);
+
+    const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (
+        !disabled
+        && ((event.key === 'Backspace' && removeAdjacentSkillChip('backward'))
+          || (event.key === 'Delete' && removeAdjacentSkillChip('forward')))
+      ) {
+        event.preventDefault();
+        return;
+      }
+      onKeyDown(event);
+    }, [disabled, onKeyDown, removeAdjacentSkillChip]);
+
+    const handleBeforeInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
+      const inputType = (event.nativeEvent as InputEvent).inputType;
+      const direction = inputType === 'deleteContentBackward'
+        ? 'backward'
+        : inputType === 'deleteContentForward'
+          ? 'forward'
+          : null;
+      if (direction && !disabled && removeAdjacentSkillChip(direction)) {
+        event.preventDefault();
+      }
+    }, [disabled, removeAdjacentSkillChip]);
+
     const handleCompositionStart = useCallback(() => {
       isComposing.current = true;
     }, []);
@@ -178,7 +244,8 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
         suppressContentEditableWarning
         data-placeholder={placeholder || ''}
         onInput={handleInput}
-        onKeyDown={onKeyDown}
+        onBeforeInput={handleBeforeInput}
+        onKeyDown={handleKeyDown}
         onPaste={onPaste}
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}

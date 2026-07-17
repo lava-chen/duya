@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RichTextInput } from './RichTextInput';
 
 describe('RichTextInput slash highlighting', () => {
-  it('highlights a slash token as soon as it is typed', () => {
+  it('renders an exact slash token as a skill chip and removes it atomically', () => {
     const onChange = vi.fn();
     render(
       <RichTextInput
@@ -22,6 +22,19 @@ describe('RichTextInput slash highlighting', () => {
     fireEvent.input(input);
 
     expect(onChange).toHaveBeenCalledWith('/do');
-    expect(input.querySelector('[data-slash-command]')).toHaveTextContent('/do');
+    const skillChip = input.querySelector<HTMLElement>('[data-skill-chip="do"]');
+    expect(skillChip).not.toBeNull();
+    expect(skillChip?.contentEditable).toBe('false');
+
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(input, { key: 'Backspace' });
+
+    expect(onChange).toHaveBeenLastCalledWith('');
   });
 });
