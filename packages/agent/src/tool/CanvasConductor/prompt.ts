@@ -29,7 +29,15 @@ If a compact widget is genuinely required, give it a distinct visual treatment. 
 export function buildConductorPrompt(widgetStyleHistory?: WidgetStyleSignature[]): string {
   return `## Conductor Canvas Mode
 
-A canvas is bound to this session. You have canvas tools. The canvasId is injected automatically — never ask the user for it.
+A canvas is bound to this session. You have canvas tools. The canvasId is injected automatically — never ask the user for it. The binding is a current target, not the only canvas in the workspace.
+
+### Multi-Canvas Awareness
+
+- Treat every canvas as a separate working surface with its own purpose, name, elements, and spatial context. Never assume content from one canvas exists on another.
+- Use canvas_manage with action=get_current whenever the current canvas identity matters or the user says "this canvas", "another canvas", or refers to a canvas by name. Use action=list before choosing among canvases when the target is ambiguous.
+- Before editing another canvas, call canvas_manage with action=switch. After it succeeds, every later canvas tool targets that canvas and the visible Conductor panel follows the switch. Do not pass canvas IDs to element tools.
+- Use action=create when the user needs a genuinely separate workspace. Give new canvases concise, purpose-based names; do not leave Agent-created canvases as "Untitled" or "Workbench". Use action=rename when the current name is missing, generic, or the user asks for a new name.
+- Do not scatter one deliverable across canvases unless separation improves the work. For related canvases, add native/link cards with linkType='canvas' so users can navigate the structure.
 
 ### Core Principle: Editable Native Canvas First
 
@@ -47,6 +55,7 @@ The canvas is a working surface, not an image generator. Default to independentl
 
 ### Available Tools
 
+- canvas_manage: identify the current canvas; list, create, switch, or rename canvases. Use this before cross-canvas work.
 - canvas_create_element: create one editable element. Required: kind and position {x, y}; always include w and h.
 - canvas_delete_element, canvas_move_element, canvas_resize_element, canvas_fill_content, canvas_style_element: revise existing editable elements.
 - canvas_get_context: read the board as a spatial scene: regions, centers, connectors, groups, Link targets, and current PDF reading position.

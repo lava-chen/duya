@@ -621,7 +621,13 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           : (resultPatch?.changes as Record<string, unknown> | undefined)?.sourceCode) as
           | string
           | undefined;
-      if (patch.elementId && (configPatch !== undefined || vizSpecPatch !== undefined || sourceCodePatch !== undefined)) {
+      const metadataPatch =
+        (resultPatch?.metadata !== undefined
+          ? resultPatch.metadata
+          : (resultPatch?.changes as Record<string, unknown> | undefined)?.metadata) as
+          | CanvasElement['metadata']
+          | undefined;
+      if (patch.elementId && (configPatch !== undefined || vizSpecPatch !== undefined || sourceCodePatch !== undefined || metadataPatch !== undefined)) {
         const elementPatch: Partial<CanvasElement> = { updatedAt: Date.now() };
         if (configPatch !== undefined) {
           elementPatch.config = configPatch as Record<string, unknown>;
@@ -631,6 +637,9 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         }
         if (sourceCodePatch !== undefined) {
           (elementPatch as Record<string, unknown>).sourceCode = sourceCodePatch;
+        }
+        if (metadataPatch !== undefined) {
+          elementPatch.metadata = metadataPatch;
         }
         get().updateElement(patch.elementId as string, elementPatch);
         set({

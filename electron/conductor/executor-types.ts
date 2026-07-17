@@ -11,6 +11,7 @@ export type ExecutorAction =
   | 'canvas.find_empty_space'
   | 'canvas.auto_layout'
   | 'canvas.capture'
+  | 'canvas.manage'
   | 'element.create'
   | 'element.batch_create'
   | 'element.update'

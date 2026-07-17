@@ -155,7 +155,7 @@ export async function createNativeElement(
   style?: Record<string, unknown>,
 ): Promise<any> {
   const api = getConductorAPI();
-  if (!api) return;
+  if (!api) throw new Error("Conductor IPC is unavailable. Open the canvas in the DUYA desktop app.");
   return api.action({
     action: 'element.create_native',
     canvasId,

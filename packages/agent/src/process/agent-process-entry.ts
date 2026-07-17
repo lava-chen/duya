@@ -25,7 +25,13 @@ import { buildAttachmentContext } from '../llm/attachment-context.js';
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
 import type { Message, MessageContent, MCPServerConfig, Tool } from '../types.js';
-import { messageDb, pluginDb, settingDb, sessionDb } from '../ipc/db-client.js';
+import {
+  messageDb,
+  pluginDb,
+  settingDb,
+  sessionDb,
+  skillLearningDb,
+} from '../ipc/db-client.js';
 import { IncrementalSaveQueue } from './incremental-save-queue.js';
 import {
   enqueue,
@@ -64,6 +70,7 @@ import { detectModelCapability } from '../llm/model-capability-cache.js';
 import type { ProbeConfig } from '../llm/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
 import type { ToolExecutor } from '../tool/registry.js';
+import type { ImprovementResult } from '../self-improver/SelfImprover.js';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -345,7 +352,7 @@ function conductorIpcRequest<T = unknown>(
     const timeout = options?.timeout || 30000;
 
     // Unwrap { action, payload } from the ipc-request.ts helper.
-    const outerPayload = payload as { action?: string; payload?: unknown } | undefined;
+    const outerPayload = payload as { action?: string; payload?: unknown; sessionId?: string } | undefined;
     const action = outerPayload?.action ?? channel;
     const innerPayload = outerPayload?.payload ?? payload;
 
@@ -367,6 +374,7 @@ function conductorIpcRequest<T = unknown>(
       requestId,
       action,
       payload: innerPayload,
+      sessionId: outerPayload?.sessionId,
     });
   });
 }
@@ -880,6 +888,51 @@ async function initAgent(config: InitMessage['providerConfig'] | null | undefine
       .catch((err) => {
         log('[Agent-Process] Compaction persist failed:', err instanceof Error ? err.message : String(err));
       });
+  };
+
+  agent.onSkillReviewCompleted = async (result: ImprovementResult) => {
+    const evaluation = result.evaluationResult;
+    const status = result.finalSkillPath
+      ? 'published'
+      : result.error
+        ? 'failed'
+        : 'skipped';
+    let activityId: string | undefined;
+    try {
+      const stored = await skillLearningDb.create({
+        sessionId: sessionId!,
+        skillName: result.creatorResult?.skillName,
+        status,
+        reason: result.creatorResult?.reason ?? 'No reusable skill was created',
+        score: evaluation?.score,
+        feedback: evaluation?.feedback,
+        executedTask: evaluation?.executedTask,
+        dimensions: evaluation?.dimensions,
+        iterationCount: result.iterationCount,
+        maxIterations: result.maxIterations,
+        finalPath: result.finalSkillPath,
+        error: result.error,
+      }) as { id?: string };
+      activityId = stored.id;
+    } catch (error) {
+      log('[Agent-Process] Skill learning event persistence failed:', error);
+    }
+
+    sendToMain({
+      type: 'chat:skill_review_completed',
+      sessionId: sessionId!,
+      data: {
+        passed: status === 'published',
+        score: evaluation?.score ?? 0,
+        feedback: evaluation?.feedback ?? '',
+        iterations: result.iterationCount,
+        maxIterations: result.maxIterations,
+        finalPath: result.finalSkillPath,
+        skillName: result.creatorResult?.skillName,
+        error: result.error,
+        activityId,
+      },
+    });
   };
 
   if (setSandboxEnabled) {
