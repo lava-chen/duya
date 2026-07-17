@@ -3000,22 +3000,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           }
           break;
         }
-
-        case 'research:clarification:resolve': {
-          const { requestId, answers } = msg as unknown as { requestId: string; answers: Record<string, string> };
-          // Plan 224: Research mode now dispatches via modeModifierRegistry
-          // (orchestrator paradigm). The active ResearchMode instance is
-          // tracked in research-mode.ts, so resolveActiveResearchClarification
-          // tries the instance first, then falls back to the module-level
-          // pending map automatically.
-          const { resolveActiveResearchClarification } = await import('../modes/research-mode.js');
-          const resolved = resolveActiveResearchClarification(requestId, answers);
-          if (!resolved) {
-            warn('[Agent-Process] Research clarification resolution failed: no pending request found', requestId);
-          }
-          break;
-        }
-
     default:
       warn('[Agent-Process] Unknown message type:', msgType);
   }
