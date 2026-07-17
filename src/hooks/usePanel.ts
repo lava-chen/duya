@@ -44,7 +44,10 @@ const MIN_PANEL_WIDTH = 300;
 // windows. The real cap is the workspace ratio (see `MAX_PANEL_RATIO`).
 const MAX_PANEL_WIDTH = 1120;
 const DEFAULT_PANEL_WIDTH = 340;
-const MIN_CHAT_WIDTH = 680;
+// Allow the chat column to shrink further on small screens. The previous
+// 680px floor made the minimum window width too large when a side panel
+// was open; 420px keeps input readable while freeing horizontal space.
+const MIN_CHAT_WIDTH = 420;
 // The panel must not exceed this share of the workspace. Keeps the
 // chat column readable on both 1280px and 4K windows.
 const MAX_PANEL_RATIO = 0.6;

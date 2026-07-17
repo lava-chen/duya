@@ -1566,7 +1566,9 @@ a {
 
 .app-main-wrapper {
   flex: 1;
-  min-width: min(520px, 100%);
+  /* Match the new MIN_CHAT_WIDTH so the main column can shrink alongside
+     the chat area on small screens. */
+  min-width: min(420px, 100%);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -10241,9 +10243,10 @@ html[data-message-font-size="large"] .prose h3 {
   }
 }
 
-/* A browser needs 460px while chat keeps a 680px readable minimum. Below
-   their combined width, keep chat intact and let the browser float over it. */
-@container (max-width: 1140px) {
+/* The browser panel needs 460px while chat keeps a 420px minimum. When the
+   workspace is narrower than their combined width (880px), keep chat intact
+   and let the browser float over it. */
+@container (max-width: 879px) {
   .panel-zone-open[data-page-id="browser"]:not(.panel-zone-expanded) {
     position: absolute;
     z-index: 40;
@@ -12336,7 +12339,10 @@ html[data-message-font-size="large"] .prose h3 {
   }
 }
 
-@container (max-width: 980px) {
+/* When the workspace cannot fit the chat minimum plus the smallest panel
+   (420 + 300 = 720px), float the panel so the chat column never shrinks below
+   MIN_CHAT_WIDTH. */
+@container (max-width: 719px) {
   .panel-zone-open:not(.panel-zone-expanded) {
     position: absolute;
     z-index: 40;
