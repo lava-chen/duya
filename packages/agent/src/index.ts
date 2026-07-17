@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Public API for the @duya/agent package.
  *
  * This file is a pure barrel: it re-exports the public surface
@@ -207,35 +207,6 @@ export type {
   ClarificationQuestion,
   ClarificationAnswer,
 } from './modes/index.js';
-export {
-  OrchestratorPhase,
-  ResearchMode,
-  ResearchContext,
-  Orchestrator,
-} from './modes/research-mode/index.js';
-export { convertToSSEEvent } from './modes/research-mode/index.js';
-export type {
-  ExtendedResearchSSEEvent,
-  QueryComplexity,
-  SearchQueryType,
-  SearchStrategy,
-  AnswerQuality,
-  ResearchQuestion,
-  ResearchFinding,
-  FindingContradiction,
-  ResearchEntity,
-  ResearchStateSummary,
-  OrchestratorConfig,
-  OrchestratorDependencies,
-  EvidenceChain,
-  EvidenceNode,
-  DiffAnalysis,
-  DiffPoint,
-  ExportResult,
-  ShareLink,
-  ContinueResearchResult,
-  ResearchEvent,
-} from './modes/research-mode/index.js';
 
 export { duyaAgent, duyaAgent as default } from './agent/DuyaAgent.js';
 
