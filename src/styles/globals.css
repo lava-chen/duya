@@ -3387,14 +3387,12 @@ a {
   transform: translateX(-50%);
   min-width: 280px;
   max-width: 400px;
-  max-height: min(420px, calc(100vh - 12rem));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  background: var(--sidebar-bg);
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  padding: 0.4rem;
   z-index: 100;
+}
+
+.welcome-project-dropdown.option-panel--above {
+  top: auto;
+  bottom: calc(100% + 0.4rem);
 }
 
 .welcome-project-dropdown::-webkit-scrollbar {
