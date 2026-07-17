@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LinkContent } from "..//types/canvas-node";
+import { createPortal } from "react-dom";
+import type { LinkContent } from "../types/canvas-node";
 import { useConversationStore } from "@/stores/conversation-store";
-import { listCanvases } from "..//ipc/conductor-ipc";
+import { listCanvases } from "../ipc/conductor-ipc";
 
 type LinkType = LinkContent["linkType"];
 
@@ -13,358 +14,124 @@ interface LinkCreateDialogProps {
   onConfirm: (content: LinkContent) => void;
 }
 
-interface CanvasMeta {
-  id: string;
-  name: string;
-}
-
-interface SearchItem {
-  id: string;
-  type: LinkType;
-  title: string;
-  subtitle: string;
-  icon: string;
-}
+interface CanvasMeta { id: string; name: string; }
+interface SearchItem { id: string; type: LinkType; title: string; subtitle: string; }
 
 function looksLikeUrl(input: string): boolean {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return true;
-  // Loose URL heuristic: contains a dot and no spaces, e.g. example.com
-  if (/^[^\s]+\.[^\s]{2,}$/.test(trimmed)) return true;
-  return false;
+  const value = input.trim();
+  return value.startsWith("http://") || value.startsWith("https://") || /^[^\s]+\.[^\s]{2,}$/.test(value);
 }
 
 function normalizeUrl(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
-  return `https://${trimmed}`;
+  const value = input.trim();
+  return /^https?:\/\//.test(value) ? value : `https://${value}`;
+}
+
+function domainFromUrl(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+}
+
+function LinkGlyph({ type }: { type: LinkType }) {
+  const label = type === "url" ? "↗" : type === "canvas" ? "⌘" : "◌";
+  return <span className={`canvas-link-picker__glyph canvas-link-picker__glyph--${type}`}>{label}</span>;
 }
 
 const DUYA_LINK_RE = /^duya:\/\/(session|canvas)\/(.+)$/;
 
 function parseDuyaLink(input: string): { linkType: "session" | "canvas"; targetId: string } | null {
   const match = input.trim().match(DUYA_LINK_RE);
-  if (!match) return null;
-  const linkType = match[1];
-  if (linkType !== "session" && linkType !== "canvas") return null;
-  return { linkType, targetId: match[2] };
+  return match && (match[1] === "session" || match[1] === "canvas")
+    ? { linkType: match[1], targetId: match[2] }
+    : null;
 }
 
-export const LinkCreateDialog: React.FC<LinkCreateDialogProps> = ({
-  open,
-  onClose,
-  onConfirm,
-}) => {
+export const LinkCreateDialog: React.FC<LinkCreateDialogProps> = ({ open, onClose, onConfirm }) => {
   const [query, setQuery] = useState("");
   const [canvases, setCanvases] = useState<CanvasMeta[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const threads = useConversationStore((state) => state.threads);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [canvasBounds, setCanvasBounds] = useState<DOMRect | null>(null);
 
   useEffect(() => {
-    if (open) {
-      setQuery("");
-      setSelectedIndex(0);
-      window.setTimeout(() => inputRef.current?.focus(), 50);
-      listCanvases()
-        .then((list) => setCanvases(list.map((c) => ({ id: c.id, name: c.name }))))
-        .catch(() => setCanvases([]));
-    }
+    if (!open) return;
+    setQuery("");
+    setSelectedIndex(0);
+    window.setTimeout(() => inputRef.current?.focus(), 50);
+    listCanvases().then((list) => setCanvases(list.map((canvas) => ({ id: canvas.id, name: canvas.name })))).catch(() => setCanvases([]));
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const updateBounds = () => setCanvasBounds(document.querySelector(".canvas-area")?.getBoundingClientRect() ?? null);
+    updateBounds();
+    window.addEventListener("resize", updateBounds);
+    return () => window.removeEventListener("resize", updateBounds);
   }, [open]);
 
   const items = useMemo<SearchItem[]>(() => {
-    const trimmed = query.trim();
+    const term = query.trim().toLowerCase();
     const result: SearchItem[] = [];
-
-    // External URL option when the query looks like a URL.
-    if (trimmed && looksLikeUrl(trimmed)) {
-      const url = normalizeUrl(trimmed);
-      result.push({
-        id: "__url__",
-        type: "url",
-        title: trimmed,
-        subtitle: url,
-        icon: "🌐",
-      });
+    if (query.trim() && looksLikeUrl(query)) {
+      const url = normalizeUrl(query);
+      result.push({ id: "__url__", type: "url", title: domainFromUrl(url), subtitle: url });
     }
+    result.push(...canvases.filter((canvas) => !term || canvas.name.toLowerCase().includes(term)).map((canvas) => ({ id: canvas.id, type: "canvas" as const, title: canvas.name, subtitle: "Canvas" })));
+    result.push(...threads.filter((thread) => !term || (thread.title || "").toLowerCase().includes(term)).map((thread) => ({ id: thread.id, type: "session" as const, title: thread.title || "Untitled session", subtitle: "Conversation" })));
+    return result;
+  }, [canvases, query, threads]);
 
-    const lowerQuery = trimmed.toLowerCase();
+  useEffect(() => setSelectedIndex((index) => Math.min(index, Math.max(0, items.length - 1))), [items.length]);
+  useEffect(() => { listRef.current?.querySelector(`[data-index="${selectedIndex}"]`)?.scrollIntoView({ block: "nearest" }); }, [selectedIndex]);
 
-    // Canvas items.
-    const canvasItems: SearchItem[] = canvases
-      .filter((c) => !lowerQuery || c.name.toLowerCase().includes(lowerQuery))
-      .map((c) => ({
-        id: c.id,
-        type: "canvas",
-        title: c.name,
-        subtitle: "DUYA Canvas",
-        icon: "🎨",
-      }));
+  const selectItem = useCallback((item: SearchItem) => {
+    const duya = parseDuyaLink(query);
+    const content: LinkContent = duya
+      ? { linkType: duya.linkType, targetId: duya.targetId, title: item.title, expanded: true }
+      : item.type === "url"
+        ? { linkType: "url", url: item.subtitle, title: item.title, siteName: domainFromUrl(item.subtitle), expanded: false }
+        : { linkType: item.type, targetId: item.id, title: item.title, description: item.subtitle, expanded: true };
+    onConfirm(content);
+    onClose();
+  }, [onClose, onConfirm, query]);
 
-    // Session items.
-    const sessionItems: SearchItem[] = threads
-      .filter((t) => !lowerQuery || (t.title || "").toLowerCase().includes(lowerQuery))
-      .map((t) => ({
-        id: t.id,
-        type: "session",
-        title: t.title || "Untitled Session",
-        subtitle: "DUYA Session",
-        icon: "💬",
-      }));
-
-    return [...result, ...canvasItems, ...sessionItems];
-  }, [query, canvases, threads]);
-
-  useEffect(() => {
-    setSelectedIndex((prev) => Math.min(prev, Math.max(0, items.length - 1)));
-  }, [items.length]);
-
-  const handleSelect = useCallback(
-    (item: SearchItem) => {
-      const trimmed = query.trim();
-      const duya = trimmed ? parseDuyaLink(trimmed) : null;
-
-      let content: LinkContent;
-      if (duya) {
-        content = {
-          linkType: duya.linkType,
-          targetId: duya.targetId,
-          title: item.title,
-          expanded: false,
-        };
-      } else if (item.type === "url") {
-        content = {
-          linkType: "url",
-          url: item.subtitle,
-          title: item.title === item.subtitle ? undefined : item.title,
-          expanded: false,
-        };
-      } else {
-        content = {
-          linkType: item.type,
-          targetId: item.id,
-          title: item.title,
-          expanded: false,
-        };
-      }
-
-      onConfirm(content);
-      onClose();
-    },
-    [onConfirm, onClose, query]
-  );
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-        return;
-      }
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSelectedIndex((prev) => Math.min(prev + 1, items.length - 1));
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSelectedIndex((prev) => Math.max(prev - 1, 0));
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        const item = items[selectedIndex];
-        if (item) handleSelect(item);
-        return;
-      }
-    },
-    [items, onClose, selectedIndex, handleSelect]
-  );
-
-  useEffect(() => {
-    const selected = listRef.current?.querySelector(`[data-index="${selectedIndex}"]`);
-    if (selected) {
-      selected.scrollIntoView({ block: "nearest" });
-    }
-  }, [selectedIndex]);
+  const onKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (event.key === "Escape") { event.preventDefault(); onClose(); }
+    if (event.key === "ArrowDown") { event.preventDefault(); setSelectedIndex((index) => Math.min(index + 1, items.length - 1)); }
+    if (event.key === "ArrowUp") { event.preventDefault(); setSelectedIndex((index) => Math.max(index - 1, 0)); }
+    if (event.key === "Enter" && items[selectedIndex]) { event.preventDefault(); selectItem(items[selectedIndex]); }
+  }, [items, onClose, selectItem, selectedIndex]);
 
   if (!open) return null;
+  const groups: Array<{ title: string; type: LinkType; items: SearchItem[] }> = [
+    { title: "Paste a link", type: "url", items: items.filter((item) => item.type === "url") },
+    { title: "Canvases", type: "canvas", items: items.filter((item) => item.type === "canvas") },
+    { title: "Conversations", type: "session", items: items.filter((item) => item.type === "session") },
+  ];
 
-  return (
-    <div
-      className="conductor-confirmation-overlay"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <div
-        className="conductor-confirmation-dialog"
-        style={{
-          width: "min(90vw, 520px)",
-          padding: 0,
-          overflow: "hidden",
-          display: "flex",
-          flexDirection: "column",
-          maxHeight: "min(80vh, 560px)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "14px 16px",
-            borderBottom: "1px solid var(--conductor-border)",
-          }}
-        >
-          <span style={{ fontSize: 16, color: "var(--text-tertiary)" }}>🔍</span>
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Search canvases / sessions or paste a URL..."
-            style={{
-              flex: 1,
-              fontSize: 15,
-              background: "transparent",
-              border: "none",
-              outline: "none",
-              color: "var(--text-primary)",
-            }}
-          />
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: "50%",
-              border: "none",
-              background: "transparent",
-              color: "var(--text-tertiary)",
-              cursor: "pointer",
-              fontSize: 16,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </div>
-
-        <div
-          ref={listRef}
-          style={{
-            flex: 1,
-            overflow: "auto",
-            padding: "8px 0",
-          }}
-        >
-          {items.length === 0 && (
-            <div
-              style={{
-                padding: "24px 16px",
-                textAlign: "center",
-                color: "var(--text-tertiary)",
-                fontSize: 13,
-              }}
-            >
-              {query.trim() ? "No canvases, sessions, or URLs matched." : "Start typing to search."}
-            </div>
-          )}
-
-          {items.map((item, index) => {
-            const isSelected = index === selectedIndex;
-            return (
-              <button
-                key={`${item.type}-${item.id}`}
-                type="button"
-                data-index={index}
-                onClick={() => handleSelect(item)}
-                onMouseEnter={() => setSelectedIndex(index)}
-                style={{
-                  width: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "10px 16px",
-                  textAlign: "left",
-                  border: "none",
-                  background: isSelected ? "var(--conductor-accent-soft)" : "transparent",
-                  cursor: "pointer",
-                  transition: "background 0.12s ease",
-                }}
-              >
-                <span
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 14,
-                    flexShrink: 0,
-                    background: "var(--surface)",
-                    border: "1px solid var(--conductor-border)",
-                  }}
-                >
-                  {item.icon}
-                </span>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div
-                    style={{
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: "var(--text-primary)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {item.title}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "var(--text-tertiary)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {item.subtitle}
-                  </div>
-                </div>
-                {isSelected && (
-                  <span style={{ fontSize: 12, color: "var(--conductor-accent)" }}>↵</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        <div
-          style={{
-            padding: "8px 16px",
-            borderTop: "1px solid var(--conductor-border)",
-            fontSize: 12,
-            color: "var(--text-tertiary)",
-            display: "flex",
-            gap: 12,
-          }}
-        >
-          <span>↑↓ to navigate</span>
-          <span>↵ to select</span>
-          <span>Esc to close</span>
-        </div>
+  let globalIndex = 0;
+  const dialog = <div className="canvas-link-picker-overlay" style={canvasBounds ? { inset: "auto", left: canvasBounds.left, top: canvasBounds.top, width: canvasBounds.width, height: canvasBounds.height } : undefined} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="canvas-link-picker" role="dialog" aria-modal="true" aria-label="Create a canvas link" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="canvas-link-picker__input-row">
+        <span className="canvas-link-picker__search">⌕</span>
+        <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="Search canvases or paste a URL…" />
+        <button type="button" onClick={onClose} aria-label="Close link picker">×</button>
       </div>
+      <div className="canvas-link-picker__results" ref={listRef}>
+        {items.length === 0 ? <p className="canvas-link-picker__empty">No matching canvas or conversation.</p> : groups.map((group) => {
+          if (!group.items.length) return null;
+          return <section className="canvas-link-picker__group" key={group.type}><h2>{group.title}</h2>{group.items.map((item) => {
+            const index = globalIndex++;
+            const selected = index === selectedIndex;
+            return <button key={`${item.type}-${item.id}`} type="button" data-index={index} className={`canvas-link-picker__item${selected ? " is-selected" : ""}`} onMouseEnter={() => setSelectedIndex(index)} onClick={() => selectItem(item)}>
+              <LinkGlyph type={item.type} /><span><strong>{item.title}</strong><small>{item.subtitle}</small></span>{selected && <kbd>↵</kbd>}
+            </button>;
+          })}</section>;
+        })}
+      </div>
+      <footer><span>↑↓ Navigate</span><span>↵ Insert</span><span>Esc Close</span></footer>
     </div>
-  );
+  </div>;
+  return createPortal(dialog, document.body);
 };

@@ -2,13 +2,13 @@
  * Canvas Conductor tools — registration entry point.
  *
  * Thirteen tools for main-agent control of the conductor canvas:
- *   - canvas_create_element     : create a new sticky / image / file / connector / widget
- *   - canvas_batch_create       : create multiple elements + connectors in one call (with ref bindings)
+ *   - canvas_create_element     : create one native element at a time
  *   - canvas_delete_element     : delete an element by ID
  *   - canvas_move_element       : reposition (x, y)
  *   - canvas_resize_element     : resize (w, h)
  *   - canvas_fill_content       : merge-patch content fields (text, url, fileName)
  *   - canvas_style_element      : merge-patch visual style (color, fontSize, stroke)
+ *   - canvas_get_context        : read the board as a spatial scene and relationship map
  *   - canvas_list_elements      : list all elements as compact text tree (structured read)
  *   - canvas_find_empty_space   : find a non-overlapping position for a new element
  *   - canvas_auto_layout        : compute a layout PREVIEW (bin-pack / flow / viewport-aware)
@@ -27,13 +27,13 @@
 import type { ToolRegistry } from '../registry.js';
 import type { ToolRegistration } from '../../modes/types.js';
 import { definition as createDefinition, executor as createExecutor } from './CanvasCreateElementTool.js';
-import { definition as batchCreateDefinition, executor as batchCreateExecutor } from './CanvasBatchCreateTool.js';
 import { definition as deleteDefinition, executor as deleteExecutor } from './CanvasDeleteElementTool.js';
 import { definition as moveDefinition, executor as moveExecutor } from './CanvasMoveElementTool.js';
 import { definition as resizeDefinition, executor as resizeExecutor } from './CanvasResizeElementTool.js';
 import { definition as fillDefinition, executor as fillExecutor } from './CanvasFillContentTool.js';
 import { definition as styleDefinition, executor as styleExecutor } from './CanvasStyleElementTool.js';
 import { definition as listElementsDefinition, executor as listElementsExecutor } from './CanvasListElementsTool.js';
+import { definition as getContextDefinition, executor as getContextExecutor } from './CanvasGetContextTool.js';
 import { definition as findEmptySpaceDefinition, executor as findEmptySpaceExecutor } from './CanvasFindEmptySpaceTool.js';
 import { definition as captureDefinition, executor as captureExecutor } from './CanvasCaptureTool.js';
 import { definition as getKnowledgeDefinition, executor as getKnowledgeExecutor } from './CanvasGetKnowledgeTool.js';
@@ -56,12 +56,12 @@ import { definition as applyLayoutDefinition, executor as applyLayoutExecutor } 
 export function getCanvasConductorTools(): ToolRegistration[] {
   return [
     { definition: createDefinition, executor: createExecutor },
-    { definition: batchCreateDefinition, executor: batchCreateExecutor },
     { definition: deleteDefinition, executor: deleteExecutor },
     { definition: moveDefinition, executor: moveExecutor },
     { definition: resizeDefinition, executor: resizeExecutor },
     { definition: fillDefinition, executor: fillExecutor },
     { definition: styleDefinition, executor: styleExecutor },
+    { definition: getContextDefinition, executor: getContextExecutor },
     { definition: listElementsDefinition, executor: listElementsExecutor },
     { definition: findEmptySpaceDefinition, executor: findEmptySpaceExecutor },
     { definition: autoLayoutDefinition, executor: autoLayoutExecutor },
@@ -112,9 +112,9 @@ export {
   executor as canvasCaptureExecutor,
 } from './CanvasCaptureTool.js';
 export {
-  definition as canvasBatchCreateDefinition,
-  executor as canvasBatchCreateExecutor,
-} from './CanvasBatchCreateTool.js';
+  definition as canvasGetContextDefinition,
+  executor as canvasGetContextExecutor,
+} from './CanvasGetContextTool.js';
 export {
   definition as canvasListElementsDefinition,
   executor as canvasListElementsExecutor,

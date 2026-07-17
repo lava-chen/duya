@@ -43,6 +43,7 @@ import { binPack } from './layout/binPack';
 import { flowLayout } from './layout/flowLayout';
 import { viewportAwarePack } from './layout/viewport';
 import type { LayoutElement, LayoutResult } from './layout/types';
+import { prepareCanvasDocument, syncCanvasDocument } from './document-service';
 
 const ACTOR = 'agent';
 // Canvas bounds in *grid units* (1 unit = 80 px). The conductor canvas model
@@ -71,7 +72,10 @@ function applyDefaultDimensions(
   }
   const defaults: Record<string, { w: number; h: number }> = {
     'native/sticky': { w: 4, h: 3 },
+    'native/shape': { w: 4, h: 2 },
+    'native/document': { w: 6, h: 5 },
     'native/text': { w: 10, h: 2 },
+    'native/table': { w: 5, h: 1.5 },
     'native/image': { w: 5, h: 4 },
     'native/file': { w: 4, h: 3 },
     'native/link': { w: 4, h: 1 },
@@ -266,6 +270,51 @@ export class ConductorDbService {
     };
   }
 
+  /**
+   * A location-first canvas read for agents. Unlike a plain element list, this
+   * returns a compact spatial map and semantic edges so the model can make
+   * intentional placement decisions before it edits the board.
+   */
+  describeCanvasContext(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const canvasId = payload.canvasId as string;
+    const includeConfig = payload.includeConfig === true;
+    const snapshot = getCanvasSnapshot(canvasId);
+    if (!snapshot) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: `Canvas ${canvasId} not found` },
+      };
+    }
+
+    const elements = snapshot.elements;
+    const canvas = snapshot.canvas;
+    const spatialOverview = this.buildSpatialOverview(elements);
+    const relationships = this.buildRelationshipsMarkdown(elements);
+    const markdown = [
+      `# Canvas context: ${canvas.name}`,
+      canvas.description ? `Description: ${canvas.description}` : null,
+      'Coordinate system: 40 × 30 grid units. Origin is top-left; x grows right, y grows down.',
+      '',
+      spatialOverview,
+      '',
+      relationships,
+      '',
+      this.buildElementsMarkdown(elements, includeConfig),
+    ].filter(Boolean).join('\n');
+
+    return {
+      success: true,
+      result: {
+        canvasId,
+        markdown,
+        count: elements.length,
+        overlaps: this.detectOverlaps(elements),
+        spatialOverview,
+        relationships,
+      },
+    };
+  }
+
   findEmptySpace(payload: Record<string, unknown>): ExecutorRpcResponse {
     const canvasId = payload.canvasId as string;
     const preferredX = typeof payload.preferredX === 'number' ? payload.preferredX : 1;
@@ -350,7 +399,39 @@ export class ConductorDbService {
       }
       case 'native/file': {
         const name = typeof cfg.fileName === 'string' ? cfg.fileName : '';
-        return truncate(name, 60);
+        const page = typeof cfg.pdfPage === 'number' && Number.isFinite(cfg.pdfPage)
+          ? `, PDF page ${Math.max(1, Math.round(cfg.pdfPage))}`
+          : '';
+        return truncate(`${name}${page}`, 60);
+      }
+      case 'native/shape': {
+        const label =
+          (typeof cfg.text === 'string' && cfg.text) ||
+          (typeof cfg.label === 'string' && cfg.label) ||
+          (typeof cfg.content === 'string' && cfg.content) ||
+          'shape';
+        return truncate(label, 60);
+      }
+      case 'native/text': {
+        const text =
+          (typeof cfg.text === 'string' && cfg.text) ||
+          (typeof cfg.content === 'string' && cfg.content) ||
+          '';
+        return truncate(text, 60);
+      }
+      case 'native/document': {
+        const title =
+          (typeof cfg.title === 'string' && cfg.title) ||
+          (typeof cfg.fileName === 'string' && cfg.fileName) ||
+          (typeof cfg.content === 'string' && cfg.content) ||
+          'document';
+        return truncate(title, 60);
+      }
+      case 'native/table': {
+        const title = typeof cfg.title === 'string' && cfg.title ? cfg.title : 'Table';
+        const columns = Array.isArray(cfg.headers) ? cfg.headers.length : 3;
+        const rows = Array.isArray(cfg.rows) ? cfg.rows.length : 3;
+        return truncate(`${title} (${columns} columns × ${rows} rows)`, 60);
       }
       case 'native/connector': {
         const src = resolveConnectorEndpoint(cfg.source);
@@ -461,6 +542,10 @@ export class ConductorDbService {
    */
   private categorizeElement(kind: string): string {
     if (kind === 'native/sticky') return 'Stickies';
+    if (kind === 'native/shape') return 'Shapes';
+    if (kind === 'native/text') return 'Text';
+    if (kind === 'native/document') return 'Documents';
+    if (kind === 'native/table') return 'Tables';
     if (kind === 'native/connector') return 'Connectors';
     if (kind === 'native/image') return 'Images';
     if (kind === 'native/file') return 'Files';
@@ -483,7 +568,7 @@ export class ConductorDbService {
 
     const lines: string[] = [`## Canvas State (${elements.length} elements)\n`];
 
-    const categoryOrder = ['Stickies', 'Images', 'Files', 'Connectors', 'Widgets', 'Groups', 'Other'];
+    const categoryOrder = ['Stickies', 'Shapes', 'Text', 'Documents', 'Images', 'Files', 'Links', 'Connectors', 'Widgets', 'Groups', 'Other'];
     for (const cat of categoryOrder) {
       if (!byKind[cat] || byKind[cat].length === 0) continue;
       lines.push(`### ${cat} (${byKind[cat].length})`);
@@ -491,7 +576,8 @@ export class ConductorDbService {
         const pos = el.position as { x?: number; y?: number; w?: number; h?: number };
         const posStr = `${pos?.w ?? 0}x${pos?.h ?? 0} @ (${pos?.x ?? 0},${pos?.y ?? 0})`;
         const summary = this.summarizeElement(el.elementKind, el.config);
-        let line = `- ${el.id} [${posStr}] ${summary}`;
+        const location = this.describeLocation(pos);
+        let line = `- ${el.id} [${posStr}; ${location}] ${summary}`;
         if (includeConfig && el.config) {
           line += `\n  config: ${JSON.stringify(el.config)}`;
         }
@@ -501,6 +587,45 @@ export class ConductorDbService {
     }
 
     return lines.join('\n');
+  }
+
+  private describeLocation(position: { x?: number; y?: number; w?: number; h?: number }): string {
+    const centerX = (position.x ?? 0) + (position.w ?? 0) / 2;
+    const centerY = (position.y ?? 0) + (position.h ?? 0) / 2;
+    const column = centerX < 13.34 ? 'left' : centerX > 26.66 ? 'right' : 'center';
+    const row = centerY < 10 ? 'top' : centerY > 20 ? 'bottom' : 'middle';
+    return `${row}-${column}, center (${centerX.toFixed(1)}, ${centerY.toFixed(1)})`;
+  }
+
+  private buildRelationshipsMarkdown(elements: ConductorElement[]): string {
+    const labels = new Map(elements.map((element) => [
+      element.id,
+      this.summarizeElement(element.elementKind, element.config) || element.id,
+    ]));
+    const lines: string[] = ['## Relationships'];
+
+    for (const element of elements) {
+      const config = element.config || {};
+      if (element.elementKind === 'native/connector') {
+        const source = resolveConnectorEndpoint(config.source);
+        const target = resolveConnectorEndpoint(config.target);
+        const label = typeof config.label === 'string' && config.label ? ` (${config.label})` : '';
+        lines.push(`- connector${label}: ${source} [${labels.get(source) ?? 'unknown'}] → ${target} [${labels.get(target) ?? 'unknown'}]`);
+      }
+      if (element.elementKind === 'native/group') {
+        const memberIds = Array.isArray(config.memberIds)
+          ? config.memberIds.filter((id): id is string => typeof id === 'string')
+          : [];
+        lines.push(`- group ${element.id}: ${memberIds.map((id) => `${id} [${labels.get(id) ?? 'unknown'}]`).join(', ') || 'empty'}`);
+      }
+      if (element.elementKind === 'native/link') {
+        const target = typeof config.url === 'string' ? config.url : typeof config.targetId === 'string' ? config.targetId : 'unknown target';
+        const type = config.linkType === 'canvas' || config.linkType === 'session' ? config.linkType : 'url';
+        lines.push(`- link ${element.id}: ${type} → ${target}`);
+      }
+    }
+
+    return lines.length === 1 ? '## Relationships\n- No explicit connectors, groups, or links.' : lines.join('\n');
   }
 
   createElement(payload: Record<string, unknown>): ExecutorRpcResponse {
@@ -943,6 +1068,7 @@ export class ConductorDbService {
 
     const prevConfig = (prev.config as Record<string, unknown>) || {};
     const mergedConfig: Record<string, unknown> = { ...prevConfig, ...patch };
+    if (prev.elementKind === 'native/document') syncCanvasDocument(canvasId, mergedConfig);
     const now = Date.now();
     updateElementConfig(elementId, mergedConfig, now);
 
@@ -1255,7 +1381,10 @@ export class ConductorDbService {
     const parentId = payload.parentId as string | null | undefined;
 
     const elementKind = `native/${nodeType}`;
-    const config = { ...content, style };
+    const elementId = this.ensureUniqueElementId();
+    const config = nodeType === 'document'
+      ? { ...prepareCanvasDocument(canvasId, elementId, content), style }
+      : { ...content, style };
 
     const validation = validateElementInput(elementKind, position, config);
     if (!validation.valid) {
@@ -1267,7 +1396,6 @@ export class ConductorDbService {
 
     const defaultedPosition = applyDefaultDimensions(elementKind, position);
     const clampedPosition = clampPositionToCanvas(defaultedPosition, CANVAS_WIDTH_UNITS, CANVAS_HEIGHT_UNITS);
-    const elementId = this.ensureUniqueElementId();
     const now = Date.now();
     const nativeKind = nodeType;
     const metadata = {

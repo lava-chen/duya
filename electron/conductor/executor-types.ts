@@ -6,6 +6,10 @@
 
 export type ExecutorAction =
   | 'canvas.snapshot'
+  | 'canvas.describe_context'
+  | 'canvas.list_elements'
+  | 'canvas.find_empty_space'
+  | 'canvas.auto_layout'
   | 'canvas.capture'
   | 'element.create'
   | 'element.batch_create'

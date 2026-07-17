@@ -24,10 +24,128 @@ import {
   getConnectorEndpoint,
   getConnectorArrowGeometry,
   getPolylineMidpoint,
+  orthogonalizeElbowPoints,
+  snapConnectorEdgePosition,
+  simplifyOrthogonalPoints,
 } from "../..//domain/canvas/connector-renderer";
 
 const HIT_TARGET_WIDTH = 20;
 const DEFAULT_CONNECTOR_COLOR = "var(--text-secondary)";
+const ELBOW_STUB_LENGTH = 40;
+const ELBOW_CLEARANCE = 28;
+
+interface ObstacleBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function getConnectorObstacles(
+  elements: CanvasElement[],
+  sourceId: string,
+  targetId: string,
+): ObstacleBounds[] {
+  return elements
+    .filter((element) =>
+      element.id !== sourceId &&
+      element.id !== targetId &&
+      !element.elementKind.startsWith("native/connector") &&
+      !element.elementKind.startsWith("native/group"),
+    )
+    .map((element) => ({
+      left: element.position.x * GRID_PX - ELBOW_CLEARANCE,
+      top: element.position.y * GRID_PX - ELBOW_CLEARANCE,
+      right: (element.position.x + element.position.w) * GRID_PX + ELBOW_CLEARANCE,
+      bottom: (element.position.y + element.position.h) * GRID_PX + ELBOW_CLEARANCE,
+    }));
+}
+
+function routeIntersectsObstacle(points: Point[], obstacle: ObstacleBounds): boolean {
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    if (Math.abs(start.y - end.y) < 0.01) {
+      const left = Math.min(start.x, end.x);
+      const right = Math.max(start.x, end.x);
+      if (start.y > obstacle.top && start.y < obstacle.bottom && right > obstacle.left && left < obstacle.right) return true;
+    } else if (Math.abs(start.x - end.x) < 0.01) {
+      const top = Math.min(start.y, end.y);
+      const bottom = Math.max(start.y, end.y);
+      if (start.x > obstacle.left && start.x < obstacle.right && bottom > obstacle.top && top < obstacle.bottom) return true;
+    }
+  }
+  return false;
+}
+
+function routeLength(points: Point[]): number {
+  return points.slice(0, -1).reduce((length, point, index) =>
+    length + Math.hypot(points[index + 1].x - point.x, points[index + 1].y - point.y), 0);
+}
+
+type ConnectorDirection = NonNullable<ReturnType<typeof anchorToDirection>>;
+
+function getElbowStub(point: Point, direction: ConnectorDirection): Point {
+  switch (direction) {
+    case "left":
+      return { x: point.x - ELBOW_STUB_LENGTH, y: point.y };
+    case "right":
+      return { x: point.x + ELBOW_STUB_LENGTH, y: point.y };
+    case "up":
+      return { x: point.x, y: point.y - ELBOW_STUB_LENGTH };
+    case "down":
+      return { x: point.x, y: point.y + ELBOW_STUB_LENGTH };
+  }
+}
+
+function computePerpendicularDetour(
+  src: Point,
+  srcDir: ConnectorDirection,
+  tgt: Point,
+  tgtDir: ConnectorDirection,
+  lane: number,
+): Point[] {
+  const srcStub = getElbowStub(src, srcDir);
+  const tgtStub = getElbowStub(tgt, tgtDir);
+  const sourceHorizontal = srcDir === "left" || srcDir === "right";
+  return simplifyOrthogonalPoints(sourceHorizontal
+    ? [src, srcStub, { x: srcStub.x, y: lane }, { x: tgtStub.x, y: lane }, tgtStub, tgt]
+    : [src, srcStub, { x: lane, y: srcStub.y }, { x: lane, y: tgtStub.y }, tgtStub, tgt]);
+}
+
+function chooseElbowRoute(
+  src: Point,
+  srcDir: ReturnType<typeof anchorToDirection>,
+  tgt: Point,
+  tgtDir: ReturnType<typeof anchorToDirection>,
+  waypoints: Point[] | undefined,
+  obstacles: ObstacleBounds[],
+): Point[] {
+  const resolvedSrcDir = srcDir ?? autoDirection(src, tgt);
+  const resolvedTgtDir = tgtDir ?? autoDirection(tgt, src);
+  const fallback = computeElbowRoutePoints(src, resolvedSrcDir, tgt, resolvedTgtDir, waypoints, ELBOW_STUB_LENGTH);
+  if (waypoints?.length || obstacles.length === 0) return fallback;
+
+  const sourceHorizontal = resolvedSrcDir === "left" || resolvedSrcDir === "right";
+  const targetHorizontal = resolvedTgtDir === "left" || resolvedTgtDir === "right";
+  if (sourceHorizontal !== targetHorizontal) return fallback;
+  if (!obstacles.some((obstacle) => routeIntersectsObstacle(fallback, obstacle))) return fallback;
+
+  const endpointsAreAligned = sourceHorizontal
+    ? Math.abs(src.y - tgt.y) < 0.01
+    : Math.abs(src.x - tgt.x) < 0.01;
+  const laneCandidates = sourceHorizontal
+    ? obstacles.flatMap((obstacle) => endpointsAreAligned ? [obstacle.top, obstacle.bottom] : [obstacle.left, obstacle.right])
+    : obstacles.flatMap((obstacle) => endpointsAreAligned ? [obstacle.left, obstacle.right] : [obstacle.top, obstacle.bottom]);
+  const candidates = laneCandidates
+    .map((lane) => endpointsAreAligned
+      ? computePerpendicularDetour(src, resolvedSrcDir, tgt, resolvedTgtDir, lane)
+      : computeElbowRoutePoints(src, resolvedSrcDir, tgt, resolvedTgtDir, undefined, ELBOW_STUB_LENGTH, lane))
+    .filter((route) => !obstacles.some((obstacle) => routeIntersectsObstacle(route, obstacle)));
+
+  if (candidates.length === 0) return fallback;
+  return candidates.reduce((best, candidate) => routeLength(candidate) < routeLength(best) ? candidate : best);
+}
 
 export interface ConnectorComputedData {
   path: string;
@@ -71,7 +189,9 @@ interface ConnectorPathProps {
 }
 
 export function resolveConnectorRoutingMode(config: Record<string, unknown>): ConnectorRoutingMode {
-  return config.routingMode === "elbow" ? "elbow" : "curve";
+  // Connectors created before routingMode existed are diagram connectors too.
+  // Keep curves opt-in so persisted canvases do not silently become diagonal.
+  return config.routingMode === "curve" ? "curve" : "elbow";
 }
 
 export function resolveConnectorMarkers(config: Record<string, unknown>): {
@@ -105,8 +225,23 @@ function resolveEffectiveAnchor(
   const otherCenter = getAnchorPosition(otherNode, "center", elements);
   const halfWidth = Math.max(1, node.position.w * GRID_PX / 2);
   const halfHeight = Math.max(1, node.position.h * GRID_PX / 2);
-  const normalizedX = (otherCenter.x - center.x) / halfWidth;
-  const normalizedY = (otherCenter.y - center.y) / halfHeight;
+  const otherHalfWidth = Math.max(1, otherNode.position.w * GRID_PX / 2);
+  const otherHalfHeight = Math.max(1, otherNode.position.h * GRID_PX / 2);
+  const deltaX = otherCenter.x - center.x;
+  const deltaY = otherCenter.y - center.y;
+
+  // Diagram layers may be much farther apart horizontally than vertically
+  // (a parent with several children). When their bounds are vertically
+  // separated, bottom-to-top is the natural attachment and preserves a
+  // shared vertical trunk before the horizontal branch.
+  const verticalGap = Math.abs(deltaY) - halfHeight - otherHalfHeight;
+  if (verticalGap >= 24) return deltaY >= 0 ? "bottom" : "top";
+
+  const horizontalGap = Math.abs(deltaX) - halfWidth - otherHalfWidth;
+  if (horizontalGap >= 24) return deltaX >= 0 ? "right" : "left";
+
+  const normalizedX = deltaX / halfWidth;
+  const normalizedY = deltaY / halfHeight;
   if (Math.abs(normalizedX) >= Math.abs(normalizedY)) {
     return normalizedX >= 0 ? "right" : "left";
   }
@@ -121,9 +256,39 @@ function resolveAutoAttachment(
   const endpoint = connector.config[endpointRole] as ConnectorEndpoint | undefined;
   if (!endpoint) return null;
   const anchorId = resolveEffectiveAnchor(connector, endpointRole, elements);
-  if (Number.isFinite(endpoint.edgePosition)) {
-    return { anchorId, edgePosition: Math.max(0, Math.min(1, endpoint.edgePosition as number)) };
+  const explicitPosition = Number.isFinite(endpoint.edgePosition)
+    ? Math.max(0, Math.min(1, endpoint.edgePosition as number))
+    : null;
+
+  // Outgoing connections leave a node through the centre of their resolved
+  // side. Nearby explicit ports are clustered as well, so separately drawn
+  // elbows can converge into one shared trunk without overriding deliberate
+  // ports that are visibly far apart.
+  if (endpointRole === "source") {
+    const position = explicitPosition ?? 0.5;
+    if (resolveConnectorRoutingMode(connector.config) !== "elbow") {
+      return { anchorId, edgePosition: position };
+    }
+    const node = elements.find((element) => element.id === endpoint.nodeId);
+    const edgeLengthPx = node
+      ? (anchorId === "top" || anchorId === "bottom" ? node.position.w : node.position.h) * GRID_PX
+      : GRID_PX * 3;
+    const peerPositions = elements.flatMap((candidate) => {
+      if (candidate.elementKind !== "native/connector" || resolveConnectorRoutingMode(candidate.config) !== "elbow") return [];
+      const candidateEndpoint = candidate.config.source as ConnectorEndpoint | undefined;
+      if (!candidateEndpoint || candidateEndpoint.nodeId !== endpoint.nodeId) return [];
+      if (resolveEffectiveAnchor(candidate, "source", elements) !== anchorId) return [];
+      return [Number.isFinite(candidateEndpoint.edgePosition)
+        ? Math.max(0, Math.min(1, candidateEndpoint.edgePosition as number))
+        : 0.5];
+    });
+    return {
+      anchorId,
+      edgePosition: snapConnectorEdgePosition(position, peerPositions, edgeLengthPx),
+    };
   }
+
+  if (explicitPosition !== null) return { anchorId, edgePosition: explicitPosition };
 
   const peers: Array<{ connectorId: string; endpointRole: "source" | "target" }> = [];
   for (const candidate of elements) {
@@ -175,9 +340,15 @@ export function getComputedConnectorData(
     const waypoints = Array.isArray(connector.config.waypoints)
       ? connector.config.waypoints as Point[]
       : undefined;
-    const points = computeElbowRoutePoints(srcPoint, srcDir, tgtPoint, tgtDir, waypoints);
+    const obstacles = getConnectorObstacles(elements, sourceNode.id, targetNode.id);
+    // Guard the render boundary as well as the route builder. Persisted
+    // waypoints and future routing strategies must never be able to turn an
+    // elbow connector into a diagonal segment.
+    const points = orthogonalizeElbowPoints(
+      chooseElbowRoute(srcPoint, srcDir, tgtPoint, tgtDir, waypoints, obstacles),
+    );
     return {
-      path: computeRoundedElbowPath(points, Number(connector.config.cornerRadius ?? 14)),
+      path: computeRoundedElbowPath(points, Number(connector.config.cornerRadius ?? 12)),
       srcPoint,
       tgtPoint,
       sourceCenter,
@@ -243,18 +414,18 @@ function markerUrl(prefix: string, marker: ConnectorMarker): string | undefined 
 function ConnectorArrow({
   marker,
   tip,
-  center,
+  directionPoint,
   color,
   testId,
 }: {
   marker: ConnectorMarker;
   tip: Point;
-  center: Point;
+  directionPoint: Point;
   color: string;
   testId: string;
 }) {
   if (marker !== "arrow" && marker !== "open-arrow") return null;
-  const { left, right } = getConnectorArrowGeometry(tip, center);
+  const { left, right } = getConnectorArrowGeometry(tip, directionPoint);
   if (marker === "open-arrow") {
     return (
       <path
@@ -262,7 +433,7 @@ function ConnectorArrow({
         d={`M ${left.x} ${left.y} L ${tip.x} ${tip.y} L ${right.x} ${right.y}`}
         fill="none"
         stroke={color}
-        strokeWidth={2.2}
+        strokeWidth={2.6}
         strokeLinecap="round"
         strokeLinejoin="round"
         style={{ pointerEvents: "none" }}
@@ -299,7 +470,7 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   const targetEndpoint = connector.config.target as ConnectorEndpoint | undefined;
   const legacyStyle = connector.config.style as Record<string, unknown> | undefined;
   const stroke = (connector.config.color as string) || (legacyStyle?.stroke as string) || DEFAULT_CONNECTOR_COLOR;
-  const strokeWidth = 2.5;
+  const strokeWidth = 3.5;
   const strokeStyle = (connector.config.strokeStyle as "solid" | "dashed" | "dotted" | undefined) || "solid";
   const dashArray = strokeStyle === "dashed" ? "10 7" : strokeStyle === "dotted" ? "1 7" : undefined;
   const renderStroke = isSelected ? "var(--conductor-accent)" : stroke;
@@ -325,6 +496,18 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   );
 
   if (!computedData || !computedData.path || computedData.path.includes("NaN")) return null;
+  const sourceAdjacent = computedData.routingMode === "elbow"
+    ? computedData.elbowPoints?.[1]
+    : computedData.sourceControl;
+  const targetAdjacent = computedData.routingMode === "elbow"
+    ? computedData.elbowPoints?.[Math.max(0, (computedData.elbowPoints?.length ?? 1) - 2)]
+    : computedData.targetControl;
+  const sourceArrowDirectionPoint = sourceAdjacent
+    ? { x: computedData.srcPoint.x * 2 - sourceAdjacent.x, y: computedData.srcPoint.y * 2 - sourceAdjacent.y }
+    : computedData.sourceCenter;
+  const targetArrowDirectionPoint = targetAdjacent
+    ? { x: computedData.tgtPoint.x * 2 - targetAdjacent.x, y: computedData.tgtPoint.y * 2 - targetAdjacent.y }
+    : computedData.targetCenter;
   const labelWidth = Math.max(48, Math.min(220, label.length * 7.4 + 20));
   const elbowHandles = computedData.elbowPoints?.slice(0, -1).flatMap((point, segmentIndex) => {
     const next = computedData.elbowPoints?.[segmentIndex + 1];
@@ -367,8 +550,8 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
         markerEnd={markerUrl(markerPrefix, endMarker)}
         style={{ pointerEvents: "none", transition: "stroke var(--motion-duration-micro) var(--motion-smooth), stroke-width var(--motion-duration-micro) var(--motion-smooth)" }}
       />}
-      {renderVisuals && <ConnectorArrow marker={startMarker} tip={computedData.srcPoint} center={computedData.sourceCenter} color={renderStroke} testId="connector-start-arrow" />}
-      {renderVisuals && <ConnectorArrow marker={endMarker} tip={computedData.tgtPoint} center={computedData.targetCenter} color={renderStroke} testId="connector-end-arrow" />}
+      {renderVisuals && <ConnectorArrow marker={startMarker} tip={computedData.srcPoint} directionPoint={sourceArrowDirectionPoint} color={renderStroke} testId="connector-start-arrow" />}
+      {renderVisuals && <ConnectorArrow marker={endMarker} tip={computedData.tgtPoint} directionPoint={targetArrowDirectionPoint} color={renderStroke} testId="connector-end-arrow" />}
 
       {renderVisuals && label && (
         <g transform={`translate(${computedData.midPoint.x}, ${computedData.midPoint.y})`} style={{ pointerEvents: "none" }}>

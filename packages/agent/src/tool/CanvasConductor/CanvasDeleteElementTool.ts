@@ -29,11 +29,7 @@ export const definition: Tool = {
       elementId: {
         type: 'string',
         description:
-          'The ID of the element to delete. Obtain from canvas_list_elements, or use a ref from a canvas_batch_create you just made in this turn.',
-      },
-      ref: {
-        type: 'string',
-        description: 'Semantic ref name from a previous canvas_batch_create. Use this or elementId.',
+          'The ID of the element to delete. Obtain it from canvas_list_elements or from canvas_create_element in this turn.',
       },
     },
     required: [],
@@ -57,10 +53,7 @@ export const executor: ToolExecutor = {
       return noCanvasIdResult(TOOL_NAME);
     }
 
-    const resolved = resolveElementId(
-      { elementId: input.elementId as string | undefined, ref: input.ref as string | undefined },
-      context,
-    );
+    const resolved = resolveElementId({ elementId: input.elementId as string | undefined });
     if ('error' in resolved) {
       return {
         id: crypto.randomUUID(),

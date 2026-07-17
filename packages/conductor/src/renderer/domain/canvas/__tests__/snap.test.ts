@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { computeSnap } from '../snap';
 import {
   getConnectorArrowGeometry,
+  orthogonalizeElbowPoints,
+  snapConnectorEdgePosition,
   snapElbowSegmentCoordinate,
 } from '../connector-renderer';
 import type { CanvasElement } from '../../../types/conductor';
@@ -95,6 +97,27 @@ describe('computeSnap', () => {
 });
 
 describe('connector direct-manipulation geometry', () => {
+  it('clusters nearby ports onto one shared connector trunk', () => {
+    const peers = [0.48, 0.52];
+
+    expect(snapConnectorEdgePosition(0.48, peers, 320)).toBe(0.5);
+    expect(snapConnectorEdgePosition(0.52, peers, 320)).toBe(0.5);
+    expect(snapConnectorEdgePosition(0.72, peers, 320)).toBe(0.72);
+  });
+
+  it('repairs a diagonal persisted route into axis-aligned elbow segments', () => {
+    const points = orthogonalizeElbowPoints([
+      { x: 352, y: 566 },
+      { x: 489, y: 949 },
+    ]);
+
+    expect(points).toEqual([
+      { x: 352, y: 566 },
+      { x: 489, y: 566 },
+      { x: 489, y: 949 },
+    ]);
+  });
+
   it('snaps a dragged elbow segment exactly onto a nearby parallel route', () => {
     const result = snapElbowSegmentCoordinate(
       103,
@@ -127,8 +150,19 @@ describe('connector direct-manipulation geometry', () => {
       { x: 120, y: 50 },
     );
 
-    expect(geometry.left.x).toBe(91);
-    expect(geometry.right.x).toBe(91);
-    expect([geometry.left.y, geometry.right.y].sort((a, b) => a - b)).toEqual([45.4, 54.6]);
+    expect(geometry.left.x).toBe(89.5);
+    expect(geometry.right.x).toBe(89.5);
+    expect([geometry.left.y, geometry.right.y].sort((a, b) => a - b)).toEqual([44.5, 55.5]);
+  });
+
+  it('keeps the arrow base perpendicular to the final connector segment', () => {
+    const geometry = getConnectorArrowGeometry(
+      { x: 100, y: 100 },
+      { x: 100, y: 120 },
+    );
+
+    expect(geometry.left.y).toBe(89.5);
+    expect(geometry.right.y).toBe(89.5);
+    expect([geometry.left.x, geometry.right.x].sort((a, b) => a - b)).toEqual([94.5, 105.5]);
   });
 });

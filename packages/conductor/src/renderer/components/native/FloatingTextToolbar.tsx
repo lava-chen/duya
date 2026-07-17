@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { TextBolderIcon, TextItalicIcon, TextUnderlineIcon, TextStrikethroughIcon } from "@/components/icons";
 import {
   CapsuleToolbar,
@@ -70,14 +71,15 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
 
     const host = container.getBoundingClientRect();
     const toolbarWidth = toolbarRef.current?.offsetWidth ?? 220;
-    let x = rect.left + rect.width / 2 - toolbarWidth / 2 - host.left;
-    let y = rect.top - host.top - 48;
+    let x = rect.left + rect.width / 2 - toolbarWidth / 2;
+    let y = rect.top - 48;
 
-    // Clamp horizontally inside the sticky note.
-    x = Math.max(8, Math.min(x, host.width - toolbarWidth - 8));
+    // Clamp in viewport coordinates. The editor content may be visually
+    // rotated, but selection client rects are already viewport-relative.
+    x = Math.max(host.left + 8, Math.min(x, host.right - toolbarWidth - 8));
     // If there is not enough room above, show below the selection.
-    if (y < 8) {
-      y = rect.bottom - host.top + 8;
+    if (y < host.top + 8) {
+      y = rect.bottom + 8;
     }
 
     setPosition({ x, y });
@@ -137,13 +139,17 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
     refresh();
   }, [refresh]);
 
-  if (!visible) return null;
+  if (!visible || typeof document === "undefined") return null;
 
-  return (
-    <div ref={toolbarRef}>
+  return createPortal(
+    <div
+      ref={toolbarRef}
+      style={{ position: "fixed", left: position.x, top: position.y, zIndex: 100 }}
+    >
       <CapsuleToolbar
-        left={position.x}
-        top={position.y}
+        left={0}
+        top={0}
+        zoomAware={false}
         onMouseDown={(e) => e.preventDefault()}
       >
         <button
@@ -198,6 +204,7 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
           <TextStrikethroughIcon size={15} />
         </button>
       </CapsuleToolbar>
-    </div>
+    </div>,
+    document.body,
   );
 };

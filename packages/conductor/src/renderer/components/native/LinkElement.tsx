@@ -1,457 +1,146 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo } from "react";
-import type { CanvasElement } from "../..//types/conductor";
-import { useConductorStore } from "../..//stores/conductor-store";
-import { executeAction } from "../..//ipc/conductor-ipc";
+import type { CanvasElement } from "../../types/conductor";
+import { useConductorStore } from "../../stores/conductor-store";
+import { executeAction } from "../../ipc/conductor-ipc";
+import { getSnapshot } from "../../ipc/conductor-ipc";
 import { useConversationStore } from "@/stores/conversation-store";
 
 type LinkType = "url" | "session" | "canvas";
 
 interface ParsedLinkConfig {
-  linkType: LinkType;
-  title?: string;
-  description?: string;
-  url?: string;
-  faviconUrl?: string;
-  siteName?: string;
-  targetId?: string;
-  expanded: boolean;
+  linkType: LinkType; title?: string; description?: string; url?: string;
+  faviconUrl?: string; siteName?: string; targetId?: string; expanded: boolean;
   expandedSize?: { w: number; h: number };
 }
 
-const LINK_META: Record<
-  LinkType,
-  { icon: string; badge: string; gradient: string; accent: string }
-> = {
-  url: {
-    icon: "🌐",
-    badge: "External URL",
-    gradient: "linear-gradient(135deg, rgba(124,58,237,0.18), rgba(0,122,255,0.14))",
-    accent: "#7c3aed",
-  },
-  session: {
-    icon: "💬",
-    badge: "DUYA Session",
-    gradient: "linear-gradient(135deg, rgba(0,122,255,0.18), rgba(10,132,255,0.12))",
-    accent: "#007aff",
-  },
-  canvas: {
-    icon: "🎨",
-    badge: "DUYA Canvas",
-    gradient: "linear-gradient(135deg, rgba(34,197,94,0.16), rgba(0,122,255,0.12))",
-    accent: "#22c55e",
-  },
-};
+const LINK_LABEL: Record<LinkType, string> = { url: "External link", session: "Conversation", canvas: "Canvas" };
+
+function isExpandedSize(value: unknown): value is { w: number; h: number } {
+  if (!value || typeof value !== "object") return false;
+  const size = value as Record<string, unknown>;
+  return typeof size.w === "number" && typeof size.h === "number";
+}
 
 function parseLinkConfig(config: Record<string, unknown>): ParsedLinkConfig {
   const rawType = config.linkType;
-  const linkType: LinkType = rawType === "session" || rawType === "canvas" ? rawType : "url";
-  const expandedSize = isExpandedSize(config.expandedSize) ? config.expandedSize : undefined;
-
   return {
-    linkType,
+    linkType: rawType === "canvas" || rawType === "session" ? rawType : "url",
     title: typeof config.title === "string" ? config.title : undefined,
     description: typeof config.description === "string" ? config.description : undefined,
     url: typeof config.url === "string" ? config.url : undefined,
     faviconUrl: typeof config.faviconUrl === "string" ? config.faviconUrl : undefined,
     siteName: typeof config.siteName === "string" ? config.siteName : undefined,
     targetId: typeof config.targetId === "string" ? config.targetId : undefined,
-    expanded: config.expanded === true,
-    expandedSize,
+    expanded: typeof config.expanded === "boolean" ? config.expanded : rawType !== "url",
+    expandedSize: isExpandedSize(config.expandedSize) ? config.expandedSize : undefined,
   };
 }
 
-function isExpandedSize(value: unknown): value is { w: number; h: number } {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return typeof record.w === "number" && typeof record.h === "number";
-}
-
-function getDomainFromUrl(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
-
-function getDisplayTitle(config: ParsedLinkConfig): string {
+function domainFromUrl(url: string): string { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; } }
+function titleFor(config: ParsedLinkConfig): string {
   if (config.title) return config.title;
-  if (config.linkType === "url") {
-    if (config.url) return getDomainFromUrl(config.url);
-    return "External Link";
-  }
-  if (config.targetId) return config.targetId.slice(0, 8);
-  return config.linkType === "session" ? "Untitled Session" : "Untitled Canvas";
+  if (config.url) return domainFromUrl(config.url);
+  return config.targetId?.slice(0, 8) || `Untitled ${LINK_LABEL[config.linkType].toLowerCase()}`;
+}
+function metaFor(config: ParsedLinkConfig): string {
+  if (config.linkType === "url") return config.siteName || (config.url ? domainFromUrl(config.url) : "External URL");
+  return config.description || LINK_LABEL[config.linkType];
 }
 
-function getMetaLine(config: ParsedLinkConfig): string {
-  if (config.linkType === "url") {
-    return config.siteName || (config.url ? getDomainFromUrl(config.url) : "");
-  }
-  if (config.linkType === "session") {
-    return config.description || "DUYA session";
-  }
-  return config.description || "DUYA canvas";
+function LinkMark({ type, faviconUrl }: { type: LinkType; faviconUrl?: string }) {
+  if (type === "url" && faviconUrl) return <img className="canvas-link__favicon" src={faviconUrl} alt="" />;
+  return <span className={`canvas-link__mark canvas-link__mark--${type}`}>{type === "url" ? "↗" : type === "canvas" ? "⌘" : "◌"}</span>;
 }
 
-const chipBaseStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "7px 11px 7px 10px",
-  borderRadius: 999,
-  border: "1px solid var(--conductor-border)",
-  background: "var(--surface)",
-  boxShadow: "var(--shadow-resting)",
-  cursor: "pointer",
-  maxWidth: "100%",
-  transition: "background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease",
-};
+function CanvasLinkPreview({ canvasId, title }: { canvasId?: string; title: string }) {
+  const [elements, setElements] = React.useState<CanvasElement[]>([]);
 
-const iconBubbleStyle: React.CSSProperties = {
-  width: 22,
-  height: 22,
-  borderRadius: "50%",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 12,
-  flexShrink: 0,
-};
+  useEffect(() => {
+    if (!canvasId) return;
+    let cancelled = false;
+    getSnapshot(canvasId)
+      .then((snapshot) => {
+        const targetElements = (snapshot as (typeof snapshot & { elements?: CanvasElement[] }) | null)?.elements ?? [];
+        if (!cancelled) setElements(targetElements);
+      })
+      .catch(() => { if (!cancelled) setElements([]); });
+    return () => { cancelled = true; };
+  }, [canvasId]);
 
-const expandBtnStyle: React.CSSProperties = {
-  width: 18,
-  height: 18,
-  borderRadius: "50%",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 10,
-  color: "var(--text-tertiary)",
-  flexShrink: 0,
-  transition: "background 0.15s ease, color 0.15s ease",
-};
+  const bounds = useMemo(() => {
+    if (!elements.length) return { minX: 0, minY: 0, width: 1, height: 1 };
+    const minX = Math.min(...elements.map((item) => item.position.x));
+    const minY = Math.min(...elements.map((item) => item.position.y));
+    const maxX = Math.max(...elements.map((item) => item.position.x + item.position.w));
+    const maxY = Math.max(...elements.map((item) => item.position.y + item.position.h));
+    return { minX, minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+  }, [elements]);
 
-const buttonBaseStyle: React.CSSProperties = {
-  flex: 1,
-  fontSize: 12,
-  fontWeight: 600,
-  padding: "7px 10px",
-  borderRadius: "var(--radius-button)",
-  border: "1px solid var(--conductor-border)",
-  background: "var(--surface)",
-  color: "var(--text-primary)",
-  cursor: "pointer",
-  transition: "background 0.15s ease",
-};
+  return <div className="canvas-link__preview" aria-label={`${title} canvas preview`}>
+    <div className="canvas-link__preview-grid" />
+    {elements.slice(0, 40).map((item) => {
+      const left = ((item.position.x - bounds.minX) / bounds.width) * 72 + 14;
+      const top = ((item.position.y - bounds.minY) / bounds.height) * 64 + 18;
+      const width = Math.max(5, (item.position.w / bounds.width) * 72);
+      const height = Math.max(4, (item.position.h / bounds.height) * 64);
+      const kind = item.native_kind ?? item.elementKind.replace("native/", "");
+      return <span key={item.id} className={`canvas-link__preview-node canvas-link__preview-node--${kind}`} style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }} />;
+    })}
+    {!elements.length && <span className="canvas-link__preview-empty">Empty canvas</span>}
+    <span className="canvas-link__preview-stats">{elements.length} {elements.length === 1 ? "element" : "elements"}</span>
+  </div>;
+}
 
 export const LinkElement: React.FC<{ element: CanvasElement }> = ({ element }) => {
   const config = useMemo(() => parseLinkConfig(element.config), [element.config]);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
   const setActiveCanvas = useConductorStore((state) => state.setActiveCanvas);
   const setActiveThread = useConversationStore((state) => state.setActiveThread);
+  const title = titleFor(config);
+  const meta = metaFor(config);
 
-  const meta = LINK_META[config.linkType];
-  const title = getDisplayTitle(config);
-  const metaLine = getMetaLine(config);
-
-  const handleOpen = useCallback(() => {
-    if (config.linkType === "url") {
-      const url = config.url;
-      if (url) window.open(url, "_blank", "noopener,noreferrer");
-      return;
-    }
-    if (config.linkType === "canvas") {
-      if (config.targetId) setActiveCanvas(config.targetId);
-      return;
-    }
-    if (config.linkType === "session") {
-      if (config.targetId) setActiveThread(config.targetId);
-      return;
-    }
+  const open = useCallback(() => {
+    if (config.linkType === "url" && config.url) window.open(config.url, "_blank", "noopener,noreferrer");
+    if (config.linkType === "canvas" && config.targetId) setActiveCanvas(config.targetId);
+    if (config.linkType === "session" && config.targetId) setActiveThread(config.targetId);
   }, [config, setActiveCanvas, setActiveThread]);
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (event.target instanceof HTMLButtonElement) return;
+    event.preventDefault();
+    event.stopPropagation();
+    open();
+  }, [open]);
+  const copy = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    void navigator.clipboard.writeText(config.linkType === "url" ? config.url || "" : `duya://${config.linkType}/${config.targetId || ""}`);
+  }, [config]);
+  const toggle = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!activeCanvasId) return;
+    const expanded = !config.expanded;
+    const size = expanded ? config.expandedSize ?? (config.linkType === "url" ? { w: 5, h: 2 } : { w: 5, h: 4 }) : { w: 4, h: 1 };
+    void executeAction({ action: "element.update", elementId: element.id, canvasId: activeCanvasId, position: { ...element.position, ...size }, config: { ...element.config, expanded } });
+  }, [activeCanvasId, config.expanded, config.expandedSize, config.linkType, element.config, element.id, element.position]);
 
-  const handleCopy = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      const text =
-        config.linkType === "url"
-          ? config.url || ""
-          : `duya://${config.linkType}/${config.targetId || ""}`;
-      void navigator.clipboard.writeText(text);
-    },
-    [config]
-  );
-
-  const toggleExpanded = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (!activeCanvasId) return;
-
-      const nextExpanded = !config.expanded;
-      const nextPosition = nextExpanded
-        ? config.expandedSize ?? { w: 5, h: 4 }
-        : { w: 4, h: 1 };
-
-      executeAction({
-        action: "element.update",
-        elementId: element.id,
-        canvasId: activeCanvasId,
-        position: {
-          ...element.position,
-          ...nextPosition,
-        },
-        config: {
-          ...element.config,
-          expanded: nextExpanded,
-        },
-      }).catch(() => {});
-    },
-    [activeCanvasId, config.expanded, config.expandedSize, element.config, element.id, element.position]
-  );
-
-  // Persist the user's resized dimensions for the expanded state.
   useEffect(() => {
-    if (!config.expanded || !activeCanvasId) return;
+    if (!config.expanded || !activeCanvasId || (element.position.w === config.expandedSize?.w && element.position.h === config.expandedSize?.h)) return;
+    void executeAction({ action: "element.update", elementId: element.id, canvasId: activeCanvasId, config: { ...element.config, expandedSize: { w: element.position.w, h: element.position.h } } });
+  }, [activeCanvasId, config.expanded, config.expandedSize?.h, config.expandedSize?.w, element.config, element.id, element.position.h, element.position.w]);
 
-    const currentW = element.position.w;
-    const currentH = element.position.h;
-    const storedW = config.expandedSize?.w;
-    const storedH = config.expandedSize?.h;
+  if (!config.expanded) return <div className="canvas-link canvas-link--compact" role="link" tabIndex={0} onKeyDown={onKeyDown} onClick={(event) => { event.stopPropagation(); open(); }}>
+    <LinkMark type={config.linkType} faviconUrl={config.faviconUrl} /><span className="canvas-link__compact-title">{title}</span><span className="canvas-link__compact-meta">{meta}</span>
+    <button type="button" aria-label="Expand link card" onClick={toggle}>⌄</button>
+  </div>;
 
-    if (
-      typeof currentW !== "number" ||
-      typeof currentH !== "number" ||
-      (currentW === storedW && currentH === storedH)
-    ) {
-      return;
-    }
-
-    executeAction({
-      action: "element.update",
-      elementId: element.id,
-      canvasId: activeCanvasId,
-      config: {
-        ...element.config,
-        expandedSize: { w: currentW, h: currentH },
-      },
-    }).catch(() => {});
-  }, [
-    activeCanvasId,
-    config.expanded,
-    config.expandedSize?.h,
-    config.expandedSize?.w,
-    element.config,
-    element.id,
-    element.position.h,
-    element.position.w,
-  ]);
-
-  const chipStyle: React.CSSProperties = {
-    ...chipBaseStyle,
-    borderColor: config.expanded ? meta.accent : "var(--conductor-border)",
-  };
-
-  const chipIconStyle: React.CSSProperties = {
-    ...iconBubbleStyle,
-    background: `${meta.accent}1F`,
-  };
-
-  if (!config.expanded) {
-    return (
-      <div
-        className="w-full h-full flex items-center"
-        style={{ padding: "0 4px" }}
-      >
-        <div
-          className="link-chip"
-          style={chipStyle}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleOpen();
-          }}
-          onMouseEnter={(e) => {
-            const target = e.currentTarget as HTMLDivElement;
-            target.style.background = "var(--element-bg)";
-            target.style.boxShadow = "var(--shadow-hovering)";
-            target.style.borderColor = meta.accent;
-          }}
-          onMouseLeave={(e) => {
-            const target = e.currentTarget as HTMLDivElement;
-            target.style.background = "var(--surface)";
-            target.style.boxShadow = "var(--shadow-resting)";
-            target.style.borderColor = "var(--conductor-border)";
-          }}
-        >
-          <span style={chipIconStyle}>{meta.icon}</span>
-          <span
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: "var(--text-primary)",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {title}
-          </span>
-          <button
-            type="button"
-            aria-label="Expand"
-            style={expandBtnStyle}
-            onClick={toggleExpanded}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = meta.accent;
-              e.currentTarget.style.background = `${meta.accent}1F`;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = "var(--text-tertiary)";
-              e.currentTarget.style.background = "transparent";
-            }}
-          >
-            ▾
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="w-full h-full flex flex-col overflow-hidden"
-      style={{
-        background: "var(--element-bg)",
-        border: `1px solid ${meta.accent}`,
-        borderRadius: "var(--radius-element)",
-        boxShadow: "var(--shadow-hovering)",
-      }}
-    >
-      <div
-        style={{
-          height: 80,
-          background: meta.gradient,
-          position: "relative",
-          display: "flex",
-          alignItems: "flex-end",
-          padding: "12px 14px",
-          flexShrink: 0,
-        }}
-      >
-        <button
-          type="button"
-          aria-label="Collapse"
-          onClick={toggleExpanded}
-          style={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            width: 24,
-            height: 24,
-            borderRadius: "50%",
-            border: "none",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(255,255,255,0.85)",
-            color: "#1d1d1f",
-            fontSize: 14,
-            cursor: "pointer",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-          }}
-        >
-          ×
-        </button>
-        <span
-          style={{
-            position: "absolute",
-            top: 10,
-            left: 10,
-            background: "rgba(255,255,255,0.92)",
-            color: "#1d1d1f",
-            fontSize: 11,
-            fontWeight: 700,
-            padding: "3px 8px",
-            borderRadius: 6,
-            boxShadow: "0 1px 2px rgba(0,0,0,0.08)",
-          }}
-        >
-          {meta.badge}
-        </span>
-        <span
-          style={{
-            ...iconBubbleStyle,
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            fontSize: 20,
-            marginRight: 12,
-            background: "rgba(255,255,255,0.92)",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.08)",
-          }}
-        >
-          {meta.icon}
-        </span>
-        <span
-          style={{
-            fontSize: 16,
-            fontWeight: 700,
-            color: "#fff",
-            textShadow: "0 1px 3px rgba(0,0,0,0.25)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {title}
-        </span>
-      </div>
-
-      <div className="flex-1 min-h-0 flex flex-col" style={{ padding: 14 }}>
-        <div
-          style={{
-            fontSize: 13,
-            color: "var(--text-secondary)",
-            lineHeight: 1.5,
-            marginBottom: 12,
-            overflow: "hidden",
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
-          }}
-        >
-          {config.description || metaLine || "No description provided."}
-        </div>
-        <div
-          style={{
-            fontSize: 12,
-            color: "var(--text-tertiary)",
-            marginBottom: 14,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {meta.icon} {metaLine}
-        </div>
-        <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
-          <button
-            type="button"
-            style={{ ...buttonBaseStyle, background: meta.accent, color: "#fff", borderColor: meta.accent }}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleOpen();
-            }}
-          >
-            Open
-          </button>
-          <button type="button" style={buttonBaseStyle} onClick={handleCopy}>
-            Copy
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  const isInternal = config.linkType !== "url";
+  return <article className={`canvas-link canvas-link--expanded canvas-link--${config.linkType}`} role="link" tabIndex={0} onKeyDown={onKeyDown} onClick={(event) => { event.stopPropagation(); open(); }}>
+    {config.linkType === "canvas" && <CanvasLinkPreview canvasId={config.targetId} title={title} />}
+    {isInternal && config.linkType === "session" && <div className="canvas-link__preview canvas-link__preview--session" aria-hidden="true"><span className="canvas-link__preview-empty">Conversation</span></div>}
+    <header><LinkMark type={config.linkType} faviconUrl={config.faviconUrl} /><div><span className="canvas-link__eyebrow">{LINK_LABEL[config.linkType]}</span><h3>{title}</h3><p>{meta}</p></div><button type="button" aria-label="Collapse link card" onClick={toggle}>⌃</button></header>
+    {config.description && config.linkType === "url" && <p className="canvas-link__description">{config.description}</p>}
+    <footer><button type="button" onClick={copy}>Copy link</button><span>↗ Open</span></footer>
+  </article>;
 };

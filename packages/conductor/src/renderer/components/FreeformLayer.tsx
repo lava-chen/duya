@@ -38,6 +38,11 @@ const FreeformItem = memo(function FreeformItem({
   onPositionChange,
   onDeleteElement,
 }: FreeformItemProps) {
+  // Native elements provide their own selection chrome. Keeping a second
+  // wrapper outline here caused the blue glow to sit underneath their
+  // purple handles and made one selection look like two competing states.
+  const showWrapperSelection = selected && !element.elementKind.startsWith("native/");
+
   return (
     <div
       id={`native-el-${element.id}`}
@@ -51,13 +56,20 @@ const FreeformItem = memo(function FreeformItem({
         width: gridUnitsToPx(element.position.w),
         height: gridUnitsToPx(element.position.h),
         zIndex: element.position.zIndex,
-        transform: `rotate(${element.position.rotation ?? 0}deg)`,
+        // Native cards own a separate visual layer below their interaction
+        // chrome. Rotating this outer box also rotated the selection bounds,
+        // resize handles, toolbar and text-edit hit area. Keep native layout
+        // coordinates stable and let NativeChrome rotate only its content.
+        // Non-native widgets still own their complete visual chrome here.
+        transform: element.elementKind.startsWith("native/")
+          ? undefined
+          : `rotate(${element.position.rotation ?? 0}deg)`,
         cursor: readOnly ? "default" : "grab",
         userSelect: editing ? "text" : "none",
-        outline: selected ? "2px solid var(--accent)" : "none",
-        outlineOffset: selected ? "3px" : 0,
-        boxShadow: selected ? "0 0 0 6px var(--accent-soft)" : undefined,
-        borderRadius: selected ? 14 : undefined,
+        outline: showWrapperSelection ? "2px solid var(--accent)" : "none",
+        outlineOffset: showWrapperSelection ? "3px" : 0,
+        boxShadow: showWrapperSelection ? "0 0 0 6px var(--accent-soft)" : undefined,
+        borderRadius: showWrapperSelection ? 14 : undefined,
         pointerEvents: "auto",
       }}
     >
