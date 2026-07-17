@@ -5,9 +5,7 @@
 import React, { useEffect, useRef, useMemo, useCallback, forwardRef, useImperativeHandle, useLayoutEffect, useState } from 'react';
 import type { Message } from '@/types';
 import { MessageItem } from './MessageItem';
-import { ResearchModePanel } from './research-mode';
 import { StreamingMessage } from './StreamingMessage';
-import { useResearchSession } from '@/hooks/useResearchSession';
 
 export interface MessageListRef {
   scrollToBottom: () => void;
@@ -706,13 +704,6 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   );
 
   const shouldRenderStreamingMessage = isStreaming;
-  const researchSnapshot = useResearchSession(sessionId);
-  const shouldRenderResearchPanel = researchSnapshot.mode === 'research'
-    && (researchSnapshot.active
-      || researchSnapshot.stage === 'complete'
-      || researchSnapshot.stage === 'error'
-      || researchSnapshot.planQuestions.length > 0
-      || !!researchSnapshot.reportText);
 
   // Track session changes and reset scroll state
   useEffect(() => {
@@ -824,13 +815,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       hasScrolledOnMountRef.current = true;
       // Show content after scroll is done — layout is correct now
       setIsInitialLoading(false);
-    } else if (messages.length === 0 && shouldRenderResearchPanel) {
-      // Restored research sessions can have no chat messages loaded yet, but
-      // still need to show the durable research card rebuilt from DB state.
-      hasScrolledOnMountRef.current = true;
-      setIsInitialLoading(false);
     }
-  }, [messages.length, sessionId, shouldRenderResearchPanel, scrollToBottom]);
+  }, [messages.length, sessionId, scrollToBottom]);
 
   useImperativeHandle(ref, () => ({
     scrollToBottom,
@@ -924,15 +910,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           </div>
         )}
 
-        {shouldRenderResearchPanel && (
-          <ResearchModePanel
-            sessionId={sessionId}
-            snapshot={researchSnapshot}
-            onForceStop={onForceStop}
-          />
-        )}
-
-        {shouldRenderStreamingMessage && !shouldRenderResearchPanel && (
+        {shouldRenderStreamingMessage && (
           <StreamingMessage
             sessionId={sessionId}
             onForceStop={onForceStop}

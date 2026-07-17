@@ -202,7 +202,6 @@ export function PanelHeader() {
 
 function shortcutFor(id: PageId): string | null {
   switch (id) {
-    case "research": return "Ctrl+Shift+G";
     case "terminal": return "Ctrl+`";
     case "browser": return "Ctrl+T";
     case "files": return "Ctrl+P";
@@ -236,11 +235,11 @@ const AddPageMenu = forwardRef<
   HTMLDivElement,
   { onSelect: (pageId: PageId) => void }
 >(function AddPageMenu({ onSelect }, ref) {
-  // `office` and `research` are passive surfaces — opened by the
-  // agent / external events, not chosen from the menu. Hide them here
-  // so the picker only surfaces pages the user can launch themselves.
+  // `office` is a passive surface — opened by the agent / external
+  // events, not chosen from the menu. Hide it here so the picker only
+  // surfaces pages the user can launch themselves.
   const entries = Object.values(PAGE_REGISTRY).filter(
-    (entry) => entry.id !== "office" && entry.id !== "preview" && entry.id !== "research"
+    (entry) => entry.id !== "office" && entry.id !== "preview"
   );
 
   return (

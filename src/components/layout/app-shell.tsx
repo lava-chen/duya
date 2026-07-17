@@ -112,13 +112,11 @@ function AppShellInner({ children }: AppShellProps) {
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const activePageId = activeTab?.pageId;
   const isConductorOpen = panelOpen && activePageId === 'conductor';
-  const isResearchOpen = panelOpen && activePageId === 'research';
 
   return (
     <div
       className="app-shell-root"
       data-conductor-open={isConductorOpen ? "true" : undefined}
-      data-research-open={isResearchOpen ? "true" : undefined}
       data-panel-expanded={workspaceExpanded ? "true" : undefined}
       style={{ "--app-sidebar-width": `${sidebarWidth + 4}px` } as CSSProperties}
     >
