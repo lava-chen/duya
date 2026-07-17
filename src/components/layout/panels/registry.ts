@@ -13,13 +13,12 @@ import {
 import type { TranslationKey } from "@/i18n";
 import { FileTreePanel } from "./FileTreePanel";
 import { SidebarConductorView } from "./SidebarConductorView";
-import { ResearchActivityPanel } from "./ResearchActivityPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { OfficePanel } from "./OfficePanel";
 import { FilePreviewPanel } from "./FilePreviewPanel";
 
-export type PageId = "files" | "preview" | "conductor" | "research" | "terminal" | "browser" | "office";
+export type PageId = "files" | "preview" | "conductor" | "terminal" | "browser" | "office";
 
 export interface PageTab {
   id: string;
@@ -90,16 +89,6 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     widthRatio: 0.6,
     defaultExpanded: false,
     component: SidebarConductorView as ComponentType<{ tab: PageTab; embedded: boolean }>,
-  },
-  research: {
-    id: "research",
-    labelKey: "panel.research",
-    icon: GlobeIcon,
-    multiInstance: false,
-    available: true,
-    minWidth: 320,
-    defaultExpanded: false,
-    component: ResearchActivityPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   terminal: {
     id: "terminal",

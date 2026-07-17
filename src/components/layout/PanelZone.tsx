@@ -15,15 +15,13 @@ import {
 import { ArrowsInSimple, ArrowsOutSimple } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
 
-// `office` and `research` are passive surfaces — they are opened by
-// events (`duya:open-office-panel`) or by `ResearchModePanel` once a
-// research session is running, so they are intentionally absent from
-// both this launcher and the add-page menu.
+// `office` is a passive surface — opened by events
+// (`duya:open-office-panel`), so it is intentionally absent from both
+// this launcher and the add-page menu.
 const EMPTY_LAUNCHER_ORDER: PageId[] = ["terminal", "browser", "files", "conductor"];
 
 function shortcutFor(id: PageId): string | null {
   switch (id) {
-    case "research": return "Ctrl+Shift+G";
     case "terminal": return "Ctrl+`";
     case "browser": return "Ctrl+T";
     case "files": return "Ctrl+P";
