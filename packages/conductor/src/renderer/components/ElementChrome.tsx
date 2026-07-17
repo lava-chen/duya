@@ -5,6 +5,9 @@ import { X, DotsSixVertical } from "@phosphor-icons/react";
 import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { canvasTransformState } from "./CanvasArea";
 import { GRID_PX } from "../domain/canvas/units";
+import { useConductorStore } from "../stores/conductor-store";
+import { CapsuleMoreMenu, CapsuleToolbar } from "./toolbar/CapsuleToolbar";
+import { useElementLock } from "./toolbar/useElementLock";
 
 interface ElementChromeProps {
   element: CanvasElement;
@@ -31,6 +34,8 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
   onPositionChange,
   children,
 }) => {
+  const { locked, toggleLocked } = useElementLock(element);
+  const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
   const isMinimal = variant === "minimal";
   const resizeRef = useRef<{
     startMouseX: number;
@@ -43,6 +48,7 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
   } | null>(null);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    if (locked) return;
     e.preventDefault();
     e.stopPropagation();
     resizeRef.current = {
@@ -54,7 +60,7 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
       lastMouseX: e.clientX,
       lastMouseY: e.clientY,
     };
-  }, [element.position]);
+  }, [element.position, locked]);
 
   useEffect(() => {
     const flushResizeFrame = () => {
@@ -106,11 +112,26 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
     };
   }, [element.id, element.position, onPositionChange]);
 
-  const showResize = !readOnly;
+  const showResize = !readOnly && !locked;
+  const selectionToolbar = selected && !readOnly ? (
+    <CapsuleToolbar>
+      <CapsuleMoreMenu
+        title="More element actions"
+        items={[
+          { label: locked ? "Unlock position" : "Lock position", onSelect: toggleLocked },
+          { label: "Close toolbar", onSelect: () => setSelectedElementId(null) },
+          ...(onDelete
+            ? [{ label: "Delete element", onSelect: onDelete, tone: "danger" as const }]
+            : []),
+        ]}
+      />
+    </CapsuleToolbar>
+  ) : null;
 
   if (isMinimal) {
     return (
       <div className="relative w-full h-full group">
+        {selectionToolbar}
         {/* Transparent drag frame. It is invisible by default so the widget
             looks borderless, but it becomes visible on hover to signal that
             the edge can be used to drag/resize the widget without covering
@@ -139,8 +160,13 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
   }
 
   return (
-    <div className="flex flex-col h-full rounded-xl border border-[var(--border)] bg-[var(--main-bg)] overflow-hidden shadow-sm transition-all duration-300 hover:shadow-md group">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)] flex-shrink-0 cursor-grab active:cursor-grabbing">
+    <div className="relative h-full w-full overflow-visible">
+      {selectionToolbar}
+      <div className="flex h-full flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--main-bg)] shadow-sm transition-all duration-300 hover:shadow-md group">
+        <div
+          className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)] flex-shrink-0"
+          style={{ cursor: locked ? "default" : "grab" }}
+        >
         <div className="flex items-center gap-2 min-w-0">
           <DotsSixVertical size={12} className="text-[var(--muted)] flex-shrink-0" />
           <span className="text-xs font-medium text-[var(--text)] truncate">
@@ -165,20 +191,21 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
             <X size={12} />
           </button>
         )}
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto">
+          {children}
+        </div>
+        {showResize && (
+          <div
+            data-resize-handle="se"
+            className="absolute bottom-0 right-0 w-3 h-3 cursor-se-resize z-10"
+            style={{
+              background: "linear-gradient(135deg, transparent 50%, var(--border) 50%, transparent 75%)",
+            }}
+            onMouseDown={handleResizeStart}
+          />
+        )}
       </div>
-      <div className="flex-1 min-h-0 overflow-auto">
-        {children}
-      </div>
-      {showResize && (
-        <div
-          data-resize-handle="se"
-          className="absolute bottom-0 right-0 w-3 h-3 cursor-se-resize z-10"
-          style={{
-            background: "linear-gradient(135deg, transparent 50%, var(--border) 50%, transparent 75%)",
-          }}
-          onMouseDown={handleResizeStart}
-        />
-      )}
     </div>
   );
 };

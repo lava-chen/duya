@@ -5,7 +5,8 @@ import { GridFour, Minus, PaintBucket, Plus, TextAlignCenter, TextAlignLeft, Tex
 import type { CanvasElement } from "../..//types/conductor";
 import { updateElementContent } from "../..//ipc/conductor-ipc";
 import { useConductorStore } from "../..//stores/conductor-store";
-import { CapsuleToolbar, CAPSULE_BTN_ACTIVE, CAPSULE_BTN_BASE, CAPSULE_DIVIDER } from "../toolbar/CapsuleToolbar";
+import { CapsuleMoreMenu, CapsuleToolbar, CAPSULE_BTN_ACTIVE, CAPSULE_BTN_BASE, CAPSULE_DIVIDER } from "../toolbar/CapsuleToolbar";
+import { useElementLock } from "../toolbar/useElementLock";
 
 type Align = "left" | "center" | "right";
 type CellStyle = { bold?: boolean; italic?: boolean; align?: Align; fontSize?: number; color?: string; background?: string };
@@ -80,6 +81,7 @@ function cellKey(row: number, column: number): string {
 }
 
 export const TableElement: React.FC<{ element: CanvasElement }> = ({ element }) => {
+  const { locked, toggleLocked } = useElementLock(element);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
   const editingElementId = useConductorStore((state) => state.editingElementId);
   const selectedElementId = useConductorStore((state) => state.selectedElementId);
@@ -211,7 +213,7 @@ export const TableElement: React.FC<{ element: CanvasElement }> = ({ element }) 
 
   return (
     <div className="canvas-table-shell" style={{ position: "relative", width: "100%", height: "fit-content", boxSizing: "border-box" }}>
-      {isEditing && <TableToolbar selected={selectedCell} style={selectedStyle} headerFill={data.headerFill} headerTextColor={data.headerTextColor} borderColor={data.borderColor} onStyle={toggleStyle} onFontSize={adjustFontSize} onColor={applyColor} onDelete={deleteSelection} />}
+      {isEditing && <TableToolbar selected={selectedCell} style={selectedStyle} headerFill={data.headerFill} headerTextColor={data.headerTextColor} borderColor={data.borderColor} onStyle={toggleStyle} onFontSize={adjustFontSize} onColor={applyColor} onDelete={deleteSelection} onFinish={() => setEditingElementId(null)} locked={locked} onToggleLock={toggleLocked} />}
       {isEditing && <div className="canvas-table__column-rail" title="Column controls. Select a header to edit or delete it."><span>⋮⋮</span><span>⋮⋮</span></div>}
       <section
         aria-label={`${data.title || "Table"} table`}
@@ -242,7 +244,7 @@ function TableCell({ value, header = false, editing, selected, style, headerFill
   </div>;
 }
 
-function TableToolbar({ selected, style, headerFill, headerTextColor, borderColor, onStyle, onFontSize, onColor, onDelete }: { selected: SelectedCell; style: CellStyle; headerFill: string; headerTextColor: string; borderColor: string; onStyle: (key: "bold" | "italic" | "align", value?: Align) => void; onFontSize: (delta: number) => void; onColor: (target: "text" | "fill" | "border", color: string) => void; onDelete: () => void }) {
+function TableToolbar({ selected, style, headerFill, headerTextColor, borderColor, onStyle, onFontSize, onColor, onDelete, onFinish, locked, onToggleLock }: { selected: SelectedCell; style: CellStyle; headerFill: string; headerTextColor: string; borderColor: string; onStyle: (key: "bold" | "italic" | "align", value?: Align) => void; onFontSize: (delta: number) => void; onColor: (target: "text" | "fill" | "border", color: string) => void; onDelete: () => void; onFinish: () => void; locked: boolean; onToggleLock: () => void }) {
   const [picker, setPicker] = useState<"text" | "fill" | "border" | null>(null);
   const isHeader = selected?.row === -1;
   const valueFor = (target: "text" | "fill" | "border") => target === "border" ? borderColor : target === "text" ? (isHeader ? headerTextColor : style.color ?? "#27313f") : (isHeader ? headerFill : style.background ?? "#ffffff");
@@ -263,6 +265,13 @@ function TableToolbar({ selected, style, headerFill, headerTextColor, borderColo
       {([ ["left", TextAlignLeft], ["center", TextAlignCenter], ["right", TextAlignRight] ] as const).map(([align, Icon]) => <button key={align} type="button" title={`Align ${align}`} disabled={!selected} onClick={() => onStyle("align", align)} style={{ ...CAPSULE_BTN_BASE, ...(style.align === align ? CAPSULE_BTN_ACTIVE : {}), opacity: selected ? 1 : 0.45 }}><Icon size={17} weight="bold" /></button>)}
       <div style={CAPSULE_DIVIDER} />
       <button type="button" title="Delete selected row or column" disabled={!selected} onClick={onDelete} style={{ ...CAPSULE_BTN_BASE, color: "#ff9d9d", opacity: selected ? 1 : 0.45 }}><Trash size={16} weight="bold" /></button>
+      <CapsuleMoreMenu
+        items={[
+          { label: locked ? "Unlock position" : "Lock position", onSelect: onToggleLock },
+          { label: "Finish editing", onSelect: onFinish },
+          { label: "Delete selected row or column", onSelect: onDelete, disabled: !selected, tone: "danger" },
+        ]}
+      />
     </CapsuleToolbar>
     {picker && <div className="canvas-table__palette" role="menu" aria-label={`${picker} color palette`}>
       {TABLE_COLORS.map((color) => <button key={color} type="button" title={color} onMouseDown={(event) => event.preventDefault()} onClick={() => { onColor(picker, color); setPicker(null); }} style={{ background: color, outline: valueFor(picker) === color ? "2px solid #fff" : "none", outlineOffset: 2 }} />)}

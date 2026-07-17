@@ -9,6 +9,10 @@ import {
   CAPSULE_BTN_ACTIVE,
   CAPSULE_DIVIDER,
 } from "../toolbar/CapsuleToolbar";
+import {
+  ElementUtilityActions,
+  type ElementUtilityActionsProps,
+} from "../toolbar/ElementUtilityActions";
 
 type FontFamily = "sans" | "serif" | "mono";
 type TextAlign = "left" | "center" | "right";
@@ -54,7 +58,10 @@ const HIGHLIGHT_SWATCHES = [
  * FloatingTextToolbar during edit mode; this toolbar is for the selected
  * element's overall typography.
  */
-export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ element }) => {
+export const TextSelectionToolbar: React.FC<{
+  element: CanvasElement;
+  utilityActions: ElementUtilityActionsProps;
+}> = ({ element, utilityActions }) => {
   const apply = useStyleUpdate(element);
 
   const fontFamily = (element.config.fontFamily as FontFamily) || "sans";
@@ -88,7 +95,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
           onClick={() => apply({ fontFamily: f.value })}
           style={chipStyle(fontFamily === f.value)}
           onMouseEnter={(e) => {
-            if (fontFamily !== f.value) e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+            if (fontFamily !== f.value) e.currentTarget.style.background = "var(--surface-hover)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background =
@@ -106,7 +113,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
         title="Decrease font size"
         onClick={() => apply({ fontSize: Math.max(10, fontSize - 2) })}
         style={CAPSULE_BTN_BASE}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-hover)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
         −
@@ -116,7 +123,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
           minWidth: 20,
           textAlign: "center",
           fontSize: 11,
-          color: "rgba(255,255,255,0.85)",
+          color: "var(--text-primary)",
           userSelect: "none",
         }}
       >
@@ -127,7 +134,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
         title="Increase font size"
         onClick={() => apply({ fontSize: Math.min(120, fontSize + 2) })}
         style={CAPSULE_BTN_BASE}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-hover)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
         +
@@ -143,7 +150,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
           onClick={() => apply({ fontWeight: w })}
           style={chipStyle(fontWeight === w)}
           onMouseEnter={(e) => {
-            if (fontWeight !== w) e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+            if (fontWeight !== w) e.currentTarget.style.background = "var(--surface-hover)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background =
@@ -164,7 +171,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
           onClick={() => apply({ align: a.value })}
           style={chipStyle(align === a.value)}
           onMouseEnter={(e) => {
-            if (align !== a.value) e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+            if (align !== a.value) e.currentTarget.style.background = "var(--surface-hover)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background =
@@ -186,7 +193,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
           style={chipStyle(Math.abs(lineHeight - l) < 0.01)}
           onMouseEnter={(e) => {
             if (Math.abs(lineHeight - l) >= 0.01)
-              e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+              e.currentTarget.style.background = "var(--surface-hover)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background =
@@ -223,7 +230,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
               height: 16,
               borderRadius: "50%",
               background: color,
-              border: "1px solid rgba(255,255,255,0.25)",
+              border: "1px solid var(--command-menu-border)",
               display: "inline-block",
             }}
           />
@@ -262,10 +269,10 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
               height: 16,
               borderRadius: "50%",
               background: highlightColor ?? "transparent",
-              border: "1px solid rgba(255,255,255,0.25)",
+              border: "1px solid var(--command-menu-border)",
               display: "inline-block",
               backgroundImage: !highlightColor
-                ? "linear-gradient(45deg, transparent 45%, rgba(255,255,255,0.4) 45%, rgba(255,255,255,0.4) 55%, transparent 55%)"
+                ? "linear-gradient(45deg, transparent 45%, var(--text-tertiary) 45%, var(--text-tertiary) 55%, transparent 55%)"
                 : undefined,
             }}
           />
@@ -281,6 +288,7 @@ export const TextSelectionToolbar: React.FC<{ element: CanvasElement }> = ({ ele
           />
         )}
       </div>
+      <ElementUtilityActions {...utilityActions} />
     </CapsuleToolbar>
   );
 };
@@ -305,8 +313,8 @@ function ColorPicker({
         gridTemplateColumns: "repeat(3, 28px)",
         gap: 6,
         padding: 10,
-        background: "rgba(40, 44, 52, 0.98)",
-        border: "1px solid rgba(255,255,255,0.12)",
+        background: "var(--command-menu-bg)",
+        border: "1px solid var(--command-menu-border)",
         borderRadius: 12,
         boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
         zIndex: 40,
@@ -325,13 +333,13 @@ function ColorPicker({
               width: 28,
               height: 28,
               borderRadius: "50%",
-              border: active ? "2px solid #fff" : "1px solid rgba(255,255,255,0.2)",
+              border: active ? "2px solid var(--text-primary)" : "1px solid var(--command-menu-border)",
               padding: 0,
               background: sw.hex,
               cursor: "pointer",
               backgroundImage:
                 sw.hex === "transparent"
-                  ? "linear-gradient(45deg, transparent 45%, rgba(255,255,255,0.4) 45%, rgba(255,255,255,0.4) 55%, transparent 55%)"
+                  ? "linear-gradient(45deg, transparent 45%, var(--text-tertiary) 45%, var(--text-tertiary) 55%, transparent 55%)"
                   : undefined,
               boxShadow: active ? "0 0 0 1px var(--conductor-accent)" : undefined,
             }}

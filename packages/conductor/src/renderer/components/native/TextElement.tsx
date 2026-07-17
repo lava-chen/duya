@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { CanvasElement } from "../..//types/conductor";
-import { updateElementContent, executeAction } from "../..//ipc/conductor-ipc";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CanvasElement, CanvasPosition } from "../..//types/conductor";
+import { executeAction } from "../..//ipc/conductor-ipc";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { FloatingTextToolbar } from "./FloatingTextToolbar";
 import { looksLikeHtml, textToHtml, htmlToText } from "./text-html";
+import { textContentSizeToGrid, MAX_TEXT_WIDTH_PX } from "../../domain/canvas/text-size";
 
 /**
  * Standalone text element. Unlike sticky, it has no card styling (no
@@ -50,6 +51,11 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
 
   const [editHtml, setEditHtml] = useState(() => textToHtml(content));
   const contentEditableRef = useRef<HTMLDivElement>(null);
+  const [editorContainer, setEditorContainer] = useState<HTMLDivElement | null>(null);
+  const setEditorRef = useCallback((node: HTMLDivElement | null) => {
+    contentEditableRef.current = node;
+    setEditorContainer(node);
+  }, []);
   // Guards against double-handling when Escape triggers blur during unmount.
   const exitModeRef = useRef<"save" | "cancel" | null>(null);
   // Track whether this element was freshly created (empty) so Esc on an empty
@@ -64,20 +70,65 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
   useEffect(() => {
     if (isEditing) {
       exitModeRef.current = null;
-      if (contentEditableRef.current) {
-        contentEditableRef.current.focus();
+      if (editorContainer) {
+        editorContainer.focus();
         // Place caret at end so typing appends rather than prepends.
         const selection = window.getSelection();
         if (selection) {
           const range = document.createRange();
-          range.selectNodeContents(contentEditableRef.current);
+          range.selectNodeContents(editorContainer);
           range.collapse(false);
           selection.removeAllRanges();
           selection.addRange(range);
         }
       }
     }
-  }, [isEditing]);
+  }, [editorContainer, isEditing]);
+
+  const measureContentPosition = useCallback((html: string): CanvasPosition | null => {
+    const editor = contentEditableRef.current;
+    if (!editor || typeof document === "undefined") return null;
+
+    const computed = window.getComputedStyle(editor);
+    const measure = document.createElement("div");
+    measure.style.position = "fixed";
+    measure.style.visibility = "hidden";
+    measure.style.pointerEvents = "none";
+    measure.style.left = "-10000px";
+    measure.style.top = "0";
+    measure.style.display = "inline-block";
+    measure.style.width = "max-content";
+    measure.style.maxWidth = `${MAX_TEXT_WIDTH_PX}px`;
+    measure.style.whiteSpace = "pre-wrap";
+    measure.style.overflowWrap = "break-word";
+    measure.style.wordBreak = "break-word";
+    measure.style.fontFamily = computed.fontFamily;
+    measure.style.fontSize = computed.fontSize;
+    measure.style.fontWeight = computed.fontWeight;
+    measure.style.fontStyle = computed.fontStyle;
+    measure.style.lineHeight = computed.lineHeight;
+    measure.innerHTML = html || "&nbsp;";
+    document.body.appendChild(measure);
+    const size = textContentSizeToGrid(measure.scrollWidth + 4, measure.scrollHeight + 4);
+    measure.remove();
+
+    const currentPosition = useConductorStore.getState().elements.find((candidate) => candidate.id === element.id)?.position ?? element.position;
+    return { ...currentPosition, ...size };
+  }, [element.id, element.position]);
+
+  const fitContent = useCallback((html: string): CanvasPosition | null => {
+    const nextPosition = measureContentPosition(html);
+    if (!nextPosition) return null;
+    const currentPosition = useConductorStore.getState().elements.find((candidate) => candidate.id === element.id)?.position;
+    if (!currentPosition || Math.abs(currentPosition.w - nextPosition.w) > 0.001 || Math.abs(currentPosition.h - nextPosition.h) > 0.001) {
+      updateElement(element.id, { position: nextPosition });
+    }
+    return nextPosition;
+  }, [element.id, measureContentPosition, updateElement]);
+
+  useLayoutEffect(() => {
+    if (isEditing) fitContent(editHtml);
+  }, [editHtml, fitContent, isEditing]);
 
   const save = useCallback(() => {
     if (exitModeRef.current !== null) return;
@@ -100,17 +151,25 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
       return;
     }
 
-    if (normalized !== content.trim()) {
-      const newConfig = { ...element.config, content: normalized };
-      updateElement(element.id, { config: newConfig });
+    const newConfig = { ...element.config, content: normalized };
+    const nextPosition = fitContent(nextHtml);
+    const contentChanged = normalized !== content.trim();
+    if (contentChanged || nextPosition) {
+      updateElement(element.id, { config: newConfig, ...(nextPosition ? { position: nextPosition } : {}) });
       if (activeCanvasId) {
-        updateElementContent(element.id, activeCanvasId, { content: normalized })
+        executeAction({
+          action: "element.update",
+          elementId: element.id,
+          canvasId: activeCanvasId,
+          config: newConfig,
+          ...(nextPosition ? { position: nextPosition } : {}),
+        })
           .catch((err) => setUiError(`Save text failed: ${err instanceof Error ? err.message : err}`));
       }
     }
     isNewAndEmptyRef.current = normalized === "";
     setEditingElementId(null);
-  }, [activeCanvasId, content, editHtml, element.config, element.id, removeElement, setEditingElementId, setUiError, updateElement]);
+  }, [activeCanvasId, content, editHtml, element.config, element.id, fitContent, removeElement, setEditingElementId, setUiError, updateElement]);
 
   const cancel = useCallback(() => {
     if (exitModeRef.current !== null) return;
@@ -173,7 +232,7 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
       {isEditing ? (
         <>
           <div
-            ref={contentEditableRef}
+            ref={setEditorRef}
             contentEditable
             suppressContentEditableWarning
             onInput={() => setEditHtml(contentEditableRef.current?.innerHTML ?? "")}
@@ -209,7 +268,7 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
             }}
             dangerouslySetInnerHTML={{ __html: editHtml }}
           />
-          <FloatingTextToolbar container={contentEditableRef.current} />
+          <FloatingTextToolbar container={editorContainer} element={element} showWhenEditing />
         </>
       ) : (
         <div

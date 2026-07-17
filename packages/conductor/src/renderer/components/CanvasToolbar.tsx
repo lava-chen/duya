@@ -6,6 +6,7 @@ import { ELEMENT_ICONS } from "./toolbar/element-icons";
 import { uploadAsset } from "..//ipc/conductor-ipc";
 import { LinkCreateDialog } from "./LinkCreateDialog";
 import { DocumentCreateDialog } from "./DocumentCreateDialog";
+import { DRAGGABLE_CREATE_TOOL_IDS, getCanvasToolDragPayload } from "../domain/canvas/toolbar-drag";
 import type { LinkContent } from "..//types/canvas-node";
 import {
   ArrowElbowDownRight,
@@ -207,25 +208,20 @@ interface ToolButtonProps {
   onDragStart: (e: React.DragEvent, toolId: string) => void;
 }
 
-function isNonDraggableTool(id: ToolId): boolean {
-  return id === "select" || id === "hand" || id === "document" || id === "shape" || id === "connector" || id === "media" || id === "link";
-}
-
-// `text` is draggable: drag from toolbar to canvas creates the
-// element at the drop position. Click + click-on-canvas also works via the
-// default `create:text` activeTool flow.
+// Creation tools can be dragged directly onto the canvas. Tools that need a
+// target (connector), a file (media), or change interaction mode stay click-only.
 
 function ToolButton({ tool, isActive, isSubmenuOpen, onClick, onDragStart }: ToolButtonProps) {
-  const nonDraggable = isNonDraggableTool(tool.id);
+  const draggable = DRAGGABLE_CREATE_TOOL_IDS.has(tool.id);
   return (
     <div className="relative">
       <ToolbarTooltip label={tool.label} shortcut={tool.shortcut}>
         <button
           type="button"
-          draggable={!nonDraggable}
+          draggable={draggable}
           onClick={(e) => onClick(tool, e)}
           onDragStart={(e) => {
-            if (nonDraggable) {
+            if (!draggable) {
               e.preventDefault();
               return;
             }
@@ -255,8 +251,14 @@ export function CanvasToolbar() {
   const [documentDialogOpen, setDocumentDialogOpen] = useState(false);
 
   const handleDragStart = useCallback((e: React.DragEvent, toolId: string) => {
+    const payload = getCanvasToolDragPayload(toolId);
+    if (!payload) {
+      e.preventDefault();
+      return;
+    }
     e.dataTransfer.effectAllowed = "copy";
-    e.dataTransfer.setData("application/x-conductor-tool", toolId);
+    e.dataTransfer.setData("application/x-conductor-tool", payload.type);
+    e.dataTransfer.setData("application/x-conductor-extra", JSON.stringify(payload.extra));
   }, []);
 
   const handleSubmenuSelect = useCallback((type: string, extra?: Record<string, unknown>) => {

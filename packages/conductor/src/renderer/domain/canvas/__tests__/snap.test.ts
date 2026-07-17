@@ -6,6 +6,8 @@ import {
   snapConnectorEdgePosition,
   snapElbowSegmentCoordinate,
 } from '../connector-renderer';
+import { getCanvasToolDragPayload } from '../toolbar-drag';
+import { textContentSizeToGrid } from '../text-size';
 import type { CanvasElement } from '../../../types/conductor';
 
 function makeElement(id: string, x: number, y: number, w: number, h: number): CanvasElement {
@@ -93,6 +95,34 @@ describe('computeSnap', () => {
     if (result.kind === 'alignment') {
       expect(result.x).toBe(5);
     }
+  });
+});
+
+describe('toolbar element creation', () => {
+  it('creates a usable drag payload for every direct-create toolbar tool', () => {
+    expect(getCanvasToolDragPayload('text')).toEqual({ type: 'text', extra: {} });
+    expect(getCanvasToolDragPayload('table')).toEqual({ type: 'table', extra: {} });
+    expect(getCanvasToolDragPayload('shape')).toMatchObject({
+      type: 'shape',
+      extra: { presentation: 'shape', shape: 'rect' },
+    });
+    expect(getCanvasToolDragPayload('link')).toEqual({
+      type: 'link',
+      extra: { linkType: 'url', title: 'Link', url: '' },
+    });
+  });
+
+  it('keeps target- and file-dependent tools click-only', () => {
+    expect(getCanvasToolDragPayload('connector')).toBeNull();
+    expect(getCanvasToolDragPayload('media')).toBeNull();
+  });
+});
+
+describe('text content sizing', () => {
+  it('starts compact and grows with content within readable bounds', () => {
+    expect(textContentSizeToGrid(1, 1)).toEqual({ w: 1.5, h: 0.4 });
+    expect(textContentSizeToGrid(316.2, 74.2)).toEqual({ w: 317 / 80, h: 75 / 80 });
+    expect(textContentSizeToGrid(2000, 2000)).toEqual({ w: 8, h: 15 });
   });
 });
 

@@ -25,6 +25,15 @@ import {
   resolveConnectorRoutingMode,
 } from "./native/ConnectorElement";
 import { canvasTransformState } from "./CanvasArea";
+import {
+  CapsuleMoreMenu,
+  CapsuleToolbar,
+  CAPSULE_BTN_ACTIVE,
+  CAPSULE_BTN_BASE,
+  CAPSULE_CONTROL_BASE,
+  CAPSULE_DIVIDER,
+} from "./toolbar/CapsuleToolbar";
+import { useElementLock } from "./toolbar/useElementLock";
 
 interface NativeConnectorOverlayProps {
   elements: CanvasElement[];
@@ -44,42 +53,22 @@ const MARKER_OPTIONS: { value: ConnectorMarker; label: string }[] = [
   { value: "bar", label: "Bar" },
 ];
 
-const TOOLBAR_BUTTON: React.CSSProperties = {
-  height: 30,
-  width: 30,
-  display: "inline-grid",
-  placeItems: "center",
-  border: 0,
-  borderRadius: 7,
-  padding: 0,
-  color: "var(--text-primary)",
-  background: "transparent",
-  cursor: "pointer",
-};
-
-const TOOLBAR_SELECT: React.CSSProperties = {
-  height: 30,
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 7,
-  padding: "0 7px",
-  color: "var(--text-primary)",
-  background: "var(--command-menu-bg)",
-  borderColor: "var(--command-menu-border)",
-  fontSize: 12,
-  outline: "none",
-};
-
 function ConnectorToolbar({
   connector,
   labelDraft,
   onLabelDraftChange,
   onPatch,
+  onDelete,
+  onDismiss,
 }: {
   connector: CanvasElement;
   labelDraft: string;
   onLabelDraftChange: (value: string) => void;
   onPatch: (patch: Record<string, unknown>) => void;
+  onDelete: () => void;
+  onDismiss: () => void;
 }) {
+  const { locked, toggleLocked } = useElementLock(connector);
   const routingMode = resolveConnectorRoutingMode(connector.config);
   const strokeStyle = (connector.config.strokeStyle as "solid" | "dashed" | "dotted" | undefined) ?? "solid";
   const legacyStyle = connector.config.style as Record<string, unknown> | undefined;
@@ -87,34 +76,20 @@ function ConnectorToolbar({
   const { startMarker, endMarker } = resolveConnectorMarkers(connector.config);
 
   const routeButton = (mode: ConnectorRoutingMode): React.CSSProperties => ({
-    ...TOOLBAR_BUTTON,
-    background: routingMode === mode ? "var(--canvas-tool-accent)" : "transparent",
-    color: routingMode === mode ? "#fff" : "var(--text-primary)",
+    ...CAPSULE_BTN_BASE,
+    ...(routingMode === mode ? CAPSULE_BTN_ACTIVE : {}),
   });
 
   return (
-    <div
-      style={{
-        pointerEvents: "auto",
-        minHeight: 40,
-        borderRadius: 11,
-        display: "flex",
-        alignItems: "center",
-        gap: 4,
-        padding: "4px 6px",
-        background: "var(--command-menu-bg)",
-        border: "1px solid var(--command-menu-border)",
-        boxShadow: "none",
-        color: "var(--text-primary)",
-        fontSize: 12,
-        whiteSpace: "nowrap",
-      }}
-      onPointerDown={(event) => event.stopPropagation()}
+    <CapsuleToolbar
+      positioned={false}
+      zoomAware={false}
+      onMouseDown={(event) => event.stopPropagation()}
     >
       <button type="button" aria-label="Elbow connector" title="Elbow connector" style={routeButton("elbow")} onClick={() => onPatch({ routingMode: "elbow" })}><ArrowElbowDownRight size={17} weight="bold" /></button>
       <button type="button" aria-label="Curved connector" title="Curved connector" style={routeButton("curve")} onClick={() => onPatch({ routingMode: "curve" })}><BezierCurve size={17} weight="bold" /></button>
-      <span style={{ width: 1, height: 22, background: "var(--command-menu-border)", margin: "0 2px" }} />
-      <select aria-label="Line style" title="Line style" value={strokeStyle} style={TOOLBAR_SELECT} onChange={(event) => onPatch({ strokeStyle: event.target.value })}>
+      <span style={CAPSULE_DIVIDER} />
+      <select aria-label="Line style" title="Line style" value={strokeStyle} style={CAPSULE_CONTROL_BASE} onChange={(event) => onPatch({ strokeStyle: event.target.value })}>
         <option value="solid">Solid</option>
         <option value="dashed">Dashed</option>
         <option value="dotted">Dotted</option>
@@ -122,10 +97,10 @@ function ConnectorToolbar({
       <label title="Line color" style={{ width: 26, height: 26, borderRadius: 7, background: color, border: "1px solid var(--command-menu-border)", overflow: "hidden", cursor: "pointer", flexShrink: 0 }}>
         <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#8793A3"} onChange={(event) => onPatch({ color: event.target.value })} style={{ width: 36, height: 36, opacity: 0, cursor: "pointer" }} />
       </label>
-      <select aria-label="Start marker" title="Start marker" value={startMarker} style={{ ...TOOLBAR_SELECT, width: 90 }} onChange={(event) => onPatch({ startMarker: event.target.value })}>
+      <select aria-label="Start marker" title="Start marker" value={startMarker} style={{ ...CAPSULE_CONTROL_BASE, width: 90 }} onChange={(event) => onPatch({ startMarker: event.target.value })}>
         {MARKER_OPTIONS.map((option) => <option key={option.value} value={option.value}>S · {option.label}</option>)}
       </select>
-      <select aria-label="End marker" title="End marker" value={endMarker} style={{ ...TOOLBAR_SELECT, width: 90 }} onChange={(event) => onPatch({ endMarker: event.target.value })}>
+      <select aria-label="End marker" title="End marker" value={endMarker} style={{ ...CAPSULE_CONTROL_BASE, width: 90 }} onChange={(event) => onPatch({ endMarker: event.target.value })}>
         {MARKER_OPTIONS.map((option) => <option key={option.value} value={option.value}>E · {option.label}</option>)}
       </select>
       <input
@@ -138,9 +113,24 @@ function ConnectorToolbar({
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
-        style={{ width: 108, height: 30, border: "1px solid var(--command-menu-border)", borderRadius: 7, padding: "0 9px", color: "var(--text-primary)", background: "var(--command-menu-bg)", fontSize: 12, outline: "none" }}
+        style={{ ...CAPSULE_CONTROL_BASE, width: 108, padding: "0 9px" }}
       />
-    </div>
+      <CapsuleMoreMenu
+        items={[
+          { label: locked ? "Unlock position" : "Lock position", onSelect: toggleLocked },
+          {
+            label: "Clear label",
+            disabled: labelDraft.length === 0,
+            onSelect: () => {
+              onLabelDraftChange("");
+              onPatch({ label: "" });
+            },
+          },
+          { label: "Close toolbar", onSelect: onDismiss },
+          { label: "Delete connector", onSelect: onDelete, tone: "danger" },
+        ]}
+      />
+    </CapsuleToolbar>
   );
 }
 
@@ -148,6 +138,7 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
   const selectedElementId = useConductorStore((state) => state.selectedElementId);
   const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
   const updateElement = useConductorStore((state) => state.updateElement);
+  const removeElement = useConductorStore((state) => state.removeElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
   const canvasZoom = useConductorStore((state) => state.canvasZoom);
   const [hoveredConnectorId, setHoveredConnectorId] = useState<string | null>(null);
@@ -211,6 +202,17 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     void persistConfig(selectedConnector, { ...selectedConnector.config, ...patch });
   }, [selectedConnector, persistConfig]);
 
+  const deleteSelectedConnector = useCallback(() => {
+    if (!selectedConnector || !activeCanvasId) return;
+    removeElement(selectedConnector.id);
+    setSelectedElementId(null);
+    void executeAction({
+      action: "element.delete",
+      elementId: selectedConnector.id,
+      canvasId: activeCanvasId,
+    });
+  }, [activeCanvasId, removeElement, selectedConnector, setSelectedElementId]);
+
   const toCanvasPoint = useCallback((event: PointerEvent | React.PointerEvent): Point => {
     const host = document.querySelector(".canvas-area") as HTMLElement | null;
     if (!host) return { x: 0, y: 0 };
@@ -242,7 +244,7 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     event.stopPropagation();
     event.preventDefault();
     const connector = connectors.find((candidate) => candidate.id === connectorId);
-    if (!connector) return;
+    if (!connector || connector.metadata.locked === true) return;
     setDragState({ kind: "endpoint", connectorId, endpoint });
     setDragPoint(toCanvasPoint(event));
 
@@ -276,6 +278,8 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
   const handleCurveControlPointerDown = useCallback((connectorId: string, control: "source" | "target", _point: Point, event: React.PointerEvent<SVGCircleElement>) => {
     event.stopPropagation();
     event.preventDefault();
+    const connector = connectors.find((candidate) => candidate.id === connectorId);
+    if (!connector || connector.metadata.locked === true) return;
     setDragState({ kind: "curve-control", connectorId, control });
 
     const cleanup = () => {
@@ -327,13 +331,13 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
-  }, [persistConfig, toCanvasPoint, updateElement]);
+  }, [connectors, persistConfig, toCanvasPoint, updateElement]);
 
   const handleElbowSegmentPointerDown = useCallback((connectorId: string, segmentIndex: number, orientation: "horizontal" | "vertical", event: React.PointerEvent<SVGRectElement>) => {
     event.stopPropagation();
     event.preventDefault();
     const current = useConductorStore.getState().elements.find((element) => element.id === connectorId);
-    if (!current) return;
+    if (!current || current.metadata.locked === true) return;
     const source = current.config.source as ConnectorEndpoint | undefined;
     const target = current.config.target as ConnectorEndpoint | undefined;
     const sourceNode = source ? elements.find((element) => element.id === source.nodeId) : null;
@@ -479,7 +483,14 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
             transformOrigin: "top left",
           }}
         >
-          <ConnectorToolbar connector={selectedConnector} labelDraft={labelDraft} onLabelDraftChange={setLabelDraft} onPatch={patchSelectedConnector} />
+          <ConnectorToolbar
+            connector={selectedConnector}
+            labelDraft={labelDraft}
+            onLabelDraftChange={setLabelDraft}
+            onPatch={patchSelectedConnector}
+            onDelete={deleteSelectedConnector}
+            onDismiss={() => setSelectedElementId(null)}
+          />
         </div>
       )}
     </>
