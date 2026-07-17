@@ -2,7 +2,7 @@
  * Conductor mode modifier (plan 224 Phase 3).
  *
  * Declares the canvas-conductor overlay as a {@link ModeModifier} in
- * modifier paradigm: it injects the 11 canvas tools, bypasses profile
+ * modifier paradigm: it injects the canvas tool set, bypasses profile
  * filtering (so canvas tools survive even under the `code` profile),
  * prepends the conductor prompt, and surfaces `conductorCanvasId`
  * through `toolUseContextPatch` so every canvas tool sees it without
@@ -51,8 +51,7 @@ export const conductorMode: ModeModifier = {
   display: { label: 'Conductor 画布', icon: 'SquareHalf' },
 
   tools: {
-    // 11 canvas tools (create / batch / delete / move / resize / fill /
-    // style / list / find-empty-space / capture / get-knowledge).
+    // Canvas element, layout, perception, knowledge, and multi-canvas tools.
     inject: () => getCanvasConductorTools(),
     // Canvas tools are gated by the session toggle, not by the agent
     // profile. Re-instate any canvas tools that a profile may have

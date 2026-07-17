@@ -15,6 +15,13 @@ import type {
   ExecutorRpcRequest,
   ExecutorRpcResponse,
 } from './executor-types';
+import {
+  createCanvas,
+  listCanvases,
+  updateCanvas,
+  type ConductorCanvas,
+} from '../db/queries/conductors';
+import { getSession, updateSession } from '../db/queries/sessions';
 
 export type { ExecutorRpcRequest, ExecutorRpcResponse } from './executor-types';
 
@@ -38,9 +45,19 @@ export type CanvasCaptureFn = (
   capturedAt: string;
 }>;
 
+export interface CanvasManagementEvent {
+  operation: 'create' | 'switch' | 'rename';
+  sessionId?: string;
+  canvas: ConductorCanvas;
+  currentCanvasId?: string;
+}
+
+export type CanvasManagementChangedFn = (event: CanvasManagementEvent) => void;
+
 export class ConductorExecutorProxy {
   private dbService: ConductorDbService;
   private captureFn: CanvasCaptureFn | null = null;
+  private canvasManagementChangedFn: CanvasManagementChangedFn | null = null;
 
   constructor() {
     this.dbService = new ConductorDbService();
@@ -64,11 +81,134 @@ export class ConductorExecutorProxy {
     this.dbService.setBroadcastPatch(fn);
   }
 
+  setCanvasManagementChangedFn(fn: CanvasManagementChangedFn): void {
+    this.canvasManagementChangedFn = fn;
+  }
+
+  private resolveCurrentCanvas(sessionId: string | undefined, fallbackCanvasId?: string): ConductorCanvas | null {
+    const canvases = listCanvases();
+    const persistedCanvasId = sessionId ? getSession(sessionId)?.conductor_canvas_id : null;
+    const currentCanvasId = persistedCanvasId ?? fallbackCanvasId;
+    return currentCanvasId ? canvases.find((canvas) => canvas.id === currentCanvasId) ?? null : null;
+  }
+
+  private bindSessionToCanvas(sessionId: string | undefined, canvas: ConductorCanvas): ExecutorRpcResponse | null {
+    if (!sessionId) {
+      return {
+        success: false,
+        error: { code: 'NO_SESSION', message: 'A chat session is required to switch canvases' },
+      };
+    }
+    const updated = updateSession(sessionId, {
+      conductor_mode_enabled: 1,
+      conductor_canvas_id: canvas.id,
+    });
+    if (!updated) {
+      return {
+        success: false,
+        error: { code: 'SESSION_NOT_FOUND', message: `Session ${sessionId} not found` },
+      };
+    }
+    return null;
+  }
+
+  private manageCanvas(request: ExecutorRpcRequest): ExecutorRpcResponse {
+    const payload = request.payload;
+    const action = payload.action as 'get_current' | 'list' | 'create' | 'switch' | 'rename';
+    const fallbackCanvasId = payload.currentCanvasId as string | undefined;
+    const currentCanvas = this.resolveCurrentCanvas(request.sessionId, fallbackCanvasId);
+
+    if (action === 'get_current') {
+      return { success: true, result: { action, currentCanvas } };
+    }
+
+    if (action === 'list') {
+      return { success: true, result: { action, currentCanvas, canvases: listCanvases() } };
+    }
+
+    if (action === 'create') {
+      const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+      if (!name) {
+        return { success: false, error: { code: 'INVALID_INPUT', message: 'Canvas name is required' } };
+      }
+      const shouldSwitch = payload.switchTo !== false;
+      if (shouldSwitch && (!request.sessionId || !getSession(request.sessionId))) {
+        return {
+          success: false,
+          error: { code: 'SESSION_NOT_FOUND', message: 'A valid chat session is required to create and switch canvases' },
+        };
+      }
+      const canvas = createCanvas({
+        name,
+        description: payload.description as string | undefined,
+      });
+      if (shouldSwitch) {
+        const bindError = this.bindSessionToCanvas(request.sessionId, canvas);
+        if (bindError) return bindError;
+      }
+      this.canvasManagementChangedFn?.({
+        operation: 'create',
+        sessionId: request.sessionId,
+        canvas,
+        currentCanvasId: shouldSwitch ? canvas.id : undefined,
+      });
+      return {
+        success: true,
+        result: { action, canvas, currentCanvas: shouldSwitch ? canvas : currentCanvas, switched: shouldSwitch },
+      };
+    }
+
+    const canvasId = payload.canvasId as string;
+    const target = listCanvases().find((canvas) => canvas.id === canvasId);
+    if (!target) {
+      return { success: false, error: { code: 'NOT_FOUND', message: `Canvas ${canvasId} not found` } };
+    }
+
+    if (action === 'switch') {
+      const bindError = this.bindSessionToCanvas(request.sessionId, target);
+      if (bindError) return bindError;
+      this.canvasManagementChangedFn?.({
+        operation: 'switch',
+        sessionId: request.sessionId,
+        canvas: target,
+        currentCanvasId: target.id,
+      });
+      return { success: true, result: { action, currentCanvas: target, canvas: target, switched: true } };
+    }
+
+    if (action === 'rename') {
+      const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+      if (!name) {
+        return { success: false, error: { code: 'INVALID_INPUT', message: 'Canvas name is required' } };
+      }
+      const renamed = updateCanvas(canvasId, { name });
+      this.canvasManagementChangedFn?.({
+        operation: 'rename',
+        sessionId: request.sessionId,
+        canvas: renamed,
+        currentCanvasId: currentCanvas?.id,
+      });
+      return {
+        success: true,
+        result: {
+          action,
+          canvas: renamed,
+          currentCanvas: currentCanvas?.id === renamed.id ? renamed : currentCanvas,
+        },
+      };
+    }
+
+    return { success: false, error: { code: 'INVALID_ACTION', message: `Unknown canvas management action: ${action}` } };
+  }
+
   async execute(request: ExecutorRpcRequest): Promise<ExecutorRpcResponse> {
     const { action, payload } = request;
 
     try {
       switch (action) {
+        case 'canvas.manage':
+          return this.manageCanvas(request);
+
         case 'canvas.snapshot':
           return this.dbService.getCanvasSnapshot(payload.canvasId as string);
 

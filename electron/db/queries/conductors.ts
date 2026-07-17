@@ -482,6 +482,10 @@ export function updateElementConfig(elementId: string, config: Record<string, un
   db().prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(config), now, elementId);
 }
 
+export function updateElementMetadata(elementId: string, metadata: Record<string, unknown>, now: number): void {
+  db().prepare('UPDATE conductor_elements SET metadata = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(metadata), now, elementId);
+}
+
 export function updateElementVizSpec(elementId: string, vizSpec: Record<string, unknown> | null, now: number): void {
   db().prepare('UPDATE conductor_elements SET viz_spec = ?, updated_at = ? WHERE id = ?').run(vizSpec ? JSON.stringify(vizSpec) : null, now, elementId);
 }
@@ -705,6 +709,7 @@ export function invertPatch(patch: Record<string, unknown>, actionType: string):
         config: (patch as any).prevConfig || patch.config,
         vizSpec: (patch as any).prevVizSpec ?? patch.vizSpec,
         position: (patch as any).prevPosition || patch.position,
+        metadata: (patch as any).prevMetadata || patch.metadata,
       };
     case 'element.arrange':
       return {};

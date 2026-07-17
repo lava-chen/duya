@@ -192,7 +192,7 @@ export type ConductorActionRequest =
   | { action: 'widget.delete'; widgetId: string; canvasId: string }
   | { action: 'widget.restore'; widgetId: string; canvasId: string }
   | { action: 'element.create'; canvasId: string; elementKind: ElementKind; position: CanvasPosition; vizSpec?: VizSpec | null; config?: Record<string, unknown>; permissions?: ElementPermissions }
-  | { action: 'element.update'; elementId: string; canvasId: string; vizSpec?: VizSpec | null; position?: Partial<CanvasPosition>; config?: Record<string, unknown> }
+  | { action: 'element.update'; elementId: string; canvasId: string; vizSpec?: VizSpec | null; position?: Partial<CanvasPosition>; config?: Record<string, unknown>; metadata?: Partial<ElementMetadata> }
   | { action: 'element.delete'; elementId: string; canvasId: string }
   | { action: 'element.move'; elementId: string; canvasId: string; position: CanvasPosition }
   | { action: 'element.arrange'; canvasId: string; layout: Array<{ elementId: string; position: CanvasPosition }> }
@@ -316,7 +316,7 @@ export const ConductorActionRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('widget.delete'), widgetId: z.string(), canvasId: z.string() }),
   z.object({ action: z.literal('widget.restore'), widgetId: z.string(), canvasId: z.string() }),
   z.object({ action: z.literal('element.create'), canvasId: z.string(), elementKind: z.string(), position: CanvasPositionSchema, vizSpec: VizSpecSchema.nullable().optional(), config: z.record(z.string(), z.unknown()).optional(), permissions: WidgetPermissionsSchema.optional() }),
-  z.object({ action: z.literal('element.update'), elementId: z.string(), canvasId: z.string(), vizSpec: VizSpecSchema.nullable().optional(), position: CanvasPositionSchema.partial().optional(), config: z.record(z.string(), z.unknown()).optional() }),
+  z.object({ action: z.literal('element.update'), elementId: z.string(), canvasId: z.string(), vizSpec: VizSpecSchema.nullable().optional(), position: CanvasPositionSchema.partial().optional(), config: z.record(z.string(), z.unknown()).optional(), metadata: z.record(z.string(), z.unknown()).optional() }),
   z.object({ action: z.literal('element.delete'), elementId: z.string(), canvasId: z.string() }),
   z.object({ action: z.literal('element.move'), elementId: z.string(), canvasId: z.string(), position: CanvasPositionSchema }),
   z.object({ action: z.literal('element.arrange'), canvasId: z.string(), layout: z.array(z.object({ elementId: z.string(), position: CanvasPositionSchema })) }),

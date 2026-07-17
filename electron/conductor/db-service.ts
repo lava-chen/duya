@@ -17,6 +17,7 @@ import {
   insertElement,
   updateElementPosition,
   updateElementConfig,
+  updateElementMetadata,
   updateElementVizSpec,
   updateElementSourceCode,
   deleteElement,
@@ -989,6 +990,7 @@ export class ConductorDbService {
     const vizSpec = payload.vizSpec !== undefined ? (payload.vizSpec as Record<string, unknown> | null) : undefined;
     const position = payload.position as Record<string, unknown> | undefined;
     const config = payload.config as Record<string, unknown> | undefined;
+    const metadata = payload.metadata as Record<string, unknown> | undefined;
 
     const prev = getElement(elementId, canvasId);
     if (!prev) {
@@ -1016,13 +1018,19 @@ export class ConductorDbService {
       changes.position = position;
       changes.prevPosition = prev.position;
     }
+    if (metadata !== undefined) {
+      const nextMetadata = { ...prev.metadata, ...metadata };
+      updateElementMetadata(elementId, nextMetadata, now);
+      changes.metadata = nextMetadata;
+      changes.prevMetadata = prev.metadata;
+    }
 
     writeActionLog({
       canvasId,
       widgetId: null,
       actor: ACTOR,
       actionType: 'element.update',
-      payload: { elementId, vizSpec, position, config },
+      payload: { elementId, vizSpec, position, config, metadata },
       resultPatch: changes,
     });
 

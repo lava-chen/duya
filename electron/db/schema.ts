@@ -271,7 +271,9 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       schedule_every_ms INTEGER,
       schedule_cron_expr TEXT,
       schedule_cron_tz TEXT,
+      schedule_end_at TEXT,
       workflow_id TEXT,
+      working_directory TEXT NOT NULL DEFAULT '',
       prompt TEXT NOT NULL DEFAULT '',
       input_params TEXT NOT NULL DEFAULT '{}',
       session_target TEXT NOT NULL DEFAULT 'isolated' CHECK(session_target IN ('isolated')),
@@ -1924,6 +1926,59 @@ const migrations: Migration[] = [
       }
       // Unique index so a project maps to at most one canvas.
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conductor_canvases_project_path ON conductor_canvases(project_path) WHERE project_path IS NOT NULL`);
+    },
+  },
+  {
+    id: 39,
+    name: 'add_automation_cron_working_directory',
+    migrate(db: BetterSqlite3Db): void {
+      const tableInfo = db.prepare('PRAGMA table_info(automation_crons)').all() as Array<{ name: string }>;
+      if (!tableInfo.some((column) => column.name === 'working_directory')) {
+        db.exec(`ALTER TABLE automation_crons ADD COLUMN working_directory TEXT NOT NULL DEFAULT ''`);
+      }
+    },
+  },
+  {
+    id: 40,
+    name: 'create_skill_learning_events',
+    migrate(db: BetterSqlite3Db): void {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS skill_learning_events (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          skill_name TEXT,
+          status TEXT NOT NULL CHECK(status IN ('published', 'skipped', 'failed')),
+          reason TEXT NOT NULL DEFAULT '',
+          score INTEGER,
+          feedback TEXT,
+          executed_task TEXT,
+          dimensions_json TEXT,
+          iteration_count INTEGER NOT NULL DEFAULT 0,
+          max_iterations INTEGER NOT NULL DEFAULT 3,
+          final_path TEXT,
+          error TEXT,
+          read_at INTEGER,
+          created_at INTEGER NOT NULL
+        )
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_skill_learning_events_created
+        ON skill_learning_events(created_at DESC)
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_skill_learning_events_unread
+        ON skill_learning_events(read_at, status, created_at DESC)
+      `);
+    },
+  },
+  {
+    id: 41,
+    name: 'add_automation_cron_schedule_end_at',
+    migrate(db: BetterSqlite3Db): void {
+      const tableInfo = db.prepare('PRAGMA table_info(automation_crons)').all() as Array<{ name: string }>;
+      if (!tableInfo.some((column) => column.name === 'schedule_end_at')) {
+        db.exec(`ALTER TABLE automation_crons ADD COLUMN schedule_end_at TEXT`);
+      }
     },
   },
 ];

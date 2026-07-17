@@ -128,7 +128,11 @@ function collectRecentImageAttachments(messages: Message[]): Array<{
 // Side-effect import so the class is in scope for the rest of this
 // module (e.g. `new SelfImprover(...)` in the constructor and
 // `getDefaultSelfImprover()` in the integration wiring below).
-import { SelfImprover, getDefaultSelfImprover } from '../self-improver/SelfImprover.js';
+import {
+  SelfImprover,
+  getDefaultSelfImprover,
+  type ImprovementResult,
+} from '../self-improver/SelfImprover.js';
 import { SkillCurator, getDefaultCurator } from '../self-improver/SkillCurator.js';
 
 // Mode System imports (the class is the only consumer in this file;
@@ -259,6 +263,8 @@ export class duyaAgent {
   private permissionMode: PermissionMode = 'default'; // Permission mode for tool execution
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
   private selfImprover: SelfImprover; // Self-improvement tracker for skill creation
+  /** Bridge for results that finish after the foreground SSE stream closes. */
+  onSkillReviewCompleted?: (result: ImprovementResult) => Promise<void> | void;
   private curator: SkillCurator; // Periodic skill consolidation curator
   private visionClient?: LLMClient; // Optional vision model client
   private visionConfig?: import('../types.js').VisionConfig; // Vision model configuration
@@ -280,7 +286,6 @@ export class duyaAgent {
    * per-call shallow spread does not lose writes.
    */
   private canvasFreshness: CanvasFreshnessState = {
-    refMap: new Map(),
     recentlyCreatedElementIds: new Set(),
   };
   /**
@@ -1016,6 +1021,11 @@ export class duyaAgent {
         conductorCanvasId:
           (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
           options?.conductorCanvasId,
+        canvasTarget: {
+          canvasId:
+            (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
+            options?.conductorCanvasId,
+        },
       };
 
       const executor = new StreamingToolExecutor(
@@ -2119,9 +2129,13 @@ export class duyaAgent {
     yield { type: 'skill_review_started' };
 
     // Fire-and-forget: run review in background without blocking the generator
-    this._runBackgroundReview(messagesSnapshot).catch((err) => {
-      logger.error('[SelfImprover] Background review failed', err);
-    });
+    this._runBackgroundReview(messagesSnapshot)
+      .then(async (result) => {
+        await this.onSkillReviewCompleted?.(result);
+      })
+      .catch((err) => {
+        logger.error('[SelfImprover] Background review failed', err);
+      });
   }
 
   private async _runBackgroundReview(messagesSnapshot: Message[]): Promise<import('../self-improver/SelfImprover.js').ImprovementResult> {

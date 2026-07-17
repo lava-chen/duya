@@ -48,7 +48,7 @@ export async function ipcRequest<T = unknown>(
     try {
       const response = await context.ipcRequest<T>(
         'conductor:executor:rpc',
-        { action, payload },
+        { action, payload, sessionId: context.options.sessionId },
         options,
       );
 
@@ -93,7 +93,7 @@ export async function ipcRequest<T = unknown>(
  * Throws if conductor mode is not active (canvasId missing).
  */
 export function getCanvasId(context: ToolUseContext): string {
-  const id = context.conductorCanvasId;
+  const id = context.canvasTarget?.canvasId ?? context.conductorCanvasId;
   if (!id) {
     throw new Error(
       'Canvas conductor tool invoked without a bound canvasId. ' +
