@@ -1,10 +1,10 @@
 /**
  * Gateway Agent Prompt System
  *
- * Minimal prompt system for the gateway relay agent. Unlike
+ * Minimal prompt system for the gateway channel agent. Unlike
  * GeneralPromptSystem (which renders a large duya_cli self-management
  * manual plus task/action/tool-usage guidance), this system renders
- * only what a stateless IM relay needs:
+ * only what a messaging-channel agent needs:
  *
  *   static:  intro (identity) → gatewayRole (behaviour) → system (ops)
  *            → toneAndStyle
@@ -12,8 +12,8 @@
  *
  * It deliberately omits: generalTaskGuidance, actions, toolUsage,
  * agentsMd, memory, environment, mcp, skills, scratchpad,
- * visionGuidelines, outputEfficiency — none of these help a relay
- * agent and several actively mislead it into doing work itself.
+ * visionGuidelines, outputEfficiency — the focused gateway role section
+ * carries the execution and media rules without the desktop-only material.
  */
 
 import type {
@@ -29,6 +29,8 @@ import { cachedPromptSection, volatilePromptSection } from '../constants/promptS
 import type { PromptProfile } from '../modes/types.js'
 import { DEFAULT_PROMPT_PROFILE } from '../modes/index.js'
 import { getShellForPrompt } from '../../utils/shellDetector.js'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 // Gateway-specific static sections
 import { getGatewayIntroSection, getGatewayRoleSection } from './sections/static/index.js'
@@ -99,9 +101,9 @@ export class GatewayPromptSystem extends PromptSystem {
   }
 
   override buildContext(options: PromptBuildContextOptions): PromptContext {
-    const workingDirectory = options.workingDirectory !== undefined && options.workingDirectory !== null
+    const workingDirectory = options.workingDirectory !== undefined && options.workingDirectory !== null && options.workingDirectory !== ''
       ? options.workingDirectory
-      : process.cwd()
+      : join(homedir(), '.duya', 'workspace')
 
     return {
       sessionId: options.sessionId,

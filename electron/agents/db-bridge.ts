@@ -89,6 +89,22 @@ function emitMailboxEvent(name: 'emitMailObserved' | 'emitMailApplied' | 'emitMa
   }
 }
 
+function emitSkillLearningCreated(event: Record<string, unknown>): void {
+  try {
+    // Keep this notification intentionally small: the renderer reloads the
+    // canonical record through the Skills IPC boundary before displaying it.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { BrowserWindow } = require('electron') as typeof import('electron');
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) {
+        window.webContents.send('skills:learning:created', { id: event.id });
+      }
+    }
+  } catch {
+    // The bridge also runs in non-Electron test contexts.
+  }
+}
+
 /**
  * Get default model name based on provider type
  */
@@ -144,6 +160,50 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
   const now = Date.now();
 
   switch (action) {
+    // ==================== Skill learning activity ====================
+    case 'skillLearning:create': {
+      const status = p.status;
+      if (status !== 'published' && status !== 'skipped' && status !== 'failed') {
+        throw new Error('Invalid skill learning status');
+      }
+      if (typeof p.sessionId !== 'string' || !p.sessionId) {
+        throw new Error('Skill learning event requires a sessionId');
+      }
+
+      const id = randomUUID();
+      db.prepare(`
+        INSERT INTO skill_learning_events (
+          id, session_id, skill_name, status, reason, score, feedback,
+          executed_task, dimensions_json, iteration_count, max_iterations,
+          final_path, error, read_at, created_at
+        ) VALUES (
+          @id, @session_id, @skill_name, @status, @reason, @score, @feedback,
+          @executed_task, @dimensions_json, @iteration_count, @max_iterations,
+          @final_path, @error, NULL, @created_at
+        )
+      `).run({
+        id,
+        session_id: p.sessionId,
+        skill_name: typeof p.skillName === 'string' ? p.skillName : null,
+        status,
+        reason: typeof p.reason === 'string' ? p.reason.slice(0, 2000) : '',
+        score: typeof p.score === 'number' ? Math.max(0, Math.min(10, p.score)) : null,
+        feedback: typeof p.feedback === 'string' ? p.feedback.slice(0, 6000) : null,
+        executed_task: typeof p.executedTask === 'string' ? p.executedTask.slice(0, 2000) : null,
+        dimensions_json: p.dimensions && typeof p.dimensions === 'object'
+          ? JSON.stringify(p.dimensions)
+          : null,
+        iteration_count: typeof p.iterationCount === 'number' ? p.iterationCount : 0,
+        max_iterations: typeof p.maxIterations === 'number' ? p.maxIterations : 3,
+        final_path: typeof p.finalPath === 'string' ? p.finalPath : null,
+        error: typeof p.error === 'string' ? p.error.slice(0, 2000) : null,
+        created_at: now,
+      });
+      const event = db.prepare('SELECT * FROM skill_learning_events WHERE id = ?').get(id) as Record<string, unknown>;
+      emitSkillLearningCreated(event);
+      return event;
+    }
+
     // ==================== Session actions ====================
     case 'session:create': {
       let providerType: ApiProvider['providerType'] = 'anthropic';
@@ -999,7 +1059,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       const patch = p.patch as {
         name?: string;
         description?: string | null;
-        schedule?: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null };
+        schedule?: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null; endAt?: string | null };
         prompt?: string;
         inputParams?: Record<string, unknown>;
         concurrencyPolicy?: 'skip' | 'parallel' | 'queue' | 'replace';

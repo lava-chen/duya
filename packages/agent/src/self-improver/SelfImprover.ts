@@ -14,8 +14,14 @@
  */
 
 import type { Message, AgentOptions } from '../types.js';
-import { readDraftSkill, backupDraftSkill, getDraftSkillsDir } from '../skills/SkillDraftManager.js';
+import {
+  readDraftSkill,
+  backupDraftSkill,
+  getDraftSkillsDir,
+  promoteDraftSkill,
+} from '../skills/SkillDraftManager.js';
 import { getSkillRegistry } from '../skills/registry.js';
+import { recordSkillCreate } from '../skills/skillUsage.js';
 import {
   loadSelfImproverState,
   saveSelfImproverState,
@@ -251,10 +257,11 @@ Execute the task using the tools and steps described in the skill. Observe:
 
 **Total Score: 0-10 (sum of all dimensions)**
 
-### Step 4: Pass/Fail Decision
+### Step 4: Report Only
 
-- **Pass (score >= 7)**: Call skill_manage(action='promote', name='<skill-name>')
-- **Fail (score < 7)**: Call skill_manage(action='reject', name='<skill-name>') to delete the failed draft, then provide detailed feedback for revision
+Do not call \`skill_manage\` to promote, reject, or edit the draft. The
+orchestration layer owns those state transitions so a failed evaluation can be
+revised and tested again without losing its draft.
 
 ### Step 5: Return Evaluation
 
@@ -402,14 +409,20 @@ export class SelfImprover {
 
   private schedulePersist(): Promise<void> {
     if (this.suppressPersist) return Promise.resolve();
-    const p = saveSelfImproverState({
+    const state = {
       itersSinceSkill: this.itersSinceSkill,
       toolCallsSinceSkill: this.toolCallsSinceSkill,
       lastResetAt: this.lastResetAt,
       lastReviewAt: this.lastReviewAt,
-    }).catch((err) => {
-      console.warn(`[SelfImprover] persist failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    };
+    // Consecutive turns can finish before the previous atomic file write has
+    // completed. Serialize snapshots so an older write cannot land after a
+    // newer one and roll the learning counter backwards.
+    const p = (this.lastPersistPromise ?? Promise.resolve())
+      .then(() => saveSelfImproverState(state))
+      .catch((err) => {
+        console.warn(`[SelfImprover] persist failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
     this.lastPersistPromise = p;
     return p;
   }
@@ -1120,6 +1133,20 @@ ${feedback}`;
       const passed = evaluationResult.score >= PASS_THRESHOLD;
 
       if (passed) {
+        const promotion = await promoteDraftSkill(skillName);
+        if (!promotion.success || !promotion.path) {
+          return {
+            phase: ImprovementPhase.IDLE,
+            creatorResult: { created: true, skillName, reason: 'Skill passed evaluation but could not be published' },
+            evaluationResult,
+            iterationCount: iteration + 1,
+            maxIterations: this.maxIterations,
+            error: promotion.error || `Skill '${skillName}' could not be published`,
+          };
+        }
+
+        await recordSkillCreate(skillName, 'agent');
+
         // Success! Skill passed evaluation — clean up any backups
         // left by revision iterations.
         await this.cleanupDraftBackups(skillName);
@@ -1127,7 +1154,7 @@ ${feedback}`;
           phase: ImprovementPhase.IDLE,
           creatorResult: { created: true, skillName, reason: 'Skill passed evaluation' },
           evaluationResult,
-          finalSkillPath: `~/.duya/skills/${skillName}`,
+          finalSkillPath: promotion.path,
           iterationCount: iteration + 1,
           maxIterations: this.maxIterations,
         };

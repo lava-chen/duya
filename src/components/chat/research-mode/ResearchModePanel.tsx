@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { usePanel } from '@/hooks/usePanel';
+import { useOptionalPanel } from '@/hooks/usePanel';
 import type { ResearchSessionSnapshot } from '@/types/research';
 import { PlanCard } from './PlanCard';
 import { RunningCard } from './RunningCard';
@@ -13,12 +13,20 @@ export interface ResearchModePanelProps {
   onForceStop?: () => void;
 }
 
+const NOOP_OPEN_PANEL = () => '';
+const NOOP_SET_PANEL_OPEN = () => {};
+
 export function ResearchModePanel({
   sessionId,
   snapshot,
   onForceStop,
 }: ResearchModePanelProps) {
-  const { panelOpen, tabs, activeTabId, openOrActivatePage, setPanelOpen } = usePanel();
+  const panel = useOptionalPanel();
+  const panelOpen = panel?.panelOpen ?? false;
+  const tabs = panel?.tabs ?? [];
+  const activeTabId = panel?.activeTabId ?? null;
+  const openOrActivatePage = panel?.openOrActivatePage ?? NOOP_OPEN_PANEL;
+  const setPanelOpen = panel?.setPanelOpen ?? NOOP_SET_PANEL_OPEN;
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const isResearchActive = panelOpen && activeTab?.pageId === 'research';

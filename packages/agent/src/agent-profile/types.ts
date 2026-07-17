@@ -183,22 +183,24 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
   {
     id: 'gateway',
     name: 'Gateway',
-    description: 'Relay agent for messaging channels — passes messages between users and other session agents',
-    // Gateway is a relay, not a worker. It allows ['*'] then denies:
-    //   - write/exec tools (it should delegate, not do the work)
+    description: 'Channel agent for messaging platforms — handles tasks directly and can consult other sessions when useful',
+    // Gateway is a capable channel agent. It allows ['*'] then denies:
+    //   - write tools that require a desktop permission surface
     //   - interactive/UI/canvas/management tools (no desktop surface)
     //   - recursive subagent spawning (avoid runaway)
-    // MessageSession + SessionSearch are intentionally ALLOWED so the
-    // gateway can talk to other session agents — that is its core job.
+    // Read-only shell commands are intentionally available so channel tasks
+    // such as locating and sending a local file can complete without making
+    // the user copy data into the gateway workspace first.
     identityPrompt:
-      'You are a "Gateway" relay agent running in a messaging channel. ' +
-      'Your job is to relay messages between the user and other session agents — ' +
-      'not to do the work yourself. Answer quick questions directly; delegate ' +
-      'anything that takes longer via MessageSession.',
+      'You are Duya, a capable channel agent running in a messaging platform. ' +
+      'Handle the user\'s request directly with the tools available to you. ' +
+      'Use other sessions only when their existing context is genuinely relevant.',
     allowedTools: ['*'],
     disallowedTools: [
-      // Write/exec — gateway relays, does not do work itself.
-      'write', 'edit', 'bash', 'powershell',
+      // Write operations need an interactive permission surface that channel
+      // sessions do not have. Bash/PowerShell remain available; their own
+      // security classifier gates commands that require approval.
+      'write', 'edit',
       // Interactive/UI/canvas — no desktop surface in a channel.
       'canvas:*',
       'show_widget',
@@ -211,10 +213,12 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'memory',
       'read_module',
       'task',
-      'enter_worktree', 'exit_worktree',
-      'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
-      'team_create', 'team_delete',
-      'list_mcp_resources', 'read_mcp_resource',
+      'EnterWorktree', 'ExitWorktree',
+      'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
+      // These tools are currently file-backed coordination scaffolding and do
+      // not implement a complete team runtime. Never expose them to Gateway.
+      'TeamCreate', 'TeamDelete',
+      'ListMcpResources', 'ReadMcpResource',
       'vision_analyze',
       'WebSearch', 'WebFetch',
     ],
@@ -245,9 +249,9 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'show_widget',
       'Agent',
       'canvas:*',
-      'team_create', 'team_delete',
-      'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
-      'enter_worktree', 'exit_worktree',
+      'TeamCreate', 'TeamDelete',
+      'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
+      'EnterWorktree', 'ExitWorktree',
     ],
     promptProfile: {
       // The 'actions' section repeatedly instructs "ask the user before

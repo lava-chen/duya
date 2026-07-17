@@ -14,11 +14,13 @@ import {
 } from "@phosphor-icons/react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
-import { usePanel } from "@/hooks/usePanel";
+import { useOptionalPanel } from "@/hooks/usePanel";
 
 interface ChatHeaderProps {
   thread: Thread;
 }
+
+const NOOP_OPEN_PANEL = () => "";
 
 type MenuAction =
   | { kind: "action"; id: string; label: string; shortcut?: string; onSelect: () => void; danger?: boolean }
@@ -37,7 +39,7 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
   const { t } = useTranslation();
   const updateThreadTitle = useConversationStore((s) => s.updateThreadTitle);
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
-  const { openOrActivatePage } = usePanel();
+  const openOrActivatePage = useOptionalPanel()?.openOrActivatePage ?? NOOP_OPEN_PANEL;
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(thread.title || "");

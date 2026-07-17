@@ -1,5 +1,6 @@
 import { homedir } from 'os';
 import { join } from 'path';
+import { mkdirSync } from 'fs';
 import { GatewayInitConfig, PlatformConfig, WorkerSpawnConfig } from './types';
 
 export interface DbSettingRow {
@@ -41,6 +42,13 @@ export function resolveGatewayWorkspace(initConfig?: GatewayInitConfig): string 
     return join(homedir(), raw.slice(1));
   }
   return raw;
+}
+
+/** Resolve and create the gateway workspace before a worker uses it as cwd. */
+export function prepareGatewayWorkspace(initConfig?: GatewayInitConfig): string {
+  const workspace = resolveGatewayWorkspace(initConfig);
+  mkdirSync(workspace, { recursive: true });
+  return workspace;
 }
 
 export function buildInitConfig(

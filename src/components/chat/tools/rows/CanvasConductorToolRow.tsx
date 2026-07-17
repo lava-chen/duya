@@ -1,7 +1,7 @@
-// CanvasConductorToolRow — renders the thirteen canvas_* tools with
+// CanvasConductorToolRow — renders the canvas_* tool family with
 // human-readable verbs and summaries instead of raw JSON dumps.
 //
-// Each tool maps to a stable action key (create, batchCreate, delete,
+// Each tool maps to a stable action key (manage, create, batchCreate, delete,
 // move, resize, fill, style, list, findEmptySpace, autoLayout,
 // applyLayout, capture, getKnowledge). The row picks the running /
 // done / error i18n key from that action and shows a concise summary
@@ -27,6 +27,7 @@ interface CanvasConductorToolRowProps {
 }
 
 type CanvasAction =
+  | 'manage'
   | 'create'
   | 'batchCreate'
   | 'delete'
@@ -43,6 +44,8 @@ type CanvasAction =
 
 function getCanvasAction(name: string): CanvasAction {
   switch (name.toLowerCase()) {
+    case 'canvas_manage':
+      return 'manage';
     case 'canvas_create_element':
       return 'create';
     case 'canvas_batch_create':
@@ -134,6 +137,20 @@ function computeSummary(tool: ToolAction, action: CanvasAction): string {
   const resultData = parseToolResult(tool.result);
 
   switch (action) {
+    case 'manage': {
+      const operation = typeof input.action === 'string' ? input.action : 'get_current';
+      const name = typeof input.name === 'string' ? input.name : '';
+      const currentCanvas = resultData?.currentCanvas;
+      const currentName = currentCanvas && typeof currentCanvas === 'object'
+        ? (currentCanvas as Record<string, unknown>).name
+        : undefined;
+      if (operation === 'list' && Array.isArray(resultData?.canvases)) {
+        return `${resultData.canvases.length} canvases`;
+      }
+      if (name) return truncate(`${operation}: ${name}`);
+      if (typeof currentName === 'string') return truncate(`${operation}: ${currentName}`);
+      return operation;
+    }
     case 'create': {
       const kind = typeof input.kind === 'string' ? input.kind : '';
       const text =

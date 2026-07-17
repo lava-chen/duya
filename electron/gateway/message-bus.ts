@@ -19,7 +19,8 @@ import { testBridgeChannel } from '../services/network/bridge-tester';
 import { getPairingStore } from './pairing';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getGatewayProxyConfig } from '../db/queries/settings';
-import { getDefaultGatewayWorkspace, resolveGatewayWorkspace } from './config';
+import { getDefaultGatewayWorkspace, prepareGatewayWorkspace } from './config';
+import { buildGatewayInboundChatRequest } from './inbound-request';
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
@@ -466,17 +467,31 @@ export function handleGatewayMessage(
       let accumulatedText = '';
       let sseBuffer = '';
 
-      const body = JSON.stringify({
-        prompt: inboundMsg.prompt,
-        options: {
-          ...inboundMsg.options,
-          platform,
-          platformMsgId: inboundMsg.platformMsgId,
-          platformChatId,
-          agentProfileId: 'gateway',
-        },
+      const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
+      const db = getDatabase();
+      if (db) {
+        try {
+          // Repair sessions created before the gateway workspace contract was
+          // introduced. More importantly, keep UI metadata aligned with the
+          // top-level cwd passed to the worker below and restore the fixed
+          // channel permission profile for legacy rows.
+          db.prepare(
+            'UPDATE chat_sessions SET working_directory = ?, permission_profile = ?, updated_at = ? WHERE id = ?',
+          ).run(workingDirectory, GATEWAY_PERMISSION_PROFILE, Date.now(), sessionId);
+        } catch (err) {
+          getLogger().warn(
+            'Failed to synchronize gateway session workspace',
+            { sessionId, error: err instanceof Error ? err.message : String(err) },
+            LogComponent.Gateway,
+          );
+        }
+      }
+
+      const body = JSON.stringify(buildGatewayInboundChatRequest({
+        inbound: inboundMsg,
         providerConfig,
-      });
+        workingDirectory,
+      }));
 
       const req = require('http').request(
         {
@@ -635,7 +650,7 @@ export function handleGatewayMessage(
 
       // Resolve workspace from init config (reads bridge_workspace setting,
       // falls back to ~/.duya/workspace).
-      const workingDirectory = resolveGatewayWorkspace(getOrBuildInitConfig());
+      const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
 
       // Save session to threads table and chat_sessions table
       const db = getDatabase();
@@ -651,7 +666,10 @@ export function handleGatewayMessage(
           db.prepare(`
             INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+            ON CONFLICT(id) DO UPDATE SET
+              working_directory = excluded.working_directory,
+              permission_profile = excluded.permission_profile,
+              updated_at = excluded.updated_at
           `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
 
           // Create user mapping atomically (saves one IPC round-trip from Gateway)
@@ -718,7 +736,7 @@ export function handleGatewayMessage(
 
       // Resolve workspace from init config (reads bridge_workspace setting,
       // falls back to ~/.duya/workspace).
-      const workingDirectory = resolveGatewayWorkspace(getOrBuildInitConfig());
+      const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
 
       // Save new session to threads table and chat_sessions table
       if (db) {
@@ -734,7 +752,10 @@ export function handleGatewayMessage(
           db.prepare(`
             INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+            ON CONFLICT(id) DO UPDATE SET
+              working_directory = excluded.working_directory,
+              permission_profile = excluded.permission_profile,
+              updated_at = excluded.updated_at
           `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
           // Update the user mapping to point at the new session. Without
           // this, getOrCreateSession would return the old session id and
@@ -1289,7 +1310,7 @@ export function registerGatewayIpcHandlers(): void {
 
     // Resolve workspace from init config (reads bridge_workspace setting,
     // falls back to ~/.duya/workspace).
-    const workingDirectory = resolveGatewayWorkspace(getOrBuildInitConfig());
+    const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
 
     // Save session to threads table and chat_sessions table
     const db = getDatabase();
@@ -1304,10 +1325,13 @@ export function registerGatewayIpcHandlers(): void {
         `).run(sessionId, title, 'gateway', '', now, now);
         // Also insert into chat_sessions so messages can be persisted via replaceMessages
         db.prepare(`
-          INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, provider_id, generation, created_at, updated_at, is_deleted)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-          ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-        `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', 'env', 0, now, now);
+          INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+          ON CONFLICT(id) DO UPDATE SET
+            working_directory = excluded.working_directory,
+            permission_profile = excluded.permission_profile,
+            updated_at = excluded.updated_at
+        `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
       } catch (err) {
         getLogger().error('Failed to save gateway session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
       }
