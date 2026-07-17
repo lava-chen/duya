@@ -42,8 +42,9 @@ import { setRecap } from '@/components/layout/recap-store';
 import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
-import { usePanel } from '@/hooks/usePanel';
+import { useOptionalPanel } from '@/hooks/usePanel';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
+import type { ConductorCanvas } from '@duya/conductor/renderer/types/conductor';
 
 interface ChatViewProps {
   sessionId: string;
@@ -57,6 +58,9 @@ interface ChatViewProps {
   isStreaming?: boolean;
   hasQueuedMessages?: boolean;
 }
+
+const NOOP_OPEN_PANEL = () => '';
+const NOOP_CLOSE_PANEL = () => {};
 
 function WorkspaceComposerLayer({
   expanded,
@@ -160,7 +164,11 @@ export function ChatView({
   const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
   const taskDrawerOpen = useTaskDrawerOpen();
-  const { workspaceExpanded, openOrActivatePage, tabs: panelTabs, closePanel } = usePanel();
+  const panel = useOptionalPanel();
+  const workspaceExpanded = panel?.workspaceExpanded ?? false;
+  const openOrActivatePage = panel?.openOrActivatePage ?? NOOP_OPEN_PANEL;
+  const panelTabs = panel?.tabs ?? [];
+  const closePanel = panel?.closePanel ?? NOOP_CLOSE_PANEL;
   // Keep a ref to the latest panel tabs so cleanup code can close conductor
   // tabs without adding `tabs` to the dependency list of callbacks/effects
   // that must stay stable (e.g. handleConductorChange, session loader).
@@ -192,6 +200,50 @@ export function ChatView({
     conductorCanvasIdRef.current = next;
     setConductorCanvasIdState(next);
   }, []);
+
+  // Agent-side canvas_manage operations are durable in SQLite, but the
+  // renderer also needs to follow them immediately. Listen on the conductor
+  // channel so a switch updates the conversation binding and replaces the
+  // frozen sidebar canvas tab with the new target.
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
+    const subscribe = () => {
+      unsubscribe?.();
+      const port = window.electronAPI?.getConductorPort?.();
+      if (!port?.onCanvasChanged) return;
+
+      unsubscribe = port.onCanvasChanged((event) => {
+        const canvas = event.canvas as unknown as ConductorCanvas;
+        const conductorStore = useConductorStore.getState();
+        if (conductorStore.canvases.some((item) => item.id === canvas.id)) {
+          conductorStore.updateCanvas(canvas);
+        } else {
+          conductorStore.addCanvas(canvas);
+        }
+
+        if (!event.currentCanvasId || event.sessionId !== sessionId) return;
+
+        setConductorEnabled(true);
+        setConductorCanvasId(event.currentCanvasId);
+        useConversationStore.getState().setThreadConductorBinding(sessionId, true, event.currentCanvasId);
+
+        for (const tab of panelTabsRef.current.filter(
+          (item) => item.pageId === 'conductor' && item.params?.canvasId !== event.currentCanvasId,
+        )) {
+          closePanel(tab.id);
+        }
+        openOrActivatePage('conductor', { canvasId: event.currentCanvasId });
+      });
+    };
+
+    subscribe();
+    window.addEventListener('conductor-port-ready', subscribe);
+    return () => {
+      window.removeEventListener('conductor-port-ready', subscribe);
+      unsubscribe?.();
+    };
+  }, [closePanel, openOrActivatePage, sessionId, setConductorCanvasId, setConductorEnabled]);
 
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);

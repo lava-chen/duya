@@ -138,6 +138,28 @@ DUYA 采用 **Multi-Agent Process** 模式，每个 Agent 运行在独立的 **C
     回复原路返回给外部平台
 ```
 
+#### Gateway Agent runtime contract
+
+- Gateway sessions use `agentProfileId: 'gateway'` and fixed
+  `permission_profile='default'`; an inbound turn repairs legacy rows that still
+  contain another permission profile.
+- The configured `bridge_workspace` is prepared before use and defaults to
+  `~/.duya/workspace`. `electron/gateway/message-bus.ts` passes it as the
+  Agent Server request's top-level `workingDirectory` and
+  `defaultWorkspaceDirectory`; placing it only under `options` does not
+  initialize the worker cwd.
+- The Gateway profile can use read/search plus Bash/PowerShell. Read-only shell
+  commands execute directly, while the shell security classifier retains
+  confirmation requirements for risky commands.
+- Desktop-only, recursive-agent, mode/worktree, and the incomplete file-backed
+  `TeamCreate` / `TeamDelete` tools are excluded using their exact,
+  case-sensitive wire names.
+- Channel media delivery accepts accessible absolute paths through
+  `MEDIA:<absolute-path>`; a file does not need to be copied into the Gateway
+  workspace first.
+- `SessionSearch` / `MessageSession` are optional continuity tools, not a
+  default substitute for handling the user's task with local tools.
+
 ### 消息持久化流程
 
 ```
@@ -1093,14 +1115,21 @@ DUYA now includes a Phase 1 CronJob foundation in Electron Main Process:
 ### Scheduler behavior
 
 - Supports schedule kinds: `at`, `every`, `cron` (with optional IANA timezone).
+- Renderer presets (hourly, daily, weekdays, weekly, monthly, custom, once) compile into the same `at` / `cron` contract; existing non-preset expressions remain editable as Custom.
+- Repeating schedules can persist `schedule_end_at`; next-run calculation refuses candidates after that boundary and disables exhausted jobs.
 - Supports concurrency policies: `skip`, `parallel`, `queue`, `replace`.
 - Uses in-memory running state + DB run state tracking.
 - Uses retry with default backoff `[30s, 60s, 300s]` and default `max_retries = 3`.
+- Startup isolates invalid stored schedules instead of aborting the scheduler, and long waits are re-armed in safe `setTimeout` segments.
+- Cron sessions default to `~/.duya/workspace`, create that directory before Agent init, and never fall back to the Electron process cwd.
+- Agent readiness is subscribed before `init`; failed `init` and `chat:start` sends fail the run instead of waiting for a timeout.
 
 ### Frontend entry
 
 - Sidebar adds **Automation** navigation.
-- Minimal view: `src/components/automation/AutomationView.tsx`
+- View: `src/components/automation/AutomationView.tsx`
+- Shared frequency UI: `src/components/automation/CronScheduleCard.tsx`
+- Preset adapter and next-run preview: `src/components/automation/cron-schedule.ts`
 - Renderer IPC wrapper: `src/lib/automation-ipc.ts`
 
 ## Conductor connector geometry
@@ -1110,3 +1139,53 @@ Connector records persist semantic geometry rather than SVG paths. Each endpoint
 Agent-created editable diagrams default to elbow routing. Architecture fan-out/fan-in guidance aligns sibling nodes and uses direct semantic connectors whose overlapping orthogonal segments form a shared trunk/bus with short terminal branches; curve routing is an explicit organic-style exception.
 
 Dragging an internal elbow segment uses zoom-aware screen-space snapping against nearby parallel segments from other elbow connectors. Only spatially related segment ranges participate, so shared trunks can become exactly collinear without pulling toward unrelated routes. Default arrow markers use compact convex geometry aligned toward the attached node center; the connector stroke continues underneath the filled head so the terminal reads as one integrated shape.
+
+## Conductor knowledge workspace
+
+The Conductor canvas is a project knowledge workspace, not a sticky-note board.
+Each canvas is bound to one project folder (`conductor_canvases.project_path`); a
+canvas created from a session inherits that session's working directory, while a
+standalone canvas prompts for a project folder.
+
+- `native/document` is a Markdown source element. New documents are written to
+  `<project>/.duya/canvas/<element-id>.md`; imported documents must be an `.md`
+  file inside the same project. The canvas keeps a project-relative path plus a
+  render snapshot, and both user edits and Agent `element.update_content`
+  changes synchronously write the Markdown file.
+- `native/shape` is the diagram primitive for frameworks, timelines, map
+annotations, and flowcharts. `native/sticky` remains renderable only for
+existing boards and must not be used for new diagrams.
+- `native/table` is a canvas-native, individually editable grid. Its compact
+  `{ title, headers, rows }` config is persisted through `element.update_content`.
+- Files, PDFs, and images remain source-material elements. Text documents
+  supply nearby notes/drafts, shapes and connectors express interpretation,
+  and `native/link` connects canvases and sessions into a homepage canvas.
+- Canvas document/import menus reuse the chat input command-popover surface
+  (`--command-menu-*` variables and `conductor-popover-item`) so settings and
+  canvas controls have one visual language.
+- Canvas element selection toolbars share the connector-style capsule surface.
+  Their More menu persists `metadata.locked` through `element.update`; locked
+  elements remain selectable and editable, but direct drag, resize, connector
+  geometry handles, and group movement cannot change their position.
+
+## Conductor multi-canvas target contract (Plan 233)
+
+Conductor mode binds a chat session to one current canvas through
+`chat_sessions.conductor_canvas_id`, but the workspace may contain many
+canvases. The `canvas_manage` tool is the canvas-level control surface:
+`get_current`, `list`, `create`, `switch`, and `rename`. Element tools never
+accept a model-provided canvas ID; they resolve the current target from the
+shared `ToolUseContext.canvasTarget` object.
+
+A successful switch has three synchronized effects:
+
+1. mutate `canvasTarget` so later tool calls in the same Agent turn use the
+   new canvas and clear cross-canvas freshness state;
+2. persist the new ID to `chat_sessions.conductor_canvas_id` through
+   `ConductorExecutorProxy`;
+3. publish `conductor:canvas:changed` so the conversation store and frozen
+   sidebar Conductor tab follow the new target immediately.
+
+Canvas identity is therefore durable session state, while element state
+remains scoped to the selected canvas. Renderer state is never the sole source
+of truth for Agent target selection.

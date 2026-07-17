@@ -32,6 +32,7 @@ import {
 import type { DbInitResult, DatabaseStats } from '../db/index';
 import { emitMailApplied, emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
 import { uploadAsset as conductorUploadAsset } from '../conductor/asset-service';
+import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
 import { markMailboxForGuidance, promoteQueuedMailbox } from '../db/mailbox-transitions';
 
 // Re-export lifecycle functions for backward compatibility
@@ -703,7 +704,8 @@ export function registerDbHandlers(): void {
   ipcMain.handle('automation:cron:create', (_event, data: {
     name: string;
     description?: string | null;
-    schedule: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null };
+    workingDirectory?: string;
+    schedule: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null; endAt?: string | null };
     prompt: string;
     model: string;
     inputParams?: Record<string, unknown>;
@@ -721,7 +723,8 @@ export function registerDbHandlers(): void {
   ipcMain.handle('automation:cron:update', (_event, id: string, patch: {
     name?: string;
     description?: string | null;
-    schedule?: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null };
+    workingDirectory?: string;
+    schedule?: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null; endAt?: string | null };
     prompt?: string;
     inputParams?: Record<string, unknown>;
     concurrencyPolicy?: 'skip' | 'parallel' | 'queue' | 'replace';
@@ -1873,7 +1876,9 @@ export function registerConductorHandlers(): void {
             agentCanWrite: true,
             agentCanDelete: true,
           };
-          const config = { ...content, style };
+          const config = nodeType === 'document'
+            ? { ...prepareCanvasDocument(canvasId, elementId, content), style }
+            : { ...content, style };
           const metadata = {
             label: (content.label as string) || nodeType,
             tags: [] as string[],
@@ -1961,14 +1966,16 @@ export function registerConductorHandlers(): void {
 
         case 'element.update_content': {
           const elementId = request.elementId as string;
-          const content = request.content as Record<string, unknown>;
-          const prev = d.prepare('SELECT config FROM conductor_elements WHERE id = ? AND canvas_id = ?').get(elementId, canvasId) as any;
+          const content = (request.content as Record<string, unknown> | undefined) ?? {};
+          const prev = d.prepare('SELECT config, element_kind FROM conductor_elements WHERE id = ? AND canvas_id = ?').get(elementId, canvasId) as any;
           if (!prev) throw new Error(`Element ${elementId} not found`);
 
           const prevConfig = JSON.parse(prev.config);
-          d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(content), now, elementId);
+          const nextConfig = { ...prevConfig, ...content };
+          if (prev.element_kind === 'native/document') syncCanvasDocument(canvasId, nextConfig);
+          d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(nextConfig), now, elementId);
 
-          const resultPatch = { config: content, prevConfig };
+          const resultPatch = { config: nextConfig, prevConfig };
           const actionId = writeActionLog(action, elementId, { content }, resultPatch);
           broadcastPatch({ canvasId, elementId, actionId, resultPatch });
           return { success: true, actionId, elementId, resultPatch };

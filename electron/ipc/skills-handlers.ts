@@ -15,7 +15,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { getConfigManager } from '../config/manager';
 import { parseSkillFrontmatter, parseAllowedTools } from '../utils/skill-parser';
 import { scanSkillFile, type SkillFinding } from '../../packages/agent/src/security/skillScanner.js';
-import { getJsonSetting, setJsonSetting } from '../db/index';
+import { getDatabase, getJsonSetting, setJsonSetting } from '../db/index';
 import { getPluginManager } from '../plugins/PluginManager';
 import * as crypto from 'crypto';
 
@@ -526,6 +526,72 @@ export function registerSkillsHandlers(): void {
     } catch (error) {
       const logger = getLogger();
       logger.error('Failed to update security bypass list', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Skills);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('skills:learning:list', async (_event, options?: { limit?: number; unreadOnly?: boolean }) => {
+    try {
+      const db = getDatabase();
+      if (!db) throw new Error('Database not initialized');
+      const limit = Math.max(1, Math.min(100, Number(options?.limit) || 30));
+      const unreadOnly = options?.unreadOnly === true;
+      const rows = unreadOnly
+        ? db.prepare(`
+            SELECT * FROM skill_learning_events
+            WHERE read_at IS NULL AND status IN ('published', 'failed')
+            ORDER BY created_at DESC LIMIT ?
+          `).all(limit)
+        : db.prepare(`
+            SELECT * FROM skill_learning_events
+            ORDER BY created_at DESC LIMIT ?
+          `).all(limit);
+      return { success: true, events: rows };
+    } catch (error) {
+      getLogger().error(
+        'Failed to list Skill learning events',
+        error instanceof Error ? error : new Error(String(error)),
+        undefined,
+        LogComponent.Skills,
+      );
+      return { success: false, events: [], error: String(error) };
+    }
+  });
+
+  ipcMain.handle('skills:learning:unreadCount', async () => {
+    try {
+      const db = getDatabase();
+      if (!db) throw new Error('Database not initialized');
+      const row = db.prepare(`
+        SELECT COUNT(*) AS count FROM skill_learning_events
+        WHERE read_at IS NULL AND status IN ('published', 'failed')
+      `).get() as { count: number };
+      return { success: true, count: row.count };
+    } catch (error) {
+      return { success: false, count: 0, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('skills:learning:markRead', async (_event, ids?: string[]) => {
+    try {
+      const db = getDatabase();
+      if (!db) throw new Error('Database not initialized');
+      const now = Date.now();
+      const validIds = Array.isArray(ids)
+        ? ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : [];
+      if (validIds.length === 0) {
+        db.prepare(`
+          UPDATE skill_learning_events SET read_at = ?
+          WHERE read_at IS NULL AND status IN ('published', 'failed')
+        `).run(now);
+      } else {
+        const placeholders = validIds.map(() => '?').join(', ');
+        db.prepare(`UPDATE skill_learning_events SET read_at = ? WHERE id IN (${placeholders})`)
+          .run(now, ...validIds);
+      }
+      return { success: true };
+    } catch (error) {
       return { success: false, error: String(error) };
     }
   });

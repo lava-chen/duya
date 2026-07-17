@@ -648,10 +648,18 @@ function handlePostChatSSE(
           };
         } else if (msgType === 'ready') {
           // 'ready' type is already correct format
-        } else if (msgType === 'chat:agent_progress' || msgType === 'chat:skill_review_started' || msgType === 'chat:skill_review_completed') {
+        } else if (msgType === 'chat:agent_progress') {
           sseEvent = {
             type: msgType.replace('chat:', ''),
             data: event,
+          };
+        } else if (msgType === 'chat:skill_review_started' || msgType === 'chat:skill_review_completed') {
+          // Skill-review payloads are already the renderer contract. Keep the
+          // worker envelope out of `data`, otherwise the review indicator
+          // receives `{ data: { passed, score, ... } }` and cannot resolve.
+          sseEvent = {
+            type: msgType.replace('chat:', ''),
+            data: event.data,
           };
         } else if (msgType.startsWith('chat:research_')) {
           // Worker emits `chat:research_*` events where convertSSEToAgentMessage

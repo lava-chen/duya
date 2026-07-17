@@ -29,6 +29,10 @@ exec-plans/
 
 Plans in `active/` are being executed with clear phases and checkpoints.
 
+| [232-input-option-popover-alignment](./active/232-input-option-popover-alignment.md) | Shared searchable option-panel style for chat model and project/session pickers | P1 | In progress |
+| [233-conductor-multi-canvas-management](./active/233-conductor-multi-canvas-management.md) | Agent canvas identity, listing, creation, switching, naming, and durable sidebar/session sync | P0 | In progress |
+| [231-cron-automation-ui-runtime-hardening](./active/231-cron-automation-ui-runtime-hardening.md) | Cron creation/editing UX, schedule presets, scheduler startup hardening, and default workspace | P0 | Implementation complete; verification blockers recorded |
+
 ### Agent Feature Parity Plans
 
 | Plan | Description | Priority | Status |
@@ -163,6 +167,7 @@ Moved here when finished. Each includes:
 
 | Plan | Description | Completed |
 |------|-------------|-----------|
+| [230-gateway-agent-capability-and-workspace](./completed/230-gateway-agent-capability-and-workspace.md) | Gateway Agent direct tools, isolated workspace propagation, and broken Team tool filtering | 2026-07-17 |
 | [226-agent-harness-project-grounding](./completed/226-agent-harness-project-grounding.md) | Agent Harness Project Grounding — scoped AGENTS.md、计划/规格恢复、调查门槛、跨 session/agent 连续性与提示词 profile 一致性 | 2026-07-15 |
 | [229-recent-session-directory](./completed/229-recent-session-directory.md) | Recent Session Directory — project-aware discovery, scoped SessionSearch, and guarded MessageSession follow-up | 2026-07-15 |
 | [02-context-compaction-system](./completed/02-context-compaction-system.md) | Context Compression 系统 | 2026-04-09 |

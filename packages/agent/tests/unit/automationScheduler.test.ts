@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeNextRunAtMs } from '../../../../electron/automation/Scheduler';
+import { computeNextRunAtMs } from '../../../../electron/automation/persistence';
 import type { CronSchedule } from '../../../../electron/automation/types';
 
 describe('computeNextRunAtMs', () => {
@@ -51,5 +51,16 @@ describe('computeNextRunAtMs', () => {
     expect(utcNext).not.toBeNull();
     expect(shanghaiNext).not.toBeNull();
     expect(utcNext).not.toBe(shanghaiNext);
+  });
+
+  it('does not schedule a run after the repeat end time', () => {
+    const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const schedule: CronSchedule = {
+      kind: 'every',
+      everyMs: 60_000,
+      endAt: new Date(now + 30_000).toISOString(),
+    };
+
+    expect(computeNextRunAtMs(schedule, now)).toBeNull();
   });
 });

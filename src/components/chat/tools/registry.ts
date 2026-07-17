@@ -260,7 +260,7 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    // Canvas Conductor — thirteen canvas_* tools grouped under one
+    // Canvas Conductor — the canvas_* tool family grouped under one
     // renderer. The dedicated CanvasConductorToolRow supplies the
     // per-tool verb and summary; this entry is the registry fallback
     // for the group summary builder and any path that bypasses the row.

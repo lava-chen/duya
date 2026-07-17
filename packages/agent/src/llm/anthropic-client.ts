@@ -21,6 +21,7 @@ import { extractToolInputPreview, hasToolInputPreview } from './tool-input-previ
 
 /** Valid ID characters for Anthropic API: alphanumeric, underscore, hyphen */
 const VALID_ID_REGEX = /[^a-zA-Z0-9_-]/g;
+const ANTHROPIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const THINKING_TYPES = new Set(['thinking', 'redacted_thinking']);
 // MiniMax Anthropic-compatible endpoint: `max_tokens` is the OUTPUT token
 // ceiling, NOT the total context window. Docs list MiniMax-M3 total
@@ -571,9 +572,13 @@ function repairToolPairing(messages: MessageParam[]): MessageParam[] {
  * checking that both IDs exist somewhere in history is insufficient: MiniMax
  * rejects that sequence with error 2013.
  */
-function normalizeToolResultOrdering(messages: MessageParam[]): MessageParam[] {
+function normalizeToolResultOrdering(
+  messages: MessageParam[],
+  synthesizeMissingToolResults = false,
+): MessageParam[] {
   const normalized: MessageParam[] = [];
   let reorderedRounds = 0;
+  let synthesizedCount = 0;
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
@@ -596,12 +601,14 @@ function normalizeToolResultOrdering(messages: MessageParam[]): MessageParam[] {
     const resultBlocks: ContentBlockParam[] = [];
     const deferred: MessageParam[] = [];
     let resultEndIndex = -1;
+    let roundEndIndex = index;
 
     for (let cursor = index + 1; cursor < messages.length && unresolvedIds.size > 0; cursor++) {
       const candidate = messages[cursor];
       if (candidate.role === 'assistant') {
         break;
       }
+      roundEndIndex = cursor;
 
       if (candidate.role === 'user' && Array.isArray(candidate.content)) {
         const matchingResults = candidate.content.filter((block) => {
@@ -631,10 +638,28 @@ function normalizeToolResultOrdering(messages: MessageParam[]): MessageParam[] {
       deferred.push(candidate);
     }
 
-    // Leave incomplete rounds to repairToolPairing, which safely drops the
-    // unpaired blocks. Reordering only complete rounds avoids fabricating a
-    // tool result or moving unrelated later conversation into the round.
+    // Keep the normal path non-destructive. On a provider-reported protocol
+    // error, recovery mode preserves the tool call and supplies a truthful
+    // failed result for only the calls that did not finish before the next
+    // assistant turn. A result after that turn is stale and is removed by the
+    // strict recovery cleanup below.
     if (unresolvedIds.size > 0 || resultEndIndex === -1) {
+      if (synthesizeMissingToolResults) {
+        const synthesizedResults = Array.from(unresolvedIds, (toolUseId) => ({
+          type: 'tool_result' as const,
+          tool_use_id: toolUseId,
+          content: '<tool_error>Tool execution did not complete. This result was synthesized during conversation recovery.</tool_error>',
+          is_error: true,
+        })) as ContentBlockParam[];
+
+        normalized.push(message);
+        normalized.push({ role: 'user', content: [...resultBlocks, ...synthesizedResults] });
+        normalized.push(...deferred);
+        synthesizedCount += synthesizedResults.length;
+        reorderedRounds++;
+        index = roundEndIndex;
+        continue;
+      }
       normalized.push(message);
       continue;
     }
@@ -657,7 +682,59 @@ function normalizeToolResultOrdering(messages: MessageParam[]): MessageParam[] {
     );
   }
 
+  if (synthesizedCount > 0) {
+    logger.warn(
+      `[toAnthropicMessages] Synthesized ${synthesizedCount} missing tool_result block(s) for recovery`,
+    );
+  }
+
   return normalized;
+}
+
+/**
+ * Recovery requests must not retain delayed tool results after a synthetic
+ * result has already closed the tool round. Anthropic-compatible endpoints
+ * accept tool_result blocks only in the user turn immediately after the
+ * corresponding assistant tool_use turn.
+ */
+function stripNonAdjacentToolResults(messages: MessageParam[]): MessageParam[] {
+  return messages.map((message, index) => {
+    if (message.role !== 'user' || !Array.isArray(message.content)) {
+      return message;
+    }
+
+    const previous = messages[index - 1];
+    const expectedIds = new Set<string>();
+    if (previous?.role === 'assistant' && Array.isArray(previous.content)) {
+      for (const block of previous.content) {
+        if (typeof block !== 'object' || block === null || (block as { type?: string }).type !== 'tool_use') {
+          continue;
+        }
+        const id = (block as { id?: string }).id;
+        if (id) expectedIds.add(id);
+      }
+    }
+
+    const seenIds = new Set<string>();
+    const content = (message.content as ContentBlockParam[]).filter((block) => {
+      if (typeof block !== 'object' || block === null || (block as { type?: string }).type !== 'tool_result') {
+        return true;
+      }
+      const id = (block as { tool_use_id?: string }).tool_use_id;
+      if (!id || !expectedIds.has(id) || seenIds.has(id)) {
+        return false;
+      }
+      seenIds.add(id);
+      return true;
+    });
+
+    if (content.length === message.content.length) {
+      return message;
+    }
+    return content.length > 0
+      ? { ...message, content }
+      : { ...message, content: [{ type: 'text', text: '(delayed tool result removed)' } as ContentBlockParam] };
+  });
 }
 
 /**
@@ -777,50 +854,6 @@ function toAnthropicMessages(
     }
   }
 
-  // Recovery mode is deliberately additive: do not discard an assistant's
-  // tool_use just because a worker crashed before its result was persisted.
-  // Instead, synthesize an explicit failed result. That restores the provider
-  // protocol without claiming the tool actually completed, and lets the model
-  // continue from a truthful state on the retry.
-  if (synthesizeMissingToolResults) {
-    const existingResultIds = new Set<string>();
-    for (const entry of converted) {
-      for (const id of entry.toolResultIds) existingResultIds.add(id);
-    }
-
-    const repaired: typeof converted = [];
-    let synthesizedCount = 0;
-    for (const entry of converted) {
-      repaired.push(entry);
-      if (entry.originalRole !== 'assistant' || entry.toolCallIds.length === 0) continue;
-
-      const missingIds = entry.toolCallIds.filter((id) => !existingResultIds.has(id));
-      if (missingIds.length === 0) continue;
-
-      synthesizedCount += missingIds.length;
-      repaired.push({
-        originalRole: 'tool',
-        toolCallIds: [],
-        toolResultIds: missingIds,
-        param: {
-          role: 'user',
-          content: missingIds.map((toolUseId) => ({
-            type: 'tool_result',
-            tool_use_id: toolUseId,
-            content: '<tool_error>Tool execution did not complete. This result was synthesized during conversation recovery.</tool_error>',
-            is_error: true,
-          })) as ContentBlockParam[],
-        },
-      });
-    }
-    if (synthesizedCount > 0) {
-      logger.warn(
-        `[toAnthropicMessages] Synthesized ${synthesizedCount} missing tool_result block(s) for recovery`,
-      );
-    }
-    converted.splice(0, converted.length, ...repaired);
-  }
-
   // Step 2: Bidirectional orphan cleanup using GLOBAL id matching.
   //
   // Previous version required `tool_use` to be IMMEDIATELY followed by
@@ -892,6 +925,13 @@ function toAnthropicMessages(
       // Drop only the tool_use blocks whose id is a true orphan (no
       // matching tool_result exists anywhere in the history).
       if (entry.toolCallIds.length > 0 && Array.isArray(entry.param.content)) {
+        if (synthesizeMissingToolResults) {
+          // Recovery handles missing results by exact round position below.
+          // Keep the original tool_use so it can receive a synthetic failed
+          // result instead of being silently erased by global ID cleanup.
+          result.push(entry.param);
+          continue;
+        }
         const filteredContent = (entry.param.content as ContentBlockParam[]).filter((block) => {
           if (typeof block !== 'object' || block === null) return true;
           if ((block as { type?: string }).type !== 'tool_use') return true;
@@ -1028,7 +1068,7 @@ function toAnthropicMessages(
   // Step 3: Restore provider-required ordering for complete tool rounds.
   // A global ID match alone is not enough: MiniMax rejects a task
   // notification between tool_use and tool_result with error 2013.
-  const ordered = normalizeToolResultOrdering(result);
+  const ordered = normalizeToolResultOrdering(result, synthesizeMissingToolResults);
 
   // Step 4: Strip orphaned tool_results (no matching tool_use). This is
   // now mostly redundant with the bidirectional cleanup above, but
@@ -1049,12 +1089,25 @@ function toAnthropicMessages(
   // positions so we can diagnose the root cause.
   const repaired = repairToolPairing(withThinkingHandled);
 
-  return repaired;
+  // In recovery, a delayed result cannot remain after its original round has
+  // been closed with a synthetic failure result. Remove it so every retained
+  // tool_result belongs to the directly preceding assistant tool_use message.
+  const strictRecoveryPayload = synthesizeMissingToolResults
+    ? stripNonAdjacentToolResults(repaired)
+    : repaired;
+
+  return strictRecoveryPayload;
 }
 
 function isMiniMaxInvalidParameters2013(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /\b2013\b/.test(message) && /invalid params|invalid_request_error/i.test(message);
+}
+
+function isToolResultOrderingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /tool_use[\s\S]{0,200}tool_result|tool_result[\s\S]{0,200}tool_use/i.test(message) &&
+    /immediately after|corresponding|must have/i.test(message);
 }
 
 /**
@@ -1220,7 +1273,23 @@ export class AnthropicClient implements LLMClient {
   ): AsyncGenerator<SSEEvent, void, unknown> {
     logger.debug(`[AnthropicClient] streamChat started, model=${this.model}, isMiniMax=${this.isMiniMax}`);
 
-    const tools = options?.tools?.map((tool) => ({
+    // DeepSeek's Anthropic-compatible endpoint validates tool names with the
+    // OpenAI function-name contract. Tool names can originate in MCP servers,
+    // so reject names the provider cannot represent before serializing them.
+    const requestedTools = options?.tools ?? [];
+    const compatibleTools = requestedTools.filter((tool) => ANTHROPIC_TOOL_NAME_PATTERN.test(tool.name));
+    const invalidToolNames = requestedTools
+      .filter((tool) => !ANTHROPIC_TOOL_NAME_PATTERN.test(tool.name))
+      .map((tool) => tool.name);
+    if (invalidToolNames.length > 0) {
+      logger.warn(
+        '[AnthropicClient] Excluded tools with invalid Anthropic-compatible names',
+        { invalidToolNames },
+        'AnthropicClient',
+      );
+    }
+
+    const tools = compatibleTools.map((tool) => ({
       name: tool.name,
       description: tool.description,
       input_schema: tool.input_schema as Anthropic.Tool.InputSchema,
@@ -1302,29 +1371,32 @@ export class AnthropicClient implements LLMClient {
       );
       logger.debug('Stream created successfully', undefined, 'AnthropicClient');
     } catch (streamError) {
-      if (!this.isMiniMax || !isMiniMaxInvalidParameters2013(streamError) || options?.signal?.aborted) {
+      const isMiniMax2013 = this.isMiniMax && isMiniMaxInvalidParameters2013(streamError);
+      const isToolOrderingFailure = isToolResultOrderingError(streamError);
+      if ((!isMiniMax2013 && !isToolOrderingFailure) || options?.signal?.aborted) {
         logger.error('Failed to create stream', streamError instanceof Error ? streamError : new Error(String(streamError)), undefined, 'AnthropicClient');
         throw streamError;
       }
 
-      // MiniMax sometimes reduces malformed history to the unhelpful generic
-      // `invalid params, 400 (2013)`. Recover once before exposing an error:
-      // synthesize missing failed tool results, remove cache directives, omit
-      // optional thinking, and reserve a conservative output budget.
+      // Some Anthropic-compatible providers identify the broken tool round
+      // precisely, while MiniMax reports only `invalid params, 400 (2013)`.
+      // Recover once with an exact, strict tool-result pairing repair.
       anthropicMessages = toAnthropicMessages(messages, this.baseURL, true);
       logger.warn(
-        '[AnthropicClient] MiniMax returned 2013; retrying once with repaired tool history and conservative request parameters',
-        { messageCount: anthropicMessages.length },
+        '[AnthropicClient] Retrying once with repaired tool history after provider rejected tool-result ordering',
+        { messageCount: anthropicMessages.length, isMiniMax2013 },
         'AnthropicClient',
       );
       try {
         stream = await this.client.messages.stream(
           {
             model: this.model,
-            max_tokens: Math.min(
-              getMiniMaxAnthropicMaxTokens(this.model, options?.maxOutputTokens ?? options?.contextWindow),
-              MINIMAX_RECOVERY_MAX_TOKENS,
-            ),
+            max_tokens: isMiniMax2013
+              ? Math.min(
+                  getMiniMaxAnthropicMaxTokens(this.model, options?.maxOutputTokens ?? options?.contextWindow),
+                  MINIMAX_RECOVERY_MAX_TOKENS,
+                )
+              : options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
             temperature: options?.temperature ?? 1,
             system: options?.systemPrompt || '',
             messages: anthropicMessages,
@@ -1332,9 +1404,9 @@ export class AnthropicClient implements LLMClient {
           },
           options?.signal ? { signal: options.signal } : undefined,
         );
-        logger.info('MiniMax 2013 recovery retry created stream successfully', undefined, 'AnthropicClient');
+        logger.info('Tool-result pairing recovery retry created stream successfully', undefined, 'AnthropicClient');
       } catch (recoveryError) {
-        logger.error('MiniMax 2013 recovery retry failed', recoveryError instanceof Error ? recoveryError : new Error(String(recoveryError)), undefined, 'AnthropicClient');
+        logger.error('Tool-result pairing recovery retry failed', recoveryError instanceof Error ? recoveryError : new Error(String(recoveryError)), undefined, 'AnthropicClient');
         throw recoveryError;
       }
     }

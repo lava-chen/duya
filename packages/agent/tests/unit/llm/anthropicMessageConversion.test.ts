@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AnthropicClient } from '../../../src/llm/anthropic-client.js';
-import type { Message } from '../../../src/types.js';
+import type { Message, Tool } from '../../../src/types.js';
 
 const MINIMAX_URL = 'https://api.minimaxi.com/anthropic';
 const FAKE_API_KEY = 'sk-test-fake-key-for-reproduction';
@@ -31,7 +31,8 @@ function makeClient(): AnthropicClient {
 
 async function captureRequestBody(
   client: AnthropicClient,
-  messages: Message[]
+  messages: Message[],
+  tools: Tool[] = [],
 ): Promise<any> {
   let captured: any = null;
   const sdkClient = (client as any).client;
@@ -59,7 +60,7 @@ async function captureRequestBody(
   try {
     const gen = client.streamChat(messages, {
       systemPrompt: 'You are a test assistant.',
-      tools: [],
+      tools,
     });
     for await (const _evt of gen) {
       // drain
@@ -103,6 +104,22 @@ function flattenEvents(messages: any[]): Array<{ kind: 'use' | 'result' | 'text'
 describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('filters invalid tool names for Anthropic-compatible providers', async () => {
+    const client = makeClient();
+    const tools = [
+      { name: 'valid_tool', description: 'valid', input_schema: {} },
+      { name: 'mcp.invalid-tool', description: 'invalid', input_schema: {} },
+    ] as Tool[];
+
+    const body = await captureRequestBody(client, [
+      { id: 'u1', role: 'user', content: 'Hello', timestamp: 1 },
+    ], tools);
+
+    expect(body.tools).toEqual([
+      expect.objectContaining({ name: 'valid_tool' }),
+    ]);
   });
 
   // ===========================================================================
@@ -654,5 +671,70 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
     expect(recoveredEvents).toContainEqual({ kind: 'use', id: 'missing-result' });
     expect(recoveredEvents).toContainEqual({ kind: 'result', id: 'missing-result' });
     expect(JSON.stringify(requests[1].messages)).toContain('synthesized during conversation recovery');
+  });
+
+  it('retries a provider-reported delayed tool result with strict pairing (case 15)', async () => {
+    const client = makeClient();
+    const requests: any[] = [];
+    const sdkClient = (client as any).client;
+    vi.spyOn(sdkClient.messages, 'stream').mockImplementation(async (params: any) => {
+      requests.push(params);
+      if (requests.length === 1) {
+        throw new Error(
+          '400 {"error":{"message":"tool_use ids were found without tool_result blocks immediately after"}}',
+        );
+      }
+      return {
+        on: () => {},
+        finalMessage: () => Promise.resolve({
+          id: 'recovered', type: 'message', role: 'assistant', model: 'MiniMax-M3',
+          content: [], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => ({ value: undefined, done: true }),
+            return: async () => ({ value: undefined, done: true }),
+          };
+        },
+      } as any;
+    });
+
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Use a tool', timestamp: 1 },
+      {
+        id: 'a1', role: 'assistant', timestamp: 2,
+        content: [{ type: 'tool_use', id: 'late-result', name: 'Bash', input: { command: 'dir' } }],
+      },
+      { id: 'a2', role: 'assistant', content: 'This was incorrectly persisted first.', timestamp: 3 },
+      { id: 't1', role: 'tool', content: 'late output', tool_call_id: 'late-result', timestamp: 4 },
+    ];
+
+    for await (const _event of client.streamChat(messages, { systemPrompt: 'test', tools: [] })) {
+      // Drain the recovered stream.
+    }
+
+    expect(requests).toHaveLength(2);
+    const recoveredMessages = requests[1].messages;
+    const toolCallIndex = recoveredMessages.findIndex((message: any) =>
+      message.role === 'assistant' &&
+      Array.isArray(message.content) &&
+      message.content.some((block: any) => block.type === 'tool_use' && block.id === 'late-result'),
+    );
+    expect(toolCallIndex).toBeGreaterThanOrEqual(0);
+
+    const immediateResult = recoveredMessages[toolCallIndex + 1];
+    expect(immediateResult).toMatchObject({ role: 'user' });
+    expect(immediateResult.content).toContainEqual(expect.objectContaining({
+      type: 'tool_result',
+      tool_use_id: 'late-result',
+      is_error: true,
+    }));
+
+    const lateResults = recoveredMessages.flatMap((message: any) =>
+      Array.isArray(message.content)
+        ? message.content.filter((block: any) => block.type === 'tool_result' && block.tool_use_id === 'late-result')
+        : [],
+    );
+    expect(lateResults).toHaveLength(1);
   });
 });

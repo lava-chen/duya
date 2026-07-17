@@ -228,6 +228,8 @@ export interface SkillReviewCompletedData {
   finalPath?: string;
   skillName?: string;
   error?: string;
+  /** Persistent activity record created after a background review finishes. */
+  activityId?: string;
 }
 
 // Permission request event
@@ -566,6 +568,12 @@ export interface ToolUseContext {
    */
   conductorCanvasId?: string;
   /**
+   * Mutable target shared by every canvas tool call in the current turn.
+   * `canvas_manage` updates this object after a successful switch so later
+   * calls immediately operate on the new canvas despite context spreading.
+   */
+  canvasTarget?: CanvasTargetState;
+  /**
    * Mutable, per-session canvas state shared across tool calls within a turn
    * and across turns. MUST be a stable reference object: StreamingToolExecutor
    * spreads ToolUseContext per call (creating a shallow copy with a new
@@ -592,18 +600,17 @@ export interface CanvasFreshnessState {
   /** Timestamp (ms) of the last successful canvas_list_elements call. */
   lastListElementsTime?: number;
   /**
-   * Ref name -> elementId map populated by canvas_batch_create.
-   * Allows later tools to reference elements by semantic names like "login"
-   * instead of memorizing UUIDs.
-   */
-  refMap: Map<string, string>;
-  /**
    * Element IDs created by the agent in this session. Populated by
-   * canvas_create_element and canvas_batch_create. Used by the freshness
+   * canvas_create_element. Used by the freshness
    * check so the agent can fill/style/move an element it just created
    * without re-calling canvas_list_elements.
    */
   recentlyCreatedElementIds: Set<string>;
+}
+
+export interface CanvasTargetState {
+  canvasId?: string;
+  canvasName?: string;
 }
 
 /** Style signature captured from a widget/dynamic element's sourceCode. */

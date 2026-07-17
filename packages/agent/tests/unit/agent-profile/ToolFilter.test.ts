@@ -11,6 +11,7 @@ import {
   expandToolGroups,
 } from '../../../src/agent-profile/ToolFilter.js';
 import type { AgentProfile } from '../../../src/agent-profile/types.js';
+import { PRESET_AGENT_PROFILES } from '../../../src/agent-profile/types.js';
 
 const ALL_TOOLS = [
   'file:read',
@@ -221,6 +222,56 @@ describe('resolveAllowedTools', () => {
     expect(result.allowed).toContain('file:write');
     expect(result.allowed).not.toContain('browser:navigate');
     expect(result.allowed).not.toContain('gateway:http');
+  });
+
+  it('gives Gateway shell access while blocking incomplete team tools', () => {
+    const gateway = PRESET_AGENT_PROFILES.find((profile) => profile.id === 'gateway');
+    expect(gateway).toBeDefined();
+
+    const registeredGatewaySurface = [
+      'bash',
+      'powershell',
+      'read',
+      'glob',
+      'grep',
+      'MessageSession',
+      'SessionSearch',
+      'TeamCreate',
+      'TeamDelete',
+      'Agent',
+      'EnterWorktree',
+      'ExitWorktree',
+      'EnterPlanMode',
+      'ExitPlanMode',
+      'SwitchMode',
+      'ListMcpResources',
+      'ReadMcpResource',
+    ];
+    const result = resolveAllowedTools(gateway!, registeredGatewaySurface);
+
+    expect(result.allowed).toEqual(expect.arrayContaining([
+      'bash',
+      'powershell',
+      'read',
+      'glob',
+      'grep',
+      'MessageSession',
+      'SessionSearch',
+    ]));
+    expect(result.allowed).not.toEqual(expect.arrayContaining([
+      'TeamCreate',
+      'TeamDelete',
+      'Agent',
+      'EnterWorktree',
+      'ExitWorktree',
+      'EnterPlanMode',
+      'ExitPlanMode',
+      'SwitchMode',
+      'ListMcpResources',
+      'ReadMcpResource',
+    ]));
+    expect(result.diagnostics.unmatchedPatterns).not.toContain('TeamCreate');
+    expect(result.diagnostics.unmatchedPatterns).not.toContain('TeamDelete');
   });
 });
 

@@ -15,9 +15,10 @@ describe('conductor canvas design guidance', () => {
 
   it('does not register the batch creation tool', () => {
     const toolNames = getCanvasConductorTools().map(({ definition }) => definition.name);
-    expect(toolNames).toHaveLength(13);
+    expect(toolNames).toHaveLength(14);
     expect(toolNames).not.toContain('canvas_batch_create');
     expect(toolNames).toContain('canvas_create_element');
+    expect(toolNames).toContain('canvas_manage');
   });
 
   it('keeps the mode prompt native-first while retaining compact guidance', () => {
@@ -27,6 +28,8 @@ describe('conductor canvas design guidance', () => {
     expect(prompt).toContain('one element at a time with canvas_create_element');
     expect(prompt).not.toContain('canvas_batch_create');
     expect(prompt).toContain('Do not create new stickies');
+    expect(prompt).toContain('Multi-Canvas Awareness');
+    expect(prompt).toContain('canvas_manage with action=switch');
     expect(KNOWLEDGE_SECTIONS['mindmap-layout']).toContain('Root: 3.5x1.25, fontSize 24');
     expect(KNOWLEDGE_SECTIONS['mindmap-layout']).toContain('Do not add a separate oversized title banner');
   });

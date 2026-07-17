@@ -84,6 +84,12 @@ export interface ConductorPortAPI {
   startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string; language?: string; visionModel?: string; permissionMode?: string }) => void
   interruptAgent: () => void
   onStatePatch: (callback: (data: Record<string, unknown>) => void) => () => void
+  onCanvasChanged: (callback: (data: {
+    operation: 'create' | 'switch' | 'rename'
+    sessionId?: string
+    canvas: Record<string, unknown>
+    currentCanvasId?: string
+  }) => void) => () => void
   onText: (callback: (data: { content: string; sessionId?: string }) => void) => () => void
   onThinking: (callback: (data: { content: string; sessionId?: string }) => void) => () => void
   onToolUse: (callback: (data: { id: string; name: string; input: unknown; sessionId?: string }) => void) => () => void
@@ -156,6 +162,12 @@ export interface SkillsAPI {
   setEnabled: (skillName: string, enabled: boolean) => Promise<{ success: boolean; overrides?: Record<string, boolean>; error?: string }>
   getSecurityBypass: () => Promise<{ success: boolean; skills: string[]; error?: string }>
   setSecurityBypass: (skillName: string, bypass: boolean) => Promise<{ success: boolean; skills: string[]; error?: string }>
+  learning: {
+    list: (options?: { limit?: number; unreadOnly?: boolean }) => Promise<{ success: boolean; events: unknown[]; error?: string }>
+    unreadCount: () => Promise<{ success: boolean; count: number; error?: string }>
+    markRead: (ids?: string[]) => Promise<{ success: boolean; error?: string }>
+    onCreated: (callback: () => void) => () => void
+  }
 }
 
 export interface ProviderAPI {
@@ -1382,6 +1394,14 @@ function getConductorPortAPI(): ConductorPortAPI | null {
     onStatePatch: (callback: (data: Record<string, unknown>) => void) => {
       return registerHandler('conductor:state:patch', (data) => callback(data as Record<string, unknown>));
     },
+    onCanvasChanged: (callback) => {
+      return registerHandler('conductor:canvas:changed', (data) => callback(data as {
+        operation: 'create' | 'switch' | 'rename';
+        sessionId?: string;
+        canvas: Record<string, unknown>;
+        currentCanvasId?: string;
+      }));
+    },
     onText: (callback: (data: { content: string; sessionId?: string }) => void) => {
       return registerHandler('conductor:text', (data) => callback(data as { content: string; sessionId?: string }));
     },
@@ -1848,6 +1868,16 @@ const electronAPI: ElectronAPI = {
     setEnabled: (skillName: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', skillName, enabled),
     getSecurityBypass: () => ipcRenderer.invoke('skills:getSecurityBypass'),
     setSecurityBypass: (skillName: string, bypass: boolean) => ipcRenderer.invoke('skills:setSecurityBypass', skillName, bypass),
+    learning: {
+      list: (options?: { limit?: number; unreadOnly?: boolean }) => ipcRenderer.invoke('skills:learning:list', options),
+      unreadCount: () => ipcRenderer.invoke('skills:learning:unreadCount'),
+      markRead: (ids?: string[]) => ipcRenderer.invoke('skills:learning:markRead', ids),
+      onCreated: (callback: () => void) => {
+        const handler = () => callback();
+        ipcRenderer.on('skills:learning:created', handler);
+        return () => ipcRenderer.removeListener('skills:learning:created', handler);
+      },
+    },
   },
   files: {
     browse: (dirPath: string, maxDepth?: number) => ipcRenderer.invoke('files:browse', dirPath, maxDepth),

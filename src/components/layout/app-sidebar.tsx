@@ -41,6 +41,7 @@ import { ThreadListItem } from "./sidebar/ThreadListItem";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
 import { useOptionalPanel } from "@/hooks/usePanel";
+import { useSkillLearning } from "@/hooks/useSkillLearning";
 import { InputDialog } from "@/components/ui/InputDialog";
 
 type ThemeMode = "light" | "dark";
@@ -165,6 +166,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const panel = useOptionalPanel();
     const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
     const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
+    const { events: skillLearningEvents, unreadCount: skillLearningUnread } = useSkillLearning(5);
+    const latestSkillLearning = skillLearningEvents.find((event) => event.read_at === null && event.status !== 'skipped');
 
     const systemDark = useMemo(
       () =>
@@ -559,6 +562,26 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         </div>
 
         <div className="sidebar-bottom">
+          {skillLearningUnread > 0 && latestSkillLearning && (
+            <button
+              type="button"
+              onClick={() => handleSettingsTabChange('skills')}
+              className="mx-2 mb-2 flex w-[calc(100%-1rem)] items-center gap-2 rounded-lg border border-accent/30 bg-accent/[0.07] px-2.5 py-2 text-left transition-colors hover:bg-accent/[0.12]"
+              aria-label={`查看 ${skillLearningUnread} 条 Agent 学习动态`}
+            >
+              <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent">
+                <LightningIcon size={15} weight="fill" />
+                <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-[var(--sidebar-bg)] bg-accent" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-semibold text-foreground">Agent 学习动态</span>
+                <span className="block truncate text-[11px] text-muted-foreground">
+                  {latestSkillLearning.skill_name || latestSkillLearning.reason}
+                </span>
+              </span>
+              <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-white">{skillLearningUnread}</span>
+            </button>
+          )}
           <button
             type="button"
             className="sidebar-settings"

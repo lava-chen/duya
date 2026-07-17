@@ -1321,7 +1321,7 @@ export function MessageInput({
 
         <div
           className={`message-input-surface relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''}`}
-          style={{ backgroundColor: 'var(--surface)', boxShadow: 'inset 0 0 0 1px var(--border-color), 0 2px 8px rgba(0,0,0,0.08)' }}
+          style={{ backgroundColor: 'var(--surface)', boxShadow: 'inset 0 0 0 1px var(--border-color)' }}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -1377,9 +1377,9 @@ export function MessageInput({
           )}
 
           {/* Bottom Toolbar */}
-          <div className="mt-1 px-2 flex items-center justify-between">
+          <div className="mt-1 px-2 flex min-w-0 items-center gap-2">
             {/* Left: Plus Button (opens unified command popover) & Permission */}
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
               {/* Plus Button — opens the slash command popover (modes + settings + skills) */}
               <button
                 type="button"
@@ -1448,20 +1448,20 @@ export function MessageInput({
                     key={mode}
                     type="button"
                     onClick={() => handleToggleMode(mode)}
-                    className="group flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium text-[#7db4ff] border border-transparent hover:bg-[rgba(37,99,235,0.18)] hover:border-[#7db4ff]/40"
+                    className="group flex min-w-0 max-w-24 shrink items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium text-[#7db4ff] border border-transparent hover:bg-[rgba(37,99,235,0.18)] hover:border-[#7db4ff]/40"
                   >
                     <XIcon
                       size={14}
                       className="hidden group-hover:block"
                     />
-                    <span>{label}</span>
+                    <span className="truncate">{label}</span>
                   </button>
                 );
               })}
             </div>
 
             {/* Right: Send/Stop Button */}
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               {hasQueuedMessages && !isStreaming && (
                 <span className="text-xs text-muted-foreground bg-accent/20 px-1.5 py-0.5 rounded-full select-none">
                   +{1}

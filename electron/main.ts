@@ -493,6 +493,12 @@ if (gotTheLock) {
         ...patch,
       });
     });
+    conductorExecutorProxy.setCanvasManagementChangedFn((event) => {
+      channelManager.sendToChannel('conductor', {
+        type: 'conductor:canvas:changed',
+        ...event,
+      });
+    });
 
     // Inject the proxy into the agent-server lifecycle so the main chat
     // worker can also reach it via the `conductor:executor:rpc` bridge.
