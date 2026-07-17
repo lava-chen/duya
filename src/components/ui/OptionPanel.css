@@ -1,0 +1,132 @@
+.option-panel {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 12px;
+  background: var(--sidebar-bg);
+  box-shadow: none;
+}
+
+.option-panel-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 11px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.option-panel-search svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.option-panel-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+}
+
+.option-panel-search input::placeholder {
+  color: var(--muted);
+}
+
+.option-panel-title {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.option-panel-list {
+  max-height: min(280px, 44vh);
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.option-panel-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: var(--text);
+  text-align: left;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.option-panel-item:hover,
+.option-panel-item.is-active {
+  background: var(--surface-hover);
+}
+
+.option-panel-item.is-selected {
+  background: var(--accent-soft);
+}
+
+.option-panel-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.option-panel-check {
+  display: inline-flex;
+  width: 14px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.option-panel-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.option-panel-label,
+.option-panel-description,
+.option-panel-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.option-panel-label {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.option-panel-description,
+.option-panel-meta {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.option-panel-meta {
+  max-width: 72px;
+  flex: none;
+  text-align: right;
+}
+
+.option-panel-empty {
+  padding: 22px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.option-panel-footer {
+  border-top: 1px solid var(--border);
+  padding: 4px;
+}

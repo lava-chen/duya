@@ -100,7 +100,7 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
         onClick={handleToggle}
         disabled={disabled}
         className={`
-          flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium
+          flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1 rounded-lg transition-all text-xs font-medium
           ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
           ${getModeStyle()}
         `}

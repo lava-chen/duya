@@ -4,6 +4,11 @@ import { useState, useRef, useEffect } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ChevronDownIcon, FileIcon, FolderOpenIcon } from "@/components/icons";
+import {
+  OptionPanel,
+  type OptionPanelItem,
+  useOptionPanelPlacement,
+} from "@/components/ui/OptionPanel";
 import { ReferencesPanel } from "./ReferencesPanel";
 
 interface SessionSelectorProps {
@@ -32,6 +37,7 @@ export function SessionSelector({
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"threads" | "references">("threads");
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const { placement, maxListHeight } = useOptionPanelPlacement(isProjectDropdownOpen, dropdownRef);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -60,6 +66,12 @@ export function SessionSelector({
   };
 
   const recentThreads = threads.slice(0, maxRecentThreads);
+  const projectItems: OptionPanelItem[] = projects.map((project) => ({
+    id: project.workingDirectory,
+    label: project.projectName,
+    description: project.workingDirectory,
+    searchText: `${project.projectName} ${project.workingDirectory}`,
+  }));
 
   const formatDate = (timestamp: number): string => {
     const now = Date.now();
@@ -91,42 +103,42 @@ export function SessionSelector({
             <ChevronDownIcon size={14} />
           </button>
           {isProjectDropdownOpen && (
-            <div className="welcome-project-dropdown">
-              {projects.map((project) => (
-                <button
-                  key={project.workingDirectory}
-                  className={`welcome-project-dropdown-item ${
-                    selectedProject?.workingDirectory === project.workingDirectory ? "active" : ""
-                  }`}
-                  onClick={() => handleSelectProject({
-                    workingDirectory: project.workingDirectory,
-                    projectName: project.projectName,
-                  })}
-                >
-                  <span className="welcome-project-dropdown-name">{project.projectName}</span>
-                  <span className="welcome-project-dropdown-path">{project.workingDirectory}</span>
-                </button>
-              ))}
-              <div className="welcome-project-dropdown-divider" />
-              <button
-                className="welcome-project-dropdown-item new-project"
-                onClick={handleNewBlankProject}
-              >
-                <span style={{ color: 'var(--muted)' }}>
-                  <FileIcon size={15} />
-                </span>
-                <span>{t('project.newBlankProject')}</span>
-              </button>
-              <button
-                className="welcome-project-dropdown-item new-project"
-                onClick={handleUseExistingFolder}
-              >
-                <span style={{ color: 'var(--muted)' }}>
-                  <FolderOpenIcon size={15} />
-                </span>
-                <span>{t('project.useExistingFolder')}</span>
-              </button>
-            </div>
+            <OptionPanel
+              className={`welcome-project-dropdown option-panel--${placement}`}
+              title={t('chat.selectProject')}
+              items={projectItems}
+              selectedId={selectedProject?.workingDirectory}
+              onSelect={(item) => {
+                const project = projects.find(({ workingDirectory }) => workingDirectory === item.id);
+                if (project) handleSelectProject(project);
+              }}
+              onClose={() => setIsProjectDropdownOpen(false)}
+              maxListHeight={maxListHeight}
+              searchPlaceholder={t('project.searchProjects')}
+              emptyMessage={t('project.noProjectMatches')}
+              footer={
+                <div className="grid gap-1">
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs transition-colors hover:bg-[var(--surface-hover)]"
+                    onClick={handleNewBlankProject}
+                    style={{ color: 'var(--text)' }}
+                  >
+                    <FileIcon size={14} style={{ color: 'var(--muted)' }} />
+                    <span>{t('project.newBlankProject')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs transition-colors hover:bg-[var(--surface-hover)]"
+                    onClick={handleUseExistingFolder}
+                    style={{ color: 'var(--text)' }}
+                  >
+                    <FolderOpenIcon size={14} style={{ color: 'var(--muted)' }} />
+                    <span>{t('project.useExistingFolder')}</span>
+                  </button>
+                </div>
+              }
+            />
           )}
         </div>
         <span className="welcome-input-label">{t('chat.whatToBuildInSuffix')}</span>
