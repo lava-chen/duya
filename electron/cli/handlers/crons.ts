@@ -63,10 +63,12 @@ export interface CronListItemDTO {
 }
 
 export interface CronInfoItemDTO extends CronListItemDTO {
+  workingDirectory?: string;
   scheduleAt?: string;
   scheduleEveryMs?: number;
   scheduleCronExpr?: string;
   scheduleCronTz?: string;
+  scheduleEndAt?: string;
   prompt: string;
   model?: string;
   concurrencyPolicy: ConcurrencyPolicy;
@@ -92,12 +94,14 @@ export interface CronRunItemDTO {
 export interface CreateCronBody {
   name: string;
   description?: string;
+  workingDirectory?: string;
   schedule: {
     kind: ScheduleKind;
     at?: string;
     everyMs?: number;
     cronExpr?: string;
     cronTz?: string;
+    endAt?: string;
   };
   prompt: string;
   model?: string;
@@ -111,6 +115,7 @@ export interface CreateCronBody {
 export interface UpdateCronBody {
   name?: string;
   description?: string;
+  workingDirectory?: string;
   schedule?: CreateCronBody['schedule'];
   prompt?: string;
   model?: string;
@@ -203,10 +208,12 @@ function toListItem(row: AutomationCron): CronListItemDTO {
 function toInfoItem(row: AutomationCron): CronInfoItemDTO {
   return {
     ...toListItem(row),
+    workingDirectory: row.working_directory || undefined,
     scheduleAt: row.schedule_at ?? undefined,
     scheduleEveryMs: row.schedule_every_ms ?? undefined,
     scheduleCronExpr: row.schedule_cron_expr ?? undefined,
     scheduleCronTz: row.schedule_cron_tz ?? undefined,
+    scheduleEndAt: row.schedule_end_at ?? undefined,
     prompt: row.prompt,
     model: row.model,
     concurrencyPolicy: row.concurrency_policy,
@@ -255,6 +262,7 @@ function toSchedulerSchedule(s: CreateCronBody['schedule']): CronSchedule {
     everyMs: s.everyMs,
     cronExpr: s.cronExpr,
     cronTz: s.cronTz,
+    endAt: s.endAt,
   };
 }
 
@@ -262,6 +270,7 @@ function toCreateInput(body: CreateCronBody): CreateAutomationCronInput {
   return {
     name: body.name,
     description: body.description,
+    workingDirectory: body.workingDirectory,
     schedule: toSchedulerSchedule(body.schedule),
     prompt: body.prompt,
     model: body.model ?? '',
@@ -276,6 +285,7 @@ function toUpdateInput(body: UpdateCronBody): UpdateAutomationCronInput {
   return {
     name: body.name,
     description: body.description,
+    workingDirectory: body.workingDirectory,
     schedule: body.schedule ? toSchedulerSchedule(body.schedule) : undefined,
     prompt: body.prompt,
     model: body.model,

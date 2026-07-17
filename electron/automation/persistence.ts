@@ -10,6 +10,7 @@ import type {
   ListCronRunsInput,
   UpdateAutomationCronInput,
 } from './types.js';
+import { resolveAutomationWorkspace } from './workspace.js';
 
 const DEFAULT_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = [30_000, 60_000, 300_000];
@@ -22,6 +23,9 @@ export function normalizeCronStatus(value: string | undefined): CronStatus {
 
 export function assertValidSchedule(schedule: CronSchedule): void {
   if (!schedule || typeof schedule !== 'object') throw new Error('schedule is required');
+  if (schedule.endAt && Number.isNaN(Date.parse(schedule.endAt))) {
+    throw new Error(`schedule.endAt must be an ISO date-time; got: ${JSON.stringify(schedule.endAt)}`);
+  }
   if (schedule.kind === 'at') {
     if (!schedule.at || Number.isNaN(Date.parse(schedule.at))) {
       throw new Error(
@@ -57,15 +61,21 @@ export function assertValidSchedule(schedule: CronSchedule): void {
 }
 
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | null {
+  const endAtMs = schedule.endAt ? Date.parse(schedule.endAt) : null;
+  const withinEnd = (candidate: number | null): number | null => {
+    if (candidate === null) return null;
+    if (endAtMs !== null && Number.isFinite(endAtMs) && candidate > endAtMs) return null;
+    return candidate;
+  };
   if (schedule.kind === 'at') {
     const at = Date.parse(schedule.at || '');
     if (!Number.isFinite(at) || at <= nowMs) return null;
-    return at;
+    return withinEnd(at);
   }
   if (schedule.kind === 'every') {
     const everyMs = Math.max(1, Math.floor(schedule.everyMs || 0));
     if (!Number.isFinite(everyMs) || everyMs <= 0) return null;
-    return nowMs + everyMs;
+    return withinEnd(nowMs + everyMs);
   }
   if (schedule.kind === 'cron') {
     const expr = schedule.cronExpr?.trim() || '';
@@ -75,15 +85,16 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     if (!next) return null;
     const nextMs = next.getTime();
     if (!Number.isFinite(nextMs) || nextMs <= nowMs) return null;
-    return nextMs;
+    return withinEnd(nextMs);
   }
   return null;
 }
 
 export function rowToSchedule(row: AutomationCron): CronSchedule {
-  if (row.schedule_kind === 'at') return { kind: 'at', at: row.schedule_at || undefined };
-  if (row.schedule_kind === 'every') return { kind: 'every', everyMs: row.schedule_every_ms || undefined };
-  return { kind: 'cron', cronExpr: row.schedule_cron_expr || undefined, cronTz: row.schedule_cron_tz || undefined };
+  const endAt = row.schedule_end_at || undefined;
+  if (row.schedule_kind === 'at') return { kind: 'at', at: row.schedule_at || undefined, endAt };
+  if (row.schedule_kind === 'every') return { kind: 'every', everyMs: row.schedule_every_ms || undefined, endAt };
+  return { kind: 'cron', cronExpr: row.schedule_cron_expr || undefined, cronTz: row.schedule_cron_tz || undefined, endAt };
 }
 
 export class CronPersistence {
@@ -129,17 +140,18 @@ export class CronPersistence {
 
     this.db.prepare(`
       INSERT INTO automation_crons (
-        id, name, description, schedule_kind, schedule_at, schedule_every_ms, schedule_cron_expr, schedule_cron_tz,
-        workflow_id, prompt, input_params, session_target, delivery_mode, status, model, last_run_at, next_run_at, last_error,
+        id, name, description, schedule_kind, schedule_at, schedule_every_ms, schedule_cron_expr, schedule_cron_tz, schedule_end_at,
+        workflow_id, working_directory, prompt, input_params, session_target, delivery_mode, status, model, last_run_at, next_run_at, last_error,
         retry_count, concurrency_policy, max_retries, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'isolated', 'none', ?, ?, NULL, ?, NULL, 0, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'isolated', 'none', ?, ?, NULL, ?, NULL, 0, ?, ?, ?, ?)
     `).run(
       id, input.name, input.description ?? null,
       input.schedule.kind, input.schedule.kind === 'at' ? input.schedule.at ?? null : null,
       input.schedule.kind === 'every' ? input.schedule.everyMs ?? null : null,
       input.schedule.kind === 'cron' ? input.schedule.cronExpr ?? null : null,
       input.schedule.kind === 'cron' ? input.schedule.cronTz ?? null : null,
-      null, input.prompt.trim(), JSON.stringify(input.inputParams ?? {}),
+      input.schedule.endAt ?? null,
+      null, resolveAutomationWorkspace(input.workingDirectory), input.prompt.trim(), JSON.stringify(input.inputParams ?? {}),
       status, input.model.trim(), nextRunAt,
       input.concurrencyPolicy ?? 'skip' as ConcurrencyPolicy, input.maxRetries ?? DEFAULT_MAX_RETRIES, now, now
     );
@@ -160,7 +172,7 @@ export class CronPersistence {
 
     this.db.prepare(`
       UPDATE automation_crons SET name=?, description=?, schedule_kind=?, schedule_at=?, schedule_every_ms=?,
-        schedule_cron_expr=?, schedule_cron_tz=?, prompt=?, input_params=?, status=?, model=?, next_run_at=?,
+        schedule_cron_expr=?, schedule_cron_tz=?, schedule_end_at=?, working_directory=?, prompt=?, input_params=?, status=?, model=?, next_run_at=?,
         concurrency_policy=?, max_retries=?, updated_at=? WHERE id=?
     `).run(
       patch.name ?? current.name, patch.description !== undefined ? patch.description : current.description,
@@ -168,6 +180,8 @@ export class CronPersistence {
       mergedSchedule.kind === 'every' ? mergedSchedule.everyMs ?? null : null,
       mergedSchedule.kind === 'cron' ? mergedSchedule.cronExpr ?? null : null,
       mergedSchedule.kind === 'cron' ? mergedSchedule.cronTz ?? null : null,
+      mergedSchedule.endAt ?? null,
+      patch.workingDirectory !== undefined ? resolveAutomationWorkspace(patch.workingDirectory) : current.working_directory,
       patch.prompt !== undefined ? patch.prompt.trim() : current.prompt,
       patch.inputParams !== undefined ? JSON.stringify(patch.inputParams) : current.input_params,
       nextStatus, patch.model !== undefined ? patch.model.trim() : current.model, nextRunAt,
@@ -209,12 +223,18 @@ export class CronPersistence {
     return { shouldRetry, retryDelay };
   }
 
-  insertChatSession(sessionId: string, name: string, model: string, providerId: string): void {
+  insertChatSession(
+    sessionId: string,
+    name: string,
+    model: string,
+    providerId: string,
+    workingDirectory: string,
+  ): void {
     // Cron 路径固定 permission_profile='default'. 不读 desktop settings.permissionMode, 走 cronPermissionMode 独立字段.
     // 这是与 ChatView 默认 session 的明确切分, 避免用户的桌面设置污染定时任务.
     const now = Date.now();
-    this.db.prepare(`INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, context_summary, context_summary_updated_at, is_deleted, generation) VALUES (?, ?, ?, ?, ?, '', '', '', 'active', 'automation', 'default', ?, '', 0, 0, 0)`)
-      .run(sessionId, name, now, now, model, providerId);
+    this.db.prepare(`INSERT INTO chat_sessions (id, title, created_at, updated_at, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, context_summary, context_summary_updated_at, is_deleted, generation) VALUES (?, ?, ?, ?, ?, '', ?, '', 'active', 'automation', 'default', ?, '', 0, 0, 0)`)
+      .run(sessionId, name, now, now, model, workingDirectory, providerId);
   }
 
   beginRun(runId: string, cronId: string, sessionId: string, manual: boolean): void {
@@ -232,6 +252,16 @@ export class CronPersistence {
 
   updateNextRunAt(id: string, nextRunAt: number | null): void {
     this.db.prepare('UPDATE automation_crons SET next_run_at = ?, updated_at = ? WHERE id = ?').run(nextRunAt, Date.now(), id);
+  }
+
+  disableExhaustedCron(id: string): void {
+    this.db.prepare("UPDATE automation_crons SET status = 'disabled', next_run_at = NULL, updated_at = ? WHERE id = ?")
+      .run(Date.now(), id);
+  }
+
+  markScheduleError(id: string, reason: string): void {
+    this.db.prepare("UPDATE automation_crons SET status = 'error', next_run_at = NULL, last_error = ?, updated_at = ? WHERE id = ?")
+      .run(reason, Date.now(), id);
   }
 
   cleanupOldRuns(): { deletedCount: number } {

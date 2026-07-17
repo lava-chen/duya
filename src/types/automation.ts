@@ -9,6 +9,7 @@ export interface CronSchedule {
   everyMs?: number;
   cronExpr?: string;
   cronTz?: string | null;
+  endAt?: string | null;
 }
 
 export interface AutomationCron {
@@ -20,7 +21,9 @@ export interface AutomationCron {
   schedule_every_ms: number | null;
   schedule_cron_expr: string | null;
   schedule_cron_tz: string | null;
+  schedule_end_at: string | null;
   workflow_id: string | null;
+  working_directory: string;
   prompt: string;
   input_params: string;
   session_target: 'isolated';
@@ -53,6 +56,7 @@ export interface AutomationCronRun {
 export interface CreateAutomationCronInput {
   name: string;
   description?: string | null;
+  workingDirectory?: string;
   schedule: CronSchedule;
   prompt: string;
   model: string;
@@ -65,6 +69,7 @@ export interface CreateAutomationCronInput {
 export interface UpdateAutomationCronInput {
   name?: string;
   description?: string | null;
+  workingDirectory?: string;
   schedule?: CronSchedule;
   prompt?: string;
   model?: string;

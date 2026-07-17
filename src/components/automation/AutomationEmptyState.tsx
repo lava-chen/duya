@@ -6,11 +6,13 @@ import {
 import { useTranslation } from '@/hooks/useTranslation';
 
 interface AutomationEmptyStateProps {
+  onManualCreate: () => void;
   onChatCreate: () => void;
   onViewTemplates: () => void;
 }
 
 export function AutomationEmptyState({
+  onManualCreate,
   onChatCreate,
   onViewTemplates,
 }: AutomationEmptyStateProps) {
@@ -34,7 +36,7 @@ export function AutomationEmptyState({
             background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
             color: '#ffffff',
           }}
-          onClick={onChatCreate}
+          onClick={onManualCreate}
           onMouseEnter={(e) => {
             e.currentTarget.style.opacity = '0.9';
             e.currentTarget.style.transform = 'translateY(-1px)';
@@ -48,6 +50,15 @@ export function AutomationEmptyState({
         >
           <Plus size={16} weight="bold" />
           {t('automation.newAutomation')}
+        </button>
+
+        <button
+          type="button"
+          className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors"
+          style={{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}
+          onClick={onChatCreate}
+        >
+          通过对话创建
         </button>
 
         <button
