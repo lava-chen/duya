@@ -8,6 +8,10 @@
 
 const VALID_ELEMENT_KINDS = new Set([
   'native/sticky',
+  'native/shape',
+  'native/document',
+  'native/text',
+  'native/table',
   'native/image',
   'native/file',
   'native/connector',
@@ -118,7 +122,7 @@ export function validateElementInput(
 export function validateKindConfig(kind: string, config: Record<string, unknown>): ValidationResult {
   const checks: ValidationResult[] = [];
 
-  if (kind === 'native/sticky') {
+  if (kind === 'native/sticky' || kind === 'native/shape') {
     const color = config.color;
     if (color !== undefined && (typeof color !== 'string' || !STICKY_COLORS.has(color))) {
       checks.push(
@@ -130,6 +134,34 @@ export function validateKindConfig(kind: string, config: Record<string, unknown>
     const fontSize = config.fontSize;
     if (fontSize !== undefined && (!isFiniteNumber(fontSize) || (fontSize as number) <= 0)) {
       checks.push(fail('sticky fontSize must be a positive finite number'));
+    }
+  }
+
+  if (kind === 'native/document') {
+    for (const field of ['title', 'markdown', 'filePath'] as const) {
+      if (config[field] !== undefined && typeof config[field] !== 'string') {
+        checks.push(fail(`document ${field} must be a string`));
+      }
+    }
+  }
+
+  if (kind === 'native/table') {
+    const headers = config.headers;
+    if (headers !== undefined && (!Array.isArray(headers) || headers.length === 0 || headers.length > 12 || headers.some((value) => typeof value !== 'string'))) {
+      checks.push(fail('table headers must be an array of 1-12 strings'));
+    }
+    const rows = config.rows;
+    if (rows !== undefined && (!Array.isArray(rows) || rows.length > 50 || rows.some((row) => !Array.isArray(row) || row.some((value) => typeof value !== 'string')))) {
+      checks.push(fail('table rows must be an array of up to 50 string arrays'));
+    }
+    if (config.title !== undefined && typeof config.title !== 'string') {
+      checks.push(fail('table title must be a string'));
+    }
+    for (const field of ['headerFill', 'headerTextColor', 'borderColor'] as const) {
+      const value = config[field];
+      if (value !== undefined && (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value))) {
+        checks.push(fail(`table ${field} must be a six-digit hex color`));
+      }
     }
   }
 

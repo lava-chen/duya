@@ -12,6 +12,7 @@ The conductor canvas supports a minimal element set:
 - **native/connector** — Connection line between elements
 - **native/image** — Image element (assetId or url)
 - **native/file** — File attachment element (assetId, fileName, mimeType)
+- **native/table** — Editable table (title, headers, rows)
 - **native/link** — Link card referencing a URL, DUYA session, or DUYA canvas
 - **native/group** — Loose-binding group frame around member elements
 - **widget/task-list** — Structured task list widget
@@ -109,6 +110,26 @@ vizSpec format:
   "fileName": "spec.pdf",
   "mimeType": "application/pdf",
   "size": 102400
+}
+\`\`\`
+
+### native/table — Editable Tables
+
+Use for: compact comparisons, schedules, inventories, and research data that
+people may revise cell by cell.
+
+Config fields:
+- **title** (optional): short table name.
+- **headers** (optional): 1–12 column labels.
+- **rows** (optional): up to 50 arrays of string cell values.
+- **headerFill**, **headerTextColor**, **borderColor** (optional): six-digit hex colors for the editable table theme.
+
+Example:
+\`\`\`json
+{
+  "title": "Packing list",
+  "headers": ["Item", "Status"],
+  "rows": [["Boots", "Pack"], ["Map", "Download"]]
 }
 \`\`\`
 

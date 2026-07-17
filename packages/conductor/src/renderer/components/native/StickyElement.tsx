@@ -58,6 +58,65 @@ const STICKY_MARKDOWN_COMPONENTS = {
   ),
 };
 
+type DiagramShape = "rect" | "rounded" | "ellipse" | "diamond" | "parallelogram" | "triangle" | "hexagon";
+
+function DiagramShapeBackdrop({
+  shape,
+  fill,
+  stroke,
+  strokeWidth,
+  strokeStyle,
+}: {
+  shape: DiagramShape;
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+  strokeStyle: "solid" | "dashed" | "dotted";
+}) {
+  const common = {
+    fill,
+    stroke,
+    strokeWidth: Math.max(strokeWidth, 1),
+    strokeDasharray: strokeStyle === "dashed" ? "7 4" : strokeStyle === "dotted" ? "2 3" : undefined,
+    vectorEffect: "non-scaling-stroke" as const,
+  };
+
+  let primitive: React.ReactNode;
+  switch (shape) {
+    case "rounded":
+      primitive = <rect x="1" y="1" width="98" height="98" rx="8" {...common} />;
+      break;
+    case "ellipse":
+      primitive = <ellipse cx="50" cy="50" rx="49" ry="49" {...common} />;
+      break;
+    case "diamond":
+      primitive = <polygon points="50,1 99,50 50,99 1,50" {...common} />;
+      break;
+    case "parallelogram":
+      primitive = <polygon points="14,1 99,1 86,99 1,99" {...common} />;
+      break;
+    case "triangle":
+      primitive = <polygon points="50,1 99,99 1,99" {...common} />;
+      break;
+    case "hexagon":
+      primitive = <polygon points="25,1 75,1 99,50 75,99 25,99 1,50" {...common} />;
+      break;
+    default:
+      primitive = <rect x="1" y="1" width="98" height="98" {...common} />;
+  }
+
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", overflow: "visible", pointerEvents: "none" }}
+    >
+      {primitive}
+    </svg>
+  );
+}
+
 export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element }) => {
   const updateElement = useConductorStore((state) => state.updateElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
@@ -71,7 +130,11 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   const text = (element.config.text as string) || "";
 
   // New style fields (optional, fall back to defaults for old data).
-  const shape = (element.config.shape as "rect" | "diamond" | "ellipse" | undefined) || "rect";
+  const isDiagramShape =
+    element.elementKind === "native/shape" ||
+    element.config.presentation === "shape" ||
+    ["filled", "outline", "dashed"].includes(element.config.shapePreset as string);
+  const shape = (element.config.shape as DiagramShape | undefined) || "rect";
   const bgColor = element.config.bgColor as string | undefined;
   const borderStyleCfg = element.config.borderStyle as
     | { color?: string; width?: number; style?: "solid" | "dashed" | "dotted" }
@@ -100,7 +163,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
     : defaultFontSize;
 
   // Short shapes (diamond/ellipse) downgrade font size for long text to avoid overflow.
-  const isShortShape = shape === "diamond" || shape === "ellipse";
+  const isShortShape = shape === "diamond" || shape === "ellipse" || shape === "triangle" || shape === "hexagon";
   const effectiveFontSize = isShortShape && text.length > 20 ? Math.max(16, fontSize - 4) : fontSize;
 
   const [editHtml, setEditHtml] = useState(textToHtml(text));
@@ -155,22 +218,25 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   }, [setEditingElementId, text]);
 
   const hasText = text.trim().length > 0;
+  const isEmptyEditor = htmlToText(editHtml).trim().length === 0;
 
   // Shape-driven outer styles.
-  const borderRadius = shape === "ellipse" ? "50%" : "var(--radius-element)";
-  const padding = shape === "ellipse" ? "16px 18px" : shape === "diamond" ? "16px 18px" : "10px 12px";
-  const shapeRotate = shape === "diamond" ? "rotate(45deg)" : "";
+  const borderRadius = shape === "ellipse" ? "50%" : isDiagramShape ? shape === "rounded" ? "8px" : "0" : "6px";
+  const padding = isDiagramShape ? "18px 24px" : shape === "ellipse" ? "16px 18px" : shape === "diamond" ? "16px 18px" : "10px 12px";
+  const shapeRotate = !isDiagramShape && shape === "diamond" ? "rotate(45deg)" : "";
   const combinedTransform = shapeRotate || "none";
-  const outerBackground = bgColor ?? theme.bg;
+  const outerBackground = isDiagramShape ? "transparent" : bgColor ?? theme.bg;
   // When the user hasn't configured a borderStyle, default to a 1px solid
   // border using the diagram stroke color so sticky notes share the visual
   // language of diagram module nodes.
-  const outerBorder =
+  const outerBorder = isDiagramShape
+    ? "none"
+    :
     borderWidth > 0
       ? `${borderWidth}px ${borderStyleValue} ${borderColor}`
       : `1px solid ${theme.stroke}`;
   // Counter-rotate inner content so it stays upright inside a diamond.
-  const contentWrapperTransform = shape === "diamond" ? "rotate(-45deg)" : "none";
+  const contentWrapperTransform = !isDiagramShape && shape === "diamond" ? "rotate(-45deg)" : "none";
 
   return (
     <div
@@ -206,6 +272,15 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
         }
       }}
     >
+      {isDiagramShape && (
+        <DiagramShapeBackdrop
+          shape={shape}
+          fill={bgColor ?? theme.bg}
+          stroke={borderWidth > 0 ? borderColor : theme.stroke}
+          strokeWidth={borderWidth > 0 ? borderWidth : 1}
+          strokeStyle={borderStyleValue}
+        />
+      )}
       <div
         style={{
           display: "flex",
@@ -213,11 +288,13 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
           flex: 1,
           minHeight: 0,
           transform: contentWrapperTransform,
+          position: "relative",
+          zIndex: 1,
           // Short diagram labels should read as nodes, not as mostly-empty
           // note cards. Longer notes keep the familiar top-left flow.
-          alignItems: isShortShape || isCompactLabel ? "center" : "stretch",
-          justifyContent: isShortShape || isCompactLabel ? "center" : "flex-start",
-          textAlign: isShortShape || isCompactLabel ? "center" : "left",
+          alignItems: isDiagramShape || isShortShape || isCompactLabel ? "center" : "stretch",
+          justifyContent: isDiagramShape || isShortShape || isCompactLabel ? "center" : "flex-start",
+          textAlign: isDiagramShape || isShortShape || isCompactLabel ? "center" : "left",
         }}
       >
       {isEditing ? (
@@ -257,6 +334,24 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
             }}
             dangerouslySetInnerHTML={{ __html: editHtml }}
           />
+          {isEmptyEditor && (
+            <span
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: isDiagramShape || isShortShape || isCompactLabel ? "center" : "flex-start",
+                color: theme.placeholder,
+                fontSize: `${effectiveFontSize}px`,
+                lineHeight: isCompactLabel ? 1.3 : 1.5,
+                pointerEvents: "none",
+              }}
+            >
+              Add text
+            </span>
+          )}
           <FloatingTextToolbar container={contentEditableRef.current} />
         </>
       ) : (
@@ -280,9 +375,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
                   {text}
                 </ReactMarkdown>
               )
-            ) : (
-              <span style={{ color: theme.placeholder }}>Add text</span>
-            )}
+            ) : null}
           </div>
         </>
       )}

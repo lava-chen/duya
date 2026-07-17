@@ -333,8 +333,8 @@ Rules:
 
 ### Editable mind-map density
 
-Use `canvas_batch_create` only when the user should be able to edit/move
-individual nodes. Use the root as the title; never add a separate wide title
+Create each node with `canvas_create_element` so it appears immediately and
+the user can intervene between elements. Use the root as the title; never add a separate wide title
 sticky. Root = 3.5x1.25 at 24px, first-level branch = 3x1 at 22px,
 leaf = 2.5x1 at 20px. Keep the entire cluster inside the smallest practical
 bounding box. A finished mind map meant to be read as one composition should

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowElbowDownRight, BezierCurve } from "@phosphor-icons/react";
 import type { CanvasElement } from "..//types/conductor";
 import type {
   ConnectorEndpoint,
@@ -45,13 +46,14 @@ const MARKER_OPTIONS: { value: ConnectorMarker; label: string }[] = [
 
 const TOOLBAR_BUTTON: React.CSSProperties = {
   height: 30,
+  width: 30,
+  display: "inline-grid",
+  placeItems: "center",
   border: 0,
   borderRadius: 7,
-  padding: "0 10px",
-  color: "#E7ECF5",
+  padding: 0,
+  color: "var(--text-primary)",
   background: "transparent",
-  fontSize: 12,
-  fontWeight: 600,
   cursor: "pointer",
 };
 
@@ -60,8 +62,9 @@ const TOOLBAR_SELECT: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.12)",
   borderRadius: 7,
   padding: "0 7px",
-  color: "#E7ECF5",
-  background: "#253246",
+  color: "var(--text-primary)",
+  background: "var(--command-menu-bg)",
+  borderColor: "var(--command-menu-border)",
   fontSize: 12,
   outline: "none",
 };
@@ -85,36 +88,38 @@ function ConnectorToolbar({
 
   const routeButton = (mode: ConnectorRoutingMode): React.CSSProperties => ({
     ...TOOLBAR_BUTTON,
-    background: routingMode === mode ? "#8C4EFF" : "transparent",
+    background: routingMode === mode ? "var(--canvas-tool-accent)" : "transparent",
+    color: routingMode === mode ? "#fff" : "var(--text-primary)",
   });
 
   return (
     <div
       style={{
         pointerEvents: "auto",
-        minHeight: 44,
-        borderRadius: 12,
+        minHeight: 40,
+        borderRadius: 11,
         display: "flex",
         alignItems: "center",
-        gap: 5,
-        padding: "0 8px",
-        background: "rgba(24, 34, 49, 0.97)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        boxShadow: "0 10px 30px rgba(8, 14, 24, 0.32)",
-        color: "#E7ECF5",
+        gap: 4,
+        padding: "4px 6px",
+        background: "var(--command-menu-bg)",
+        border: "1px solid var(--command-menu-border)",
+        boxShadow: "none",
+        color: "var(--text-primary)",
         fontSize: 12,
+        whiteSpace: "nowrap",
       }}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <button type="button" title="Elbow connector" style={routeButton("elbow")} onClick={() => onPatch({ routingMode: "elbow" })}>Elbow</button>
-      <button type="button" title="Curved connector" style={routeButton("curve")} onClick={() => onPatch({ routingMode: "curve" })}>Curve</button>
-      <span style={{ width: 1, height: 24, background: "rgba(255,255,255,0.12)", margin: "0 2px" }} />
+      <button type="button" aria-label="Elbow connector" title="Elbow connector" style={routeButton("elbow")} onClick={() => onPatch({ routingMode: "elbow" })}><ArrowElbowDownRight size={17} weight="bold" /></button>
+      <button type="button" aria-label="Curved connector" title="Curved connector" style={routeButton("curve")} onClick={() => onPatch({ routingMode: "curve" })}><BezierCurve size={17} weight="bold" /></button>
+      <span style={{ width: 1, height: 22, background: "var(--command-menu-border)", margin: "0 2px" }} />
       <select aria-label="Line style" title="Line style" value={strokeStyle} style={TOOLBAR_SELECT} onChange={(event) => onPatch({ strokeStyle: event.target.value })}>
         <option value="solid">Solid</option>
         <option value="dashed">Dashed</option>
         <option value="dotted">Dotted</option>
       </select>
-      <label title="Line color" style={{ width: 28, height: 28, borderRadius: 8, background: color, border: "2px solid rgba(255,255,255,0.7)", overflow: "hidden", cursor: "pointer", flexShrink: 0 }}>
+      <label title="Line color" style={{ width: 26, height: 26, borderRadius: 7, background: color, border: "1px solid var(--command-menu-border)", overflow: "hidden", cursor: "pointer", flexShrink: 0 }}>
         <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#8793A3"} onChange={(event) => onPatch({ color: event.target.value })} style={{ width: 36, height: 36, opacity: 0, cursor: "pointer" }} />
       </label>
       <select aria-label="Start marker" title="Start marker" value={startMarker} style={{ ...TOOLBAR_SELECT, width: 90 }} onChange={(event) => onPatch({ startMarker: event.target.value })}>
@@ -133,7 +138,7 @@ function ConnectorToolbar({
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
-        style={{ width: 124, height: 30, border: "1px solid rgba(255,255,255,0.12)", borderRadius: 7, padding: "0 9px", color: "#E7ECF5", background: "rgba(255,255,255,0.06)", fontSize: 12, outline: "none" }}
+        style={{ width: 108, height: 30, border: "1px solid var(--command-menu-border)", borderRadius: 7, padding: "0 9px", color: "var(--text-primary)", background: "var(--command-menu-bg)", fontSize: 12, outline: "none" }}
       />
     </div>
   );
@@ -144,6 +149,7 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
   const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
   const updateElement = useConductorStore((state) => state.updateElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
+  const canvasZoom = useConductorStore((state) => state.canvasZoom);
   const [hoveredConnectorId, setHoveredConnectorId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [dragPoint, setDragPoint] = useState<Point | null>(null);
@@ -170,6 +176,16 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     if (!sourceNode || !targetNode) return null;
     return getComputedConnectorData(selectedConnector, elements, sourceNode.position, targetNode.position);
   }, [selectedConnector, elements]);
+
+  const toolbarAnchor = useMemo(() => {
+    if (!selectedData) return null;
+    // Whimsical-style connector controls follow the upper visible endpoint.
+    // This keeps the toolbar attached to the selected line even for very long
+    // connectors instead of drifting to the canvas or route bounding box.
+    return selectedData.srcPoint.y <= selectedData.tgtPoint.y
+      ? selectedData.srcPoint
+      : selectedData.tgtPoint;
+  }, [selectedData]);
 
   const handleConnectorClick = useCallback((connectorId: string) => {
     setSelectedElementId(selectedElementId === connectorId ? null : connectorId);
@@ -409,9 +425,8 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
   }, [dragState, dragPoint, connectors, elements]);
 
   if (connectors.length === 0) return null;
-  const toolbarWidth = 636;
-  const toolbarX = selectedData?.midPoint.x ?? 0;
-  const toolbarY = selectedData ? selectedData.midPoint.y - 62 : 0;
+  const safeZoom = Number.isFinite(canvasZoom) && canvasZoom > 0 ? canvasZoom : 1;
+  const inverseZoom = 1 / safeZoom;
 
   return (
     <>
@@ -450,12 +465,23 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
           </g>
         )}
 
-        {selectedConnector && selectedData && !dragState && (
-          <foreignObject x={toolbarX - toolbarWidth / 2} y={toolbarY} width={toolbarWidth} height={50} style={{ overflow: "visible", pointerEvents: "none" }}>
-            <ConnectorToolbar connector={selectedConnector} labelDraft={labelDraft} onLabelDraftChange={setLabelDraft} onPatch={patchSelectedConnector} />
-          </foreignObject>
-        )}
       </svg>
+
+      {selectedConnector && toolbarAnchor && !dragState && (
+        <div
+          style={{
+            position: "absolute",
+            left: toolbarAnchor.x,
+            top: toolbarAnchor.y - 12 * inverseZoom,
+            zIndex: 7,
+            pointerEvents: "none",
+            transform: `scale(${inverseZoom}) translate(-50%, -100%)`,
+            transformOrigin: "top left",
+          }}
+        >
+          <ConnectorToolbar connector={selectedConnector} labelDraft={labelDraft} onLabelDraftChange={setLabelDraft} onPatch={patchSelectedConnector} />
+        </div>
+      )}
     </>
   );
 };

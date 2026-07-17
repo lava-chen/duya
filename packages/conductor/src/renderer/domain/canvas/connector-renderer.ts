@@ -362,12 +362,12 @@ export interface ConnectorArrowGeometry {
 
 export function getConnectorArrowGeometry(
   tip: Point,
-  center: Point,
-  headLength = 9,
-  halfWidth = 4.6,
+  directionPoint: Point,
+  headLength = 10.5,
+  halfWidth = 5.5,
 ): ConnectorArrowGeometry {
-  const dx = center.x - tip.x;
-  const dy = center.y - tip.y;
+  const dx = directionPoint.x - tip.x;
+  const dy = directionPoint.y - tip.y;
   const length = Math.hypot(dx, dy) || 1;
   const inward = { x: dx / length, y: dy / length };
   const perpendicular = { x: -inward.y, y: inward.x };
@@ -385,6 +385,34 @@ export function getConnectorArrowGeometry(
       y: base.y - perpendicular.y * halfWidth,
     },
   };
+}
+
+export function snapConnectorEdgePosition(
+  position: number,
+  peerPositions: number[],
+  edgeLengthPx: number,
+  thresholdPx = 14,
+): number {
+  const current = Math.max(0, Math.min(1, Number.isFinite(position) ? position : 0.5));
+  const threshold = Math.min(0.12, thresholdPx / Math.max(1, edgeLengthPx));
+  const positions = peerPositions
+    .filter(Number.isFinite)
+    .map((value) => Math.max(0, Math.min(1, value)))
+    .sort((a, b) => a - b);
+  if (!positions.some((value) => Math.abs(value - current) < 0.0001)) {
+    positions.push(current);
+    positions.sort((a, b) => a - b);
+  }
+  const currentIndex = positions.reduce((bestIndex, value, index) =>
+    Math.abs(value - current) < Math.abs(positions[bestIndex] - current) ? index : bestIndex, 0);
+  let start = currentIndex;
+  let end = currentIndex;
+  while (start > 0 && positions[start] - positions[start - 1] <= threshold) start -= 1;
+  while (end < positions.length - 1 && positions[end + 1] - positions[end] <= threshold) end += 1;
+  const cluster = positions.slice(start, end + 1);
+  if (cluster.length <= 1) return current;
+  const average = cluster.reduce((sum, value) => sum + value, 0) / cluster.length;
+  return Math.round(average * 10_000) / 10_000;
 }
 
 function intervalGap(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
@@ -453,7 +481,7 @@ export function snapElbowSegmentCoordinate(
   };
 }
 
-function orthogonalizePoints(points: Point[]): Point[] {
+export function orthogonalizeElbowPoints(points: Point[]): Point[] {
   if (points.length < 2) return points;
   const result: Point[] = [points[0]];
   for (let index = 1; index < points.length; index += 1) {
@@ -474,6 +502,7 @@ export function computeElbowRoutePoints(
   tgtDir: Direction,
   waypoints?: Point[],
   stubLength = 32,
+  laneCoordinate?: number,
 ): Point[] {
   const savedWaypoints = waypoints?.filter(isFinitePoint).map((point) => ({ ...point })) ?? [];
   if (savedWaypoints.length > 0) {
@@ -483,7 +512,7 @@ export function computeElbowRoutePoints(
     else first.x = src.x;
     if (tgtDir === 'left' || tgtDir === 'right') last.y = tgt.y;
     else last.x = tgt.x;
-    return orthogonalizePoints([src, ...savedWaypoints, tgt]);
+    return orthogonalizeElbowPoints([src, ...savedWaypoints, tgt]);
   }
 
   const srcVec = directionVector[srcDir];
@@ -500,7 +529,7 @@ export function computeElbowRoutePoints(
   const tgtHorizontal = tgtDir === 'left' || tgtDir === 'right';
 
   if (srcHorizontal && tgtHorizontal) {
-    const midX = (srcStub.x + tgtStub.x) / 2;
+    const midX = laneCoordinate ?? (srcStub.x + tgtStub.x) / 2;
     return simplifyOrthogonalPoints([
       src,
       srcStub,
@@ -512,7 +541,7 @@ export function computeElbowRoutePoints(
   }
 
   if (!srcHorizontal && !tgtHorizontal) {
-    const midY = (srcStub.y + tgtStub.y) / 2;
+    const midY = laneCoordinate ?? (srcStub.y + tgtStub.y) / 2;
     return simplifyOrthogonalPoints([
       src,
       srcStub,

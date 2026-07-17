@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowClockwise, CopySimple, DotsThree, X } from "@phosphor-icons/react";
 import type { CanvasElement, CanvasPosition } from "../..//types/conductor";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { canvasTransformState } from "../CanvasArea";
 import { GRID_PX } from "../../domain/canvas/units";
+import { quantizeResizeDelta } from "../../domain/canvas/resize-snap";
 import { PencilIcon, TrashIcon, CaretDownIcon } from "@/components/icons";
-import { executeAction } from "../../ipc/conductor-ipc";
+import { createNativeElement, executeAction } from "../../ipc/conductor-ipc";
 import { useStyleUpdate } from "../StylePanel";
 import { STICKY_COLORS, STICKY_COLOR_KEYS, type StickyColorKey } from "./sticky-colors";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -19,10 +21,13 @@ import {
 } from "../toolbar/CapsuleToolbar";
 import { TextSelectionToolbar } from "./TextSelectionToolbar";
 
-type HandleDirection = "nw" | "ne" | "se" | "sw";
+type HandleDirection = "nw" | "ne" | "se" | "sw" | "n" | "e" | "s" | "w";
 
-const HANDLE_SIZE = 8;
+// Screen-pixel target size. The canvas zoom is inverted at render time so
+// handles remain easy to grab at both overview and detail zoom levels.
+const HANDLE_SIZE = 12;
 const MIN_SIZE_GRID = 1;
+const DUPLICATE_OFFSET_GRID = 0.5;
 
 type StickyShape = "rect" | "diamond" | "ellipse";
 
@@ -72,14 +77,124 @@ const BORDER_STYLES: { value: "none" | "solid" | "dashed" | "dotted"; labelKey: 
   { value: "dotted", labelKey: "conductor.toolbar.borderDotted" },
 ];
 
+interface ElementUtilityActionsProps {
+  onDuplicate: () => void;
+  onRotate: () => void;
+  onBringToFront: () => void;
+  onSendToBack: () => void;
+  onDismiss: () => void;
+  onDelete: (event: React.MouseEvent) => void;
+  deleteTitle: string;
+}
+
+function ElementUtilityActions({
+  onDuplicate,
+  onRotate,
+  onBringToFront,
+  onSendToBack,
+  onDismiss,
+  onDelete,
+  deleteTitle,
+}: ElementUtilityActionsProps) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const handleOutsidePress = (event: MouseEvent) => {
+      if (!moreMenuRef.current?.contains(event.target as Node)) {
+        setMoreOpen(false);
+      }
+    };
+    window.setTimeout(() => document.addEventListener("mousedown", handleOutsidePress), 0);
+    return () => document.removeEventListener("mousedown", handleOutsidePress);
+  }, [moreOpen]);
+
+  const menuItemStyle: React.CSSProperties = {
+    display: "block",
+    width: "100%",
+    padding: "7px 10px",
+    border: "none",
+    background: "transparent",
+    color: "rgba(255,255,255,0.9)",
+    textAlign: "left",
+    fontSize: 12,
+    cursor: "pointer",
+  };
+
+  return (
+    <>
+      <div style={CAPSULE_DIVIDER} />
+      <button type="button" title="Rotate 90°" onClick={onRotate} style={CAPSULE_BTN_BASE}>
+        <ArrowClockwise size={16} />
+      </button>
+      <button type="button" title="Duplicate element" onClick={onDuplicate} style={CAPSULE_BTN_BASE}>
+        <CopySimple size={16} />
+      </button>
+      <div style={{ position: "relative" }} ref={moreMenuRef}>
+        <button
+          type="button"
+          title="More element actions"
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          onClick={() => setMoreOpen((open) => !open)}
+          style={CAPSULE_BTN_BASE}
+        >
+          <DotsThree size={18} weight="bold" />
+        </button>
+        {moreOpen && (
+          <div
+            role="menu"
+            style={{
+              position: "absolute",
+              bottom: 36,
+              right: -4,
+              minWidth: 132,
+              padding: 4,
+              background: "rgba(40, 44, 52, 0.98)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 10,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+              zIndex: 40,
+            }}
+          >
+            <button type="button" role="menuitem" onClick={() => { onBringToFront(); setMoreOpen(false); }} style={menuItemStyle}>
+              Bring to front
+            </button>
+            <button type="button" role="menuitem" onClick={() => { onSendToBack(); setMoreOpen(false); }} style={menuItemStyle}>
+              Send to back
+            </button>
+          </div>
+        )}
+      </div>
+      <button type="button" title={deleteTitle} onClick={onDelete} style={CAPSULE_BTN_BASE}>
+        <TrashIcon size={16} />
+      </button>
+      <button type="button" title="Close selection toolbar" onClick={onDismiss} style={CAPSULE_BTN_BASE}>
+        <X size={16} />
+      </button>
+    </>
+  );
+}
+
 function StickySelectionToolbar({
   element,
   onEdit,
   onDelete,
+  onDuplicate,
+  onRotate,
+  onBringToFront,
+  onSendToBack,
+  onDismiss,
 }: {
   element: CanvasElement;
   onEdit: () => void;
   onDelete: (e: React.MouseEvent) => void;
+  onDuplicate: () => void;
+  onRotate: () => void;
+  onBringToFront: () => void;
+  onSendToBack: () => void;
+  onDismiss: () => void;
 }) {
   const { t } = useTranslation();
   const apply = useStyleUpdate(element);
@@ -234,9 +349,10 @@ function StickySelectionToolbar({
             style={{
               height: 24,
               padding: "0 8px",
+              whiteSpace: "nowrap",
               borderRadius: 12,
               border: "none",
-              background: active ? "var(--conductor-accent)" : "transparent",
+              background: active ? "var(--canvas-tool-accent)" : "transparent",
               color: active ? "#fff" : "rgba(255,255,255,0.85)",
               fontSize: 11,
               fontWeight: 500,
@@ -247,7 +363,7 @@ function StickySelectionToolbar({
               if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.1)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = active ? "var(--conductor-accent)" : "transparent";
+              e.currentTarget.style.background = active ? "var(--canvas-tool-accent)" : "transparent";
             }}
           >
             {t(b.labelKey)}
@@ -267,16 +383,180 @@ function StickySelectionToolbar({
       >
         <PencilIcon size={16} />
       </button>
-      <button
-        type="button"
-        title={t("conductor.toolbar.delete")}
-        onClick={onDelete}
-        style={CAPSULE_BTN_BASE}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-      >
-        <TrashIcon size={16} />
-      </button>
+      <ElementUtilityActions
+        onDuplicate={onDuplicate}
+        onRotate={onRotate}
+        onBringToFront={onBringToFront}
+        onSendToBack={onSendToBack}
+        onDismiss={onDismiss}
+        onDelete={onDelete}
+        deleteTitle={t("conductor.toolbar.delete")}
+      />
+    </CapsuleToolbar>
+  );
+}
+
+type ShapePreset = "filled" | "outline" | "dashed";
+
+const DEFAULT_SHAPE_COLOR = "#F4B566";
+const SHAPE_COLORS = [
+  "#FFFFFF", "#D9E1E8", "#A7B4C2", "#7E8B98",
+  "#4EA4E6", "#8E83EC", "#AB60D5", "#CF69D1",
+  "#55C4BD", "#75B5AC", "#C3B194", "#D99694",
+  "#E77986", DEFAULT_SHAPE_COLOR, "#FFD262",
+] as const;
+
+function shapePresetConfig(preset: ShapePreset, color: string): Record<string, unknown> {
+  return {
+    shapePreset: preset,
+    shapeColor: color,
+    bgColor: preset === "filled" ? color : "transparent",
+    borderStyle: {
+      color,
+      width: preset === "filled" ? 1 : 2,
+      style: preset === "dashed" ? "dashed" : "solid",
+    },
+  };
+}
+
+function ShapeSelectionToolbar({
+  element,
+  onEdit,
+  onDelete,
+  onDuplicate,
+  onRotate,
+  onBringToFront,
+  onSendToBack,
+  onDismiss,
+}: {
+  element: CanvasElement;
+  onEdit: () => void;
+  onDelete: (event: React.MouseEvent) => void;
+  onDuplicate: () => void;
+  onRotate: () => void;
+  onBringToFront: () => void;
+  onSendToBack: () => void;
+  onDismiss: () => void;
+}) {
+  const apply = useStyleUpdate(element);
+  const activePreset = (element.config.shapePreset as ShapePreset | undefined) ?? "filled";
+  const [colorOpen, setColorOpen] = useState(false);
+  const colorMenuRef = useRef<HTMLDivElement>(null);
+  const borderStyle = element.config.borderStyle as { color?: string } | undefined;
+  const shapeColor = (element.config.shapeColor as string | undefined)
+    ?? borderStyle?.color
+    ?? (element.config.bgColor as string | undefined)
+    ?? DEFAULT_SHAPE_COLOR;
+
+  useEffect(() => {
+    if (!colorOpen) return;
+    const handleOutsidePress = (event: MouseEvent) => {
+      if (!colorMenuRef.current?.contains(event.target as Node)) {
+        setColorOpen(false);
+      }
+    };
+    window.setTimeout(() => document.addEventListener("mousedown", handleOutsidePress), 0);
+    return () => document.removeEventListener("mousedown", handleOutsidePress);
+  }, [colorOpen]);
+
+  return (
+    <CapsuleToolbar>
+      {(["filled", "outline", "dashed"] as ShapePreset[]).map((preset) => {
+        const active = activePreset === preset;
+        return (
+          <button
+            key={preset}
+            type="button"
+            title={preset === "filled" ? "Filled" : preset === "outline" ? "Outline" : "Transparent dashed"}
+            onClick={() => apply(shapePresetConfig(preset, shapeColor))}
+            style={{ ...CAPSULE_BTN_BASE, ...(active ? CAPSULE_BTN_ACTIVE : {}) }}
+          >
+            <span
+              style={{
+                width: 16,
+                height: 13,
+                borderRadius: 3,
+                border: `2px ${preset === "dashed" ? "dashed" : "solid"} ${active ? "#fff" : "rgba(255,255,255,0.88)"}`,
+                background: preset === "filled" ? (active ? "#fff" : "#F4B566") : "transparent",
+              }}
+            />
+          </button>
+        );
+      })}
+      <div style={CAPSULE_DIVIDER} />
+      <div style={{ position: "relative" }} ref={colorMenuRef}>
+        <button
+          type="button"
+          title="Shape color"
+          aria-haspopup="menu"
+          aria-expanded={colorOpen}
+          onClick={() => setColorOpen((open) => !open)}
+          style={{ ...CAPSULE_BTN_BASE, width: 30 }}
+        >
+          <span
+            style={{
+              width: 17,
+              height: 17,
+              borderRadius: "50%",
+              background: shapeColor,
+              border: "1px solid rgba(255,255,255,0.4)",
+            }}
+          />
+        </button>
+        {colorOpen && (
+          <div
+            role="menu"
+            style={{
+              position: "absolute",
+              bottom: 36,
+              left: "50%",
+              transform: "translateX(-50%)",
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 28px)",
+              gap: 6,
+              padding: 10,
+              background: "rgba(40, 44, 52, 0.98)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 12,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+              zIndex: 40,
+            }}
+          >
+            {SHAPE_COLORS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                title={color}
+                onClick={() => {
+                  apply(shapePresetConfig(activePreset, color));
+                  setColorOpen(false);
+                }}
+                style={{
+                  width: 28,
+                  height: 28,
+                  padding: 0,
+                  borderRadius: "50%",
+                  border: shapeColor === color ? "2px solid #fff" : "1px solid rgba(255,255,255,0.2)",
+                  background: color,
+                  cursor: "pointer",
+                  boxShadow: shapeColor === color ? "0 0 0 1px var(--canvas-tool-accent)" : undefined,
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={CAPSULE_DIVIDER} />
+      <button type="button" title="Edit text" onClick={onEdit} style={CAPSULE_BTN_BASE}><PencilIcon size={16} /></button>
+      <ElementUtilityActions
+        onDuplicate={onDuplicate}
+        onRotate={onRotate}
+        onBringToFront={onBringToFront}
+        onSendToBack={onSendToBack}
+        onDismiss={onDismiss}
+        onDelete={onDelete}
+        deleteTitle="Delete shape"
+      />
     </CapsuleToolbar>
   );
 }
@@ -296,9 +576,30 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
   const updateElement = useConductorStore((state) => state.updateElement);
   const removeElement = useConductorStore((state) => state.removeElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
+  const elements = useConductorStore((state) => state.elements);
+  const setUiError = useConductorStore((state) => state.setUiError);
+  const canvasZoom = useConductorStore((state) => state.canvasZoom);
 
   const isSelected = selectedElementId === element.id || selectedElementIds.includes(element.id);
   const isEditing = editingElementId === element.id;
+  const usesIntrinsicHeight = element.elementKind === "native/table";
+  const isMultiSelect = selectedElementIds.length > 1;
+  // Element controls are intentionally exclusive to a single selection.
+  // MultiSelectBar owns the bulk actions, so rendering one capsule and one
+  // set of resize handles per selected element would create overlapping UI.
+  const showSingleElementControls = isSelected && !isEditing && !isMultiSelect;
+  const isDiagramShape =
+    element.elementKind === "native/shape" ||
+    element.config.presentation === "shape" ||
+    ["filled", "outline", "dashed"].includes(element.config.shapePreset as string);
+  const diagramShape = element.config.shape as string | undefined;
+  const selectionRadius = isDiagramShape
+    ? diagramShape === "ellipse"
+      ? "50%"
+      : diagramShape === "rounded"
+        ? 8
+        : 0
+    : 6;
 
   const handleDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -311,6 +612,61 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       }).catch(() => {});
     }
   }, [activeCanvasId, element.id, removeElement]);
+
+  const persistPosition = useCallback((position: CanvasPosition, failureLabel: string) => {
+    updateElement(element.id, { position });
+    if (!activeCanvasId) return;
+    void executeAction({
+      action: "element.update",
+      elementId: element.id,
+      canvasId: activeCanvasId,
+      position,
+    }).catch((error) => {
+      setUiError(`${failureLabel}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }, [activeCanvasId, element.id, setUiError, updateElement]);
+
+  const handleRotate = useCallback(() => {
+    persistPosition({
+      ...element.position,
+      rotation: ((element.position.rotation ?? 0) + 90) % 360,
+    }, "Rotate element failed");
+  }, [element.position, persistPosition]);
+
+  const handleLayerChange = useCallback((direction: "front" | "back") => {
+    const zIndexes = elements.map((candidate) => candidate.position.zIndex);
+    const nextZIndex = direction === "front"
+      ? Math.max(...zIndexes, element.position.zIndex) + 1
+      : Math.min(...zIndexes, element.position.zIndex) - 1;
+    persistPosition({ ...element.position, zIndex: nextZIndex }, "Update element layer failed");
+  }, [element.position, elements, persistPosition]);
+
+  const handleDuplicate = useCallback(async () => {
+    if (!activeCanvasId) return;
+    const nodeType = element.elementKind.replace(/^native\//, "");
+    try {
+      const result = await createNativeElement(
+        activeCanvasId,
+        nodeType,
+        {
+          ...element.position,
+          x: element.position.x + DUPLICATE_OFFSET_GRID,
+          y: element.position.y + DUPLICATE_OFFSET_GRID,
+          zIndex: Math.max(...elements.map((candidate) => candidate.position.zIndex), element.position.zIndex) + 1,
+        },
+        { ...element.config },
+      );
+      const duplicateId = (result as { resultPatch?: { element?: { id?: string } } } | undefined)
+        ?.resultPatch?.element?.id;
+      if (duplicateId) setSelectedElementId(duplicateId);
+    } catch (error) {
+      setUiError(`Duplicate element failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [activeCanvasId, element.config, element.elementKind, element.position, elements, setSelectedElementId, setUiError]);
+
+  const dismissSelectionToolbar = useCallback(() => {
+    setSelectedElementId(null);
+  }, [setSelectedElementId]);
 
   const resizeRef = useRef<{
     dir: HandleDirection;
@@ -327,6 +683,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     lastMouseX: number;
     lastMouseY: number;
   } | null>(null);
+  const [resizeDimensions, setResizeDimensions] = useState<{ w: number; h: number } | null>(null);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -356,6 +713,10 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       lastMouseX: e.clientX,
       lastMouseY: e.clientY,
     };
+    setResizeDimensions({
+      w: Math.round(element.position.w * GRID_PX),
+      h: Math.round(element.position.h * GRID_PX),
+    });
   }, [element.position, element.metadata]);
 
   useEffect(() => {
@@ -367,9 +728,11 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       const zoom = canvasTransformState.zoom || 1;
       const dx = (r.lastMouseX - r.startMouseX) / zoom;
       const dy = (r.lastMouseY - r.startMouseY) / zoom;
-      // Use float grid units for smooth live resize; snap on commit.
-      const dw = dx / GRID_PX;
-      const dh = dy / GRID_PX;
+      // Resize in half-grid steps. Continuous pixel updates made it too easy
+      // to land on accidental sizes, while the previous release-time snap
+      // caused a noticeable jump under the cursor.
+      const dw = quantizeResizeDelta(dx / GRID_PX);
+      const dh = quantizeResizeDelta(dy / GRID_PX);
 
       let newW = r.origW;
       let newH = r.origH;
@@ -446,6 +809,10 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
           rotation: r.origRotation,
         },
       });
+      setResizeDimensions({
+        w: Math.round(newW * GRID_PX),
+        h: Math.round(newH * GRID_PX),
+      });
     };
 
     const handleGlobalMouseMove = (e: MouseEvent) => {
@@ -465,19 +832,16 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
         window.cancelAnimationFrame(r.rafId);
         flushResizeFrame();
       }
-      // Snap final size/position to whole grid units on commit so the
-      // layout stays tidy after a smooth live resize.
+      // Values are already quantized while resizing. Keep the displayed
+      // geometry on release rather than applying a second, larger snap.
       const el = useConductorStore.getState().elements.find((e) => e.id === element.id);
       let finalPosition: CanvasPosition | undefined;
       if (el) {
-        const snappedW = Math.max(MIN_SIZE_GRID, Math.round(el.position.w));
-        const snappedH = Math.max(MIN_SIZE_GRID, Math.round(el.position.h));
-        const snappedX = Math.round(el.position.x);
-        const snappedY = Math.round(el.position.y);
-        finalPosition = { ...el.position, x: snappedX, y: snappedY, w: snappedW, h: snappedH };
+        finalPosition = { ...el.position };
         updateElement(element.id, { position: finalPosition });
       }
       resizeRef.current = null;
+      setResizeDimensions(null);
       if (finalPosition) {
         onPositionChange?.(element.id, finalPosition);
       }
@@ -491,16 +855,20 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     };
   }, [element.id, onPositionChange, updateElement]);
 
+  const effectiveZoom = canvasZoom > 0 ? canvasZoom : canvasTransformState.zoom || 1;
+  const handleSize = HANDLE_SIZE / effectiveZoom;
+  const handleOffset = handleSize / 2;
   const handleStyle: React.CSSProperties = {
     position: "absolute",
-    width: 8,
-    height: 8,
+    width: handleSize,
+    height: handleSize,
+    boxSizing: "border-box",
     background: "var(--canvas-bg, #fff)",
-    border: "1px solid var(--conductor-accent)",
-    borderRadius: 2,
+    border: `${1 / effectiveZoom}px solid var(--canvas-tool-accent)`,
+    borderRadius: 1 / effectiveZoom,
     zIndex: 10,
     pointerEvents: "auto",
-    boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+    boxShadow: "none",
     transition: "transform var(--motion-duration-micro) var(--motion-spring)",
   };
 
@@ -510,58 +878,142 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       style={{
         position: "relative",
         width: "100%",
-        height: "100%",
-        outline: isSelected ? "2px solid var(--conductor-accent)" : "none",
-        outlineOffset: isSelected ? 2 : 0,
-        borderRadius: "var(--radius-element)",
+        height: usesIntrinsicHeight ? "fit-content" : "100%",
+        // Tables draw their selection border on the grid itself. Their height is
+        // determined by rows, rather than the stale freeform element rectangle.
+        outline: isSelected && !usesIntrinsicHeight ? `${1.5 / effectiveZoom}px solid var(--canvas-tool-accent)` : "none",
+        outlineOffset: 0,
+        borderRadius: selectionRadius,
         cursor: isEditing ? "text" : "default",
-        boxShadow: isSelected ? "0 0 0 4px var(--conductor-accent-soft)" : "none",
-        transition: "outline var(--motion-duration-micro) var(--motion-smooth), box-shadow var(--motion-duration-micro) var(--motion-smooth)",
+        boxShadow: "none",
+        transition: "outline var(--motion-duration-micro) var(--motion-smooth)",
       }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >
-      {children}
+      <div
+        className="native-chrome__visual"
+        data-native-element-visual
+        style={{
+          position: "absolute",
+          inset: 0,
+          transform: element.position.rotation
+            ? `rotate(${element.position.rotation}deg)`
+            : undefined,
+          transformOrigin: "center",
+        }}
+      >
+        {children}
+      </div>
 
-      {isSelected && !isEditing && element.elementKind === "native/sticky" && (
-        <StickySelectionToolbar
+      {showSingleElementControls && element.elementKind === "native/shape" && (
+        <ShapeSelectionToolbar
           element={element}
           onEdit={() => setEditingElementId(element.id)}
           onDelete={handleDelete}
+          onDuplicate={handleDuplicate}
+          onRotate={handleRotate}
+          onBringToFront={() => handleLayerChange("front")}
+          onSendToBack={() => handleLayerChange("back")}
+          onDismiss={dismissSelectionToolbar}
         />
       )}
 
-      {isSelected && !isEditing && element.elementKind === "native/text" && (
+      {showSingleElementControls && element.elementKind === "native/sticky" && (
+        isDiagramShape
+          ? <ShapeSelectionToolbar
+              element={element}
+              onEdit={() => setEditingElementId(element.id)}
+              onDelete={handleDelete}
+              onDuplicate={handleDuplicate}
+              onRotate={handleRotate}
+              onBringToFront={() => handleLayerChange("front")}
+              onSendToBack={() => handleLayerChange("back")}
+              onDismiss={dismissSelectionToolbar}
+            />
+          : <StickySelectionToolbar
+              element={element}
+              onEdit={() => setEditingElementId(element.id)}
+              onDelete={handleDelete}
+              onDuplicate={handleDuplicate}
+              onRotate={handleRotate}
+              onBringToFront={() => handleLayerChange("front")}
+              onSendToBack={() => handleLayerChange("back")}
+              onDismiss={dismissSelectionToolbar}
+            />
+      )}
+
+      {showSingleElementControls && element.elementKind === "native/text" && (
         <TextSelectionToolbar element={element} />
       )}
 
-      {isSelected && !isEditing && element.metadata?.resizeMode !== 'fixed' && (
+      {showSingleElementControls && element.metadata?.resizeMode !== 'fixed' && (
         <>
-          <div
-            data-resize-handle="nw"
-            className="conductor-resize-handle nw"
-            style={{ ...handleStyle, top: -4, left: -4, cursor: "nwse-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "nw")}
-          />
-          <div
-            data-resize-handle="ne"
-            className="conductor-resize-handle ne"
-            style={{ ...handleStyle, top: -4, right: -4, cursor: "nesw-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "ne")}
-          />
-          <div
-            data-resize-handle="se"
-            className="conductor-resize-handle se"
-            style={{ ...handleStyle, bottom: -4, right: -4, cursor: "nwse-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "se")}
-          />
-          <div
-            data-resize-handle="sw"
-            className="conductor-resize-handle sw"
-            style={{ ...handleStyle, bottom: -4, left: -4, cursor: "nesw-resize" }}
-            onMouseDown={(e) => handleResizeStart(e, "sw")}
-          />
+          {usesIntrinsicHeight ? <>
+            <div
+              data-resize-handle="w"
+              className="conductor-resize-handle w"
+              style={{ ...handleStyle, top: "50%", left: -handleOffset, cursor: "ew-resize", transform: "translateY(-50%)" }}
+              onMouseDown={(e) => handleResizeStart(e, "w")}
+            />
+            <div
+              data-resize-handle="e"
+              className="conductor-resize-handle e"
+              style={{ ...handleStyle, top: "50%", right: -handleOffset, cursor: "ew-resize", transform: "translateY(-50%)" }}
+              onMouseDown={(e) => handleResizeStart(e, "e")}
+            />
+          </> : <>
+            <div
+              data-resize-handle="nw"
+              className="conductor-resize-handle nw"
+              style={{ ...handleStyle, top: -handleOffset, left: -handleOffset, cursor: "nwse-resize" }}
+              onMouseDown={(e) => handleResizeStart(e, "nw")}
+            />
+            <div
+              data-resize-handle="ne"
+              className="conductor-resize-handle ne"
+              style={{ ...handleStyle, top: -handleOffset, right: -handleOffset, cursor: "nesw-resize" }}
+              onMouseDown={(e) => handleResizeStart(e, "ne")}
+            />
+            <div
+              data-resize-handle="se"
+              className="conductor-resize-handle se"
+              style={{ ...handleStyle, bottom: -handleOffset, right: -handleOffset, cursor: "nwse-resize" }}
+              onMouseDown={(e) => handleResizeStart(e, "se")}
+            />
+            <div
+              data-resize-handle="sw"
+              className="conductor-resize-handle sw"
+              style={{ ...handleStyle, bottom: -handleOffset, left: -handleOffset, cursor: "nesw-resize" }}
+              onMouseDown={(e) => handleResizeStart(e, "sw")}
+            />
+          </>}
         </>
+      )}
+
+      {resizeDimensions && (
+        <div
+          aria-live="polite"
+          style={{
+            position: "absolute",
+            right: -2 / (canvasTransformState.zoom || 1),
+            bottom: -18 / (canvasTransformState.zoom || 1),
+            zIndex: 20,
+            padding: "1px 3px",
+            borderRadius: 4,
+            background: "transparent",
+            color: "var(--canvas-tool-accent)",
+            fontSize: 10,
+            fontWeight: 600,
+            lineHeight: 1.2,
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+            transform: `scale(${1 / (canvasTransformState.zoom || 1)})`,
+            transformOrigin: "top right",
+          }}
+        >
+          {resizeDimensions.w} × {resizeDimensions.h}
+        </div>
       )}
     </div>
   );

@@ -3,7 +3,8 @@
  *
  * Fills or updates the content of an existing canvas element.
  * Content fields are element-kind specific:
- *   - native/sticky:    { text: string, color?: string }
+ *   - native/shape:     { text: string }
+ *   - native/document:  { markdown: string }
  *   - native/image:     { url: string, fileName?: string }
  *   - native/file:      { fileName: string, mimeType?: string, url?: string }
  *   - native/connector: { source: string, target: string }
@@ -27,7 +28,9 @@ export const definition: Tool = {
   description:
     'Fill or update the content of an existing canvas element. ' +
     'Content fields depend on element kind:\n' +
-    '  - native/sticky: { text, color? }\n' +
+    '  - native/shape: { text, shape?, shapePreset? }\n' +
+    '  - native/document: { markdown, title? }; this updates the project Markdown file too\n' +
+    '  - native/sticky: legacy only; do not create new notes\n' +
     '  - native/image: { url, fileName? }\n' +
     '  - native/file: { fileName, mimeType?, url? }\n' +
     '  - native/connector: { source, target, routingMode?, label?, waypoints?, curveControlOffsets? }; keep routingMode="elbow" unless the user explicitly requests an organic curve\n' +
@@ -40,18 +43,14 @@ export const definition: Tool = {
     properties: {
       elementId: {
         type: 'string',
-        description: 'The ID of the element to fill. Obtain from canvas_list_elements, or use a ref from a canvas_batch_create you just made in this turn.',
-      },
-      ref: {
-        type: 'string',
-        description: 'Semantic ref name from a previous canvas_batch_create. Use this or elementId.',
+        description: 'The ID of the element to fill. Obtain it from canvas_list_elements or from canvas_create_element in this turn.',
       },
       content: {
         type: 'object',
         description:
           'Content fields to write into the element config. ' +
           'Only supplied fields are overwritten; other config fields are preserved. ' +
-          'For native/sticky, put { text, color } HERE — not at the top level.',
+          'For native/document, put { markdown } HERE. For native/shape, put { text } HERE.',
         properties: {
           text: {
             type: 'string',
@@ -117,10 +116,7 @@ export const executor: ToolExecutor = {
     // Resolve elementId first so we can check freshness against it.
     // fill_content is a merge-patch (idempotent, non-destructive), so
     // we still allow it on freshly-created elements even if list is stale.
-    const resolved = resolveElementId(
-      { elementId: input.elementId as string | undefined, ref: input.ref as string | undefined },
-      context,
-    );
+    const resolved = resolveElementId({ elementId: input.elementId as string | undefined });
     if ('error' in resolved) {
       return {
         id: crypto.randomUUID(),

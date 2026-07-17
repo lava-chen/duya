@@ -73,9 +73,12 @@ export const executor: ToolExecutor = {
     // Worker wraps the executor result as { success, data: result }. The
     // ipcRequest helper returns this shape, so read `data` (not `result`).
     const data = (response as unknown as {
-      data?: { markdown?: string; count?: number };
+      data?: { markdown?: string; count?: number; spatialOverview?: string };
     }).data;
-    const markdown = data?.markdown ?? `Canvas has ${data?.count ?? 0} elements.`;
+    const markdown = [
+      data?.markdown ?? `Canvas has ${data?.count ?? 0} elements.`,
+      data?.spatialOverview ? `\n${data.spatialOverview}` : null,
+    ].filter(Boolean).join('\n');
 
     // Record the fresh list timestamp on the shared canvasFreshness
     // container (NOT on context directly). StreamingToolExecutor spreads

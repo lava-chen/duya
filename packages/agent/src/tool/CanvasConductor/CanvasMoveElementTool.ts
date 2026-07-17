@@ -26,11 +26,7 @@ export const definition: Tool = {
     properties: {
       elementId: {
         type: 'string',
-        description: 'The ID of the element to move. Obtain from canvas_list_elements, or use a ref from a canvas_batch_create you just made in this turn.',
-      },
-      ref: {
-        type: 'string',
-        description: 'Semantic ref name from a previous canvas_batch_create. Use this or elementId.',
+        description: 'The ID of the element to move. Obtain it from canvas_list_elements or from canvas_create_element in this turn.',
       },
       x: {
         type: 'number',
@@ -62,10 +58,7 @@ export const executor: ToolExecutor = {
       return noCanvasIdResult(TOOL_NAME);
     }
 
-    const resolved = resolveElementId(
-      { elementId: input.elementId as string | undefined, ref: input.ref as string | undefined },
-      context,
-    );
+    const resolved = resolveElementId({ elementId: input.elementId as string | undefined });
     if ('error' in resolved) {
       return {
         id: crypto.randomUUID(),

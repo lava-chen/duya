@@ -60,7 +60,12 @@ export function CanvasSelector() {
   const handleCreateCanvas = async (name: string) => {
     if (!name.trim()) return;
     try {
-      const canvas = await createCanvas(name.trim());
+      const location = await window.electronAPI.dialog.openFolder({
+        title: "Choose the project folder for this canvas",
+      });
+      const projectPath = location.filePaths[0];
+      if (location.canceled || !projectPath) return;
+      const canvas = await createCanvas(name.trim(), undefined, projectPath);
       addCanvas(canvas);
       disconnectBridge();
       setActiveCanvas(canvas.id);
@@ -260,7 +265,7 @@ export function CanvasSelector() {
 
       <InputDialog
         isOpen={createDialogOpen}
-        title="Create New Canvas"
+        title="Name the canvas"
         placeholder="Enter canvas name..."
         onConfirm={handleCreateCanvas}
         onCancel={() => setCreateDialogOpen(false)}

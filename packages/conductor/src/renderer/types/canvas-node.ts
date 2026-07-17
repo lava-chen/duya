@@ -1,5 +1,6 @@
 export const NodeType = {
   sticky: 'sticky',
+  document: 'document',
   shape: 'shape',
   text: 'text',
   connector: 'connector',
@@ -119,6 +120,13 @@ export interface StickyContent {
   };
 }
 
+/** A Markdown file in the canvas project. `filePath` is project-relative. */
+export interface DocumentContent {
+  title: string;
+  markdown: string;
+  filePath: string;
+}
+
 export interface SectionContent {
   title?: string;
   background?: string;
@@ -144,6 +152,8 @@ export interface FileContent {
   mimeType?: string;
   size?: number;
   url?: string;
+  pdfPage?: number;
+  pdfZoom?: number;
 }
 
 export interface GroupContent {

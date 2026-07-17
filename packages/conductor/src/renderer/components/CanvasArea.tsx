@@ -32,7 +32,10 @@ const MIN_READABLE_FIT_ZOOM = 0.65;
 const ZOOM_STEP = 0.1;
 const SNAP_GRID = 20;
 const DRAG_THRESHOLD = 3;
-const ALIGN_THRESHOLD = 8;
+// Keep snapping intentional: the tolerance is expressed in screen pixels so
+// it feels equally light at every zoom level instead of covering a huge area
+// of the canvas at normal zoom.
+const ALIGN_SNAP_SCREEN_PX = 8;
 
 // Apple-style interaction constants
 const ZOOM_ELASTIC_MIN = 0.15;
@@ -50,8 +53,10 @@ function snapToGrid(value: number, grid = SNAP_GRID): number {
 }
 
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
-  sticky: { w: 3, h: 2, zIndex: 0 },
+  document: { w: 6, h: 5, zIndex: 0 },
+  shape: { w: 4, h: 2, zIndex: 0 },
   text: { w: 10, h: 2, zIndex: 0 },
+  table: { w: 5, h: 1.5, zIndex: 0 },
   image: { w: 5, h: 4, zIndex: 0 },
   file: { w: 4, h: 3, zIndex: 0 },
   link: { w: 4, h: 1, zIndex: 0 },
@@ -269,6 +274,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     velocityX: number;
     velocityY: number;
   } | null>(null);
+  const temporaryPanToolRef = useRef<string | null>(null);
 
   const inertiaRef = useRef<{
     rafId: number | null;
@@ -471,7 +477,15 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     canvasY: number,
   ) => {
     if (!activeCanvasId) return;
-    const def = NATIVE_DEFAULTS[type] || { w: 4, h: 3, zIndex: 0 };
+    const linkType = extra.linkType;
+    const isShape = type === "shape";
+    const def = isShape
+      ? { w: 4, h: 2, zIndex: 0 }
+      : type === "link" && extra.expanded === true
+      ? linkType === "url"
+        ? { w: 5, h: 2, zIndex: 0 }
+        : { w: 5, h: 4, zIndex: 0 }
+      : NATIVE_DEFAULTS[type] || { w: 4, h: 3, zIndex: 0 };
     const pxW = def.w * GRID_PX;
     const pxH = def.h * GRID_PX;
     // canvasX/canvasY are canvas-perspective pixels; CanvasPosition.x/y
@@ -490,17 +504,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       setUiError(null);
       setActiveTool(null);
 
-      // For text elements, auto-select and enter edit mode right after
-      // creation so the user can type immediately. The new element arrives
-      // via an async state patch; defer to next tick so the store has it.
-      if (type === "text") {
+      // Text and document elements open their editor immediately. Diagram shapes stay
+      // visually empty until the user explicitly double-clicks to label one.
+      if (type === "text" || type === "document" || type === "table") {
         setTimeout(() => {
           const store = useConductorStore.getState();
-          // Find the freshly created native/text element closest to the
+          // Find the freshly created native element closest to the
           // creation position (most recent createdAt wins on ties).
-          const candidates = store.elements.filter(
-            (e) => e.elementKind === "native/text",
-          );
+          const candidates = store.elements.filter((e) => e.elementKind === `native/${type}`);
           if (candidates.length === 0) return;
           const newest = candidates.reduce((a, b) =>
             (b.createdAt ?? 0) > (a.createdAt ?? 0) ? b : a,
@@ -580,7 +591,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       // 2. Compute alignment snap on the proposed primary. Overlap is
       // intentional: dragging one item must never rearrange unrelated
       // content. Explicit auto-layout remains available from the toolbar.
-      const snapResult = computeSnap(proposedPrimary, latestElements, { threshold: ALIGN_THRESHOLD });
+      const alignmentThreshold = ALIGN_SNAP_SCREEN_PX /
+        (sanitizeZoom(transformRef.current.zoom) * GRID_PX);
+      const snapResult = computeSnap(proposedPrimary, latestElements, { threshold: alignmentThreshold });
 
       // 3. Determine final primary position.
       const finalX = snapResult.kind === 'alignment' ? snapResult.x : proposedPrimary.position.x;
@@ -739,7 +752,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         const vx = panRef.current.velocityX;
         const vy = panRef.current.velocityY;
         panRef.current = null;
-        setHostCursor(spaceHeldRef.current ? "grab" : "default");
+        const restoreTool = temporaryPanToolRef.current;
+        temporaryPanToolRef.current = null;
+        if (restoreTool !== null) setActiveTool(restoreTool || null);
+        setHostCursor(spaceHeldRef.current || activeTool === "pan" ? "grab" : "default");
 
         if (Math.abs(vx) > 2 || Math.abs(vy) > 2) {
           startInertia(vx, vy);
@@ -765,7 +781,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       window.removeEventListener("mousemove", handleGlobalMove);
       window.removeEventListener("mouseup", handleGlobalUp);
     };
-  }, [clientToCanvas, activeCanvasId, onPositionChange, setUiError, setActiveTool, setHostCursor, syncCanvasStateToStore, startInertia, springZoomToHard, isDragging]);
+  }, [clientToCanvas, activeCanvasId, onPositionChange, setUiError, setActiveTool, setHostCursor, syncCanvasStateToStore, startInertia, springZoomToHard, isDragging, activeTool]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (readOnly) return;
@@ -776,8 +792,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     // Pan has highest priority among canvas interactions so modifier keys
     // and space-bar override element drag / connector draw even when the
     // pointer starts on top of an element.
-    if (e.ctrlKey || e.metaKey || e.button === 1 || spaceHeldRef.current) {
+    if (e.ctrlKey || e.metaKey || e.button === 1 || spaceHeldRef.current || activeTool === "pan") {
       e.preventDefault();
+      if (e.button === 1 && activeTool !== "pan") {
+        temporaryPanToolRef.current = activeTool ?? "";
+        setActiveTool("pan");
+      }
       cancelInertia();
       panRef.current = {
         active: true,
@@ -1104,7 +1124,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     // Tool shortcuts (single letter, no modifier)
     const toolMap: Record<string, string> = {
       v: "select",
-      n: "sticky",
+      h: "pan",
+      s: "shape",
+      d: "document",
       c: "connector:elbow",
     };
     const tool = toolMap[e.key.toLowerCase()];
@@ -1112,6 +1134,15 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       e.preventDefault();
       if (tool === "select") {
         setActiveTool(null);
+      } else if (tool === "shape") {
+        setActiveTool(`create:shape:${encodeURIComponent(JSON.stringify({
+          presentation: "shape",
+          shape: "rect",
+          shapePreset: "filled",
+          color: "yellow",
+          bgColor: "#F4B566",
+          borderStyle: { color: "#E98436", width: 1, style: "solid" },
+        }))}`);
       } else {
         setActiveTool(tool);
       }
@@ -1368,6 +1399,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       if (panRef.current?.active) return "grabbing";
       return "grab";
     }
+    if (activeTool === "pan") return panRef.current?.active ? "grabbing" : "grab";
     if (parseConnectorTool(activeTool)) return "crosshair";
     if (parseCreateTool(activeTool)) return "copy";
     if (panRef.current?.active) return "grabbing";

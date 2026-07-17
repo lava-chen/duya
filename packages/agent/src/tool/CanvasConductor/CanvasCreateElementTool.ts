@@ -81,12 +81,15 @@ export const definition: Tool = {
   description:
     'Create a new element on the bound canvas. Call this tool directly when the user asks for any canvas element. ' +
     'Element kind determines which config fields are expected:\n' +
-    '  - native/sticky:    { text, color? }  — a colored note with text\n' +
+    '  - native/shape:     { text, shape?, shapePreset? } — a diagram node; use for flowcharts and frameworks\n' +
+    '  - native/document:  { title?, markdown?, filePath? } — a durable Markdown draft linked to the project\n' +
+    '  - native/table:     { title?, headers?: string[], rows?: string[][], headerFill?, headerTextColor?, borderColor? } — an editable grid for comparisons, schedules, and research data\n' +
+    '  - native/sticky:    legacy colored note; do not create new ones\n' +
     '  - native/image:     { url, fileName? } — image from a URL\n' +
     '  - native/file:      { fileName, mimeType?, url? } — file attachment\n' +
     '  - native/connector: { source, target, routingMode?: "elbow"|"curve", label?, color?, strokeStyle?, startMarker?, endMarker? } — editable connector between two elements; routingMode defaults to "elbow". Use curve only when the user explicitly requests an organic curved relation.\n' +
     '  - native/link:      { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description? } — reference card\n' +
-    '  - widget/dynamic:   HTML/SVG sourceCode for custom visual content\n\n' +
+    '  - widget/dynamic:   last-resort HTML/SVG for one small secondary mini component; never use it for a whole guide, plan, diagram, or dashboard\n\n' +
     'Position is required and uses canvas grid units (1 unit = 80px). ' +
     'ALWAYS provide w and h; do not omit them. Choose size based on content — do NOT oversize: ' +
     'compact label 2.5x1, short Chinese line 3x1, two short lines 3.5x1.5, standard note 4x2. ' +
@@ -103,8 +106,8 @@ export const definition: Tool = {
       kind: {
         type: 'string',
         description:
-          'Element kind. One of: "native/sticky", "native/image", "native/file", ' +
-          '"native/connector", "native/link", "widget/dynamic".',
+          'Element kind. Prefer native/shape, native/document, native/text, native/table, native/image, native/file, native/connector, or native/link. ' +
+          'widget/dynamic is only for one compact secondary mini component, never the primary canvas content.',
       },
       position: {
         type: 'object',
@@ -141,8 +144,8 @@ export const definition: Tool = {
       sourceCode: {
         type: 'string',
         description:
-          'Required when kind="widget/dynamic". HTML or SVG string to render in sandboxed iframe. ' +
-          'Must be self-contained (no external resources, no <script>). Inline CSS only. ' +
+          'Required only when kind="widget/dynamic". Use only for a compact secondary mini component, never a guide, itinerary, diagram, or dashboard. ' +
+          'HTML or SVG renders in a sandboxed iframe and is not node-by-node editable. Must be self-contained (no external resources, no <script>). Inline CSS only. ' +
           'SVG must have explicit width/height.',
       },
     },
@@ -214,14 +217,24 @@ export const executor: ToolExecutor = {
       };
     }
 
-    const response = await ipcRequest(context, 'element.create', {
-      canvasId,
-      kind,
-      position,
-      config,
-      vizSpec,
-      ...(sourceCode ? { sourceCode } : {}),
-    });
+    // Native canvas elements use the V2 creation path. Besides keeping the
+    // renderer contract consistent, this lets native/document create its
+    // project-relative Markdown file before the element is persisted.
+    const response = kind.startsWith('native/') && kind !== 'native/connector'
+      ? await ipcRequest(context, 'element.create_native', {
+          canvasId,
+          nodeType: kind.slice('native/'.length),
+          position,
+          content: config,
+        })
+      : await ipcRequest(context, 'element.create', {
+          canvasId,
+          kind,
+          position,
+          config,
+          vizSpec,
+          ...(sourceCode ? { sourceCode } : {}),
+        });
 
     if (response.success && kind === 'widget/dynamic' && sourceCode && context) {
       const signature = extractWidgetStyleSignature(sourceCode);

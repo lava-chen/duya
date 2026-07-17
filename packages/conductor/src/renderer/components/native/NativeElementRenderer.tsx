@@ -3,12 +3,14 @@
 import React from "react";
 import type { CanvasElement, CanvasPosition } from "../..//types/conductor";
 import { StickyElement } from "./StickyElement";
+import { DocumentElement } from "./DocumentElement";
 import { ConnectorElement } from "./ConnectorElement";
 import { ImageElement } from "./ImageElement";
 import { FileElement } from "./FileElement";
 import { GroupElement } from "./GroupElement";
 import { LinkElement } from "./LinkElement";
 import { TextElement } from "./TextElement";
+import { TableElement } from "./TableElement";
 import { NativeChrome } from "./NativeChrome";
 
 interface NativeElementRendererProps {
@@ -27,12 +29,15 @@ function UnknownNativeElement({ nodeType }: { nodeType: string }) {
 
 const elementMap: Record<string, React.ComponentType<{ element: CanvasElement }>> = {
   sticky: StickyElement,
+  shape: StickyElement,
+  document: DocumentElement,
   connector: ConnectorElement,
   image: ImageElement,
   file: FileElement,
   group: GroupElement,
   link: LinkElement,
   text: TextElement,
+  table: TableElement,
 };
 
 export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({
@@ -52,10 +57,13 @@ export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({
 
   if (
     element.elementKind === "native/sticky" ||
+    element.elementKind === "native/shape" ||
+    element.elementKind === "native/document" ||
     element.elementKind === "native/image" ||
     element.elementKind === "native/file" ||
     element.elementKind === "native/link" ||
     element.elementKind === "native/text"
+    || element.elementKind === "native/table"
   ) {
     return (
       <NativeChrome element={element} onPositionChange={onPositionChange}>

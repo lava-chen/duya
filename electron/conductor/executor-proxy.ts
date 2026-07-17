@@ -72,6 +72,9 @@ export class ConductorExecutorProxy {
         case 'canvas.snapshot':
           return this.dbService.getCanvasSnapshot(payload.canvasId as string);
 
+        case 'canvas.describe_context':
+          return this.dbService.describeCanvasContext(payload);
+
         case 'canvas.capture': {
           if (!this.captureFn) {
             return {

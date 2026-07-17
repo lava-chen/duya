@@ -22,6 +22,8 @@ export interface CapsuleToolbarProps {
   left?: number;
   /** Explicit top position (pre-zoom). When provided, overrides topOffset. */
   top?: number;
+  /** Set false for a toolbar already positioned in viewport pixels. */
+  zoomAware?: boolean;
   /** Children buttons. */
   children: React.ReactNode;
   /** Stop mouse down so clicks on the toolbar don't deselect elements. */
@@ -35,11 +37,12 @@ export const CapsuleToolbar: React.FC<CapsuleToolbarProps> = ({
   centerX = true,
   left,
   top,
+  zoomAware = true,
   children,
   onMouseDown,
 }) => {
   const zoom = useConductorStore((state) => state.canvasZoom);
-  const invZoom = 1 / (zoom > 0 ? zoom : 1);
+  const invZoom = zoomAware ? 1 / (zoom > 0 ? zoom : 1) : 1;
 
   const style: React.CSSProperties = {
     position: "absolute",
@@ -62,16 +65,15 @@ export const CapsuleToolbar: React.FC<CapsuleToolbarProps> = ({
     style.top = top * invZoom;
     style.transform = `scale(${invZoom})`;
     style.transformOrigin = "top left";
-  } else {
+  } else if (centerX) {
     // Element-anchored positioning (default).
     style.top = (top ?? -topOffset) * invZoom;
-    if (centerX) {
-      style.left = "50%";
-      style.transform = `translateX(-50%) scale(${invZoom})`;
-    } else {
-      style.left = 0;
-      style.transform = `scale(${invZoom})`;
-    }
+    style.left = "50%";
+    style.transform = `translateX(-50%) scale(${invZoom})`;
+  } else {
+    style.top = (top ?? -topOffset) * invZoom;
+    style.left = 0;
+    style.transform = `scale(${invZoom})`;
   }
 
   return (
@@ -107,7 +109,7 @@ export const CAPSULE_BTN_BASE: React.CSSProperties = {
 };
 
 export const CAPSULE_BTN_ACTIVE: React.CSSProperties = {
-  background: "var(--conductor-accent)",
+  background: "var(--canvas-tool-accent)",
   color: "#fff",
 };
 

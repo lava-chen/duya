@@ -1,7 +1,8 @@
 "use client";
 
 import React from "react";
-import type { CanvasElement } from "../..//types/conductor";
+import type { CanvasElement } from "../../types/conductor";
+import { PdfElement } from "./PdfElement";
 
 function formatBytes(bytes: unknown): string {
   if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) return "";
@@ -63,56 +64,7 @@ export const FileElement: React.FC<{ element: CanvasElement }> = ({ element }) =
       title={fileName}
     >
       {isPdfFile && url ? (
-        <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-          <iframe
-            src={`${url}#toolbar=0&navpanes=0&scrollbar=1`}
-            title={fileName}
-            style={{
-              width: "100%",
-              height: "100%",
-              border: "none",
-              background: "#fff",
-              pointerEvents: "auto",
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: 6,
-              right: 6,
-              zIndex: 2,
-              padding: "3px 8px",
-              fontSize: 10,
-              fontWeight: 700,
-              color: "#fff",
-              background: "#E0431B",
-              borderRadius: 4,
-              letterSpacing: 0.5,
-              pointerEvents: "none",
-            }}
-          >
-            PDF
-          </div>
-          <div
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              padding: "6px 10px",
-              fontSize: 11,
-              fontWeight: 600,
-              color: "var(--text)",
-              background: "linear-gradient(transparent, rgba(255,255,255,0.95))",
-              pointerEvents: "none",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {fileName}
-          </div>
-        </div>
+        <PdfElement element={element} />
       ) : (
         <div
           style={{

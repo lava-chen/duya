@@ -4,14 +4,24 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useConductorStore } from "..//stores/conductor-store";
 import { ELEMENT_ICONS } from "./toolbar/element-icons";
 import { uploadAsset } from "..//ipc/conductor-ipc";
-import { STICKY_COLORS, STICKY_COLOR_KEYS } from "./native/sticky-colors";
 import { LinkCreateDialog } from "./LinkCreateDialog";
+import { DocumentCreateDialog } from "./DocumentCreateDialog";
 import type { LinkContent } from "..//types/canvas-node";
-import { ArrowElbowDownRight, BezierCurve } from "@phosphor-icons/react";
+import {
+  ArrowElbowDownRight,
+  BezierCurve,
+  Circle,
+  Diamond,
+  Hexagon,
+  Parallelogram,
+  Rectangle,
+  Triangle,
+  X,
+} from "@phosphor-icons/react";
 
 type ToolId =
-  | "select" | "sticky"
-  | "connector" | "media" | "link" | "text";
+  | "select" | "hand" | "document" | "shape"
+  | "connector" | "media" | "link" | "text" | "table";
 
 interface Tool {
   id: ToolId;
@@ -23,19 +33,39 @@ interface Tool {
 }
 
 const TOOLS: Tool[] = [
-  { id: "select", icon: ELEMENT_ICONS.select, label: "Select", shortcut: "V", group: 0 },
-  { id: "sticky", icon: ELEMENT_ICONS.sticky, label: "Sticky note", shortcut: "N", group: 1, hasSubmenu: true },
+  { id: "select", icon: ELEMENT_ICONS.select, label: "Arrow", shortcut: "V", group: 0 },
+  { id: "hand", icon: ELEMENT_ICONS.hand, label: "Drag canvas", shortcut: "H", group: 0 },
+  { id: "document", icon: ELEMENT_ICONS.document, label: "Markdown document", shortcut: "D", group: 1 },
+  { id: "shape", icon: ELEMENT_ICONS.shape, label: "Diagram shapes", shortcut: "S", group: 1, hasSubmenu: true },
   { id: "text", icon: ELEMENT_ICONS.text, label: "Text", shortcut: "T", group: 1 },
+  { id: "table", icon: ELEMENT_ICONS.table, label: "Table", group: 1 },
   { id: "connector", icon: ELEMENT_ICONS.connector, label: "Connector", shortcut: "C", group: 1, hasSubmenu: true },
   { id: "media", icon: ELEMENT_ICONS.media, label: "Media", shortcut: "M", group: 1 },
   { id: "link", icon: ELEMENT_ICONS.link, label: "Link", shortcut: "L", group: 1 },
 ];
 
-// Sticky color palette — derived from the shared module so the toolbar preview
-// swatch matches the rendered sticky color exactly.
-const STICKY_COLORS_LIST: { color: string; hex: string }[] = STICKY_COLOR_KEYS.map(
-  (key) => ({ color: key, hex: STICKY_COLORS[key].bg }),
-);
+type DiagramShape = "rect" | "rounded" | "ellipse" | "diamond" | "parallelogram" | "triangle" | "hexagon";
+
+const DIAGRAM_SHAPES: { shape: DiagramShape; label: string; icon: React.ReactNode }[] = [
+  { shape: "rect", label: "Rectangle", icon: <Rectangle size={21} weight="regular" /> },
+  { shape: "rounded", label: "Rounded rectangle", icon: <Rectangle size={21} weight="regular" /> },
+  { shape: "ellipse", label: "Ellipse", icon: <Circle size={21} weight="regular" /> },
+  { shape: "diamond", label: "Diamond", icon: <Diamond size={21} weight="regular" /> },
+  { shape: "parallelogram", label: "Parallelogram", icon: <Parallelogram size={21} weight="regular" /> },
+  { shape: "triangle", label: "Triangle", icon: <Triangle size={21} weight="regular" /> },
+  { shape: "hexagon", label: "Hexagon", icon: <Hexagon size={21} weight="regular" /> },
+];
+
+function diagramShapeConfig(shape: DiagramShape): Record<string, unknown> {
+  return {
+    presentation: "shape",
+    shape,
+    shapePreset: "filled",
+    color: "yellow",
+    bgColor: "#F4B566",
+    borderStyle: { color: "#E98436", width: 1, style: "solid" },
+  };
+}
 
 function createToolValue(type: string, extra?: Record<string, unknown>): string {
   const encoded = extra ? `:${encodeURIComponent(JSON.stringify(extra))}` : "";
@@ -51,7 +81,6 @@ interface SubmenuProps {
 
 function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [stickyColor, setStickyColor] = useState("yellow");
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -63,35 +92,35 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
 
   const baseClass = "absolute left-[62px] conductor-popover py-1.5 min-w-[176px] z-[200]";
 
-  if (toolId === "sticky") {
+  if (toolId === "shape") {
     return (
-      <div ref={ref} className={baseClass} style={{ top: anchorY }}>
-        <div className="flex gap-1.5 px-3 py-2.5">
-          {STICKY_COLORS_LIST.map((c) => (
-            <button
-              key={c.color}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.effectAllowed = "copy";
-                e.dataTransfer.setData("application/x-conductor-tool", "sticky");
-                e.dataTransfer.setData("application/x-conductor-extra", JSON.stringify({ color: c.color }));
-              }}
-              onDragEnd={() => onClose()}
-              onClick={(e) => {
-                e.preventDefault();
-                setStickyColor(c.color);
-                onSelect("sticky", { color: c.color });
-              }}
-              className="w-[20px] h-[20px] rounded-[6px] transition-transform hover:scale-110 flex-shrink-0"
-              style={{
-                background: c.hex,
-                outline: stickyColor === c.color ? "2px solid var(--accent)" : "none",
-                outlineOffset: 1,
-              }}
-              aria-label={c.color}
-            />
-          ))}
-        </div>
+      <div
+        ref={ref}
+        className="absolute left-[62px] z-[200] flex w-12 flex-col items-center gap-1 rounded-[14px] border border-[var(--command-menu-border)] bg-[var(--command-menu-bg)] px-1.5 py-1.5"
+        style={{ top: anchorY - 4 }}
+      >
+        <button
+          type="button"
+          aria-label="Close shape palette"
+          title="Close"
+          onClick={onClose}
+          className="conductor-tool-button flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--text)]"
+        >
+          <X size={18} weight="regular" />
+        </button>
+        <div className="canvas-toolbar__divider w-full" />
+        {DIAGRAM_SHAPES.map((item) => (
+          <button
+            key={item.shape}
+            type="button"
+            aria-label={item.label}
+            title={item.label}
+            onClick={() => onSelect("shape", diagramShapeConfig(item.shape))}
+            className="conductor-tool-button flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--text)]"
+          >
+            {item.icon}
+          </button>
+        ))}
       </div>
     );
   }
@@ -179,10 +208,10 @@ interface ToolButtonProps {
 }
 
 function isNonDraggableTool(id: ToolId): boolean {
-  return id === "connector" || id === "select" || id === "media" || id === "link";
+  return id === "select" || id === "hand" || id === "document" || id === "shape" || id === "connector" || id === "media" || id === "link";
 }
 
-// `text` is draggable like `sticky`: drag from toolbar to canvas creates the
+// `text` is draggable: drag from toolbar to canvas creates the
 // element at the drop position. Click + click-on-canvas also works via the
 // default `create:text` activeTool flow.
 
@@ -215,6 +244,7 @@ export function CanvasToolbar() {
   const activeTool = useConductorStore((s) => s.activeTool);
   const setActiveTool = useConductorStore((s) => s.setActiveTool);
   const activeCanvasId = useConductorStore((s) => s.activeCanvasId);
+  const activeCanvas = useConductorStore((s) => s.canvases.find((canvas) => canvas.id === s.activeCanvasId));
   const setUiError = useConductorStore((s) => s.setUiError);
 
   const barRef = useRef<HTMLDivElement>(null);
@@ -222,6 +252,7 @@ export function CanvasToolbar() {
   const [openSubmenu, setOpenSubmenu] = useState<ToolId | null>(null);
   const [submenuAnchorY, setSubmenuAnchorY] = useState(0);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [documentDialogOpen, setDocumentDialogOpen] = useState(false);
 
   const handleDragStart = useCallback((e: React.DragEvent, toolId: string) => {
     e.dataTransfer.effectAllowed = "copy";
@@ -259,7 +290,21 @@ export function CanvasToolbar() {
     setActiveTool(createToolValue("link", content as unknown as Record<string, unknown>));
   }, [setActiveTool]);
 
+  const startCreateDocument = useCallback((content?: Record<string, unknown>) => {
+    if (!activeCanvas?.projectPath) {
+      setUiError("Choose a project folder when creating this canvas before adding Markdown files.");
+      return;
+    }
+    setActiveTool(createToolValue("document", content));
+    setDocumentDialogOpen(false);
+  }, [activeCanvas?.projectPath, setActiveTool, setUiError]);
+
   const handleClick = useCallback((tool: Tool, e: React.MouseEvent) => {
+    if (tool.id === "document") {
+      setDocumentDialogOpen(true);
+      return;
+    }
+
     if (tool.hasSubmenu) {
       if (barRef.current) {
         const btn = (e.currentTarget as HTMLElement).closest("button");
@@ -273,11 +318,6 @@ export function CanvasToolbar() {
       return;
     }
 
-    if (tool.id === "select") {
-      setActiveTool(null);
-      return;
-    }
-
     if (tool.id === "media") {
       fileInputRef.current?.click();
       return;
@@ -285,6 +325,16 @@ export function CanvasToolbar() {
 
     if (tool.id === "link") {
       setLinkDialogOpen(true);
+      return;
+    }
+
+    if (tool.id === "select") {
+      setActiveTool(null);
+      return;
+    }
+
+    if (tool.id === "hand") {
+      setActiveTool("pan");
       return;
     }
 
@@ -301,18 +351,27 @@ export function CanvasToolbar() {
   return (
     <div
       ref={barRef}
-      className="absolute left-0 top-1/2 -translate-y-1/2 z-20 select-none flex flex-col items-center gap-1.5 py-4 px-2.5 conductor-panel"
-      style={{ borderRadius: "0 var(--radius-panel) var(--radius-panel) 0", borderLeft: "none" }}
+      className="canvas-toolbar absolute left-3 top-1/2 -translate-y-1/2 z-20 select-none flex flex-col items-center gap-1.5 py-3 px-2 conductor-panel"
+      style={{ borderRadius: 22 }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       {Array.from(groups.entries()).map(([group, tools]) => (
-        <div key={group} className="flex flex-col">
-          {group > 0 && <div className="w-7 h-px my-2.5 mx-auto" style={{ background: "var(--conductor-border)" }} />}
-          <div className="flex flex-col items-center gap-1.5">
+        <div key={group} className="canvas-toolbar__group flex flex-col">
+          {group > 0 && <div className="canvas-toolbar__divider" />}
+          <div className="canvas-toolbar__tools flex flex-col items-center gap-1.5">
             {tools.map((tool) => {
-              const isActive = tool.id === "connector"
-                ? Boolean(activeTool?.startsWith("connector:"))
-                : activeTool === tool.id || Boolean(activeTool?.startsWith(`create:${tool.id}`));
+              const isShapeTool = Boolean(activeTool?.startsWith("create:shape:"));
+              const isActive = tool.id === "select"
+                ? activeTool === null
+                : tool.id === "hand"
+                  ? activeTool === "pan"
+                  : tool.id === "shape"
+                    ? isShapeTool
+                    : tool.id === "document"
+                      ? Boolean(activeTool?.startsWith("create:document"))
+                      : tool.id === "connector"
+                        ? Boolean(activeTool?.startsWith("connector:"))
+                        : activeTool === tool.id || Boolean(activeTool?.startsWith(`create:${tool.id}`));
               const isSubmenuOpen = openSubmenu === tool.id;
 
               return (
@@ -342,7 +401,7 @@ export function CanvasToolbar() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,application/pdf,.pdf,.doc,.docx,.txt,.md"
+        accept="image/*,application/pdf,.pdf,.doc,.docx,.txt"
         style={{ display: "none" }}
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -357,6 +416,14 @@ export function CanvasToolbar() {
         open={linkDialogOpen}
         onClose={() => setLinkDialogOpen(false)}
         onConfirm={startCreateLink}
+      />
+      <DocumentCreateDialog
+        open={documentDialogOpen}
+        projectPath={activeCanvas?.projectPath ?? undefined}
+        canvasId={activeCanvasId ?? undefined}
+        onClose={() => setDocumentDialogOpen(false)}
+        onConfirm={startCreateDocument}
+        onError={setUiError}
       />
     </div>
   );
