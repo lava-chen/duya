@@ -25,22 +25,28 @@ import {
   PencilSimple,
   Trash,
   Clock,
-  Calendar,
-  Timer,
   SlidersHorizontal,
   WarningCircle,
-  CheckCircle,
   XCircle,
   SpinnerGap,
   Robot,
   SquaresFour,
   ArrowRight,
+  DotsThree,
 } from '@phosphor-icons/react';
 import { AutomationEmptyState } from './AutomationEmptyState';
 import { QuickCronChatModal } from './QuickCronChatModal';
 import { TemplateMarketModal } from './TemplateMarketModal';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useTranslation } from '@/hooks/useTranslation';
+import { CronScheduleCard } from './CronScheduleCard';
+import {
+  createDefaultScheduleDraft,
+  describeScheduleDraft,
+  draftToSchedule,
+  scheduleToDraft,
+  type ScheduleDraft,
+} from './cron-schedule';
 
 function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): string {
   const sections = [
@@ -85,12 +91,9 @@ type EditorState = {
   maxRetries: string;
   enabled: boolean;
   model: string;
+  workingDirectory: string;
+  scheduleDraft: ScheduleDraft;
 };
-
-function formatTime(value: number | null): string {
-  if (!value) return '-';
-  return new Date(value).toLocaleString();
-}
 
 function formatRelativeTime(value: number | null, t: (key: 'automation.timeLaterShort' | 'automation.timeLaterMinutes' | 'automation.timeAgoShort' | 'automation.timeAgoMinutes', params?: Record<string, string | number>) => string): string {
   if (!value) return '-';
@@ -112,45 +115,54 @@ function formatRelativeTime(value: number | null, t: (key: 'automation.timeLater
 function formatDateShort(value: number | null): string {
   if (!value) return '-';
   const d = new Date(value);
-  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
 }
 
-function getScheduleDisplay(cron: AutomationCron): string {
+function formatInterval(ms: number | null): string {
+  const value = ms ?? 0;
+  if (value >= 86_400_000 && value % 86_400_000 === 0) return `每 ${value / 86_400_000} 天`;
+  if (value >= 3_600_000 && value % 3_600_000 === 0) return `每 ${value / 3_600_000} 小时`;
+  if (value >= 60_000 && value % 60_000 === 0) return `每 ${value / 60_000} 分钟`;
+  return `每 ${Math.max(1, Math.round(value / 1000))} 秒`;
+}
+
+function formatCronSchedule(expression: string | null): string {
+  const fields = expression?.trim().split(/\s+/) ?? [];
+  if (fields.length !== 5) return '自定义计划';
+  const [minute = '', hour = '', dayOfMonth = '', month = '', dayOfWeek = ''] = fields;
+  if (minute.startsWith('*/') && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return `每 ${minute.slice(2)} 分钟`;
+  }
+  const time = /^\d+$/.test(minute) && /^\d+$/.test(hour)
+    ? `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
+    : '';
+  if (dayOfMonth === '*' && month === '*' && dayOfWeek === '*') return time ? `每天 ${time}` : '每天';
+  const weekday: Record<string, string> = {
+    '0': '日', '1': '一', '2': '二', '3': '三', '4': '四', '5': '五', '6': '六', '7': '日',
+  };
+  if (dayOfMonth === '*' && month === '*' && weekday[dayOfWeek]) {
+    return `每周${weekday[dayOfWeek]}${time ? ` ${time}` : ''}`;
+  }
+  return time ? `自定义 · ${time}` : '自定义计划';
+}
+
+function getFriendlySchedule(cron: AutomationCron): string {
   switch (cron.schedule_kind) {
     case 'every':
-      return `Every ${cron.schedule_every_ms ? cron.schedule_every_ms / 1000 : '?'}s`;
+      return formatInterval(cron.schedule_every_ms);
     case 'at':
-      return `At ${cron.schedule_at || '?'}`;
+      return cron.schedule_at ? `一次性 · ${formatDateShort(Date.parse(cron.schedule_at))}` : '一次性任务';
     case 'cron':
-      return cron.schedule_cron_expr || '?';
+      return formatCronSchedule(cron.schedule_cron_expr);
     default:
-      return 'Unknown';
-  }
-}
-
-function getScheduleLabel(cron: AutomationCron, t: (key: 'automation.scheduleEvery' | 'automation.scheduleAt' | 'automation.scheduleUnknown') => string): string {
-  const everyPrefix = t('automation.scheduleEvery');
-  switch (cron.schedule_kind) {
-    case 'every': {
-      const ms = cron.schedule_every_ms ?? 0;
-      if (ms >= 86400000) return `${everyPrefix} ${ms / 86400000}d`;
-      if (ms >= 3600000) return `${everyPrefix} ${ms / 3600000}h`;
-      if (ms >= 60000) return `${everyPrefix} ${ms / 60000}m`;
-      return `${everyPrefix} ${ms / 1000}s`;
-    }
-    case 'at':
-      return `${t('automation.scheduleAt')} ${cron.schedule_at || '?'}`;
-    case 'cron':
-      return cron.schedule_cron_expr || '?';
-    default:
-      return t('automation.scheduleUnknown');
+      return '未设置计划';
   }
 }
 
 function getStatusIcon(status: string) {
   switch (status) {
     case 'enabled':
-      return <CheckCircle size={14} weight="fill" className="text-[var(--success)]" />;
+      return <span className="h-4 w-4 rounded-full border-2 border-[var(--muted)]" aria-label="已启用" />;
     case 'error':
       return <WarningCircle size={14} weight="fill" className="text-[var(--error)]" />;
     case 'disabled':
@@ -173,16 +185,29 @@ const DEFAULT_EDITOR: EditorState = {
   maxRetries: '3',
   enabled: true,
   model: '',
+  workingDirectory: '',
+  scheduleDraft: createDefaultScheduleDraft(),
 };
 
-// Parse prompt into task steps
-function parsePromptSteps(prompt: string): string[] {
-  const lines = prompt.split(/\n|(?:\d+\.\s+)/).filter(l => l.trim().length > 0);
-  if (lines.length <= 1) {
-    // Try to split by sentences or commas
-    return prompt.split(/[.!?;]/).filter(l => l.trim().length > 10).map(l => l.trim());
-  }
-  return lines.map(l => l.trim()).filter(l => l.length > 0 && !l.match(/^\d+\.$/));
+function editorStateFromCron(cron: AutomationCron): EditorState {
+  return {
+    id: cron.id,
+    name: cron.name,
+    description: cron.description ?? '',
+    scheduleKind: cron.schedule_kind,
+    at: cron.schedule_at ?? '',
+    everyMs: String(cron.schedule_every_ms ?? 3_600_000),
+    cronExpr: cron.schedule_cron_expr ?? '0 9 * * *',
+    cronTz: cron.schedule_cron_tz ?? '',
+    prompt: cron.prompt,
+    inputParams: cron.input_params || '{}',
+    concurrencyPolicy: cron.concurrency_policy,
+    maxRetries: String(cron.max_retries),
+    enabled: cron.status === 'enabled',
+    model: cron.model,
+    workingDirectory: cron.working_directory || '',
+    scheduleDraft: scheduleToDraft(cron),
+  };
 }
 
 // Mock capabilities based on prompt content
@@ -400,7 +425,8 @@ export function AutomationView() {
 
   function handleCreateNew(): void {
     setSelectedTemplate(null);
-    setQuickChatModalOpen(true);
+    setSelectedCronId(null);
+    setIsCreating(true);
   }
 
   function handleChatCreate(): void {
@@ -517,37 +543,17 @@ export function AutomationView() {
   }, [runs]);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="automation-scheduled-view h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4">
-        <h2 className="automation-title-copernicus" style={{ color: 'var(--text)' }}>{t('automation.title')}</h2>
+      <div className="flex items-center justify-between px-8 pt-8 pb-5">
+        <div>
+          <h2 className="automation-title-copernicus text-3xl" style={{ color: 'var(--text)' }}>已计划</h2>
+          <p className="mt-2 text-sm" style={{ color: 'var(--muted)' }}>让 Duya 帮你安排任务、设置提醒，或定期跟进更新。</p>
+        </div>
         {!showEmptyState && (
         <div className="flex items-center gap-2">
           <button
-            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all duration-200"
-            style={{
-              background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
-              color: '#ffffff',
-            }}
-            onClick={handleCreateNew}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.opacity = '0.9';
-              e.currentTarget.style.transform = 'translateY(-1px)';
-              e.currentTarget.style.boxShadow = '0 4px 12px var(--accent-shadow)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.opacity = '1';
-              e.currentTarget.style.transform = 'translateY(0)';
-              e.currentTarget.style.boxShadow = 'none';
-            }}
-            type="button"
-          >
-            <Plus size={16} weight="bold" />
-            {t('automation.newAutomation')}
-          </button>
-
-          <button
-            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all duration-200"
+            className="flex items-center gap-2 px-4 py-2 rounded-full font-medium text-sm whitespace-nowrap transition-all duration-200"
             style={{
               background: 'var(--surface)',
               color: 'var(--text)',
@@ -577,15 +583,25 @@ export function AutomationView() {
       {showEmptyState ? (
         <div className="flex-1 overflow-hidden">
           <AutomationEmptyState
+            onManualCreate={handleCreateNew}
             onChatCreate={handleChatCreate}
             onViewTemplates={handleViewTemplates}
           />
         </div>
       ) : (
-        <div className="flex-1 overflow-hidden px-6 pb-6 min-h-0">
-          <div className="h-full min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="flex-1 overflow-hidden px-8 pb-8 min-h-0">
+          <div className="h-full min-h-0 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,0.75fr)_minmax(440px,1.25fr)]">
           {/* Cron Jobs List - Left Side */}
-          <section className="flex flex-col h-full min-h-0 lg:col-span-1">
+          <section className="flex flex-col h-full min-h-0">
+            <button
+              type="button"
+              onClick={handleCreateNew}
+              className="mb-7 flex items-center gap-3 rounded-full px-5 py-4 text-left transition-colors"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
+            >
+              <Plus size={20} weight="bold" style={{ color: 'var(--text)' }} />
+              <span className="text-base">安排任务</span>
+            </button>
             <div className="flex-1 overflow-y-auto scrollbar-thin">
               {loading ? (
                 <div className="flex items-center justify-center h-32" style={{ color: 'var(--muted)' }}>
@@ -598,13 +614,14 @@ export function AutomationView() {
                   <p className="text-sm" style={{ color: 'var(--muted)' }}>{t('automation.noAutomations')}</p>
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-0">
                   {crons.map((cron) => (
                     <div
                       key={cron.id}
-                      className="px-3 py-2.5 cursor-pointer transition-all duration-200 rounded-lg"
+                      className="px-5 py-4 cursor-pointer transition-all duration-200 rounded-2xl border-b"
                       style={{
-                        background: selectedCronId === cron.id && !isCreating ? 'var(--accent-soft)' : 'transparent',
+                        background: selectedCronId === cron.id && !isCreating ? 'var(--surface)' : 'transparent',
+                        borderColor: selectedCronId === cron.id && !isCreating ? 'var(--text)' : 'var(--border)',
                       }}
                       onClick={() => handleSelectCron(cron)}
                       onKeyDown={(event) => {
@@ -615,21 +632,20 @@ export function AutomationView() {
                       role="button"
                       tabIndex={0}
                     >
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2 min-w-0">
-                          {getStatusIcon(cron.status)}
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedCronId === cron.id && !isCreating ? (
+                            <span className="h-3 w-3 rounded-full bg-[var(--accent)]" />
+                          ) : (
+                            getStatusIcon(cron.status)
+                          )}
                           <span className="font-medium text-sm truncate" style={{ color: 'var(--text)' }}>{cron.name}</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 text-xs ml-5" style={{ color: 'var(--muted)' }}>
-                        <span className="flex items-center gap-1">
-                          <Timer size={11} />
-                          {getScheduleLabel(cron, t)}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Calendar size={11} />
-                          {formatDateShort(cron.next_run_at)}
-                        </span>
+                      <div className="flex items-center gap-1.5 text-xs ml-7" style={{ color: 'var(--muted)' }}>
+                        <span>{getFriendlySchedule(cron)}</span>
+                        <span>·</span>
+                        <span>下次运行 {formatRelativeTime(cron.next_run_at, t)}</span>
                       </div>
                     </div>
                   ))}
@@ -639,7 +655,7 @@ export function AutomationView() {
           </section>
 
           {/* Detail/Editor Panel - Right Side */}
-          <section className="flex flex-col h-full min-h-0 rounded-xl overflow-hidden lg:col-span-2" style={{ border: '1px solid var(--border)' }}>
+          <section className="flex flex-col h-full min-h-0 overflow-hidden border-l" style={{ borderColor: 'var(--border)' }}>
             {isCreating ? (
               <CronEditor
                 availableModels={availableModels}
@@ -649,11 +665,12 @@ export function AutomationView() {
                   try {
                     setSaving(true);
                     setError(null);
-                    const created = await createAutomationCronIPC(data as CreateAutomationCronInput);
+                    const created = await createAutomationCronIPC(data);
                     await reloadCrons(created.id);
                     setIsCreating(false);
                   } catch (err) {
                     setError(err instanceof Error ? err.message : String(err));
+                    throw err;
                   } finally {
                     setSaving(false);
                   }
@@ -678,6 +695,7 @@ export function AutomationView() {
                     await reloadCrons(id);
                   } catch (err) {
                     setError(err instanceof Error ? err.message : String(err));
+                    throw err;
                   } finally {
                     setSaving(false);
                   }
@@ -734,7 +752,7 @@ export function AutomationView() {
 
 // Cron Editor Component
 interface CronEditorProps {
-  onSave: (data: CreateAutomationCronInput) => void;
+  onSave: (data: CreateAutomationCronInput) => Promise<void>;
   onCancel: () => void;
   saving: boolean;
   initialData?: EditorState;
@@ -746,40 +764,57 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
   const { t } = useTranslation();
   const [editor, setEditor] = useState<EditorState>(initialData || DEFAULT_EDITOR);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setModelError(null);
+    setFormError(null);
+
+    if (!editor.name.trim()) {
+      setFormError('请输入任务名称。');
+      return;
+    }
+    if (!editor.prompt.trim()) {
+      setFormError('请输入每次运行时要执行的提示词。');
+      return;
+    }
 
     if (!editor.model || !editor.model.trim()) {
       setModelError(t('automation.modelRequired'));
       return;
     }
 
-    const parsedParams = editor.inputParams ? JSON.parse(editor.inputParams) : {};
-    const maxRetries = Number(editor.maxRetries || '3');
-    const schedule =
-      editor.scheduleKind === 'at'
-        ? { kind: 'at' as const, at: editor.at }
-        : editor.scheduleKind === 'every'
-          ? { kind: 'every' as const, everyMs: Number(editor.everyMs) }
-          : { kind: 'cron' as const, cronExpr: editor.cronExpr, cronTz: editor.cronTz || null };
+    try {
+      const parsedParams = editor.inputParams ? JSON.parse(editor.inputParams) : {};
+      if (!parsedParams || Array.isArray(parsedParams) || typeof parsedParams !== 'object') {
+        throw new Error('输入参数必须是 JSON 对象。');
+      }
+      const maxRetries = Number(editor.maxRetries || '3');
+      const schedule = draftToSchedule(editor.scheduleDraft);
+      if (schedule.kind === 'cron' && !schedule.cronExpr?.trim()) throw new Error('请输入 Cron 表达式。');
+      if (schedule.kind === 'at' && !schedule.at) throw new Error('请选择运行时间。');
+      if (editor.scheduleDraft.endRepeat === 'on' && !editor.scheduleDraft.endAt) throw new Error('请选择结束重复时间。');
 
-    onSave({
-      name: editor.name,
-      description: editor.description || null,
-      schedule,
-      prompt: editor.prompt,
-      model: editor.model.trim(),
-      inputParams: parsedParams as Record<string, unknown>,
-      concurrencyPolicy: editor.concurrencyPolicy,
-      maxRetries,
-      enabled: editor.enabled,
-    });
+      await onSave({
+        name: editor.name.trim(),
+        description: editor.description.trim() || null,
+        schedule,
+        prompt: editor.prompt.trim(),
+        model: editor.model.trim(),
+        workingDirectory: editor.workingDirectory.trim() || undefined,
+        inputParams: parsedParams as Record<string, unknown>,
+        concurrencyPolicy: editor.concurrencyPolicy,
+        maxRetries,
+        enabled: editor.enabled,
+      });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   return (
     <>
-      <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between" style={{ background: 'var(--surface)' }}>
+      <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between" style={{ background: 'var(--surface)' }}>
         <h3 className="font-medium text-sm" style={{ color: 'var(--text)' }}>
           {initialData?.id ? t('automation.editAutomation') : t('automation.newAutomation')}
         </h3>
@@ -793,16 +828,16 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           <XCircle size={18} />
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
+      <div className="flex-1 overflow-y-auto p-5 pb-24 scrollbar-thin">
         <div className="space-y-4">
-          {/* Name & Description */}
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.name')}</label>
+          {/* Name and prompt are the primary decisions, so they lead the form. */}
+          <div className="overflow-hidden rounded-xl divide-y divide-[var(--border)]" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+            <div className="px-4 py-3.5">
+              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>任务名称</label>
               <input
-                className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
+                className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
                 style={{
-                  background: 'var(--main-bg)',
+                  background: 'rgba(0, 0, 0, 0.3)',
                   border: '1px solid var(--border)',
                   color: 'var(--text)',
                 }}
@@ -813,26 +848,36 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                 onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
               />
             </div>
-            <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.description')}</label>
-              <input
-                className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
-                style={{
-                  background: 'var(--main-bg)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text)',
-                }}
-                placeholder={t('automation.descriptionPlaceholder')}
-                value={editor.description}
-                onChange={(event) => setEditor((prev) => ({ ...prev, description: event.target.value }))}
+            <div className="px-4 py-3.5">
+              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>提示词</label>
+              <textarea
+                className="w-full px-3 py-3 rounded-md text-sm transition-all duration-150 outline-none resize-y bg-black/30"
+                style={{ border: '1px solid var(--border)', color: 'var(--text)', minHeight: '148px' }}
+                placeholder={t('automation.promptPlaceholder')}
+                value={editor.prompt}
+                onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
                 onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
                 onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
               />
             </div>
           </div>
 
+          <div className="overflow-hidden rounded-2xl" style={{ background: 'var(--command-menu-bg)', border: '1px solid var(--command-menu-border)' }}>
+            <div className="px-5 py-4">
+              <label className="mb-2 block text-xs font-medium" style={{ color: 'var(--command-menu-muted)' }}>工作目录</label>
+              <input
+                className="w-full rounded-lg bg-transparent px-3 py-2 text-sm outline-none"
+                style={{ border: '1px solid var(--command-menu-border)', color: 'var(--text)' }}
+                placeholder="~/.duya/workspace（默认）"
+                value={editor.workingDirectory}
+                onChange={(event) => setEditor((prev) => ({ ...prev, workingDirectory: event.target.value }))}
+              />
+              <p className="mt-2 text-xs" style={{ color: 'var(--command-menu-muted)' }}>留空时任务在 ~/.duya/workspace 中运行。</p>
+            </div>
+          </div>
+
           {/* Model Selection */}
-          <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+          <div className="rounded-xl px-4 py-3.5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
             <div className="flex items-center gap-2 mb-3">
               <Robot size={14} style={{ color: 'var(--accent)' }} />
               <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.model')}</span>
@@ -857,13 +902,21 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
             )}
           </div>
 
-          {/* Schedule Section */}
-          <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-            <div className="flex items-center gap-2 mb-3">
+          <section>
+            <p className="mb-3 text-xs font-medium" style={{ color: 'var(--command-menu-muted)' }}>频率</p>
+            <CronScheduleCard
+              value={editor.scheduleDraft}
+              onChange={(scheduleDraft) => setEditor((prev) => ({ ...prev, scheduleDraft }))}
+            />
+          </section>
+
+          {/* Legacy schedule controls are kept out of the render path while old editor fields remain wire-compatible. */}
+          <div className="hidden overflow-hidden rounded-xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+            <div className="flex items-center gap-2 px-4 pt-3.5 pb-3 border-b border-[var(--border)]">
               <Clock size={14} style={{ color: 'var(--accent)' }} />
               <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.schedule')}</span>
             </div>
-            <div className="flex gap-2 mb-3">
+            <div className="flex gap-2 px-4 py-3.5 border-b border-[var(--border)]">
               {(['every', 'at', 'cron'] as CronScheduleKind[]).map((kind) => (
                 <button
                   key={kind}
@@ -886,45 +939,49 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                     }
                   }}
                 >
-                  {kind}
+                  {kind === 'every' ? '重复' : kind === 'at' ? '一次' : '自定义'}
                 </button>
               ))}
             </div>
 
             {editor.scheduleKind === 'every' && (
-              <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.intervalMs')}</label>
+              <div className="px-4 pb-3.5">
+                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>每隔多久运行</label>
+                <div className="flex items-center gap-3">
                 <input
-                  className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
+                  className="min-w-0 flex-1 px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
                   style={{
-                    background: 'var(--surface)',
+                    background: 'rgba(0, 0, 0, 0.3)',
                     border: '1px solid var(--border)',
                     color: 'var(--text)',
                   }}
                   type="number"
-                  placeholder="60000"
-                  value={editor.everyMs}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, everyMs: event.target.value }))}
+                  min="1"
+                  placeholder="60"
+                  value={editor.everyMs ? String(Number(editor.everyMs) / 60_000) : ''}
+                  onChange={(event) => setEditor((prev) => ({ ...prev, everyMs: String(Number(event.target.value || '0') * 60_000) }))}
                   onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
                   onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
                 />
+                <span className="text-sm whitespace-nowrap" style={{ color: 'var(--muted)' }}>分钟</span>
+                </div>
                 <p className="text-xs mt-1.5" style={{ color: 'var(--muted)', opacity: 0.7 }}>
-                  {t('automation.intervalMsHint')}
+                  例如：60 表示每小时运行一次。
                 </p>
               </div>
             )}
             {editor.scheduleKind === 'at' && (
-              <div>
+              <div className="px-4 pb-3.5">
                 <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.dateTime')}</label>
                 <input
-                  className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
+                  className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
                   style={{
-                    background: 'var(--surface)',
+                    background: 'rgba(0, 0, 0, 0.3)',
                     border: '1px solid var(--border)',
                     color: 'var(--text)',
                   }}
-                  placeholder="2026-05-01T10:00:00.000Z"
-                  value={editor.at}
+                  type="datetime-local"
+                  value={editor.at ? editor.at.slice(0, 16) : ''}
                   onChange={(event) => setEditor((prev) => ({ ...prev, at: event.target.value }))}
                   onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
                   onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
@@ -932,13 +989,13 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
               </div>
             )}
             {editor.scheduleKind === 'cron' && (
-              <div className="space-y-3">
+              <div className="space-y-3 px-4 pb-3.5">
                 <div>
                   <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.cronExpression')}</label>
                   <input
-                    className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none font-mono"
+                    className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none font-mono bg-black/30"
                     style={{
-                      background: 'var(--surface)',
+                      background: 'rgba(0, 0, 0, 0.3)',
                       border: '1px solid var(--border)',
                       color: 'var(--text)',
                     }}
@@ -955,9 +1012,9 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                 <div>
                   <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.timezone')}</label>
                   <input
-                    className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
+                    className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
                     style={{
-                      background: 'var(--surface)',
+                      background: 'rgba(0, 0, 0, 0.3)',
                       border: '1px solid var(--border)',
                       color: 'var(--text)',
                     }}
@@ -972,32 +1029,13 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
             )}
           </div>
 
-          {/* Prompt Section */}
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.prompt')}</label>
-            <textarea
-              className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none resize-none"
-              style={{
-                background: 'var(--main-bg)',
-                border: '1px solid var(--border)',
-                color: 'var(--text)',
-                minHeight: '80px',
-              }}
-              placeholder={t('automation.promptPlaceholder')}
-              value={editor.prompt}
-              onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-            />
-          </div>
-
           {/* Input Params */}
-          <div>
+          <div className="rounded-xl px-4 py-3.5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.inputParams')}</label>
             <textarea
-              className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none resize-none font-mono"
+              className="w-full px-3 py-2 rounded-md text-sm transition-all duration-150 outline-none resize-none font-mono bg-black/30"
               style={{
-                background: 'var(--main-bg)',
+                background: 'rgba(0, 0, 0, 0.3)',
                 border: '1px solid var(--border)',
                 color: 'var(--text)',
                 minHeight: '50px',
@@ -1011,18 +1049,18 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           </div>
 
           {/* Advanced Settings */}
-          <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-            <div className="flex items-center gap-2 mb-3">
+          <div className="overflow-hidden rounded-xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+            <div className="flex items-center gap-2 px-4 py-3.5 border-b border-[var(--border)]">
               <SlidersHorizontal size={14} style={{ color: 'var(--accent)' }} />
               <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.advancedSettings')}</span>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 px-4 py-3.5">
               <div>
                 <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.concurrencyPolicy')}</label>
                 <select
-                  className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none cursor-pointer"
+                  className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none cursor-pointer bg-black/30"
                   style={{
-                    background: 'var(--surface)',
+                    background: 'rgba(0, 0, 0, 0.3)',
                     border: '1px solid var(--border)',
                     color: 'var(--text)',
                   }}
@@ -1042,9 +1080,9 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
               <div>
                 <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.maxRetries')}</label>
                 <input
-                  className="w-full px-3 py-2 rounded-lg text-sm transition-all duration-150 outline-none"
+                  className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
                   style={{
-                    background: 'var(--surface)',
+                    background: 'rgba(0, 0, 0, 0.3)',
                     border: '1px solid var(--border)',
                     color: 'var(--text)',
                   }}
@@ -1058,7 +1096,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                 />
               </div>
             </div>
-            <label className="flex items-center gap-2 mt-3 text-sm cursor-pointer" style={{ color: 'var(--text)' }}>
+            <label className="flex items-center gap-2 px-4 py-3.5 border-t border-[var(--border)] text-sm cursor-pointer" style={{ color: 'var(--text)' }}>
               <div className="relative inline-flex items-center">
                 <input
                   type="checkbox"
@@ -1086,7 +1124,15 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           </div>
 
           {/* Action Buttons */}
-          <div className="flex gap-3 pt-2">
+          {formError && (
+            <div className="rounded-xl px-4 py-3 text-sm" role="alert" style={{ background: 'var(--error-soft)', color: 'var(--error)' }}>
+              {formError}
+            </div>
+          )}
+          <div
+            className="-mx-5 flex gap-3 border-t px-5 pb-5 pt-4"
+            style={{ background: 'var(--command-menu-bg)', borderColor: 'var(--command-menu-border)' }}
+          >
             <button
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm transition-all duration-200"
               style={{
@@ -1096,7 +1142,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
               }}
               type="button"
               disabled={saving}
-              onClick={handleSubmit}
+              onClick={() => { void handleSubmit(); }}
               onMouseEnter={(e) => {
                 if (!saving) {
                   e.currentTarget.style.opacity = '0.9';
@@ -1148,7 +1194,7 @@ interface CronDetailProps {
   modelsLoading: boolean;
   onRun: () => void;
   onDelete: () => void;
-  onUpdate: (id: string, data: Parameters<typeof updateAutomationCronIPC>[1]) => void;
+  onUpdate: (id: string, data: Parameters<typeof updateAutomationCronIPC>[1]) => Promise<void>;
   saving: boolean;
   onViewSession?: (run: AutomationCronRun) => void;
   successRate: number | null;
@@ -1159,12 +1205,11 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
   const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [showAllRuns, setShowAllRuns] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   const displayedRuns = showAllRuns ? runs : runs.slice(0, 5);
   const capabilities = inferCapabilities(cron.prompt);
   const executionGraph = buildExecutionGraph(cron.prompt);
-  const promptSteps = parsePromptSteps(cron.prompt);
-
   // Last result
   const lastRun = runs[0];
   const lastResult = lastRun ? {
@@ -1174,44 +1219,58 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
       ? `${Math.round((lastRun.ended_at - lastRun.started_at) / 1000)}s`
       : null,
   } : null;
+  const [draftPrompt, setDraftPrompt] = useState(cron.prompt);
+  const [draftScheduleKind, setDraftScheduleKind] = useState<CronScheduleKind>(cron.schedule_kind);
+  const [draftEveryMs, setDraftEveryMs] = useState(String(cron.schedule_every_ms ?? 60_000));
+  const [draftAt, setDraftAt] = useState(cron.schedule_at ?? '');
+  const [draftCronExpr, setDraftCronExpr] = useState(cron.schedule_cron_expr ?? '*/5 * * * *');
+  const [draftCronTz, setDraftCronTz] = useState(cron.schedule_cron_tz ?? '');
+  const detailScheduleDraft = useMemo(() => scheduleToDraft(cron), [cron]);
+
+  const beginEditing = () => {
+    setDraftPrompt(cron.prompt);
+    setDraftScheduleKind(cron.schedule_kind);
+    setDraftEveryMs(String(cron.schedule_every_ms ?? 60_000));
+    setDraftAt(cron.schedule_at ?? '');
+    setDraftCronExpr(cron.schedule_cron_expr ?? '*/5 * * * *');
+    setDraftCronTz(cron.schedule_cron_tz ?? '');
+    setIsEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setIsEditing(false);
+  };
+
+  const saveInlineChanges = async () => {
+    const schedule = draftScheduleKind === 'at'
+      ? { kind: 'at' as const, at: draftAt }
+      : draftScheduleKind === 'every'
+        ? { kind: 'every' as const, everyMs: Number(draftEveryMs) }
+        : { kind: 'cron' as const, cronExpr: draftCronExpr, cronTz: draftCronTz || null };
+
+    await onUpdate(cron.id, {
+      schedule,
+      prompt: draftPrompt,
+    });
+    setIsEditing(false);
+  };
 
   if (isEditing) {
     return (
       <CronEditor
-        initialData={{
-          id: cron.id,
-          name: cron.name,
-          description: cron.description ?? '',
-          scheduleKind: cron.schedule_kind,
-          at: cron.schedule_at ?? '',
-          everyMs: cron.schedule_every_ms ? String(cron.schedule_every_ms) : '60000',
-          cronExpr: cron.schedule_cron_expr ?? '*/5 * * * *',
-          cronTz: cron.schedule_cron_tz ?? '',
-          prompt: cron.prompt,
-          inputParams: cron.input_params || '{}',
-          concurrencyPolicy: cron.concurrency_policy,
-          maxRetries: String(cron.max_retries),
-          enabled: cron.status === 'enabled',
-          model: cron.model ?? '',
-        }}
+        initialData={editorStateFromCron(cron)}
         availableModels={availableModels}
         modelsLoading={modelsLoading}
+        saving={saving}
+        onCancel={cancelEditing}
         onSave={async (data) => {
+          const { enabled, ...patch } = data;
           await onUpdate(cron.id, {
-            name: data.name,
-            description: data.description,
-            schedule: data.schedule,
-            prompt: data.prompt,
-            model: data.model,
-            inputParams: data.inputParams,
-            concurrencyPolicy: data.concurrencyPolicy,
-            maxRetries: data.maxRetries,
-            status: data.enabled ? 'enabled' : 'disabled',
+            ...patch,
+            status: enabled === false ? 'disabled' : 'enabled',
           });
           setIsEditing(false);
         }}
-        onCancel={() => setIsEditing(false)}
-        saving={saving}
       />
     );
   }
@@ -1219,12 +1278,63 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
   return (
     <>
       {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between" style={{ background: 'var(--surface)' }}>
-        <div className="flex items-center gap-2">
-          {getStatusIcon(cron.status)}
-          <h3 className="font-medium text-sm" style={{ color: 'var(--text)' }}>{cron.name}</h3>
+      <div className="px-8 pt-7 pb-5 flex items-start justify-between" style={{ background: 'var(--main-bg)' }}>
+        <div className="min-w-0">
+          <p className="mb-1 text-xs" style={{ color: 'var(--accent)' }}>{getFriendlySchedule(cron)}</p>
+          <h3 className="font-medium text-lg truncate" style={{ color: 'var(--text)' }}>{cron.name}</h3>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="relative">
+          <button
+            type="button"
+            aria-label="更多操作"
+            aria-expanded={showMoreMenu}
+            className="flex h-9 w-9 items-center justify-center rounded-full transition-colors"
+            style={{ color: 'var(--text)' }}
+            onClick={() => setShowMoreMenu((visible) => !visible)}
+            onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--surface-hover)'; }}
+            onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
+          >
+            <DotsThree size={22} weight="bold" />
+          </button>
+          {showMoreMenu && (
+            <div
+              className="absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-xl py-1 shadow-lg"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+            >
+              <button
+                type="button"
+                className="w-full px-3 py-2 text-left text-sm transition-colors"
+                style={{ color: 'var(--text)' }}
+                onClick={() => { setShowMoreMenu(false); beginEditing(); }}
+                onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--surface-hover)'; }}
+                onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
+              >
+                编辑计划
+              </button>
+              <button
+                type="button"
+                className="w-full px-3 py-2 text-left text-sm transition-colors"
+                style={{ color: 'var(--success)' }}
+                onClick={() => { setShowMoreMenu(false); onRun(); }}
+                onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--success-soft)'; }}
+                onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
+              >
+                立即运行
+              </button>
+              <button
+                type="button"
+                className="w-full px-3 py-2 text-left text-sm transition-colors"
+                style={{ color: 'var(--error)' }}
+                onClick={() => { setShowMoreMenu(false); onDelete(); }}
+                onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--error-soft)'; }}
+                onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
+              >
+                删除计划
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="hidden items-center gap-2">
           <button
             className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
             style={{ background: 'var(--success-soft)', color: 'var(--success)' }}
@@ -1243,8 +1353,17 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
           >
             <PencilSimple size={12} />
-            {t('automation.edit')}
+            编辑
           </button>
+          {lastRun?.session_id && onViewSession && (
+            <button
+              className="px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
+              style={{ background: 'var(--text)', color: 'var(--main-bg)' }}
+              onClick={() => onViewSession(lastRun)}
+            >
+              打开聊天
+            </button>
+          )}
           <button
             className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
             style={{ background: 'var(--error-soft)', color: 'var(--error)' }}
@@ -1259,21 +1378,176 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {/* Daily Brief Section */}
-        <div className="p-4 border-b border-[var(--border)]">
-          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.dailyBrief')}</span>
+        <div className="px-8 pb-8 pt-4">
+          <section>
+            <p className="mb-3 text-xs font-medium" style={{ color: 'var(--muted)' }}>提示词</p>
+            <textarea
+              readOnly={!isEditing}
+              value={isEditing ? draftPrompt : cron.prompt}
+              aria-label="提示词"
+              className="min-h-52 w-full resize-none rounded-2xl px-5 py-4 text-[15px] leading-7 outline-none"
+              style={{ background: 'var(--main-bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
+              onChange={(event) => setDraftPrompt(event.target.value)}
+            />
+          </section>
 
-          <div className="grid grid-cols-2 gap-3 mt-3">
+          <section className="mt-8">
+            <p className="mb-3 text-xs font-medium" style={{ color: 'var(--muted)' }}>频率</p>
+            <div className="w-full overflow-hidden rounded-2xl" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+              {isEditing ? (
+                <>
+                  <div className="flex items-center justify-between gap-4 px-5 py-4 text-sm">
+                    <span style={{ color: 'var(--text)' }}>重复</span>
+                    <select
+                      value={draftScheduleKind}
+                      className="min-w-28 rounded-lg px-2 py-1.5 text-right outline-none"
+                      style={{ background: 'var(--surface)', color: 'var(--text)' }}
+                      onChange={(event) => setDraftScheduleKind(event.target.value as CronScheduleKind)}
+                    >
+                      <option value="every">重复</option>
+                      <option value="at">一次</option>
+                      <option value="cron">自定义</option>
+                    </select>
+                  </div>
+                  {draftScheduleKind === 'every' && (
+                    <div className="flex items-center justify-between gap-4 px-5 py-4 text-sm" style={{ borderTop: '1px solid var(--border)' }}>
+                      <span style={{ color: 'var(--text)' }}>间隔</span>
+                      <div className="flex items-center gap-2" style={{ color: 'var(--muted)' }}>
+                        <input
+                          type="number"
+                          min="1"
+                          value={Number(draftEveryMs) / 60_000}
+                          className="w-20 rounded-lg px-2 py-1.5 text-right outline-none"
+                          style={{ background: 'var(--surface)', color: 'var(--text)' }}
+                          onChange={(event) => setDraftEveryMs(String(Number(event.target.value || '0') * 60_000))}
+                        />
+                        分钟
+                      </div>
+                    </div>
+                  )}
+                  {draftScheduleKind === 'at' && (
+                    <div className="flex items-center justify-between gap-4 px-5 py-4 text-sm" style={{ borderTop: '1px solid var(--border)' }}>
+                      <span style={{ color: 'var(--text)' }}>时间</span>
+                      <input
+                        type="datetime-local"
+                        value={draftAt ? draftAt.slice(0, 16) : ''}
+                        className="rounded-lg px-2 py-1.5 outline-none"
+                        style={{ background: 'var(--surface)', color: 'var(--text)' }}
+                        onChange={(event) => setDraftAt(event.target.value)}
+                      />
+                    </div>
+                  )}
+                  {draftScheduleKind === 'cron' && (
+                    <div className="space-y-3 px-5 py-4" style={{ borderTop: '1px solid var(--border)' }}>
+                      <input
+                        value={draftCronExpr}
+                        className="w-full rounded-lg px-3 py-2 font-mono text-sm outline-none"
+                        style={{ background: 'var(--surface)', color: 'var(--text)' }}
+                        onChange={(event) => setDraftCronExpr(event.target.value)}
+                      />
+                      <input
+                        value={draftCronTz}
+                        placeholder="本地时间"
+                        className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                        style={{ background: 'var(--surface)', color: 'var(--text)' }}
+                        onChange={(event) => setDraftCronTz(event.target.value)}
+                      />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="w-full text-left transition-colors"
+                  onClick={beginEditing}
+                  onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--surface-hover)'; }}
+                  onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
+                >
+                  <div className="flex items-center justify-between px-5 py-4 text-sm">
+                    <span style={{ color: 'var(--text)' }}>重复</span>
+                    <span className="flex items-center gap-2" style={{ color: 'var(--muted)' }}>
+                      {cron.schedule_kind === 'at' ? '一次' : '重复'} <span aria-hidden="true">›</span>
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between px-5 py-4 text-sm" style={{ borderTop: '1px solid var(--border)' }}>
+                    <span style={{ color: 'var(--text)' }}>频率</span>
+                    <span className="flex items-center gap-2" style={{ color: 'var(--muted)' }}>
+                      {describeScheduleDraft(detailScheduleDraft)} <span aria-hidden="true">›</span>
+                    </span>
+                  </div>
+                </button>
+              )}
+            </div>
+          </section>
+
+          <section className="mt-6">
+            <div className="flex items-center justify-between rounded-2xl px-5 py-4 text-sm" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+              <span style={{ color: 'var(--text)' }}>下次运行</span>
+              <span className="text-right" style={{ color: 'var(--muted)' }}>
+                {formatDateShort(cron.next_run_at)}
+              </span>
+            </div>
+          </section>
+
+          <section className="mt-4">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-5 rounded-2xl px-5 py-4 text-left text-sm transition-colors"
+              style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}
+              onClick={beginEditing}
+            >
+              <span style={{ color: 'var(--text)' }}>工作目录</span>
+              <span className="truncate" style={{ color: 'var(--muted)' }}>{cron.working_directory || '~/.duya/workspace'}</span>
+            </button>
+          </section>
+        </div>
+
+        <div className="hidden">
+        {/* Daily Brief Section */}
+        <div className="p-6 border-b border-[var(--border)]">
+          <span className="text-xs font-semibold tracking-wider" style={{ color: 'var(--muted)' }}>计划</span>
+
+          <div className="mt-3 overflow-hidden rounded-xl divide-y divide-[var(--border)]" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderColor: 'var(--border)' }}>
             {/* Status Card */}
-            <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.status')}</span>
-              <p className="text-sm font-medium capitalize mt-1" style={{ color: 'var(--text)' }}>
-                {cron.status === 'error' ? t('automation.statusError') : lastResult?.status || t('automation.statusNoRuns')}
+            <div className="flex items-center justify-between px-4 py-3.5" style={{ background: 'transparent' }}>
+              <span className="text-sm" style={{ color: 'var(--text)' }}>重复</span>
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                {getFriendlySchedule(cron)}
               </p>
             </div>
 
             {/* Next Run Card */}
-            <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+            <div className="flex items-center justify-between px-4 py-3.5" style={{ background: 'transparent' }}>
+              <span className="text-sm" style={{ color: 'var(--text)' }}>下次运行</span>
+              <div className="text-right">
+                <p className="text-sm" style={{ color: 'var(--text)' }}>{formatRelativeTime(cron.next_run_at, t)}</p>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{formatDateShort(cron.next_run_at)}</p>
+              </div>
+            </div>
+
+            {/* Last Result Card */}
+            <div className="flex items-center justify-between px-4 py-3.5" style={{ background: 'transparent' }}>
+              <span className="text-sm" style={{ color: 'var(--text)' }}>上次运行</span>
+              <div className="text-right">
+                <p className="text-sm" style={{ color: 'var(--text)' }}>
+                  {lastRun?.started_at ? formatDateShort(lastRun.started_at) : '尚未运行'}
+                </p>
+                {lastResult && (
+                  <p className="text-xs mt-0.5" style={{ color: lastResult.status === 'success' ? 'var(--success)' : 'var(--error)' }}>
+                    {lastResult.status === 'success' ? '已完成' : '未完成'}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between px-4 py-3.5" style={{ background: 'transparent' }}>
+              <span className="text-sm" style={{ color: 'var(--text)' }}>状态</span>
+              <p className="text-sm" style={{ color: cron.status === 'error' ? 'var(--error)' : cron.status === 'disabled' ? 'var(--muted)' : 'var(--success)' }}>
+                {cron.status === 'error' ? '需要处理' : cron.status === 'disabled' ? '已暂停' : '已启用'}
+              </p>
+            </div>
+
+            <div className="hidden rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
               <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.nextRun')}</span>
               <p className="text-sm font-medium mt-1" style={{ color: 'var(--text)' }}>
                 {formatDateShort(cron.next_run_at)}
@@ -1283,8 +1557,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
               </p>
             </div>
 
-            {/* Last Result Card */}
-            <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+            <div className="hidden rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
               <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.lastResult')}</span>
               {lastResult ? (
                 <>
@@ -1303,7 +1576,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             </div>
 
             {/* Capabilities Card */}
-            <div className="rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
+            <div className="hidden rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
               <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.capabilities')}</span>
               <div className="flex flex-wrap gap-1.5 mt-2">
                 {capabilities.map((cap) => (
@@ -1324,27 +1597,15 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
         </div>
 
         {/* Task Spec Section */}
-        <div className="p-4 border-b border-[var(--border)]">
-          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.task')}</span>
-          <div className="rounded-lg p-3 mt-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-            <p className="text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
-              {promptSteps[0] || cron.prompt}
-            </p>
-            {promptSteps.length > 1 && (
-              <ul className="space-y-1">
-                {promptSteps.slice(1).map((step, i) => (
-                  <li key={i} className="flex items-start gap-2 text-xs" style={{ color: 'var(--muted)' }}>
-                    <span className="mt-0.5 w-1 h-1 rounded-full bg-[var(--accent)] flex-shrink-0" />
-                    {step}
-                  </li>
-                ))}
-              </ul>
-            )}
+        <div className="p-6 border-b border-[var(--border)]">
+          <span className="text-xs font-semibold tracking-wider" style={{ color: 'var(--muted)' }}>提示词</span>
+          <div className="rounded-xl p-4 mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap text-sm leading-6 bg-black/30" style={{ border: '1px solid var(--border)', color: 'var(--text)' }}>
+            {cron.prompt}
           </div>
         </div>
 
         {/* Execution Graph Section */}
-        <div className="p-4 border-b border-[var(--border)]">
+        <div className="hidden p-4 border-b border-[var(--border)]">
           <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.executionGraph')}</span>
           <div className="flex items-center gap-1 overflow-x-auto pb-2 mt-3">
             {executionGraph.map((node, i) => (
@@ -1368,7 +1629,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
         </div>
 
         {/* Runs Timeline Section */}
-        <div className="p-4">
+        <div className="hidden p-4">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.recentRuns')}</span>
             {successRate !== null && (
@@ -1485,7 +1746,42 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             </div>
           )}
         </div>
+        </div>
       </div>
+      {isEditing ? (
+        <div className="flex gap-3 px-8 pb-6 pt-3" style={{ background: 'var(--main-bg)', borderTop: '1px solid var(--border)' }}>
+          <button
+            type="button"
+            disabled={saving}
+            className="flex-1 rounded-full px-4 py-3 text-sm font-medium transition-opacity"
+            style={{ background: 'var(--text)', color: 'var(--main-bg)', opacity: saving ? 0.6 : 1 }}
+            onClick={() => { void saveInlineChanges(); }}
+          >
+            {saving ? '保存中…' : '保存更改'}
+          </button>
+          <button
+            type="button"
+            className="rounded-full px-5 py-3 text-sm font-medium transition-colors"
+            style={{ color: 'var(--text)', border: '1px solid var(--border)' }}
+            onClick={cancelEditing}
+          >
+            取消
+          </button>
+        </div>
+      ) : lastRun?.session_id && onViewSession && (
+        <div className="px-8 pb-6 pt-3" style={{ background: 'var(--main-bg)', borderTop: '1px solid var(--border)' }}>
+          <button
+            type="button"
+            className="w-full rounded-full px-4 py-3 text-sm font-medium transition-opacity"
+            style={{ background: 'var(--text)', color: 'var(--main-bg)' }}
+            onClick={() => onViewSession(lastRun)}
+            onMouseEnter={(event) => { event.currentTarget.style.opacity = '0.82'; }}
+            onMouseLeave={(event) => { event.currentTarget.style.opacity = '1'; }}
+          >
+            打开聊天
+          </button>
+        </div>
+      )}
     </>
   );
 }

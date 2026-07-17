@@ -2,10 +2,15 @@ import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool.js';
 import { getConfigManager, toLLMProvider } from '../config/manager.js';
+import { getLogger, LogComponent } from '../logging/logger.js';
 import { CronPersistence, computeNextRunAtMs, rowToSchedule } from './persistence.js';
 import type { AutomationCron, AutomationCronRun } from './types.js';
+import { prepareAutomationWorkspace } from './workspace.js';
+
+export { computeNextRunAtMs } from './persistence.js';
 
 const RUN_TIMEOUT_MS = 10 * 60_000;
+const MAX_TIMER_DELAY_MS = 2_147_000_000;
 
 type RunningExecution = { runId: string; sessionId: string; startedAt: number };
 
@@ -30,10 +35,14 @@ export class AutomationScheduler {
       try {
         const result = this.persistence.cleanupOldRuns();
         if (result.deletedCount > 0) {
-          console.log(`[AutomationScheduler] Cleaned up ${result.deletedCount} old run records`);
+          getLogger().info('Automation run history cleaned up', {
+            deletedCount: result.deletedCount,
+          }, LogComponent.Automation);
         }
-      } catch {
-        // best-effort
+      } catch (error) {
+        getLogger().warn('Automation run-history cleanup failed', {
+          error: error instanceof Error ? error.message : String(error),
+        }, LogComponent.Automation);
       }
     }, 12 * 60 * 60 * 1000); // every 12 hours
   }
@@ -81,12 +90,39 @@ export class AutomationScheduler {
   private reschedule(cron: AutomationCron): void {
     this.unschedule(cron.id);
     if (cron.status !== 'enabled') return;
-    const now = Date.now();
-    const schedule = rowToSchedule(cron);
-    const nextRunAt = computeNextRunAtMs(schedule, now);
-    this.persistence.updateNextRunAt(cron.id, nextRunAt);
-    if (!nextRunAt) return;
-    this.timers.set(cron.id, setTimeout(() => void this.onCronTimer(cron.id), Math.max(0, nextRunAt - now)));
+    try {
+      const schedule = rowToSchedule(cron);
+      const nextRunAt = computeNextRunAtMs(schedule, Date.now());
+      this.persistence.updateNextRunAt(cron.id, nextRunAt);
+      if (!nextRunAt) {
+        if (schedule.kind === 'at' || schedule.endAt) this.persistence.disableExhaustedCron(cron.id);
+        return;
+      }
+      this.armTimer(cron.id, nextRunAt);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.persistence.markScheduleError(cron.id, reason);
+      getLogger().error('Failed to schedule automation', error instanceof Error ? error : new Error(reason), {
+        cronId: cron.id,
+      }, LogComponent.Automation);
+    }
+  }
+
+  private armTimer(cronId: string, nextRunAt: number): void {
+    const remaining = Math.max(0, nextRunAt - Date.now());
+    const delay = Math.min(remaining, MAX_TIMER_DELAY_MS);
+    this.timers.set(cronId, setTimeout(() => {
+      this.timers.delete(cronId);
+      if (nextRunAt - Date.now() > 500) {
+        this.armTimer(cronId, nextRunAt);
+        return;
+      }
+      void this.onCronTimer(cronId).catch((error) => {
+        getLogger().error('Automation timer execution failed', error instanceof Error ? error : new Error(String(error)), {
+          cronId,
+        }, LogComponent.Automation);
+      });
+    }, delay));
   }
 
   private unschedule(id: string): void {
@@ -152,14 +188,30 @@ export class AutomationScheduler {
     const model = cron.model?.trim();
     if (!model) throw new Error('cron model is not configured');
 
-    this.persistence.insertChatSession(sessionId, `[Cron] ${cron.name}`, model, activeProvider.id);
+    // Older cron rows did not retain their project path. Never initialise an
+    // agent with an empty cwd: it can stall project discovery before `ready`.
+    const workingDirectory = prepareAutomationWorkspace(cron.working_directory);
+    this.persistence.insertChatSession(
+      sessionId,
+      `[Cron] ${cron.name}`,
+      model,
+      activeProvider.id,
+      workingDirectory,
+    );
     await pool.acquire(sessionId);
-    pool.send(sessionId, {
+    // Subscribe before sending init. A fast child can otherwise emit `ready`
+    // between send() and waitForReady(), turning a healthy start into 30s timeout.
+    const ready = pool.waitForReady(sessionId);
+    const initSent = pool.send(sessionId, {
       type: 'init', sessionId,
       providerConfig: { apiKey: activeProvider.apiKey, baseURL: activeProvider.baseUrl, model, provider: toLLMProvider(activeProvider.providerType), authStyle: 'api_key' },
-      workingDirectory: '', systemPrompt: '',
+      workingDirectory, systemPrompt: '',
     });
-    await pool.waitForReady(sessionId);
+    if (!initSent) {
+      void ready.catch(() => undefined);
+      throw new Error(`Agent process ${sessionId} stopped before initialization`);
+    }
+    await ready;
 
     return await new Promise<string>((resolve, reject) => {
       const chunks: string[] = [];
@@ -176,7 +228,12 @@ export class AutomationScheduler {
       // is applied. Without this, options: undefined caused the agent to
       // fall back to the general-purpose profile with ALL tools, including
       // interactive ones that would hang forever in a headless cron run.
-      pool.send(sessionId, { type: 'chat:start', id: randomUUID(), sessionId, prompt: cron.prompt, options: { agentProfileId: 'cron' } });
+      const chatSent = pool.send(sessionId, { type: 'chat:start', id: randomUUID(), sessionId, prompt: cron.prompt, options: { agentProfileId: 'cron' } });
+      if (!chatSent) {
+        clearTimeout(timeout);
+        pool.removeMessageHandler(sessionId);
+        reject(new Error(`Agent process ${sessionId} stopped before the cron prompt was sent`));
+      }
     });
   }
 }
@@ -190,4 +247,9 @@ export function initAutomationScheduler(db: Database.Database): AutomationSchedu
 
 export function getAutomationScheduler(): AutomationScheduler | null {
   return instance;
+}
+
+export function resetAutomationSchedulerForTests(): void {
+  instance?.shutdown();
+  instance = null;
 }

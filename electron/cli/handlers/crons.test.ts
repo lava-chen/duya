@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS automation_crons (
   schedule_every_ms INTEGER,
   schedule_cron_expr TEXT,
   schedule_cron_tz TEXT,
+  schedule_end_at TEXT,
   workflow_id TEXT,
   prompt TEXT NOT NULL,
   model TEXT NOT NULL,
