@@ -1,89 +1,116 @@
 /**
- * researchMode — orchestrator-paradigm ModeModifier for Deep Research.
+ * researchMode — modifier-paradigm ModeModifier for Deep Research.
  *
- * Research mode is a multi-stage orchestrator (plan → clarification →
- * iteration → synthesis) that takes over the entire stream. It cannot
- * be expressed as a modifier on the agent tool loop, so it uses the
- * `orchestrator` field of {@link ModeModifier} (Phase 1.5 of plan 224).
+ * Research mode shapes agent behavior through a prompt prefix (research
+ * methodology) and a tool block list (no writes, no canvas). It does
+ * NOT take over the stream — the standard DuyaAgent.streamChat loop
+ * drives the entire workflow. Every search, fetch, and source
+ * evaluation is a normal tool_use/tool_result pair visible in chat.
  *
- * This file is a thin adapter that:
- *   1. Declares the {@link ModeModifier} metadata (id / kind / exclusiveWith / display)
- *   2. Wires `orchestrator.execute` to the existing {@link ResearchMode} class
- *   3. Builds the legacy {@link ModeContext} from the new {@link OrchestratorDeps}
+ * Symmetric with plan-task-mode.ts: both use prompt.prefix + tools.block
+ * instead of an orchestrator. Clarification uses the standard
+ * ask_user_question tool — no bespoke IPC channel.
  *
- * The ResearchMode class and its Orchestrator internals are unchanged —
- * only the registration and dispatch path changes (from `ModeRegistry.register`
- * to `modeModifierRegistry.register`).
+ * Migration (plan 224 follow-up): the previous orchestrator-paradigm
+ * implementation (research-mode/ directory + researchRunDb.ts) is
+ * deleted. The Orchestrator paradigm itself is retained in
+ * ModeModifierOrchestrator for future modes.
  */
 
-import { ResearchMode } from './research-mode/index.js';
-import {
-  resolveResearchClarificationRequest,
-  rejectResearchClarificationRequest,
-} from './research-mode/index.js';
-import { buildResearchRunDB } from '../session/researchRunDb.js';
-import { logger } from '../utils/logger.js';
-import type {
-  ModeModifier,
-  ModeModifierContext,
-  ModeContext,
-  OrchestratorDeps,
-  SSEEvent,
-} from './types.js';
+import type { ModeModifier } from './types.js';
 
 /**
- * Active ResearchMode instance — tracked so external code (e.g.
- * clarification resolution via IPC) can reach the running orchestrator
- * through {@link resolveActiveResearchClarification}.
+ * System prompt prefix prepended in research mode.
  *
- * The instance also registers pending clarifications into the
- * module-level `pendingResearchClarifications` map (see
- * `research-mode/index.ts`), so this variable is only needed for
- * instance-level `resolveClarification` / `rejectClarification` calls
- * that clear the instance's `latestClarificationRequestId` tracker.
+ * Instructs the agent to follow a research methodology
+ * (clarify -> plan -> search -> evaluate -> iterate -> synthesize)
+ * without hardcoding a state machine. The agent uses existing
+ * read-only tools (web_search, web_fetch, read, glob, grep,
+ * session_search, wiki_search, wiki_read, ask_user_question, vision)
+ * and produces a structured markdown report.
  */
-let activeResearchMode: ResearchMode | null = null;
+const RESEARCH_MODE_PROMPT = `# Deep Research Mode Active
+
+You are now in **Deep Research Mode**. Your goal is to conduct a rigorous research investigation using the available tools (web_search, web_fetch, read, glob, grep, session_search, wiki_search, wiki_read, ask_user_question, vision) and produce a comprehensive research report.
+
+## Research Workflow
+
+1. **Clarify** — If the query is ambiguous, use \`ask_user_question\` to clarify scope, depth, and success criteria. Do not over-ask; one focused round is usually enough.
+
+2. **Plan** — Before searching, briefly outline:
+   - Key sub-questions to investigate
+   - Search strategies and source types to prioritize
+   - What "sufficient coverage" looks like for this query
+
+3. **Search & Gather** — Execute searches iteratively:
+   - Start broad, then refine based on findings
+   - Use multiple query formulations when initial results are sparse
+   - Cross-reference claims across at least 2 independent sources when factual accuracy matters
+   - Fetch full pages for promising leads (don't rely on snippets alone)
+
+4. **Evaluate** — For each source, consider:
+   - Authority: who published this, and why should I trust them?
+   - Recency: is the information current enough for this question?
+   - Bias: what perspective does this source represent?
+   - Corroboration: do other sources confirm or contradict this?
+
+5. **Iterate** — After each batch of findings:
+   - What gaps remain?
+   - What contradictions need resolution?
+   - Is it worth searching more, or have I hit diminishing returns?
+   - If a new angle emerges, pursue it before synthesizing
+
+6. **Synthesize** — When evidence is sufficient (or you've hit diminishing returns), write the research report as a structured markdown document.
+
+## Constraints
+
+- **Do NOT modify, create, or delete files.** Write/edit/bash are blocked.
+- **Do NOT use canvas/conductor tools.** They are blocked in research mode.
+- Use \`ask_user_question\` when you genuinely need user input — do not guess on scope-critical decisions.
+- Every factual claim in your final report must be traceable to a source you actually consulted during this session.
+
+## Report Format
+
+When you are ready to synthesize, produce the report as a single markdown message with this structure:
+
+\`\`\`markdown
+## Research Report: <topic>
+
+### Executive Summary
+[2-3 sentence overview of findings]
+
+### Key Findings
+1. [Finding 1 — with inline source references]
+2. [Finding 2 — ...]
+...
+
+### Evidence & Sources
+- [Source 1 — title, url, key quote, authority/recency notes]
+- [Source 2 — ...]
+
+### Contradictions & Uncertainties
+- [Unresolved conflicts, missing evidence, areas of low confidence]
+
+### Methodology
+- Brief note on what was searched, what was excluded, and why
+\`\`\`
+
+## When to Stop
+
+Stop researching when:
+- You have cross-corroborated the central claims
+- Additional searches return redundant information
+- You've hit the time/iteration budget the user specified
+- The user asks you to wrap up
+
+Do not stop early just because the first search returned results. Depth matters more than speed in research mode.
+`;
 
 /**
- * Resolve a pending research clarification request. Tries the active
- * ResearchMode instance first (so its `latestClarificationRequestId`
- * tracker is cleared), then falls back to the module-level pending map.
- *
- * Called by `agent-process-entry.ts` when the renderer answers a
- * clarification question via IPC.
- */
-export function resolveActiveResearchClarification(
-  requestId: string,
-  answers: Record<string, string>,
-): boolean {
-  if (activeResearchMode?.resolveClarification(requestId, answers)) {
-    return true;
-  }
-  return resolveResearchClarificationRequest(requestId, answers);
-}
-
-/**
- * Reject a pending research clarification request. Same lookup order
- * as {@link resolveActiveResearchClarification}.
- */
-export function rejectActiveResearchClarification(
-  requestId: string,
-  error: Error,
-): boolean {
-  if (activeResearchMode?.rejectClarification(requestId, error)) {
-    return true;
-  }
-  return rejectResearchClarificationRequest(requestId, error);
-}
-
-/**
- * The Research mode modifier. Registered in `modes/index.ts` via
- * `modeModifierRegistry.register(researchMode)`.
- *
- * `exclusiveWith: ['plan-task']` — research and plan-task are both
- * per-message modes that cannot compose (plan-task is read-only,
- * research needs write access to run DB). Research composes with
- * conductor (research-mode orchestrator + conductor canvas tools).
+ * Research mode modifier — per-message, read-only, mutually exclusive
+ * with plan-task. Composes with conductor at the registry level, but
+ * all canvas tools are blocked so conductor's injections are inert
+ * under research mode (intentional — research is read-only).
  */
 export const researchMode: ModeModifier = {
   id: 'research',
@@ -91,91 +118,41 @@ export const researchMode: ModeModifier = {
   exclusiveWith: ['plan-task'],
   display: { label: 'Deep Research', icon: 'Telescope' },
 
-  orchestrator: {
-    execute: async function* (
-      query: string,
-      _ctx: ModeModifierContext,
-      deps: OrchestratorDeps,
-    ): AsyncGenerator<SSEEvent, void, unknown> {
-      // Research mode depends on a chat session for run tracking and
-      // report persistence. Fail fast in contexts without one (CLI /
-      // standalone harness) instead of letting the orchestrator run,
-      // produce a report the user can't retrieve, and silently return
-      // an empty `done`.
-      if (!deps.sessionId) {
-        logger.warn('[researchMode] No sessionId; refusing to start');
-        yield {
-          type: 'error',
-          data: 'Research mode requires an active chat session (sessionId is missing)',
-        } as SSEEvent;
-        return;
-      }
+  tools: {
+    // Block write/execute/side-effect tools (same set as plan-task) plus
+    // all conductor canvas tools. Uses `block` (blacklist) instead of
+    // `allow` (whitelist) so read-only tools added in the future remain
+    // available without updating this list.
+    block: [
+      // Write / execute / side-effect tools
+      'bash',
+      'edit',
+      'write',
+      'enter_worktree',
+      'exit_worktree',
+      'team_create',
+      'team_delete',
+      'skill_manage',
+      'module',
 
-      const mode = new ResearchMode();
-      activeResearchMode = mode;
-      try {
-        const legacyCtx = await buildLegacyModeContext(query, deps);
-        yield* mode.execute(query, legacyCtx);
-      } finally {
-        activeResearchMode = null;
-      }
-    },
+      // Conductor canvas tools (13)
+      'canvas_create_element',
+      'canvas_batch_create',
+      'canvas_delete_element',
+      'canvas_move_element',
+      'canvas_resize_element',
+      'canvas_fill_content',
+      'canvas_style_element',
+      'canvas_list_elements',
+      'canvas_find_empty_space',
+      'canvas_auto_layout',
+      'canvas_apply_layout',
+      'canvas_capture',
+      'canvas_get_knowledge',
+    ],
+  },
+
+  prompt: {
+    prefix: RESEARCH_MODE_PROMPT,
   },
 };
-
-/**
- * Build the legacy {@link ModeContext} expected by {@link ResearchMode.execute}
- * from the new {@link OrchestratorDeps}.
- *
- * This is a pure adapter — it does not modify the deps, only projects
- * them into the shape ResearchMode was written against. Once ResearchMode
- * is refactored to accept {@link OrchestratorDeps} directly (out of scope
- * for plan 224), this adapter can be deleted.
- */
-async function buildLegacyModeContext(
-  query: string,
-  deps: OrchestratorDeps,
-): Promise<ModeContext> {
-  const { _researchRunId, runDB, persistState } = await buildResearchRunDB(
-    deps.sessionId,
-    query,
-  );
-
-  const toolExecute: ModeContext['toolExecute'] = (name, input) =>
-    deps.toolRegistry.execute(name, input, deps.workingDirectory).then((r) => {
-      if (!r) throw new Error(`Tool not found: ${name}`);
-      return r;
-    });
-
-  const toolExecuteConcurrent: ModeContext['toolExecuteConcurrent'] =
-    async function* (calls) {
-      const batchSize = 5;
-      for (let i = 0; i < calls.length; i += batchSize) {
-        const batch = calls.slice(i, i + batchSize);
-        const results = await Promise.all(
-          batch.map((c) =>
-            deps.toolRegistry
-              .execute(c.name, c.input, undefined)
-              .then((r) => {
-                if (!r) throw new Error(`Tool not found: ${c.name}`);
-                return r;
-              }),
-          ),
-        );
-        for (const r of results) yield r;
-      }
-    };
-
-  return {
-    llmClient: deps.llmClient,
-    abortController: deps.abortController,
-    sessionId: deps.sessionId,
-    workingDirectory: deps.workingDirectory,
-    researchMemory: deps.researchMemory,
-    _researchRunId,
-    toolExecute,
-    toolExecuteConcurrent,
-    persistState,
-    runDB,
-  };
-}
