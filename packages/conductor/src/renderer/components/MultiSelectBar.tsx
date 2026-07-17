@@ -5,6 +5,11 @@ import { useConductorStore } from "../stores/conductor-store";
 import { createNativeElement, executeAction } from "../ipc/conductor-ipc";
 import type { CanvasElement, CanvasPosition } from "../types/conductor";
 import { GRID_PX } from "../domain/canvas/units";
+import {
+  CapsuleMoreMenu,
+  CapsuleToolbar,
+  CAPSULE_DIVIDER,
+} from "./toolbar/CapsuleToolbar";
 // Approximate bar width (two buttons + divider + padding). Used only for
 // horizontal viewport clamping; the actual width is determined by content.
 const BAR_WIDTH = 200;
@@ -57,6 +62,7 @@ export function MultiSelectBar() {
   const canvasZoom = useConductorStore((state) => state.canvasZoom);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
   const removeElement = useConductorStore((state) => state.removeElement);
+  const updateElement = useConductorStore((state) => state.updateElement);
   const clearSelection = useConductorStore((state) => state.clearSelection);
   const setUiError = useConductorStore((state) => state.setUiError);
 
@@ -120,6 +126,33 @@ export function MultiSelectBar() {
     (el) => el.elementKind !== "native/group",
   );
   const canGroup = memberCandidates.length >= 2;
+  const allLocked = selectedElements.length > 0 && selectedElements.every((element) => element.metadata.locked === true);
+
+  const handleToggleLock = async () => {
+    const nextLocked = !allLocked;
+    const previousMetadata = new Map(selectedElements.map((element) => [element.id, element.metadata]));
+    for (const element of selectedElements) {
+      updateElement(element.id, {
+        metadata: { ...element.metadata, locked: nextLocked },
+        updatedAt: Date.now(),
+      });
+    }
+    if (!activeCanvasId) return;
+    try {
+      await Promise.all(selectedElements.map((element) => executeAction({
+        action: "element.update",
+        canvasId: activeCanvasId,
+        elementId: element.id,
+        metadata: { ...element.metadata, locked: nextLocked },
+      })));
+    } catch (error) {
+      for (const element of selectedElements) {
+        const metadata = previousMetadata.get(element.id);
+        if (metadata) updateElement(element.id, { metadata, updatedAt: Date.now() });
+      }
+      setUiError(`Update selection lock failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 
   const handleGroup = async () => {
     if (!activeCanvasId || !bbox || !canGroup) return;
@@ -195,13 +228,13 @@ export function MultiSelectBar() {
       onMouseDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="conductor-panel flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--sidebar-bg)] px-1.5 py-1 shadow-[0_16px_40px_rgba(0,0,0,0.32)]">
+      <CapsuleToolbar positioned={false} zoomAware={false}>
         {isUngroupMode ? (
           <button
             type="button"
             onClick={handleUngroup}
             title="Ungroup (delete the group frame, keep members)"
-            className="conductor-tool-button flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-[var(--text)] transition-colors hover:bg-[var(--surface-hover)]"
+            className="conductor-tool-button flex h-[30px] items-center gap-1 rounded-[7px] px-2 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             Ungroup
           </button>
@@ -215,21 +248,28 @@ export function MultiSelectBar() {
                 ? "Group selected elements"
                 : "Need at least 2 non-group elements (groups cannot be nested)"
             }
-            className="conductor-tool-button flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-[var(--text)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+            className="conductor-tool-button flex h-[30px] items-center gap-1 rounded-[7px] px-2 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
           >
             Group
           </button>
         )}
-        <span className="h-5 w-px bg-[var(--conductor-border)]" aria-hidden="true" />
+        <span style={CAPSULE_DIVIDER} aria-hidden="true" />
         <button
           type="button"
           onClick={handleDelete}
           title="Delete selected"
-          className="conductor-tool-button flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-[var(--text)] transition-colors hover:bg-[var(--surface-hover)]"
+          className="conductor-tool-button flex h-[30px] items-center gap-1 rounded-[7px] px-2 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
         >
           Delete
         </button>
-      </div>
+        <CapsuleMoreMenu
+          items={[
+            { label: allLocked ? "Unlock selected positions" : "Lock selected positions", onSelect: () => { void handleToggleLock(); } },
+            { label: "Clear selection", onSelect: clearSelection },
+            { label: "Delete selected", onSelect: () => { void handleDelete(); }, tone: "danger" },
+          ]}
+        />
+      </CapsuleToolbar>
     </div>
   );
 }

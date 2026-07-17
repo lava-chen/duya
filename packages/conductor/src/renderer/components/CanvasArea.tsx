@@ -55,7 +55,9 @@ function snapToGrid(value: number, grid = SNAP_GRID): number {
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
   document: { w: 6, h: 5, zIndex: 0 },
   shape: { w: 4, h: 2, zIndex: 0 },
-  text: { w: 10, h: 2, zIndex: 0 },
+  // Standalone text is content-sized while editing. Start compact so an
+  // empty text insertion reads as a cursor, not an oversized empty region.
+  text: { w: 2, h: 0.5, zIndex: 0 },
   table: { w: 5, h: 1.5, zIndex: 0 },
   image: { w: 5, h: 4, zIndex: 0 },
   file: { w: 4, h: 3, zIndex: 0 },
@@ -206,6 +208,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   onDeleteElement,
 }) => {
   const setCanvasZoom = useConductorStore((state) => state.setCanvasZoom);
+  const addElement = useConductorStore((state) => state.addElement);
   const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
   const setSelectedElementIds = useConductorStore((state) => state.setSelectedElementIds);
   const toggleElementSelection = useConductorStore((state) => state.toggleElementSelection);
@@ -500,30 +503,41 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
 
     try {
-      await createNativeElement(activeCanvasId, type, position, extra);
+      const result = await createNativeElement(activeCanvasId, type, position, extra) as {
+        success?: boolean;
+        error?: { message?: string };
+        resultPatch?: { element?: CanvasElement };
+      } | undefined;
+      if (!result?.success) {
+        throw new Error(result?.error?.message ?? "The canvas did not return the created element.");
+      }
+      const created = result.resultPatch?.element;
+      if (!created) {
+        throw new Error("The canvas created the element without a renderer payload.");
+      }
+
+      // The IPC response is authoritative for this local user action. Do not
+      // wait for the asynchronous conductor bridge: it can arrive after the
+      // next click, which previously made a successful text insertion appear
+      // to vanish. The bridge later sees the same id and safely de-duplicates.
+      const store = useConductorStore.getState();
+      if (!store.elements.some((element) => element.id === created.id)) {
+        addElement(created);
+      }
+      store.setSelectedElementId(created.id);
       setUiError(null);
       setActiveTool(null);
 
-      // Text and document elements open their editor immediately. Diagram shapes stay
-      // visually empty until the user explicitly double-clicks to label one.
+      // Text, document, and table elements open their editor immediately.
+      // Shapes remain selected after creation and enter text editing on their
+      // existing double-click interaction.
       if (type === "text" || type === "document" || type === "table") {
-        setTimeout(() => {
-          const store = useConductorStore.getState();
-          // Find the freshly created native element closest to the
-          // creation position (most recent createdAt wins on ties).
-          const candidates = store.elements.filter((e) => e.elementKind === `native/${type}`);
-          if (candidates.length === 0) return;
-          const newest = candidates.reduce((a, b) =>
-            (b.createdAt ?? 0) > (a.createdAt ?? 0) ? b : a,
-          );
-          store.setSelectedElementId(newest.id);
-          store.setEditingElementId(newest.id);
-        }, 0);
+        store.setEditingElementId(created.id);
       }
     } catch (err) {
       setUiError(`Create ${type} failed: ${err instanceof Error ? err.message : err}`);
     }
-  }, [activeCanvasId, setActiveTool, setUiError]);
+  }, [activeCanvasId, addElement, setActiveTool, setUiError]);
 
   const dropFileAt = useCallback(async (file: File, canvasX: number, canvasY: number) => {
     if (!activeCanvasId) return;
@@ -856,13 +870,19 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         return;
       }
 
+      if (el.metadata.locked === true) {
+        setSelectedElementId(elementId);
+        setHostCursor("default");
+        return;
+      }
+
       const { selectedElementIds: currentSelection } = useConductorStore.getState();
       const shouldDragSelection = currentSelection.includes(elementId) && currentSelection.length > 1;
       const targetIds = shouldDragSelection ? currentSelection : [elementId];
       const dragTargets = targetIds
         .map((id) => {
           const targetElement = elements.find((candidate) => candidate.id === id);
-          return targetElement
+          return targetElement && targetElement.metadata.locked !== true
             ? { id, origX: targetElement.position.x, origY: targetElement.position.y }
             : null;
         })

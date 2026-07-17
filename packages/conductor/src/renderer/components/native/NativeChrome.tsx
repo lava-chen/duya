@@ -1,13 +1,12 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowClockwise, CopySimple, DotsThree, X } from "@phosphor-icons/react";
 import type { CanvasElement, CanvasPosition } from "../..//types/conductor";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { canvasTransformState } from "../CanvasArea";
 import { GRID_PX } from "../../domain/canvas/units";
 import { quantizeResizeDelta } from "../../domain/canvas/resize-snap";
-import { PencilIcon, TrashIcon, CaretDownIcon } from "@/components/icons";
+import { PencilIcon, CaretDownIcon } from "@/components/icons";
 import { createNativeElement, executeAction } from "../../ipc/conductor-ipc";
 import { useStyleUpdate } from "../StylePanel";
 import { STICKY_COLORS, STICKY_COLOR_KEYS, type StickyColorKey } from "./sticky-colors";
@@ -20,6 +19,11 @@ import {
   CAPSULE_DIVIDER,
 } from "../toolbar/CapsuleToolbar";
 import { TextSelectionToolbar } from "./TextSelectionToolbar";
+import {
+  ElementUtilityActions,
+  type ElementUtilityActionsProps,
+} from "../toolbar/ElementUtilityActions";
+import { useElementLock } from "../toolbar/useElementLock";
 
 type HandleDirection = "nw" | "ne" | "se" | "sw" | "n" | "e" | "s" | "w";
 
@@ -77,106 +81,6 @@ const BORDER_STYLES: { value: "none" | "solid" | "dashed" | "dotted"; labelKey: 
   { value: "dotted", labelKey: "conductor.toolbar.borderDotted" },
 ];
 
-interface ElementUtilityActionsProps {
-  onDuplicate: () => void;
-  onRotate: () => void;
-  onBringToFront: () => void;
-  onSendToBack: () => void;
-  onDismiss: () => void;
-  onDelete: (event: React.MouseEvent) => void;
-  deleteTitle: string;
-}
-
-function ElementUtilityActions({
-  onDuplicate,
-  onRotate,
-  onBringToFront,
-  onSendToBack,
-  onDismiss,
-  onDelete,
-  deleteTitle,
-}: ElementUtilityActionsProps) {
-  const [moreOpen, setMoreOpen] = useState(false);
-  const moreMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!moreOpen) return;
-    const handleOutsidePress = (event: MouseEvent) => {
-      if (!moreMenuRef.current?.contains(event.target as Node)) {
-        setMoreOpen(false);
-      }
-    };
-    window.setTimeout(() => document.addEventListener("mousedown", handleOutsidePress), 0);
-    return () => document.removeEventListener("mousedown", handleOutsidePress);
-  }, [moreOpen]);
-
-  const menuItemStyle: React.CSSProperties = {
-    display: "block",
-    width: "100%",
-    padding: "7px 10px",
-    border: "none",
-    background: "transparent",
-    color: "rgba(255,255,255,0.9)",
-    textAlign: "left",
-    fontSize: 12,
-    cursor: "pointer",
-  };
-
-  return (
-    <>
-      <div style={CAPSULE_DIVIDER} />
-      <button type="button" title="Rotate 90°" onClick={onRotate} style={CAPSULE_BTN_BASE}>
-        <ArrowClockwise size={16} />
-      </button>
-      <button type="button" title="Duplicate element" onClick={onDuplicate} style={CAPSULE_BTN_BASE}>
-        <CopySimple size={16} />
-      </button>
-      <div style={{ position: "relative" }} ref={moreMenuRef}>
-        <button
-          type="button"
-          title="More element actions"
-          aria-haspopup="menu"
-          aria-expanded={moreOpen}
-          onClick={() => setMoreOpen((open) => !open)}
-          style={CAPSULE_BTN_BASE}
-        >
-          <DotsThree size={18} weight="bold" />
-        </button>
-        {moreOpen && (
-          <div
-            role="menu"
-            style={{
-              position: "absolute",
-              bottom: 36,
-              right: -4,
-              minWidth: 132,
-              padding: 4,
-              background: "rgba(40, 44, 52, 0.98)",
-              border: "1px solid rgba(255,255,255,0.12)",
-              borderRadius: 10,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
-              zIndex: 40,
-            }}
-          >
-            <button type="button" role="menuitem" onClick={() => { onBringToFront(); setMoreOpen(false); }} style={menuItemStyle}>
-              Bring to front
-            </button>
-            <button type="button" role="menuitem" onClick={() => { onSendToBack(); setMoreOpen(false); }} style={menuItemStyle}>
-              Send to back
-            </button>
-          </div>
-        )}
-      </div>
-      <button type="button" title={deleteTitle} onClick={onDelete} style={CAPSULE_BTN_BASE}>
-        <TrashIcon size={16} />
-      </button>
-      <button type="button" title="Close selection toolbar" onClick={onDismiss} style={CAPSULE_BTN_BASE}>
-        <X size={16} />
-      </button>
-    </>
-  );
-}
-
 function StickySelectionToolbar({
   element,
   onEdit,
@@ -186,6 +90,8 @@ function StickySelectionToolbar({
   onBringToFront,
   onSendToBack,
   onDismiss,
+  locked,
+  onToggleLock,
 }: {
   element: CanvasElement;
   onEdit: () => void;
@@ -195,6 +101,8 @@ function StickySelectionToolbar({
   onBringToFront: () => void;
   onSendToBack: () => void;
   onDismiss: () => void;
+  locked: boolean;
+  onToggleLock: () => void;
 }) {
   const { t } = useTranslation();
   const apply = useStyleUpdate(element);
@@ -254,7 +162,7 @@ function StickySelectionToolbar({
             ...(shape === s.value ? CAPSULE_BTN_ACTIVE : {}),
           }}
           onMouseEnter={(e) => {
-            if (shape !== s.value) e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+            if (shape !== s.value) e.currentTarget.style.background = "var(--surface-hover)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background =
@@ -286,11 +194,11 @@ function StickySelectionToolbar({
               height: 16,
               borderRadius: "50%",
               background: currentBg,
-              border: "1px solid rgba(255,255,255,0.25)",
+              border: "1px solid var(--command-menu-border)",
               display: "inline-block",
             }}
           />
-          <CaretDownIcon size={10} color="rgba(255,255,255,0.6)" />
+          <CaretDownIcon size={10} color="var(--text-tertiary)" />
         </button>
         {colorOpen && (
           <div
@@ -303,8 +211,8 @@ function StickySelectionToolbar({
               gridTemplateColumns: "repeat(3, 28px)",
               gap: 6,
               padding: 10,
-              background: "rgba(40, 44, 52, 0.98)",
-              border: "1px solid rgba(255,255,255,0.12)",
+              background: "var(--command-menu-bg)",
+              border: "1px solid var(--command-menu-border)",
               borderRadius: 12,
               boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
               zIndex: 30,
@@ -323,7 +231,7 @@ function StickySelectionToolbar({
                     width: 28,
                     height: 28,
                     borderRadius: "50%",
-                    border: active ? "2px solid #fff" : "1px solid rgba(255,255,255,0.2)",
+                    border: active ? "2px solid var(--text-primary)" : "1px solid var(--command-menu-border)",
                     padding: 0,
                     background: hex,
                     cursor: "pointer",
@@ -353,14 +261,14 @@ function StickySelectionToolbar({
               borderRadius: 12,
               border: "none",
               background: active ? "var(--canvas-tool-accent)" : "transparent",
-              color: active ? "#fff" : "rgba(255,255,255,0.85)",
+              color: active ? "#fff" : "var(--text-primary)",
               fontSize: 11,
               fontWeight: 500,
               cursor: "pointer",
               transition: "background var(--motion-duration-micro) var(--motion-smooth)",
             }}
             onMouseEnter={(e) => {
-              if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+              if (!active) e.currentTarget.style.background = "var(--surface-hover)";
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.background = active ? "var(--canvas-tool-accent)" : "transparent";
@@ -378,7 +286,7 @@ function StickySelectionToolbar({
         title={t("conductor.toolbar.edit")}
         onClick={onEdit}
         style={CAPSULE_BTN_BASE}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-hover)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
         <PencilIcon size={16} />
@@ -391,6 +299,8 @@ function StickySelectionToolbar({
         onDismiss={onDismiss}
         onDelete={onDelete}
         deleteTitle={t("conductor.toolbar.delete")}
+        locked={locked}
+        onToggleLock={onToggleLock}
       />
     </CapsuleToolbar>
   );
@@ -428,6 +338,8 @@ function ShapeSelectionToolbar({
   onBringToFront,
   onSendToBack,
   onDismiss,
+  locked,
+  onToggleLock,
 }: {
   element: CanvasElement;
   onEdit: () => void;
@@ -437,6 +349,8 @@ function ShapeSelectionToolbar({
   onBringToFront: () => void;
   onSendToBack: () => void;
   onDismiss: () => void;
+  locked: boolean;
+  onToggleLock: () => void;
 }) {
   const apply = useStyleUpdate(element);
   const activePreset = (element.config.shapePreset as ShapePreset | undefined) ?? "filled";
@@ -476,7 +390,7 @@ function ShapeSelectionToolbar({
                 width: 16,
                 height: 13,
                 borderRadius: 3,
-                border: `2px ${preset === "dashed" ? "dashed" : "solid"} ${active ? "#fff" : "rgba(255,255,255,0.88)"}`,
+                border: `2px ${preset === "dashed" ? "dashed" : "solid"} ${active ? "#fff" : "var(--text-primary)"}`,
                 background: preset === "filled" ? (active ? "#fff" : "#F4B566") : "transparent",
               }}
             />
@@ -499,7 +413,7 @@ function ShapeSelectionToolbar({
               height: 17,
               borderRadius: "50%",
               background: shapeColor,
-              border: "1px solid rgba(255,255,255,0.4)",
+              border: "1px solid var(--command-menu-border)",
             }}
           />
         </button>
@@ -515,8 +429,8 @@ function ShapeSelectionToolbar({
               gridTemplateColumns: "repeat(4, 28px)",
               gap: 6,
               padding: 10,
-              background: "rgba(40, 44, 52, 0.98)",
-              border: "1px solid rgba(255,255,255,0.12)",
+              background: "var(--command-menu-bg)",
+              border: "1px solid var(--command-menu-border)",
               borderRadius: 12,
               boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
               zIndex: 40,
@@ -536,7 +450,7 @@ function ShapeSelectionToolbar({
                   height: 28,
                   padding: 0,
                   borderRadius: "50%",
-                  border: shapeColor === color ? "2px solid #fff" : "1px solid rgba(255,255,255,0.2)",
+                  border: shapeColor === color ? "2px solid var(--text-primary)" : "1px solid var(--command-menu-border)",
                   background: color,
                   cursor: "pointer",
                   boxShadow: shapeColor === color ? "0 0 0 1px var(--canvas-tool-accent)" : undefined,
@@ -556,6 +470,8 @@ function ShapeSelectionToolbar({
         onDismiss={onDismiss}
         onDelete={onDelete}
         deleteTitle="Delete shape"
+        locked={locked}
+        onToggleLock={onToggleLock}
       />
     </CapsuleToolbar>
   );
@@ -568,6 +484,7 @@ interface NativeChromeProps {
 }
 
 export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, onPositionChange }) => {
+  const { locked, toggleLocked } = useElementLock(element);
   const selectedElementId = useConductorStore((state) => state.selectedElementId);
   const selectedElementIds = useConductorStore((state) => state.selectedElementIds);
   const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
@@ -668,6 +585,18 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     setSelectedElementId(null);
   }, [setSelectedElementId]);
 
+  const utilityActions: ElementUtilityActionsProps = {
+    onDuplicate: handleDuplicate,
+    onRotate: handleRotate,
+    onBringToFront: () => handleLayerChange("front"),
+    onSendToBack: () => handleLayerChange("back"),
+    onDismiss: dismissSelectionToolbar,
+    onDelete: handleDelete,
+    deleteTitle: "Delete element",
+    locked,
+    onToggleLock: toggleLocked,
+  };
+
   const resizeRef = useRef<{
     dir: HandleDirection;
     startMouseX: number;
@@ -696,6 +625,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
   }, [element.id, setEditingElementId]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent, dir: HandleDirection) => {
+    if (locked) return;
     e.preventDefault();
     e.stopPropagation();
     resizeRef.current = {
@@ -717,7 +647,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
       w: Math.round(element.position.w * GRID_PX),
       h: Math.round(element.position.h * GRID_PX),
     });
-  }, [element.position, element.metadata]);
+  }, [element.position, element.metadata, locked]);
 
   useEffect(() => {
     const flushResizeFrame = () => {
@@ -916,6 +846,8 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
           onBringToFront={() => handleLayerChange("front")}
           onSendToBack={() => handleLayerChange("back")}
           onDismiss={dismissSelectionToolbar}
+          locked={locked}
+          onToggleLock={toggleLocked}
         />
       )}
 
@@ -930,6 +862,8 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
               onBringToFront={() => handleLayerChange("front")}
               onSendToBack={() => handleLayerChange("back")}
               onDismiss={dismissSelectionToolbar}
+              locked={locked}
+              onToggleLock={toggleLocked}
             />
           : <StickySelectionToolbar
               element={element}
@@ -940,14 +874,31 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
               onBringToFront={() => handleLayerChange("front")}
               onSendToBack={() => handleLayerChange("back")}
               onDismiss={dismissSelectionToolbar}
+              locked={locked}
+              onToggleLock={toggleLocked}
             />
       )}
 
       {showSingleElementControls && element.elementKind === "native/text" && (
-        <TextSelectionToolbar element={element} />
+        <TextSelectionToolbar element={element} utilityActions={utilityActions} />
       )}
 
-      {showSingleElementControls && element.metadata?.resizeMode !== 'fixed' && (
+      {showSingleElementControls && ![
+        "native/shape",
+        "native/sticky",
+        "native/text",
+      ].includes(element.elementKind) && (
+        <CapsuleToolbar>
+          <ElementUtilityActions
+            {...utilityActions}
+            leadingDivider={false}
+            showDuplicate={false}
+            showRotate={false}
+          />
+        </CapsuleToolbar>
+      )}
+
+      {showSingleElementControls && !locked && element.metadata?.resizeMode !== 'fixed' && (
         <>
           {usesIntrinsicHeight ? <>
             <div

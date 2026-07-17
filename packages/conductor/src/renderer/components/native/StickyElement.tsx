@@ -168,6 +168,11 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
 
   const [editHtml, setEditHtml] = useState(textToHtml(text));
   const contentEditableRef = useRef<HTMLDivElement>(null);
+  const [editorContainer, setEditorContainer] = useState<HTMLDivElement | null>(null);
+  const setEditorRef = useCallback((node: HTMLDivElement | null) => {
+    contentEditableRef.current = node;
+    setEditorContainer(node);
+  }, []);
   // Guards against double-handling when Escape triggers blur during unmount.
   const exitModeRef = useRef<"save" | "cancel" | null>(null);
 
@@ -300,7 +305,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
       {isEditing ? (
         <>
           <div
-            ref={contentEditableRef}
+            ref={setEditorRef}
             contentEditable
             suppressContentEditableWarning
             onInput={() => setEditHtml(contentEditableRef.current?.innerHTML ?? "")}
@@ -352,7 +357,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
               Add text
             </span>
           )}
-          <FloatingTextToolbar container={contentEditableRef.current} />
+          <FloatingTextToolbar container={editorContainer} element={element} showWhenEditing />
         </>
       ) : (
         <>

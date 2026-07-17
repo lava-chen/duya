@@ -64,7 +64,7 @@ const FreeformItem = memo(function FreeformItem({
         transform: element.elementKind.startsWith("native/")
           ? undefined
           : `rotate(${element.position.rotation ?? 0}deg)`,
-        cursor: readOnly ? "default" : "grab",
+        cursor: readOnly || element.metadata.locked === true ? "default" : "grab",
         userSelect: editing ? "text" : "none",
         outline: showWrapperSelection ? "2px solid var(--accent)" : "none",
         outlineOffset: showWrapperSelection ? "3px" : 0,

@@ -64,6 +64,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
   const memberIds = (element.config.memberIds as string[] | undefined) ?? [];
   const title = (element.config.title as string | undefined) ?? "";
   const bgColor = element.config.bgColor as string | undefined;
+  const locked = element.metadata.locked === true;
 
   // Real-time bbox: re-computes whenever elements change (members dragged, etc).
   const bbox = useMemo(() => computeGroupBbox(memberIds, elements), [memberIds, elements]);
@@ -88,6 +89,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
   }, [element.id, setSelectedElementId]);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
+    if (locked) return;
     if (!bbox) return;
     e.preventDefault();
     e.stopPropagation();
@@ -96,7 +98,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
     const origPositions = new Map<string, { x: number; y: number }>();
     for (const id of memberIds) {
       const el = elements.find((it) => it.id === id);
-      if (el) origPositions.set(id, { x: el.position.x, y: el.position.y });
+      if (el && el.metadata.locked !== true) origPositions.set(id, { x: el.position.x, y: el.position.y });
     }
 
     dragRef.current = {
@@ -107,7 +109,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
       lastMouseX: e.clientX,
       lastMouseY: e.clientY,
     };
-  }, [bbox, elements, memberIds, setSelectedElementId]);
+  }, [bbox, elements, locked, memberIds, setSelectedElementId]);
 
   useEffect(() => {
     const flushDragFrame = () => {
@@ -197,7 +199,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
     background: bgColor ? `${bgColor}` : "transparent",
     opacity: bgColor ? 0.08 : 1,
     pointerEvents: "auto",
-    cursor: isSelected ? "grab" : "default",
+    cursor: isSelected && !locked ? "grab" : "default",
     transition: "border var(--motion-duration-micro) var(--motion-smooth)",
     zIndex: 0,
   };
@@ -249,7 +251,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
       <div style={overlayStyle} />
       {title && <div style={titleStyle}>{title}</div>}
 
-      {isSelected && (
+      {isSelected && !locked && (
         <>
           <div style={{ ...handleStyle, top: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2, cursor: "nwse-resize" }} />
           <div style={{ ...handleStyle, top: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2, cursor: "nesw-resize" }} />
