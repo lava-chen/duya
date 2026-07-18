@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="120" viewBox="0 0 1200 120" role="img" aria-labelledby="title desc">
+  <title id="title">What can Duya do?</title>
+  <desc id="desc">Section header with serif title, mono section number, and Codex-style capability tags.</desc>
+
+  <rect width="1200" height="120" fill="#fefdfb"/>
+
+  <!-- Hairline top -->
+  <line x1="64" y1="24" x2="1136" y2="24" stroke="#1a1a1a" stroke-opacity="0.06" stroke-width="1"/>
+
+  <!-- Section number: mono, like command palette group header -->
+  <text x="64" y="56" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="500" fill="#6b6b6b" letter-spacing="1.5">MODE</text>
+
+  <!-- Section title: Copernicus fallback serif -->
+  <text x="64" y="96" font-family="Georgia, 'Times New Roman', serif" font-size="40" font-weight="700" fill="#1a1a1a" letter-spacing="-1">What can Duya do?</text>
+
+  <!-- Right: Codex-style capability chips -->
+  <g transform="translate(760 56)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#6b6b6b">
+    <rect x="0" y="0" width="72" height="24" rx="6" fill="#ffffff" stroke="#e5e5e5" stroke-width="1"/>
+    <text x="36" y="16" text-anchor="middle">browser</text>
+    <rect x="84" y="0" width="60" height="24" rx="6" fill="#ffffff" stroke="#e5e5e5" stroke-width="1"/>
+    <text x="114" y="16" text-anchor="middle">files</text>
+    <rect x="156" y="0" width="60" height="24" rx="6" fill="#ffffff" stroke="#e5e5e5" stroke-width="1"/>
+    <text x="186" y="16" text-anchor="middle">shell</text>
+    <rect x="228" y="0" width="72" height="24" rx="6" fill="#ffffff" stroke="#e5e5e5" stroke-width="1"/>
+    <text x="264" y="16" text-anchor="middle">canvas</text>
+    <rect x="312" y="0" width="56" height="24" rx="6" fill="#f1f1f1" stroke="#7c3aed" stroke-opacity="0.3" stroke-width="1"/>
+    <text x="340" y="16" text-anchor="middle" fill="#7c3aed" font-weight="600">mcp</text>
+  </g>
+
+  <!-- Hairline bottom -->
+  <line x1="64" y1="108" x2="1136" y2="108" stroke="#1a1a1a" stroke-opacity="0.06" stroke-width="1"/>
+</svg>
