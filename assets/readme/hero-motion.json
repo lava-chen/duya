@@ -1,0 +1,35 @@
+{
+  "width": 1200,
+  "fps": 30,
+  "duration": 5.0,
+  "colors": 256,
+  "dither": "none",
+  "transparent_color": "#00ff00",
+  "alpha_threshold": 128,
+  "clip_to_base_alpha": true,
+  "max_size_mb": 2.0,
+  "reveals": [
+    {
+      "id": "title-block",
+      "axis": "x",
+      "start": 0.15,
+      "end": 1.1,
+      "exit": {"start": 4.1, "end": 4.95}
+    },
+    {
+      "id": "popover",
+      "axis": "x",
+      "start": 0.4,
+      "end": 1.4,
+      "exit": {"start": 4.1, "end": 4.95}
+    },
+    {
+      "id": "selected-row",
+      "axis": "y",
+      "start": 1.2,
+      "end": 2.0,
+      "exit": {"start": 4.15, "end": 4.95}
+    }
+  ],
+  "layers": []
+}
