@@ -198,6 +198,44 @@ git push origin master v0.1.5
 The release-notes file is the only place where the changelog lives
 in long form. Do not duplicate it into the tag body.
 
+##### Execution workflow
+
+After the user confirms the recommendation, run these steps in order:
+
+1. Make sure `docs/release-notes/v<X>.md` exists. Create it from the
+   headline changelog bullets if it does not.
+2. Bump `package.json` `version` to `<X>`.
+3. Stage and commit the bump and the release notes:
+   ```bash
+   git add package.json docs/release-notes/v<X>.md
+   git commit -m "chore(release): bump version to <X>"
+   ```
+4. Create an annotated tag using the release notes as the tag body:
+   ```bash
+   git tag -a v<X> -F docs/release-notes/v<X>.md
+   ```
+5. Push the branch and the tag together to trigger the release workflow:
+   ```bash
+   git push origin <branch> v<X>
+   ```
+6. Verify the push succeeded:
+   ```bash
+   git branch -vv
+   git ls-remote --tags origin refs/tags/v<X>
+   ```
+7. Check the repository Actions page to confirm the release workflow
+   started and monitor it to completion.
+
+If a previous attempt partially completed (commit exists but tag/push
+failed), inspect the current state first to avoid duplicates:
+
+```bash
+git status
+git log --oneline -3
+git tag --list 'v<X>*'
+git ls-remote --tags origin refs/tags/v<X>
+```
+
 ## Code
 
 - TS strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
