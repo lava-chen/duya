@@ -387,6 +387,12 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       );
       if (existing) {
         setActiveTabId(existing.id);
+        const providedTitle = typeof params?.title === "string" ? params.title : undefined;
+        if (providedTitle && providedTitle !== existing.title) {
+          setTabs((prev) => prev.map((tab) => (
+            tab.id === existing.id ? { ...tab, title: providedTitle } : tab
+          )));
+        }
         applyPageLayout(pageId);
         return existing.id;
       }

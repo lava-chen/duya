@@ -1168,6 +1168,20 @@ class StreamSessionManager {
         }
       } else {
         console.warn('[stream-session-manager] Invalid titleGenerationModel format (need providerId:modelName):', titleGenerationModel);
+        // Fallback: treat the raw value as a plain model name using the active
+        // provider so title generation still works for legacy/free-form values.
+        if (providerConfig) {
+          titleGenerationModelConfig = {
+            provider: providerConfig.provider,
+            apiKey: providerConfig.apiKey,
+            baseURL: providerConfig.baseURL || '',
+            model: titleGenerationModel,
+          };
+          console.log('[stream-session-manager] Falling back title model to active provider:', {
+            provider: providerConfig.provider,
+            model: titleGenerationModel,
+          });
+        }
       }
     }
 

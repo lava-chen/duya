@@ -176,6 +176,11 @@ export function ChatView({
   useEffect(() => {
     panelTabsRef.current = panelTabs;
   }, [panelTabs]);
+  const activeTabId = panel?.activeTabId ?? null;
+  const activeTabIdRef = useRef(activeTabId);
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId;
+  }, [activeTabId]);
 
   // Conductor mode is independent of plan/research modes — separate state.
   // conductorCanvasId is the durable binding to the sidebar canvas; when
@@ -228,12 +233,25 @@ export function ChatView({
         setConductorCanvasId(event.currentCanvasId);
         useConversationStore.getState().setThreadConductorBinding(sessionId, true, event.currentCanvasId);
 
+        // If the requested canvas is already the active conductor tab, keep it
+        // as-is instead of closing and reopening tabs.
+        const activeTab = panelTabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
+        if (
+          activeTab?.pageId === 'conductor' &&
+          activeTab.params?.canvasId === event.currentCanvasId
+        ) {
+          return;
+        }
+
         for (const tab of panelTabsRef.current.filter(
           (item) => item.pageId === 'conductor' && item.params?.canvasId !== event.currentCanvasId,
         )) {
           closePanel(tab.id);
         }
-        openOrActivatePage('conductor', { canvasId: event.currentCanvasId });
+        openOrActivatePage('conductor', {
+          canvasId: event.currentCanvasId,
+          title: canvas.name || t('panel.conductor'),
+        });
       });
     };
 

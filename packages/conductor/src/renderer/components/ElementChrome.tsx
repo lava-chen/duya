@@ -6,6 +6,7 @@ import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { canvasTransformState } from "./CanvasArea";
 import { GRID_PX } from "../domain/canvas/units";
 import { useConductorStore } from "../stores/conductor-store";
+import { useTranslation } from "@/hooks/useTranslation";
 import { CapsuleMoreMenu, CapsuleToolbar } from "./toolbar/CapsuleToolbar";
 import { useElementLock } from "./toolbar/useElementLock";
 
@@ -34,6 +35,7 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
   onPositionChange,
   children,
 }) => {
+  const { t } = useTranslation();
   const { locked, toggleLocked } = useElementLock(element);
   const setSelectedElementId = useConductorStore((state) => state.setSelectedElementId);
   const isMinimal = variant === "minimal";
@@ -116,12 +118,12 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
   const selectionToolbar = selected && !readOnly ? (
     <CapsuleToolbar>
       <CapsuleMoreMenu
-        title="More element actions"
+        title={t("conductor.utility.moreActions")}
         items={[
-          { label: locked ? "Unlock position" : "Lock position", onSelect: toggleLocked },
-          { label: "Close toolbar", onSelect: () => setSelectedElementId(null) },
+          { label: locked ? t("conductor.utility.unlockPosition") : t("conductor.utility.lockPosition"), onSelect: toggleLocked },
+          { label: t("conductor.utility.closeToolbar"), onSelect: () => setSelectedElementId(null) },
           ...(onDelete
-            ? [{ label: "Delete element", onSelect: onDelete, tone: "danger" as const }]
+            ? [{ label: t("conductor.utility.deleteElement"), onSelect: onDelete, tone: "danger" as const }]
             : []),
         ]}
       />

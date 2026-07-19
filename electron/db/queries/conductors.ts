@@ -111,20 +111,46 @@ export interface WriteActionLogParams {
 // Canvas CRUD
 // ============================================================
 
+/**
+ * Map a raw conductor_canvases row to the ConductorCanvas DTO.
+ * Shared by listCanvases and listCanvasesForProject so the two list
+ * paths always agree on field naming and JSON parsing.
+ */
+function mapCanvasRow(row: any): ConductorCanvas {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    layoutConfig: safeParseJson<Record<string, unknown>>(row.layout_config, {}),
+    sortOrder: row.sort_order,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    projectPath: row.project_path ?? null,
+  };
+}
+
 export function listCanvases(): ConductorCanvas[] {
   const rows = db().prepare(
     'SELECT * FROM conductor_canvases ORDER BY sort_order, created_at DESC'
   ).all() as any[];
-  return rows.map((r: any) => ({
-    id: r.id,
-    name: r.name,
-    description: r.description,
-    layoutConfig: safeParseJson<Record<string, unknown>>(r.layout_config, {}),
-    sortOrder: r.sort_order,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    projectPath: r.project_path ?? null,
-  }));
+  return rows.map(mapCanvasRow);
+}
+
+/**
+ * List canvases scoped to a project path. Includes:
+ *   - canvases whose project_path matches the session's working directory
+ *   - legacy/shared canvases with project_path IS NULL (created before
+ *     project_path was tracked, or intentionally shared)
+ * Returns all canvases (unfiltered) when projectPath is null/empty so
+ * callers without a session-scoped working directory still see every
+ * canvas.
+ */
+export function listCanvasesForProject(projectPath: string | null): ConductorCanvas[] {
+  if (!projectPath) return listCanvases();
+  const rows = db().prepare(
+    'SELECT * FROM conductor_canvases WHERE project_path = ? OR project_path IS NULL ORDER BY sort_order, created_at DESC'
+  ).all(projectPath) as any[];
+  return rows.map(mapCanvasRow);
 }
 
 /**

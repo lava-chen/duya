@@ -3,17 +3,20 @@
 import { ArrowArcLeft, ArrowArcRight, GearSix } from "@phosphor-icons/react";
 import { useConductorStore } from "../stores/conductor-store";
 import { ConductorSettings } from "./ConductorSettings";
+import { useTranslation } from "@/hooks/useTranslation";
+import type { TranslationKey } from "@/i18n";
 
-const STATUS_LABEL: Record<string, string> = {
-  idle: "Idle",
-  thinking: "Agent thinking",
-  streaming: "Agent responding",
-  tool_use: "Tool running",
-  completed: "Completed",
-  error: "Error",
+const STATUS_KEY: Record<string, TranslationKey> = {
+  idle: "conductor.status.idle",
+  thinking: "conductor.status.thinking",
+  streaming: "conductor.status.streaming",
+  tool_use: "conductor.status.toolUse",
+  completed: "conductor.status.completed",
+  error: "conductor.status.error",
 };
 
 export function CanvasStatusBar() {
+  const { t } = useTranslation();
   const { undo, redo, canUndo, canRedo, agentStatus, canvasZoom, setConductorSettingsOpen } =
     useConductorStore();
 
@@ -27,7 +30,7 @@ export function CanvasStatusBar() {
           type="button"
           onClick={undo}
           disabled={!canUndo}
-          title="Undo"
+          title={t("conductor.status.undo")}
           className="flex items-center justify-center w-7 h-7 rounded-full text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <ArrowArcLeft size={14} weight="regular" />
@@ -36,7 +39,7 @@ export function CanvasStatusBar() {
           type="button"
           onClick={redo}
           disabled={!canRedo}
-          title="Redo"
+          title={t("conductor.status.redo")}
           className="flex items-center justify-center w-7 h-7 rounded-full text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <ArrowArcRight size={14} weight="regular" />
@@ -45,7 +48,7 @@ export function CanvasStatusBar() {
 
       <div className="text-[11px] text-[var(--muted)] px-1">{zoomPercent}%</div>
       <div className="text-[11px] text-[var(--muted)] px-1">
-        {STATUS_LABEL[agentStatus] || "Syncing"}
+        {t(STATUS_KEY[agentStatus] ?? "conductor.status.syncing")}
       </div>
 
       <div className="w-px h-4 bg-[var(--border)] mx-1" />
@@ -53,7 +56,7 @@ export function CanvasStatusBar() {
       <button
         type="button"
         onClick={() => setConductorSettingsOpen(true)}
-        title="Conductor settings"
+        title={t("conductor.status.settings")}
         className="flex items-center justify-center w-7 h-7 rounded-full text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors"
       >
         <GearSix size={14} weight="regular" />

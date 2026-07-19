@@ -4,8 +4,6 @@ import { useState, useEffect, useCallback } from "react";
 import { CanvasToolbar } from "./CanvasToolbar";
 import { CanvasArea } from "./CanvasArea";
 import { CanvasErrorBoundary } from "./CanvasErrorBoundary";
-import { ConductorComposer } from "./ConductorComposer";
-import { CanvasStatusBar } from "./CanvasStatusBar";
 import { CanvasSelector } from "./CanvasSelector";
 import { useConductorStore } from "..//stores/conductor-store";
 import { listCanvases, createCanvas, getSnapshot, executeAction } from "..//ipc/conductor-ipc";
@@ -13,9 +11,11 @@ import { registerAllElements } from "../elements";
 import "../widgets";
 import { RefinePanel } from "..//refine/RefinePanel";
 import { useCanvasCaptureRequest } from "../hooks/useCanvasCaptureRequest";
+import { useTranslation } from "@/hooks/useTranslation";
 import type { CanvasPosition } from "..//types/conductor";
 
 export function ConductorView() {
+  const { t } = useTranslation();
   const {
     canvases,
     activeCanvasId,
@@ -129,7 +129,7 @@ export function ConductorView() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full bg-[var(--main-bg)]">
-        <div className="shimmer-text text-sm">Loading Conductor...</div>
+        <div className="shimmer-text text-sm">{t("conductor.loading")}</div>
       </div>
     );
   }
@@ -149,7 +149,7 @@ export function ConductorView() {
               type="button"
               onClick={() => setUiError(null)}
               className="text-[var(--error)]/80 hover:text-[var(--error)]"
-              aria-label="Dismiss error"
+              aria-label={t("conductor.dismissError")}
             >
               ×
             </button>
@@ -167,20 +167,11 @@ export function ConductorView() {
           </CanvasErrorBoundary>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-[var(--muted)] text-sm gap-4">
-            <p>Select or create a canvas to begin</p>
+            <p>{t("conductor.selectOrCreateCanvas")}</p>
           </div>
         )}
 
         <CanvasToolbar />
-
-        <div className="absolute left-1/2 bottom-5 -translate-x-1/2 z-30 w-[min(860px,84vw)] flex items-end gap-2">
-          <div className="flex-1 rounded-2xl border border-[var(--border)] bg-[var(--sidebar-bg)] shadow-[0_14px_36px_rgba(0,0,0,0.42)] overflow-hidden">
-            <ConductorComposer />
-          </div>
-          <div className="rounded-full border border-[var(--border)] bg-[var(--sidebar-bg)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden flex-shrink-0">
-            <CanvasStatusBar />
-          </div>
-        </div>
 
         <RefinePanel />
       </div>

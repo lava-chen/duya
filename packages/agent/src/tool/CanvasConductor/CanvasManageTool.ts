@@ -135,9 +135,16 @@ export const executor: ToolExecutor = {
         if (!context.canvasTarget) context.canvasTarget = {};
         context.canvasTarget.canvasId = next.id;
         context.canvasTarget.canvasName = next.name;
-        if (targetChanged && context.canvasFreshness) {
-          context.canvasFreshness.lastListElementsTime = undefined;
-          context.canvasFreshness.recentlyCreatedElementIds.clear();
+        if (targetChanged) {
+          // Propagate the new canvas id back to the owning mode modifier's
+          // persistent state so the next turn's toolUseContextPatch
+          // picks up the switch instead of reverting to the canvas bound
+          // at streamChat start.
+          context.updateModeCanvasId?.(next.id);
+          if (context.canvasFreshness) {
+            context.canvasFreshness.lastListElementsTime = undefined;
+            context.canvasFreshness.recentlyCreatedElementIds.clear();
+          }
         }
       } else if (affectedCanvas && affectedCanvas.id === currentCanvasId && action === 'rename' && context.canvasTarget) {
         context.canvasTarget.canvasName = affectedCanvas.name;

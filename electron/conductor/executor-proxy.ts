@@ -18,6 +18,7 @@ import type {
 import {
   createCanvas,
   listCanvases,
+  listCanvasesForProject,
   updateCanvas,
   type ConductorCanvas,
 } from '../db/queries/conductors';
@@ -117,13 +118,26 @@ export class ConductorExecutorProxy {
     const action = payload.action as 'get_current' | 'list' | 'create' | 'switch' | 'rename';
     const fallbackCanvasId = payload.currentCanvasId as string | undefined;
     const currentCanvas = this.resolveCurrentCanvas(request.sessionId, fallbackCanvasId);
+    // Resolve the session's working directory once so every branch below
+    // (list / create / switch / rename) agrees on the project scope.
+    const session = request.sessionId ? getSession(request.sessionId) : null;
+    const sessionProjectPath = session?.working_directory ?? null;
 
     if (action === 'get_current') {
       return { success: true, result: { action, currentCanvas } };
     }
 
     if (action === 'list') {
-      return { success: true, result: { action, currentCanvas, canvases: listCanvases() } };
+      const canvases = sessionProjectPath
+        ? listCanvasesForProject(sessionProjectPath)
+        : listCanvases();
+      // Always include the current canvas even if it didn't match the
+      // project filter (defensive — keeps the agent's current target
+      // visible even when its project_path disagrees with the session).
+      if (currentCanvas && !canvases.some((c) => c.id === currentCanvas.id)) {
+        canvases.unshift(currentCanvas);
+      }
+      return { success: true, result: { action, currentCanvas, canvases } };
     }
 
     if (action === 'create') {
@@ -141,6 +155,7 @@ export class ConductorExecutorProxy {
       const canvas = createCanvas({
         name,
         description: payload.description as string | undefined,
+        projectPath: sessionProjectPath,
       });
       if (shouldSwitch) {
         const bindError = this.bindSessionToCanvas(request.sessionId, canvas);
@@ -165,6 +180,15 @@ export class ConductorExecutorProxy {
     }
 
     if (action === 'switch') {
+      if (!this.isCanvasAccessible(target, sessionProjectPath)) {
+        return {
+          success: false,
+          error: {
+            code: 'CANVAS_NOT_ACCESSIBLE',
+            message: `Canvas ${canvasId} belongs to a different project and cannot be switched to from this session`,
+          },
+        };
+      }
       const bindError = this.bindSessionToCanvas(request.sessionId, target);
       if (bindError) return bindError;
       this.canvasManagementChangedFn?.({
@@ -180,6 +204,15 @@ export class ConductorExecutorProxy {
       const name = typeof payload.name === 'string' ? payload.name.trim() : '';
       if (!name) {
         return { success: false, error: { code: 'INVALID_INPUT', message: 'Canvas name is required' } };
+      }
+      if (!this.isCanvasAccessible(target, sessionProjectPath)) {
+        return {
+          success: false,
+          error: {
+            code: 'CANVAS_NOT_ACCESSIBLE',
+            message: `Canvas ${canvasId} belongs to a different project and cannot be renamed from this session`,
+          },
+        };
       }
       const renamed = updateCanvas(canvasId, { name });
       this.canvasManagementChangedFn?.({
@@ -199,6 +232,24 @@ export class ConductorExecutorProxy {
     }
 
     return { success: false, error: { code: 'INVALID_ACTION', message: `Unknown canvas management action: ${action}` } };
+  }
+
+  /**
+   * A canvas is accessible to a session when:
+   *   - it has no project_path (legacy / shared), OR
+   *   - its project_path matches the session's working directory, OR
+   *   - it is already the session's current canvas (caller checks this
+   *     before calling by only invoking switch/rename on a target the
+   *     agent picked, but the helper stays defensive by treating null
+   *     sessionProjectPath as "no project scope, anything shared OK").
+   *
+   * Returns false when the canvas is bound to a different project and
+   * the session has no claim to it.
+   */
+  private isCanvasAccessible(canvas: ConductorCanvas, sessionProjectPath: string | null): boolean {
+    if (canvas.projectPath === null || canvas.projectPath === undefined) return true;
+    if (!sessionProjectPath) return false;
+    return canvas.projectPath === sessionProjectPath;
   }
 
   async execute(request: ExecutorRpcRequest): Promise<ExecutorRpcResponse> {

@@ -5,6 +5,7 @@ import { useConductorStore } from "../stores/conductor-store";
 import { createNativeElement, executeAction } from "../ipc/conductor-ipc";
 import type { CanvasElement, CanvasPosition } from "../types/conductor";
 import { GRID_PX } from "../domain/canvas/units";
+import { useTranslation } from "@/hooks/useTranslation";
 import {
   CapsuleMoreMenu,
   CapsuleToolbar,
@@ -65,6 +66,7 @@ export function MultiSelectBar() {
   const updateElement = useConductorStore((state) => state.updateElement);
   const clearSelection = useConductorStore((state) => state.clearSelection);
   const setUiError = useConductorStore((state) => state.setUiError);
+  const { t } = useTranslation();
 
   const selectedElements = useMemo(() => {
     const ids =
@@ -233,10 +235,10 @@ export function MultiSelectBar() {
           <button
             type="button"
             onClick={handleUngroup}
-            title="Ungroup (delete the group frame, keep members)"
+            title={t("conductor.multi.ungroupTitle")}
             className="conductor-tool-button flex h-[30px] items-center gap-1 rounded-[7px] px-2 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            Ungroup
+            {t("conductor.multi.ungroup")}
           </button>
         ) : (
           <button
@@ -245,28 +247,28 @@ export function MultiSelectBar() {
             disabled={!canGroup}
             title={
               canGroup
-                ? "Group selected elements"
-                : "Need at least 2 non-group elements (groups cannot be nested)"
+                ? t("conductor.multi.groupSelected")
+                : t("conductor.multi.groupDisabled")
             }
             className="conductor-tool-button flex h-[30px] items-center gap-1 rounded-[7px] px-2 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
           >
-            Group
+            {t("conductor.multi.group")}
           </button>
         )}
         <span style={CAPSULE_DIVIDER} aria-hidden="true" />
         <button
           type="button"
           onClick={handleDelete}
-          title="Delete selected"
+          title={t("conductor.multi.deleteSelected")}
           className="conductor-tool-button flex h-[30px] items-center gap-1 rounded-[7px] px-2 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
         >
-          Delete
+          {t("conductor.multi.deleteSelected")}
         </button>
         <CapsuleMoreMenu
           items={[
-            { label: allLocked ? "Unlock selected positions" : "Lock selected positions", onSelect: () => { void handleToggleLock(); } },
-            { label: "Clear selection", onSelect: clearSelection },
-            { label: "Delete selected", onSelect: () => { void handleDelete(); }, tone: "danger" },
+            { label: allLocked ? t("conductor.multi.unlockSelected") : t("conductor.multi.lockSelected"), onSelect: () => { void handleToggleLock(); } },
+            { label: t("conductor.multi.clearSelection"), onSelect: clearSelection },
+            { label: t("conductor.multi.deleteSelected"), onSelect: () => { void handleDelete(); }, tone: "danger" },
           ]}
         />
       </CapsuleToolbar>

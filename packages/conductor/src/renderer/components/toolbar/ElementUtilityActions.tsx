@@ -3,6 +3,7 @@
 import React from "react";
 import { ArrowClockwise, CopySimple, X } from "@phosphor-icons/react";
 import { TrashIcon } from "@/components/icons";
+import { useTranslation } from "@/hooks/useTranslation";
 import {
   CAPSULE_BTN_BASE,
   CAPSULE_DIVIDER,
@@ -38,31 +39,32 @@ export function ElementUtilityActions({
   locked,
   onToggleLock,
 }: ElementUtilityActionsProps) {
+  const { t } = useTranslation();
   return (
     <>
       {leadingDivider && <div style={CAPSULE_DIVIDER} />}
       {showRotate && (
-        <button type="button" title="Rotate 90°" onClick={onRotate} style={CAPSULE_BTN_BASE}>
+        <button type="button" title={t("conductor.utility.rotate")} onClick={onRotate} style={CAPSULE_BTN_BASE}>
           <ArrowClockwise size={16} />
         </button>
       )}
       {showDuplicate && (
-        <button type="button" title="Duplicate element" onClick={onDuplicate} style={CAPSULE_BTN_BASE}>
+        <button type="button" title={t("conductor.utility.duplicate")} onClick={onDuplicate} style={CAPSULE_BTN_BASE}>
           <CopySimple size={16} />
         </button>
       )}
       <CapsuleMoreMenu
-        title="More element actions"
+        title={t("conductor.utility.moreActions")}
         items={[
-          { label: locked ? "Unlock position" : "Lock position", onSelect: onToggleLock },
-          { label: "Bring to front", onSelect: onBringToFront },
-          { label: "Send to back", onSelect: onSendToBack },
+          { label: locked ? t("conductor.utility.unlockPosition") : t("conductor.utility.lockPosition"), onSelect: onToggleLock },
+          { label: t("conductor.utility.bringToFront"), onSelect: onBringToFront },
+          { label: t("conductor.utility.sendToBack"), onSelect: onSendToBack },
         ]}
       />
       <button type="button" title={deleteTitle} onClick={onDelete} style={CAPSULE_BTN_BASE}>
         <TrashIcon size={16} />
       </button>
-      <button type="button" title="Close selection toolbar" onClick={onDismiss} style={CAPSULE_BTN_BASE}>
+      <button type="button" title={t("conductor.utility.closeToolbar")} onClick={onDismiss} style={CAPSULE_BTN_BASE}>
         <X size={16} />
       </button>
     </>

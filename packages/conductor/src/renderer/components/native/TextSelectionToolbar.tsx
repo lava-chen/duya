@@ -3,6 +3,8 @@
 import React, { useState } from "react";
 import type { CanvasElement } from "../..//types/conductor";
 import { useStyleUpdate } from "../StylePanel";
+import { useTranslation } from "@/hooks/useTranslation";
+import type { TranslationKey } from "@/i18n";
 import {
   CapsuleToolbar,
   CAPSULE_BTN_BASE,
@@ -17,18 +19,16 @@ import {
 type FontFamily = "sans" | "serif" | "mono";
 type TextAlign = "left" | "center" | "right";
 
-const FONT_OPTIONS: { value: FontFamily; label: string }[] = [
-  { value: "sans", label: "Sans" },
-  { value: "serif", label: "Serif" },
-  { value: "mono", label: "Mono" },
+const FONT_OPTIONS: { value: FontFamily; labelKey: TranslationKey }[] = [
+  { value: "sans", labelKey: "conductor.text.sans" },
+  { value: "serif", labelKey: "conductor.text.serif" },
+  { value: "mono", labelKey: "conductor.text.mono" },
 ];
 
-const WEIGHT_OPTIONS = [300, 400, 500, 600, 700];
-const LINE_OPTIONS = [1.0, 1.2, 1.5, 1.8, 2.0];
-const ALIGN_OPTIONS: { value: TextAlign; label: string }[] = [
-  { value: "left", label: "L" },
-  { value: "center", label: "C" },
-  { value: "right", label: "R" },
+const ALIGN_OPTIONS: { value: TextAlign; label: string; titleKey: TranslationKey }[] = [
+  { value: "left", label: "L", titleKey: "conductor.text.alignLeft" },
+  { value: "center", label: "C", titleKey: "conductor.text.alignCenter" },
+  { value: "right", label: "R", titleKey: "conductor.text.alignRight" },
 ];
 
 const COLOR_SWATCHES = [
@@ -62,14 +62,13 @@ export const TextSelectionToolbar: React.FC<{
   element: CanvasElement;
   utilityActions: ElementUtilityActionsProps;
 }> = ({ element, utilityActions }) => {
+  const { t } = useTranslation();
   const apply = useStyleUpdate(element);
 
   const fontFamily = (element.config.fontFamily as FontFamily) || "sans";
   const fontSize = (element.config.fontSize as number) || 16;
-  const fontWeight = (element.config.fontWeight as number) || 400;
   const color = (element.config.color as string) || "var(--text)";
   const align = (element.config.align as TextAlign) || "left";
-  const lineHeight = (element.config.lineHeight as number) || 1.5;
   const highlightColor = element.config.highlightColor as string | null | undefined;
 
   const [colorOpen, setColorOpen] = useState(false);
@@ -91,7 +90,7 @@ export const TextSelectionToolbar: React.FC<{
         <button
           key={f.value}
           type="button"
-          title={f.label}
+          title={t(f.labelKey)}
           onClick={() => apply({ fontFamily: f.value })}
           style={chipStyle(fontFamily === f.value)}
           onMouseEnter={(e) => {
@@ -102,7 +101,7 @@ export const TextSelectionToolbar: React.FC<{
               fontFamily === f.value ? (CAPSULE_BTN_ACTIVE.background as string) : "transparent";
           }}
         >
-          {f.label}
+          {t(f.labelKey)}
         </button>
       ))}
 
@@ -110,7 +109,7 @@ export const TextSelectionToolbar: React.FC<{
 
       <button
         type="button"
-        title="Decrease font size"
+        title={t("conductor.text.decreaseFontSize")}
         onClick={() => apply({ fontSize: Math.max(10, fontSize - 2) })}
         style={CAPSULE_BTN_BASE}
         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-hover)")}
@@ -131,7 +130,7 @@ export const TextSelectionToolbar: React.FC<{
       </span>
       <button
         type="button"
-        title="Increase font size"
+        title={t("conductor.text.increaseFontSize")}
         onClick={() => apply({ fontSize: Math.min(120, fontSize + 2) })}
         style={CAPSULE_BTN_BASE}
         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-hover)")}
@@ -142,32 +141,11 @@ export const TextSelectionToolbar: React.FC<{
 
       <div style={CAPSULE_DIVIDER} />
 
-      {WEIGHT_OPTIONS.map((w) => (
-        <button
-          key={w}
-          type="button"
-          title={`Weight ${w}`}
-          onClick={() => apply({ fontWeight: w })}
-          style={chipStyle(fontWeight === w)}
-          onMouseEnter={(e) => {
-            if (fontWeight !== w) e.currentTarget.style.background = "var(--surface-hover)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background =
-              fontWeight === w ? (CAPSULE_BTN_ACTIVE.background as string) : "transparent";
-          }}
-        >
-          {w}
-        </button>
-      ))}
-
-      <div style={CAPSULE_DIVIDER} />
-
       {ALIGN_OPTIONS.map((a) => (
         <button
           key={a.value}
           type="button"
-          title={a.value}
+          title={t(a.titleKey)}
           onClick={() => apply({ align: a.value })}
           style={chipStyle(align === a.value)}
           onMouseEnter={(e) => {
@@ -184,34 +162,10 @@ export const TextSelectionToolbar: React.FC<{
 
       <div style={CAPSULE_DIVIDER} />
 
-      {LINE_OPTIONS.map((l) => (
-        <button
-          key={l}
-          type="button"
-          title={`Line height ${l}`}
-          onClick={() => apply({ lineHeight: l })}
-          style={chipStyle(Math.abs(lineHeight - l) < 0.01)}
-          onMouseEnter={(e) => {
-            if (Math.abs(lineHeight - l) >= 0.01)
-              e.currentTarget.style.background = "var(--surface-hover)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background =
-              Math.abs(lineHeight - l) < 0.01
-                ? (CAPSULE_BTN_ACTIVE.background as string)
-                : "transparent";
-          }}
-        >
-          {l}
-        </button>
-      ))}
-
-      <div style={CAPSULE_DIVIDER} />
-
       <div style={{ position: "relative" }}>
         <button
           type="button"
-          title="Text color"
+          title={t("conductor.text.textColor")}
           onClick={() => {
             setColorOpen((v) => !v);
             setHighlightOpen(false);
@@ -250,7 +204,7 @@ export const TextSelectionToolbar: React.FC<{
       <div style={{ position: "relative" }}>
         <button
           type="button"
-          title="Highlight color"
+          title={t("conductor.text.highlightColor")}
           onClick={() => {
             setHighlightOpen((v) => !v);
             setColorOpen(false);

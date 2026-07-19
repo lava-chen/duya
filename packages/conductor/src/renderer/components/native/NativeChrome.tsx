@@ -329,6 +329,12 @@ function shapePresetConfig(preset: ShapePreset, color: string): Record<string, u
   };
 }
 
+const SHAPE_PRESET_KEY: Record<ShapePreset, TranslationKey> = {
+  filled: "conductor.shape.filled",
+  outline: "conductor.shape.outline",
+  dashed: "conductor.shape.transparentDashed",
+};
+
 function ShapeSelectionToolbar({
   element,
   onEdit,
@@ -352,6 +358,7 @@ function ShapeSelectionToolbar({
   locked: boolean;
   onToggleLock: () => void;
 }) {
+  const { t } = useTranslation();
   const apply = useStyleUpdate(element);
   const activePreset = (element.config.shapePreset as ShapePreset | undefined) ?? "filled";
   const [colorOpen, setColorOpen] = useState(false);
@@ -381,7 +388,7 @@ function ShapeSelectionToolbar({
           <button
             key={preset}
             type="button"
-            title={preset === "filled" ? "Filled" : preset === "outline" ? "Outline" : "Transparent dashed"}
+            title={t(SHAPE_PRESET_KEY[preset])}
             onClick={() => apply(shapePresetConfig(preset, shapeColor))}
             style={{ ...CAPSULE_BTN_BASE, ...(active ? CAPSULE_BTN_ACTIVE : {}) }}
           >
@@ -401,7 +408,7 @@ function ShapeSelectionToolbar({
       <div style={{ position: "relative" }} ref={colorMenuRef}>
         <button
           type="button"
-          title="Shape color"
+          title={t("conductor.shape.shapeColor")}
           aria-haspopup="menu"
           aria-expanded={colorOpen}
           onClick={() => setColorOpen((open) => !open)}
@@ -461,7 +468,7 @@ function ShapeSelectionToolbar({
         )}
       </div>
       <div style={CAPSULE_DIVIDER} />
-      <button type="button" title="Edit text" onClick={onEdit} style={CAPSULE_BTN_BASE}><PencilIcon size={16} /></button>
+      <button type="button" title={t("conductor.shape.editText")} onClick={onEdit} style={CAPSULE_BTN_BASE}><PencilIcon size={16} /></button>
       <ElementUtilityActions
         onDuplicate={onDuplicate}
         onRotate={onRotate}
@@ -469,7 +476,7 @@ function ShapeSelectionToolbar({
         onSendToBack={onSendToBack}
         onDismiss={onDismiss}
         onDelete={onDelete}
-        deleteTitle="Delete shape"
+        deleteTitle={t("conductor.shape.deleteShape")}
         locked={locked}
         onToggleLock={onToggleLock}
       />
@@ -585,6 +592,8 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     setSelectedElementId(null);
   }, [setSelectedElementId]);
 
+  const { t: translate } = useTranslation();
+
   const utilityActions: ElementUtilityActionsProps = {
     onDuplicate: handleDuplicate,
     onRotate: handleRotate,
@@ -592,7 +601,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
     onSendToBack: () => handleLayerChange("back"),
     onDismiss: dismissSelectionToolbar,
     onDelete: handleDelete,
-    deleteTitle: "Delete element",
+    deleteTitle: translate("conductor.toolbar.delete"),
     locked,
     onToggleLock: toggleLocked,
   };

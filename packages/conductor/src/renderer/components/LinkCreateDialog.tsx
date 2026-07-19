@@ -3,7 +3,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { LinkContent } from "../types/canvas-node";
+import type { TranslationKey } from "@/i18n";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useTranslation } from "@/hooks/useTranslation";
 import { listCanvases } from "../ipc/conductor-ipc";
 
 type LinkType = LinkContent["linkType"];
@@ -46,6 +48,7 @@ function parseDuyaLink(input: string): { linkType: "session" | "canvas"; targetI
 }
 
 export const LinkCreateDialog: React.FC<LinkCreateDialogProps> = ({ open, onClose, onConfirm }) => {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [canvases, setCanvases] = useState<CanvasMeta[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -77,8 +80,8 @@ export const LinkCreateDialog: React.FC<LinkCreateDialogProps> = ({ open, onClos
       const url = normalizeUrl(query);
       result.push({ id: "__url__", type: "url", title: domainFromUrl(url), subtitle: url });
     }
-    result.push(...canvases.filter((canvas) => !term || canvas.name.toLowerCase().includes(term)).map((canvas) => ({ id: canvas.id, type: "canvas" as const, title: canvas.name, subtitle: "Canvas" })));
-    result.push(...threads.filter((thread) => !term || (thread.title || "").toLowerCase().includes(term)).map((thread) => ({ id: thread.id, type: "session" as const, title: thread.title || "Untitled session", subtitle: "Conversation" })));
+    result.push(...canvases.filter((canvas) => !term || canvas.name.toLowerCase().includes(term)).map((canvas) => ({ id: canvas.id, type: "canvas" as const, title: canvas.name, subtitle: t("conductor.link.canvas") })));
+    result.push(...threads.filter((thread) => !term || (thread.title || "").toLowerCase().includes(term)).map((thread) => ({ id: thread.id, type: "session" as const, title: thread.title || t("conductor.link.untitledSession"), subtitle: t("conductor.link.conversation") })));
     return result;
   }, [canvases, query, threads]);
 
@@ -104,24 +107,24 @@ export const LinkCreateDialog: React.FC<LinkCreateDialogProps> = ({ open, onClos
   }, [items, onClose, selectItem, selectedIndex]);
 
   if (!open) return null;
-  const groups: Array<{ title: string; type: LinkType; items: SearchItem[] }> = [
-    { title: "Paste a link", type: "url", items: items.filter((item) => item.type === "url") },
-    { title: "Canvases", type: "canvas", items: items.filter((item) => item.type === "canvas") },
-    { title: "Conversations", type: "session", items: items.filter((item) => item.type === "session") },
+  const groups: Array<{ title: TranslationKey; type: LinkType; items: SearchItem[] }> = [
+    { title: "conductor.link.pasteLink", type: "url", items: items.filter((item) => item.type === "url") },
+    { title: "conductor.link.canvases", type: "canvas", items: items.filter((item) => item.type === "canvas") },
+    { title: "conductor.link.conversations", type: "session", items: items.filter((item) => item.type === "session") },
   ];
 
   let globalIndex = 0;
   const dialog = <div className="canvas-link-picker-overlay" style={canvasBounds ? { inset: "auto", left: canvasBounds.left, top: canvasBounds.top, width: canvasBounds.width, height: canvasBounds.height } : undefined} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="canvas-link-picker" role="dialog" aria-modal="true" aria-label="Create a canvas link" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="canvas-link-picker" role="dialog" aria-modal="true" aria-label={t("conductor.link.title")} onMouseDown={(event) => event.stopPropagation()}>
       <div className="canvas-link-picker__input-row">
         <span className="canvas-link-picker__search">⌕</span>
-        <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="Search canvases or paste a URL…" />
-        <button type="button" onClick={onClose} aria-label="Close link picker">×</button>
+        <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder={t("conductor.link.placeholder")} />
+        <button type="button" onClick={onClose} aria-label={t("conductor.link.close")}>×</button>
       </div>
       <div className="canvas-link-picker__results" ref={listRef}>
-        {items.length === 0 ? <p className="canvas-link-picker__empty">No matching canvas or conversation.</p> : groups.map((group) => {
+        {items.length === 0 ? <p className="canvas-link-picker__empty">{t("conductor.link.empty")}</p> : groups.map((group) => {
           if (!group.items.length) return null;
-          return <section className="canvas-link-picker__group" key={group.type}><h2>{group.title}</h2>{group.items.map((item) => {
+          return <section className="canvas-link-picker__group" key={group.type}><h2>{t(group.title)}</h2>{group.items.map((item) => {
             const index = globalIndex++;
             const selected = index === selectedIndex;
             return <button key={`${item.type}-${item.id}`} type="button" data-index={index} className={`canvas-link-picker__item${selected ? " is-selected" : ""}`} onMouseEnter={() => setSelectedIndex(index)} onClick={() => selectItem(item)}>
@@ -130,7 +133,7 @@ export const LinkCreateDialog: React.FC<LinkCreateDialogProps> = ({ open, onClos
           })}</section>;
         })}
       </div>
-      <footer><span>↑↓ Navigate</span><span>↵ Insert</span><span>Esc Close</span></footer>
+      <footer><span>{t("conductor.link.navigate")}</span><span>{t("conductor.link.insert")}</span><span>{t("conductor.link.closeKey")}</span></footer>
     </div>
   </div>;
   return createPortal(dialog, document.body);

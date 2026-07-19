@@ -11,6 +11,7 @@ import { useCanvasCaptureRequest } from "@duya/conductor/renderer/hooks/useCanva
 import "@duya/conductor/renderer/widgets";
 import type { CanvasPosition } from "@duya/conductor/renderer/types/conductor";
 import type { PageTab } from "./registry";
+import { useOptionalPanel } from "@/hooks/usePanel";
 
 export function SidebarConductorView({
   tab,
@@ -41,6 +42,18 @@ export function SidebarConductorView({
   // frozen at open time. When mounted standalone (legacy / tests), fall
   // back to the active canvas id from the conductor store.
   const tabCanvasId = tab?.params?.canvasId as string | undefined;
+
+  const panel = useOptionalPanel();
+  const targetCanvasName = useConductorStore((s) => {
+    const targetId = tabCanvasId ?? s.activeCanvasId;
+    if (!targetId) return undefined;
+    return s.canvases.find((c) => c.id === targetId)?.name;
+  });
+
+  useEffect(() => {
+    if (!tab?.id || !panel || !targetCanvasName) return;
+    panel.updateTabTitle(tab.id, targetCanvasName);
+  }, [tab?.id, panel, targetCanvasName]);
 
   const [isLoading, setIsLoading] = useState(true);
 

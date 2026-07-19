@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   listCanvases: vi.fn(),
+  listCanvasesForProject: vi.fn(),
   createCanvas: vi.fn(),
   updateCanvas: vi.fn(),
   getSession: vi.fn(),
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../db/queries/conductors', () => {
   return {
     listCanvases: mocks.listCanvases,
+    listCanvasesForProject: mocks.listCanvasesForProject,
     createCanvas: mocks.createCanvas,
     updateCanvas: mocks.updateCanvas,
     getCanvasSnapshot: vi.fn(),
@@ -119,5 +121,113 @@ describe('ConductorExecutorProxy canvas management', () => {
     expect(response.success).toBe(false);
     expect(response.error?.code).toBe('SESSION_NOT_FOUND');
     expect(mocks.createCanvas).not.toHaveBeenCalled();
+  });
+
+  it('filters list by project_path when the session has a working directory', async () => {
+    mocks.getSession.mockReturnValue({
+      id: 'session-1',
+      working_directory: '/proj/A',
+      conductor_canvas_id: 'canvas-1',
+    });
+    mocks.listCanvasesForProject.mockReturnValue([firstCanvas]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'list' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.listCanvasesForProject).toHaveBeenCalledWith('/proj/A');
+    expect(mocks.listCanvasesForProject).toHaveBeenCalledTimes(1);
+    // listCanvases is invoked exactly once — by resolveCurrentCanvas to
+    // look up the current canvas by id. The list branch itself must use
+    // the scoped listCanvasesForProject instead.
+    expect(mocks.listCanvases).toHaveBeenCalledTimes(1);
+    // The filtered list is returned, with the current canvas (canvas-1)
+    // already present so no defensive unshift is needed.
+    expect((response.result as { canvases: { id: string }[] }).canvases.map((c) => c.id)).toEqual(['canvas-1']);
+  });
+
+  it('passes the session working directory as projectPath to createCanvas', async () => {
+    mocks.getSession.mockReturnValue({
+      id: 'session-1',
+      working_directory: '/proj/A',
+      conductor_canvas_id: null,
+    });
+    mocks.createCanvas.mockReturnValue({
+      id: 'canvas-new',
+      name: 'New board',
+      description: null,
+      layoutConfig: {},
+      sortOrder: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      projectPath: '/proj/A',
+    });
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(
+      request({ action: 'create', name: 'New board', switchTo: false }),
+    );
+
+    expect(response.success).toBe(true);
+    expect(mocks.createCanvas).toHaveBeenCalledWith({
+      name: 'New board',
+      description: undefined,
+      projectPath: '/proj/A',
+    });
+  });
+
+  it('rejects switch to a canvas bound to a different project', async () => {
+    const foreignCanvas = { ...firstCanvas, id: 'canvas-foreign', projectPath: '/proj/B' };
+    mocks.getSession.mockReturnValue({
+      id: 'session-1',
+      working_directory: '/proj/A',
+      conductor_canvas_id: 'canvas-1',
+    });
+    mocks.listCanvases.mockReturnValue([firstCanvas, foreignCanvas]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'switch', canvasId: 'canvas-foreign' }));
+
+    expect(response.success).toBe(false);
+    expect(response.error?.code).toBe('CANVAS_NOT_ACCESSIBLE');
+    expect(mocks.updateSession).not.toHaveBeenCalled();
+  });
+
+  it('allows switch to a legacy canvas whose project_path is null', async () => {
+    mocks.getSession.mockReturnValue({
+      id: 'session-1',
+      working_directory: '/proj/A',
+      conductor_canvas_id: 'canvas-1',
+    });
+    // secondCanvas has projectPath: null (legacy/shared)
+    mocks.listCanvases.mockReturnValue([firstCanvas, secondCanvas]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'switch', canvasId: 'canvas-2' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.updateSession).toHaveBeenCalledWith('session-1', {
+      conductor_mode_enabled: 1,
+      conductor_canvas_id: 'canvas-2',
+    });
+  });
+
+  it('rejects rename of a canvas bound to a different project', async () => {
+    const foreignCanvas = { ...firstCanvas, id: 'canvas-foreign', projectPath: '/proj/B' };
+    mocks.getSession.mockReturnValue({
+      id: 'session-1',
+      working_directory: '/proj/A',
+      conductor_canvas_id: 'canvas-1',
+    });
+    mocks.listCanvases.mockReturnValue([firstCanvas, foreignCanvas]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(
+      request({ action: 'rename', canvasId: 'canvas-foreign', name: 'Hijacked' }),
+    );
+
+    expect(response.success).toBe(false);
+    expect(response.error?.code).toBe('CANVAS_NOT_ACCESSIBLE');
+    expect(mocks.updateCanvas).not.toHaveBeenCalled();
   });
 });
