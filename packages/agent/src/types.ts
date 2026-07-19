@@ -310,6 +310,20 @@ export interface AgentOptions {
   /** Default workspace directory for permission checking. Defaults to ~/.duya/workspace */
   defaultWorkspaceDirectory?: string;
   /**
+   * Optional user-defined permission rules (allow/deny/ask/additional directories).
+   * Mirrors the shape expected by `permissionsLoader.settingsJsonToRules`.
+   * Currently only consumed by CLI / headless callers; the renderer does not
+   * yet expose a UI for editing these rules.
+   */
+  permissionRules?: {
+    permissions?: {
+      allow?: string[];
+      deny?: string[];
+      ask?: string[];
+      additionalDirectories?: string[];
+    };
+  };
+  /**
    * Phase 2: optional ProviderRuntimeConfig. When present, the agent
    * SHOULD prefer `apiFormat` / `headers` from this object over the
    * legacy `provider` discriminator. New code paths should treat
@@ -573,6 +587,13 @@ export interface ToolUseContext {
    * calls immediately operate on the new canvas despite context spreading.
    */
   canvasTarget?: CanvasTargetState;
+  /**
+   * Optional callback for canvas tools to propagate a canvasId change back
+   * to the owning mode modifier's persistent state. Used by canvas_manage
+   * after a successful switch/create-with-switchTo so the next turn's
+   * toolUseContextPatch.conductorCanvasId reflects the new target.
+   */
+  updateModeCanvasId?: (canvasId: string) => void;
   /**
    * Mutable, per-session canvas state shared across tool calls within a turn
    * and across turns. MUST be a stable reference object: StreamingToolExecutor

@@ -27,7 +27,7 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       is_deleted INTEGER NOT NULL DEFAULT 0,
       generation INTEGER NOT NULL DEFAULT 0,
       agent_profile_id TEXT DEFAULT NULL,
-      parent_id TEXT REFERENCES chat_sessions(id),
+      parent_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
       agent_type TEXT NOT NULL DEFAULT 'main',
       agent_name TEXT NOT NULL DEFAULT '',
       conductor_mode_enabled INTEGER NOT NULL DEFAULT 0,
@@ -1979,6 +1979,24 @@ const migrations: Migration[] = [
       if (!tableInfo.some((column) => column.name === 'schedule_end_at')) {
         db.exec(`ALTER TABLE automation_crons ADD COLUMN schedule_end_at TEXT`);
       }
+    },
+  },
+  {
+    id: 42,
+    name: 'add_chat_sessions_parent_delete_set_null',
+    migrate(db: BetterSqlite3Db): void {
+      // SQLite does not allow adding ON DELETE behavior to an existing column.
+      // Use a trigger to set child session parent_id to NULL when the parent
+      // session is deleted, preventing FOREIGN KEY constraint failures.
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS trg_chat_sessions_parent_set_null
+        AFTER DELETE ON chat_sessions
+        FOR EACH ROW
+        WHEN OLD.id IS NOT NULL
+        BEGIN
+          UPDATE chat_sessions SET parent_id = NULL WHERE parent_id = OLD.id;
+        END;
+      `);
     },
   },
 ];

@@ -52,8 +52,10 @@ import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.
 import { dequeueAllMatching, enqueuePendingNotification } from '../queue/index.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
-import type { ToolPermissionContext, PermissionMode } from '../permissions/types.js';
+import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource } from '../permissions/types.js';
 import { permissionModeFromString } from '../permissions/PermissionMode.js';
+import { settingsJsonToRules } from '../permissions/permissionsLoader.js';
+import { permissionRuleValueToString } from '../permissions/permissionRuleParser.js';
 import { logger } from '../utils/logger.js';
 import { createChildAbortController } from '../abort/index.js';
 import { getAgentProfileService } from '../agent-profile/AgentProfileService.js';
@@ -63,6 +65,7 @@ import { ResearchMemory } from '../research-memory/index.js';
 import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
 import type { MailboxApplyMode, MailboxRow } from '../session/db.js';
+import path from 'node:path';
 
 function extractTextFromContent(content: string | MessageContent[]): string {
   if (typeof content === 'string') return content
@@ -262,6 +265,10 @@ export class duyaAgent {
   private communicationPlatform?: import('../prompts/types.js').CommunicationPlatform; // Communication platform for prompt injection
   private permissionMode: PermissionMode = 'default'; // Permission mode for tool execution
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
+  private alwaysAllowRules: ToolPermissionRulesBySource = {};
+  private alwaysDenyRules: ToolPermissionRulesBySource = {};
+  private alwaysAskRules: ToolPermissionRulesBySource = {};
+  private additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory> = new Map();
   private selfImprover: SelfImprover; // Self-improvement tracker for skill creation
   /** Bridge for results that finish after the foreground SSE stream closes. */
   onSkillReviewCompleted?: (result: ImprovementResult) => Promise<void> | void;
@@ -580,6 +587,27 @@ export class duyaAgent {
     // Initialize permission system
     this.permissionMode = options.permissionMode || 'default';
     this.hasPermissionsToUseTool = createHasPermissionsToUseTool();
+
+    // Parse optional user-defined permission rules so allow/deny/ask rules
+    // actually reach the permission engine (they were previously hardcoded
+    // to empty maps in _buildPermissionContext).
+    const ruleSource: PermissionRuleSource = 'userSettings';
+    const allRules = settingsJsonToRules(options.permissionRules ?? null, ruleSource);
+    this.alwaysAllowRules = this.groupRulesBySource(
+      allRules.filter((r) => r.ruleBehavior === 'allow'),
+    );
+    this.alwaysDenyRules = this.groupRulesBySource(
+      allRules.filter((r) => r.ruleBehavior === 'deny'),
+    );
+    this.alwaysAskRules = this.groupRulesBySource(
+      allRules.filter((r) => r.ruleBehavior === 'ask'),
+    );
+
+    const additionalDirs = options.permissionRules?.permissions?.additionalDirectories ?? [];
+    for (const dir of additionalDirs) {
+      const resolved = path.resolve(dir);
+      this.additionalWorkingDirectories.set(resolved, { path: resolved, source: ruleSource });
+    }
 
     // Initialize self-improvement system.
     // Use the process-wide singleton when no explicit interval is
@@ -1026,6 +1054,20 @@ export class duyaAgent {
             (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
             options?.conductorCanvasId,
         },
+        // Propagate canvas_manage's switch/create-with-switchTo back into
+        // the persistent modeCtx so the NEXT turn's toolUseContextPatch
+        // reflects the new target. Without this, intra-streamChat
+        // cross-turn canvas switches revert to the canvas bound at
+        // streamChat start.
+        updateModeCanvasId: this.modeCtx
+          ? (canvasId: string) => {
+              this.modeCtx!.state.conductorCanvasId = canvasId;
+              this.modeCtx!.toolUseContextPatch = {
+                ...(this.modeCtx!.toolUseContextPatch ?? {}),
+                conductorCanvasId: canvasId,
+              };
+            }
+          : undefined,
       };
 
       const executor = new StreamingToolExecutor(
@@ -1880,14 +1922,29 @@ export class duyaAgent {
   }
 
   /**
+   * Group parsed permission rules by their source for the engine's
+   * `ToolPermissionRulesBySource` shape.
+   */
+  private groupRulesBySource(
+    rules: Array<{ source: PermissionRuleSource; ruleValue: { toolName: string; ruleContent?: string } }>,
+  ): ToolPermissionRulesBySource {
+    const grouped: ToolPermissionRulesBySource = {};
+    for (const rule of rules) {
+      const serialized = permissionRuleValueToString(rule.ruleValue);
+      const list = grouped[rule.source] ?? [];
+      list.push(serialized);
+      grouped[rule.source] = list;
+    }
+    return grouped;
+  }
+
+  /**
    * Build the permission context and `canUseTool` closure for this turn.
    *
-   * `canUseTool` is fail-open: when the permission check itself throws
-   * (e.g. abort, classifier glitch) we return an explicit `allow` so the
-   * streaming executor does not drop into the in-band user prompt. Without
-   * `behavior: 'allow'` the executor's `canUseBehavior !== 'allow'` guard
-   * would treat it as a non-allow and ask the user — the wrong default
-   * when the permission system is the thing that failed.
+   * `canUseTool` is fail-closed: when the permission check itself throws
+   * (e.g. abort, classifier glitch) we return `deny`. Returning `allow`
+   * would let a tool execute when the permission system is in an unknown
+   * state, which is the wrong default for a security boundary.
    */
   private _buildPermissionContext(): {
     permissionContext: ToolPermissionCheckContext;
@@ -1897,10 +1954,10 @@ export class duyaAgent {
       getAppState: () => ({
         toolPermissionContext: {
           mode: this.permissionMode,
-          additionalWorkingDirectories: new Map(),
-          alwaysAllowRules: {},
-          alwaysDenyRules: {},
-          alwaysAskRules: {},
+          additionalWorkingDirectories: this.additionalWorkingDirectories,
+          alwaysAllowRules: this.alwaysAllowRules,
+          alwaysDenyRules: this.alwaysDenyRules,
+          alwaysAskRules: this.alwaysAskRules,
           isBypassPermissionsModeAvailable: true,
           defaultWorkspaceDirectory: this.defaultWorkspaceDirectory,
         } as ToolPermissionContext,
@@ -1928,13 +1985,13 @@ export class duyaAgent {
           behavior: decision.behavior,
         };
       } catch (err) {
-        // See fail-open note above.
-        logger.warn(
-          `[Agent] canUseTool check threw for ${toolName}, fail-open with allow: ${err instanceof Error ? err.message : String(err)}`
-        );
+        // Fail-closed: if the permission system itself breaks, do not let
+        // the tool run. Log the failure so operators can detect it.
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(`[Agent] canUseTool check threw for ${toolName}, fail-closed with deny: ${reason}`);
         return {
-          allowed: true,
-          behavior: 'allow',
+          allowed: false,
+          behavior: 'deny',
         };
       }
     };

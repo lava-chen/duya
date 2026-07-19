@@ -127,6 +127,8 @@ interface InitMessage {
   language?: string;
   sandboxEnabled?: boolean;
   securityScanEnabled?: boolean;
+  /** Optional user-defined permission rules. Mirrors `AgentOptions.permissionRules`. */
+  permissionRules?: import('../types.js').AgentOptions['permissionRules'];
   /** Authoritative locale/timezone from the user's machine (sent by main). */
   systemLocation?: {
     locale: string;
@@ -813,7 +815,18 @@ function summarizeConversationForWiki(messages: Message[], maxMessages = 12): st
 // Agent Initialization
 // ============================================================================
 
-async function initAgent(config: InitMessage['providerConfig'] | null | undefined, workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string, browserBackendMode?: 'auto' | 'extension' | 'built-in'): Promise<void> {
+async function initAgent(
+  config: InitMessage['providerConfig'] | null | undefined,
+  workDir?: string,
+  defaultWorkspaceDir?: string,
+  sysPrompt?: string,
+  blockedDomains?: string[],
+  language?: string,
+  sandboxEnabled?: boolean,
+  communicationPlatform?: string,
+  browserBackendMode?: 'auto' | 'extension' | 'built-in',
+  permissionRules?: InitMessage['permissionRules'],
+): Promise<void> {
   // Store system prompt for use in chat
   sessionSystemPrompt = sysPrompt;
 
@@ -862,6 +875,7 @@ async function initAgent(config: InitMessage['providerConfig'] | null | undefine
     browserBackendMode,
     language,
     defaultWorkspaceDirectory: defaultWorkspaceDir,
+    permissionRules,
     // Phase 3: thread the runtime config into the agent. The
     // constructor will prefer `apiFormat` over `provider` when
     // present. Legacy fields stay authoritative for everything else
@@ -2632,8 +2646,20 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             } : 'MISSING!',
           });
           setSystemLocation(initMsg.systemLocation ?? null);
+          let initError: string | null = null;
           try {
-            await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform, initMsg.browserBackendMode);
+            await initAgent(
+              initMsg.providerConfig,
+              initMsg.workingDirectory,
+              initMsg.defaultWorkspaceDirectory,
+              initMsg.systemPrompt,
+              initMsg.blockedDomains,
+              initMsg.language,
+              initMsg.sandboxEnabled,
+              initMsg.communicationPlatform,
+              initMsg.browserBackendMode,
+              initMsg.permissionRules,
+            );
 
             try {
               // Parallel: skills loading (disk I/O) + DB message loading (IPC)
@@ -2693,12 +2719,19 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             } catch (err) {
               warn('[Agent-Process] Failed to load messages from DB:', err);
             }
+          } catch (err) {
+            initError = err instanceof Error ? err.message : String(err);
+            warn('[Agent-Process] Agent initialization failed:', err);
           } finally {
             initializing = false;
             await drainQueuedChatStart();
           }
 
-          sendToMain({ type: 'ready', sessionId });
+          sendToMain({
+            type: 'ready',
+            sessionId,
+            ...(initError ? { status: 'error', error: initError } : {}),
+          });
 
           // Initialize MCP servers asynchronously after sending ready so that slow or hung
           // MCP servers do not block the worker from becoming ready.

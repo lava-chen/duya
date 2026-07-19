@@ -47,6 +47,32 @@ const PERMISSION_RULE_SOURCES = [
   'session',
 ] as const
 
+/**
+ * Tools that only interact with the application's own internal state or
+ * read-only app metadata. They do not touch user files, external systems,
+ * or the network, so they should not be gated by permission modes.
+ */
+const GLOBAL_ALWAYS_ALLOWED_TOOLS = new Set([
+  'AskUserQuestion',
+  'EnterPlanMode',
+  'ExitPlanMode',
+  'SwitchMode',
+  'EnterWorktree',
+  'ExitWorktree',
+  'MessageSession',
+  'SendMessage',
+  'Brief',
+  'show_widget',
+  'read_module',
+  'SessionSearch',
+  'WorktreeContext',
+  'ToolSearch',
+  'LSP',
+  'task',
+  'Agent',
+  'Task',
+])
+
 export function permissionRuleSourceDisplayString(
   source: string,
 ): string {
@@ -195,6 +221,12 @@ const LOW_RISK_BROWSER_OPERATIONS = new Set([
   'close_window',
 ]);
 
+const CANVAS_TOOL_PREFIX = 'canvas_';
+
+function isCanvasTool(toolName: string): boolean {
+  return toolName.startsWith(CANVAS_TOOL_PREFIX);
+}
+
 export interface ToolPermissionCheckContext {
   getAppState: () => {
     toolPermissionContext: ToolPermissionContext
@@ -232,7 +264,35 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
 
     let appState = context.getAppState()
 
-    // 1. Check if the tool is denied
+    // 1. Canvas tools operate entirely within the application's own canvas
+    // surface. They do not touch user files or external systems, so they
+    // must be unconditionally allowed regardless of permission mode or user
+    // rules.
+    if (isCanvasTool(toolName)) {
+      return {
+        behavior: 'allow',
+        decisionReason: {
+          type: 'safetyCheck',
+          reason: `${toolName} is an internal canvas operation.`,
+          classifierApprovable: false,
+        },
+      }
+    }
+
+    // 2. Internal-only tools that only read or mutate the application's own
+    // state should not be gated by permission modes or user rules.
+    if (GLOBAL_ALWAYS_ALLOWED_TOOLS.has(toolName)) {
+      return {
+        behavior: 'allow',
+        decisionReason: {
+          type: 'safetyCheck',
+          reason: `${toolName} is an internal application operation.`,
+          classifierApprovable: false,
+        },
+      }
+    }
+
+    // 3. Check if the tool is denied
     const denyRule = getDenyRuleForTool(appState.toolPermissionContext, toolName)
     if (denyRule) {
       return {
@@ -245,7 +305,7 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 2. Check if the entire tool should always ask for permission
+    // 4. Check if the entire tool should always ask for permission
     const askRule = getAskRuleForTool(appState.toolPermissionContext, toolName)
     if (askRule) {
       return {
@@ -258,7 +318,7 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 3. Check mode-based permissions
+    // 5. Check mode-based permissions
     const shouldBypassPermissions =
       appState.toolPermissionContext.mode === 'bypassPermissions' ||
       (appState.toolPermissionContext.mode === 'plan' &&
@@ -274,7 +334,7 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 4. Check if entire tool is allowed
+    // 6. Check if entire tool is allowed
     const alwaysAllowedRule = toolAlwaysAllowedRule(
       appState.toolPermissionContext,
       toolName,
@@ -289,7 +349,7 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 5. Check if the tool operates within the workspace directory
+    // 7. Check if the tool operates within the workspace directory
     if (isToolWithinWorkspace(toolName, input, appState.toolPermissionContext)) {
       return {
         behavior: 'allow',
@@ -300,7 +360,7 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 6. Auto mode: locally allow clearly low-risk actions before invoking the
+    // 8. Auto mode: locally allow clearly low-risk actions before invoking the
     // LLM classifier. This keeps normal exploration such as `ls`, `pwd`,
     // `git status`, `Get-ChildItem`, browser navigation, and browser snapshots
     // from being rejected by an unavailable or overly conservative classifier.
@@ -316,7 +376,7 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       };
     }
 
-    // 7. Auto mode: use AI classifier instead of prompting user
+    // 9. Auto mode: use AI classifier instead of prompting user
     if (isAutoMode && context.llmClient && context.classifierModel) {
       const denialState =
         appState.denialTracking ??

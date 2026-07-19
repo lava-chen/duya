@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useConductorStore } from "..//stores/conductor-store";
 import { createCanvas, updateCanvas, deleteCanvas, getSnapshot } from "..//ipc/conductor-ipc";
 import { InputDialog } from "@/components/ui/InputDialog";
+import { useTranslation } from "@/hooks/useTranslation";
 import {
   ChevronDownIcon,
   PlusIcon,
@@ -13,6 +14,7 @@ import {
 } from "@/components/icons";
 
 export function CanvasSelector() {
+  const { t } = useTranslation();
   const {
     canvases,
     activeCanvasId,
@@ -61,7 +63,7 @@ export function CanvasSelector() {
     if (!name.trim()) return;
     try {
       const location = await window.electronAPI.dialog.openFolder({
-        title: "Choose the project folder for this canvas",
+        title: t("conductor.toolbar.chooseProjectFolder"),
       });
       const projectPath = location.filePaths[0];
       if (location.canceled || !projectPath) return;
@@ -141,7 +143,7 @@ export function CanvasSelector() {
           style={{ color: "var(--text)" }}
         >
           <span className="max-w-[200px] truncate">
-            {activeCanvas?.name || "Select Canvas"}
+            {activeCanvas?.name || t("conductor.selector.selectCanvas")}
           </span>
           <ChevronDownIcon
             size={16}
@@ -171,7 +173,7 @@ export function CanvasSelector() {
                 }
               >
                 <PlusIcon size={16} />
-                <span>New Canvas</span>
+                <span>{t("conductor.selector.newCanvas")}</span>
               </button>
             </div>
 
@@ -186,7 +188,7 @@ export function CanvasSelector() {
                   className="px-4 py-3 text-sm text-center"
                   style={{ color: "var(--muted)" }}
                 >
-                  No canvases yet
+                  {t("conductor.selector.noCanvases")}
                 </div>
               ) : (
                 canvases.map((canvas) => (
@@ -234,7 +236,7 @@ export function CanvasSelector() {
                         onMouseLeave={(e) =>
                           (e.currentTarget.style.backgroundColor = "transparent")
                         }
-                        title="Rename"
+                        title={t("conductor.selector.rename")}
                       >
                         <PencilIcon size={14} />
                       </button>
@@ -249,7 +251,7 @@ export function CanvasSelector() {
                           onMouseLeave={(e) =>
                             (e.currentTarget.style.backgroundColor = "transparent")
                           }
-                          title="Delete"
+                          title={t("conductor.selector.delete")}
                         >
                           <TrashIcon size={14} />
                         </button>
@@ -265,16 +267,16 @@ export function CanvasSelector() {
 
       <InputDialog
         isOpen={createDialogOpen}
-        title="Name the canvas"
-        placeholder="Enter canvas name..."
+        title={t("conductor.selector.nameCanvas")}
+        placeholder={t("conductor.selector.enterCanvasName")}
         onConfirm={handleCreateCanvas}
         onCancel={() => setCreateDialogOpen(false)}
       />
 
       <InputDialog
         isOpen={renameDialogOpen}
-        title="Rename Canvas"
-        placeholder="Enter new name..."
+        title={t("conductor.selector.renameCanvas")}
+        placeholder={t("conductor.selector.enterNewName")}
         defaultValue={renamingCanvas?.name || ""}
         onConfirm={handleRenameCanvas}
         onCancel={() => {
@@ -301,10 +303,10 @@ export function CanvasSelector() {
               className="text-base font-medium mb-2"
               style={{ color: "var(--text)" }}
             >
-              Delete Canvas?
+              {t("conductor.selector.deleteCanvasTitle")}
             </h3>
             <p className="text-sm mb-4" style={{ color: "var(--muted)" }}>
-              This action cannot be undone. All widgets and data on this canvas will be permanently deleted.
+              {t("conductor.selector.deleteCanvasDesc")}
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -318,7 +320,7 @@ export function CanvasSelector() {
                   (e.currentTarget.style.backgroundColor = "transparent")
                 }
               >
-                Cancel
+                {t("conductor.selector.cancel")}
               </button>
               <button
                 onClick={() => handleDeleteCanvas(deleteConfirmId)}
@@ -331,7 +333,7 @@ export function CanvasSelector() {
                   (e.currentTarget.style.opacity = "1")
                 }
               >
-                Delete
+                {t("conductor.selector.delete")}
               </button>
             </div>
           </div>

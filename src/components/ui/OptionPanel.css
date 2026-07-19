@@ -2,8 +2,8 @@
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: 12px;
-  background: var(--sidebar-bg);
-  box-shadow: none;
+  background-color: var(--sidebar-bg, var(--surface-solid));
+  box-shadow: var(--shadow-resting);
 }
 
 .option-panel-search {

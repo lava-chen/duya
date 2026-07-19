@@ -922,6 +922,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         return;
       }
 
+      // If a text editor is active, blur it first so onBlur saves before the
+      // editor unmounts on the upcoming selection clear.
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (activeElement && activeElement.isContentEditable) {
+        activeElement.blur();
+      }
       clearSelection();
       setIsBoxSelecting(true);
       const rect = viewportRef.current!.getBoundingClientRect();

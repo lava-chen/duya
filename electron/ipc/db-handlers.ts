@@ -199,7 +199,17 @@ export function registerDbHandlers(): void {
   ipcMain.handle('db:session:delete', (_event, sessionId: string) => {
     const database = getDb();
     const txn = database.transaction(() => {
+      // Break parent-child relationships first so the self-referencing FK on
+      // chat_sessions.parent_id does not block deletion. Newer schemas use
+      // ON DELETE SET NULL plus a trigger, but we keep this for compatibility.
+      database.prepare('UPDATE chat_sessions SET parent_id = NULL WHERE parent_id = ?').run(sessionId);
+      // Explicitly clean up dependent rows. Most of these tables declare
+      // ON DELETE CASCADE, but being explicit makes the deletion order safe
+      // and protects against future schema changes that might drop CASCADE.
+      database.prepare('DELETE FROM message_attachments WHERE session_id = ?').run(sessionId);
       database.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+      database.prepare('DELETE FROM tasks WHERE session_id = ?').run(sessionId);
+      database.prepare('DELETE FROM research_sessions WHERE session_id = ?').run(sessionId);
       const result = database.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
       return result.changes > 0;
     });

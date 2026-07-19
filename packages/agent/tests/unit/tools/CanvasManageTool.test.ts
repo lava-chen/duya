@@ -71,4 +71,38 @@ describe('canvas_manage', () => {
     expect(result.error).toBe(true);
     expect(ipcRequest).not.toHaveBeenCalled();
   });
+
+  it('propagates the new canvas id to the mode modifier via updateModeCanvasId on switch', async () => {
+    const { context } = makeContext({
+      success: true,
+      data: {
+        action: 'switch',
+        currentCanvas: { id: 'canvas-2', name: 'Second' },
+        switched: true,
+      },
+    });
+    const updateModeCanvasId = vi.fn();
+    context.updateModeCanvasId = updateModeCanvasId;
+
+    await executor.execute({ action: 'switch', canvasId: 'canvas-2' }, undefined, context);
+
+    expect(updateModeCanvasId).toHaveBeenCalledWith('canvas-2');
+  });
+
+  it('does not call updateModeCanvasId when the target did not change', async () => {
+    const { context } = makeContext({
+      success: true,
+      data: {
+        action: 'switch',
+        currentCanvas: { id: 'canvas-1', name: 'First' },
+        switched: true,
+      },
+    });
+    const updateModeCanvasId = vi.fn();
+    context.updateModeCanvasId = updateModeCanvasId;
+
+    await executor.execute({ action: 'switch', canvasId: 'canvas-1' }, undefined, context);
+
+    expect(updateModeCanvasId).not.toHaveBeenCalled();
+  });
 });

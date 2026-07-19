@@ -35,25 +35,41 @@ export function useSkillLearning(limit = 30) {
       setLoading(false);
       return;
     }
-    const [eventsResult, unreadResult] = await Promise.all([
-      api.list({ limit }),
-      api.unreadCount(),
-    ]);
-    if (eventsResult.success) {
-      setEvents(eventsResult.events as SkillLearningEvent[]);
+    try {
+      const [eventsResult, unreadResult] = await Promise.all([
+        api.list({ limit }),
+        api.unreadCount(),
+      ]);
+      if (eventsResult.success) {
+        setEvents(eventsResult.events as SkillLearningEvent[]);
+      }
+      if (unreadResult.success) {
+        setUnreadCount(unreadResult.count);
+      }
+    } catch (error) {
+      // The backend handler may be unavailable during development if the
+      // Electron main process has not been rebuilt/restarted. Fail silently
+      // so the rest of the UI is not disrupted.
+      if (typeof console !== 'undefined') {
+        console.warn('[useSkillLearning] refresh failed:', error);
+      }
+    } finally {
+      setLoading(false);
     }
-    if (unreadResult.success) {
-      setUnreadCount(unreadResult.count);
-    }
-    setLoading(false);
   }, [limit]);
 
   const markRead = useCallback(async (ids?: string[]) => {
     const api = getLearningApi();
     if (!api) return;
-    const result = await api.markRead(ids);
-    if (result.success) {
-      await refresh();
+    try {
+      const result = await api.markRead(ids);
+      if (result.success) {
+        await refresh();
+      }
+    } catch (error) {
+      if (typeof console !== 'undefined') {
+        console.warn('[useSkillLearning] markRead failed:', error);
+      }
     }
   }, [refresh]);
 

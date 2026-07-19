@@ -175,6 +175,9 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   }, []);
   // Guards against double-handling when Escape triggers blur during unmount.
   const exitModeRef = useRef<"save" | "cancel" | null>(null);
+  // Skip React state sync while an IME composition is in progress so the
+  // browser's composition DOM is not reset mid-composition.
+  const isComposingRef = useRef(false);
 
   useEffect(() => {
     setEditHtml(textToHtml(text));
@@ -308,7 +311,17 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
             ref={setEditorRef}
             contentEditable
             suppressContentEditableWarning
-            onInput={() => setEditHtml(contentEditableRef.current?.innerHTML ?? "")}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false;
+              setEditHtml(contentEditableRef.current?.innerHTML ?? "");
+            }}
+            onInput={() => {
+              if (isComposingRef.current) return;
+              setEditHtml(contentEditableRef.current?.innerHTML ?? "");
+            }}
             onBlur={save}
             onKeyDown={(e) => {
               if (e.key === "Escape") {

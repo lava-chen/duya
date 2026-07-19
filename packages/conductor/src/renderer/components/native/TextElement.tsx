@@ -40,7 +40,8 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
 
   const isEditing = editingElementId === element.id;
 
-  const content = (element.config.content as string) ?? "";
+  // native/text config historically allowed either `content` or `text`.
+  const content = ((element.config.content as string | undefined) ?? (element.config.text as string | undefined)) ?? "";
   const fontFamily = (element.config.fontFamily as FontFamily) || "sans";
   const fontSize = (element.config.fontSize as number) || 16;
   const fontWeight = (element.config.fontWeight as number) || 400;
@@ -58,6 +59,9 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
   }, []);
   // Guards against double-handling when Escape triggers blur during unmount.
   const exitModeRef = useRef<"save" | "cancel" | null>(null);
+  // Skip React state sync while an IME composition is in progress so the
+  // browser's composition DOM is not reset mid-composition.
+  const isComposingRef = useRef(false);
   // Track whether this element was freshly created (empty) so Esc on an empty
   // new element deletes it instead of leaving an empty text box on canvas.
   const isNewAndEmptyRef = useRef<boolean>(content.trim().length === 0);
@@ -171,6 +175,18 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
     setEditingElementId(null);
   }, [activeCanvasId, content, editHtml, element.config, element.id, fitContent, removeElement, setEditingElementId, setUiError, updateElement]);
 
+  // Safety net: if editing mode is cleared by an external action (e.g.
+  // clicking bare canvas clears selection before the editor blur fires),
+  // the pending editHtml would be lost. Persist it when we transition from
+  // editing to non-editing without having already saved/cancelled.
+  const wasEditingRef = useRef(isEditing);
+  useEffect(() => {
+    if (wasEditingRef.current && !isEditing && exitModeRef.current === null) {
+      save();
+    }
+    wasEditingRef.current = isEditing;
+  }, [isEditing, save]);
+
   const cancel = useCallback(() => {
     if (exitModeRef.current !== null) return;
     exitModeRef.current = "cancel";
@@ -235,7 +251,17 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
             ref={setEditorRef}
             contentEditable
             suppressContentEditableWarning
-            onInput={() => setEditHtml(contentEditableRef.current?.innerHTML ?? "")}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false;
+              setEditHtml(contentEditableRef.current?.innerHTML ?? "");
+            }}
+            onInput={() => {
+              if (isComposingRef.current) return;
+              setEditHtml(contentEditableRef.current?.innerHTML ?? "");
+            }}
             onBlur={save}
             onKeyDown={(e) => {
               if (e.key === "Escape") {

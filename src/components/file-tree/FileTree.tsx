@@ -75,6 +75,50 @@ interface FileTreeContextType {
 }
 
 // =============================================================================
+// Persistence helpers
+// =============================================================================
+
+const EXPANDED_STORAGE_PREFIX = "duya:file-tree-expanded:";
+
+function getExpandedStorageKey(workingDirectory: string | undefined): string | null {
+  if (!workingDirectory) return null;
+  return `${EXPANDED_STORAGE_PREFIX}${workingDirectory}`;
+}
+
+function loadExpandedPaths(
+  workingDirectory: string | undefined,
+  fallback: Set<string>
+): Set<string> {
+  const key = getExpandedStorageKey(workingDirectory);
+  if (!key) return new Set(fallback);
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set<string>(parsed);
+      }
+    }
+  } catch {
+    // Ignore malformed storage data and fall back to defaults.
+  }
+  return new Set(fallback);
+}
+
+function saveExpandedPaths(
+  workingDirectory: string | undefined,
+  expandedPaths: Set<string>
+): void {
+  const key = getExpandedStorageKey(workingDirectory);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(Array.from(expandedPaths)));
+  } catch {
+    // Storage may be unavailable or full; persistence is best-effort.
+  }
+}
+
+// =============================================================================
 // Context
 // =============================================================================
 
@@ -116,7 +160,19 @@ export function FileTree({
   onRenameSubmit,
   onRenameCancel,
 }: FileTreeProps) {
-  const [internalExpanded, setInternalExpanded] = useState(defaultExpanded);
+  const [internalExpanded, setInternalExpanded] = useState(() =>
+    loadExpandedPaths(workingDirectory, defaultExpanded)
+  );
+
+  // Reload persisted expansion state when the working directory changes.
+  useEffect(() => {
+    setInternalExpanded(loadExpandedPaths(workingDirectory, defaultExpanded));
+  }, [workingDirectory, defaultExpanded]);
+
+  // Persist expansion state whenever it changes.
+  useEffect(() => {
+    saveExpandedPaths(workingDirectory, internalExpanded);
+  }, [internalExpanded, workingDirectory]);
 
   const togglePath = useCallback((path: string) => {
     setInternalExpanded((prev) => {

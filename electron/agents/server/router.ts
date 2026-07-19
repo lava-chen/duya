@@ -384,9 +384,16 @@ async function handlePostChat(
                   (msg.type === 'ready' || msg.type === 'conductor:ready') &&
                   (!msg.sessionId || msg.sessionId === sessionId)
                 ) {
+                  const waitedMs = Date.now() - startedAt;
+                  if (msg.status === 'error') {
+                    const errorMsg = typeof msg.error === 'string' ? msg.error : 'Worker initialization failed';
+                    logger.error('Worker init failed via stdout', new Error(errorMsg), { sessionId, waitedMs });
+                    finish(() => reject(new Error(`Worker initialization failed: ${errorMsg}`)));
+                    return;
+                  }
                   logger.info('Worker ready via stdout', {
                     sessionId,
-                    waitedMs: Date.now() - startedAt,
+                    waitedMs,
                     readyType: msg.type,
                   });
                   finish(resolve);
@@ -403,9 +410,16 @@ async function handlePostChat(
               (msg.type === 'ready' || msg.type === 'conductor:ready') &&
               (!msg.sessionId || msg.sessionId === sessionId)
             ) {
+              const waitedMs = Date.now() - startedAt;
+              if (msg.status === 'error') {
+                const errorMsg = typeof msg.error === 'string' ? msg.error : 'Worker initialization failed';
+                logger.error('Worker init failed via IPC', new Error(errorMsg), { sessionId, waitedMs });
+                finish(() => reject(new Error(`Worker initialization failed: ${errorMsg}`)));
+                return;
+              }
               logger.info('Worker ready via IPC', {
                 sessionId,
-                waitedMs: Date.now() - startedAt,
+                waitedMs,
                 readyType: msg.type,
               });
               finish(resolve);
@@ -439,6 +453,16 @@ async function handlePostChat(
         });
       };
 
+      // Reject early if provider config is missing or incomplete so the
+      // worker does not crash with a misleading initialization timeout.
+      if (!providerConfig || !providerConfig.model) {
+        httpLogger.warn('Chat rejected: missing provider config', { sessionId });
+        child.kill();
+        revertStreamingLock();
+        sendJson(res, 400, { error: 'No provider or model configured' });
+        return;
+      }
+
       // Send init first if provider config is provided
       // M7: Use structured logger
       httpLogger.debug('Sending init command to worker', { sessionId, hasProviderConfig: !!providerConfig });
@@ -453,6 +477,7 @@ async function handlePostChat(
         communicationPlatform: parsed.options?.platform,
         securityScanEnabled: parsed.options?.securityScanEnabled,
         referencesEnabled: detectReferencesEnabled(workingDirectory),
+        permissionRules: parsed.options?.permissionRules,
       });
 
       try {

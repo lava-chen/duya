@@ -91,14 +91,16 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
     const host = container.getBoundingClientRect();
     const rect = getSelectionRect(container) ?? host;
     const toolbarWidth = toolbarRef.current?.offsetWidth ?? 470;
+    const toolbarHeight = toolbarRef.current?.offsetHeight ?? 44;
     let x = rect.left + rect.width / 2 - toolbarWidth / 2;
-    let y = rect.top - 50;
+    // Default to showing the toolbar above the selection/element.
+    let y = rect.top - toolbarHeight - 8;
 
-    // Clamp in viewport coordinates. The editor content may be visually
-    // rotated, but selection client rects are already viewport-relative.
-    x = Math.max(host.left + 8, Math.min(x, host.right - toolbarWidth - 8));
-    // If there is not enough room above, show below the selection.
-    if (y < host.top + 8) {
+    // Clamp horizontally within the viewport.
+    const viewportWidth = window.innerWidth;
+    x = Math.max(8, Math.min(x, viewportWidth - toolbarWidth - 8));
+    // Only move below when there is not enough room above the viewport.
+    if (y < 8) {
       y = rect.bottom + 8;
     }
 
