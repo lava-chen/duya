@@ -7,6 +7,8 @@ import { useConductorStore } from "../..//stores/conductor-store";
 import { FloatingTextToolbar } from "./FloatingTextToolbar";
 import { looksLikeHtml, textToHtml, htmlToText } from "./text-html";
 import { textContentSizeToGrid, MAX_TEXT_WIDTH_PX } from "../../domain/canvas/text-size";
+import { useElementEditSession } from "./editing/useElementEditSession";
+import { useElementPersistence } from "./editing/useElementPersistence";
 
 /**
  * Standalone text element. Unlike sticky, it has no card styling (no
@@ -34,11 +36,7 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
   const updateElement = useConductorStore((state) => state.updateElement);
   const removeElement = useConductorStore((state) => state.removeElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
-  const editingElementId = useConductorStore((state) => state.editingElementId);
-  const setEditingElementId = useConductorStore((state) => state.setEditingElementId);
-  const setUiError = useConductorStore((state) => state.setUiError);
-
-  const isEditing = editingElementId === element.id;
+  const persist = useElementPersistence(element);
 
   // native/text config historically allowed either `content` or `text`.
   const content = ((element.config.content as string | undefined) ?? (element.config.text as string | undefined)) ?? "";
@@ -50,44 +48,19 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
   const lineHeight = (element.config.lineHeight as number) || 1.5;
   const highlightColor = element.config.highlightColor as string | null | undefined;
 
-  const [editHtml, setEditHtml] = useState(() => textToHtml(content));
   const contentEditableRef = useRef<HTMLDivElement>(null);
   const [editorContainer, setEditorContainer] = useState<HTMLDivElement | null>(null);
   const setEditorRef = useCallback((node: HTMLDivElement | null) => {
     contentEditableRef.current = node;
     setEditorContainer(node);
   }, []);
-  // Guards against double-handling when Escape triggers blur during unmount.
-  const exitModeRef = useRef<"save" | "cancel" | null>(null);
-  // Skip React state sync while an IME composition is in progress so the
-  // browser's composition DOM is not reset mid-composition.
-  const isComposingRef = useRef(false);
   // Track whether this element was freshly created (empty) so Esc on an empty
   // new element deletes it instead of leaving an empty text box on canvas.
   const isNewAndEmptyRef = useRef<boolean>(content.trim().length === 0);
 
   useEffect(() => {
-    setEditHtml(textToHtml(content));
     isNewAndEmptyRef.current = content.trim().length === 0;
   }, [element.id, content]);
-
-  useEffect(() => {
-    if (isEditing) {
-      exitModeRef.current = null;
-      if (editorContainer) {
-        editorContainer.focus();
-        // Place caret at end so typing appends rather than prepends.
-        const selection = window.getSelection();
-        if (selection) {
-          const range = document.createRange();
-          range.selectNodeContents(editorContainer);
-          range.collapse(false);
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }
-      }
-    }
-  }, [editorContainer, isEditing]);
 
   const measureContentPosition = useCallback((html: string): CanvasPosition | null => {
     const editor = contentEditableRef.current;
@@ -130,81 +103,74 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
     return nextPosition;
   }, [element.id, measureContentPosition, updateElement]);
 
-  useLayoutEffect(() => {
-    if (isEditing) fitContent(editHtml);
-  }, [editHtml, fitContent, isEditing]);
+  const deleteFreshEmpty = useCallback(() => {
+    removeElement(element.id);
+    if (activeCanvasId) {
+      void executeAction({
+        action: "element.delete",
+        elementId: element.id,
+        canvasId: activeCanvasId,
+      }).catch(() => {});
+    }
+  }, [activeCanvasId, element.id, removeElement]);
 
-  const save = useCallback(() => {
-    if (exitModeRef.current !== null) return;
-    exitModeRef.current = "save";
-    const nextHtml = contentEditableRef.current?.innerHTML ?? editHtml;
+  const commitDraft = useCallback((nextHtml: string) => {
     const normalized = htmlToText(nextHtml);
 
-    // Empty content handling: delete fresh elements, keep existing ones
-    // (they will render a placeholder instead).
     if (normalized === "" && isNewAndEmptyRef.current) {
-      removeElement(element.id);
-      if (activeCanvasId) {
-        executeAction({
-          action: "element.delete",
-          elementId: element.id,
-          canvasId: activeCanvasId,
-        }).catch(() => {});
-      }
-      setEditingElementId(null);
+      deleteFreshEmpty();
       return;
     }
 
-    const newConfig = { ...element.config, content: normalized };
     const nextPosition = fitContent(nextHtml);
     const contentChanged = normalized !== content.trim();
     if (contentChanged || nextPosition) {
-      updateElement(element.id, { config: newConfig, ...(nextPosition ? { position: nextPosition } : {}) });
-      if (activeCanvasId) {
-        executeAction({
-          action: "element.update",
-          elementId: element.id,
-          canvasId: activeCanvasId,
-          config: newConfig,
-          ...(nextPosition ? { position: nextPosition } : {}),
-        })
-          .catch((err) => setUiError(`Save text failed: ${err instanceof Error ? err.message : err}`));
-      }
+      persist({
+        config: { content: normalized },
+        ...(nextPosition ? { position: nextPosition } : {}),
+      }, "Save text failed");
     }
     isNewAndEmptyRef.current = normalized === "";
-    setEditingElementId(null);
-  }, [activeCanvasId, content, editHtml, element.config, element.id, fitContent, removeElement, setEditingElementId, setUiError, updateElement]);
+  }, [content, deleteFreshEmpty, fitContent, persist]);
 
-  // Safety net: if editing mode is cleared by an external action (e.g.
-  // clicking bare canvas clears selection before the editor blur fires),
-  // the pending editHtml would be lost. Persist it when we transition from
-  // editing to non-editing without having already saved/cancelled.
-  const wasEditingRef = useRef(isEditing);
-  useEffect(() => {
-    if (wasEditingRef.current && !isEditing && exitModeRef.current === null) {
-      save();
-    }
-    wasEditingRef.current = isEditing;
-  }, [isEditing, save]);
-
-  const cancel = useCallback(() => {
-    if (exitModeRef.current !== null) return;
-    exitModeRef.current = "cancel";
-    setEditHtml(textToHtml(content));
-    // Esc on a fresh empty element also deletes it — matches the "click away
-    // on empty new element" behavior so users don't get stranded boxes.
+  const cancelDraft = useCallback(() => {
     if (content.trim() === "" && isNewAndEmptyRef.current) {
-      removeElement(element.id);
-      if (activeCanvasId) {
-        executeAction({
-          action: "element.delete",
-          elementId: element.id,
-          canvasId: activeCanvasId,
-        }).catch(() => {});
-      }
+      deleteFreshEmpty();
     }
-    setEditingElementId(null);
-  }, [activeCanvasId, content, element.id, removeElement, setEditingElementId]);
+  }, [content, deleteFreshEmpty]);
+
+  const focusEditor = useCallback(() => {
+    const editor = contentEditableRef.current;
+    if (!editor) return;
+    editor.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, []);
+
+  const {
+    isEditing,
+    draft: editHtml,
+    setDraft: setEditHtml,
+    save,
+    cancel,
+    isComposingRef,
+  } = useElementEditSession({
+    elementId: element.id,
+    source: content,
+    createDraft: textToHtml,
+    onCommit: commitDraft,
+    onCancel: cancelDraft,
+    focusEditor,
+  });
+
+  useLayoutEffect(() => {
+    if (isEditing) fitContent(editHtml);
+  }, [editHtml, fitContent, isEditing]);
 
   const hasContent = content.trim().length > 0;
 

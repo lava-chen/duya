@@ -445,6 +445,12 @@ export interface ChatOptions {
    * conductorMode is true.
    */
   conductorCanvasId?: string;
+  /**
+   * Internal follow-up turn triggered when a background sub-agent reaches a
+   * terminal state. It consumes queued task notifications without adding an
+   * empty synthetic user message to the conversation history.
+   */
+  backgroundTaskResume?: boolean;
 }
 
 // 会话信息

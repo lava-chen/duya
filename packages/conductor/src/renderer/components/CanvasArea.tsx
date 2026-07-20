@@ -4,6 +4,7 @@ import React, { useCallback, useRef, useState, useEffect } from "react";
 import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
 import { createNativeElement, executeAction, uploadAsset } from "..//ipc/conductor-ipc";
+import { shouldStartEditingOnCreate } from "./native/native-element-capabilities";
 import { FreeformLayer } from "./FreeformLayer";
 import { ConnectorOverlay } from "./ConnectorOverlay";
 import { NativeConnectorOverlay } from "./NativeConnectorOverlay";
@@ -528,10 +529,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       setUiError(null);
       setActiveTool(null);
 
-      // Text, document, and table elements open their editor immediately.
-      // Shapes remain selected after creation and enter text editing on their
-      // existing double-click interaction.
-      if (type === "text" || type === "document" || type === "table") {
+      if (shouldStartEditingOnCreate(type)) {
         store.setEditingElementId(created.id);
       }
     } catch (err) {

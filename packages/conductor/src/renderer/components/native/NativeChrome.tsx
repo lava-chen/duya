@@ -24,6 +24,7 @@ import {
   type ElementUtilityActionsProps,
 } from "../toolbar/ElementUtilityActions";
 import { useElementLock } from "../toolbar/useElementLock";
+import { getNativeElementCapabilities, type NativeElementCapabilities } from "./native-element-capabilities";
 
 type HandleDirection = "nw" | "ne" | "se" | "sw" | "n" | "e" | "s" | "w";
 
@@ -486,11 +487,13 @@ function ShapeSelectionToolbar({
 
 interface NativeChromeProps {
   element: CanvasElement;
+  capabilities?: NativeElementCapabilities;
   children: React.ReactNode;
   onPositionChange?: (id: string, position: CanvasPosition) => void;
 }
 
-export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, onPositionChange }) => {
+export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilities: declaredCapabilities, children, onPositionChange }) => {
+  const capabilities = declaredCapabilities ?? getNativeElementCapabilities(element);
   const { locked, toggleLocked } = useElementLock(element);
   const selectedElementId = useConductorStore((state) => state.selectedElementId);
   const selectedElementIds = useConductorStore((state) => state.selectedElementIds);
@@ -506,16 +509,13 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
 
   const isSelected = selectedElementId === element.id || selectedElementIds.includes(element.id);
   const isEditing = editingElementId === element.id;
-  const usesIntrinsicHeight = element.elementKind === "native/table";
+  const usesIntrinsicHeight = capabilities.resizeHandles === "horizontal";
   const isMultiSelect = selectedElementIds.length > 1;
   // Element controls are intentionally exclusive to a single selection.
   // MultiSelectBar owns the bulk actions, so rendering one capsule and one
   // set of resize handles per selected element would create overlapping UI.
   const showSingleElementControls = isSelected && !isEditing && !isMultiSelect;
-  const isDiagramShape =
-    element.elementKind === "native/shape" ||
-    element.config.presentation === "shape" ||
-    ["filled", "outline", "dashed"].includes(element.config.shapePreset as string);
+  const isDiagramShape = capabilities.selectionToolbar === "shape";
   const diagramShape = element.config.shape as string | undefined;
   const selectionRadius = isDiagramShape
     ? diagramShape === "ellipse"
@@ -630,8 +630,9 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    if (capabilities.editMode === "none") return;
     setEditingElementId(element.id);
-  }, [element.id, setEditingElementId]);
+  }, [capabilities.editMode, element.id, setEditingElementId]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent, dir: HandleDirection) => {
     if (locked) return;
@@ -845,7 +846,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
         {children}
       </div>
 
-      {showSingleElementControls && element.elementKind === "native/shape" && (
+      {showSingleElementControls && capabilities.selectionToolbar === "shape" && (
         <ShapeSelectionToolbar
           element={element}
           onEdit={() => setEditingElementId(element.id)}
@@ -860,43 +861,26 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
         />
       )}
 
-      {showSingleElementControls && element.elementKind === "native/sticky" && (
-        isDiagramShape
-          ? <ShapeSelectionToolbar
-              element={element}
-              onEdit={() => setEditingElementId(element.id)}
-              onDelete={handleDelete}
-              onDuplicate={handleDuplicate}
-              onRotate={handleRotate}
-              onBringToFront={() => handleLayerChange("front")}
-              onSendToBack={() => handleLayerChange("back")}
-              onDismiss={dismissSelectionToolbar}
-              locked={locked}
-              onToggleLock={toggleLocked}
-            />
-          : <StickySelectionToolbar
-              element={element}
-              onEdit={() => setEditingElementId(element.id)}
-              onDelete={handleDelete}
-              onDuplicate={handleDuplicate}
-              onRotate={handleRotate}
-              onBringToFront={() => handleLayerChange("front")}
-              onSendToBack={() => handleLayerChange("back")}
-              onDismiss={dismissSelectionToolbar}
-              locked={locked}
-              onToggleLock={toggleLocked}
-            />
+      {showSingleElementControls && capabilities.selectionToolbar === "sticky" && (
+        <StickySelectionToolbar
+          element={element}
+          onEdit={() => setEditingElementId(element.id)}
+          onDelete={handleDelete}
+          onDuplicate={handleDuplicate}
+          onRotate={handleRotate}
+          onBringToFront={() => handleLayerChange("front")}
+          onSendToBack={() => handleLayerChange("back")}
+          onDismiss={dismissSelectionToolbar}
+          locked={locked}
+          onToggleLock={toggleLocked}
+        />
       )}
 
-      {showSingleElementControls && element.elementKind === "native/text" && (
+      {showSingleElementControls && capabilities.selectionToolbar === "text" && (
         <TextSelectionToolbar element={element} utilityActions={utilityActions} />
       )}
 
-      {showSingleElementControls && ![
-        "native/shape",
-        "native/sticky",
-        "native/text",
-      ].includes(element.elementKind) && (
+      {showSingleElementControls && capabilities.selectionToolbar === "utility" && (
         <CapsuleToolbar>
           <ElementUtilityActions
             {...utilityActions}
@@ -907,7 +891,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, children, o
         </CapsuleToolbar>
       )}
 
-      {showSingleElementControls && !locked && element.metadata?.resizeMode !== 'fixed' && (
+      {showSingleElementControls && !locked && capabilities.resizeHandles !== "none" && element.metadata?.resizeMode !== 'fixed' && (
         <>
           {usesIntrinsicHeight ? <>
             <div

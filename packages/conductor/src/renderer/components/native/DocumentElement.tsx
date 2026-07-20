@@ -16,8 +16,10 @@ import {
   X,
 } from "@phosphor-icons/react";
 import type { CanvasElement } from "../..//types/conductor";
-import { updateElementContent } from "../..//ipc/conductor-ipc";
 import { useConductorStore } from "../..//stores/conductor-store";
+import { useElementEditSession } from "./editing/useElementEditSession";
+import { useElementPersistence } from "./editing/useElementPersistence";
+import { CapsuleToolbar, CAPSULE_BTN_BASE, CAPSULE_DIVIDER } from "../toolbar/CapsuleToolbar";
 
 type SelectionRange = { start: number; end: number };
 type BlockKind = "paragraph" | "heading-1" | "heading-2" | "heading-3" | "ordered" | "bullet" | "checklist";
@@ -58,6 +60,10 @@ function documentFileName(title: string): string {
   return `${normalized || "document"}.md`;
 }
 
+function markdownToDraft(source: string): string {
+  return source;
+}
+
 interface EditorSurfaceProps {
   editorRef: React.MutableRefObject<HTMLTextAreaElement | null>;
   draft: string;
@@ -70,6 +76,8 @@ interface EditorSurfaceProps {
   onSelectionChange: (target: HTMLTextAreaElement) => void;
   onBlur: () => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  onCompositionStart: () => void;
+  onCompositionEnd: () => void;
   onToggleBold: () => void;
   onToggleItalic: () => void;
   onCreateLink: () => void;
@@ -92,6 +100,8 @@ function EditorSurface({
   onSelectionChange,
   onBlur,
   onKeyDown,
+  onCompositionStart,
+  onCompositionEnd,
   onToggleBold,
   onToggleItalic,
   onCreateLink,
@@ -110,40 +120,39 @@ function EditorSurface({
     >
       {showToolbar && (
         <div
-          className="canvas-document__selection-toolbar"
-          style={{ top: toolbarTop }}
+          style={{ position: "absolute", left: 8, top: toolbarTop, zIndex: 20 }}
           role="toolbar"
           aria-label="Selected Markdown text tools"
         >
-          <button type="button" className="canvas-document__agent-button" onMouseDown={(event) => event.preventDefault()} onClick={onRequestChange}>Request change <kbd>Ctrl K</kbd></button>
-          <span className="canvas-document__toolbar-divider" />
-          <button type="button" aria-label="Add link" title="Add link" onMouseDown={(event) => event.preventDefault()} onClick={onCreateLink}><LinkSimple size={16} weight="bold" /></button>
-          <button type="button" aria-label="Bold" title="Bold" onMouseDown={(event) => event.preventDefault()} onClick={onToggleBold}><TextB size={17} weight="bold" /></button>
-          <button type="button" aria-label="Italic" title="Italic" onMouseDown={(event) => event.preventDefault()} onClick={onToggleItalic}><TextItalic size={17} weight="bold" /></button>
-          <div className="canvas-document__block-picker">
-            <TextAa size={16} weight="bold" />
-            <button
-              type="button"
-              className="canvas-document__block-trigger"
-              aria-label="Text type"
-              aria-expanded={blockMenuOpen}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={onToggleBlockMenu}
-            >Text <span aria-hidden="true">⌄</span></button>
-            {blockMenuOpen && (
-              <div className="canvas-document__block-menu" role="menu" aria-label="Text type options">
-                {BLOCK_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="menuitem"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => onBlockChange(option.value)}
-                  >{option.label}</button>
-                ))}
-              </div>
-            )}
-          </div>
+          <CapsuleToolbar positioned={false} zoomAware={false} onMouseDown={(event) => event.preventDefault()}>
+            <button type="button" onClick={onRequestChange} style={{ ...CAPSULE_BTN_BASE, width: "auto", padding: "0 10px", gap: 6 }}>Request change <kbd>Ctrl K</kbd></button>
+            <div style={CAPSULE_DIVIDER} />
+            <button type="button" aria-label="Add link" title="Add link" onClick={onCreateLink} style={CAPSULE_BTN_BASE}><LinkSimple size={16} weight="bold" /></button>
+            <button type="button" aria-label="Bold" title="Bold" onClick={onToggleBold} style={CAPSULE_BTN_BASE}><TextB size={17} weight="bold" /></button>
+            <button type="button" aria-label="Italic" title="Italic" onClick={onToggleItalic} style={CAPSULE_BTN_BASE}><TextItalic size={17} weight="bold" /></button>
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <button
+                type="button"
+                aria-label="Text type"
+                aria-expanded={blockMenuOpen}
+                onClick={onToggleBlockMenu}
+                style={{ ...CAPSULE_BTN_BASE, width: "auto", padding: "0 8px", gap: 4 }}
+              ><TextAa size={16} weight="bold" /> Text <span aria-hidden="true">⌄</span></button>
+              {blockMenuOpen && (
+                <div className="canvas-document__block-menu" role="menu" aria-label="Text type options">
+                  {BLOCK_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="menuitem"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => onBlockChange(option.value)}
+                    >{option.label}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </CapsuleToolbar>
         </div>
       )}
       <textarea
@@ -155,6 +164,8 @@ function EditorSurface({
         onMouseUp={(event) => onSelectionChange(event.currentTarget)}
         onBlur={onBlur}
         onKeyDown={onKeyDown}
+        onCompositionStart={onCompositionStart}
+        onCompositionEnd={onCompositionEnd}
         aria-label={`Edit ${title}`}
         className="canvas-document__textarea"
         style={focused ? undefined : { height: `${Math.max(52, Math.min(420, draft.split("\n").length * 23 + 22))}px` }}
@@ -165,16 +176,12 @@ function EditorSurface({
 }
 
 export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element }) => {
-  const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
-  const editingElementId = useConductorStore((state) => state.editingElementId);
   const setEditingElementId = useConductorStore((state) => state.setEditingElementId);
-  const updateElement = useConductorStore((state) => state.updateElement);
   const setUiError = useConductorStore((state) => state.setUiError);
+  const persist = useElementPersistence(element);
   const markdown = (element.config.markdown as string) ?? "";
   const title = (element.config.title as string) ?? "Untitled document";
   const filePath = (element.config.filePath as string) ?? "";
-  const isEditing = editingElementId === element.id;
-  const [draft, setDraft] = useState(markdown);
   const [selection, setSelection] = useState<SelectionRange>({ start: 0, end: 0 });
   const [toolbarTop, setToolbarTop] = useState(8);
   const [blockMenuOpen, setBlockMenuOpen] = useState(false);
@@ -184,48 +191,51 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
   const focusEditorRef = useRef<HTMLTextAreaElement>(null);
   const activeEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const focusModeRef = useRef(false);
-  const persistedMarkdownRef = useRef(markdown);
 
-  useEffect(() => {
-    setDraft(markdown);
-    persistedMarkdownRef.current = markdown;
-  }, [element.id, markdown]);
+  const commitDraft = useCallback((nextDraft: string) => {
+    focusModeRef.current = false;
+    setFocusMode(false);
+    setBlockMenuOpen(false);
+    if (nextDraft !== markdown) {
+      persist({ config: { markdown: nextDraft } }, "Save Markdown document failed");
+    }
+  }, [markdown, persist]);
+
+  const cancelDraft = useCallback(() => {
+    focusModeRef.current = false;
+    setFocusMode(false);
+    setBlockMenuOpen(false);
+  }, []);
+
+  const focusEditor = useCallback(() => {
+    const editor = focusModeRef.current ? focusEditorRef.current : editorRef.current;
+    activeEditorRef.current = editor;
+    editor?.focus();
+  }, []);
+
+  const {
+    isEditing,
+    draft,
+    setDraft,
+    save,
+    cancel,
+    isComposingRef,
+  } = useElementEditSession({
+    elementId: element.id,
+    source: markdown,
+    createDraft: markdownToDraft,
+    onCommit: commitDraft,
+    onCancel: cancelDraft,
+    focusEditor,
+  });
 
   useEffect(() => {
     if (!isEditing) {
       setFocusMode(false);
       focusModeRef.current = false;
       setBlockMenuOpen(false);
-      return;
     }
-    requestAnimationFrame(() => {
-      const editor = focusModeRef.current ? focusEditorRef.current : editorRef.current;
-      activeEditorRef.current = editor;
-      editor?.focus();
-    });
   }, [isEditing]);
-
-  const save = useCallback(() => {
-    focusModeRef.current = false;
-    setFocusMode(false);
-    if (draft !== persistedMarkdownRef.current && activeCanvasId) {
-      persistedMarkdownRef.current = draft;
-      updateElement(element.id, { config: { ...element.config, markdown: draft } });
-      void updateElementContent(element.id, activeCanvasId, { markdown: draft }).catch((error) => {
-        persistedMarkdownRef.current = markdown;
-        updateElement(element.id, { config: element.config });
-        setUiError(`Save Markdown document failed: ${error instanceof Error ? error.message : error}`);
-      });
-    }
-    setEditingElementId(null);
-  }, [activeCanvasId, draft, element.config, element.id, markdown, setEditingElementId, setUiError, updateElement]);
-
-  const cancel = useCallback(() => {
-    focusModeRef.current = false;
-    setFocusMode(false);
-    setDraft(markdown);
-    setEditingElementId(null);
-  }, [markdown, setEditingElementId]);
 
   const handleBlur = useCallback(() => {
     window.setTimeout(() => {
@@ -292,6 +302,7 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
   }, [draft, filePath, selection, title]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isComposingRef.current) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
       event.preventDefault();
       wrapSelection("**");
@@ -351,6 +362,8 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
     onSelectionChange: handleSelectionChange,
     onBlur: handleBlur,
     onKeyDown: handleKeyDown,
+    onCompositionStart: () => { isComposingRef.current = true; },
+    onCompositionEnd: () => { isComposingRef.current = false; },
     onToggleBold: () => wrapSelection("**"),
     onToggleItalic: () => wrapSelection("_"),
     onCreateLink: createLink,

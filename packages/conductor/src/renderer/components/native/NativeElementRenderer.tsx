@@ -12,6 +12,7 @@ import { LinkElement } from "./LinkElement";
 import { TextElement } from "./TextElement";
 import { TableElement } from "./TableElement";
 import { NativeChrome } from "./NativeChrome";
+import { getNativeElementCapabilities } from "./native-element-capabilities";
 
 interface NativeElementRendererProps {
   element: CanvasElement;
@@ -55,18 +56,10 @@ export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({
     );
   }
 
-  if (
-    element.elementKind === "native/sticky" ||
-    element.elementKind === "native/shape" ||
-    element.elementKind === "native/document" ||
-    element.elementKind === "native/image" ||
-    element.elementKind === "native/file" ||
-    element.elementKind === "native/link" ||
-    element.elementKind === "native/text"
-    || element.elementKind === "native/table"
-  ) {
+  const capabilities = getNativeElementCapabilities(element);
+  if (capabilities.usesChrome) {
     return (
-      <NativeChrome element={element} onPositionChange={onPositionChange}>
+      <NativeChrome element={element} capabilities={capabilities} onPositionChange={onPositionChange}>
         <Component element={element} />
       </NativeChrome>
     );

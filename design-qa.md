@@ -86,7 +86,6 @@ for the mandatory side-by-side comparison.
   its GPU process, then capture and compare `file-workspace-expanded.png`.
 
 final result: blocked
-
 ---
 
 # Slash Command Composer Design QA
@@ -169,5 +168,67 @@ Blocked. The Product Design in-app browser runtime is unavailable in this sessio
 ## Follow-Up Polish
 
 - Capture the same dense canvas state in Electron and compare it with the source at the same crop and zoom.
+
+final result: blocked
+
+---
+
+# Conductor Element Editing and Scene Architecture Design QA
+
+**Comparison Target**
+
+- Source visual truth: `C:/Users/lavachen/AppData/Local/Temp/codex-clipboard-0dcfbbe3-94db-4eb1-940c-926e31621bef.png` (Whimsical timeline and contextual toolbar reference; the five additional supplied screenshots define the broader composable-board target).
+- Implementation screenshot: `C:/Users/lavachen/AppData/Local/Temp/duya-conductor-canvas-qa-2026-07-19.png`.
+- Viewport: 1920 x 1080.
+- State: DUYA local Web preview, Conductor workspace open, canvas selector open, dark theme.
+
+**Full-view Comparison Evidence**
+
+- The reference shows a populated editable timeline with selected-element handles and a contextual capsule toolbar.
+- The implementation Web preview renders the Conductor shell and left element toolbar, but cannot load or create a canvas because the Electron IPC bridge is unavailable. The visible state reports `Load canvases failed: IPC not available`.
+- The artifacts therefore do not represent the same product state. Typography, spacing, colors, image/icon fidelity, element chrome, and editing affordances cannot be judged reliably against the populated reference.
+
+**Focused Region Comparison Evidence**
+
+- A focused toolbar/element comparison was not possible: no native element can be instantiated in the browser-only preview, so the implementation has no selected element, resize handles, or contextual toolbar to crop and compare.
+
+**Findings**
+
+- [P0] Canvas visual QA is blocked by the missing Electron IPC runtime.
+  Location: Conductor canvas loading and creation path.
+  Evidence: the browser-rendered implementation reports `Load canvases failed: IPC not available`; `New Canvas` cannot produce a populated board.
+  Impact: the primary text-editing, selection-toolbar, resize, and scene-composition interactions cannot be exercised or visually compared.
+  Fix: launch the real Electron renderer (or an Electron Playwright fixture with a seeded canvas), create a representative timeline/architecture scene, capture the selected and editing states, and repeat the comparison at 1920 x 1080.
+
+**Primary Interactions Tested**
+
+- Opened the Conductor workspace.
+- Opened the canvas selector.
+- Confirmed the New Canvas entry is exposed.
+- Confirmed canvas loading is stopped at the Electron IPC boundary.
+
+**Console Errors Checked**
+
+- Canvas IPC is unavailable in the Web-only preview.
+- Thread/provider IPC calls also report unavailable Electron APIs; these are expected for this preview surface and prevent a representative application state.
+
+**Required Fidelity Surfaces**
+
+- Fonts and typography: blocked; the canvas element and contextual-toolbar typography is absent.
+- Spacing and layout rhythm: blocked; no populated scene or selected element is available.
+- Colors and visual tokens: shell tokens render, but element/tool state comparison is blocked.
+- Image quality and asset fidelity: not applicable to the empty implementation state; no substituted canvas assets were introduced in this change.
+- Copy and content: blocked; the requested architecture/timeline/project/homepage scene content is generated only in a live canvas session.
+
+**Comparison History**
+
+- Pass 1: captured the Web preview at 1920 x 1080 and compared it with the supplied Whimsical timeline reference in one combined visual input. Found the P0 IPC blocker before an equivalent canvas state could be produced. No visual fixes were made from this blocked state.
+
+**Implementation Checklist**
+
+- Run the Electron application with a seeded Conductor canvas.
+- Capture shape, sticky, text, Markdown document, table, and image selection states.
+- Verify Escape, blur, Ctrl/Cmd+Enter, IME input, external selection changes, resize handles, and capability-specific toolbars.
+- Build an Agent-generated timeline or architecture scene and compare density, hierarchy, and toolbar behavior against the references.
 
 final result: blocked

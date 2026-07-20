@@ -55,6 +55,18 @@ describe('conductor canvas design guidance', () => {
     expect(travelGuide).toContain('only text boxes is incomplete');
   });
 
+  it('provides composable scene blueprints for Whimsical-style boards', () => {
+    const prompt = buildConductorPrompt();
+    const blueprints = KNOWLEDGE_SECTIONS['scene-blueprints'];
+    expect(prompt).toContain('load scene-blueprints and choose one primary blueprint');
+    expect(blueprints).toContain('Blueprint A: Architecture Diagram');
+    expect(blueprints).toContain('Blueprint B: Timeline / Roadmap');
+    expect(blueprints).toContain('Blueprint C: Project Outline');
+    expect(blueprints).toContain('Blueprint D: Knowledge Homepage');
+    expect(blueprints).toContain('call canvas_capture');
+    expect(blueprints).toContain('native/link cards');
+  });
+
   it('accepts native text for direct element creation', () => {
     expect(validateElementInput('native/text', { x: 1, y: 1, w: 4, h: 1 }, { text: 'Title' })).toEqual({
       valid: true,

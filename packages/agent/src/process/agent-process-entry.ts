@@ -41,7 +41,9 @@ import {
   hasCommandsInQueue,
   clearCommandQueue,
   getCommandQueueLength,
+  getCommandQueueSnapshot,
   isQueuedCommandEditable,
+  subscribeToCommandQueue,
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
@@ -207,6 +209,8 @@ interface ChatStartMessage {
     conductorMode?: boolean;
     /** Conductor canvas ID bound to the session (required when conductorMode is true). */
     conductorCanvasId?: string;
+    /** Internal continuation for a completed background sub-agent. */
+    backgroundTaskResume?: boolean;
   };
 }
 
@@ -253,6 +257,27 @@ const HEARTBEAT_INTERVAL = 5000; // Send pong every 5 seconds during streaming
 // Independent heartbeat timer to keep process alive during long operations
 let chatHeartbeatTimer: NodeJS.Timeout | null = null;
 const CHAT_HEARTBEAT_INTERVAL = 8000; // Send pong every 8 seconds while chat is active
+let backgroundResumeSignalledForSession: string | null = null;
+
+function scheduleBackgroundTaskResume(): void {
+  setImmediate(() => {
+    const activeSessionId = sessionId;
+    if (!activeSessionId || chatInProgress || backgroundResumeSignalledForSession === activeSessionId) return;
+
+    const hasPendingNotification = getCommandQueueSnapshot().some(
+      (command) => command.mode === 'task-notification' && command.agentId === activeSessionId,
+    );
+    if (!hasPendingNotification) return;
+
+    backgroundResumeSignalledForSession = activeSessionId;
+    sendToMain({ type: 'chat:background_task_ready', sessionId: activeSessionId });
+  });
+}
+
+// Terminal background work is stored in the process-local queue. A completed
+// foreground turn otherwise has no reason to inspect that queue again, so
+// wake the renderer to start an internal follow-up request for this session.
+subscribeToCommandQueue(scheduleBackgroundTaskResume);
 
 function startChatHeartbeat(): void {
   if (chatHeartbeatTimer) {
@@ -1855,6 +1880,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       conductorIpc: msg.options?.conductorMode
         ? { sendToMain, ipcRequest: conductorIpcRequest }
         : undefined,
+      backgroundTaskResume: msg.options?.backgroundTaskResume,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
@@ -2774,10 +2800,14 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             });
             break;
           }
+          backgroundResumeSignalledForSession = null;
           chatInProgress = true;
           handleChatStart(chatMsg).finally(() => {
             chatInProgress = false;
-            setImmediate(() => { void drainQueuedChatStart(); });
+            setImmediate(() => {
+              void drainQueuedChatStart();
+              scheduleBackgroundTaskResume();
+            });
           });
           break;
         }

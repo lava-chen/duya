@@ -46,14 +46,15 @@ export function enqueue<T = unknown>(
 
 export function enqueuePendingNotification<T = unknown>(
   value: string,
-  rawMessage: T
+  rawMessage: T,
+  agentId?: string,
 ): void {
   commandQueue.push({
     id: crypto.randomUUID(),
     value,
     mode: 'task-notification',
     priority: 'later',
-    agentId: undefined,
+    agentId,
     rawMessage,
     isMeta: true,
   })

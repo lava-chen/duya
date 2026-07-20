@@ -182,6 +182,7 @@ export async function* runAgent({
       parentSessionId,
       subAgentSessionId: sessionId,
     }, 'SubAgent')
+    onProgress?.({ type: 'error', data: errorMsg, agentId })
     yield {
       id: crypto.randomUUID(),
       role: 'assistant',
@@ -190,6 +191,7 @@ export async function* runAgent({
         text: errorMsg,
       }],
       timestamp: Date.now(),
+      metadata: { agentError: errorMsg },
     }
     return
   }
@@ -254,6 +256,7 @@ export async function* runAgent({
   let toolCalls = 0
   let hasError = false
   let errorMessage = ''
+  let terminalProgressEmitted = false
   let lastEventType: SSEEvent['type'] | 'none' = 'none'
   let lastEventAt = Date.now()
   let lastPersistTime = 0
@@ -363,6 +366,7 @@ export async function* runAgent({
           }, 'SubAgent')
           textParts.push(`\n[Error during agent execution: ${stallMessage}]`)
           onProgress?.({ type: 'error', data: stallMessage, agentId })
+          terminalProgressEmitted = true
           // Attempt to interrupt/cleanup to avoid orphaned stream tasks.
           subAgent.interrupt()
           try {
@@ -403,6 +407,10 @@ export async function* runAgent({
             agentType: agentDefinition.agentType,
             subAgentSessionId: sessionId,
           }, 'SubAgent')
+          hasError = true
+          errorMessage = 'Sub-agent cancelled after the parent task was aborted'
+          onProgress?.({ type: 'error', data: errorMessage, agentId })
+          terminalProgressEmitted = true
           break
         }
 
@@ -435,6 +443,7 @@ export async function* runAgent({
           tokenUsage = event.data
         } else if (event.type === 'done') {
           onProgress?.({ type: 'done', duration: Date.now() - startTime, agentId })
+          terminalProgressEmitted = true
           break
         } else if (event.type === 'error') {
           const errorData = typeof event.data === 'string' ? event.data : JSON.stringify(event.data)
@@ -449,6 +458,7 @@ export async function* runAgent({
           }, 'SubAgent')
           textParts.push(`\n[Error: ${errorData}]`)
           onProgress?.({ type: 'error', data: errorData, agentId })
+          terminalProgressEmitted = true
         }
       }
     } finally {
@@ -471,6 +481,15 @@ export async function* runAgent({
     }, 'SubAgent')
     textParts.push(`\n[Error during agent execution: ${errMsg}]`)
     onProgress?.({ type: 'error', data: errMsg, agentId })
+    terminalProgressEmitted = true
+  }
+
+  if (!terminalProgressEmitted) {
+    if (hasError) {
+      onProgress?.({ type: 'error', data: errorMessage || 'Sub-agent failed', agentId })
+    } else {
+      onProgress?.({ type: 'done', duration: Date.now() - startTime, agentId })
+    }
   }
 
   // For built-in agents with callbacks, call the callback
@@ -493,6 +512,7 @@ export async function* runAgent({
     agentToolCallCount: toolCalls,
     agentDurationMs: duration,
     agentStartTime: startTime,
+    ...(hasError ? { agentError: errorMessage || 'Sub-agent failed' } : {}),
   }
 
   // Build content blocks including thinking if present

@@ -82,6 +82,7 @@ interface BackgroundSpawnRecord {
     agentId: string;
     outputFilePath?: string;
     background: true;
+    status: 'running';
   };
 }
 
@@ -99,6 +100,14 @@ function hashString(value: string): string {
 function pruneRecentBackgroundSpawns(now: number): void {
   for (const [key, record] of recentBackgroundSpawns) {
     if (now - record.createdAt > BACKGROUND_SPAWN_TTL_MS) {
+      recentBackgroundSpawns.delete(key);
+    }
+  }
+}
+
+function removeBackgroundSpawn(taskId: string): void {
+  for (const [key, record] of recentBackgroundSpawns) {
+    if (record.result.taskId === taskId) {
       recentBackgroundSpawns.delete(key);
     }
   }
@@ -350,12 +359,13 @@ export class SubagentTool extends BaseTool {
           agentType: requestedAgentType,
           resolvedAgentType: agentDefinition.agentType,
           description: agentInput.description || agentInput.name,
-          content: `[Agent launched in background: ${subAgentName}]`,
+          content: `[Agent running in background: ${subAgentName}. Do not poll or respawn it; a task notification will arrive when it finishes.]`,
           sessionId: subAgentSessionId,
           taskId,
           agentId: taskId,
           outputFilePath: record.outputFilePath,
           background: true,
+          status: 'running',
         };
         if (parentSessionId) {
           const spawnRecord: BackgroundSpawnRecord = {
@@ -420,6 +430,12 @@ export class SubagentTool extends BaseTool {
               subAgentSessionId,
               err,
             }, 'SubAgent')
+          } finally {
+            // The terminal notification is already durable in the queue. The
+            // in-memory lifecycle record is no longer needed after DB status
+            // persistence and would otherwise accumulate for the process life.
+            backgroundAgentLifecycle.markDrained([taskId])
+            removeBackgroundSpawn(taskId)
           }
         })
 

@@ -1168,6 +1168,31 @@ existing boards and must not be used for new diagrams.
   elements remain selectable and editable, but direct drag, resize, connector
   geometry handles, and group movement cannot change their position.
 
+### Native element capability contract
+
+Native renderer behavior is declared by
+`packages/conductor/src/renderer/components/native/native-element-capabilities.ts`.
+Each element kind declares its edit mode, selection-toolbar family, resize
+handles, chrome ownership, and whether creation should enter editing. Renderer,
+chrome, and canvas creation code consume this registry; they must not maintain
+parallel element-kind lists. Non-editable elements such as images, files, and
+links never enter `editingElementId` on double-click.
+
+Text-like editors share `useElementEditSession` for focus, IME composition,
+blur-save, Escape-cancel, Ctrl/Cmd+Enter-save, and external editing-state exits.
+Config writes use `useElementPersistence`, which applies optimistic renderer
+state and performs a stale-safe rollback if persistence fails. Element-specific
+components only translate their local draft into config/position patches.
+
+### Agent scene grammar
+
+Complex canvas results are editable native-element scenes. The on-demand
+`scene-blueprints` knowledge section defines spatial grammars for architecture
+diagrams, timelines/roadmaps, project outlines, and knowledge homepages. The
+Agent chooses one primary blueprint, creates the scene skeleton before details,
+adds connectors last, then captures and refines the result. `widget/dynamic`
+remains a compact auxiliary component and cannot replace a multi-element scene.
+
 ## Conductor multi-canvas target contract (Plan 233)
 
 Conductor mode binds a chat session to one current canvas through
@@ -1189,3 +1214,22 @@ A successful switch has three synchronized effects:
 Canvas identity is therefore durable session state, while element state
 remains scoped to the selected canvas. Renderer state is never the sole source
 of truth for Agent target selection.
+
+## Background SubAgent lifecycle
+
+- `SubagentTool` returns a launch receipt immediately with `background: true`
+  and `status: running`. A successful tool invocation means the sub-agent was
+  dispatched; it does not mean the delegated task completed.
+- `BackgroundAgentLifecycle` owns the terminal `completed` / `failed` /
+  `killed` transition and enqueues exactly one `<task-notification>` for the
+  parent session.
+- `DuyaAgent` only performs non-blocking notification drains. When a terminal
+  notification arrives after the parent turn has ended, the worker emits
+  `chat:background_task_ready`; Electron relays it to the renderer, which
+  starts an empty `backgroundTaskResume` SSE turn. That turn drains the queued
+  notification without persisting a synthetic empty user message. Wakeups that
+  race the prior SSE terminal event are deferred until that stream is terminal.
+- Renderer status is driven by the sub-agent's own `agent_progress` terminal
+  event, not by the parent stream phase or the Agent tool launch receipt.
+- Live sub-agent rows are consolidated in the TaskDrawer; the chat composer
+  does not render a separate expanding sub-agent panel.

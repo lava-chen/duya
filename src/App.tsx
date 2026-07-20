@@ -16,7 +16,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
 import { FontProvider } from "@/contexts/FontContext";
 import { StartupLanding, type StartupLandingPhase } from "@/components/StartupLanding";
-import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, subscribeToDbPersisted, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages } from "@/lib/stream-session-manager";
+import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, subscribeToDbPersisted, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages, resumeBackgroundTask } from "@/lib/stream-session-manager";
 import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
@@ -332,6 +332,18 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
 
     return unsubscribe;
   }, [activeThreadId, loadThreadMessages]);
+
+  // A background sub-agent can finish after its parent turn has already
+  // completed. Resume the parent session through the normal HTTP+SSE path so
+  // the queued task-notification becomes a real model follow-up, not merely
+  // a message waiting for the user's next input.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.onBackgroundTaskReady) return;
+    return api.onBackgroundTaskReady(({ sessionId }) => {
+      void resumeBackgroundTask(sessionId);
+    });
+  }, []);
 
   // Handle notification click to navigate to session
   useEffect(() => {

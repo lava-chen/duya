@@ -3,10 +3,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GridFour, Minus, PaintBucket, Plus, TextAlignCenter, TextAlignLeft, TextAlignRight, TextB, TextItalic, TextT, Trash } from "@phosphor-icons/react";
 import type { CanvasElement } from "../..//types/conductor";
-import { updateElementContent } from "../..//ipc/conductor-ipc";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { CapsuleMoreMenu, CapsuleToolbar, CAPSULE_BTN_ACTIVE, CAPSULE_BTN_BASE, CAPSULE_DIVIDER } from "../toolbar/CapsuleToolbar";
 import { useElementLock } from "../toolbar/useElementLock";
+import { useElementPersistence } from "./editing/useElementPersistence";
 
 type Align = "left" | "center" | "right";
 type CellStyle = { bold?: boolean; italic?: boolean; align?: Align; fontSize?: number; color?: string; background?: string };
@@ -82,13 +82,11 @@ function cellKey(row: number, column: number): string {
 
 export const TableElement: React.FC<{ element: CanvasElement }> = ({ element }) => {
   const { locked, toggleLocked } = useElementLock(element);
-  const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
   const editingElementId = useConductorStore((state) => state.editingElementId);
   const selectedElementId = useConductorStore((state) => state.selectedElementId);
   const selectedElementIds = useConductorStore((state) => state.selectedElementIds);
   const setEditingElementId = useConductorStore((state) => state.setEditingElementId);
-  const updateElement = useConductorStore((state) => state.updateElement);
-  const setUiError = useConductorStore((state) => state.setUiError);
+  const persistElement = useElementPersistence(element);
   const [storedData, setStoredData] = useState<TableData>(() => tableDataFromConfig(element.config));
   // A canvas can contain tables made by an earlier build. Normalize state on
   // every render so missing headers/rows never take down the whole canvas.
@@ -117,14 +115,8 @@ export const TableElement: React.FC<{ element: CanvasElement }> = ({ element }) 
     // input event handler.
     const normalized = tableDataFromConfig(next);
     stage(normalized);
-    const config = { ...element.config, ...normalized };
-    updateElement(element.id, { config });
-    if (activeCanvasId) {
-      void updateElementContent(element.id, activeCanvasId, normalized).catch((error) => {
-        setUiError(`Save table failed: ${error instanceof Error ? error.message : error}`);
-      });
-    }
-  }, [activeCanvasId, element.config, element.id, setUiError, stage, updateElement]);
+    persistElement({ config: normalized }, "Save table failed");
+  }, [persistElement, stage]);
 
   const updateCell = useCallback((row: number, column: number, value: string) => {
     const next = dataRef.current;
@@ -240,8 +232,34 @@ export const TableElement: React.FC<{ element: CanvasElement }> = ({ element }) 
 function TableCell({ value, header = false, editing, selected, style, headerFill = DEFAULT_HEADER_FILL, headerTextColor = DEFAULT_HEADER_TEXT, borderColor = DEFAULT_BORDER_COLOR, onSelect, onChange, onCommit }: { value: string; header?: boolean; editing: boolean; selected: boolean; style?: CellStyle; headerFill?: string; headerTextColor?: string; borderColor?: string; onSelect: () => void; onChange: (value: string) => void; onCommit: () => void }) {
   const activeStyle: React.CSSProperties = { textAlign: style?.align ?? "left", fontWeight: style?.bold ? 700 : header ? 700 : 400, fontStyle: style?.italic ? "italic" : "normal", fontSize: style?.fontSize ?? 12 };
   return <div role={header ? "columnheader" : "cell"} onClick={onSelect} style={{ minWidth: 78, minHeight: header ? 31 : 29, padding: "5px 8px", boxSizing: "border-box", borderRight: `1px solid ${borderColor}`, borderBottom: `1px solid ${borderColor}`, background: style?.background ?? (header ? headerFill : "var(--bg-canvas)"), color: style?.color ?? (header ? headerTextColor : "var(--text)"), outline: selected ? "2px solid #a541f4" : "none", outlineOffset: -2, ...activeStyle }}>
-    {editing && selected ? <input autoFocus value={value} onChange={(event) => onChange(event.target.value)} onBlur={() => onCommit()} onKeyDown={(event) => { if (event.key === "Escape") event.currentTarget.blur(); }} aria-label={header ? "Column heading" : "Table cell"} style={{ width: "100%", border: 0, outline: 0, padding: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: activeStyle.textAlign }} /> : value || <span style={{ opacity: 0.35 }}>—</span>}
+    {editing && selected ? <TableCellEditor value={value} label={header ? "Column heading" : "Table cell"} textAlign={activeStyle.textAlign} onChange={onChange} onCommit={onCommit} /> : value || <span style={{ opacity: 0.35 }}>—</span>}
   </div>;
+}
+
+function TableCellEditor({ value, label, textAlign, onChange, onCommit }: { value: string; label: string; textAlign: React.CSSProperties["textAlign"]; onChange: (value: string) => void; onCommit: () => void }) {
+  const initialValueRef = useRef(value);
+  const composingRef = useRef(false);
+  return <input
+    autoFocus
+    value={value}
+    onChange={(event) => onChange(event.target.value)}
+    onBlur={onCommit}
+    onCompositionStart={() => { composingRef.current = true; }}
+    onCompositionEnd={() => { composingRef.current = false; }}
+    onKeyDown={(event) => {
+      if (composingRef.current) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onChange(initialValueRef.current);
+        event.currentTarget.blur();
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        event.currentTarget.blur();
+      }
+    }}
+    aria-label={label}
+    style={{ width: "100%", border: 0, outline: 0, padding: 0, background: "transparent", color: "inherit", font: "inherit", textAlign }}
+  />;
 }
 
 function TableToolbar({ selected, style, headerFill, headerTextColor, borderColor, onStyle, onFontSize, onColor, onDelete, onFinish, locked, onToggleLock }: { selected: SelectedCell; style: CellStyle; headerFill: string; headerTextColor: string; borderColor: string; onStyle: (key: "bold" | "italic" | "align", value?: Align) => void; onFontSize: (delta: number) => void; onColor: (target: "text" | "fill" | "border", color: string) => void; onDelete: () => void; onFinish: () => void; locked: boolean; onToggleLock: () => void }) {
