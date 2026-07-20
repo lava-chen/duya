@@ -1,5 +1,5 @@
 // PermissionPrompt.tsx - Permission prompt UI component
-// Style aligned with SubAgentPanel (globals.css .sub-agent-*).
+// Uses the compact sub-agent chrome styles from globals.css.
 
 'use client';
 

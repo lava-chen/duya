@@ -48,7 +48,6 @@ import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
 import type { WidgetStyleSignature, CanvasFreshnessState } from '../types.js';
-import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
 import { dequeueAllMatching, enqueuePendingNotification } from '../queue/index.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
@@ -155,47 +154,10 @@ export function filterToolsByAllowedTools(tools: Tool[], allowedTools: readonly 
   return tools.filter((tool) => allowedSet.has(tool.name));
 }
 
-function hasRunningBackgroundTasksForSession(parentSessionId?: string): boolean {
-  if (!parentSessionId) return false
-  return backgroundAgentLifecycle.getAll().some(
-    (task) =>
-      task.parentSessionId === parentSessionId &&
-      (task.status === 'pending' || task.status === 'running')
-  )
-}
-
-async function waitForBackgroundTaskNotifications(parentSessionId?: string): Promise<string[]> {
-  const TIMEOUT_MS = 120_000
-  const startTime = Date.now()
-
-  while (hasRunningBackgroundTasksForSession(parentSessionId)) {
-    const drained = dequeueAllMatching(
-      (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
-    )
-    if (drained.length > 0) {
-      return drained.map((cmd) => cmd.value)
-    }
-    if (Date.now() - startTime >= TIMEOUT_MS) {
-      // Timeout: list unfinished task IDs and yield what we have so
-      // the main conversation is not blocked indefinitely.
-      const unfinishedTaskIds = backgroundAgentLifecycle
-        .getAll()
-        .filter(
-          (task) =>
-            task.parentSessionId === parentSessionId &&
-            (task.status === 'pending' || task.status === 'running'),
-        )
-        .map((task) => task.taskId)
-      logger.warn(
-        `[Agent] waitForBackgroundTaskNotifications timed out after ${TIMEOUT_MS}ms; ` +
-        `unfinished tasks: ${unfinishedTaskIds.join(', ') || '(none)'}`,
-      )
-      break
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  }
+function drainBackgroundTaskNotifications(parentSessionId?: string): string[] {
+  if (!parentSessionId) return []
   return dequeueAllMatching(
-    (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
+    (cmd) => cmd.mode === 'task-notification' && cmd.agentId === parentSessionId
   ).map((cmd) => cmd.value)
 }
 
@@ -800,6 +762,11 @@ export class duyaAgent {
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext();
     let messages = this._resolveInitialMessages(prompt, options);
+    const contextWindow =
+      this.runtimeConfig?.modelCapabilities?.contextWindow &&
+      this.runtimeConfig.modelCapabilities.contextWindow > 0
+        ? this.runtimeConfig.modelCapabilities.contextWindow
+        : DEFAULT_CONTEXT_WINDOW;
 
     // Extract system-role messages from message history (compaction summaries,
     // session memory, etc.) and merge into the system prompt.
@@ -941,9 +908,23 @@ export class duyaAgent {
         systemPromptContent = prefix + '\n\n' + this.baseSystemPromptWithoutModes;
       }
 
+      // Pick up background results that completed after a previous user-facing
+      // turn ended. This is deliberately non-blocking: unfinished agents stay
+      // in the background and their notification remains queued until ready.
+      const queuedBackgroundNotifications = drainBackgroundTaskNotifications(this.sessionId)
+      for (const xml of queuedBackgroundNotifications) {
+        messages.push({
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: xml,
+          timestamp: Date.now(),
+          metadata: { isTaskNotification: true },
+        })
+      }
+
       // Only add user message on first turn (original prompt)
       // Subsequent turns are continuations after tool results, not new prompts
-      if (turnCount === 1) {
+      if (turnCount === 1 && !options?.backgroundTaskResume) {
         // Check if the last message is already a user message with the same content
         // This prevents duplicates when messages are pre-loaded from DB before streamChat is called
         const lastMessage = messages[messages.length - 1];
@@ -1141,6 +1122,19 @@ export class duyaAgent {
         });
       }
 
+      // Publish an estimate before each provider request so the renderer can
+      // update the context ring while the Agent is still working. Provider
+      // usage later in this turn replaces this estimate with exact counts.
+      const estimatedContext = estimateContextTokens(messages);
+      yield {
+        type: 'context_usage',
+        data: {
+          usedTokens: estimatedContext.totalTokens,
+          contextWindow,
+          percentFull: (estimatedContext.totalTokens / contextWindow) * 100,
+        },
+      };
+
       try {
         // Stream from LLM with FULL message history
         logger.info(`[Agent] Turn ${turnCount}: Starting LLM stream, messages=${messages.length}, provider=${this.provider}`);
@@ -1331,9 +1325,7 @@ export class duyaAgent {
             // <task-notification> XML envelopes (claude-code protocol).
             // metadata.isTaskNotification lets the renderer hide these
             // from the chat UI without relying on a string-prefix sniff.
-            const completedNotificationXml = dequeueAllMatching(
-              (cmd) => cmd.mode === 'task-notification' && cmd.agentId === undefined
-            ).map((cmd) => cmd.value)
+            const completedNotificationXml = drainBackgroundTaskNotifications(this.sessionId)
             if (completedNotificationXml.length > 0) {
               for (const xml of completedNotificationXml) {
                 messages.push({
@@ -1374,7 +1366,26 @@ export class duyaAgent {
             yield event;
 
           } else if (event.type === 'result') {
-            // Pass through token usage result
+            // Cache tokens are part of the active provider context even when
+            // they are billed separately. Use the exact completed-turn usage
+            // to replace the pre-request local estimate in the renderer.
+            const usedTokens =
+              event.data.input_tokens +
+              event.data.output_tokens +
+              (event.data.cache_hit_tokens ?? 0) +
+              (event.data.cache_creation_tokens ?? 0);
+            if (usedTokens > 0) {
+              yield {
+                type: 'context_usage',
+                data: {
+                  usedTokens,
+                  contextWindow,
+                  percentFull: (usedTokens / contextWindow) * 100,
+                },
+              };
+            }
+
+            // Preserve the token-usage event for cost accounting.
             yield event;
           }
         }
@@ -1419,7 +1430,9 @@ export class duyaAgent {
         // If no tool_use blocks were emitted, we're done
         // Note: assistant message was already added in 'done' event handler
         if (!needsFollowUp) {
-          const completedNotificationXml = await waitForBackgroundTaskNotifications(this.sessionId)
+          // Close the race between the last turn-boundary drain and finalizing
+          // the response, but never wait for agents that are still running.
+          const completedNotificationXml = drainBackgroundTaskNotifications(this.sessionId)
           if (completedNotificationXml.length > 0) {
             for (const xml of completedNotificationXml) {
               messages.push({

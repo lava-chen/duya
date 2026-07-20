@@ -4,6 +4,7 @@ import { CheckSquareIcon } from "@phosphor-icons/react";
 import { useEffect } from "react";
 import { usePanel } from "@/hooks/usePanel";
 import { useTaskCount } from "@/hooks/useTaskCount";
+import { useSubAgentProgress } from "@/hooks/useSubAgentProgress";
 import { useConversationStore } from "@/stores/conversation-store";
 import { setTaskDrawerOpen, useTaskDrawerOpen } from "./task-drawer-store";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -15,7 +16,9 @@ export function TaskDrawerToggle() {
   const currentView = useConversationStore((state) => state.currentView);
   const taskDrawerOpen = useTaskDrawerOpen();
   const { pending, active } = useTaskCount();
-  const taskBadgeCount = pending + active;
+  const agents = useSubAgentProgress(activeThreadId ?? "");
+  const runningAgents = agents.filter((agent) => agent.status === "running" || agent.status === "waiting").length;
+  const taskBadgeCount = pending + active + runningAgents;
 
   useEffect(() => {
     if (workspaceExpanded && taskDrawerOpen) {

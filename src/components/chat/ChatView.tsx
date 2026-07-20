@@ -17,7 +17,7 @@ import { Info, CaretDown } from '@phosphor-icons/react';
 import type { PermissionMode } from './PermissionModeSelector';
 import { ChatHeader } from './ChatHeader';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
-import { getThreadIPC, updateThreadIPC, listThreadsByParentIdIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
+import { getThreadIPC, updateThreadIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
 import { useSettings } from '@/hooks/useSettings';
 import { useStreamPhase } from '@/hooks/useStreamPhase';
 import { useStreamingContextUsage } from '@/hooks/useStreamingContextUsage';
@@ -28,7 +28,6 @@ import { useMailboxStore } from '@/stores/mailbox-store';
 import { useShallow } from 'zustand/react/shallow';
 import type { MailboxRow } from '@/stores/mailbox-store';
 import type { FileAttachment } from '@/types/message';
-import { SubAgentPanel } from './SubAgentPanel';
 import { MailboxPanel } from './MailboxPanel';
 import { compactContext } from '@/lib/agent-sse-client';
 import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from './AgentModeSelector';
@@ -1130,30 +1129,6 @@ export function ChatView({
                 </button>
               </div>
             )}
-
-            {/* Sub-agent panel - aligned to input width so it tracks the input box on resize */}
-            <SubAgentPanel
-              sessionId={sessionId}
-              onOpenSubAgent={async (_agentName, agentSessionId) => {
-                console.log('[ChatView] onOpenSubAgent called:', agentSessionId?.slice(0, 8));
-                if (agentSessionId) {
-                  useConversationStore.getState().setActiveThread(agentSessionId);
-                } else {
-                  console.log('[ChatView] No agentSessionId, trying fallback...');
-                  try {
-                    const children = await listThreadsByParentIdIPC(sessionId);
-                    console.log('[ChatView] listThreadsByParentIdIPC children:', children.length);
-                    const fallback = children.find(c => c.agentType === 'sub-agent');
-                    if (fallback) {
-                      console.log('[ChatView] Using fallback:', fallback.id.slice(0, 8));
-                      useConversationStore.getState().setActiveThread(fallback.id);
-                    }
-                  } catch (err) {
-                    console.error('[ChatView] Failed to open sub-agent:', err);
-                  }
-                }
-              }}
-            />
 
             {!isAskUserQuestionPending && (
               <PermissionPrompt

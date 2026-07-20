@@ -143,6 +143,38 @@ describe('BackgroundAgentLifecycle.run', () => {
     expect(r.result?.content[0].text).toBe('final')
   })
 
+  it('reads an error marker from the final agent message metadata', async () => {
+    const lc = new BackgroundAgentLifecycle()
+    lc.register(makeInput())
+    async function* gen() {
+      yield {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'partial output' }],
+        metadata: { agentError: 'provider failed' },
+      } as unknown as Message
+    }
+
+    await lc.run('t-1', gen())
+
+    expect(lc.getSnapshot('t-1')?.status).toBe('failed')
+    expect(lc.getSnapshot('t-1')?.error).toBe('provider failed')
+  })
+
+  it('treats an error progress event as task failure even if the source returns normally', async () => {
+    const lc = new BackgroundAgentLifecycle()
+    lc.register(makeInput())
+    async function* gen() {
+      yield { type: 'error', data: 'provider failed', agentId: 't-1' } as AgentProgressEvent
+      yield { role: 'assistant', content: [{ type: 'text', text: 'partial output' }] } as unknown as Message
+    }
+
+    await lc.run('t-1', gen())
+
+    const task = lc.getSnapshot('t-1')!
+    expect(task.status).toBe('failed')
+    expect(task.error).toBe('provider failed')
+  })
+
   it('kill path: source throws AbortError -> status=killed', async () => {
     const lc = new BackgroundAgentLifecycle()
     lc.register(makeInput())

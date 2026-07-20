@@ -10,9 +10,11 @@ import {
   SpinnerIcon,
   TrashIcon,
   ArrowCounterClockwiseIcon,
+  RobotIcon,
   XIcon,
 } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useSubAgentProgress, type SubAgentRowInfo } from "@/hooks/useSubAgentProgress";
 import { setTaskDrawerOpen, useTaskDrawerOpen } from "./task-drawer-store";
 import { useRecap, clearRecap } from "./recap-store";
 
@@ -84,6 +86,7 @@ export function TaskDrawer() {
   const onClose = useCallback(() => setTaskDrawerOpen(false), []);
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
   const { tasks, setTasks, loading, fetchTasks } = useTaskList(open ? activeThreadId : null);
+  const agents = useSubAgentProgress(activeThreadId ?? "");
   const recap = useRecap();
 
   const [collapsed, setCollapsed] = useState(false);
@@ -150,6 +153,7 @@ export function TaskDrawer() {
 
   const completed = tasks.filter((task) => task.status === "completed").length;
   const pending = tasks.length - completed;
+  const runningAgents = agents.filter((agent) => agent.status === "running" || agent.status === "waiting").length;
 
   return (
     <AnimatePresence>
@@ -175,6 +179,8 @@ export function TaskDrawer() {
             <DrawerHeader
               pending={pending}
               completed={completed}
+              runningAgents={runningAgents}
+              totalAgents={agents.length}
               collapsed={collapsed}
               onToggleCollapsed={() => setCollapsed((value) => !value)}
               onClose={onClose}
@@ -190,6 +196,22 @@ export function TaskDrawer() {
             <div className="task-card-list">
               {!collapsed && (
                 <div className="task-card-list-inner">
+                  {agents.length > 0 && (
+                    <TaskDrawerSection label="Agents">
+                      {agents.map((agent) => (
+                        <AgentRow
+                          key={agent.id}
+                          agent={agent}
+                          onOpen={() => {
+                            if (agent.sessionId) {
+                              useConversationStore.getState().setActiveThread(agent.sessionId);
+                            }
+                          }}
+                        />
+                      ))}
+                    </TaskDrawerSection>
+                  )}
+                  <TaskDrawerSection label="Tasks">
                   {tasks.length === 0 && !loading && (
                     <div className="task-card-empty">No tasks yet.</div>
                   )}
@@ -201,6 +223,7 @@ export function TaskDrawer() {
                       onDelete={() => void handleDelete(task)}
                     />
                   ))}
+                  </TaskDrawerSection>
                 </div>
               )}
             </div>
@@ -214,12 +237,16 @@ export function TaskDrawer() {
 function DrawerHeader({
   pending,
   completed,
+  runningAgents,
+  totalAgents,
   collapsed,
   onToggleCollapsed,
   onClose,
 }: {
   pending: number;
   completed: number;
+  runningAgents: number;
+  totalAgents: number;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onClose: () => void;
@@ -238,6 +265,11 @@ function DrawerHeader({
         />
         <span className="task-card-title-text">Tasks</span>
         <span className="task-card-count">{pending} open</span>
+        {totalAgents > 0 && (
+          <span className="task-card-agent-count">
+            {runningAgents > 0 ? `${runningAgents} running` : `${totalAgents} agents`}
+          </span>
+        )}
         {completed > 0 && <span className="task-card-done-count">{completed} done</span>}
       </button>
       <button
@@ -250,6 +282,41 @@ function DrawerHeader({
         <XIcon size={14} />
       </button>
     </div>
+  );
+}
+
+function TaskDrawerSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <section className="task-card-section">
+      <div className="task-card-section-label">{label}</div>
+      {children}
+    </section>
+  );
+}
+
+function AgentRow({ agent, onOpen }: { agent: SubAgentRowInfo; onOpen: () => void }) {
+  const canOpen = Boolean(agent.sessionId);
+  const statusIcon = agent.status === "running" || agent.status === "waiting"
+    ? <SpinnerIcon size={12} className="text-accent animate-spin" />
+    : agent.status === "completed"
+      ? <CheckIcon size={12} className="text-green-500" />
+      : <XIcon size={12} className="text-red-500" />;
+
+  return (
+    <button
+      type="button"
+      className="task-card-agent-row"
+      onClick={onOpen}
+      disabled={!canOpen}
+      title={canOpen ? `Open ${agent.name}` : `${agent.name} is starting`}
+    >
+      <span className="task-card-agent-icon" style={{ color: agent.color }}>
+        <RobotIcon size={13} />
+      </span>
+      <span className="task-card-row-title">{agent.name}</span>
+      <span className="task-card-agent-status">{agent.description}</span>
+      <span className="task-card-agent-state">{statusIcon}</span>
+    </button>
   );
 }
 

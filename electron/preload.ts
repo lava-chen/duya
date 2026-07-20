@@ -955,6 +955,7 @@ export interface ElectronAPI {
     actionId: string
     reply?: string
   }) => void) => () => void
+  onBackgroundTaskReady: (callback: (data: { sessionId: string }) => void) => () => void
   app: {
     getVersion: () => Promise<string>
     quit: () => Promise<void>
@@ -1598,6 +1599,13 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on('notification:action', handler);
     return () => {
       ipcRenderer.removeListener('notification:action', handler);
+    };
+  },
+  onBackgroundTaskReady: (callback: (data: { sessionId: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string }) => callback(data);
+    ipcRenderer.on('chat:background_task_ready', handler);
+    return () => {
+      ipcRenderer.removeListener('chat:background_task_ready', handler);
     };
   },
   app: {

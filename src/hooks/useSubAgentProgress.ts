@@ -2,8 +2,6 @@
 
 import { useMemo } from 'react';
 import { useStreamingAgentProgress, type AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
-import { useStreamPhase } from '@/hooks/useStreamPhase';
-import type { StreamPhase } from '@/types';
 
 export interface SubAgentRowInfo {
   id: string;
@@ -49,15 +47,11 @@ function groupEventsByAgent(events: AgentProgressEventWithMeta[]): Map<string, A
   return groups;
 }
 
-function getAgentStatus(events: AgentProgressEventWithMeta[], phase: StreamPhase): SubAgentRowInfo['status'] {
+export function getSubAgentStatus(events: AgentProgressEventWithMeta[]): SubAgentRowInfo['status'] {
   if (events.length === 0) return 'waiting';
   const lastEvent = events[events.length - 1];
   if (lastEvent.type === 'done') return 'completed';
   if (lastEvent.type === 'error') return 'error';
-  const streamInactive = phase === 'completed' || phase === 'error' || phase === 'idle';
-  if (streamInactive) {
-    return 'completed';
-  }
   return 'running';
 }
 
@@ -86,7 +80,6 @@ function getAgentDisplayNameFromEvents(events: AgentProgressEventWithMeta[]): st
  */
 export function useSubAgentProgress(sessionId: string): SubAgentRowInfo[] {
   const events = useStreamingAgentProgress(sessionId);
-  const phase = useStreamPhase(sessionId);
 
   return useMemo(() => {
     const groups = groupEventsByAgent(events);
@@ -95,7 +88,7 @@ export function useSubAgentProgress(sessionId: string): SubAgentRowInfo[] {
 
     for (const [agentId, agentEvents] of groups) {
       const customName = getAgentDisplayNameFromEvents(agentEvents);
-      const status = getAgentStatus(agentEvents, phase);
+      const status = getSubAgentStatus(agentEvents);
       const isTerminal = status === 'completed' || status === 'error';
       // AgentProgressEvent carries the sub-agent's session under `sessionId`
       // (it is the canonical sub-agent session id, distinct from the parent
@@ -122,5 +115,5 @@ export function useSubAgentProgress(sessionId: string): SubAgentRowInfo[] {
     }
 
     return agents;
-  }, [events, phase]);
+  }, [events]);
 }

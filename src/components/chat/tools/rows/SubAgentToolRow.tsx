@@ -106,6 +106,47 @@ function getToolVerb(toolName?: string): string {
   return '运行工具';
 }
 
+function getStringInput(
+  input: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = input?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function compactActivityTarget(value: string): string {
+  const oneLine = value.replace(/\s+/g, ' ').trim();
+  return oneLine.length > 120 ? `${oneLine.slice(0, 117)}...` : oneLine;
+}
+
+function getToolTarget(event: AgentProgressEventWithMeta): string | undefined {
+  const name = event.toolName?.toLowerCase() ?? '';
+  const input = event.toolInput;
+
+  if (SHELL_TOOLS.has(name) || name === 'duya_cli' || name === 'duya-cli' || name === 'duyacli') {
+    return getStringInput(input, ['command', 'cmd', 'script', 'commandLine']);
+  }
+  if (READ_TOOLS.has(name) || EDIT_TOOLS.has(name)) {
+    return getStringInput(input, ['file_path', 'filePath', 'path', 'file', 'filename']);
+  }
+  if (SEARCH_TOOLS.has(name)) {
+    return getStringInput(input, ['query', 'pattern', 'glob', 'path']);
+  }
+  if (name.startsWith('browser_') || name.startsWith('browser-') || name === 'browser') {
+    return getStringInput(input, ['url', 'query', 'selector']);
+  }
+  return undefined;
+}
+
+function getToolActivityPhrase(event: AgentProgressEventWithMeta, isActive: boolean): string {
+  const verb = getToolVerb(event.toolName);
+  const target = getToolTarget(event);
+  return `${isActive ? '正在' : '刚完成'}${verb}${target ? `：${compactActivityTarget(target)}` : ''}`;
+}
+
 function getLivePhrase(latest: AgentProgressEventWithMeta | undefined): string | null {
   if (!latest) return null;
   switch (latest.type) {
@@ -114,9 +155,9 @@ function getLivePhrase(latest: AgentProgressEventWithMeta | undefined): string |
     case 'thinking':
       return '思考中...';
     case 'tool_use':
-      return `正在${getToolVerb(latest.toolName)}...`;
+      return getToolActivityPhrase(latest, true);
     case 'tool_result':
-      return `完成${getToolVerb(latest.toolName)}`;
+      return getToolActivityPhrase(latest, false);
     case 'text':
       return '输出结果中...';
     case 'done':
@@ -142,6 +183,7 @@ function buildStatsPhrase(stats: ToolStats): string {
 
 function buildStatusPhrase(
   latest: AgentProgressEventWithMeta | undefined,
+  lastToolEvent: AgentProgressEventWithMeta | undefined,
   isRunning: boolean,
   isError: boolean,
   stats: ToolStats,
@@ -154,7 +196,10 @@ function buildStatusPhrase(
     return '已完成';
   }
 
-  const live = getLivePhrase(latest);
+  const activity = lastToolEvent
+    ? getToolActivityPhrase(lastToolEvent, lastToolEvent.type === 'tool_use')
+    : null;
+  const live = activity ?? getLivePhrase(latest);
   const statsPhrase = buildStatsPhrase(stats);
   if (live && statsPhrase) return `${live} · ${statsPhrase}`;
   if (live) return live;
@@ -166,8 +211,6 @@ export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowPr
   const renderer = getRenderer(tool.name);
   const summary = renderer.getSummary(tool.input, tool.name);
   const parsedResult = useMemo(() => parseSubAgentToolResult(tool.result), [tool.result]);
-  const isError = tool.isError || !!parsedResult?.error;
-  const isRunning = tool.result === undefined;
 
   // The prop-based event stream is only populated when the parent renders
   // via StreamingMessage. History-rendered messages (MessageItem) do not
@@ -246,6 +289,20 @@ export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowPr
   }, [mergedEvents, parsedResult?.sessionId, parsedResult?.agentId, parsedResult?.taskId, inputDescription, inputName, inputSubagentType]);
 
   const latestEvent = subAgentEvents[subAgentEvents.length - 1];
+  const lastToolEvent = useMemo(
+    () => [...subAgentEvents].reverse().find((event) => event.type === 'tool_use' || event.type === 'tool_result'),
+    [subAgentEvents],
+  );
+  const isBackground = parsedResult?.background === true;
+  const isError = tool.isError || !!parsedResult?.error || latestEvent?.type === 'error';
+  const hasTerminalEvent = latestEvent?.type === 'done' || latestEvent?.type === 'error';
+  // A background Agent tool returns a successful launch receipt immediately.
+  // That receipt is not the sub-agent's completion signal; only a terminal
+  // agent_progress event can move the row out of its running state.
+  const isRunning = !isError && (
+    tool.result === undefined ||
+    (isBackground && !hasTerminalEvent)
+  );
   const metaEvent = useMemo(
     () => [...subAgentEvents].reverse().find((e) => e.agentType || e.agentName || e.agentDescription),
     [subAgentEvents],
@@ -269,7 +326,7 @@ export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowPr
     || inputDescription
     || '';
 
-  const statusPhrase = buildStatusPhrase(latestEvent, isRunning, isError, stats);
+  const statusPhrase = buildStatusPhrase(latestEvent, lastToolEvent, isRunning, isError, stats);
   const prefixColor = getPrefixColor(prefix);
 
   const handleClick = () => {
@@ -277,7 +334,7 @@ export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowPr
     useConversationStore.getState().setActiveThread(targetSessionId);
   };
 
-  const status = isRunning ? 'running' : isError ? 'error' : 'success';
+  const status = isError ? 'error' : isRunning ? 'running' : 'success';
 
   return (
     <ActionRowChrome

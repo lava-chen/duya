@@ -1,122 +1,152 @@
 <p align="center">
-  <img src="./assets/readme/hero.gif" width="100%" alt="Duya — a local-first desktop AI agent for research, files, code, and visible workflows">
+  <img src="./assets/readme/hero.gif" width="100%" alt="Duya — a local-first desktop AI agent that turns research, files, and tool output into an editable project canvas">
+</p>
+
+<h1 align="center">Duya</h1>
+
+<p align="center">
+  A local-first desktop AI agent that works inside your projects while keeping its tools, changes, and permission decisions visible.
 </p>
 
 <p align="center">
   <a href="https://github.com/lava-chen/duya/releases">
-    <img src="https://img.shields.io/github/v/release/lava-chen/duya?style=flat-square" alt="GitHub release">
+    <img src="https://img.shields.io/github/v/release/lava-chen/duya?style=flat-square" alt="Latest GitHub release">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License">
   </a>
-  <a href="https://github.com/lava-chen/duya/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/lava-chen/duya/ci.yml?style=flat-square" alt="CI">
-  </a>
 </p>
 
-> Duya is in public beta. It is usable, but still rough. Expect fast iteration, visible bugs, and frequent release notes.
+> **Public beta:** Duya is usable today, but onboarding, packaged builds, and some experimental workflows still need broader real-world testing. Expect visible rough edges and frequent releases.
 
-**Duya is a local-first desktop AI agent.** It brings agent workflows into a desktop workspace where the agent can browse the web, read and edit files, run terminal commands, manage project references, and render visual artifacts — with every sensitive action visible and permission-based.
+Duya is for people who want an agent to do more than answer in a chat box. Open a project, give it a task, and let it research the web, inspect files, run commands, and create useful outputs without hiding the execution behind a remote job.
 
-The goal is not blind autonomy. It is **controlled agency**.
+"Local-first" describes the workspace and application state, not every model call. Conversations, sessions, tool history, settings, and project references are kept on your computer. When you use a remote model provider, the prompt and the context needed for that request are sent to that provider. You can also connect a local Ollama instance when you want model inference to stay on your machine.
 
 ---
 
-## Demo
+## One task, end to end
 
-A good first task looks like this:
+Start with one concrete task:
 
 ```text
-Research how local-first AI agents are different from cloud agents.
-Use the browser to collect sources, then create a markdown note in this project.
+Research how local-first AI agents differ from cloud agents.
+Use the browser to collect reliable sources, then create a cited Markdown note in this project.
 ```
 
-Duya will open the browser, search and navigate pages, capture what it finds, ask before writing files, and leave a cited note in your workspace — all inside the desktop app.
+During the run, Duya can:
+
+1. Open and navigate pages in its browser instead of relying only on search snippets.
+2. Show browser, file, and terminal activity as tool cards you can inspect.
+3. Pause for approval when the selected permission mode requires it.
+4. Write the finished note into the project so it remains useful after the chat ends.
+
+You can send a correction or new constraint while the task is still running. Duya will apply it at a safe checkpoint or queue it for the next turn rather than making you restart the session.
 
 ---
 
-## Why Duya?
+## Why a desktop agent?
 
-Most AI agent tools fall into one of three buckets:
-
-- **Terminal agents** are powerful, but intimidating for non-developers.
-- **Chat assistants** are easy to use, but cannot really operate inside your local workspace.
-- **Cloud agents** can run long tasks, but often hide execution details and move sensitive work away from your computer.
-
-Duya takes a different path: a desktop app that gives the agent real local tools while keeping every action visible, inspectable, and permission-gated.
+- **Work where the files already are.** Choose a project folder and give the agent access to the context it needs instead of uploading the whole workspace to a separate environment.
+- **See the work, not just the answer.** Browser actions, file operations, terminal output, permission requests, and generated artifacts stay attached to the conversation.
+- **Keep control during long tasks.** Interrupt a run, add instructions, switch permission modes, or continue later from locally persisted session history.
+- **Bring your own model.** Configure a hosted provider, an OpenAI- or Anthropic-compatible endpoint, or local Ollama, then choose which models are available in the app.
 
 ---
 
-<img src="./assets/readme/section-what.svg" width="100%" alt="What can Duya do?">
+## What can Duya do?
 
-### Research with a real browser
+<img src="./assets/readme/section-what.svg" width="100%" alt="What can Duya do? Browser, files, shell, canvas, and MCP capabilities">
 
-Duya can open pages, click elements, type into inputs, scroll, manage tabs, capture screenshots, and read network output. Useful when research means interacting with the web like a user, not just calling a search API.
+### Research with an interactive browser
 
-### Work with local files
+Open pages, click controls, type into forms, scroll, manage tabs, take screenshots, and inspect page or network output. This is useful when research requires interacting with a website rather than calling a search API once.
 
-Read, search, write, and edit files in your workspace. Supports standard agent coding tools such as `read`, `grep`, `glob`, `edit`, `write`, `bash`, and `PowerShell`. Generated or modified files can be opened directly from tool cards.
+### Read and change project files
 
-### Use project references
-
-Curate files that matter to the agent — project notes, `.duya` files, `.agents` files, `.claude` files, design docs, or task context — so the agent uses them as working context instead of guessing from scattered files.
+Search, read, create, and edit files in the selected workspace. File changes remain ordinary project files, and generated or modified files can be opened from their tool cards.
 
 ### Run terminal workflows
 
-Run shell commands when permitted, inspect outputs, and use terminal results as part of the task loop. Sensitive commands can be permission-gated.
+Execute shell commands, review their output, and use the result in the next step of a task. The default **Ask** permission mode separates routine reads from actions that require approval; **Auto** and **Bypass** are explicit opt-in modes with warnings.
 
-### Continue instructions during a run
+### Give the agent durable project context
 
-Send follow-up instructions into an active task instead of waiting for the whole run to finish. The Agent Mailbox model makes long-running tasks easier to steer.
+Pin the notes, specifications, agent instructions, and other reference files that should guide the work. Duya uses those references with the current project and session instead of guessing from unrelated files.
 
-### Create visual artifacts
+### Create and inspect artifacts
 
-Render widgets, diagrams, dashboards, charts, and mini visualizations inside the chat. Generated widgets pass through a visual self-review pipeline so the agent can inspect and improve the rendered result.
+Render Markdown, diagrams, charts, dashboards, document previews, and interactive widgets inside the workspace. Keep the explanation in chat while opening the resulting file or visual beside it.
 
-### Use Conductor canvas workflows
+### Extend the tool surface
 
-An experimental canvas mode supports elements, smart layout, viewport-aware packing, alignment-first snapping, collision handling, and agent-driven canvas operations.
+Install Skills, connect MCP servers, and use plugins to add specialized instructions and tools. These capabilities stay visible in the app rather than becoming an invisible global prompt.
+
+### Organize work on a canvas
+
+Conductor is an experimental project canvas for documents, shapes, tables, links, and agent-created diagrams. It is available for exploratory workflows, but it should not yet be treated as a fully stabilized core path.
 
 ---
 
 ## Quick start
 
-1. **Download** the latest beta from [Releases](https://github.com/lava-chen/duya/releases).
-2. **Install** the package for your platform:
+### 1. Download a beta build
 
-| Platform | Installer |
-| -------- | --------- |
-| Windows  | `.exe` |
-| macOS    | `.dmg` |
-| Linux    | `.AppImage` |
+Get the latest package from [GitHub Releases](https://github.com/lava-chen/duya/releases).
 
-3. **Configure a model provider** in the app. Duya supports multi-provider setups. Your API key is stored locally with OS-level protection and masked in the UI.
-4. **Run a first task:**
+| Platform | Package | Beta status |
+| --- | --- | --- |
+| Windows x64 | `.exe` installer | Primary packaged test path |
+| macOS Intel / Apple silicon | `.dmg` | Available, with less smoke-test coverage |
+| Linux | `.AppImage`, `.deb`, or `.rpm` | Available, with less smoke-test coverage |
 
-```text
-Use the browser to research one topic and create a markdown note.
-```
+### 2. Configure a model
 
-```text
-Read this project folder and summarize what the project does.
-```
+In the provider settings, choose one of these paths:
 
-```text
-Inspect this small codebase, run tests if needed, and suggest one safe fix. Ask before editing files.
-```
+- Connect a hosted provider or compatible API endpoint and enter its API key.
+- Connect local Ollama, which does not require a hosted-model API key.
+
+Duya includes presets for common providers and also accepts compatible custom endpoints. Provider availability, model access, pricing, and data handling remain subject to the provider you choose.
+
+### 3. Open a project
+
+Choose the folder Duya should work in. This folder becomes the task's project context and default working directory for file search, edits, commands, references, and generated outputs.
+
+### 4. Run the first task
+
+Use the end-to-end research prompt above. A successful first run should show browser activity in the conversation and produce a Markdown note inside the selected project.
 
 ---
 
-<img src="./assets/readme/section-privacy.svg" width="100%" alt="Privacy and control">
+## Privacy and control
 
-Duya is designed as a local-first desktop app:
+<img src="./assets/readme/section-privacy.svg" width="100%" alt="Privacy and control with permission prompts enabled">
 
-- Conversations and workspace data are stored locally by default.
-- You choose your model provider and API key.
-- Tool actions are rendered as visible tool cards.
-- Sensitive actions can require explicit approval.
-- Provider credentials are masked in the UI.
-- Local persistence keeps sessions, tool outputs, and task state independent of any single process.
+Duya keeps application state local, but local-first is not the same as offline or end-to-end encrypted.
+
+### What stays on your computer
+
+- Conversation history, session state, tool results, and project references are persisted locally.
+- Project files are read and changed in the workspace you selected.
+- Provider configuration is stored in Duya's local app-data directory.
+- API keys are protected with Electron `safeStorage` when operating-system encryption is available, and Duya requests owner-only permissions for the configuration file on platforms that support them. If `safeStorage` is unavailable, the configuration remains local but should not be treated as encrypted at rest.
+
+### What can leave your computer
+
+- A remote model provider receives the prompts, conversation context, tool results, and file-derived context needed for each model request.
+- Browser research contacts the websites you ask Duya to visit.
+- Connected MCP servers, plugins, gateways, and other external services follow their own data paths and policies.
+
+Using local Ollama can keep model inference local, but browser requests and any external tools you enable still use the network. Duya's local database and ordinary project files are not end-to-end encrypted by Duya itself, so operating-system account and disk security still matter.
+
+### Permission modes
+
+- **Ask** is the safe default. Routine reads can proceed while writes, edits, commands, or other protected actions can pause for a decision according to the active permission rules.
+- **Auto** reduces prompts for approved categories of work.
+- **Bypass** grants broad execution authority and should only be enabled when you understand the workspace and task.
+
+Tool calls remain visible in the conversation, and switching to a less restrictive mode requires an explicit confirmation in the UI.
 
 ---
 
@@ -124,23 +154,30 @@ Duya is designed as a local-first desktop app:
 
 <img src="./assets/readme/workflow.svg" width="100%" alt="Duya architecture overview">
 
-Duya separates the UI, Electron main process, local persistence, and isolated agent runtimes:
+Duya separates responsibilities so one chat loop does not own the entire application:
 
-```text
-Renderer UI
-  ↕
-Electron Main Process
-  ↕
-Agent Server / IPC / SQLite
-  ↕
-Isolated Agent Worker Processes
-  ↕
-Tools: browser, files, shell, memory, skills, MCP, conductor
-```
+- The **renderer** presents chat, tool cards, project panels, previews, and canvases.
+- The **Electron main process** owns local persistence, application services, IPC, and agent-process lifecycle.
+- **Agent workers** run in child processes and communicate through the local Agent Server and IPC boundaries.
+- Browser, file, shell, Skill, MCP, memory, and canvas capabilities are exposed as tools rather than hidden side effects.
 
-Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers.
+This process separation improves interruption, recovery, and session isolation. It is not a promise of a hardened operating-system sandbox on every platform.
 
-This structure is designed so agent runs can be isolated, persisted, interrupted, and recovered more reliably than a single in-process chat loop.
+Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the detailed data flows and [docs/SECURITY.md](./docs/SECURITY.md) for the current security model and limitations.
+
+---
+
+## Beta status and known limits
+
+Duya is still a public beta. Before relying on it for sensitive or irreplaceable work, keep normal backups and review the selected permission mode.
+
+Current limits include:
+
+- First-run onboarding and packaged upgrade paths still need broader real-user testing.
+- macOS and Linux packages have less smoke-test coverage than the Windows build.
+- Conductor and several advanced workspace workflows remain experimental.
+- Process isolation is implemented, but sandbox guarantees and tool restrictions vary by platform and configuration.
+- Provider behavior, availability, cost, and retention policies are controlled by the provider you connect.
 
 ---
 
@@ -148,17 +185,15 @@ This structure is designed so agent runs can be isolated, persisted, interrupted
 
 ```bash
 npm install
-npm run electron:dev   # desktop app in development
-npm run electron:build # production build
-npm run typecheck:all  # run before committing
-npm run test           # unit tests
+npm run electron:dev   # start Vite and Electron
+npm run electron:build # build the desktop application
+npm run typecheck:all  # type-check every workspace
+npm run test           # run unit tests
 ```
 
-Other useful scripts:
+Useful packaging and diagnostic commands:
 
 ```bash
-npm run build:agent
-npm run bundle:agent
 npm run electron:pack
 npm run electron:verify:packaged
 npm run diagnose:env
@@ -168,25 +203,19 @@ npm run diagnose:env
 
 ```text
 src/                  Renderer UI
-electron/             Electron main process, IPC, local services
-packages/agent/       Agent runtime, tools, prompts, modes
+electron/             Electron main process, IPC, and local services
+packages/agent/       Agent runtime, tools, prompts, and modes
 packages/cli/         Desktop control-plane CLI
-packages/conductor/   Canvas / conductor subsystem
+packages/conductor/   Canvas and Conductor subsystem
 packages/gateway/     External channel gateway package
-scripts/              Build, bundle, packaging, diagnostics
-docs/                 Architecture, execution plans, release notes
+scripts/              Build, bundle, packaging, and diagnostics
+docs/                 Architecture, execution plans, and release notes
 ```
 
----
-
-## Current beta status
-
-Recently landed: multi-provider architecture, Agent Mailbox, typed permission flow, Codex-aligned chat composer, right-side workspace panel, Office/notebook previews, terminal panel, project references, plugin/skill/MCP layer, CLI control plane, widget rendering, Conductor canvas smart layout, and a stability audit across the agent core and tools.
-
-Known caveats: onboarding needs real-user testing, some workflows are rough or experimental, macOS and Linux packages need more smoke testing, and enterprise workspace features are not the current public-beta focus.
+Before contributing, read [AGENTS.md](./AGENTS.md) and check the active work in [docs/exec-plans/README.md](./docs/exec-plans/README.md).
 
 ---
 
 ## License
 
-MIT
+[MIT](./LICENSE)

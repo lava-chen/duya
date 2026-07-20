@@ -110,6 +110,11 @@ const interagentRouter = new InteragentRouter({
 });
 
 workerManager.setMessageHandler((sessionId, msg) => {
+  if (msg.type === 'chat:background_task_ready' && msg.sessionId === sessionId) {
+    process.send?.({ type: 'chat:background_task_ready', sessionId });
+    return;
+  }
+
   if (msg.type === 'interagent:invoke') {
     // Fire and forget — errors are handled internally and sent as chat:error
     void interagentRouter.handleInvoke({

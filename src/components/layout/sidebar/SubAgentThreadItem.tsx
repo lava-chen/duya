@@ -5,7 +5,7 @@ import { useConversationStore, type Thread } from '@/stores/conversation-store';
 import { CircleNotchIcon, CheckIcon, XIcon, RobotIcon } from '@/components/icons';
 import { subscribeToPhase } from '@/lib/stream-session-manager';
 import type { StreamPhase } from '@/types/message';
-import { useSubAgents } from '@/components/chat/SubAgentPanel';
+import { useSubAgentProgress } from '@/hooks/useSubAgentProgress';
 
 interface SubAgentThreadItemProps {
   thread: Thread;
@@ -17,7 +17,7 @@ const ACTIVE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permiss
 export function SubAgentThreadItem({ thread, isActive }: SubAgentThreadItemProps) {
   const { setActiveThread } = useConversationStore();
   const [isRunning, setIsRunning] = useState(false);
-  const subAgents = useSubAgents(thread.id);
+  const subAgents = useSubAgentProgress(thread.id);
 
   // Subscribe to stream phase changes
   useEffect(() => {

@@ -7,6 +7,7 @@ export interface ParsedSubAgentToolResult {
   agentId?: string;
   taskId?: string;
   background?: boolean;
+  status?: 'running' | 'completed' | 'failed';
   error?: string;
 }
 
@@ -32,6 +33,10 @@ export function parseSubAgentToolResult(result: string | null | undefined): Pars
       agentId: optionalString(parsed.agentId),
       taskId: optionalString(parsed.taskId),
       background: parsed.background === true,
+      status:
+        parsed.status === 'running' || parsed.status === 'completed' || parsed.status === 'failed'
+          ? parsed.status
+          : undefined,
       error: optionalString(parsed.error),
     };
   } catch {

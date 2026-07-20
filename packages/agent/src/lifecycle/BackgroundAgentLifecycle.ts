@@ -159,10 +159,20 @@ export class BackgroundAgentLifecycle {
       }, 'SubAgent')
     }
     let lastMessage: Message | undefined
+    let terminalProgress: 'done' | 'error' | undefined
+    let progressError: string | undefined
 
     try {
       for await (const ev of source) {
         if (isAgentProgressEvent(ev)) {
+          if (ev.type === 'done') {
+            terminalProgress = 'done'
+          } else if (ev.type === 'error') {
+            terminalProgress = 'error'
+            progressError = typeof ev.data === 'string' && ev.data.trim()
+              ? ev.data
+              : 'Sub-agent reported an error'
+          }
           logger.debug('[SubAgent] lifecycle progress event', {
             taskId,
             eventType: ev.type,
@@ -172,8 +182,8 @@ export class BackgroundAgentLifecycle {
           // applyProgressEvent calls `onProgress` (which the SubagentTool wires
           // to emitLiveProgress → sendEvent) and updates the progress snapshot.
           // We must NOT send a second chat:agent_progress event here — that
-          // duplicates the SSE payload and the renderer's SubAgentPanel
-          // showed every progress event twice (manifesting as 6 panel rows
+          // duplicates the SSE payload and the renderer's agent surfaces
+          // showed every progress event twice (manifesting as 6 rows
           // for 3 spawned sub-agents, one per emit path).
           await applyProgressEvent({ record: r, onProgress }, ev)
         } else {
@@ -181,12 +191,18 @@ export class BackgroundAgentLifecycle {
         }
       }
       const result = extractResultFromLastMessage(lastMessage)
-      this.complete(taskId, result)
-      this.enqueueTaskNotification(taskId, 'completed', {
-        finalMessage: extractFinalText(result),
-        totalToolUseCount: result.totalToolUseCount,
-        totalDurationMs: result.totalDurationMs,
-      })
+      const taskError = progressError ?? extractAgentError(lastMessage)
+      if (taskError) {
+        this.fail(taskId, taskError)
+        this.enqueueTaskNotification(taskId, 'failed', { error: taskError })
+      } else {
+        this.complete(taskId, result)
+        this.enqueueTaskNotification(taskId, 'completed', {
+          finalMessage: extractFinalText(result),
+          totalToolUseCount: result.totalToolUseCount,
+          totalDurationMs: result.totalDurationMs,
+        })
+      }
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         logger.warn('[SubAgent] lifecycle aborted', { taskId, err }, 'SubAgent')
@@ -196,6 +212,9 @@ export class BackgroundAgentLifecycle {
         const message = (err as Error).message ?? 'Unknown error'
         logger.error('[SubAgent] lifecycle failed', err as Error, { taskId }, 'SubAgent')
         this.fail(taskId, message)
+        if (terminalProgress !== 'error') {
+          onProgress?.({ type: 'error', data: message, agentId: taskId })
+        }
         this.enqueueTaskNotification(taskId, 'failed', { error: message })
       }
     } finally {
@@ -235,7 +254,11 @@ export class BackgroundAgentLifecycle {
       error: extras.error,
       maxResultChars: this.maxResultChars,
     }
-    enqueuePendingNotification(buildTaskNotificationXml(input), { taskId, status })
+    enqueuePendingNotification(
+      buildTaskNotificationXml(input),
+      { taskId, status },
+      r.parentSessionId,
+    )
   }
 
   /**
@@ -276,4 +299,9 @@ function extractFinalText(result: NonNullable<TaskRecord['result']>): string {
   return result.content
     .map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
     .join('\n')
+}
+
+function extractAgentError(message: Message | undefined): string | undefined {
+  const value = message?.metadata?.agentError
+  return typeof value === 'string' && value.trim() ? value : undefined
 }

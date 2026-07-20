@@ -46,6 +46,8 @@ export interface ChatOptions {
    * Injected into ToolUseContext.conductorCanvasId.
    */
   conductorCanvasId?: string;
+  /** Internal background-task follow-up; never supplied by user input. */
+  backgroundTaskResume?: boolean;
 }
 
 export interface AgentEvent {
@@ -151,6 +153,7 @@ export class AgentServerClient {
             effort: options?.effort,
             conductorMode: options?.conductorMode,
             conductorCanvasId: options?.conductorCanvasId,
+            backgroundTaskResume: options?.backgroundTaskResume,
           },
           providerConfig: options?.providerConfig,
           workingDirectory: options?.workingDirectory,

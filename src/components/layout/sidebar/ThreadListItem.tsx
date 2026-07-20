@@ -6,7 +6,7 @@ import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, 
 import { subscribeToPhase } from "@/lib/stream-session-manager";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { StreamPhase } from "@/types/message";
-import { useSubAgents } from "@/components/chat/SubAgentPanel";
+import { useSubAgentProgress, type SubAgentRowInfo } from "@/hooks/useSubAgentProgress";
 import type { TranslationKey } from "@/i18n";
 
 type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
@@ -74,7 +74,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const subAgents = useSubAgents(thread.id);
+  const subAgents = useSubAgentProgress(thread.id);
   const displayTitle = getThreadDisplayTitle(t, thread);
 
   const hasChildren = childrenThreads.length > 0;
@@ -345,7 +345,7 @@ function ChildThreadListItem({ thread }: { thread: Thread }) {
 }
 
 interface SubAgentBadgesProps {
-  agents: import("@/components/chat/SubAgentPanel").SubAgentInfo[];
+  agents: SubAgentRowInfo[];
   isRunning: boolean;
 }
 

@@ -267,6 +267,8 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       return { type: 'chat:error', message: event.data as string };
     case 'result':
       return { type: 'chat:token_usage', ...(event.data as object) };
+    case 'context_usage':
+      return { type: 'chat:context_usage', ...(event.data as object) };
     default:
       return null;
   }
@@ -641,6 +643,12 @@ describe('Agent Process Entry', () => {
       const result = convertSSEToAgentMessage({ type: 'result', data: usage });
       expect(result?.type).toBe('chat:token_usage');
       expect((result as { input_tokens: number }).input_tokens).toBe(100);
+    });
+
+    it('converts live context usage events', () => {
+      const usage = { usedTokens: 120_000, contextWindow: 200_000, percentFull: 60 };
+      const result = convertSSEToAgentMessage({ type: 'context_usage', data: usage });
+      expect(result).toEqual({ type: 'chat:context_usage', ...usage });
     });
 
     it('returns null for unknown event type', () => {

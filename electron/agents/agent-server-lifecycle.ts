@@ -1,7 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
-import { app } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
 import { handleDbRequest } from './db-bridge';
 import { killProcessTree } from '../lib/process-cleanup';
@@ -93,6 +93,15 @@ export function spawnAgentServer(): Promise<number> {
     let stdoutBuffer = '';
 
     child.on('message', (msg: any) => {
+      if (msg.type === 'chat:background_task_ready' && typeof msg.sessionId === 'string') {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send('chat:background_task_ready', { sessionId: msg.sessionId });
+          }
+        }
+        return;
+      }
+
       if (msg.type === 'db:request') {
         handleDbRequest(msg).then((response) => {
           if (!child.killed) {

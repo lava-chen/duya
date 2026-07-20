@@ -304,6 +304,8 @@ interface StartStreamParams {
   conductorCanvasId?: string;
   /** Mailbox row backing a user message queued while another run is active. */
   queuedMailboxId?: string;
+  /** Internal follow-up turn that consumes queued background task results. */
+  backgroundTaskResume?: boolean;
 }
 
 interface StartStreamResult {
@@ -560,6 +562,8 @@ class StreamSessionManager {
   private sessions: Map<string, SessionState> = new Map();
   private conductorSessions: Map<string, ConductorSessionState> = new Map();
   private pendingMessages: Map<string, StartStreamParams[]> = new Map();
+  private backgroundResumeTemplates = new Map<string, StartStreamParams>();
+  private pendingBackgroundResumes = new Set<string>();
   private drainingQueuedSessions = new Set<string>();
   private textEmitInterval = 300; // Increased from 100ms to reduce UI flickering
   private idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
@@ -1029,8 +1033,51 @@ class StreamSessionManager {
     }
   }
 
+  async resumeBackgroundTask(sessionId: string): Promise<boolean> {
+    const state = this.getOrCreateState(sessionId);
+    if (isActivePhase(state.phase)) {
+      // The worker may signal completion a few milliseconds before the
+      // foreground SSE client processes its terminal event. Keep the wakeup
+      // until that stream becomes terminal instead of silently dropping it.
+      this.pendingBackgroundResumes.add(sessionId);
+      return false;
+    }
+
+    this.pendingBackgroundResumes.delete(sessionId);
+    const template = this.backgroundResumeTemplates.get(sessionId);
+    await this.startStream({
+      ...template,
+      sessionId,
+      content: '',
+      displayContent: undefined,
+      files: undefined,
+      queuedMailboxId: undefined,
+      backgroundTaskResume: true,
+    });
+    return true;
+  }
+
+  private startPendingBackgroundResume(sessionId: string): void {
+    if (!this.pendingBackgroundResumes.has(sessionId)) return;
+
+    this.pendingBackgroundResumes.delete(sessionId);
+    void this.resumeBackgroundTask(sessionId).catch((error) => {
+      console.error('[stream-session-manager] Failed to resume background task:', error);
+    });
+  }
+
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId } = params;
+    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume } = params;
+
+    if (!backgroundTaskResume) {
+      this.backgroundResumeTemplates.set(sessionId, {
+        ...params,
+        content: '',
+        displayContent: undefined,
+        files: undefined,
+        queuedMailboxId: undefined,
+      });
+    }
 
     // Resolve workingDirectory from the thread store — sessionId IS the threadId
     let workingDirectory: string | undefined;
@@ -1188,7 +1235,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, displayContent, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId },
+      { content, displayContent, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId, backgroundTaskResume },
       nextGeneration
     );
 
@@ -1220,6 +1267,7 @@ class StreamSessionManager {
       effort?: string;
       conductorMode?: boolean;
       conductorCanvasId?: string;
+      backgroundTaskResume?: boolean;
     },
     generation: number
   ): Promise<void> {
@@ -1411,6 +1459,7 @@ class StreamSessionManager {
         effort: params.effort,
         conductorMode: params.conductorMode,
         conductorCanvasId: params.conductorCanvasId,
+        backgroundTaskResume: params.backgroundTaskResume,
       } satisfies ChatOptions);
     } catch (error) {
       console.error('[stream-session-manager] Agent Server error:', error);
@@ -1818,6 +1867,7 @@ class StreamSessionManager {
     this.notifyListeners(sessionId);
     this.clearIdleTimeout(sessionId);
     this.autoStartQueuedStream(sessionId);
+    this.startPendingBackgroundResume(sessionId);
     showMessageCompletionNotification(sessionId).catch(() => {
       // Ignore notification errors
     });
@@ -1840,6 +1890,7 @@ class StreamSessionManager {
     this.notifyListeners(sessionId);
     this.clearIdleTimeout(sessionId);
     this.autoStartQueuedStream(sessionId);
+    this.startPendingBackgroundResume(sessionId);
   }
 
   private handleDbPersistedEvent(
@@ -2412,6 +2463,7 @@ export const streamSessionManager = getStreamManager();
 
 export const ensureSession = (sessionId: string) => streamSessionManager.ensureSession(sessionId);
 export const startStream = (params: StartStreamParams) => streamSessionManager.startStream(params);
+export const resumeBackgroundTask = (sessionId: string) => streamSessionManager.resumeBackgroundTask(sessionId);
 export const stopStream = (sessionId: string, reason?: string) => streamSessionManager.stopStream(sessionId, reason);
 export const canSend = (sessionId: string) => streamSessionManager.canSend(sessionId);
 export const enqueueMessage = (sessionId: string, params: StartStreamParams) => streamSessionManager.enqueueMessage(sessionId, params);

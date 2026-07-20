@@ -64,7 +64,12 @@ coverage/
 !src/lib/message-input-logic.spec.ts
 !src/lib/chat-file-links.test.ts
 !src/components/chat/RichTextInput.test.tsx
+!src/hooks/useSubAgentProgress.test.ts
+!src/components/chat/tools/rows/SubAgentToolRow.test.tsx
+!src/components/layout/TaskDrawer.test.tsx
 !src/components/chat/SlashCommandPopover.test.tsx
+!packages/conductor/src/renderer/components/native/__tests__/native-element-capabilities.test.ts
+!packages/conductor/src/renderer/components/native/editing/__tests__/useElementEditSession.test.tsx
 !src/components/chat/SubAgentPanel.test.tsx
 !src/components/chat/__tests__/FileEditToolRow.test.tsx
 # Untrack unit-test source for these packages.

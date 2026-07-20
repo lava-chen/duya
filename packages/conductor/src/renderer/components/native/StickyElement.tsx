@@ -1,14 +1,14 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CanvasElement } from "../..//types/conductor";
-import { updateElementContent } from "../..//ipc/conductor-ipc";
-import { useConductorStore } from "../..//stores/conductor-store";
 import { STICKY_COLORS, type StickyColorKey } from "./sticky-colors";
 import { FloatingTextToolbar } from "./FloatingTextToolbar";
 import { looksLikeHtml, textToHtml, htmlToText } from "./text-html";
+import { useElementEditSession } from "./editing/useElementEditSession";
+import { useElementPersistence } from "./editing/useElementPersistence";
 
 const STICKY_MARKDOWN_COMPONENTS = {
   h1: ({ children, ...props }: any) => (
@@ -118,13 +118,7 @@ function DiagramShapeBackdrop({
 }
 
 export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element }) => {
-  const updateElement = useConductorStore((state) => state.updateElement);
-  const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
-  const editingElementId = useConductorStore((state) => state.editingElementId);
-  const setEditingElementId = useConductorStore((state) => state.setEditingElementId);
-  const setUiError = useConductorStore((state) => state.setUiError);
-
-  const isEditing = editingElementId === element.id;
+  const persist = useElementPersistence(element);
   const color = (element.config.color as StickyColorKey) || "yellow";
   const theme = STICKY_COLORS[color] ?? STICKY_COLORS.yellow;
   const text = (element.config.text as string) || "";
@@ -166,64 +160,46 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   const isShortShape = shape === "diamond" || shape === "ellipse" || shape === "triangle" || shape === "hexagon";
   const effectiveFontSize = isShortShape && text.length > 20 ? Math.max(16, fontSize - 4) : fontSize;
 
-  const [editHtml, setEditHtml] = useState(textToHtml(text));
   const contentEditableRef = useRef<HTMLDivElement>(null);
   const [editorContainer, setEditorContainer] = useState<HTMLDivElement | null>(null);
   const setEditorRef = useCallback((node: HTMLDivElement | null) => {
     contentEditableRef.current = node;
     setEditorContainer(node);
   }, []);
-  // Guards against double-handling when Escape triggers blur during unmount.
-  const exitModeRef = useRef<"save" | "cancel" | null>(null);
-  // Skip React state sync while an IME composition is in progress so the
-  // browser's composition DOM is not reset mid-composition.
-  const isComposingRef = useRef(false);
+  const focusEditor = useCallback(() => {
+    const editor = contentEditableRef.current;
+    if (!editor) return;
+    editor.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, []);
 
-  useEffect(() => {
-    setEditHtml(textToHtml(text));
-  }, [element.id, text]);
-
-  useEffect(() => {
-    if (isEditing) {
-      exitModeRef.current = null;
-      if (contentEditableRef.current) {
-        contentEditableRef.current.focus();
-        // Place caret at end so typing appends rather than prepends.
-        const selection = window.getSelection();
-        if (selection) {
-          const range = document.createRange();
-          range.selectNodeContents(contentEditableRef.current);
-          range.collapse(false);
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }
-      }
-    }
-  }, [isEditing]);
-
-  const save = useCallback(() => {
-    if (exitModeRef.current !== null) return;
-    exitModeRef.current = "save";
-    const nextHtml = contentEditableRef.current?.innerHTML ?? editHtml;
-    // Strip empty editor placeholder before comparing/saving.
+  const commitDraft = useCallback((nextHtml: string) => {
     const normalized = htmlToText(nextHtml);
     if (normalized !== text.trim()) {
-      const newConfig = { ...element.config, text: normalized };
-      updateElement(element.id, { config: newConfig });
-      if (activeCanvasId) {
-        updateElementContent(element.id, activeCanvasId, { text: normalized })
-          .catch((err) => setUiError(`Save sticky failed: ${err instanceof Error ? err.message : err}`));
-      }
+      persist({ config: { text: normalized } }, "Save sticky failed");
     }
-    setEditingElementId(null);
-  }, [activeCanvasId, editHtml, element.config, element.id, setEditingElementId, setUiError, text, updateElement]);
+  }, [persist, text]);
 
-  const cancel = useCallback(() => {
-    if (exitModeRef.current !== null) return;
-    exitModeRef.current = "cancel";
-    setEditHtml(textToHtml(text));
-    setEditingElementId(null);
-  }, [setEditingElementId, text]);
+  const {
+    isEditing,
+    draft: editHtml,
+    setDraft: setEditHtml,
+    save,
+    cancel,
+    isComposingRef,
+  } = useElementEditSession({
+    elementId: element.id,
+    source: text,
+    createDraft: textToHtml,
+    onCommit: commitDraft,
+    focusEditor,
+  });
 
   const hasText = text.trim().length > 0;
   const isEmptyEditor = htmlToText(editHtml).trim().length === 0;
