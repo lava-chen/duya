@@ -15,6 +15,7 @@ import {
 } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSubAgentProgress, type SubAgentRowInfo } from "@/hooks/useSubAgentProgress";
+import { useTranslation } from "@/hooks/useTranslation";
 import { setTaskDrawerOpen, useTaskDrawerOpen } from "./task-drawer-store";
 import { useRecap, clearRecap } from "./recap-store";
 
@@ -82,6 +83,7 @@ export function useTaskList(threadId: string | null) {
 }
 
 export function TaskDrawer() {
+  const { t } = useTranslation();
   const open = useTaskDrawerOpen();
   const onClose = useCallback(() => setTaskDrawerOpen(false), []);
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
@@ -173,7 +175,7 @@ export function TaskDrawer() {
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className="task-card-shell"
             role="dialog"
-            aria-label="Task list"
+            aria-label={t('taskDrawer.ariaLabel')}
             data-testid="task-card"
           >
             <DrawerHeader
@@ -197,7 +199,7 @@ export function TaskDrawer() {
               {!collapsed && (
                 <div className="task-card-list-inner">
                   {agents.length > 0 && (
-                    <TaskDrawerSection label="Agents">
+                    <TaskDrawerSection label={t('taskDrawer.agents')}>
                       {agents.map((agent) => (
                         <AgentRow
                           key={agent.id}
@@ -211,9 +213,9 @@ export function TaskDrawer() {
                       ))}
                     </TaskDrawerSection>
                   )}
-                  <TaskDrawerSection label="Tasks">
+                  <TaskDrawerSection label={t('taskDrawer.tasks')}>
                   {tasks.length === 0 && !loading && (
-                    <div className="task-card-empty">No tasks yet.</div>
+                    <div className="task-card-empty">{t('taskDrawer.empty')}</div>
                   )}
                   {tasks.map((task) => (
                     <TaskRow
@@ -251,6 +253,7 @@ function DrawerHeader({
   onToggleCollapsed: () => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="task-card-header">
       <button
@@ -263,21 +266,23 @@ function DrawerHeader({
           size={11}
           className={`task-card-title-caret${collapsed ? "" : " open"}`}
         />
-        <span className="task-card-title-text">Tasks</span>
-        <span className="task-card-count">{pending} open</span>
+        <span className="task-card-title-text">{t('taskDrawer.title')}</span>
+        <span className="task-card-count">{t('taskDrawer.openCount', { count: pending })}</span>
         {totalAgents > 0 && (
           <span className="task-card-agent-count">
-            {runningAgents > 0 ? `${runningAgents} running` : `${totalAgents} agents`}
+            {runningAgents > 0
+              ? t('taskDrawer.runningAgents', { count: runningAgents })
+              : t('taskDrawer.totalAgents', { count: totalAgents })}
           </span>
         )}
-        {completed > 0 && <span className="task-card-done-count">{completed} done</span>}
+        {completed > 0 && <span className="task-card-done-count">{t('taskDrawer.doneCount', { count: completed })}</span>}
       </button>
       <button
         type="button"
         onClick={onClose}
         className="task-card-icon-button"
-        title="Close"
-        aria-label="Close"
+        title={t('taskDrawer.close')}
+        aria-label={t('taskDrawer.close')}
       >
         <XIcon size={14} />
       </button>
@@ -308,7 +313,7 @@ function AgentRow({ agent, onOpen }: { agent: SubAgentRowInfo; onOpen: () => voi
       className="task-card-agent-row"
       onClick={onOpen}
       disabled={!canOpen}
-      title={canOpen ? `Open ${agent.name}` : `${agent.name} is starting`}
+      title={canOpen ? t('taskDrawer.openAgent', { name: agent.name }) : t('taskDrawer.agentStarting', { name: agent.name })}
     >
       <span className="task-card-agent-icon" style={{ color: agent.color }}>
         <RobotIcon size={13} />
@@ -329,14 +334,16 @@ function TaskRow({
   onToggleStatus: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
+  const isCompleted = task.status === "completed";
   return (
     <div className="task-card-row group" title={task.description}>
       <button
         type="button"
         onClick={onToggleStatus}
         className="task-card-status"
-        title={task.status === "completed" ? "Reopen" : "Mark done"}
-        aria-label={task.status === "completed" ? "Reopen task" : "Mark task done"}
+        title={isCompleted ? t('taskDrawer.reopen') : t('taskDrawer.markDone')}
+        aria-label={isCompleted ? t('taskDrawer.reopenTask') : t('taskDrawer.markTaskDone')}
       >
         {statusIcons[task.status]}
       </button>
@@ -347,16 +354,16 @@ function TaskRow({
         <span className="task-card-row-meta">{task.owner}</span>
       )}
       {task.blockedBy.length > 0 && (
-        <span className="task-card-row-blocked">blocked</span>
+        <span className="task-card-row-blocked">{t('taskDrawer.blocked')}</span>
       )}
       <div className="task-card-row-actions">
-        {task.status === "completed" ? (
+        {isCompleted ? (
           <button
             type="button"
             onClick={onToggleStatus}
             className="task-card-row-action"
-            title="Reopen"
-            aria-label="Reopen task"
+            title={t('taskDrawer.reopen')}
+            aria-label={t('taskDrawer.reopenTask')}
           >
             <ArrowCounterClockwiseIcon size={11} />
           </button>
@@ -365,8 +372,8 @@ function TaskRow({
           type="button"
           onClick={onDelete}
           className="task-card-row-action danger"
-          title="Delete"
-          aria-label="Delete task"
+          title={t('taskDrawer.delete')}
+          aria-label={t('taskDrawer.delete')}
         >
           <TrashIcon size={11} />
         </button>
@@ -376,6 +383,7 @@ function TaskRow({
 }
 
 function RecapBlock({ text, onDismiss }: { text: string; onDismiss: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="task-card-recap">
       <ClockCounterClockwiseIcon
@@ -389,8 +397,8 @@ function RecapBlock({ text, onDismiss }: { text: string; onDismiss: () => void }
         type="button"
         onClick={onDismiss}
         className="task-card-recap-close"
-        title="Dismiss recap"
-        aria-label="Dismiss recap"
+        title={t('taskDrawer.dismissRecap')}
+        aria-label={t('taskDrawer.dismissRecap')}
       >
         <XIcon size={11} />
       </button>
