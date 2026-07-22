@@ -11,6 +11,7 @@ import { BaseTool } from '../BaseTool.js';
 import { BROWSER_TOOL_NAME, BROWSER_TOOL_DESCRIPTION } from './constants.js';
 import { ExtensionCDPClient, type ICDPClient } from './CDPClient.js';
 import { WebviewCDPClient } from './WebviewCDPClient.js';
+import { HumanLikeCDPClient } from './HumanLikeCDPClient.js';
 import { resolveBackend, DEFAULT_BROWSER_CONFIG, type BrowserToolConfig } from './backend-resolver.js';
 import { SnapshotEngine } from './SnapshotEngine.js';
 import { FallbackBrowser } from './FallbackBrowser.js';
@@ -110,10 +111,10 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     this.currentSessionId = resolvedSessionId;
     const config = this.config ?? DEFAULT_BROWSER_CONFIG;
 
-    // Probe extension health (with timeout). Skipped entirely in built-in mode.
+    // Probe extension health (with timeout). Skipped entirely in built-in or human-like mode.
     const extensionClient = new ExtensionCDPClient(resolvedSessionId);
     let extensionOnline = false;
-    if (config.mode !== 'built-in') {
+    if (config.mode !== 'built-in' && config.mode !== 'human-like') {
       try {
         const health = await Promise.race([
           extensionClient.health(),
@@ -149,6 +150,19 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
         this.cdp = webviewClient;
         this.snapshotEngine = new SnapshotEngine(webviewClient);
         this.mode = 'webview';
+        this.extensionAvailable = false;
+        return;
+      }
+      case 'human-like': {
+        const webviewClient = new WebviewCDPClient(resolvedSessionId);
+        const humanLikeClient = new HumanLikeCDPClient({
+          base: webviewClient,
+          mode: 'human-like',
+        });
+        await humanLikeClient.connect();
+        this.cdp = humanLikeClient;
+        this.snapshotEngine = new SnapshotEngine(webviewClient);
+        this.mode = 'human-like';
         this.extensionAvailable = false;
         return;
       }

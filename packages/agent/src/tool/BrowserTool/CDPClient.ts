@@ -6,8 +6,10 @@
  */
 
 import { EventEmitter } from 'events';
+import { logger } from '../../utils/logger.js';
 import { generateStealthJs } from './stealth.js';
 import { WebviewCDPClient } from './WebviewCDPClient.js';
+import { HumanLikeCDPClient } from './HumanLikeCDPClient.js';
 
 export interface CDPResponse {
   id?: number;
@@ -17,7 +19,7 @@ export interface CDPResponse {
   params?: unknown;
 }
 
-export type CDPMode = 'extension' | 'playwright' | 'webview';
+export type CDPMode = 'extension' | 'playwright' | 'webview' | 'human-like';
 
 export interface TabInfo {
   id?: number | string;
@@ -1246,7 +1248,7 @@ export async function fetchBlockedDomains(): Promise<string[]> {
  */
 export async function createCDPClientForMode(
   sessionId: string,
-  mode: 'auto' | 'extension' | 'built-in',
+  mode: 'auto' | 'extension' | 'built-in' | 'human-like',
   options: { background?: boolean } = {},
 ): Promise<ICDPClient> {
   if (mode === 'extension') {
@@ -1254,22 +1256,31 @@ export async function createCDPClientForMode(
     const health = await extensionClient.health();
     if (health.status === 'ok') {
       await extensionClient.connect();
-      console.log('[BrowserTool] Extension mode connected');
+      logger.info('Extension mode connected', undefined, 'BrowserTool');
       return extensionClient;
     }
     throw new Error('Browser backend mode is "extension" but the Chrome extension is not connected.');
   }
 
-  if (mode === 'built-in') {
+  if (mode === 'built-in' || mode === 'human-like') {
     const webviewClient = new WebviewCDPClient(sessionId, options);
     const health = await webviewClient.health();
     if (health.status === 'ok') {
       await webviewClient.connect();
-      console.log('[BrowserTool] Built-in webview mode connected');
+      if (mode === 'human-like') {
+        const humanLikeClient = new HumanLikeCDPClient({
+          base: webviewClient,
+          mode: 'human-like',
+        });
+        await humanLikeClient.connect();
+        logger.info('Human-like webview mode connected', undefined, 'BrowserTool');
+        return humanLikeClient;
+      }
+      logger.info('Built-in webview mode connected', undefined, 'BrowserTool');
       return webviewClient;
     }
     throw new Error(
-      'Browser backend mode is "built-in" but the DUYA webview daemon is not reachable. ' +
+      `Browser backend mode is "${mode}" but the DUYA webview daemon is not reachable. ` +
       'Open the browser panel so the webview can register.'
     );
   }
@@ -1279,7 +1290,7 @@ export async function createCDPClientForMode(
   const extensionHealth = await extensionClient.health();
   if (extensionHealth.status === 'ok') {
     await extensionClient.connect();
-    console.log('[BrowserTool] Extension mode connected');
+    logger.info('Extension mode connected', undefined, 'BrowserTool');
     return extensionClient;
   }
 
@@ -1287,14 +1298,14 @@ export async function createCDPClientForMode(
   const webviewHealth = await webviewClient.health();
   if (webviewHealth.status === 'ok') {
     await webviewClient.connect();
-    console.log('[BrowserTool] Built-in webview mode connected');
+    logger.info('Built-in webview mode connected', undefined, 'BrowserTool');
     return webviewClient;
   }
 
-  console.log('[BrowserTool] Extension and webview unavailable, launching Playwright mode (independent Chromium)...');
+  logger.info('Extension and webview unavailable, launching Playwright mode (independent Chromium)...', undefined, 'BrowserTool');
   const playwrightClient = new PlaywrightCDPClient();
   await playwrightClient.connect();
-  console.log('[BrowserTool] Playwright mode connected - using independent browser window');
+  logger.info('Playwright mode connected - using independent browser window', undefined, 'BrowserTool');
   return playwrightClient;
 }
 

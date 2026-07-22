@@ -34,8 +34,16 @@ describe('resolveBackend', () => {
     expect(resolveBackend('auto', false, true)).toBe('webview');
   });
 
+  it('human-like mode: uses human-like backend when renderer available', () => {
+    expect(resolveBackend('human-like', true, true)).toBe('human-like');
+  });
+
+  it('human-like mode: falls back to static fetch when renderer unavailable', () => {
+    expect(resolveBackend('human-like', true, false)).toBe('fallback');
+  });
+
   it('handles all mode values without throwing', () => {
-    const modes: BrowserBackendMode[] = ['auto', 'extension', 'built-in'];
+    const modes: BrowserBackendMode[] = ['auto', 'extension', 'built-in', 'human-like'];
     for (const mode of modes) {
       expect(() => resolveBackend(mode, true, true)).not.toThrow();
       expect(() => resolveBackend(mode, false, false)).not.toThrow();

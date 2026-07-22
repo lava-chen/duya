@@ -11,7 +11,7 @@
 import type { BrowserBackendMode } from './types.js';
 
 export type { BrowserBackendMode } from './types.js';
-export type ResolvedBackend = 'extension' | 'webview' | 'fallback';
+export type ResolvedBackend = 'extension' | 'webview' | 'fallback' | 'human-like';
 
 export interface BrowserToolConfig {
   mode: BrowserBackendMode;
@@ -29,6 +29,7 @@ export const DEFAULT_BROWSER_CONFIG: BrowserToolConfig = {
  * - auto: extension → webview → fallback (full degradation chain)
  * - extension: always extension (no degradation, will throw if unavailable)
  * - built-in: always webview → fallback (skips extension entirely)
+ * - human-like: webview wrapped with human-like mouse/keyboard events → fallback
  */
 export function resolveBackend(
   mode: BrowserBackendMode,
@@ -40,6 +41,8 @@ export function resolveBackend(
       return 'extension';
     case 'built-in':
       return rendererAvailable ? 'webview' : 'fallback';
+    case 'human-like':
+      return rendererAvailable ? 'human-like' : 'fallback';
     case 'auto':
     default:
       if (extensionOnline) return 'extension';
