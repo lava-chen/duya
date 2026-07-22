@@ -96,8 +96,10 @@ Rules:
 Connectors are \`native/connector\` elements. The visual style lives in
 \`config\`: routingMode, color, strokeStyle, startMarker, endMarker,
 and label. Connector width is fixed so diagrams keep one visual rhythm;
-do not set or recommend a stroke width. Endpoints attach to source and
-target nodes, and the renderer computes the path from their positions.
+do not set or recommend a stroke width. Endpoints are bound references
+inside nodes or free canvas points. Elbow routes project a bound reference
+onto its nearest edge. Curves use the references as their full path endpoints
+and clip only the portions inside the source and target elements.
 
 ### Routing Mode
 

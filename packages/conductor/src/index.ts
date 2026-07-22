@@ -33,6 +33,32 @@ export {
   resetPerceptionEngine,
 } from './runtime/PerceptionEngine.js';
 export type { SemanticEvent, SemanticEventType, PerceptionConfig } from './runtime/PerceptionEngine.js';
+export type {
+  DatabaseFilterNode,
+  DatabaseProperty,
+  DatabasePropertyOption,
+  DatabasePropertyType,
+  DatabaseQueryResult,
+  DatabaseRecord,
+  DatabaseRecordSnapshot,
+  DatabaseSortRule,
+  DatabaseSource,
+  DatabaseSourceSnapshot,
+  DatabaseValue,
+  DatabaseView,
+  NativeDatabaseElementConfig,
+  ProjectDatabaseChangeEvent,
+  ProjectDatabaseCommand,
+  ProjectDatabaseRequest,
+} from './database/types.js';
+export {
+  DATABASE_PROPERTY_TYPES,
+  DatabaseFilterNodeSchema,
+  DatabaseSortRuleSchema,
+  DatabaseValueSchema,
+  ProjectDatabaseCommandSchema,
+  ProjectDatabaseRequestSchema,
+} from './database/types.js';
 
 export {
   registerConductor,

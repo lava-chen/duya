@@ -1,6 +1,6 @@
 import type { CanvasElement } from "../../types/conductor";
 
-export type NativeEditMode = "rich-text" | "markdown" | "table" | "none";
+export type NativeEditMode = "rich-text" | "markdown" | "table" | "database" | "none";
 export type NativeSelectionToolbar = "shape" | "sticky" | "text" | "utility" | "none";
 export type NativeResizeHandles = "all" | "horizontal" | "none";
 
@@ -56,6 +56,13 @@ const NATIVE_CAPABILITIES: Record<string, NativeElementCapabilities> = {
     startEditingOnCreate: true,
     usesChrome: true,
   },
+  database: {
+    editMode: "database",
+    selectionToolbar: "utility",
+    resizeHandles: "all",
+    startEditingOnCreate: true,
+    usesChrome: true,
+  },
   image: DEFAULT_CAPABILITIES,
   file: DEFAULT_CAPABILITIES,
   link: DEFAULT_CAPABILITIES,
@@ -98,4 +105,3 @@ export function getNativeTypeCapabilities(nodeType: string): NativeElementCapabi
 export function shouldStartEditingOnCreate(nodeType: string): boolean {
   return getNativeTypeCapabilities(nodeType).startEditingOnCreate;
 }
-

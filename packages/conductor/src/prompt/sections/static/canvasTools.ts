@@ -9,10 +9,11 @@ const CANVAS_TOOL_DEFINITIONS: Record<string, string> = {
   canvas_create_element: `### canvas_create_element
 Create any element on the canvas. Supports these kinds:
 - **native/sticky** — Sticky note with color (yellow, blue, green, pink, purple, gray)
-- **native/connector** — Connection line between two elements with sourceId and targetId. Default to elbow routing. In editable architecture diagrams, align sibling rows/columns so direct parent-child elbow routes share a clean trunk/bus with short branches; use curves only when explicitly requested.
+- **native/connector** — Connection line whose config.source/config.target are either {kind:"bound", nodeId, bindingPoint:{u,v}} (u/v normalized inside the element) or {kind:"free", point:{x,y}} (canvas pixels). Default to elbow routing; use curves only when explicitly requested.
 - **native/image** — Image element (assetId or url)
 - **native/file** — File attachment element (assetId, fileName, mimeType)
 - **native/table** — Editable grid for comparisons, schedules, and research data (title?, headers?: string[], rows?: string[][], headerFill?/headerTextColor?/borderColor? as #RRGGBB)
+- **native/database** — Embedded saved view over durable project records (sourceId, viewId, sourceTitle?, previewLimit?)
 - **native/link** — Link card referencing a URL, DUYA session, or DUYA canvas (linkType, url/targetId, title, description, expanded?)
 
 Parameters: canvasId, kind, position {x, y, w, h, zIndex} (all in **grid units**, 1 unit = 80 px on screen), vizSpec (kind-specific), config`,

@@ -11,6 +11,7 @@ import { GroupElement } from "./GroupElement";
 import { LinkElement } from "./LinkElement";
 import { TextElement } from "./TextElement";
 import { TableElement } from "./TableElement";
+import { DatabaseElement } from "./DatabaseElement";
 import { NativeChrome } from "./NativeChrome";
 import { getNativeElementCapabilities } from "./native-element-capabilities";
 
@@ -39,6 +40,7 @@ const elementMap: Record<string, React.ComponentType<{ element: CanvasElement }>
   link: LinkElement,
   text: TextElement,
   table: TableElement,
+  database: DatabaseElement,
 };
 
 export const NativeElementRenderer: React.FC<NativeElementRendererProps> = ({

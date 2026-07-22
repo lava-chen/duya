@@ -12,6 +12,7 @@ const VALID_ELEMENT_KINDS = new Set([
   'native/document',
   'native/text',
   'native/table',
+  'native/database',
   'native/image',
   'native/file',
   'native/connector',
@@ -31,7 +32,7 @@ const STICKY_COLORS = new Set(['yellow', 'blue', 'green', 'pink', 'purple', 'gra
 const CONNECTOR_END_MARKERS = new Set(['arrow', 'none']);
 const CONNECTOR_MARKERS = new Set(['none', 'arrow', 'open-arrow', 'circle', 'diamond', 'bar']);
 const CONNECTOR_ROUTING_MODES = new Set(['elbow', 'curve', 'bezier', 'straight']);
-const CONNECTOR_STROKE_STYLES = new Set(['solid', 'dashed', 'dotted']);
+const CONNECTOR_STROKE_STYLES = new Set(['solid', 'dashed', 'bold', 'dotted']);
 
 // Canvas bounds in grid units (1 unit = 80 px). Matches the renderer
 // constant so clamping and DB clamping agree.
@@ -165,6 +166,30 @@ export function validateKindConfig(kind: string, config: Record<string, unknown>
     }
   }
 
+  if (kind === 'native/database') {
+    for (const field of ['sourceId', 'viewId'] as const) {
+      if (typeof config[field] !== 'string' || !config[field].trim()) {
+        checks.push(fail(`database ${field} must be a non-empty string`));
+      }
+    }
+    if (config.sourceTitle !== undefined && typeof config.sourceTitle !== 'string') {
+      checks.push(fail('database sourceTitle must be a string'));
+    }
+    if (config.previewLimit !== undefined && (
+      !Number.isInteger(config.previewLimit) ||
+      (config.previewLimit as number) < 1 ||
+      (config.previewLimit as number) > 200
+    )) {
+      checks.push(fail('database previewLimit must be an integer between 1 and 200'));
+    }
+    if (config.displayMode !== undefined && config.displayMode !== 'embedded') {
+      checks.push(fail('database displayMode must be embedded'));
+    }
+    if (config.interactionMode !== undefined && !['canvas', 'database'].includes(config.interactionMode as string)) {
+      checks.push(fail('database interactionMode must be one of: canvas, database'));
+    }
+  }
+
   if (kind === 'native/connector') {
     checks.push(validateConnectorShape(config));
   }
@@ -224,11 +249,46 @@ export function validateConnectorShape(config: Record<string, unknown>): Validat
   const source = config.source;
   const target = config.target;
 
+  const validateEndpoint = (value: unknown, field: 'source' | 'target'): void => {
+    if (!isRecord(value)) {
+      checks.push(fail(`connector config.${field} must be an endpoint object`));
+      return;
+    }
+    if (value.kind === 'free') {
+      const point = value.point;
+      if (!isRecord(point) || !isFiniteNumber(point.x) || !isFiniteNumber(point.y)) {
+        checks.push(fail(`connector config.${field}.point must contain finite canvas-pixel x and y`));
+      }
+      return;
+    }
+    if (value.kind === 'bound') {
+      const bindingPoint = value.bindingPoint;
+      const u = isRecord(bindingPoint) ? bindingPoint.u : undefined;
+      const v = isRecord(bindingPoint) ? bindingPoint.v : undefined;
+      if (typeof value.nodeId !== 'string' || !value.nodeId || !isRecord(bindingPoint) ||
+          typeof u !== 'number' || !Number.isFinite(u) || typeof v !== 'number' || !Number.isFinite(v) ||
+          u < 0 || u > 1 || v < 0 || v > 1) {
+        checks.push(fail(`connector config.${field} bound endpoint requires nodeId and bindingPoint u/v in 0..1`));
+      }
+      return;
+    }
+    const validLegacyAnchor = typeof value.anchorId === 'string' &&
+      ['top', 'bottom', 'left', 'right', 'center'].includes(value.anchorId);
+    if (typeof value.nodeId !== 'string' || !value.nodeId || !validLegacyAnchor) {
+      checks.push(fail(`connector config.${field} must be a bound, free, or legacy anchored endpoint`));
+    }
+  };
+
   if (source === undefined) {
     checks.push(fail('connector config.source is required'));
+  } else {
+    validateEndpoint(source, 'source');
   }
+
   if (target === undefined) {
     checks.push(fail('connector config.target is required'));
+  } else {
+    validateEndpoint(target, 'target');
   }
 
   const endMarker = config.endMarker;
@@ -293,6 +353,15 @@ export function validateConnectorShape(config: Record<string, unknown>): Validat
         }
       }
     }
+  }
+
+  const curveMidpointOffset = config.curveMidpointOffset;
+  if (curveMidpointOffset !== undefined && (
+    !isRecord(curveMidpointOffset) ||
+    !isFiniteNumber(curveMidpointOffset.x) ||
+    !isFiniteNumber(curveMidpointOffset.y)
+  )) {
+    checks.push(fail('connector curveMidpointOffset must contain finite x and y numbers'));
   }
 
   return combine(...checks);

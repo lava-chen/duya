@@ -3,6 +3,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { CanvasToolbar } from "@duya/conductor/renderer/components/CanvasToolbar";
 import { CanvasArea } from "@duya/conductor/renderer/components/CanvasArea";
+import { FiniteCanvasArea } from "@duya/conductor/renderer/components/FiniteCanvasArea";
+import {
+  CanvasPresentationModeToggle,
+  type CanvasPresentationMode,
+} from "@duya/conductor/renderer/components/CanvasPresentationModeToggle";
+import { CanvasErrorBoundary } from "@duya/conductor/renderer/components/CanvasErrorBoundary";
 import { CanvasSelector } from "@duya/conductor/renderer/components/CanvasSelector";
 import { useConductorStore } from "@duya/conductor/renderer/stores/conductor-store";
 import { listCanvases, createCanvas, getSnapshot, executeAction } from "@duya/conductor/renderer/ipc/conductor-ipc";
@@ -44,6 +50,7 @@ export function SidebarConductorView({
   const tabCanvasId = tab?.params?.canvasId as string | undefined;
 
   const panel = useOptionalPanel();
+  const updateTabTitle = panel?.updateTabTitle;
   const targetCanvasName = useConductorStore((s) => {
     const targetId = tabCanvasId ?? s.activeCanvasId;
     if (!targetId) return undefined;
@@ -51,11 +58,12 @@ export function SidebarConductorView({
   });
 
   useEffect(() => {
-    if (!tab?.id || !panel || !targetCanvasName) return;
-    panel.updateTabTitle(tab.id, targetCanvasName);
-  }, [tab?.id, panel, targetCanvasName]);
+    if (!tab?.id || !updateTabTitle || !targetCanvasName) return;
+    updateTabTitle(tab.id, targetCanvasName);
+  }, [tab?.id, targetCanvasName, updateTabTitle]);
 
   const [isLoading, setIsLoading] = useState(true);
+  const [presentationMode, setPresentationMode] = useState<CanvasPresentationMode>("finite");
 
   // Register the agent-initiated canvas capture listener so the
   // sidebar canvas can respond to canvas_capture tool calls. Without
@@ -177,6 +185,7 @@ export function SidebarConductorView({
     <div className="sidebar-conductor">
       <div className="sidebar-conductor-header">
         <CanvasSelector />
+        <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
       </div>
 
       {uiError && (
@@ -197,19 +206,30 @@ export function SidebarConductorView({
 
       <div className="sidebar-conductor-canvas">
         {activeCanvasId ? (
-          <CanvasArea
-            elements={elements}
-            readOnly={false}
-            onPositionChange={handlePositionChange}
-            onDeleteElement={handleDeleteElement}
-          />
+          <CanvasErrorBoundary>
+            {presentationMode === "finite" ? (
+              <FiniteCanvasArea
+                elements={elements}
+                readOnly={false}
+                onPositionChange={handlePositionChange}
+                onDeleteElement={handleDeleteElement}
+              />
+            ) : (
+              <CanvasArea
+                elements={elements}
+                readOnly={false}
+                onPositionChange={handlePositionChange}
+                onDeleteElement={handleDeleteElement}
+              />
+            )}
+          </CanvasErrorBoundary>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-[var(--muted)] text-sm gap-4">
             <p>Select or create a canvas to begin</p>
           </div>
         )}
 
-        <CanvasToolbar />
+        {presentationMode === "infinite" && <CanvasToolbar />}
       </div>
     </div>
   );

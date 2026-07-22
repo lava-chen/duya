@@ -1,22 +1,24 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowElbowDownRight, BezierCurve } from "@phosphor-icons/react";
+import { ArrowElbowDownRight, BezierCurve, TextT } from "@phosphor-icons/react";
+import { TrashIcon } from "@/components/icons";
 import type { CanvasElement } from "..//types/conductor";
 import type {
   ConnectorEndpoint,
   ConnectorMarker,
-  ConnectorRoutingMode,
   CurveControlOffsets,
   Point,
 } from "..//types/canvas-node";
 import { useConductorStore, getAbsolutePosition } from "..//stores/conductor-store";
 import { executeAction } from "..//ipc/conductor-ipc";
 import {
-  autoSelectAttachment,
+  createConnectorEndpointAtPoint,
+  getDefaultCurveControls,
   GRID_PX,
+  moveElbowSegment,
   snapElbowSegmentCoordinate,
-  simplifyOrthogonalPoints,
+  snapElbowSegmentToAdjacentParallel,
 } from "..//domain/canvas/connector-renderer";
 import {
   ConnectorPath,
@@ -30,7 +32,6 @@ import {
   CapsuleToolbar,
   CAPSULE_BTN_ACTIVE,
   CAPSULE_BTN_BASE,
-  CAPSULE_CONTROL_BASE,
   CAPSULE_DIVIDER,
 } from "./toolbar/CapsuleToolbar";
 import { useElementLock } from "./toolbar/useElementLock";
@@ -41,7 +42,7 @@ interface NativeConnectorOverlayProps {
 
 type DragState =
   | { kind: "endpoint"; connectorId: string; endpoint: "source" | "target" }
-  | { kind: "curve-control"; connectorId: string; control: "source" | "target" }
+  | { kind: "curve-control"; connectorId: string; control: "midpoint" | "source" | "target" }
   | { kind: "elbow-segment"; connectorId: string; segmentIndex: number };
 
 const MARKER_OPTIONS: { value: ConnectorMarker; label: string }[] = [
@@ -53,7 +54,82 @@ const MARKER_OPTIONS: { value: ConnectorMarker; label: string }[] = [
   { value: "bar", label: "Bar" },
 ];
 
-function ConnectorToolbar({
+const CONNECTOR_COLORS = [
+  "#FFFFFF", "#D9E1E8", "#8793A3", "#536273",
+  "#3289D1", "#635BDF", "#8618D4", "#BD35CA",
+  "#12A99B", "#287D71", "#9A8565", "#BE6D6D",
+  "#DF455A", "#F28A37", "#F5BF28", "#202B38",
+] as const;
+
+type ToolbarPanel = "text" | "color" | "start-marker" | "end-marker" | null;
+type ConnectorStrokeStyle = "solid" | "dashed" | "bold";
+
+const POPOVER_STYLE: React.CSSProperties = {
+  position: "absolute",
+  bottom: 38,
+  left: "50%",
+  transform: "translateX(-50%)",
+  padding: 8,
+  background: "var(--command-menu-bg)",
+  border: "1px solid var(--command-menu-border)",
+  borderRadius: 10,
+  boxShadow: "0 12px 28px rgba(0,0,0,0.24)",
+  zIndex: 40,
+};
+
+function LineStyleIcon({ style }: { style: ConnectorStrokeStyle }) {
+  return (
+    <svg width="24" height="18" viewBox="0 0 24 18" aria-hidden>
+      <path
+        d="M 3 15 L 21 3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={style === "bold" ? 5 : 2.2}
+        strokeDasharray={style === "dashed" ? "4 3" : undefined}
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function MarkerIcon({ marker, endpoint }: { marker: ConnectorMarker; endpoint: "start" | "end" }) {
+  const start = endpoint === "start";
+  const tipX = start ? 4 : 24;
+  const innerX = start ? 10 : 18;
+  const lineStart = start ? 8 : 4;
+  const lineEnd = start ? 24 : 20;
+  const direction = start ? 1 : -1;
+  return (
+    <svg width="28" height="18" viewBox="0 0 28 18" aria-hidden>
+      <path d={`M ${lineStart} 9 L ${lineEnd} 9`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      {marker === "arrow" && <path d={`M ${tipX} 9 L ${innerX} 4 L ${innerX} 14 Z`} fill="currentColor" />}
+      {marker === "open-arrow" && <path d={`M ${innerX} 4 L ${tipX} 9 L ${innerX} 14`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />}
+      {marker === "circle" && <circle cx={tipX + direction * 2} cy="9" r="4" fill="var(--command-menu-bg)" stroke="currentColor" strokeWidth="2" />}
+      {marker === "diamond" && <path d={`M ${tipX} 9 L ${tipX + direction * 5} 4 L ${tipX + direction * 10} 9 L ${tipX + direction * 5} 14 Z`} fill="var(--command-menu-bg)" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />}
+      {marker === "bar" && <path d={`M ${tipX + direction * 2} 3 L ${tipX + direction * 2} 15`} fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />}
+    </svg>
+  );
+}
+
+function SwapMarkersIcon() {
+  return (
+    <svg width="20" height="18" viewBox="0 0 20 18" aria-hidden>
+      <path d="M 3 6 H 15 M 12 3 L 15 6 L 12 9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M 17 12 H 5 M 8 9 L 5 12 L 8 15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ToolbarPanelHost({ children, panel }: { children: React.ReactNode; panel?: React.ReactNode }) {
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      {children}
+      {panel}
+    </div>
+  );
+}
+
+export function ConnectorToolbar({
   connector,
   labelDraft,
   onLabelDraftChange,
@@ -69,16 +145,31 @@ function ConnectorToolbar({
   onDismiss: () => void;
 }) {
   const { locked, toggleLocked } = useElementLock(connector);
+  const [openPanel, setOpenPanel] = useState<ToolbarPanel>(null);
   const routingMode = resolveConnectorRoutingMode(connector.config);
-  const strokeStyle = (connector.config.strokeStyle as "solid" | "dashed" | "dotted" | undefined) ?? "solid";
+  const rawStrokeStyle = connector.config.strokeStyle;
+  const strokeStyle: ConnectorStrokeStyle = rawStrokeStyle === "dashed" || rawStrokeStyle === "bold"
+    ? rawStrokeStyle
+    : "solid";
   const legacyStyle = connector.config.style as Record<string, unknown> | undefined;
   const color = (connector.config.color as string | undefined) ?? (legacyStyle?.stroke as string | undefined) ?? "#8793A3";
   const { startMarker, endMarker } = resolveConnectorMarkers(connector.config);
 
-  const routeButton = (mode: ConnectorRoutingMode): React.CSSProperties => ({
-    ...CAPSULE_BTN_BASE,
-    ...(routingMode === mode ? CAPSULE_BTN_ACTIVE : {}),
-  });
+  const togglePanel = (panel: Exclude<ToolbarPanel, null>) => {
+    setOpenPanel((current) => current === panel ? null : panel);
+  };
+
+  const toggleRoutingMode = () => {
+    if (routingMode === "elbow") {
+      onPatch({ routingMode: "curve", waypoints: undefined });
+      return;
+    }
+    onPatch({
+      routingMode: "elbow",
+      curveMidpointOffset: undefined,
+      curveControlOffsets: undefined,
+    });
+  };
 
   return (
     <CapsuleToolbar
@@ -86,35 +177,75 @@ function ConnectorToolbar({
       zoomAware={false}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      <button type="button" aria-label="Elbow connector" title="Elbow connector" style={routeButton("elbow")} onClick={() => onPatch({ routingMode: "elbow" })}><ArrowElbowDownRight size={17} weight="bold" /></button>
-      <button type="button" aria-label="Curved connector" title="Curved connector" style={routeButton("curve")} onClick={() => onPatch({ routingMode: "curve" })}><BezierCurve size={17} weight="bold" /></button>
+      <ToolbarPanelHost panel={openPanel === "text" ? (
+        <div style={{ ...POPOVER_STYLE, padding: 7 }}>
+          <input
+            autoFocus
+            type="text"
+            aria-label="Connector label"
+            value={labelDraft}
+            placeholder="Add text"
+            onChange={(event) => onLabelDraftChange(event.target.value)}
+            onBlur={(event) => {
+              onPatch({ label: event.target.value });
+              setOpenPanel(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+              if (event.key === "Escape") setOpenPanel(null);
+            }}
+            style={{ width: 190, height: 30, border: "1px solid var(--command-menu-border)", borderRadius: 7, padding: "0 9px", color: "var(--text-primary)", background: "var(--surface)", outline: "none" }}
+          />
+        </div>
+      ) : undefined}>
+        <button type="button" aria-label="Add or edit connector text" title="Add text" style={{ ...CAPSULE_BTN_BASE, ...(openPanel === "text" ? CAPSULE_BTN_ACTIVE : {}) }} onClick={() => togglePanel("text")}><TextT size={20} weight="regular" /></button>
+      </ToolbarPanelHost>
+
+      <ToolbarPanelHost panel={openPanel === "color" ? (
+        <div role="menu" aria-label="Connector color palette" style={{ ...POPOVER_STYLE, display: "grid", gridTemplateColumns: "repeat(4, 24px)", gap: 7 }}>
+          {CONNECTOR_COLORS.map((option) => (
+            <button key={option} type="button" role="menuitem" aria-label={`Set connector color ${option}`} title={option} onClick={() => { onPatch({ color: option }); setOpenPanel(null); }} style={{ width: 24, height: 24, padding: 0, borderRadius: "50%", border: color.toLowerCase() === option.toLowerCase() ? "2px solid #fff" : "1px solid rgba(255,255,255,0.16)", outline: color.toLowerCase() === option.toLowerCase() ? "2px solid var(--canvas-tool-accent)" : "none", outlineOffset: 1, background: option, cursor: "pointer" }} />
+          ))}
+        </div>
+      ) : undefined}>
+        <button type="button" aria-label="Connector color" title="Color" style={{ ...CAPSULE_BTN_BASE, ...(openPanel === "color" ? CAPSULE_BTN_ACTIVE : {}) }} onClick={() => togglePanel("color")}>
+          <span aria-hidden style={{ width: 20, height: 20, borderRadius: "50%", background: color, border: "1px solid rgba(255,255,255,0.28)" }} />
+        </button>
+      </ToolbarPanelHost>
+
       <span style={CAPSULE_DIVIDER} />
-      <select aria-label="Line style" title="Line style" value={strokeStyle} style={CAPSULE_CONTROL_BASE} onChange={(event) => onPatch({ strokeStyle: event.target.value })}>
-        <option value="solid">Solid</option>
-        <option value="dashed">Dashed</option>
-        <option value="dotted">Dotted</option>
-      </select>
-      <label title="Line color" style={{ width: 26, height: 26, borderRadius: 7, background: color, border: "1px solid var(--command-menu-border)", overflow: "hidden", cursor: "pointer", flexShrink: 0 }}>
-        <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#8793A3"} onChange={(event) => onPatch({ color: event.target.value })} style={{ width: 36, height: 36, opacity: 0, cursor: "pointer" }} />
-      </label>
-      <select aria-label="Start marker" title="Start marker" value={startMarker} style={{ ...CAPSULE_CONTROL_BASE, width: 90 }} onChange={(event) => onPatch({ startMarker: event.target.value })}>
-        {MARKER_OPTIONS.map((option) => <option key={option.value} value={option.value}>S · {option.label}</option>)}
-      </select>
-      <select aria-label="End marker" title="End marker" value={endMarker} style={{ ...CAPSULE_CONTROL_BASE, width: 90 }} onChange={(event) => onPatch({ endMarker: event.target.value })}>
-        {MARKER_OPTIONS.map((option) => <option key={option.value} value={option.value}>E · {option.label}</option>)}
-      </select>
-      <input
-        type="text"
-        aria-label="Connector label"
-        value={labelDraft}
-        placeholder="Add text"
-        onChange={(event) => onLabelDraftChange(event.target.value)}
-        onBlur={(event) => onPatch({ label: event.target.value })}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
-        style={{ ...CAPSULE_CONTROL_BASE, width: 108, padding: "0 9px" }}
-      />
+      <div role="group" aria-label="Connector line style" style={{ display: "inline-flex", gap: 0, padding: 2, borderRadius: 8, background: "rgba(255,255,255,0.04)" }}>
+        {(["solid", "dashed", "bold"] as const).map((option) => (
+          <button key={option} type="button" aria-label={`${option} connector line`} title={option === "bold" ? "Bold" : option === "dashed" ? "Dashed" : "Default"} style={{ ...CAPSULE_BTN_BASE, width: 38, ...(strokeStyle === option ? CAPSULE_BTN_ACTIVE : {}) }} onClick={() => onPatch({ strokeStyle: option })}>
+            <LineStyleIcon style={option} />
+          </button>
+        ))}
+      </div>
+
+      <span style={CAPSULE_DIVIDER} />
+      <ToolbarPanelHost panel={openPanel === "start-marker" ? (
+        <div role="menu" aria-label="Start marker styles" style={{ ...POPOVER_STYLE, display: "grid", gridTemplateColumns: "repeat(3, 38px)", gap: 4 }}>
+          {MARKER_OPTIONS.map((option) => <button key={option.value} type="button" role="menuitem" aria-label={`Start marker ${option.label}`} title={option.label} onClick={() => { onPatch({ startMarker: option.value }); setOpenPanel(null); }} style={{ ...CAPSULE_BTN_BASE, width: 38, ...(startMarker === option.value ? CAPSULE_BTN_ACTIVE : {}) }}><MarkerIcon marker={option.value} endpoint="start" /></button>)}
+        </div>
+      ) : undefined}>
+        <button type="button" aria-label="Start marker" title="Start marker" style={{ ...CAPSULE_BTN_BASE, width: 38, ...(openPanel === "start-marker" ? CAPSULE_BTN_ACTIVE : {}) }} onClick={() => togglePanel("start-marker")}><MarkerIcon marker={startMarker} endpoint="start" /></button>
+      </ToolbarPanelHost>
+
+      <button type="button" aria-label="Swap connector markers" title="Swap ends" style={CAPSULE_BTN_BASE} onClick={() => onPatch({ startMarker: endMarker, endMarker: startMarker })}><SwapMarkersIcon /></button>
+
+      <ToolbarPanelHost panel={openPanel === "end-marker" ? (
+        <div role="menu" aria-label="End marker styles" style={{ ...POPOVER_STYLE, display: "grid", gridTemplateColumns: "repeat(3, 38px)", gap: 4 }}>
+          {MARKER_OPTIONS.map((option) => <button key={option.value} type="button" role="menuitem" aria-label={`End marker ${option.label}`} title={option.label} onClick={() => { onPatch({ endMarker: option.value }); setOpenPanel(null); }} style={{ ...CAPSULE_BTN_BASE, width: 38, ...(endMarker === option.value ? CAPSULE_BTN_ACTIVE : {}) }}><MarkerIcon marker={option.value} endpoint="end" /></button>)}
+        </div>
+      ) : undefined}>
+        <button type="button" aria-label="End marker" title="End marker" style={{ ...CAPSULE_BTN_BASE, width: 38, ...(openPanel === "end-marker" ? CAPSULE_BTN_ACTIVE : {}) }} onClick={() => togglePanel("end-marker")}><MarkerIcon marker={endMarker} endpoint="end" /></button>
+      </ToolbarPanelHost>
+
+      <span style={CAPSULE_DIVIDER} />
+      <button type="button" aria-label="Toggle connector routing" title={routingMode === "elbow" ? "Switch to curved connector" : "Switch to elbow connector"} style={{ ...CAPSULE_BTN_BASE, ...CAPSULE_BTN_ACTIVE }} onClick={toggleRoutingMode}>
+        {routingMode === "elbow" ? <ArrowElbowDownRight size={18} weight="bold" /> : <BezierCurve size={18} weight="bold" />}
+      </button>
+      <span style={CAPSULE_DIVIDER} />
       <CapsuleMoreMenu
         items={[
           { label: locked ? "Unlock position" : "Lock position", onSelect: toggleLocked },
@@ -127,9 +258,9 @@ function ConnectorToolbar({
             },
           },
           { label: "Close toolbar", onSelect: onDismiss },
-          { label: "Delete connector", onSelect: onDelete, tone: "danger" },
         ]}
       />
+      <button type="button" aria-label="Delete connector" title="Delete connector" style={CAPSULE_BTN_BASE} onClick={onDelete}><TrashIcon size={16} /></button>
     </CapsuleToolbar>
   );
 }
@@ -160,22 +291,25 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
 
   const selectedData = useMemo(() => {
     if (!selectedConnector) return null;
-    const source = selectedConnector.config.source as ConnectorEndpoint | undefined;
-    const target = selectedConnector.config.target as ConnectorEndpoint | undefined;
-    const sourceNode = source ? elements.find((element) => element.id === source.nodeId) : null;
-    const targetNode = target ? elements.find((element) => element.id === target.nodeId) : null;
-    if (!sourceNode || !targetNode) return null;
-    return getComputedConnectorData(selectedConnector, elements, sourceNode.position, targetNode.position);
+    return getComputedConnectorData(selectedConnector, elements);
   }, [selectedConnector, elements]);
 
   const toolbarAnchor = useMemo(() => {
     if (!selectedData) return null;
-    // Whimsical-style connector controls follow the upper visible endpoint.
-    // This keeps the toolbar attached to the selected line even for very long
-    // connectors instead of drifting to the canvas or route bounding box.
-    return selectedData.srcPoint.y <= selectedData.tgtPoint.y
-      ? selectedData.srcPoint
-      : selectedData.tgtPoint;
+    const controlPoints = [
+      selectedData.sourceReference,
+      selectedData.targetReference,
+      selectedData.srcPoint,
+      selectedData.tgtPoint,
+      selectedData.midPoint,
+      ...(selectedData.elbowPoints ?? []),
+      ...(selectedData.sourceControl ? [selectedData.sourceControl] : []),
+      ...(selectedData.targetControl ? [selectedData.targetControl] : []),
+    ];
+    const minX = Math.min(...controlPoints.map((point) => point.x));
+    const maxX = Math.max(...controlPoints.map((point) => point.x));
+    const minY = Math.min(...controlPoints.map((point) => point.y));
+    return { x: (minX + maxX) / 2, y: minY };
   }, [selectedData]);
 
   const handleConnectorClick = useCallback((connectorId: string) => {
@@ -226,10 +360,11 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     };
   }, []);
 
-  const hitTestNode = useCallback((point: Point, skipNodeId: string): CanvasElement | null => {
-    const nodes = elements.filter((element) => element.elementKind.startsWith("native/") && element.elementKind !== "native/connector");
+  const hitTestNode = useCallback((point: Point): CanvasElement | null => {
+    const nodes = elements
+      .filter((element) => element.elementKind.startsWith("native/") && element.elementKind !== "native/connector")
+      .sort((a, b) => b.position.zIndex - a.position.zIndex);
     for (const node of nodes) {
-      if (node.id === skipNodeId) continue;
       const gridAbs = getAbsolutePosition(node, elements);
       const x = gridAbs.x * GRID_PX;
       const y = gridAbs.y * GRID_PX;
@@ -259,23 +394,23 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
       const state = useConductorStore.getState();
       const current = state.elements.find((element) => element.id === connectorId);
       if (!current) return cleanup();
-      const source = current.config.source as ConnectorEndpoint;
-      const target = current.config.target as ConnectorEndpoint;
-      const fixedEndpoint = endpoint === "source" ? target : source;
       const dropPoint = toCanvasPoint(upEvent);
-      const candidate = hitTestNode(dropPoint, fixedEndpoint.nodeId);
-      if (candidate) {
-        const attachment = autoSelectAttachment(dropPoint, candidate, state.elements);
-        const nextEndpoint: ConnectorEndpoint = { nodeId: candidate.id, ...attachment };
-        void persistConfig(current, { ...current.config, [endpoint]: nextEndpoint });
+      const candidate = hitTestNode(dropPoint);
+      const nextEndpoint = createConnectorEndpointAtPoint(dropPoint, candidate, state.elements);
+      const nextConfig = { ...current.config, [endpoint]: nextEndpoint };
+      delete nextConfig.waypoints;
+      if (resolveConnectorRoutingMode(current.config) === "curve") {
+        delete nextConfig.curveMidpointOffset;
+        delete nextConfig.curveControlOffsets;
       }
+      void persistConfig(current, nextConfig);
       cleanup();
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   }, [connectors, hitTestNode, persistConfig, toCanvasPoint]);
 
-  const handleCurveControlPointerDown = useCallback((connectorId: string, control: "source" | "target", _point: Point, event: React.PointerEvent<SVGCircleElement>) => {
+  const handleCurveControlPointerDown = useCallback((connectorId: string, control: "midpoint" | "source" | "target", _point: Point, event: React.PointerEvent<SVGCircleElement>) => {
     event.stopPropagation();
     event.preventDefault();
     const connector = connectors.find((candidate) => candidate.id === connectorId);
@@ -291,38 +426,69 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
       const state = useConductorStore.getState();
       const current = state.elements.find((element) => element.id === connectorId);
       if (!current) return;
-      const source = current.config.source as ConnectorEndpoint | undefined;
-      const target = current.config.target as ConnectorEndpoint | undefined;
-      const sourceNode = source ? state.elements.find((element) => element.id === source.nodeId) : null;
-      const targetNode = target ? state.elements.find((element) => element.id === target.nodeId) : null;
-      if (!sourceNode || !targetNode) return;
-      const data = getComputedConnectorData(current, state.elements, sourceNode.position, targetNode.position);
+      const data = getComputedConnectorData(current, state.elements);
       if (!data) return;
       const cursor = toCanvasPoint(moveEvent);
-      const endpointPoint = control === "source" ? data.srcPoint : data.tgtPoint;
-      const endpointCenter = control === "source" ? data.sourceCenter : data.targetCenter;
-      const outwardX = endpointPoint.x - endpointCenter.x;
-      const outwardY = endpointPoint.y - endpointCenter.y;
-      const outwardLength = Math.hypot(outwardX, outwardY) || 1;
-      const outward = { x: outwardX / outwardLength, y: outwardY / outwardLength };
-      const cursorOffset = { x: cursor.x - endpointPoint.x, y: cursor.y - endpointPoint.y };
-      const tension = Math.max(24, cursorOffset.x * outward.x + cursorOffset.y * outward.y);
-      const constrainedOffset = { x: outward.x * tension, y: outward.y * tension };
+      if (control === "midpoint") {
+        const baseMidpoint = {
+          x: (data.sourceReference.x + data.targetReference.x) / 2,
+          y: (data.sourceReference.y + data.targetReference.y) / 2,
+        };
+        const controls = getDefaultCurveControls(data.sourceReference, cursor, data.targetReference);
+        const nextOffsets: CurveControlOffsets = {
+          source: {
+            x: controls.source.x - data.sourceReference.x,
+            y: controls.source.y - data.sourceReference.y,
+          },
+          target: {
+            x: controls.target.x - data.targetReference.x,
+            y: controls.target.y - data.targetReference.y,
+          },
+        };
+        updateElement(connectorId, {
+          config: {
+            ...current.config,
+            routingMode: "curve",
+            curveMidpointOffset: {
+              x: cursor.x - baseMidpoint.x,
+              y: cursor.y - baseMidpoint.y,
+            },
+            curveControlOffsets: nextOffsets,
+          },
+        });
+        return;
+      }
+
       const existing = current.config.curveControlOffsets as CurveControlOffsets | undefined;
       const fallback: CurveControlOffsets = {
         source: data.sourceControl
-          ? { x: data.sourceControl.x - data.srcPoint.x, y: data.sourceControl.y - data.srcPoint.y }
-          : { x: 40, y: 0 },
+          ? { x: data.sourceControl.x - data.sourceReference.x, y: data.sourceControl.y - data.sourceReference.y }
+          : { x: 0, y: 0 },
         target: data.targetControl
-          ? { x: data.targetControl.x - data.tgtPoint.x, y: data.targetControl.y - data.tgtPoint.y }
-          : { x: -40, y: 0 },
+          ? { x: data.targetControl.x - data.targetReference.x, y: data.targetControl.y - data.targetReference.y }
+          : { x: 0, y: 0 },
       };
+      const reference = control === "source" ? data.sourceReference : data.targetReference;
       const nextOffsets: CurveControlOffsets = {
         source: existing?.source ?? fallback.source,
         target: existing?.target ?? fallback.target,
-        [control]: constrainedOffset,
+        [control]: { x: cursor.x - reference.x, y: cursor.y - reference.y },
       };
-      updateElement(connectorId, { config: { ...current.config, routingMode: "curve", curveControlOffsets: nextOffsets } });
+      const baseMidpoint = {
+        x: (data.sourceReference.x + data.targetReference.x) / 2,
+        y: (data.sourceReference.y + data.targetReference.y) / 2,
+      };
+      updateElement(connectorId, {
+        config: {
+          ...current.config,
+          routingMode: "curve",
+          curveMidpointOffset: current.config.curveMidpointOffset ?? {
+            x: data.midPoint.x - baseMidpoint.x,
+            y: data.midPoint.y - baseMidpoint.y,
+          },
+          curveControlOffsets: nextOffsets,
+        },
+      });
     };
     const onUp = () => {
       const current = useConductorStore.getState().elements.find((element) => element.id === connectorId);
@@ -338,12 +504,7 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     event.preventDefault();
     const current = useConductorStore.getState().elements.find((element) => element.id === connectorId);
     if (!current || current.metadata.locked === true) return;
-    const source = current.config.source as ConnectorEndpoint | undefined;
-    const target = current.config.target as ConnectorEndpoint | undefined;
-    const sourceNode = source ? elements.find((element) => element.id === source.nodeId) : null;
-    const targetNode = target ? elements.find((element) => element.id === target.nodeId) : null;
-    if (!sourceNode || !targetNode) return;
-    const data = getComputedConnectorData(current, elements, sourceNode.position, targetNode.position);
+    const data = getComputedConnectorData(current, elements);
     const basePoints = data?.elbowPoints?.map((point) => ({ ...point }));
     if (!basePoints || !basePoints[segmentIndex + 1]) return;
     setDragState({ kind: "elbow-segment", connectorId, segmentIndex });
@@ -364,19 +525,8 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
         if (candidate.id === connectorId || candidate.elementKind !== "native/connector") continue;
         const candidateSource = candidate.config.source as ConnectorEndpoint | undefined;
         const candidateTarget = candidate.config.target as ConnectorEndpoint | undefined;
-        const candidateSourceNode = candidateSource
-          ? state.elements.find((element) => element.id === candidateSource.nodeId)
-          : null;
-        const candidateTargetNode = candidateTarget
-          ? state.elements.find((element) => element.id === candidateTarget.nodeId)
-          : null;
-        if (!candidateSourceNode || !candidateTargetNode) continue;
-        const candidateData = getComputedConnectorData(
-          candidate,
-          state.elements,
-          candidateSourceNode.position,
-          candidateTargetNode.position,
-        );
+        if (!candidateSource || !candidateTarget) continue;
+        const candidateData = getComputedConnectorData(candidate, state.elements);
         if (candidateData?.routingMode === "elbow" && candidateData.elbowPoints) {
           candidateRoutes.push(candidateData.elbowPoints);
         }
@@ -385,22 +535,30 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
         ? canvasTransformState.zoom
         : 1;
       const proposedCoordinate = orientation === "horizontal" ? cursor.y : cursor.x;
-      const snap = snapElbowSegmentCoordinate(
+      const threshold = 12 / zoom;
+      const ownRouteSnap = snapElbowSegmentToAdjacentParallel(
         proposedCoordinate,
         orientation,
-        points[segmentIndex],
-        points[segmentIndex + 1],
-        candidateRoutes,
-        12 / zoom,
+        points,
+        segmentIndex,
+        threshold,
       );
-      if (orientation === "horizontal") {
-        points[segmentIndex].y = snap.coordinate;
-        points[segmentIndex + 1].y = snap.coordinate;
-      } else {
-        points[segmentIndex].x = snap.coordinate;
-        points[segmentIndex + 1].x = snap.coordinate;
-      }
-      const waypoints = simplifyOrthogonalPoints(points).slice(1, -1);
+      const snap = ownRouteSnap.snapped
+        ? ownRouteSnap
+        : snapElbowSegmentCoordinate(
+            proposedCoordinate,
+            orientation,
+            points[segmentIndex],
+            points[segmentIndex + 1],
+            candidateRoutes,
+            threshold,
+          );
+      const waypoints = moveElbowSegment(
+        points,
+        segmentIndex,
+        orientation,
+        snap.coordinate,
+      ).slice(1, -1);
       updateElement(connectorId, { config: { ...stateCurrent.config, routingMode: "elbow", waypoints } });
     };
     const onUp = () => {
@@ -416,17 +574,16 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     if (dragState?.kind !== "endpoint" || !dragPoint) return null;
     const connector = connectors.find((candidate) => candidate.id === dragState.connectorId);
     if (!connector) return null;
-    const source = connector.config.source as ConnectorEndpoint | undefined;
-    const target = connector.config.target as ConnectorEndpoint | undefined;
-    const sourceNode = source ? elements.find((element) => element.id === source.nodeId) : null;
-    const targetNode = target ? elements.find((element) => element.id === target.nodeId) : null;
-    if (!sourceNode || !targetNode) return null;
-    const computed = getComputedConnectorData(connector, elements, sourceNode.position, targetNode.position);
+    const computed = getComputedConnectorData(connector, elements);
     if (!computed) return null;
-    return dragState.endpoint === "source"
-      ? { from: dragPoint, to: computed.tgtPoint }
-      : { from: computed.srcPoint, to: dragPoint };
-  }, [dragState, dragPoint, connectors, elements]);
+    const candidate = hitTestNode(dragPoint);
+    const previewEndpoint = createConnectorEndpointAtPoint(dragPoint, candidate, elements);
+    const previewConnector: CanvasElement = {
+      ...connector,
+      config: { ...connector.config, [dragState.endpoint]: previewEndpoint, waypoints: undefined },
+    };
+    return getComputedConnectorData(previewConnector, elements);
+  }, [dragState, dragPoint, connectors, elements, hitTestNode]);
 
   if (connectors.length === 0) return null;
   const safeZoom = Number.isFinite(canvasZoom) && canvasZoom > 0 ? canvasZoom : 1;
@@ -464,8 +621,8 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
 
         {dragPreview && (
           <g style={{ pointerEvents: "none" }}>
-            <path d={`M ${dragPreview.from.x} ${dragPreview.from.y} L ${dragPreview.to.x} ${dragPreview.to.y}`} fill="none" stroke="var(--conductor-accent)" strokeWidth={2} strokeDasharray="6 4" strokeLinecap="round" opacity={0.85} />
-            <circle cx={dragPreview.from.x} cy={dragPreview.from.y} r={6} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2} />
+            <path d={dragPreview.path} fill="none" stroke="var(--conductor-accent)" strokeWidth={2} strokeDasharray="6 4" strokeLinecap="round" opacity={0.85} />
+            <circle cx={dragState?.kind === "endpoint" && dragState.endpoint === "source" ? dragPreview.sourceReference.x : dragPreview.targetReference.x} cy={dragState?.kind === "endpoint" && dragState.endpoint === "source" ? dragPreview.sourceReference.y : dragPreview.targetReference.y} r={6} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2} />
           </g>
         )}
 
@@ -476,7 +633,7 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
           style={{
             position: "absolute",
             left: toolbarAnchor.x,
-            top: toolbarAnchor.y - 12 * inverseZoom,
+            top: toolbarAnchor.y - 18 * inverseZoom,
             zIndex: 7,
             pointerEvents: "none",
             transform: `scale(${inverseZoom}) translate(-50%, -100%)`,

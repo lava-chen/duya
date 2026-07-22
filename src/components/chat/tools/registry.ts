@@ -264,7 +264,7 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     // renderer. The dedicated CanvasConductorToolRow supplies the
     // per-tool verb and summary; this entry is the registry fallback
     // for the group summary builder and any path that bypasses the row.
-    match: (n) => n.toLowerCase().startsWith('canvas_'),
+    match: (n) => n.toLowerCase().startsWith('canvas_') || n.toLowerCase() === 'database_manage',
     icon: SquaresFourIcon,
     labelKey: 'streaming.toolAction.label.canvas',
     getSummary: (input, name?: string) => {

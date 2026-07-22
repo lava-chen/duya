@@ -1939,7 +1939,19 @@ export function registerConductorHandlers(): void {
             agentCanWrite: true,
             agentCanDelete: true,
           };
-          const config = { source, target, curvature, routingMode: 'bezier', style };
+          const config = {
+            source,
+            target,
+            curvature,
+            routingMode: request.routingMode === 'curve' ? 'curve' : 'elbow',
+            label: typeof request.label === 'string' ? request.label : undefined,
+            strokeStyle: typeof request.strokeStyle === 'string' ? request.strokeStyle : undefined,
+            lineWidth: typeof request.lineWidth === 'number' ? request.lineWidth : undefined,
+            color: typeof request.color === 'string' ? request.color : undefined,
+            startMarker: typeof request.startMarker === 'string' ? request.startMarker : undefined,
+            endMarker: typeof request.endMarker === 'string' ? request.endMarker : undefined,
+            style,
+          };
           const metadata = {
             label: 'Connector',
             tags: [] as string[],

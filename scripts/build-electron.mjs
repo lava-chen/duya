@@ -52,6 +52,12 @@ async function buildElectron() {
     outfile: 'dist-electron/agent-server.js',
   });
 
+  await build({
+    ...shared,
+    entryPoints: ['electron/project-database/worker.ts'],
+    outfile: 'dist-electron/project-database-worker.js',
+  });
+
   // Agent runs as ChildProcess via agent-process-entry.ts
   // which is built separately by the agent package's own TypeScript build (npm run build:agent)
   // and is NOT part of the electron bundle.

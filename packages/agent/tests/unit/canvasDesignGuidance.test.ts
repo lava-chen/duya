@@ -15,10 +15,11 @@ describe('conductor canvas design guidance', () => {
 
   it('does not register the batch creation tool', () => {
     const toolNames = getCanvasConductorTools().map(({ definition }) => definition.name);
-    expect(toolNames).toHaveLength(14);
+    expect(toolNames).toHaveLength(15);
     expect(toolNames).not.toContain('canvas_batch_create');
     expect(toolNames).toContain('canvas_create_element');
     expect(toolNames).toContain('canvas_manage');
+    expect(toolNames).toContain('database_manage');
   });
 
   it('keeps the mode prompt native-first while retaining compact guidance', () => {
@@ -82,5 +83,21 @@ describe('conductor canvas design guidance', () => {
       headers: ['Item', 'Status'],
       rows: [['Boots', 'Pack']],
     })).toEqual({ valid: true, errors: [] });
+  });
+
+  it('accepts durable database view references and rejects incomplete configs', () => {
+    expect(String(createDefinition.description)).toContain('native/database');
+    expect(buildConductorPrompt()).toContain('database_manage');
+    expect(validateElementInput('native/database', { x: 1, y: 1, w: 8, h: 5 }, {
+      sourceId: 'source-1',
+      viewId: 'view-1',
+      displayMode: 'embedded',
+      interactionMode: 'canvas',
+      previewLimit: 50,
+    })).toEqual({ valid: true, errors: [] });
+    expect(validateElementInput('native/database', { x: 1, y: 1, w: 8, h: 5 }, {
+      sourceId: '',
+      viewId: 'view-1',
+    }).valid).toBe(false);
   });
 });

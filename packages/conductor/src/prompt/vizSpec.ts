@@ -13,6 +13,7 @@ The conductor canvas supports a minimal element set:
 - **native/image** — Image element (assetId or url)
 - **native/file** — File attachment element (assetId, fileName, mimeType)
 - **native/table** — Editable table (title, headers, rows)
+- **native/database** — Saved view of typed project records (sourceId, viewId)
 - **native/link** — Link card referencing a URL, DUYA session, or DUYA canvas
 - **native/group** — Loose-binding group frame around member elements
 - **widget/task-list** — Structured task list widget
@@ -56,8 +57,8 @@ Use for: linking related elements, showing relationships.
 vizSpec format:
 \`\`\`json
 {
-  "sourceId": "element-uuid-1",
-  "targetId": "element-uuid-2",
+  "source": { "kind": "bound", "nodeId": "element-uuid-1", "bindingPoint": { "u": 0.5, "v": 0.5 } },
+  "target": { "kind": "free", "point": { "x": 960, "y": 520 } },
   "routingMode": "elbow",
   "label": "depends on",
   "strokeStyle": "solid",
@@ -68,8 +69,9 @@ vizSpec format:
 \`\`\`
 
 Style fields (all optional, top-level):
+- **source / target**: a bound reference point inside an element or a free canvas-pixel point. Elbows project bound references to the nearest edge; curves connect the references and clip the portions inside endpoint elements. Do not precompute an edge anchor.
 - **routingMode**: "elbow" | "curve" — default "elbow". Use elbow for every editable architecture map, dependency graph, flowchart, and mind map. Curve is opt-in only when explicitly requested for an organic relation.
-- **strokeStyle**: "solid" | "dashed" | "dotted" — default "solid".
+- **strokeStyle**: "solid" | "dashed" | "bold" — default "solid".
   - Use "dashed" for conditional/optional branches.
   - Use "dotted" for weak/implicit relations.
 - **color**: CSS color string — default var(--text-secondary).
