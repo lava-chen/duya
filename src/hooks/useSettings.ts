@@ -159,7 +159,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       // Browser security settings
       blockedDomains: raw.blockedDomains ? JSON.parse(raw.blockedDomains) : defaults.blockedDomains,
 // Browser backend mode
-      browserBackendMode: (raw.browserBackendMode as 'auto' | 'extension' | 'built-in') ?? defaults.browserBackendMode,
+      browserBackendMode: (raw.browserBackendMode as 'auto' | 'extension' | 'built-in' | 'human-like') ?? defaults.browserBackendMode,
       // Built-in browser default home URL
       browserHomeUrl: raw.browserHomeUrl || defaults.browserHomeUrl,
       // Built-in browser default download directory

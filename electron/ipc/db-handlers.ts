@@ -31,7 +31,8 @@ import {
 } from '../db/index';
 import type { DbInitResult, DatabaseStats } from '../db/index';
 import { emitMailApplied, emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
-import { uploadAsset as conductorUploadAsset } from '../conductor/asset-service';
+import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUploadProjectAsset } from '../conductor/asset-service';
+import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
 import { markMailboxForGuidance, promoteQueuedMailbox } from '../db/mailbox-transitions';
 
@@ -2309,6 +2310,51 @@ export function registerConductorHandlers(): void {
     }
     return conductorUploadAsset(canvasId, buffer, fileName, mimeType);
   });
+
+  ipcMain.handle(
+    'conductor:link:captureSnapshot',
+    async (
+      _event,
+      payload: {
+        canvasId: string;
+        elementId: string;
+        url: string;
+        mode: import('../../packages/conductor/src/renderer/types/canvas-node').LinkSnapshotMode;
+      },
+    ) => {
+      const { canvasId, elementId, url, mode } = payload;
+      if (!canvasId || !elementId || !url || !mode) {
+        throw new Error('canvasId, elementId, url, and mode are required');
+      }
+      if (mode === 'none') {
+        throw new Error('Cannot capture snapshot for mode "none"');
+      }
+
+      const normalizedUrl = /^https?:\/\//.test(url) ? url : `https://${url}`;
+      const canvasRow = getDb()
+        .prepare('SELECT project_path FROM conductor_canvases WHERE id = ?')
+        .get(canvasId) as {
+        project_path: string | null;
+      } | undefined;
+      const projectPath = canvasRow?.project_path ?? null;
+
+      const capture = await captureWebsiteSnapshot(normalizedUrl, mode);
+      const asset = conductorUploadProjectAsset(
+        canvasId,
+        projectPath,
+        capture.buffer,
+        `snapshot-${mode}-${Date.now()}.png`,
+        'image/png',
+      );
+
+      return {
+        assetId: asset.assetId,
+        url: asset.url,
+        width: capture.width,
+        height: capture.height,
+      };
+    },
+  );
 
   dbLogger.info('Conductor handlers registered', undefined, LogComponent.DB);
 }

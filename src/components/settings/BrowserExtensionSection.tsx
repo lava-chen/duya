@@ -23,6 +23,7 @@ import {
   SettingsCard,
   SettingsRow,
   SettingsToggle,
+  SettingsSelectRow,
 } from '@/components/settings/ui';
 import { ExtensionConfirmDialog } from '@/components/ExtensionConfirmDialog';
 import { BrowserAdvancedSection } from './BrowserAdvancedSection';
@@ -65,7 +66,22 @@ export default function BrowserExtensionSection() {
   const [domainError, setDomainError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
 
-  const extensionEnabled = settings.browserBackendMode !== 'built-in';
+  const backendModeOptions = [
+    { value: 'auto', label: t('browserBackend.auto'), description: t('browserBackend.autoDesc') },
+    { value: 'extension', label: t('browserBackend.extension'), description: t('browserBackend.extensionTitle') },
+    { value: 'built-in', label: t('browserBackend.builtin'), description: t('browserBackend.builtinDesc') },
+    { value: 'human-like', label: t('browserBackend.humanLike'), description: t('browserBackend.humanLikeDesc') },
+  ];
+
+  const handleModeChange = useCallback(async (mode: string) => {
+    const newMode = mode as 'auto' | 'extension' | 'built-in' | 'human-like';
+    await save({ browserBackendMode: newMode });
+    try {
+      await window.electronAPI?.browserBackend?.updateMode(newMode);
+    } catch {
+      // Persisted already; the agent will pick it up on next init if live update fails.
+    }
+  }, [save]);
 
   useEffect(() => {
     if (settings.blockedDomains) {
@@ -104,16 +120,6 @@ export default function BrowserExtensionSection() {
     }, 3000);
     return () => clearInterval(timer);
   }, [status, checkExtension]);
-
-  const handleToggleExtension = useCallback(async (enabled: boolean) => {
-    const newMode = enabled ? 'auto' : 'built-in';
-    await save({ browserBackendMode: newMode });
-    try {
-      await window.electronAPI?.browserBackend?.updateMode(newMode);
-    } catch {
-      // Persisted already; the agent will pick it up on next init if live update fails.
-    }
-  }, [save]);
 
   const handleApprovePendingExtension = useCallback(async () => {
     if (!window.electronAPI?.browserExtension?.approvePending) return;
@@ -272,11 +278,11 @@ export default function BrowserExtensionSection() {
           description={t('browserExtension.generalDescription')}
         >
           <SettingsCard className="mb-4">
-            <SettingsToggle
-              label={t('browserExtension.extensionEnabled')}
-              description={t('browserExtension.extensionEnabledDesc')}
-              checked={extensionEnabled}
-              onCheckedChange={handleToggleExtension}
+            <SettingsSelectRow
+              label={t('browserBackend.label')}
+              value={settings.browserBackendMode ?? 'auto'}
+              onValueChange={handleModeChange}
+              options={backendModeOptions}
               disabled={saving}
             />
           </SettingsCard>

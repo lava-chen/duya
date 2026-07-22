@@ -521,7 +521,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
     ? diagramShape === "ellipse"
       ? "50%"
       : diagramShape === "rounded"
-        ? 8
+        ? 12
         : 0
     : 6;
 

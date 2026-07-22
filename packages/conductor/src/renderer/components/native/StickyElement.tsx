@@ -83,12 +83,6 @@ function DiagramShapeBackdrop({
 
   let primitive: React.ReactNode;
   switch (shape) {
-    case "rounded":
-      primitive = <rect x="1" y="1" width="98" height="98" rx="8" {...common} />;
-      break;
-    case "ellipse":
-      primitive = <ellipse cx="50" cy="50" rx="49" ry="49" {...common} />;
-      break;
     case "diamond":
       primitive = <polygon points="50,1 99,50 50,99 1,50" {...common} />;
       break;
@@ -205,18 +199,25 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   const isEmptyEditor = htmlToText(editHtml).trim().length === 0;
 
   // Shape-driven outer styles.
-  const borderRadius = shape === "ellipse" ? "50%" : isDiagramShape ? shape === "rounded" ? "8px" : "0" : "6px";
+  // Rectangles, rounded rectangles and ellipses are rendered with CSS instead
+  // of the SVG backdrop so they hug the element edge and keep circular corners
+  // under non-uniform scaling.
+  const isCssShape = isDiagramShape && (shape === "rect" || shape === "rounded" || shape === "ellipse");
+  const borderRadius = shape === "ellipse" ? "50%" : shape === "rounded" ? "12px" : isDiagramShape ? "0" : "6px";
   const padding = isDiagramShape ? "18px 24px" : shape === "ellipse" ? "16px 18px" : shape === "diamond" ? "16px 18px" : "10px 12px";
   const shapeRotate = !isDiagramShape && shape === "diamond" ? "rotate(45deg)" : "";
   const combinedTransform = shapeRotate || "none";
-  const outerBackground = isDiagramShape ? "transparent" : bgColor ?? theme.bg;
+  const diagramStrokeWidth = borderWidth > 0 ? borderWidth : 1;
+  const diagramStrokeColor = borderWidth > 0 ? borderColor : theme.stroke;
+  const outerBackground = isCssShape ? (bgColor ?? theme.bg) : isDiagramShape ? "transparent" : bgColor ?? theme.bg;
   // When the user hasn't configured a borderStyle, default to a 1px solid
   // border using the diagram stroke color so sticky notes share the visual
   // language of diagram module nodes.
   const outerBorder = isDiagramShape
-    ? "none"
-    :
-    borderWidth > 0
+    ? isCssShape
+      ? `${diagramStrokeWidth}px ${borderStyleValue} ${diagramStrokeColor}`
+      : "none"
+    : borderWidth > 0
       ? `${borderWidth}px ${borderStyleValue} ${borderColor}`
       : `1px solid ${theme.stroke}`;
   // Counter-rotate inner content so it stays upright inside a diamond.
@@ -256,12 +257,12 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
         }
       }}
     >
-      {isDiagramShape && (
+      {isDiagramShape && !isCssShape && (
         <DiagramShapeBackdrop
           shape={shape}
           fill={bgColor ?? theme.bg}
-          stroke={borderWidth > 0 ? borderColor : theme.stroke}
-          strokeWidth={borderWidth > 0 ? borderWidth : 1}
+          stroke={diagramStrokeColor}
+          strokeWidth={diagramStrokeWidth}
           strokeStyle={borderStyleValue}
         />
       )}

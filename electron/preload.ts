@@ -1720,6 +1720,12 @@ const electronAPI: ElectronAPI = {
     redo: (canvasId: string) => ipcRenderer.invoke('conductor:redo', canvasId),
     uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) =>
       ipcRenderer.invoke('conductor:asset:upload', payload),
+    captureLinkSnapshot: (payload: {
+      canvasId: string;
+      elementId: string;
+      url: string;
+      mode: 'desktop-head' | 'desktop-full' | 'mobile-head' | 'mobile-full';
+    }) => ipcRenderer.invoke('conductor:link:captureSnapshot', payload),
   },
   thread: {
     list: () => ipcRenderer.invoke('db:session:list'),
@@ -1950,7 +1956,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('browser:clear-browser-data'),
   },
   browserBackend: {
-    updateMode: (mode: 'auto' | 'extension' | 'built-in') =>
+    updateMode: (mode: 'auto' | 'extension' | 'built-in' | 'human-like') =>
       ipcRenderer.invoke('browser:update-backend-mode', mode),
   },
   parser: {

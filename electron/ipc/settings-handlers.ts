@@ -197,7 +197,7 @@ export function registerSettingsHandlers(): void {
       } catch {}
 
       // Get browser backend mode
-      let browserBackendMode: 'auto' | 'extension' | 'built-in' = 'auto';
+      let browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
       try {
         const backendRow = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
         if (backendRow?.value) {
