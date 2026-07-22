@@ -125,7 +125,7 @@ interface InitMessage {
   skillPaths?: string[];
   communicationPlatform?: string;
   blockedDomains?: string[];
-  browserBackendMode?: 'auto' | 'extension' | 'built-in';
+  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
   language?: string;
   sandboxEnabled?: boolean;
   securityScanEnabled?: boolean;
@@ -2891,7 +2891,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         }
 
         case 'config:update': {
-          const cfgMsg = msg as unknown as { browserBackendMode?: 'auto' | 'extension' | 'built-in'; blockedDomains?: string[] };
+          const cfgMsg = msg as unknown as { browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like'; blockedDomains?: string[] };
           log('[Agent-Process] Received config:update:', cfgMsg);
           if (cfgMsg.browserBackendMode) {
             browserTool.setBrowserConfig({

@@ -162,6 +162,13 @@ export interface GroupContent {
   memberIds: string[];
 }
 
+export type LinkSnapshotMode =
+  | 'none'
+  | 'desktop-head'
+  | 'desktop-full'
+  | 'mobile-head'
+  | 'mobile-full';
+
 export interface LinkContent {
   linkType: 'url' | 'session' | 'canvas';
   title?: string;
@@ -170,8 +177,13 @@ export interface LinkContent {
   faviconUrl?: string;
   siteName?: string;
   targetId?: string;
+  /** @deprecated Replaced by snapshotMode; kept for migration. */
   expanded?: boolean;
+  /** @deprecated Replaced by snapshot-aware sizing; kept for migration. */
   expandedSize?: { w: number; h: number };
+  snapshotMode?: LinkSnapshotMode;
+  snapshotAssetId?: string;
+  snapshotUrl?: string;
 }
 
 export type NodeContent =

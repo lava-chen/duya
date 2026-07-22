@@ -520,7 +520,7 @@ export class AgentProcessPool {
     const configManager = getConfigManager();
     const db = getDatabase();
 
-    let browserBackendMode: 'auto' | 'extension' | 'built-in' = 'auto';
+    let browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
     try {
       const row = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
       if (row?.value === 'extension' || row?.value === 'built-in') {
