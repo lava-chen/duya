@@ -119,6 +119,22 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     expect(path.getAttribute('stroke-dasharray')).toBe('10 7');
   });
 
+  it('bold strokeStyle enlarges the line and integrated arrow together', () => {
+    mocks.storeState.elements = [
+      makeNode('src', 100, 100),
+      makeNode('tgt', 400, 100),
+      makeConnector('c1', 'src', 'tgt', { strokeStyle: 'bold' }),
+    ];
+    const { container } = render(<ConnectorElement element={mocks.storeState.elements[2]} />);
+    const path = getVisiblePath(container);
+    const arrow = container.querySelector('[data-testid="connector-end-arrow"]');
+
+    expect(path.getAttribute('stroke-width')).toBe('11');
+    expect(path.getAttribute('stroke-dasharray')).toBeNull();
+    expect(arrow).toBeTruthy();
+    expect(arrow?.getAttribute('d')).toContain(' Z');
+  });
+
   it('dotted strokeStyle uses round-cap dots', () => {
     mocks.storeState.elements = [
       makeNode('src', 100, 100),
@@ -178,7 +194,7 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     expect(container.querySelector('[data-testid="connector-end-arrow"]')).toBeNull();
   });
 
-  it('renders the default end arrow as integrated geometry with a butt line cap', () => {
+  it('renders the default end arrow with a rounded line cap', () => {
     mocks.storeState.elements = [
       makeNode('src', 100, 100),
       makeNode('tgt', 400, 100),
@@ -189,7 +205,7 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     // arrowEnd defaults to true when unset.
     expect(path.getAttribute('marker-end')).toBeNull();
     expect(path.getAttribute('marker-start')).toBeNull();
-    expect(path.getAttribute('stroke-linecap')).toBe('butt');
+    expect(path.getAttribute('stroke-linecap')).toBe('round');
     expect(container.querySelector('[data-testid="connector-end-arrow"]')).toBeTruthy();
   });
 
@@ -207,9 +223,12 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     const line = getVisiblePath(container);
     const arrow = container.querySelector('[data-testid="connector-end-arrow"]');
 
-    expect(computed?.tgtPoint).toEqual({ x: 120, y: 400 });
-    expect(line.getAttribute('d')).toContain('120 389.5');
-    expect(arrow?.getAttribute('d')).toContain('M 120 400');
+    expect(computed?.srcPoint.x).toBeCloseTo(120);
+    expect(computed?.srcPoint.y).toBe(246);
+    expect(computed?.tgtPoint.x).toBeCloseTo(120);
+    expect(computed?.tgtPoint.y).toBe(394);
+    expect(line.getAttribute('d')).toContain('120 383.5');
+    expect(arrow?.getAttribute('d')).toContain('M 120 394');
   });
 
   it('supports distinct start and end marker styles', () => {
@@ -234,7 +253,7 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     expect(getByText('Depends on')).toBeTruthy();
   });
 
-  it('does not move one legacy endpoint because a peer connector exists', () => {
+  it('keeps curve endpoints independently positioned along a shared edge', () => {
     const sourceA = makeNode('source-a', 100, 80);
     const sourceB = makeNode('source-b', 100, 180);
     const target = makeNode('target', 400, 120);
@@ -249,7 +268,7 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     const second = getComputedConnectorData(connectorB, elements, sourceB.position, target.position);
 
     expect(first?.tgtPoint.x).toBe(second?.tgtPoint.x);
-    expect(first?.tgtPoint.y).toBe(second?.tgtPoint.y);
+    expect(first?.tgtPoint.y).not.toBe(second?.tgtPoint.y);
   });
 
   it('defaults legacy connectors to orthogonal elbow routing', () => {
@@ -326,7 +345,7 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
 
     expect(sourceHandle.getAttribute('cx')).toBe('60');
     expect(sourceHandle.getAttribute('cy')).toBe('60');
-    expect(computed?.srcPoint).toEqual({ x: 60, y: 0 });
+    expect(computed?.srcPoint).toEqual({ x: 60, y: -6 });
     expect(handles[0].getAttribute('data-segment-index')).toBe('0');
     expect(handles.at(-1)?.getAttribute('data-segment-index')).toBe(String((computed?.elbowPoints?.length ?? 1) - 2));
     expect(container.textContent).not.toContain('NaN');
@@ -344,8 +363,8 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     const points = data?.elbowPoints ?? [];
     const targetRight = (target.position.x + target.position.w) * GRID_PX;
 
-    expect(data?.tgtPoint.x).toBe(targetRight);
-    expect(points.at(-2)?.x).toBeGreaterThan(targetRight);
+    expect(data?.tgtPoint.x).toBe(targetRight + 6);
+    expect(points.at(-2)?.x).toBeGreaterThan(targetRight + 6);
     expect(points.at(-3)?.x).toBe(points.at(-2)?.x);
   });
 
@@ -361,8 +380,8 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     const points = data?.elbowPoints ?? [];
     const targetBottom = (target.position.y + target.position.h) * GRID_PX;
 
-    expect(data?.tgtPoint.y).toBe(targetBottom);
-    expect(points.at(-2)?.y).toBeGreaterThan(targetBottom);
+    expect(data?.tgtPoint.y).toBe(targetBottom + 6);
+    expect(points.at(-2)?.y).toBeGreaterThan(targetBottom + 6);
     expect(points.at(-3)?.y).toBe(points.at(-2)?.y);
   });
 
@@ -381,8 +400,8 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
       target.position,
     );
 
-    expect(data?.srcPoint.y).toBe((source.position.y + source.position.h) * GRID_PX);
-    expect(data?.tgtPoint.y).toBe(target.position.y * GRID_PX);
+    expect(data?.srcPoint.y).toBe((source.position.y + source.position.h) * GRID_PX + 6);
+    expect(data?.tgtPoint.y).toBe(target.position.y * GRID_PX - 6);
     expect(data?.elbowPoints?.every((point, index, points) => (
       index === 0 || point.x === points[index - 1].x || point.y === points[index - 1].y
     ))).toBe(true);

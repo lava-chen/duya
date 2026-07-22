@@ -51,6 +51,19 @@ describe('createHasPermissionsToUseTool', () => {
     })
   })
 
+  it('allows database_manage as an internal conductor operation', async () => {
+    const result = await hasPermissions('database_manage', { action: 'query' }, createContext('auto'))
+
+    expect(result).toEqual({
+      behavior: 'allow',
+      decisionReason: {
+        type: 'safetyCheck',
+        reason: 'database_manage is an internal canvas operation.',
+        classifierApprovable: false,
+      },
+    })
+  })
+
   it('ignores user deny rules for internal canvas tools', async () => {
     const result = await hasPermissions(
       'canvas_manage',

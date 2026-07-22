@@ -23,6 +23,7 @@ import {
   type ConductorCanvas,
 } from '../db/queries/conductors';
 import { getSession, updateSession } from '../db/queries/sessions';
+import { getProjectDatabaseService, ProjectDatabaseServiceError } from '../project-database/service';
 
 export type { ExecutorRpcRequest, ExecutorRpcResponse } from './executor-types';
 
@@ -259,6 +260,34 @@ export class ConductorExecutorProxy {
       switch (action) {
         case 'canvas.manage':
           return this.manageCanvas(request);
+
+        case 'database.execute': {
+          const fallbackCanvasId = payload.canvasId as string | undefined;
+          const canvas = this.resolveCurrentCanvas(request.sessionId, fallbackCanvasId);
+          const session = request.sessionId ? getSession(request.sessionId) : null;
+          const projectPath = canvas?.projectPath ?? session?.working_directory ?? null;
+          if (!projectPath) {
+            return {
+              success: false,
+              error: { code: 'NO_PROJECT_PATH', message: 'The current canvas is not bound to a project folder' },
+            };
+          }
+          try {
+            const result = await getProjectDatabaseService().invoke({
+              projectPath,
+              command: payload.command as never,
+            });
+            return { success: true, result };
+          } catch (error) {
+            if (error instanceof ProjectDatabaseServiceError) {
+              return {
+                success: false,
+                error: { code: error.code ?? 'DATABASE_ERROR', message: error.message },
+              };
+            }
+            throw error;
+          }
+        }
 
         case 'canvas.snapshot':
           return this.dbService.getCanvasSnapshot(payload.canvasId as string);

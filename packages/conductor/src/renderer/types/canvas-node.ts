@@ -99,7 +99,7 @@ export interface ConnectorContent {
   };
   // New top-level style fields (preferred over nested `style` for new data).
   // Fall back to `style.*` for backward compat when unset.
-  strokeStyle?: 'solid' | 'dashed' | 'dotted';  // default: "solid"
+  strokeStyle?: 'solid' | 'dashed' | 'bold' | 'dotted';  // "dotted" is legacy-only
   color?: string;                                // default: var(--text-secondary)
   arrowStart?: boolean;                          // default: false
   arrowEnd?: boolean;                            // default: true

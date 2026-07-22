@@ -3,6 +3,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { CanvasToolbar } from "./CanvasToolbar";
 import { CanvasArea } from "./CanvasArea";
+import { FiniteCanvasArea } from "./FiniteCanvasArea";
+import {
+  CanvasPresentationModeToggle,
+  type CanvasPresentationMode,
+} from "./CanvasPresentationModeToggle";
 import { CanvasErrorBoundary } from "./CanvasErrorBoundary";
 import { CanvasSelector } from "./CanvasSelector";
 import { useConductorStore } from "..//stores/conductor-store";
@@ -34,6 +39,7 @@ export function ConductorView() {
   } = useConductorStore();
 
   const [isLoading, setIsLoading] = useState(true);
+  const [presentationMode, setPresentationMode] = useState<CanvasPresentationMode>("infinite");
 
   useEffect(() => {
     registerAllElements();
@@ -135,11 +141,12 @@ export function ConductorView() {
   }
 
   return (
-    <div className="h-full w-full overflow-hidden bg-[var(--main-bg)]">
+    <div data-testid="conductor-main-view" className="h-full w-full overflow-hidden bg-[var(--main-bg)]">
       <div className="relative h-full">
         {/* Header with Canvas Selector */}
         <div className="absolute top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-2">
           <CanvasSelector />
+          <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
         </div>
 
         {uiError && (
@@ -158,12 +165,21 @@ export function ConductorView() {
 
         {activeCanvasId ? (
           <CanvasErrorBoundary>
-            <CanvasArea
-              elements={elements}
-              readOnly={false}
-              onPositionChange={handlePositionChange}
-              onDeleteElement={handleDeleteElement}
-            />
+            {presentationMode === "finite" ? (
+              <FiniteCanvasArea
+                elements={elements}
+                readOnly={false}
+                onPositionChange={handlePositionChange}
+                onDeleteElement={handleDeleteElement}
+              />
+            ) : (
+              <CanvasArea
+                elements={elements}
+                readOnly={false}
+                onPositionChange={handlePositionChange}
+                onDeleteElement={handleDeleteElement}
+              />
+            )}
           </CanvasErrorBoundary>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-[var(--muted)] text-sm gap-4">
@@ -171,7 +187,7 @@ export function ConductorView() {
           </div>
         )}
 
-        <CanvasToolbar />
+        {presentationMode === "infinite" && <CanvasToolbar />}
 
         <RefinePanel />
       </div>

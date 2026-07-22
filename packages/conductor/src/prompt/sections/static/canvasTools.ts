@@ -13,6 +13,7 @@ Create any element on the canvas. Supports these kinds:
 - **native/image** — Image element (assetId or url)
 - **native/file** — File attachment element (assetId, fileName, mimeType)
 - **native/table** — Editable grid for comparisons, schedules, and research data (title?, headers?: string[], rows?: string[][], headerFill?/headerTextColor?/borderColor? as #RRGGBB)
+- **native/database** — Embedded saved view over durable project records (sourceId, viewId, sourceTitle?, previewLimit?)
 - **native/link** — Link card referencing a URL, DUYA session, or DUYA canvas (linkType, url/targetId, title, description, expanded?)
 
 Parameters: canvasId, kind, position {x, y, w, h, zIndex} (all in **grid units**, 1 unit = 80 px on screen), vizSpec (kind-specific), config`,

@@ -43,6 +43,7 @@ import { registerTerminalHandlers } from './ipc/terminal-handlers';
 import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
 import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
 import { registerImportHandlers } from './import/import-handlers';
+import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { getMarketplaceSyncManager } from './plugins/marketplace';
 import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
 import { initWikiAgentRuntime } from './wiki-agent/WikiAgentRuntime';
@@ -120,6 +121,12 @@ if (gotTheLock) {
     setupApplicationMenu();
 
     logEnvironmentDiagnostic();
+
+    // Project databases are independent from DUYA's application database.
+    // Register this handler before boot DB initialization so renderer code can
+    // never observe the preload API without its matching main-process route,
+    // including when the application falls back to Safe Mode.
+    registerProjectDatabaseHandlers();
 
     // ============================================================
     // Step 0.5: Cross-platform CLI install (best-effort, non-blocking)

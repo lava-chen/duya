@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { MCPInventorySnapshotDTO } from '../src/lib/mcp-inventory-types'
+import type {
+  ProjectDatabaseChangeEvent,
+  ProjectDatabaseRequest,
+} from '../packages/conductor/src/database/types'
 
 // webUtils.getPathForFile is exposed from Electron 30+. On older versions
 // (e.g. Electron 28 in this project) `File.path` still works for dragged
@@ -103,6 +107,11 @@ export interface ConductorPortAPI {
   onCaptureRequest: (callback: (data: { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }) => void) => () => void
   /** Send a capture response back to the main process (which forwards to the agent). */
   sendCaptureResponse: (data: { requestId: string; result?: unknown; error?: string }) => void
+}
+
+export interface ProjectDatabaseAPI {
+  invoke: (request: ProjectDatabaseRequest) => Promise<unknown>
+  onChanged: (callback: (event: ProjectDatabaseChangeEvent) => void) => () => void
 }
 
 export interface ThreadAPI {
@@ -1011,6 +1020,7 @@ export interface ElectronAPI {
     redo: (canvasId: string) => Promise<unknown>
     uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) => Promise<unknown>
   }
+  projectDatabase: ProjectDatabaseAPI
   thread: ThreadAPI
   session: SessionAPI
   message: MessageAPI
@@ -1720,6 +1730,14 @@ const electronAPI: ElectronAPI = {
     redo: (canvasId: string) => ipcRenderer.invoke('conductor:redo', canvasId),
     uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) =>
       ipcRenderer.invoke('conductor:asset:upload', payload),
+  },
+  projectDatabase: {
+    invoke: (request: ProjectDatabaseRequest) => ipcRenderer.invoke('project-database:invoke', request),
+    onChanged: (callback: (event: ProjectDatabaseChangeEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: ProjectDatabaseChangeEvent) => callback(data)
+      ipcRenderer.on('project-database:changed', handler)
+      return () => ipcRenderer.removeListener('project-database:changed', handler)
+    },
   },
   thread: {
     list: () => ipcRenderer.invoke('db:session:list'),

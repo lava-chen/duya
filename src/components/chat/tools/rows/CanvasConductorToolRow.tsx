@@ -40,7 +40,8 @@ type CanvasAction =
   | 'autoLayout'
   | 'applyLayout'
   | 'capture'
-  | 'getKnowledge';
+  | 'getKnowledge'
+  | 'database';
 
 function getCanvasAction(name: string): CanvasAction {
   switch (name.toLowerCase()) {
@@ -72,6 +73,8 @@ function getCanvasAction(name: string): CanvasAction {
       return 'capture';
     case 'canvas_get_knowledge':
       return 'getKnowledge';
+    case 'database_manage':
+      return 'database';
     default:
       return 'create';
   }
@@ -233,6 +236,12 @@ function computeSummary(tool: ToolAction, action: CanvasAction): string {
     case 'getKnowledge': {
       const section = typeof input.section === 'string' ? input.section : '';
       return section || 'design knowledge';
+    }
+    case 'database': {
+      const operation = typeof input.action === 'string' ? input.action : 'query';
+      const name = typeof input.name === 'string' ? input.name : '';
+      const title = typeof input.title === 'string' ? input.title : '';
+      return truncate([operation, name || title].filter(Boolean).join(': ') || 'project database');
     }
     default:
       return 'canvas';

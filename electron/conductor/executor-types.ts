@@ -12,6 +12,7 @@ export type ExecutorAction =
   | 'canvas.auto_layout'
   | 'canvas.capture'
   | 'canvas.manage'
+  | 'database.execute'
   | 'element.create'
   | 'element.batch_create'
   | 'element.update'
