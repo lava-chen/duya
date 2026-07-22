@@ -1168,6 +1168,50 @@ existing boards and must not be used for new diagrams.
   elements remain selectable and editable, but direct drag, resize, connector
   geometry handles, and group movement cannot change their position.
 
+### Project-local databases
+
+Conductor database elements use a project-owned SQLite database at
+`<project>/.duya/database.sqlite`. This is separate from DUYA's application
+database: project data travels with the project folder, while application
+sessions and canvas metadata remain in `duya-main.db`.
+
+`electron/project-database/worker.ts` is the sole SQLite connection owner.
+Renderer requests arrive through the typed preload API; Agent requests arrive
+as `database.execute` commands through the Conductor executor proxy. Both paths
+are validated by the shared command schemas before reaching the engine.
+
+The normalized model separates sources, stable property and option IDs,
+records, typed values, saved views, and per-view record positions. Records use
+optimistic revisions and mutations append events for renderer invalidation and
+audit. Archive flags preserve stable references instead of hard-deleting rows.
+
+A `native/database` canvas element stores only `sourceId`, `viewId`, and display
+preferences. It never embeds record data or a filesystem path. `native/table`
+remains the lightweight self-contained grid for small static datasets. New view
+renderers such as board and calendar must reuse the same source/record model
+rather than create parallel storage.
+
+### Canvas presentation modes
+
+One Conductor canvas can be rendered through two view-local presentation modes.
+The standalone Conductor view defaults to the existing infinite **Canvas** mode;
+the sidebar defaults to finite **Document** mode. Switching modes does not create
+or copy elements.
+
+Document mode uses an explicit content allowlist on a finite twelve-column
+surface. `native/document`, `native/table`, and `native/link` participate in a
+vertically compacted drag/resize grid. Their widget geometry is persisted under
+`conductor_canvases.layout_config.finiteWidgetLayout`, so it never overwrites
+the canonical `CanvasElement.position` used by Canvas mode. `native/text`,
+`native/image`, and `native/file` use a separate non-compacting layer and remain
+independently draggable. Every other element family, including shapes,
+stickies, mind maps, databases, generic widgets, connectors, and groups, is
+Canvas-only until it is intentionally added to the document-mode contract.
+
+Both modes reuse `ElementRenderer`, native editing sessions, selection state,
+and content persistence. Presentation code owns only placement and viewport
+behavior; it must not fork element content or editing contracts.
+
 ### Native element capability contract
 
 Native renderer behavior is declared by

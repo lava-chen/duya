@@ -167,7 +167,17 @@ export function resolveConnectorEndpoint(
   }
 
   const edgePosition = clampUnit(endpoint.edgePosition ?? 0.5);
-  let resolvedAnchor = endpoint.anchorId;
+  // Defensive: legacy/imported endpoints may carry anchor ids we don't
+  // recognize (schema drift, devtools overrides, hot-reload state from
+  // an older build). Treat unknown ids as 'center' so the rest of the
+  // pipeline — `getAnchorPosition`, `anchorToDirection`, `autoDirection`
+  // — gets a value it can handle instead of crashing on `.x` lookups.
+  const knownAnchor = endpoint.anchorId;
+  let resolvedAnchor: AnchorId = (
+    knownAnchor === 'top' || knownAnchor === 'bottom' ||
+    knownAnchor === 'left' || knownAnchor === 'right' ||
+    knownAnchor === 'center'
+  ) ? knownAnchor : 'center';
   if (resolvedAnchor === 'center' && otherPoint) {
     const rect = getNodePixelRect(node, allNodes);
     const center = { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
@@ -202,12 +212,25 @@ export function anchorToDirection(anchorId: AnchorId): Direction | null {
     case 'left': return 'left';
     case 'right': return 'right';
     case 'center': return null;
+    // Defensive default — see `getAnchorPosition` for the rationale.
+    // Returning null here lets the caller fall through to `autoDirection`,
+    // which computes a sensible direction from the geometry instead of
+    // crashing on an unknown anchor id.
+    default: return null;
   }
 }
 
 export function autoDirection(src: Point, tgt: Point): Direction {
-  const dx = tgt.x - src.x;
-  const dy = tgt.y - src.y;
+  // Defensive: callers may pass partial/NaN points (see the legacy
+  // connector path in `resolveConnectorEndpoint`). Treat any non-finite
+  // coordinate as equal to the other end so `dx`/`dy` stay meaningful
+  // and we always return a valid direction instead of crashing on `.x`.
+  const sx = Number.isFinite(src?.x) ? src.x : 0;
+  const sy = Number.isFinite(src?.y) ? src.y : 0;
+  const tx = Number.isFinite(tgt?.x) ? tgt.x : sx;
+  const ty = Number.isFinite(tgt?.y) ? tgt.y : sy;
+  const dx = tx - sx;
+  const dy = ty - sy;
   if (Math.abs(dx) > Math.abs(dy)) {
     return dx >= 0 ? 'right' : 'left';
   }
@@ -240,6 +263,12 @@ export function getAnchorPosition(
     case 'left': return { x: abs.x, y: abs.y + pxH * position };
     case 'right': return { x: abs.x + pxW, y: abs.y + pxH * position };
     case 'center': return { x: cx, y: cy };
+    // Defensive: persisted/imported data may carry anchor ids we don't
+    // recognize (schema drift, devtools overrides, hot-reload state from
+    // an older build). Fall back to the node center rather than
+    // returning undefined — downstream callers like `autoDirection`
+    // dereference `.x` on the result and would otherwise crash.
+    default: return { x: cx, y: cy };
   }
 }
 

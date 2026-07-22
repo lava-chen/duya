@@ -65,6 +65,7 @@ coverage/
 !src/lib/chat-file-links.test.ts
 !src/components/chat/RichTextInput.test.tsx
 !src/hooks/useSubAgentProgress.test.ts
+!src/hooks/__tests__/usePanel.test.ts
 !src/components/chat/tools/rows/SubAgentToolRow.test.tsx
 !src/components/layout/TaskDrawer.test.tsx
 !src/components/chat/SlashCommandPopover.test.tsx

@@ -186,6 +186,7 @@ const en = {
   'streaming.toolAction.running.canvas.applyLayout': 'Applying auto layout…',
   'streaming.toolAction.running.canvas.capture': 'Capturing canvas…',
   'streaming.toolAction.running.canvas.getKnowledge': 'Fetching canvas design knowledge…',
+  'streaming.toolAction.running.canvas.database': 'Updating project database…',
   'streaming.toolAction.done.bash': 'Ran',
   'streaming.toolAction.done.cli': 'Ran',
   'streaming.toolAction.done.read': 'Read',
@@ -216,6 +217,7 @@ const en = {
   'streaming.toolAction.done.canvas.applyLayout': 'Applied auto layout',
   'streaming.toolAction.done.canvas.capture': 'Captured canvas',
   'streaming.toolAction.done.canvas.getKnowledge': 'Fetched canvas design knowledge',
+  'streaming.toolAction.done.canvas.database': 'Updated project database',
   'streaming.toolAction.body.task.created': 'Created task #{id}: {subject}',
   'streaming.toolAction.body.task.completed': 'Task #{id} "{subject}" completed',
   'streaming.toolAction.body.task.started': 'Task #{id} "{subject}" started',
@@ -257,6 +259,7 @@ const en = {
   'streaming.toolAction.error.canvas.applyLayout': 'Failed to apply auto layout',
   'streaming.toolAction.error.canvas.capture': 'Failed to capture canvas',
   'streaming.toolAction.error.canvas.getKnowledge': 'Failed to fetch canvas design knowledge',
+  'streaming.toolAction.error.canvas.database': 'Failed to update project database',
   // Generic tool group summary (≥2 consecutive tools collapsed into one row).
   // {count} = number of tool calls in that category within the group.
   // Each category gets its own singular + plural template so headers
@@ -1831,7 +1834,9 @@ const en = {
   'conductor.toolbar.document': 'Markdown document',
   'conductor.toolbar.shape': 'Diagram shapes',
   'conductor.toolbar.text': 'Text',
-  'conductor.toolbar.table': 'Table',
+    'conductor.toolbar.table': 'Table',
+  'conductor.toolbar.database': 'Database',
+  'conductor.toolbar.databaseFolderRequired': 'Bind this canvas to a project folder before creating a database.',
   'conductor.toolbar.connector': 'Connector',
   'conductor.toolbar.media': 'Media',
   'conductor.toolbar.link': 'Link',
@@ -1913,6 +1918,17 @@ const en = {
   'conductor.document.agentPrompt': 'Create a Markdown document on the current canvas. Goal: {prompt}',
   'conductor.document.agentPromptEmpty': 'Create a Markdown document on the current canvas and first ask me what I would like the draft to include.',
   'conductor.document.startChatError': 'Failed to start document chat: {error}',
+  'conductor.presentation.label': 'Canvas presentation mode',
+  'conductor.presentation.widgets': 'Document',
+  'conductor.presentation.widgetsHint': 'Arrange documents, tables, links, text, and media in a finite workspace',
+  'conductor.presentation.canvas': 'Canvas',
+  'conductor.presentation.canvasHint': 'Use the infinite freeform canvas',
+  'conductor.presentation.moveWidget': 'Move {name}',
+  'conductor.presentation.moveWidgetHandle': 'Move widget',
+  'conductor.presentation.moveElement': 'Move {name}',
+  'conductor.presentation.moveElementHandle': 'Move element',
+  'conductor.presentation.empty': 'This canvas has no elements yet.',
+  'conductor.presentation.canvasOnly': '{count} other items are available only in Canvas mode',
 
   // Conductor element utility actions
   'conductor.utility.rotate': 'Rotate 90°',

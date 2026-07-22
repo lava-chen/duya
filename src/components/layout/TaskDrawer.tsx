@@ -1,28 +1,38 @@
 // src/components/layout/TaskDrawer.tsx
-// Right-edge task rail container. Owns:
+// Right-edge session-detail rail. Owns:
 //   - visibility / keyboard (Escape) / 1s polling
 //   - task list state via useTaskList + mutation handlers (optimistic
 //     update + rollback)
 //   - sub-agent data (live SSE via useSubAgentProgress)
-//   - assembly of the header, agents section and task list section
+//   - session-derived data: file changes / artifacts / sources
+//   - assembly of 6 section components (no header — the panel starts
+//     straight at EnvironmentInfoSection)
 //
 // Sub-panels live in their own files:
-//   ./TaskDrawerHeader.tsx   — header bar with counters
-//   ./AgentListSection.tsx   — sub-agent rows + session jump
-//   ./TaskListSection.tsx    — task rows + status icons
-//   ./DrawerSection.tsx      — generic labelled section wrapper
+//   ./EnvironmentInfoSection.tsx — session metadata + git-style totals
+//   ./MainAgentSection.tsx       — main-agent profile dropdown
+//   ./SubAgentListSection.tsx    — sub-agent rows + session jump
+//   ./TaskListSection.tsx        — task rows + status icons
+//   ./SourcesSection.tsx         — attachments / browser URLs / other refs
+//   ./ArtifactsSection.tsx       — files created by the agent
+//   ./DrawerSection.tsx          — generic labelled section wrapper
 
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useSubAgentProgress } from '@/hooks/useSubAgentProgress';
 import { useTaskList } from '@/hooks/useTaskList';
+import { useSessionArtifacts } from '@/hooks/useSessionArtifacts';
+import { useSessionSources } from '@/hooks/useSessionSources';
 import { setTaskDrawerOpen, useTaskDrawerOpen } from './task-drawer-store';
-import { TaskDrawerHeader } from './TaskDrawerHeader';
-import { AgentListSection } from './AgentListSection';
+import { EnvironmentInfoSection } from './EnvironmentInfoSection';
+import { MainAgentSection } from './MainAgentSection';
+import { SubAgentListSection } from './SubAgentListSection';
 import { TaskListSection } from './TaskListSection';
+import { SourcesSection } from './SourcesSection';
+import { ArtifactsSection } from './ArtifactsSection';
 
 const POLL_INTERVAL_MS = 1000;
 
@@ -30,10 +40,13 @@ export function TaskDrawer() {
   const open = useTaskDrawerOpen();
   const onClose = useCallback(() => setTaskDrawerOpen(false), []);
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
+  const threads = useConversationStore((state) => state.threads);
+  const thread = threads.find((t) => t.id === activeThreadId) ?? null;
+
   const { tasks, setTasks, loading, fetchTasks } = useTaskList(open ? activeThreadId : null);
   const agents = useSubAgentProgress(activeThreadId ?? "");
-
-  const [collapsed, setCollapsed] = useState(false);
+  const { fileChanges, artifacts } = useSessionArtifacts(open ? activeThreadId : null);
+  const sources = useSessionSources(open ? activeThreadId : null);
 
   useEffect(() => {
     if (!open) return;
@@ -85,12 +98,6 @@ export function TaskDrawer() {
     [fetchTasks, setTasks]
   );
 
-  const completed = tasks.filter((task) => task.status === "completed").length;
-  const pending = tasks.length - completed;
-  const runningAgents = agents.filter(
-    (agent) => agent.status === "running" || agent.status === "waiting"
-  ).length;
-
   return (
     <AnimatePresence>
       {open && (
@@ -109,36 +116,48 @@ export function TaskDrawer() {
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className="task-card-shell"
             role="dialog"
-            aria-label="Task list"
+            aria-label="Session details"
             data-testid="task-card"
           >
-            <TaskDrawerHeader
-              pending={pending}
-              completed={completed}
-              runningAgents={runningAgents}
-              totalAgents={agents.length}
-              collapsed={collapsed}
-              onToggleCollapsed={() => setCollapsed((value) => !value)}
-              onClose={onClose}
-            />
-
             <div className="task-card-list">
-              {!collapsed && (
-                <div className="task-card-list-inner">
-                  <AgentListSection
-                    agents={agents}
-                    onOpen={(sessionId) =>
-                      useConversationStore.getState().setActiveThread(sessionId)
-                    }
-                  />
-                  <TaskListSection
-                    tasks={tasks}
-                    loading={loading}
-                    onToggleStatus={handleToggleStatus}
-                    onDelete={handleDelete}
-                  />
-                </div>
-              )}
+              <div className="task-card-list-inner">
+                <EnvironmentInfoSection
+                  title={thread?.title ?? ''}
+                  workingDirectory={thread?.workingDirectory ?? null}
+                  model={thread?.model ?? null}
+                  fileChanges={fileChanges}
+                />
+
+                <MainAgentSection
+                  sessionId={activeThreadId}
+                  currentProfileId={thread?.agentProfileId ?? null}
+                />
+
+                <SubAgentListSection
+                  agents={agents}
+                  onOpen={(sessionId) =>
+                    useConversationStore.getState().setActiveThread(sessionId)
+                  }
+                />
+
+                <TaskListSection
+                  tasks={tasks}
+                  loading={loading}
+                  onToggleStatus={handleToggleStatus}
+                  onDelete={handleDelete}
+                />
+
+                <SourcesSection
+                  userAttachments={sources.userAttachments}
+                  browserUrls={sources.browserUrls}
+                  others={sources.others}
+                />
+
+                <ArtifactsSection
+                  artifacts={artifacts}
+                  cwd={thread?.workingDirectory ?? null}
+                />
+              </div>
             </div>
           </motion.aside>
         </motion.div>

@@ -24,6 +24,19 @@ function getLearningApi() {
   return window.electronAPI?.skills?.learning;
 }
 
+function eventsMatch(
+  current: SkillLearningEvent[],
+  next: SkillLearningEvent[],
+): boolean {
+  return current.length === next.length && current.every((event, index) => {
+    const candidate = next[index];
+    return event.id === candidate.id
+      && event.read_at === candidate.read_at
+      && event.created_at === candidate.created_at
+      && event.status === candidate.status;
+  });
+}
+
 export function useSkillLearning(limit = 30) {
   const [events, setEvents] = useState<SkillLearningEvent[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -32,7 +45,7 @@ export function useSkillLearning(limit = 30) {
   const refresh = useCallback(async () => {
     const api = getLearningApi();
     if (!api) {
-      setLoading(false);
+      setLoading((current) => current ? false : current);
       return;
     }
     try {
@@ -41,10 +54,11 @@ export function useSkillLearning(limit = 30) {
         api.unreadCount(),
       ]);
       if (eventsResult.success) {
-        setEvents(eventsResult.events as SkillLearningEvent[]);
+        const nextEvents = eventsResult.events as SkillLearningEvent[];
+        setEvents((current) => eventsMatch(current, nextEvents) ? current : nextEvents);
       }
       if (unreadResult.success) {
-        setUnreadCount(unreadResult.count);
+        setUnreadCount((current) => current === unreadResult.count ? current : unreadResult.count);
       }
     } catch (error) {
       // The backend handler may be unavailable during development if the
@@ -54,7 +68,7 @@ export function useSkillLearning(limit = 30) {
         console.warn('[useSkillLearning] refresh failed:', error);
       }
     } finally {
-      setLoading(false);
+      setLoading((current) => current ? false : current);
     }
   }, [limit]);
 
