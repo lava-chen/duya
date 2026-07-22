@@ -61,7 +61,7 @@ interface ToolActionsGroupProps {
   forceExpanded?: boolean;
 }
 
-export function ToolActionsGroup({
+function ToolActionsGroupImpl({
   tools,
   actions: actionsProp,
   isStreaming = false,
@@ -222,6 +222,34 @@ export function ToolActionsGroup({
     </div>
   );
 }
+
+// Custom comparator: bail out unless something the renderer actually
+// consumes changed. Most props are arrays / strings that propagate from
+// upstream hooks (useStreamingActions / useStreamingAgentProgress), and
+// those hooks now (plan 236) hold referentially stable values across
+// idempotent notifications, so reference equality is a safe and cheap
+// short-circuit. When the references are stable but content changed
+// (rare — only on a brand-new array allocation in the store) we still
+// re-render, so behavior is unchanged.
+function areToolActionsGroupPropsEqual(
+  prev: ToolActionsGroupProps,
+  next: ToolActionsGroupProps,
+): boolean {
+  return (
+    prev.actions === next.actions
+    && prev.tools === next.tools
+    && prev.thinkingContent === next.thinkingContent
+    && prev.isStreaming === next.isStreaming
+    && prev.streamingToolOutput === next.streamingToolOutput
+    && prev.flat === next.flat
+    && prev.agentProgressEvents === next.agentProgressEvents
+    && prev.totalDurationMs === next.totalDurationMs
+    && prev.liveStartedAt === next.liveStartedAt
+    && prev.forceExpanded === next.forceExpanded
+  );
+}
+
+export const ToolActionsGroup = React.memo(ToolActionsGroupImpl, areToolActionsGroupPropsEqual);
 
 /**
  * StreamingActionsBody — the un-chromed body used while the agent is

@@ -59,6 +59,16 @@ interface ChatViewProps {
 const NOOP_OPEN_PANEL = () => '';
 const NOOP_CLOSE_PANEL = () => {};
 
+// Hoisted (plan 236 Phase 5) so the sub-agent poll timer doesn't
+// allocate a fresh Set on every interval tick.
+const ACTIVE_PARENT_PHASES = new Set<string>([
+  'starting',
+  'streaming',
+  'awaiting_permission',
+  'persisting',
+]);
+const STOP_PARENT_PHASES = new Set<string>(['completed', 'error', 'idle']);
+
 function WorkspaceComposerLayer({
   expanded,
   children,
@@ -572,6 +582,10 @@ export function ChatView({
   // while the parent session is still streaming
   const parentSessionId = useConversationStore(s => s.parentSessionId);
   const loadThreadMessages = useConversationStore(s => s.loadThreadMessages);
+  // Stable ref so the effect doesn't re-run when the store action identity
+  // changes (plan 236 Phase 5).
+  const loadThreadMessagesRef = useRef(loadThreadMessages);
+  loadThreadMessagesRef.current = loadThreadMessages;
 
   useEffect(() => {
     if (!parentSessionId) return;
@@ -581,20 +595,23 @@ export function ChatView({
       parentPhase = phase;
     });
 
-    const isActive = () =>
-      parentPhase === 'starting' || parentPhase === 'streaming' ||
-      parentPhase === 'awaiting_permission' || parentPhase === 'persisting';
-
-    const stopPhases = new Set(['completed', 'error', 'idle']);
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     pollTimer = setInterval(() => {
-      if (stopPhases.has(parentPhase)) {
-        if (pollTimer) clearInterval(pollTimer);
+      // Stop polling the moment the parent leaves an active phase — we
+      // no longer need fresh sub-agent messages, and continuing to call
+      // loadThreadMessages would re-render the entire MessageList every
+      // 3s for no benefit. Sets are hoisted at module scope so the
+      // callback doesn't allocate them every tick.
+      if (STOP_PARENT_PHASES.has(parentPhase)) {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
         return;
       }
-      if (isActive()) {
-        loadThreadMessages(sessionId);
+      if (ACTIVE_PARENT_PHASES.has(parentPhase)) {
+        loadThreadMessagesRef.current(sessionId);
       }
     }, 3000);
 
@@ -602,7 +619,7 @@ export function ChatView({
       if (pollTimer) clearInterval(pollTimer);
       unsubPhase();
     };
-  }, [sessionId, parentSessionId, loadThreadMessages]);
+  }, [sessionId, parentSessionId]);
 
   const handleSend = useCallback(
     async (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, displayContent?: string) => {
