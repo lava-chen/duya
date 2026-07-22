@@ -642,11 +642,13 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   const updateTabTitle = useCallback<PanelContextValue["updateTabTitle"]>((tabId, title) => {
     const nextTitle = title.trim();
     if (!nextTitle) return;
-    setTabs((prev) => prev.map((tab) => (
-      tab.id === tabId && tab.title !== nextTitle
-        ? { ...tab, title: nextTitle }
-        : tab
-    )));
+    setTabs((prev) => {
+      const target = prev.find((tab) => tab.id === tabId);
+      if (!target || target.title === nextTitle) return prev;
+      return prev.map((tab) => (
+        tab.id === tabId ? { ...tab, title: nextTitle } : tab
+      ));
+    });
   }, []);
 
   const updateTabFavicon = useCallback<PanelContextValue["updateTabFavicon"]>((tabId, favicon) => {

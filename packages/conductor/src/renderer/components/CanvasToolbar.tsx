@@ -1,18 +1,21 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useConductorStore } from "..//stores/conductor-store";
 import { ELEMENT_ICONS } from "./toolbar/element-icons";
 import { uploadAsset } from "..//ipc/conductor-ipc";
 import { LinkCreateDialog } from "./LinkCreateDialog";
 import { DocumentCreateDialog } from "./DocumentCreateDialog";
+import { DatabaseCreateDialog } from "./DatabaseCreateDialog";
+import type { NativeDatabaseElementConfig } from "../../database/types";
 import { DRAGGABLE_CREATE_TOOL_IDS, getCanvasToolDragPayload } from "../domain/canvas/toolbar-drag";
 import type { LinkContent } from "..//types/canvas-node";
 import type { TranslationKey } from "@/i18n";
 import { useTranslation } from "@/hooks/useTranslation";
 import {
   ArrowElbowDownRight,
-  BezierCurve,
+  ArrowUpRight,
   Circle,
   Diamond,
   Hexagon,
@@ -24,7 +27,7 @@ import {
 
 type ToolId =
   | "select" | "hand" | "document" | "shape"
-  | "connector" | "media" | "link" | "text" | "table";
+  | "connector" | "media" | "link" | "text" | "table" | "database";
 
 interface Tool {
   id: ToolId;
@@ -42,6 +45,7 @@ const TOOLS: Tool[] = [
   { id: "shape", icon: ELEMENT_ICONS.shape, label: "conductor.toolbar.shape", shortcut: "S", group: 1, hasSubmenu: true },
   { id: "text", icon: ELEMENT_ICONS.text, label: "conductor.toolbar.text", shortcut: "T", group: 1 },
   { id: "table", icon: ELEMENT_ICONS.table, label: "conductor.toolbar.table", group: 1 },
+  { id: "database", icon: ELEMENT_ICONS.database, label: "conductor.toolbar.database", group: 1 },
   { id: "connector", icon: ELEMENT_ICONS.connector, label: "conductor.toolbar.connector", shortcut: "C", group: 1, hasSubmenu: true },
   { id: "media", icon: ELEMENT_ICONS.media, label: "conductor.toolbar.media", shortcut: "M", group: 1 },
   { id: "link", icon: ELEMENT_ICONS.link, label: "conductor.toolbar.link", shortcut: "L", group: 1 },
@@ -145,7 +149,7 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
           onClick={() => onSelect("connector", { routingMode: "curve" })}
           className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text)] hover:bg-[var(--surface-hover)]"
         >
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--conductor-accent-soft)] text-[var(--conductor-accent)]"><BezierCurve size={17} weight="bold" /></span>
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--conductor-accent-soft)] text-[var(--conductor-accent)]"><ArrowUpRight size={17} weight="bold" /></span>
           <span><strong className="block font-semibold">{t("conductor.toolbar.connectorCurve")}</strong><span className="text-[10px] text-[var(--muted)]">{t("conductor.toolbar.connectorCurveDesc")}</span></span>
         </button>
       </div>
@@ -189,7 +193,7 @@ function ToolbarTooltip({ label, shortcut, children }: ToolbarTooltipProps) {
   return (
     <>
       {React.cloneElement(children, { ref: buttonRef })}
-      {visible && (
+      {visible && createPortal(
         <div
           className="fixed z-[300] pointer-events-none"
           style={{ top: pos.top, left: pos.left, transform: "translateY(-50%)" }}
@@ -198,7 +202,8 @@ function ToolbarTooltip({ label, shortcut, children }: ToolbarTooltipProps) {
             <span>{t(label)}</span>
             {shortcut && <span style={{ color: "var(--text-tertiary)", fontSize: 11, fontFamily: "'Fira Mono', monospace" }}>{shortcut}</span>}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
@@ -254,6 +259,7 @@ export function CanvasToolbar() {
   const [submenuAnchorY, setSubmenuAnchorY] = useState(0);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [documentDialogOpen, setDocumentDialogOpen] = useState(false);
+  const [databaseDialogOpen, setDatabaseDialogOpen] = useState(false);
 
   const handleDragStart = useCallback((e: React.DragEvent, toolId: string) => {
     const payload = getCanvasToolDragPayload(toolId);
@@ -306,9 +312,23 @@ export function CanvasToolbar() {
     setDocumentDialogOpen(false);
   }, [activeCanvas?.projectPath, setActiveTool, setUiError, t]);
 
+  const startCreateDatabase = useCallback((content: NativeDatabaseElementConfig & { sourceTitle: string }) => {
+    setActiveTool(createToolValue("database", content as unknown as Record<string, unknown>));
+    setDatabaseDialogOpen(false);
+  }, [setActiveTool]);
+
   const handleClick = useCallback((tool: Tool, e: React.MouseEvent) => {
     if (tool.id === "document") {
       setDocumentDialogOpen(true);
+      return;
+    }
+
+    if (tool.id === "database") {
+      if (!activeCanvas?.projectPath) {
+        setUiError(t("conductor.toolbar.databaseFolderRequired"));
+        return;
+      }
+      setDatabaseDialogOpen(true);
       return;
     }
 
@@ -346,7 +366,7 @@ export function CanvasToolbar() {
     }
 
     setActiveTool(createToolValue(tool.id));
-  }, [activeTool, setActiveTool]);
+  }, [activeCanvas?.projectPath, setActiveTool, setUiError, t]);
 
   const groups = TOOLS.reduce<Map<number, Tool[]>>((acc, tool) => {
     const group = acc.get(tool.group) || [];
@@ -431,6 +451,13 @@ export function CanvasToolbar() {
         onClose={() => setDocumentDialogOpen(false)}
         onConfirm={startCreateDocument}
         onError={setUiError}
+      />
+      <DatabaseCreateDialog
+        open={databaseDialogOpen}
+        projectPath={activeCanvas?.projectPath ?? undefined}
+        onClose={() => setDatabaseDialogOpen(false)}
+        onConfirm={startCreateDatabase}
+        onError={(message) => setUiError(`Database: ${message}`)}
       />
     </div>
   );

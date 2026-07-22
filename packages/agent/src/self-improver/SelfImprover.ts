@@ -61,6 +61,64 @@ export interface EvaluationResult {
 }
 
 /**
+ * Decode the evaluator's final JSON report after its streamed response is
+ * complete. Evaluator text is emitted in arbitrary chunks, so parsing an
+ * individual event can reject a valid report whose code fence arrives later.
+ */
+export function parseEvaluationResult(text: string): EvaluationResult | null {
+  const trimmed = text.trim();
+  const candidates = [
+    ...Array.from(trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi), (match) => match[1]),
+    trimmed,
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as Partial<EvaluationResult> & { executed_task?: unknown };
+      if (
+        typeof parsed.score !== 'number'
+        || !Number.isFinite(parsed.score)
+        || typeof parsed.passed !== 'boolean'
+      ) {
+        continue;
+      }
+
+      return {
+        score: parsed.score,
+        passed: parsed.passed,
+        feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
+        dimensions: parsed.dimensions,
+        executedTask: typeof parsed.executed_task === 'string'
+          ? parsed.executed_task
+          : typeof parsed.executedTask === 'string'
+            ? parsed.executedTask
+            : undefined,
+      };
+    } catch {
+      // Keep trying later fenced blocks or the complete response.
+    }
+  }
+
+  return null;
+}
+
+function messageContentToText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  return content
+    .map((block) => {
+      if (typeof block === 'string') return block;
+      if (block && typeof block === 'object' && 'text' in block) {
+        const text = (block as { text?: unknown }).text;
+        return typeof text === 'string' ? text : '';
+      }
+      return '';
+    })
+    .join('');
+}
+
+/**
  * Result of skill creation
  */
 export interface CreatorResult {
@@ -944,7 +1002,7 @@ export class SelfImprover {
     ]);
 
     try {
-      let evaluationResult: EvaluationResult | null = null;
+      let streamedText = '';
 
       console.log('[SelfImprover] Evaluator Phase: Running evaluator agent stream...');
       // Run the evaluator conversation.
@@ -963,45 +1021,22 @@ export class SelfImprover {
           // We capture this but rely on the agent's text response for the actual evaluation
         }
 
-        if (event.type === 'text') {
-          // Try to parse evaluation from the text response
-          const text = event.data as string;
-          const jsonMatch = text.match(/```json\s*(\{.*?\})\s*```/s) ||
-                           text.match(/```\s*(\{.*?\})\s*```/s);
-
-          if (jsonMatch) {
-            try {
-              const parsed = JSON.parse(jsonMatch[1]);
-              if (typeof parsed.score === 'number' && typeof parsed.passed === 'boolean') {
-                evaluationResult = {
-                  score: parsed.score,
-                  passed: parsed.passed,
-                  feedback: parsed.feedback || '',
-                  dimensions: parsed.dimensions,
-                  executedTask: parsed.executed_task,
-                };
-                console.log(`[SelfImprover] Evaluator Phase: Parsed evaluation - score=${parsed.score}, passed=${parsed.passed}`);
-              }
-            } catch {
-              // Not valid JSON, continue
-            }
-          }
+        if (event.type === 'text' && typeof event.data === 'string') {
+          streamedText += event.data;
         }
       }
 
+      const messages = evaluatorAgent.getMessages();
+      const lastAssistantMessage = messages.filter(m => m.role === 'assistant').pop();
+      const finalResponse = messageContentToText(lastAssistantMessage?.content);
+      const evaluationResult = parseEvaluationResult(finalResponse || streamedText);
+
       if (!evaluationResult) {
         console.log('[SelfImprover] Evaluator Phase: Could not parse evaluation result');
-        // Fallback: extract from final message
-        const messages = evaluatorAgent.getMessages();
-        const lastAssistantMessage = messages.filter(m => m.role === 'assistant').pop();
-        const content = typeof lastAssistantMessage?.content === 'string'
-          ? lastAssistantMessage.content
-          : '';
-
         return {
           score: 0,
           passed: false,
-          feedback: `Could not parse evaluation result from agent response: ${content.slice(0, 500)}`,
+          feedback: 'The evaluator did not return a valid final report.',
         };
       }
 

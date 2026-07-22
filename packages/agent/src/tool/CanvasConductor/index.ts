@@ -1,7 +1,7 @@
 /**
  * Canvas Conductor tools — registration entry point.
  *
- * Fourteen tools for main-agent control of the conductor canvas:
+ * Fifteen tools for main-agent control of the conductor canvas:
  *   - canvas_manage             : identify/list/create/switch/rename canvases
  *   - canvas_create_element     : create one native element at a time
  *   - canvas_delete_element     : delete an element by ID
@@ -16,6 +16,7 @@
  *   - canvas_apply_layout       : commit a layout preview to the canvas
  *   - canvas_capture            : screenshot for vision analysis
  *   - canvas_get_knowledge      : fetch design knowledge section on-demand (no canvas needed)
+ *   - database_manage           : manage durable project-local structured records
  *
  * The canvasId is injected via ToolUseContext.conductorCanvasId —
  * the LLM never needs to track canvas state. Register conditionally
@@ -41,9 +42,10 @@ import { definition as captureDefinition, executor as captureExecutor } from './
 import { definition as getKnowledgeDefinition, executor as getKnowledgeExecutor } from './CanvasGetKnowledgeTool.js';
 import { definition as autoLayoutDefinition, executor as autoLayoutExecutor } from './CanvasAutoLayoutTool.js';
 import { definition as applyLayoutDefinition, executor as applyLayoutExecutor } from './CanvasApplyLayoutTool.js';
+import { definition as databaseDefinition, executor as databaseExecutor } from './DatabaseTool.js';
 
 /**
- * The fourteen canvas conductor tools as {@link ToolRegistration} pairs.
+ * The fifteen canvas conductor tools as {@link ToolRegistration} pairs.
  *
  * Plan 224: this is the canonical export — `conductorMode.tools.inject`
  * returns the result of this function so the modifier owns the tool
@@ -71,11 +73,12 @@ export function getCanvasConductorTools(): ToolRegistration[] {
     { definition: applyLayoutDefinition, executor: applyLayoutExecutor },
     { definition: captureDefinition, executor: captureExecutor },
     { definition: getKnowledgeDefinition, executor: getKnowledgeExecutor },
+    { definition: databaseDefinition, executor: databaseExecutor },
   ];
 }
 
 /**
- * Register the fourteen canvas conductor tools on the given registry.
+ * Register the fifteen canvas conductor tools on the given registry.
  *
  * @deprecated Plan 224 Phase 3: prefer {@link getCanvasConductorTools}
  * via `conductorMode.tools.inject`. This wrapper is retained for
@@ -142,6 +145,10 @@ export {
   definition as canvasApplyLayoutDefinition,
   executor as canvasApplyLayoutExecutor,
 } from './CanvasApplyLayoutTool.js';
+export {
+  definition as databaseManageDefinition,
+  executor as databaseManageExecutor,
+} from './DatabaseTool.js';
 export {
   ipcRequest as canvasIpcRequest,
   getCanvasId as getCanvasIdFromContext,

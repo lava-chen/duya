@@ -84,6 +84,14 @@ function edgeToDirection(edge: ConnectorEdge): Direction {
   return edge === 'top' ? 'up' : edge === 'bottom' ? 'down' : edge;
 }
 
+function offsetPointAlongDirection(point: Point, direction: Direction, distance: number): Point {
+  const vector = directionVector[direction];
+  return {
+    x: point.x + vector.x * distance,
+    y: point.y + vector.y * distance,
+  };
+}
+
 export function createBoundConnectorEndpoint(
   point: Point,
   node: CanvasElement,
@@ -118,7 +126,9 @@ export function resolveConnectorEndpoint(
   endpoint: ConnectorEndpoint,
   allNodes: CanvasElement[],
   otherPoint?: Point,
+  clearance = 0,
 ): ResolvedConnectorEndpoint | null {
+  const safeClearance = Math.max(0, Number.isFinite(clearance) ? clearance : 0);
   if (isFreeConnectorEndpoint(endpoint)) {
     if (!Number.isFinite(endpoint.point.x) || !Number.isFinite(endpoint.point.y)) return null;
     const point = { x: endpoint.point.x, y: endpoint.point.y };
@@ -146,10 +156,11 @@ export function resolveConnectorEndpoint(
       { edge: 'right', distance: (1 - u) * rect.w, point: { x: rect.x + rect.w, y: referencePoint.y } },
     ];
     const nearest = candidates.reduce((best, candidate) => candidate.distance < best.distance ? candidate : best);
+    const direction = edgeToDirection(nearest.edge);
     return {
       referencePoint,
-      edgePoint: nearest.point,
-      direction: edgeToDirection(nearest.edge),
+      edgePoint: offsetPointAlongDirection(nearest.point, direction, safeClearance),
+      direction,
       edge: nearest.edge,
       nodeId: endpoint.nodeId,
     };
@@ -168,12 +179,17 @@ export function resolveConnectorEndpoint(
     else if (horizontalGap >= 24) resolvedAnchor = dx >= 0 ? 'right' : 'left';
   }
   const referencePoint = getAnchorPosition(node, resolvedAnchor, allNodes, edgePosition);
-  const edgePoint = getConnectorEndpoint(node, resolvedAnchor, allNodes, otherPoint ?? referencePoint, edgePosition);
+  const direction = anchorToDirection(resolvedAnchor) ?? autoDirection(referencePoint, otherPoint ?? referencePoint);
+  const edgePoint = offsetPointAlongDirection(
+    getConnectorEndpoint(node, resolvedAnchor, allNodes, otherPoint ?? referencePoint, edgePosition),
+    direction,
+    safeClearance,
+  );
   const edge = resolvedAnchor === 'center' ? null : resolvedAnchor;
   return {
     referencePoint,
     edgePoint,
-    direction: anchorToDirection(resolvedAnchor) ?? autoDirection(edgePoint, otherPoint ?? referencePoint),
+    direction,
     edge,
     nodeId: endpoint.nodeId,
   };
@@ -744,16 +760,26 @@ export function computeClippedConnectorCurve(
   geometry: ConnectorCurveGeometry,
   sourceRect: CanvasPixelRect | null,
   targetRect: CanvasPixelRect | null,
+  clearance = 0,
 ): ClippedConnectorCurve {
-  const sourceT = findCurveBoundaryParameter(geometry, sourceRect, true);
-  const targetT = findCurveBoundaryParameter(geometry, targetRect, false);
+  const safeClearance = Math.max(0, Number.isFinite(clearance) ? clearance : 0);
+  const expand = (rect: CanvasPixelRect | null): CanvasPixelRect | null => rect && {
+    x: rect.x - safeClearance,
+    y: rect.y - safeClearance,
+    w: rect.w + safeClearance * 2,
+    h: rect.h + safeClearance * 2,
+  };
+  const sourceClipRect = expand(sourceRect);
+  const targetClipRect = expand(targetRect);
+  const sourceT = findCurveBoundaryParameter(geometry, sourceClipRect, true);
+  const targetT = findCurveBoundaryParameter(geometry, targetClipRect, false);
   const safeTargetT = Math.max(sourceT, targetT);
   const sourcePoint = snapPointToRectBoundary(
-    sourceRect,
+    sourceClipRect,
     evaluateConnectorCurvePoint(geometry, sourceT),
   );
   const targetPoint = snapPointToRectBoundary(
-    targetRect,
+    targetClipRect,
     evaluateConnectorCurvePoint(geometry, safeTargetT),
   );
   const sourceReferenceDirection = Math.hypot(
@@ -1077,16 +1103,6 @@ export function computeElbowRoutePoints(
   laneCoordinate?: number,
 ): Point[] {
   const savedWaypoints = waypoints?.filter(isFinitePoint).map((point) => ({ ...point })) ?? [];
-  if (savedWaypoints.length > 0) {
-    const first = savedWaypoints[0];
-    const last = savedWaypoints[savedWaypoints.length - 1];
-    if (srcDir === 'left' || srcDir === 'right') first.y = src.y;
-    else first.x = src.x;
-    if (tgtDir === 'left' || tgtDir === 'right') last.y = tgt.y;
-    else last.x = tgt.x;
-    return orthogonalizeElbowPoints([src, ...savedWaypoints, tgt]);
-  }
-
   const srcVec = directionVector[srcDir];
   const tgtVec = directionVector[tgtDir];
   const srcStub = {
@@ -1099,6 +1115,68 @@ export function computeElbowRoutePoints(
   };
   const srcHorizontal = srcDir === 'left' || srcDir === 'right';
   const tgtHorizontal = tgtDir === 'left' || tgtDir === 'right';
+
+  if (savedWaypoints.length > 0) {
+    if (savedWaypoints.length === 1) {
+      const waypoint = savedWaypoints[0];
+      if (srcHorizontal === tgtHorizontal) {
+        const lane = srcHorizontal ? waypoint.x : waypoint.y;
+        return computeElbowRoutePoints(src, srcDir, tgt, tgtDir, undefined, stubLength, lane);
+      }
+
+      if (!srcHorizontal && tgtHorizontal) {
+        const lane = tgtDir === 'left'
+          ? Math.min(waypoint.x, tgtStub.x)
+          : Math.max(waypoint.x, tgtStub.x);
+        return simplifyOrthogonalPoints([
+          src,
+          srcStub,
+          { x: lane, y: srcStub.y },
+          { x: lane, y: tgtStub.y },
+          tgtStub,
+          tgt,
+        ]);
+      }
+
+      const lane = tgtDir === 'up'
+        ? Math.min(waypoint.y, tgtStub.y)
+        : Math.max(waypoint.y, tgtStub.y);
+      return simplifyOrthogonalPoints([
+        src,
+        srcStub,
+        { x: srcStub.x, y: lane },
+        { x: tgtStub.x, y: lane },
+        tgtStub,
+        tgt,
+      ]);
+    }
+
+    const first = savedWaypoints[0];
+    const last = savedWaypoints[savedWaypoints.length - 1];
+    if (srcHorizontal) {
+      first.y = src.y;
+      first.x = srcDir === 'left'
+        ? Math.min(first.x, srcStub.x)
+        : Math.max(first.x, srcStub.x);
+    } else {
+      first.x = src.x;
+      first.y = srcDir === 'up'
+        ? Math.min(first.y, srcStub.y)
+        : Math.max(first.y, srcStub.y);
+    }
+    if (tgtHorizontal) {
+      last.y = tgt.y;
+      last.x = tgtDir === 'left'
+        ? Math.min(last.x, tgtStub.x)
+        : Math.max(last.x, tgtStub.x);
+    } else {
+      last.x = tgt.x;
+      last.y = tgtDir === 'up'
+        ? Math.min(last.y, tgtStub.y)
+        : Math.max(last.y, tgtStub.y);
+    }
+    return orthogonalizeElbowPoints([src, ...savedWaypoints, tgt]);
+  }
 
   if (srcHorizontal && tgtHorizontal) {
     const outerX = srcDir === tgtDir

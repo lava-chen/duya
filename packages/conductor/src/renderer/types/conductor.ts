@@ -197,7 +197,7 @@ export type ConductorActionRequest =
   | { action: 'element.move'; elementId: string; canvasId: string; position: CanvasPosition }
   | { action: 'element.arrange'; canvasId: string; layout: Array<{ elementId: string; position: CanvasPosition }> }
   | { action: 'element.create_native'; canvasId: string; nodeType: string; position: CanvasPosition; content: Record<string, unknown>; style?: Record<string, unknown> }
-  | { action: 'connector.create'; canvasId: string; source: ConnectorEndpoint; target: ConnectorEndpoint; curvature?: number; routingMode?: 'elbow' | 'curve'; label?: string; strokeStyle?: 'solid' | 'dashed' | 'dotted'; lineWidth?: number; color?: string; startMarker?: string; endMarker?: string; style?: Record<string, unknown> }
+  | { action: 'connector.create'; canvasId: string; source: ConnectorEndpoint; target: ConnectorEndpoint; curvature?: number; routingMode?: 'elbow' | 'curve'; label?: string; strokeStyle?: 'solid' | 'dashed' | 'bold' | 'dotted'; lineWidth?: number; color?: string; startMarker?: string; endMarker?: string; style?: Record<string, unknown> }
   | { action: 'element.update_content'; elementId: string; canvasId: string; content: Record<string, unknown> }
   | { action: 'element.reparent'; elementId: string; canvasId: string; parentId: string | null }
   | { action: 'group.create'; canvasId: string; memberIds: string[]; title?: string; bgColor?: string }
@@ -336,7 +336,7 @@ export const ConductorActionRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('element.move'), elementId: z.string(), canvasId: z.string(), position: CanvasPositionSchema }),
   z.object({ action: z.literal('element.arrange'), canvasId: z.string(), layout: z.array(z.object({ elementId: z.string(), position: CanvasPositionSchema })) }),
   z.object({ action: z.literal('element.create_native'), canvasId: z.string(), nodeType: z.string(), position: CanvasPositionSchema, content: z.record(z.string(), z.unknown()), style: z.record(z.string(), z.unknown()).optional() }),
-  z.object({ action: z.literal('connector.create'), canvasId: z.string(), source: ConnectorEndpointSchema, target: ConnectorEndpointSchema, curvature: z.number().optional(), routingMode: z.enum(['elbow', 'curve']).optional(), label: z.string().optional(), strokeStyle: z.enum(['solid', 'dashed', 'dotted']).optional(), lineWidth: z.number().positive().optional(), color: z.string().optional(), startMarker: z.string().optional(), endMarker: z.string().optional(), style: z.record(z.string(), z.unknown()).optional() }),
+  z.object({ action: z.literal('connector.create'), canvasId: z.string(), source: ConnectorEndpointSchema, target: ConnectorEndpointSchema, curvature: z.number().optional(), routingMode: z.enum(['elbow', 'curve']).optional(), label: z.string().optional(), strokeStyle: z.enum(['solid', 'dashed', 'bold', 'dotted']).optional(), lineWidth: z.number().positive().optional(), color: z.string().optional(), startMarker: z.string().optional(), endMarker: z.string().optional(), style: z.record(z.string(), z.unknown()).optional() }),
   z.object({ action: z.literal('element.update_content'), elementId: z.string(), canvasId: z.string(), content: z.record(z.string(), z.unknown()) }),
   z.object({ action: z.literal('element.reparent'), elementId: z.string(), canvasId: z.string(), parentId: z.string().nullable() }),
   z.object({ action: z.literal('group.create'), canvasId: z.string(), memberIds: z.array(z.string()).min(1), title: z.string().optional(), bgColor: z.string().optional() }),

@@ -10,6 +10,7 @@ describe("native element capabilities", () => {
     expect(getNativeElementCapabilities(element("native/text")).editMode).toBe("rich-text");
     expect(getNativeElementCapabilities(element("native/document")).editMode).toBe("markdown");
     expect(getNativeElementCapabilities(element("native/table")).editMode).toBe("table");
+    expect(getNativeElementCapabilities(element("native/database")).editMode).toBe("database");
     expect(getNativeElementCapabilities(element("native/image")).editMode).toBe("none");
     expect(getNativeElementCapabilities(element("native/file")).editMode).toBe("none");
     expect(getNativeElementCapabilities(element("native/link")).editMode).toBe("none");
@@ -32,6 +33,7 @@ describe("native element capabilities", () => {
 
   it("declares table geometry and non-chrome elements explicitly", () => {
     expect(getNativeElementCapabilities(element("native/table")).resizeHandles).toBe("horizontal");
+    expect(getNativeElementCapabilities(element("native/database")).resizeHandles).toBe("all");
     expect(getNativeElementCapabilities(element("native/group")).usesChrome).toBe(false);
     expect(getNativeElementCapabilities(element("native/connector")).selectionToolbar).toBe("none");
   });

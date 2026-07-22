@@ -77,6 +77,7 @@ function applyDefaultDimensions(
     'native/document': { w: 6, h: 5 },
     'native/text': { w: 10, h: 2 },
     'native/table': { w: 5, h: 1.5 },
+    'native/database': { w: 8, h: 5 },
     'native/image': { w: 5, h: 4 },
     'native/file': { w: 4, h: 3 },
     'native/link': { w: 4, h: 1 },
@@ -456,6 +457,12 @@ export class ConductorDbService {
         const rows = Array.isArray(cfg.rows) ? cfg.rows.length : 3;
         return truncate(`${title} (${columns} columns × ${rows} rows)`, 60);
       }
+      case 'native/database': {
+        const title = typeof cfg.sourceTitle === 'string' && cfg.sourceTitle
+          ? cfg.sourceTitle
+          : 'Database';
+        return truncate(`${title} (database view)`, 60);
+      }
       case 'native/connector': {
         const src = resolveConnectorEndpoint(cfg.source);
         const tgt = resolveConnectorEndpoint(cfg.target);
@@ -569,6 +576,7 @@ export class ConductorDbService {
     if (kind === 'native/text') return 'Text';
     if (kind === 'native/document') return 'Documents';
     if (kind === 'native/table') return 'Tables';
+    if (kind === 'native/database') return 'Databases';
     if (kind === 'native/connector') return 'Connectors';
     if (kind === 'native/image') return 'Images';
     if (kind === 'native/file') return 'Files';

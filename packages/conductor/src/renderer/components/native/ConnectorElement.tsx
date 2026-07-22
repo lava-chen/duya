@@ -32,8 +32,15 @@ import {
 
 const HIT_TARGET_WIDTH = 20;
 const DEFAULT_CONNECTOR_COLOR = "var(--text-secondary)";
+const DEFAULT_CONNECTOR_WIDTH = 3.5;
+const BOLD_CONNECTOR_WIDTH = 11;
+const DEFAULT_ARROW_LENGTH = 10.5;
+const DEFAULT_ARROW_HALF_WIDTH = 5.5;
+const BOLD_ARROW_LENGTH = 23;
+const BOLD_ARROW_HALF_WIDTH = 12;
 const ELBOW_STUB_LENGTH = 40;
 const ELBOW_CLEARANCE = 28;
+const ENDPOINT_CLEARANCE_PX = 6;
 
 interface ObstacleBounds {
   left: number;
@@ -232,8 +239,8 @@ export function getComputedConnectorData(
 
   const sourceHint = resolveConnectorEndpoint(sourceEndpoint, elements)?.referencePoint;
   const targetHint = resolveConnectorEndpoint(targetEndpoint, elements)?.referencePoint;
-  const sourceResolved = resolveConnectorEndpoint(sourceEndpoint, elements, targetHint);
-  const targetResolved = resolveConnectorEndpoint(targetEndpoint, elements, sourceHint);
+  const sourceResolved = resolveConnectorEndpoint(sourceEndpoint, elements, targetHint, ENDPOINT_CLEARANCE_PX);
+  const targetResolved = resolveConnectorEndpoint(targetEndpoint, elements, sourceHint, ENDPOINT_CLEARANCE_PX);
   if (!sourceResolved || !targetResolved) return null;
 
   const routingMode = resolveConnectorRoutingMode(connector.config);
@@ -252,6 +259,7 @@ export function getComputedConnectorData(
       geometry,
       getConnectorEndpointRect(sourceEndpoint, elements),
       getConnectorEndpointRect(targetEndpoint, elements),
+      ENDPOINT_CLEARANCE_PX,
     );
     return {
       path: clipped.path,
@@ -344,15 +352,21 @@ function ConnectorArrow({
   directionPoint,
   color,
   testId,
+  headLength = DEFAULT_ARROW_LENGTH,
+  halfWidth = DEFAULT_ARROW_HALF_WIDTH,
+  lineWidth = DEFAULT_CONNECTOR_WIDTH,
 }: {
   marker: ConnectorMarker;
   tip: Point;
   directionPoint: Point;
   color: string;
   testId: string;
+  headLength?: number;
+  halfWidth?: number;
+  lineWidth?: number;
 }) {
   if (marker !== "arrow" && marker !== "open-arrow") return null;
-  const { left, right } = getConnectorArrowGeometry(tip, directionPoint);
+  const { left, right } = getConnectorArrowGeometry(tip, directionPoint, headLength, halfWidth);
   if (marker === "open-arrow") {
     return (
       <path
@@ -360,7 +374,7 @@ function ConnectorArrow({
         d={`M ${left.x} ${left.y} L ${tip.x} ${tip.y} L ${right.x} ${right.y}`}
         fill="none"
         stroke={color}
-        strokeWidth={2.6}
+        strokeWidth={Math.max(2.6, lineWidth * 0.72)}
         strokeLinecap="round"
         strokeLinejoin="round"
         style={{ pointerEvents: "none" }}
@@ -385,8 +399,13 @@ function isArrowMarker(marker: ConnectorMarker): boolean {
   return marker === "arrow" || marker === "open-arrow";
 }
 
-function getArrowBasePoint(tip: Point, directionPoint: Point): Point {
-  const { left, right } = getConnectorArrowGeometry(tip, directionPoint);
+function getArrowBasePoint(
+  tip: Point,
+  directionPoint: Point,
+  headLength = DEFAULT_ARROW_LENGTH,
+  halfWidth = DEFAULT_ARROW_HALF_WIDTH,
+): Point {
+  const { left, right } = getConnectorArrowGeometry(tip, directionPoint, headLength, halfWidth);
   return {
     x: (left.x + right.x) / 2,
     y: (left.y + right.y) / 2,
@@ -398,6 +417,7 @@ function getTrimmedConnectorPath(
   sourceLineEnd: Point | undefined,
   targetLineEnd: Point | undefined,
   cornerRadius: number,
+  arrowTrimDistance = DEFAULT_ARROW_LENGTH,
 ): string {
   if (!sourceLineEnd && !targetLineEnd) return data.path;
 
@@ -418,7 +438,7 @@ function getTrimmedConnectorPath(
       const endT = data.curveEndT as number;
       const geometry = data.curveGeometry as NonNullable<ConnectorComputedData["curveGeometry"]>;
       const steps = 96;
-      const trimDistance = 10.5;
+      const trimDistance = arrowTrimDistance;
       let previousT = fromSource ? startT : endT;
       let previous = evaluateConnectorCurvePoint(geometry, previousT);
       let travelled = 0;
@@ -469,9 +489,12 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   const targetEndpoint = connector.config.target as ConnectorEndpoint | undefined;
   const legacyStyle = connector.config.style as Record<string, unknown> | undefined;
   const stroke = (connector.config.color as string) || (legacyStyle?.stroke as string) || DEFAULT_CONNECTOR_COLOR;
-  const strokeWidth = 3.5;
-  const strokeStyle = (connector.config.strokeStyle as "solid" | "dashed" | "dotted" | undefined) || "solid";
+  const strokeStyle = (connector.config.strokeStyle as "solid" | "dashed" | "dotted" | "bold" | undefined) || "solid";
+  const isBold = strokeStyle === "bold";
+  const strokeWidth = isBold ? BOLD_CONNECTOR_WIDTH : DEFAULT_CONNECTOR_WIDTH;
   const dashArray = strokeStyle === "dashed" ? "10 7" : strokeStyle === "dotted" ? "1 7" : undefined;
+  const arrowLength = isBold ? BOLD_ARROW_LENGTH : DEFAULT_ARROW_LENGTH;
+  const arrowHalfWidth = isBold ? BOLD_ARROW_HALF_WIDTH : DEFAULT_ARROW_HALF_WIDTH;
   const renderStroke = isSelected ? "var(--conductor-accent)" : stroke;
   const { startMarker, endMarker } = resolveConnectorMarkers(connector.config);
   const markerPrefix = `connector-marker-${connector.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
@@ -508,16 +531,17 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
     ? { x: computedData.tgtPoint.x * 2 - targetAdjacent.x, y: computedData.tgtPoint.y * 2 - targetAdjacent.y }
     : computedData.targetCenter);
   const sourceLineEnd = isArrowMarker(startMarker)
-    ? getArrowBasePoint(computedData.srcPoint, sourceArrowDirectionPoint)
+    ? getArrowBasePoint(computedData.srcPoint, sourceArrowDirectionPoint, arrowLength, arrowHalfWidth)
     : undefined;
   const targetLineEnd = isArrowMarker(endMarker)
-    ? getArrowBasePoint(computedData.tgtPoint, targetArrowDirectionPoint)
+    ? getArrowBasePoint(computedData.tgtPoint, targetArrowDirectionPoint, arrowLength, arrowHalfWidth)
     : undefined;
   const visualPath = getTrimmedConnectorPath(
     computedData,
     sourceLineEnd,
     targetLineEnd,
     Number(connector.config.cornerRadius ?? 12),
+    arrowLength,
   );
   const labelWidth = Math.max(48, Math.min(220, label.length * 7.4 + 20));
   const elbowHandles = computedData.elbowPoints?.slice(0, -1).flatMap((point, segmentIndex) => {
@@ -554,15 +578,15 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
         fill="none"
         stroke={renderStroke}
         strokeWidth={isSelected ? strokeWidth + 0.35 : strokeWidth}
-        strokeLinecap={startMarker === "arrow" || startMarker === "open-arrow" || endMarker === "arrow" || endMarker === "open-arrow" ? "butt" : "round"}
+        strokeLinecap="round"
         strokeLinejoin="round"
         strokeDasharray={dashArray}
         markerStart={markerUrl(markerPrefix, startMarker)}
         markerEnd={markerUrl(markerPrefix, endMarker)}
         style={{ pointerEvents: "none", transition: "stroke var(--motion-duration-micro) var(--motion-smooth), stroke-width var(--motion-duration-micro) var(--motion-smooth)" }}
       />}
-      {renderVisuals && <ConnectorArrow marker={startMarker} tip={computedData.srcPoint} directionPoint={sourceArrowDirectionPoint} color={renderStroke} testId="connector-start-arrow" />}
-      {renderVisuals && <ConnectorArrow marker={endMarker} tip={computedData.tgtPoint} directionPoint={targetArrowDirectionPoint} color={renderStroke} testId="connector-end-arrow" />}
+      {renderVisuals && <ConnectorArrow marker={startMarker} tip={computedData.srcPoint} directionPoint={sourceArrowDirectionPoint} color={renderStroke} testId="connector-start-arrow" headLength={arrowLength} halfWidth={arrowHalfWidth} lineWidth={strokeWidth} />}
+      {renderVisuals && <ConnectorArrow marker={endMarker} tip={computedData.tgtPoint} directionPoint={targetArrowDirectionPoint} color={renderStroke} testId="connector-end-arrow" headLength={arrowLength} halfWidth={arrowHalfWidth} lineWidth={strokeWidth} />}
 
       {renderVisuals && label && (
         <g transform={`translate(${computedData.midPoint.x}, ${computedData.midPoint.y})`} style={{ pointerEvents: "none" }}>

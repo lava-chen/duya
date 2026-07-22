@@ -12,6 +12,7 @@ const VALID_ELEMENT_KINDS = new Set([
   'native/document',
   'native/text',
   'native/table',
+  'native/database',
   'native/image',
   'native/file',
   'native/connector',
@@ -31,7 +32,7 @@ const STICKY_COLORS = new Set(['yellow', 'blue', 'green', 'pink', 'purple', 'gra
 const CONNECTOR_END_MARKERS = new Set(['arrow', 'none']);
 const CONNECTOR_MARKERS = new Set(['none', 'arrow', 'open-arrow', 'circle', 'diamond', 'bar']);
 const CONNECTOR_ROUTING_MODES = new Set(['elbow', 'curve', 'bezier', 'straight']);
-const CONNECTOR_STROKE_STYLES = new Set(['solid', 'dashed', 'dotted']);
+const CONNECTOR_STROKE_STYLES = new Set(['solid', 'dashed', 'bold', 'dotted']);
 
 // Canvas bounds in grid units (1 unit = 80 px). Matches the renderer
 // constant so clamping and DB clamping agree.
@@ -165,6 +166,30 @@ export function validateKindConfig(kind: string, config: Record<string, unknown>
     }
   }
 
+  if (kind === 'native/database') {
+    for (const field of ['sourceId', 'viewId'] as const) {
+      if (typeof config[field] !== 'string' || !config[field].trim()) {
+        checks.push(fail(`database ${field} must be a non-empty string`));
+      }
+    }
+    if (config.sourceTitle !== undefined && typeof config.sourceTitle !== 'string') {
+      checks.push(fail('database sourceTitle must be a string'));
+    }
+    if (config.previewLimit !== undefined && (
+      !Number.isInteger(config.previewLimit) ||
+      (config.previewLimit as number) < 1 ||
+      (config.previewLimit as number) > 200
+    )) {
+      checks.push(fail('database previewLimit must be an integer between 1 and 200'));
+    }
+    if (config.displayMode !== undefined && config.displayMode !== 'embedded') {
+      checks.push(fail('database displayMode must be embedded'));
+    }
+    if (config.interactionMode !== undefined && !['canvas', 'database'].includes(config.interactionMode as string)) {
+      checks.push(fail('database interactionMode must be one of: canvas, database'));
+    }
+  }
+
   if (kind === 'native/connector') {
     checks.push(validateConnectorShape(config));
   }
@@ -259,6 +284,7 @@ export function validateConnectorShape(config: Record<string, unknown>): Validat
   } else {
     validateEndpoint(source, 'source');
   }
+
   if (target === undefined) {
     checks.push(fail('connector config.target is required'));
   } else {

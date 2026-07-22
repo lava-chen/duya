@@ -60,6 +60,14 @@ describe('connector renderer geometry', () => {
     });
   });
 
+  it('keeps bound connector endpoints clear of their element edge', () => {
+    const node = makeNode();
+    const endpoint = createBoundConnectorEndpoint({ x: 1003, y: 1683 }, node, [node]);
+
+    expect(resolveConnectorEndpoint(endpoint, [node], undefined, 6)?.edgePoint)
+      .toEqual({ x: 1000, y: 1594 });
+  });
+
   it('keeps free endpoints detached from canvas elements', () => {
     expect(resolveConnectorEndpoint(
       { kind: 'free', point: { x: 50, y: 70 } },
@@ -205,6 +213,55 @@ describe('connector renderer geometry', () => {
     expect(points[1].y).toBe(50);
     expect(points[points.length - 2].y).toBe(250);
     expect(getPolylineMidpoint(points)).toEqual(expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }));
+  });
+
+  it('treats one mixed-direction waypoint as a shared exterior lane', () => {
+    const points = computeElbowRoutePoints(
+      { x: 400, y: 0 },
+      'down',
+      { x: 200, y: 300 },
+      'left',
+      [{ x: 400, y: 180 }],
+      40,
+    );
+
+    expect(points).toEqual([
+      { x: 400, y: 0 },
+      { x: 400, y: 40 },
+      { x: 160, y: 40 },
+      { x: 160, y: 300 },
+      { x: 200, y: 300 },
+    ]);
+  });
+
+  it('preserves an intentionally farther shared lane for sibling branches', () => {
+    const upper = computeElbowRoutePoints(
+      { x: 460, y: 100 },
+      'down',
+      { x: 220, y: 360 },
+      'left',
+      [{ x: 100, y: 360 }],
+      40,
+    );
+    const lower = computeElbowRoutePoints(
+      { x: 460, y: 100 },
+      'down',
+      { x: 220, y: 560 },
+      'left',
+      [{ x: 100, y: 560 }],
+      40,
+    );
+
+    expect(upper.slice(1, 4)).toEqual([
+      { x: 460, y: 140 },
+      { x: 100, y: 140 },
+      { x: 100, y: 360 },
+    ]);
+    expect(lower.slice(1, 4)).toEqual([
+      { x: 460, y: 140 },
+      { x: 100, y: 140 },
+      { x: 100, y: 560 },
+    ]);
   });
 
   it('uses endpoint-relative curve controls for editable paths', () => {

@@ -16,7 +16,7 @@
  * - Task management metadata (Task, TodoWrite)
  * - UI/plan operations (AskUserQuestion, ExitPlanMode)
  * - Language server (LSP)
- * - Canvas conductor tools (canvas_*) — internal canvas state only
+ * - Canvas conductor tools (canvas_* and database_manage) — internal project state only
  */
 const SAFE_YOLO_ALLOWLISTED_TOOLS = new Set([
   'Read',
@@ -38,6 +38,6 @@ export function isAutoModeAllowlistedTool(toolName: string): boolean {
   if (SAFE_YOLO_ALLOWLISTED_TOOLS.has(toolName)) {
     return true;
   }
-  // Canvas tools operate entirely on internal canvas state; never classify.
-  return toolName.startsWith(CANVAS_TOOL_PREFIX);
+  // Conductor tools operate entirely on internal project state; never classify.
+  return toolName.startsWith(CANVAS_TOOL_PREFIX) || toolName === 'database_manage';
 }

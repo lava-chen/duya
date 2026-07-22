@@ -75,6 +75,7 @@ const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> 
   // empty text insertion reads as a cursor, not an oversized empty region.
   text: { w: 2, h: 0.5, zIndex: 0 },
   table: { w: 5, h: 1.5, zIndex: 0 },
+  database: { w: 8, h: 5, zIndex: 0 },
   image: { w: 5, h: 4, zIndex: 0 },
   file: { w: 4, h: 3, zIndex: 0 },
   link: { w: 4, h: 1, zIndex: 0 },

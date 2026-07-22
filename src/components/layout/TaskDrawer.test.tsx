@@ -41,11 +41,6 @@ vi.mock('./task-drawer-store', () => ({
   setTaskDrawerOpen: vi.fn(),
 }));
 
-vi.mock('./recap-store', () => ({
-  useRecap: () => ({ text: '', receivedAt: null }),
-  clearRecap: vi.fn(),
-}));
-
 vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   motion: {

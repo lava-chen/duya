@@ -174,7 +174,7 @@ export async function createConnector(
     curvature?: number;
     routingMode?: 'elbow' | 'curve';
     label?: string;
-    strokeStyle?: 'solid' | 'dashed' | 'dotted';
+    strokeStyle?: 'solid' | 'dashed' | 'bold' | 'dotted';
     lineWidth?: number;
     color?: string;
     startMarker?: string;
