@@ -92,7 +92,7 @@ export interface AppSettings {
   // Browser security settings
   blockedDomains: string[];
   // Browser backend mode: auto (degradation chain) | extension | built-in
-  browserBackendMode?: 'auto' | 'extension' | 'built-in';
+  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
   // Built-in browser default home URL
   browserHomeUrl?: string;
   // Built-in browser default download directory

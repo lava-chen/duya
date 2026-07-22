@@ -31,6 +31,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 | [232-input-option-popover-alignment](./active/232-input-option-popover-alignment.md) | Shared searchable option-panel style for chat model and project/session pickers | P1 | In progress |
 | [233-conductor-multi-canvas-management](./active/233-conductor-multi-canvas-management.md) | Agent canvas identity, listing, creation, switching, naming, and durable sidebar/session sync | P0 | In progress |
+| [235-human-like-browser-backend](./active/235-human-like-browser-backend.md) | Human-like browser backend using Midscene.js for visual mouse/keyboard automation | P1 | In progress |
 | [234-canvas-element-editing-and-scene-architecture](./active/234-canvas-element-editing-and-scene-architecture.md) | Capability-driven element editing/toolbars and Agent scene blueprints | P0 | Implementation complete; verification blockers recorded |
 | [231-cron-automation-ui-runtime-hardening](./active/231-cron-automation-ui-runtime-hardening.md) | Cron creation/editing UX, schedule presets, scheduler startup hardening, and default workspace | P0 | Implementation complete; verification blockers recorded |
 

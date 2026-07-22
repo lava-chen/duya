@@ -9,7 +9,6 @@ import type { Message } from '@/types';
 import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { PermissionPrompt } from './PermissionPrompt';
-import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { SkillReviewIndicator } from './SkillReviewIndicator';
 import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase } from '@/lib/stream-session-manager';
@@ -1090,12 +1089,6 @@ export function ChatView({
         ) : (
           /* Normal message list - full width for scrollbar on right edge */
           <div className="h-full overflow-hidden">
-            {/* Context usage indicator - only show when streaming */}
-            {isStreaming && (
-              <div className="max-w-[800px] mx-auto px-4 py-2">
-                <ContextUsageIndicator contextUsage={contextUsage} />
-              </div>
-            )}
             <MessageList
               ref={messageListRef}
               messages={renderedMessages}
