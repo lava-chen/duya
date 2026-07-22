@@ -23,12 +23,18 @@ export const TOOL_NAME = 'canvas_create_element';
 
 function normalizeConnectorEndpoint(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === 'string') {
-    return value ? { nodeId: value } : undefined;
+    return value ? { nodeId: value, anchorId: 'center' } : undefined;
+  }
+  if (value && typeof value === 'object' && (value as Record<string, unknown>).kind === 'free') {
+    return { ...(value as Record<string, unknown>) };
   }
   if (value && typeof value === 'object' && 'nodeId' in value) {
     const endpoint = value as Record<string, unknown>;
     const nodeId = endpoint.nodeId;
-    return typeof nodeId === 'string' && nodeId ? { ...endpoint, nodeId } : undefined;
+    if (typeof nodeId !== 'string' || !nodeId) return undefined;
+    return endpoint.kind === 'bound'
+      ? { ...endpoint, nodeId }
+      : { anchorId: 'center', ...endpoint, nodeId };
   }
   return undefined;
 }
@@ -84,10 +90,11 @@ export const definition: Tool = {
     '  - native/shape:     { text, shape?, shapePreset? } — a diagram node; use for flowcharts and frameworks\n' +
     '  - native/document:  { title?, markdown?, filePath? } — a durable Markdown draft linked to the project\n' +
     '  - native/table:     { title?, headers?: string[], rows?: string[][], headerFill?, headerTextColor?, borderColor? } — an editable grid for comparisons, schedules, and research data\n' +
+    '  - native/database:  { sourceId, viewId, sourceTitle?, displayMode:"embedded", showTitle?:boolean, previewLimit?:number, interactionMode?:"canvas"|"database" } — a saved view of durable project records; create/discover IDs with database_manage first\n' +
     '  - native/sticky:    legacy colored note; do not create new ones\n' +
     '  - native/image:     { url, fileName? } — image from a URL\n' +
     '  - native/file:      { fileName, mimeType?, url? } — file attachment\n' +
-    '  - native/connector: { source, target, routingMode?: "elbow"|"curve", label?, color?, strokeStyle?, startMarker?, endMarker? } — editable connector between two elements; routingMode defaults to "elbow". Use curve only when the user explicitly requests an organic curved relation.\n' +
+    '  - native/connector: { source, target, routingMode?: "elbow"|"curve", label?, curveMidpointOffset?, curveControlOffsets?, color?, strokeStyle?, startMarker?, endMarker? } — endpoints are {kind:"bound",nodeId,bindingPoint:{u,v}} with u/v in 0..1, or {kind:"free",point:{x,y}} in canvas pixels. Curve midpoint offsets are relative to the endpoint midpoint. routingMode defaults to "elbow"; use curve only when explicitly requested.\n' +
     '  - native/link:      { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description? } — reference card\n' +
     '  - widget/dynamic:   last-resort HTML/SVG for one small secondary mini component; never use it for a whole guide, plan, diagram, or dashboard\n\n' +
     'Position is required and uses canvas grid units (1 unit = 80px). ' +
@@ -106,7 +113,7 @@ export const definition: Tool = {
       kind: {
         type: 'string',
         description:
-          'Element kind. Prefer native/shape, native/document, native/text, native/table, native/image, native/file, native/connector, or native/link. ' +
+          'Element kind. Prefer native/shape, native/document, native/text, native/table, native/database, native/image, native/file, native/connector, or native/link. ' +
           'widget/dynamic is only for one compact secondary mini component, never the primary canvas content.',
       },
       position: {
@@ -181,7 +188,7 @@ export const executor: ToolExecutor = {
     };
 
     // Normalize connector endpoints so single-create and batch-create
-    // both store { nodeId: string } in the database.
+    // both persist the same bound/free endpoint contract.
     const config = kind === 'native/connector'
       ? normalizeConnectorConfig(rawConfig)
       : rawConfig;

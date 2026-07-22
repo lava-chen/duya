@@ -25,6 +25,7 @@
     "./ipc/**/*.ts",
     "./logging/**/*.ts",
     "./messaging/**/*.ts",
+    "./project-database/**/*.ts",
     "./services/**/*.ts",
     "./wiki-agent/**/*.ts",
     "./automation/**/*.ts",

@@ -778,7 +778,16 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         selectedElementId: exists ? state.selectedElementId : elementId,
       };
     }),
-  setSelectedElementIds: (selectedElementIds) => set({ selectedElementIds }),
+  setSelectedElementIds: (selectedElementIds) => set({
+    selectedElementIds,
+    // Keep `selectedElementId` in sync with the array — otherwise a stale
+    // value can match a different element while the array holds one id,
+    // producing two toolbar portals (one anchored to the stale match,
+    // one to the array match) for what is supposed to be a single-
+    // element selection. For multi-select (length > 1) clear it; for
+    // single-select mirror the array; for empty, clear it.
+    selectedElementId: selectedElementIds.length === 1 ? selectedElementIds[0] : null,
+  }),
   setActiveTool: (activeTool) => set({ activeTool }),
   setEditingElementId: (editingElementId) => set({ editingElementId }),
   clearSelection: () => set({ selectedElementIds: [], selectedElementId: null, selectedWidgetId: null, editingElementId: null }),

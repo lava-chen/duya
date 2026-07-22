@@ -224,7 +224,7 @@ const LOW_RISK_BROWSER_OPERATIONS = new Set([
 const CANVAS_TOOL_PREFIX = 'canvas_';
 
 function isCanvasTool(toolName: string): boolean {
-  return toolName.startsWith(CANVAS_TOOL_PREFIX);
+  return toolName.startsWith(CANVAS_TOOL_PREFIX) || toolName === 'database_manage';
 }
 
 export interface ToolPermissionCheckContext {
@@ -264,8 +264,8 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
 
     let appState = context.getAppState()
 
-    // 1. Canvas tools operate entirely within the application's own canvas
-    // surface. They do not touch user files or external systems, so they
+    // 1. Canvas and project-database tools operate entirely within the
+    // application's own project workspace. They do not touch external systems, so they
     // must be unconditionally allowed regardless of permission mode or user
     // rules.
     if (isCanvasTool(toolName)) {

@@ -1,6 +1,7 @@
 import type { CanvasElement } from '../../types/conductor';
 import type {
   AnchorId,
+  ConnectorEndpoint,
   CurveControlOffsets,
   Point,
   Direction,
@@ -19,6 +20,180 @@ export const directionVector: Record<Direction, Point> = {
   left: { x: -1, y: 0 },
   right: { x: 1, y: 0 },
 };
+
+export const CONNECTOR_BINDING_GRID_PX = 8;
+
+export type ConnectorEdge = Exclude<AnchorId, 'center'>;
+
+export interface ResolvedConnectorEndpoint {
+  referencePoint: Point;
+  edgePoint: Point;
+  direction: Direction;
+  edge: ConnectorEdge | null;
+  nodeId: string | null;
+}
+
+export function isBoundConnectorEndpoint(
+  endpoint: ConnectorEndpoint | undefined,
+): endpoint is Extract<ConnectorEndpoint, { kind: 'bound' }> {
+  return Boolean(endpoint && 'kind' in endpoint && endpoint.kind === 'bound');
+}
+
+export function isFreeConnectorEndpoint(
+  endpoint: ConnectorEndpoint | undefined,
+): endpoint is Extract<ConnectorEndpoint, { kind: 'free' }> {
+  return Boolean(endpoint && 'kind' in endpoint && endpoint.kind === 'free');
+}
+
+export function getConnectorEndpointNodeId(endpoint: ConnectorEndpoint | undefined): string | null {
+  if (!endpoint || isFreeConnectorEndpoint(endpoint)) return null;
+  return endpoint.nodeId;
+}
+
+function clampUnit(value: number): number {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0.5));
+}
+
+export interface CanvasPixelRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export function getNodePixelRect(node: CanvasElement, allNodes: CanvasElement[]): CanvasPixelRect {
+  const absolute = getAbsolutePosition(node, allNodes);
+  return {
+    x: (Number.isFinite(absolute.x) ? absolute.x : 0) * GRID_PX,
+    y: (Number.isFinite(absolute.y) ? absolute.y : 0) * GRID_PX,
+    w: (Number.isFinite(node.position.w) ? node.position.w : 4) * GRID_PX,
+    h: (Number.isFinite(node.position.h) ? node.position.h : 3) * GRID_PX,
+  };
+}
+
+export function getConnectorEndpointRect(
+  endpoint: ConnectorEndpoint,
+  allNodes: CanvasElement[],
+): CanvasPixelRect | null {
+  const nodeId = getConnectorEndpointNodeId(endpoint);
+  const node = nodeId ? allNodes.find((candidate) => candidate.id === nodeId) : null;
+  return node ? getNodePixelRect(node, allNodes) : null;
+}
+
+function edgeToDirection(edge: ConnectorEdge): Direction {
+  return edge === 'top' ? 'up' : edge === 'bottom' ? 'down' : edge;
+}
+
+function offsetPointAlongDirection(point: Point, direction: Direction, distance: number): Point {
+  const vector = directionVector[direction];
+  return {
+    x: point.x + vector.x * distance,
+    y: point.y + vector.y * distance,
+  };
+}
+
+export function createBoundConnectorEndpoint(
+  point: Point,
+  node: CanvasElement,
+  allNodes: CanvasElement[],
+  gridPx = CONNECTOR_BINDING_GRID_PX,
+): Extract<ConnectorEndpoint, { kind: 'bound' }> {
+  const rect = getNodePixelRect(node, allNodes);
+  const safeGrid = Math.max(1, gridPx);
+  const localX = Math.round((point.x - rect.x) / safeGrid) * safeGrid;
+  const localY = Math.round((point.y - rect.y) / safeGrid) * safeGrid;
+  return {
+    kind: 'bound',
+    nodeId: node.id,
+    bindingPoint: {
+      u: clampUnit(localX / Math.max(1, rect.w)),
+      v: clampUnit(localY / Math.max(1, rect.h)),
+    },
+  };
+}
+
+export function createConnectorEndpointAtPoint(
+  point: Point,
+  node: CanvasElement | null,
+  allNodes: CanvasElement[],
+): ConnectorEndpoint {
+  return node
+    ? createBoundConnectorEndpoint(point, node, allNodes)
+    : { kind: 'free', point: { x: point.x, y: point.y } };
+}
+
+export function resolveConnectorEndpoint(
+  endpoint: ConnectorEndpoint,
+  allNodes: CanvasElement[],
+  otherPoint?: Point,
+  clearance = 0,
+): ResolvedConnectorEndpoint | null {
+  const safeClearance = Math.max(0, Number.isFinite(clearance) ? clearance : 0);
+  if (isFreeConnectorEndpoint(endpoint)) {
+    if (!Number.isFinite(endpoint.point.x) || !Number.isFinite(endpoint.point.y)) return null;
+    const point = { x: endpoint.point.x, y: endpoint.point.y };
+    return {
+      referencePoint: point,
+      edgePoint: point,
+      direction: otherPoint ? autoDirection(point, otherPoint) : 'right',
+      edge: null,
+      nodeId: null,
+    };
+  }
+
+  const node = allNodes.find((candidate) => candidate.id === endpoint.nodeId);
+  if (!node) return null;
+
+  if (isBoundConnectorEndpoint(endpoint)) {
+    const rect = getNodePixelRect(node, allNodes);
+    const u = clampUnit(endpoint.bindingPoint.u);
+    const v = clampUnit(endpoint.bindingPoint.v);
+    const referencePoint = { x: rect.x + rect.w * u, y: rect.y + rect.h * v };
+    const candidates: Array<{ edge: ConnectorEdge; distance: number; point: Point }> = [
+      { edge: 'top', distance: v * rect.h, point: { x: referencePoint.x, y: rect.y } },
+      { edge: 'bottom', distance: (1 - v) * rect.h, point: { x: referencePoint.x, y: rect.y + rect.h } },
+      { edge: 'left', distance: u * rect.w, point: { x: rect.x, y: referencePoint.y } },
+      { edge: 'right', distance: (1 - u) * rect.w, point: { x: rect.x + rect.w, y: referencePoint.y } },
+    ];
+    const nearest = candidates.reduce((best, candidate) => candidate.distance < best.distance ? candidate : best);
+    const direction = edgeToDirection(nearest.edge);
+    return {
+      referencePoint,
+      edgePoint: offsetPointAlongDirection(nearest.point, direction, safeClearance),
+      direction,
+      edge: nearest.edge,
+      nodeId: endpoint.nodeId,
+    };
+  }
+
+  const edgePosition = clampUnit(endpoint.edgePosition ?? 0.5);
+  let resolvedAnchor = endpoint.anchorId;
+  if (resolvedAnchor === 'center' && otherPoint) {
+    const rect = getNodePixelRect(node, allNodes);
+    const center = { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
+    const dx = otherPoint.x - center.x;
+    const dy = otherPoint.y - center.y;
+    const verticalGap = Math.abs(dy) - rect.h / 2;
+    const horizontalGap = Math.abs(dx) - rect.w / 2;
+    if (verticalGap >= 24) resolvedAnchor = dy >= 0 ? 'bottom' : 'top';
+    else if (horizontalGap >= 24) resolvedAnchor = dx >= 0 ? 'right' : 'left';
+  }
+  const referencePoint = getAnchorPosition(node, resolvedAnchor, allNodes, edgePosition);
+  const direction = anchorToDirection(resolvedAnchor) ?? autoDirection(referencePoint, otherPoint ?? referencePoint);
+  const edgePoint = offsetPointAlongDirection(
+    getConnectorEndpoint(node, resolvedAnchor, allNodes, otherPoint ?? referencePoint, edgePosition),
+    direction,
+    safeClearance,
+  );
+  const edge = resolvedAnchor === 'center' ? null : resolvedAnchor;
+  return {
+    referencePoint,
+    edgePoint,
+    direction,
+    edge,
+    nodeId: endpoint.nodeId,
+  };
+}
 
 export function anchorToDirection(anchorId: AnchorId): Direction | null {
   switch (anchorId) {
@@ -298,6 +473,335 @@ export function evaluateBezierPoint(
   };
 }
 
+export interface ConnectorCurveGeometry {
+  source: Point;
+  sourceControl: Point;
+  midpoint: Point;
+  targetControl: Point;
+  target: Point;
+  activated: boolean;
+}
+
+export interface ClippedConnectorCurve {
+  geometry: ConnectorCurveGeometry;
+  path: string;
+  sourcePoint: Point;
+  targetPoint: Point;
+  sourceT: number;
+  targetT: number;
+  sourceArrowDirectionPoint: Point;
+  targetArrowDirectionPoint: Point;
+}
+
+function lerpPoint(a: Point, b: Point, t: number): Point {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+  };
+}
+
+export function getDefaultCurveControls(
+  source: Point,
+  midpoint: Point,
+  target: Point,
+): { source: Point; target: Point } {
+  return {
+    source: lerpPoint(source, midpoint, 0.5),
+    target: lerpPoint(midpoint, target, 0.5),
+  };
+}
+
+export function computeConnectorCurveGeometry(
+  source: Point,
+  target: Point,
+  midpointOffset?: Point,
+  controlOffsets?: CurveControlOffsets,
+): ConnectorCurveGeometry {
+  const baseMidpoint = lerpPoint(source, target, 0.5);
+  const activated = Boolean(midpointOffset || controlOffsets);
+  const midpoint = midpointOffset
+    ? { x: baseMidpoint.x + midpointOffset.x, y: baseMidpoint.y + midpointOffset.y }
+    : baseMidpoint;
+
+  if (!activated) {
+    return {
+      source,
+      sourceControl: lerpPoint(source, midpoint, 0.5),
+      midpoint,
+      targetControl: lerpPoint(midpoint, target, 0.5),
+      target,
+      activated: false,
+    };
+  }
+
+  const defaults = getDefaultCurveControls(source, midpoint, target);
+  return {
+    source,
+    sourceControl: controlOffsets
+      ? { x: source.x + controlOffsets.source.x, y: source.y + controlOffsets.source.y }
+      : defaults.source,
+    midpoint,
+    targetControl: controlOffsets
+      ? { x: target.x + controlOffsets.target.x, y: target.y + controlOffsets.target.y }
+      : defaults.target,
+    target,
+    activated: true,
+  };
+}
+
+interface CubicSegment {
+  start: Point;
+  sourceControl: Point;
+  targetControl: Point;
+  end: Point;
+}
+
+function evaluateCubicPoint(segment: CubicSegment, t: number): Point {
+  const u = 1 - t;
+  return {
+    x: u * u * u * segment.start.x +
+      3 * u * u * t * segment.sourceControl.x +
+      3 * u * t * t * segment.targetControl.x +
+      t * t * t * segment.end.x,
+    y: u * u * u * segment.start.y +
+      3 * u * u * t * segment.sourceControl.y +
+      3 * u * t * t * segment.targetControl.y +
+      t * t * t * segment.end.y,
+  };
+}
+
+function getCurveKnots(geometry: ConnectorCurveGeometry): Point[] {
+  return [
+    geometry.source,
+    geometry.sourceControl,
+    geometry.midpoint,
+    geometry.targetControl,
+    geometry.target,
+  ];
+}
+
+function getCatmullRomSegment(knots: Point[], index: number): CubicSegment {
+  const start = knots[index];
+  const end = knots[index + 1];
+  const previous = knots[Math.max(0, index - 1)];
+  const next = knots[Math.min(knots.length - 1, index + 2)];
+  return {
+    start,
+    sourceControl: {
+      x: start.x + (end.x - previous.x) / 6,
+      y: start.y + (end.y - previous.y) / 6,
+    },
+    targetControl: {
+      x: end.x - (next.x - start.x) / 6,
+      y: end.y - (next.y - start.y) / 6,
+    },
+    end,
+  };
+}
+
+export function evaluateConnectorCurvePoint(geometry: ConnectorCurveGeometry, t: number): Point {
+  const clamped = Math.max(0, Math.min(1, t));
+  const knots = getCurveKnots(geometry);
+  const scaled = clamped * (knots.length - 1);
+  const segmentIndex = Math.min(knots.length - 2, Math.floor(scaled));
+  const localT = clamped === 1 ? 1 : scaled - segmentIndex;
+  return evaluateCubicPoint(getCatmullRomSegment(knots, segmentIndex), localT);
+}
+
+function evaluateCubicDerivative(segment: CubicSegment, t: number): Point {
+  const u = 1 - t;
+  return {
+    x: 3 * (
+      u * u * (segment.sourceControl.x - segment.start.x) +
+      2 * u * t * (segment.targetControl.x - segment.sourceControl.x) +
+      t * t * (segment.end.x - segment.targetControl.x)
+    ),
+    y: 3 * (
+      u * u * (segment.sourceControl.y - segment.start.y) +
+      2 * u * t * (segment.targetControl.y - segment.sourceControl.y) +
+      t * t * (segment.end.y - segment.targetControl.y)
+    ),
+  };
+}
+
+function sliceCubic(
+  segment: CubicSegment,
+  from: number,
+  to: number,
+): CubicSegment {
+  const safeFrom = Math.max(0, Math.min(1, from));
+  const safeTo = Math.max(safeFrom, Math.min(1, to));
+  const slicedStart = evaluateCubicPoint(segment, safeFrom);
+  const slicedEnd = evaluateCubicPoint(segment, safeTo);
+  const sourceDerivative = evaluateCubicDerivative(segment, safeFrom);
+  const targetDerivative = evaluateCubicDerivative(segment, safeTo);
+  const scale = (safeTo - safeFrom) / 3;
+  return {
+    start: slicedStart,
+    sourceControl: {
+      x: slicedStart.x + sourceDerivative.x * scale,
+      y: slicedStart.y + sourceDerivative.y * scale,
+    },
+    targetControl: {
+      x: slicedEnd.x - targetDerivative.x * scale,
+      y: slicedEnd.y - targetDerivative.y * scale,
+    },
+    end: slicedEnd,
+  };
+}
+
+export function computeConnectorCurvePath(
+  geometry: ConnectorCurveGeometry,
+  fromT = 0,
+  toT = 1,
+): string {
+  const startT = Math.max(0, Math.min(1, fromT));
+  const endT = Math.max(startT, Math.min(1, toT));
+  if (endT - startT < 0.000001) {
+    const point = evaluateConnectorCurvePoint(geometry, startT);
+    return `M ${formatCurveNumber(point.x)} ${formatCurveNumber(point.y)}`;
+  }
+
+  const knots = getCurveKnots(geometry);
+  const segmentCount = knots.length - 1;
+  const slices: CubicSegment[] = [];
+  for (let index = 0; index < segmentCount; index += 1) {
+    const segmentStartT = index / segmentCount;
+    const segmentEndT = (index + 1) / segmentCount;
+    if (endT <= segmentStartT || startT >= segmentEndT) continue;
+    const localFrom = Math.max(0, (startT - segmentStartT) * segmentCount);
+    const localTo = Math.min(1, (endT - segmentStartT) * segmentCount);
+    slices.push(sliceCubic(getCatmullRomSegment(knots, index), localFrom, localTo));
+  }
+  if (slices.length === 0) return '';
+  return slices.reduce((path, slice, index) => {
+    const move = index === 0
+      ? `M ${formatCurveNumber(slice.start.x)} ${formatCurveNumber(slice.start.y)} `
+      : '';
+    return `${path}${move}C ${formatCurveNumber(slice.sourceControl.x)} ${formatCurveNumber(slice.sourceControl.y)} ${formatCurveNumber(slice.targetControl.x)} ${formatCurveNumber(slice.targetControl.y)} ${formatCurveNumber(slice.end.x)} ${formatCurveNumber(slice.end.y)} `;
+  }, '').trim();
+}
+
+function formatCurveNumber(value: number): number {
+  return Number(value.toFixed(6));
+}
+
+function rectContainsPoint(rect: CanvasPixelRect, point: Point): boolean {
+  return point.x >= rect.x && point.x <= rect.x + rect.w &&
+    point.y >= rect.y && point.y <= rect.y + rect.h;
+}
+
+function snapPointToRectBoundary(rect: CanvasPixelRect | null, point: Point): Point {
+  if (!rect) return point;
+  const edges = [
+    { distance: Math.abs(point.x - rect.x), point: { x: rect.x, y: point.y } },
+    { distance: Math.abs(point.x - (rect.x + rect.w)), point: { x: rect.x + rect.w, y: point.y } },
+    { distance: Math.abs(point.y - rect.y), point: { x: point.x, y: rect.y } },
+    { distance: Math.abs(point.y - (rect.y + rect.h)), point: { x: point.x, y: rect.y + rect.h } },
+  ];
+  return edges.reduce((nearest, edge) => edge.distance < nearest.distance ? edge : nearest).point;
+}
+
+function findCurveBoundaryParameter(
+  geometry: ConnectorCurveGeometry,
+  rect: CanvasPixelRect | null,
+  fromSource: boolean,
+): number {
+  if (!rect) return fromSource ? 0 : 1;
+  const endpointT = fromSource ? 0 : 1;
+  const endpointPoint = evaluateConnectorCurvePoint(geometry, endpointT);
+  if (!rectContainsPoint(rect, endpointPoint)) return endpointT;
+  const boundaryDistance = Math.min(
+    Math.abs(endpointPoint.x - rect.x),
+    Math.abs(endpointPoint.x - (rect.x + rect.w)),
+    Math.abs(endpointPoint.y - rect.y),
+    Math.abs(endpointPoint.y - (rect.y + rect.h)),
+  );
+  if (boundaryDistance < 0.000001) {
+    const adjacentT = fromSource ? 0.00001 : 0.99999;
+    if (!rectContainsPoint(rect, evaluateConnectorCurvePoint(geometry, adjacentT))) return endpointT;
+  }
+
+  const sampleCount = 160;
+  let insideT = endpointT;
+  for (let index = 1; index <= sampleCount; index += 1) {
+    const candidateT = fromSource ? index / sampleCount : 1 - index / sampleCount;
+    const candidate = evaluateConnectorCurvePoint(geometry, candidateT);
+    if (!rectContainsPoint(rect, candidate)) {
+      let inside = insideT;
+      let outside = candidateT;
+      for (let iteration = 0; iteration < 24; iteration += 1) {
+        const middle = (inside + outside) / 2;
+        if (rectContainsPoint(rect, evaluateConnectorCurvePoint(geometry, middle))) inside = middle;
+        else outside = middle;
+      }
+      return (inside + outside) / 2;
+    }
+    insideT = candidateT;
+  }
+  return fromSource ? 1 : 0;
+}
+
+function getCurveOutwardDirectionPoint(
+  geometry: ConnectorCurveGeometry,
+  t: number,
+  fromSource: boolean,
+): Point {
+  const tip = evaluateConnectorCurvePoint(geometry, t);
+  const adjacentT = fromSource ? Math.min(1, t + 0.002) : Math.max(0, t - 0.002);
+  const adjacent = evaluateConnectorCurvePoint(geometry, adjacentT);
+  return {
+    x: tip.x * 2 - adjacent.x,
+    y: tip.y * 2 - adjacent.y,
+  };
+}
+
+export function computeClippedConnectorCurve(
+  geometry: ConnectorCurveGeometry,
+  sourceRect: CanvasPixelRect | null,
+  targetRect: CanvasPixelRect | null,
+  clearance = 0,
+): ClippedConnectorCurve {
+  const safeClearance = Math.max(0, Number.isFinite(clearance) ? clearance : 0);
+  const expand = (rect: CanvasPixelRect | null): CanvasPixelRect | null => rect && {
+    x: rect.x - safeClearance,
+    y: rect.y - safeClearance,
+    w: rect.w + safeClearance * 2,
+    h: rect.h + safeClearance * 2,
+  };
+  const sourceClipRect = expand(sourceRect);
+  const targetClipRect = expand(targetRect);
+  const sourceT = findCurveBoundaryParameter(geometry, sourceClipRect, true);
+  const targetT = findCurveBoundaryParameter(geometry, targetClipRect, false);
+  const safeTargetT = Math.max(sourceT, targetT);
+  const sourcePoint = snapPointToRectBoundary(
+    sourceClipRect,
+    evaluateConnectorCurvePoint(geometry, sourceT),
+  );
+  const targetPoint = snapPointToRectBoundary(
+    targetClipRect,
+    evaluateConnectorCurvePoint(geometry, safeTargetT),
+  );
+  const sourceReferenceDirection = Math.hypot(
+    geometry.source.x - sourcePoint.x,
+    geometry.source.y - sourcePoint.y,
+  ) > 0.01 ? geometry.source : getCurveOutwardDirectionPoint(geometry, sourceT, true);
+  const targetReferenceDirection = Math.hypot(
+    geometry.target.x - targetPoint.x,
+    geometry.target.y - targetPoint.y,
+  ) > 0.01 ? geometry.target : getCurveOutwardDirectionPoint(geometry, safeTargetT, false);
+  return {
+    geometry,
+    path: computeConnectorCurvePath(geometry, sourceT, safeTargetT),
+    sourcePoint,
+    targetPoint,
+    sourceT,
+    targetT: safeTargetT,
+    sourceArrowDirectionPoint: sourceReferenceDirection,
+    targetArrowDirectionPoint: targetReferenceDirection,
+  };
+}
+
 export function computeStraightPath(
   src: Point,
   tgt: Point,
@@ -348,11 +852,105 @@ export function simplifyOrthogonalPoints(points: Point[]): Point[] {
   return simplified;
 }
 
+/**
+ * Move one visible elbow segment while keeping both connector endpoints fixed.
+ * Terminal segments grow a short orthogonal dogleg instead of translating the
+ * bound/free endpoint with the segment.
+ */
+export function moveElbowSegment(
+  route: Point[],
+  segmentIndex: number,
+  orientation: OrthogonalSegmentOrientation,
+  coordinate: number,
+): Point[] {
+  if (route.length < 2 || segmentIndex < 0 || segmentIndex >= route.length - 1) return route;
+  const points = route.map((point) => ({ ...point }));
+  const lastSegmentIndex = points.length - 2;
+
+  if (segmentIndex > 0 && segmentIndex < lastSegmentIndex) {
+    if (orientation === 'horizontal') {
+      points[segmentIndex].y = coordinate;
+      points[segmentIndex + 1].y = coordinate;
+    } else {
+      points[segmentIndex].x = coordinate;
+      points[segmentIndex + 1].x = coordinate;
+    }
+    return simplifyOrthogonalPoints(points);
+  }
+
+  if (segmentIndex === 0) {
+    const endpoint = points[0];
+    const next = points[1];
+    const length = orientation === 'horizontal'
+      ? Math.abs(next.x - endpoint.x)
+      : Math.abs(next.y - endpoint.y);
+    const stubLength = Math.min(32, Math.max(16, length / 2));
+    const direction = orientation === 'horizontal'
+      ? Math.sign(next.x - endpoint.x) || 1
+      : Math.sign(next.y - endpoint.y) || 1;
+    const fixedStub = orientation === 'horizontal'
+      ? { x: endpoint.x + direction * stubLength, y: endpoint.y }
+      : { x: endpoint.x, y: endpoint.y + direction * stubLength };
+    const movedSegment = orientation === 'horizontal'
+      ? [{ x: fixedStub.x, y: coordinate }, { x: next.x, y: coordinate }]
+      : [{ x: coordinate, y: fixedStub.y }, { x: coordinate, y: next.y }];
+    return simplifyOrthogonalPoints([endpoint, fixedStub, ...movedSegment, ...points.slice(2)]);
+  }
+
+  const previous = points[points.length - 2];
+  const endpoint = points[points.length - 1];
+  const length = orientation === 'horizontal'
+    ? Math.abs(previous.x - endpoint.x)
+    : Math.abs(previous.y - endpoint.y);
+  const stubLength = Math.min(32, Math.max(16, length / 2));
+  const direction = orientation === 'horizontal'
+    ? Math.sign(previous.x - endpoint.x) || -1
+    : Math.sign(previous.y - endpoint.y) || -1;
+  const fixedStub = orientation === 'horizontal'
+    ? { x: endpoint.x + direction * stubLength, y: endpoint.y }
+    : { x: endpoint.x, y: endpoint.y + direction * stubLength };
+  const movedSegment = orientation === 'horizontal'
+    ? [{ x: previous.x, y: coordinate }, { x: fixedStub.x, y: coordinate }]
+    : [{ x: coordinate, y: previous.y }, { x: coordinate, y: fixedStub.y }];
+  return simplifyOrthogonalPoints([...points.slice(0, -2), ...movedSegment, fixedStub, endpoint]);
+}
+
 export type OrthogonalSegmentOrientation = 'horizontal' | 'vertical';
 
 export interface ElbowSegmentSnapResult {
   coordinate: number;
   snapped: boolean;
+}
+
+/** Snap a segment to the closest parallel segment on its own route. */
+export function snapElbowSegmentToAdjacentParallel(
+  proposedCoordinate: number,
+  orientation: OrthogonalSegmentOrientation,
+  route: Point[],
+  segmentIndex: number,
+  threshold = 12,
+): ElbowSegmentSnapResult {
+  const candidateIndexes = [segmentIndex - 2, segmentIndex + 2]
+    .filter((index) => index >= 0 && index < route.length - 1);
+  let coordinate = proposedCoordinate;
+  let distance = Infinity;
+
+  for (const index of candidateIndexes) {
+    const start = route[index];
+    const end = route[index + 1];
+    const isParallel = orientation === 'horizontal'
+      ? Math.abs(start.y - end.y) < 0.01
+      : Math.abs(start.x - end.x) < 0.01;
+    if (!isParallel) continue;
+    const candidate = orientation === 'horizontal' ? start.y : start.x;
+    const candidateDistance = Math.abs(candidate - proposedCoordinate);
+    if (candidateDistance <= threshold && candidateDistance < distance) {
+      coordinate = candidate;
+      distance = candidateDistance;
+    }
+  }
+
+  return { coordinate, snapped: distance !== Infinity };
 }
 
 export interface ConnectorArrowGeometry {
@@ -505,16 +1103,6 @@ export function computeElbowRoutePoints(
   laneCoordinate?: number,
 ): Point[] {
   const savedWaypoints = waypoints?.filter(isFinitePoint).map((point) => ({ ...point })) ?? [];
-  if (savedWaypoints.length > 0) {
-    const first = savedWaypoints[0];
-    const last = savedWaypoints[savedWaypoints.length - 1];
-    if (srcDir === 'left' || srcDir === 'right') first.y = src.y;
-    else first.x = src.x;
-    if (tgtDir === 'left' || tgtDir === 'right') last.y = tgt.y;
-    else last.x = tgt.x;
-    return orthogonalizeElbowPoints([src, ...savedWaypoints, tgt]);
-  }
-
   const srcVec = directionVector[srcDir];
   const tgtVec = directionVector[tgtDir];
   const srcStub = {
@@ -528,8 +1116,81 @@ export function computeElbowRoutePoints(
   const srcHorizontal = srcDir === 'left' || srcDir === 'right';
   const tgtHorizontal = tgtDir === 'left' || tgtDir === 'right';
 
+  if (savedWaypoints.length > 0) {
+    if (savedWaypoints.length === 1) {
+      const waypoint = savedWaypoints[0];
+      if (srcHorizontal === tgtHorizontal) {
+        const lane = srcHorizontal ? waypoint.x : waypoint.y;
+        return computeElbowRoutePoints(src, srcDir, tgt, tgtDir, undefined, stubLength, lane);
+      }
+
+      if (!srcHorizontal && tgtHorizontal) {
+        const lane = tgtDir === 'left'
+          ? Math.min(waypoint.x, tgtStub.x)
+          : Math.max(waypoint.x, tgtStub.x);
+        return simplifyOrthogonalPoints([
+          src,
+          srcStub,
+          { x: lane, y: srcStub.y },
+          { x: lane, y: tgtStub.y },
+          tgtStub,
+          tgt,
+        ]);
+      }
+
+      const lane = tgtDir === 'up'
+        ? Math.min(waypoint.y, tgtStub.y)
+        : Math.max(waypoint.y, tgtStub.y);
+      return simplifyOrthogonalPoints([
+        src,
+        srcStub,
+        { x: srcStub.x, y: lane },
+        { x: tgtStub.x, y: lane },
+        tgtStub,
+        tgt,
+      ]);
+    }
+
+    const first = savedWaypoints[0];
+    const last = savedWaypoints[savedWaypoints.length - 1];
+    if (srcHorizontal) {
+      first.y = src.y;
+      first.x = srcDir === 'left'
+        ? Math.min(first.x, srcStub.x)
+        : Math.max(first.x, srcStub.x);
+    } else {
+      first.x = src.x;
+      first.y = srcDir === 'up'
+        ? Math.min(first.y, srcStub.y)
+        : Math.max(first.y, srcStub.y);
+    }
+    if (tgtHorizontal) {
+      last.y = tgt.y;
+      last.x = tgtDir === 'left'
+        ? Math.min(last.x, tgtStub.x)
+        : Math.max(last.x, tgtStub.x);
+    } else {
+      last.x = tgt.x;
+      last.y = tgtDir === 'up'
+        ? Math.min(last.y, tgtStub.y)
+        : Math.max(last.y, tgtStub.y);
+    }
+    return orthogonalizeElbowPoints([src, ...savedWaypoints, tgt]);
+  }
+
   if (srcHorizontal && tgtHorizontal) {
-    const midX = laneCoordinate ?? (srcStub.x + tgtStub.x) / 2;
+    const outerX = srcDir === tgtDir
+      ? srcDir === 'right'
+        ? Math.max(srcStub.x, tgtStub.x)
+        : Math.min(srcStub.x, tgtStub.x)
+      : (srcStub.x + tgtStub.x) / 2;
+    const midX = laneCoordinate === undefined
+      ? outerX
+      : srcDir === tgtDir
+        ? srcDir === 'right'
+          ? Math.max(outerX, laneCoordinate)
+          : Math.min(outerX, laneCoordinate)
+        : laneCoordinate;
     return simplifyOrthogonalPoints([
       src,
       srcStub,
@@ -541,7 +1202,18 @@ export function computeElbowRoutePoints(
   }
 
   if (!srcHorizontal && !tgtHorizontal) {
-    const midY = laneCoordinate ?? (srcStub.y + tgtStub.y) / 2;
+    const outerY = srcDir === tgtDir
+      ? srcDir === 'down'
+        ? Math.max(srcStub.y, tgtStub.y)
+        : Math.min(srcStub.y, tgtStub.y)
+      : (srcStub.y + tgtStub.y) / 2;
+    const midY = laneCoordinate === undefined
+      ? outerY
+      : srcDir === tgtDir
+        ? srcDir === 'down'
+          ? Math.max(outerY, laneCoordinate)
+          : Math.min(outerY, laneCoordinate)
+        : laneCoordinate;
     return simplifyOrthogonalPoints([
       src,
       srcStub,
@@ -553,8 +1225,8 @@ export function computeElbowRoutePoints(
   }
 
   const corner = srcHorizontal
-    ? { x: tgtStub.x, y: srcStub.y }
-    : { x: srcStub.x, y: tgtStub.y };
+    ? { x: srcStub.x, y: tgtStub.y }
+    : { x: tgtStub.x, y: srcStub.y };
   return simplifyOrthogonalPoints([src, srcStub, corner, tgtStub, tgt]);
 }
 

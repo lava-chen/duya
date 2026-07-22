@@ -82,7 +82,7 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
   const isTaskTool = isTaskToolAction(tool.input);
   const isMessageSession = isMessageSessionTool(tool.name);
   const isVisionAnalyze = tool.name.toLowerCase() === 'vision_analyze';
-  const isCanvasConductor = tool.name.toLowerCase().startsWith('canvas_');
+  const isCanvasConductor = tool.name.toLowerCase().startsWith('canvas_') || tool.name.toLowerCase() === 'database_manage';
   const [expanded, setExpanded] = useState(false);
   // Keep all useState calls before any conditional return so React hook
   // order stays stable when routing conditions change between renders.

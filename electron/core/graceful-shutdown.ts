@@ -12,6 +12,7 @@ import { getConfigManager } from '../config/manager';
 import { getDatabase } from '../ipc/db-handlers';
 import { stopWalCheckpoint } from '../db/connection';
 import { cleanupUpdater } from '../services/updater';
+import { shutdownProjectDatabaseService } from '../project-database/service';
 
 let isShuttingDown = false;
 
@@ -129,6 +130,13 @@ export async function performGracefulShutdown(): Promise<void> {
     stopWalCheckpoint();
   } catch (err) {
     logger.error('Error stopping WAL checkpoint scheduler', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 7.6 Checkpoint and close project-local database connections.
+  try {
+    await shutdownProjectDatabaseService();
+  } catch (err) {
+    logger.error('Error shutting down project database service', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.DB);
   }
 
   // 8. Close database connection (last step)

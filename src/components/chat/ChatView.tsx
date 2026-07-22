@@ -36,7 +36,6 @@ import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
-import { setRecap } from '@/components/layout/recap-store';
 import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
@@ -871,9 +870,6 @@ export function ChatView({
     }
     try {
       const result = await window.electronAPI?.recap.request(sessionId);
-      if (result?.success && result.recap) {
-        setRecap({ text: result.recap, receivedAt: Date.now(), sessionId });
-      }
       return result ?? { success: false, recap: null, error: '对话回顾不可用。' };
     } catch {
       return { success: false, recap: null, error: '生成对话回顾失败。' };
@@ -887,13 +883,11 @@ export function ChatView({
 
   useEffect(() => {
     const cleanup = window.electronAPI?.recap.onRecapResult((data) => {
-      if (data.recap) {
-        setRecap({
-          text: data.recap,
-          receivedAt: data.timestamp,
-          sessionId: data.sessionId,
-        });
-      }
+      // Recap IPC notifications are forwarded so the main-process
+      // RecapService can keep its active-session state machine warm;
+      // the renderer-side recap UI lives in SlashCommandPopover, which
+      // calls requestRecap directly and does not depend on this event.
+      void data;
     });
     return () => {
       cleanup?.();

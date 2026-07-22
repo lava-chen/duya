@@ -23,6 +23,7 @@ import {
   ElementUtilityActions,
   type ElementUtilityActionsProps,
 } from "../toolbar/ElementUtilityActions";
+import { FloatingCapsuleToolbar } from "../toolbar/FloatingCapsuleToolbar";
 import { useElementLock } from "../toolbar/useElementLock";
 import { getNativeElementCapabilities, type NativeElementCapabilities } from "./native-element-capabilities";
 
@@ -151,7 +152,7 @@ function StickySelectionToolbar({
   };
 
   return (
-    <CapsuleToolbar>
+    <CapsuleToolbar positioned={false} zoomAware={false}>
       {SHAPES.map((s) => (
         <button
           key={s.value}
@@ -382,7 +383,7 @@ function ShapeSelectionToolbar({
   }, [colorOpen]);
 
   return (
-    <CapsuleToolbar>
+    <CapsuleToolbar positioned={false} zoomAware={false}>
       {(["filled", "outline", "dashed"] as ShapePreset[]).map((preset) => {
         const active = activePreset === preset;
         return (
@@ -507,14 +508,15 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
   const setUiError = useConductorStore((state) => state.setUiError);
   const canvasZoom = useConductorStore((state) => state.canvasZoom);
 
-  const isSelected = selectedElementId === element.id || selectedElementIds.includes(element.id);
+  const isSelected = selectedElementIds.includes(element.id);
   const isEditing = editingElementId === element.id;
   const usesIntrinsicHeight = capabilities.resizeHandles === "horizontal";
   const isMultiSelect = selectedElementIds.length > 1;
+  const isSingleSelected = isSelected && !isMultiSelect;
   // Element controls are intentionally exclusive to a single selection.
   // MultiSelectBar owns the bulk actions, so rendering one capsule and one
   // set of resize handles per selected element would create overlapping UI.
-  const showSingleElementControls = isSelected && !isEditing && !isMultiSelect;
+  const showSingleElementControls = isSingleSelected && !isEditing;
   const isDiagramShape = capabilities.selectionToolbar === "shape";
   const diagramShape = element.config.shape as string | undefined;
   const selectionRadius = isDiagramShape
@@ -622,6 +624,11 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
     lastMouseY: number;
   } | null>(null);
   const [resizeDimensions, setResizeDimensions] = useState<{ w: number; h: number } | null>(null);
+
+  // Ref to the outer chrome wrapper. The FloatingCapsuleToolbar portal
+  // uses this to anchor its position above the element regardless of
+  // the host element's z-index or canvas stacking context.
+  const hostRef = useRef<HTMLDivElement | null>(null);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -812,8 +819,14 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
     transition: "transform var(--motion-duration-micro) var(--motion-spring)",
   };
 
+  const showSelectionToolbar =
+    showSingleElementControls
+    && capabilities.selectionToolbar !== "none"
+    && capabilities.selectionToolbar !== undefined;
+
   return (
     <div
+      ref={hostRef}
       className="native-chrome"
       style={{
         position: "relative",
@@ -824,7 +837,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
         outline: isSelected && !usesIntrinsicHeight ? `${1.5 / effectiveZoom}px solid var(--canvas-tool-accent)` : "none",
         outlineOffset: 0,
         borderRadius: selectionRadius,
-        cursor: isEditing ? "text" : "default",
+        cursor: isEditing && capabilities.editMode !== "database" ? "text" : "default",
         boxShadow: "none",
         transition: "outline var(--motion-duration-micro) var(--motion-smooth)",
       }}
@@ -846,49 +859,53 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
         {children}
       </div>
 
-      {showSingleElementControls && capabilities.selectionToolbar === "shape" && (
-        <ShapeSelectionToolbar
-          element={element}
-          onEdit={() => setEditingElementId(element.id)}
-          onDelete={handleDelete}
-          onDuplicate={handleDuplicate}
-          onRotate={handleRotate}
-          onBringToFront={() => handleLayerChange("front")}
-          onSendToBack={() => handleLayerChange("back")}
-          onDismiss={dismissSelectionToolbar}
-          locked={locked}
-          onToggleLock={toggleLocked}
-        />
-      )}
+      {showSelectionToolbar && (
+        <FloatingCapsuleToolbar hostRef={hostRef}>
+          {capabilities.selectionToolbar === "shape" && (
+            <ShapeSelectionToolbar
+              element={element}
+              onEdit={() => setEditingElementId(element.id)}
+              onDelete={handleDelete}
+              onDuplicate={handleDuplicate}
+              onRotate={handleRotate}
+              onBringToFront={() => handleLayerChange("front")}
+              onSendToBack={() => handleLayerChange("back")}
+              onDismiss={dismissSelectionToolbar}
+              locked={locked}
+              onToggleLock={toggleLocked}
+            />
+          )}
 
-      {showSingleElementControls && capabilities.selectionToolbar === "sticky" && (
-        <StickySelectionToolbar
-          element={element}
-          onEdit={() => setEditingElementId(element.id)}
-          onDelete={handleDelete}
-          onDuplicate={handleDuplicate}
-          onRotate={handleRotate}
-          onBringToFront={() => handleLayerChange("front")}
-          onSendToBack={() => handleLayerChange("back")}
-          onDismiss={dismissSelectionToolbar}
-          locked={locked}
-          onToggleLock={toggleLocked}
-        />
-      )}
+          {capabilities.selectionToolbar === "sticky" && (
+            <StickySelectionToolbar
+              element={element}
+              onEdit={() => setEditingElementId(element.id)}
+              onDelete={handleDelete}
+              onDuplicate={handleDuplicate}
+              onRotate={handleRotate}
+              onBringToFront={() => handleLayerChange("front")}
+              onSendToBack={() => handleLayerChange("back")}
+              onDismiss={dismissSelectionToolbar}
+              locked={locked}
+              onToggleLock={toggleLocked}
+            />
+          )}
 
-      {showSingleElementControls && capabilities.selectionToolbar === "text" && (
-        <TextSelectionToolbar element={element} utilityActions={utilityActions} />
-      )}
+          {capabilities.selectionToolbar === "text" && (
+            <TextSelectionToolbar element={element} utilityActions={utilityActions} />
+          )}
 
-      {showSingleElementControls && capabilities.selectionToolbar === "utility" && (
-        <CapsuleToolbar>
-          <ElementUtilityActions
-            {...utilityActions}
-            leadingDivider={false}
-            showDuplicate={false}
-            showRotate={false}
-          />
-        </CapsuleToolbar>
+          {capabilities.selectionToolbar === "utility" && (
+            <CapsuleToolbar positioned={false} zoomAware={false}>
+              <ElementUtilityActions
+                {...utilityActions}
+                leadingDivider={false}
+                showDuplicate={false}
+                showRotate={false}
+              />
+            </CapsuleToolbar>
+          )}
+        </FloatingCapsuleToolbar>
       )}
 
       {showSingleElementControls && !locked && capabilities.resizeHandles !== "none" && element.metadata?.resizeMode !== 'fixed' && (

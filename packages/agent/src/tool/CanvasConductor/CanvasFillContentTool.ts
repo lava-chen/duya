@@ -7,7 +7,7 @@
  *   - native/document:  { markdown: string }
  *   - native/image:     { url: string, fileName?: string }
  *   - native/file:      { fileName: string, mimeType?: string, url?: string }
- *   - native/connector: { source: string, target: string }
+ *   - native/connector: { source: ConnectorEndpoint, target: ConnectorEndpoint }
  *   - widget/*:         { ... per-widget content }
  *
  * This tool writes into the element's `config` object. Visual style
@@ -33,7 +33,7 @@ export const definition: Tool = {
     '  - native/sticky: legacy only; do not create new notes\n' +
     '  - native/image: { url, fileName? }\n' +
     '  - native/file: { fileName, mimeType?, url? }\n' +
-    '  - native/connector: { source, target, routingMode?, label?, waypoints?, curveControlOffsets? }; keep routingMode="elbow" unless the user explicitly requests an organic curve\n' +
+    '  - native/connector: { source, target, routingMode?, label?, waypoints?, curveMidpointOffset?, curveControlOffsets? }; endpoints are bound {kind:"bound",nodeId,bindingPoint:{u,v}} or free {kind:"free",point:{x,y}}; curveMidpointOffset is relative to the endpoint midpoint; keep routingMode="elbow" unless explicitly asked for a curve\n' +
     '  - native/link: { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description?, expanded?, expandedSize? }\n' +
     '  - widget/dynamic: pass sourceCode (top-level) to revise the HTML/SVG\n\n' +
     'Only the supplied fields are overwritten; other config fields are preserved. ' +
@@ -75,12 +75,14 @@ export const definition: Tool = {
             description: 'native/file: MIME type.',
           },
           source: {
-            type: 'string',
-            description: 'native/connector: source element id.',
+            type: 'object',
+            description: 'native/connector: bound or free source endpoint reference.',
+            additionalProperties: true,
           },
           target: {
-            type: 'string',
-            description: 'native/connector: target element id.',
+            type: 'object',
+            description: 'native/connector: bound or free target endpoint reference.',
+            additionalProperties: true,
           },
         },
         additionalProperties: true,
@@ -137,7 +139,7 @@ export const executor: ToolExecutor = {
     // common mistake because the tool description mentions these
     // fields by name. Without this fallback, the patch is empty {}
     // and the write is a silent no-op.
-    const TOP_LEVEL_FIELDS = ['text', 'color', 'url', 'fileName', 'mimeType', 'source', 'target', 'routingMode', 'label', 'waypoints', 'curveControlOffsets', 'linkType', 'targetId', 'title', 'description', 'expanded', 'expandedSize'] as const;
+    const TOP_LEVEL_FIELDS = ['text', 'color', 'url', 'fileName', 'mimeType', 'source', 'target', 'routingMode', 'label', 'waypoints', 'curveMidpointOffset', 'curveControlOffsets', 'linkType', 'targetId', 'title', 'description', 'expanded', 'expandedSize'] as const;
     if (Object.keys(content).length === 0) {
       const lifted: Record<string, unknown> = {};
       for (const field of TOP_LEVEL_FIELDS) {
@@ -148,6 +150,23 @@ export const executor: ToolExecutor = {
       if (Object.keys(lifted).length > 0) {
         content = lifted;
       }
+    }
+
+    const normalizeEndpoint = (value: unknown): unknown => {
+      if (typeof value === 'string' && value) return { nodeId: value, anchorId: 'center' };
+      if (!value || typeof value !== 'object') return value;
+      const endpoint = value as Record<string, unknown>;
+      if (typeof endpoint.nodeId === 'string' && !endpoint.kind && !endpoint.anchorId) {
+        return { ...endpoint, anchorId: 'center' };
+      }
+      return endpoint;
+    };
+    if (content.source !== undefined || content.target !== undefined) {
+      content = {
+        ...content,
+        ...(content.source !== undefined ? { source: normalizeEndpoint(content.source) } : {}),
+        ...(content.target !== undefined ? { target: normalizeEndpoint(content.target) } : {}),
+      };
     }
 
     // element.update_content merges the patch into the existing

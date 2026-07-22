@@ -2,7 +2,7 @@
 
 import React, { useCallback, useRef, useState, useEffect } from "react";
 import type { CanvasElement, CanvasPosition } from "..//types/conductor";
-import { useConductorStore } from "..//stores/conductor-store";
+import { getAbsolutePosition, useConductorStore } from "..//stores/conductor-store";
 import { createNativeElement, executeAction, uploadAsset } from "..//ipc/conductor-ipc";
 import { shouldStartEditingOnCreate } from "./native/native-element-capabilities";
 import { FreeformLayer } from "./FreeformLayer";
@@ -13,17 +13,19 @@ import { StylePanel } from "./StylePanel";
 import { MultiSelectBar } from "./MultiSelectBar";
 import { GRID_PX } from "../domain/canvas/units";
 import {
-  autoDirection,
-  computeBezierPath,
+  computeClippedConnectorCurve,
+  computeConnectorCurveGeometry,
   computeElbowRoutePoints,
   computeRoundedElbowPath,
-  selectAutoAnchors,
+  createConnectorEndpointAtPoint,
+  getConnectorEndpointRect,
+  resolveConnectorEndpoint,
 } from "../domain/canvas/connector-renderer";
 import { computeSnap } from "../domain/canvas/snap";
 import { zoomToFit } from "../domain/canvas/layout/viewport";
 import { canvasSpatialIndex } from "../stores/conductor-store";
 import type { AlignmentGuide } from "../domain/canvas/snap";
-import type { ConnectorRoutingMode } from "../types/canvas-node";
+import type { ConnectorEndpoint, ConnectorRoutingMode, Point } from "../types/canvas-node";
 
 const MIN_CANVAS_WIDTH = 3200;
 const MIN_CANVAS_HEIGHT = 2400;
@@ -53,6 +55,19 @@ function snapToGrid(value: number, grid = SNAP_GRID): number {
   return Math.round(value / grid) * grid;
 }
 
+function findConnectableElementAtPoint(elements: CanvasElement[], point: Point): CanvasElement | null {
+  return elements
+    .filter((element) => element.elementKind.startsWith("native/") && !isConnectorKind(element))
+    .sort((a, b) => b.position.zIndex - a.position.zIndex)
+    .find((element) => {
+      const absolute = getAbsolutePosition(element, elements);
+      const left = absolute.x * GRID_PX;
+      const top = absolute.y * GRID_PX;
+      return point.x >= left && point.x <= left + element.position.w * GRID_PX
+        && point.y >= top && point.y <= top + element.position.h * GRID_PX;
+    }) ?? null;
+}
+
 const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> = {
   document: { w: 6, h: 5, zIndex: 0 },
   shape: { w: 4, h: 2, zIndex: 0 },
@@ -60,6 +75,7 @@ const NATIVE_DEFAULTS: Record<string, { w: number; h: number; zIndex: number }> 
   // empty text insertion reads as a cursor, not an oversized empty region.
   text: { w: 2, h: 0.5, zIndex: 0 },
   table: { w: 5, h: 1.5, zIndex: 0 },
+  database: { w: 8, h: 5, zIndex: 0 },
   image: { w: 5, h: 4, zIndex: 0 },
   file: { w: 4, h: 3, zIndex: 0 },
   link: { w: 4, h: 1, zIndex: 0 },
@@ -231,8 +247,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   const [isDragging, setIsDragging] = useState(false);
 
   const [connectorDraft, setConnectorDraft] = useState<{
-    sourceId: string;
-    sourcePx: { x: number; y: number };
+    source: ConnectorEndpoint;
     mouseX: number;
     mouseY: number;
     routingMode: ConnectorRoutingMode;
@@ -459,13 +474,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       y: (clientY - rect.top - panY) / zoom,
     };
   }, []);
-
-  const elementCenterPx = useCallback((el: CanvasElement) => ({
-    // All inputs in grid units — convert x/y to pixels first so the math
-    // mixes only pixel-scale values.
-    x: el.position.x * GRID_PX + (el.position.w * GRID_PX) / 2,
-    y: el.position.y * GRID_PX + (el.position.h * GRID_PX) / 2,
-  }), []);
 
   const setHostCursor = useCallback((cursor: string) => {
     cursorRef.current = cursor;
@@ -719,24 +727,19 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       if (cd && activeCanvasId) {
         const canvasPoint = clientToCanvas(e.clientX, e.clientY);
         const { elements: els } = useConductorStore.getState();
-        const target = els.find((el) => {
-          if (el.id === cd.sourceId) return false;
-          // canvasPoint is in canvas-perspective pixels; compare with a
-          // pixel bbox so both axes agree.
-          const left = el.position.x * GRID_PX;
-          const top = el.position.y * GRID_PX;
-          const right = left + el.position.w * GRID_PX;
-          const bottom = top + el.position.h * GRID_PX;
-          return canvasPoint.x >= left && canvasPoint.x <= right
-            && canvasPoint.y >= top && canvasPoint.y <= bottom;
-        });
+        const target = findConnectableElementAtPoint(els, canvasPoint);
+        const targetEndpoint = createConnectorEndpointAtPoint(canvasPoint, target, els);
+        const sourceResolved = resolveConnectorEndpoint(cd.source, els, canvasPoint);
+        const targetResolved = resolveConnectorEndpoint(targetEndpoint, els, sourceResolved?.edgePoint);
+        const distance = sourceResolved && targetResolved
+          ? Math.hypot(
+              targetResolved.referencePoint.x - sourceResolved.referencePoint.x,
+              targetResolved.referencePoint.y - sourceResolved.referencePoint.y,
+            )
+          : 0;
 
-        if (target) {
+        if (distance >= 4) {
           try {
-            const sourceEl = elements.find((el) => el.id === cd.sourceId);
-            const { sourceAnchor, targetAnchor } = sourceEl
-              ? selectAutoAnchors(sourceEl, target, elements)
-              : { sourceAnchor: "center", targetAnchor: "center" };
             await createNativeElement(activeCanvasId, "connector", {
               x: 0,
               y: 0,
@@ -745,8 +748,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               zIndex: 10,
               rotation: 0,
             }, {
-              source: { nodeId: cd.sourceId, anchorId: sourceAnchor },
-              target: { nodeId: target.id, anchorId: targetAnchor },
+              source: cd.source,
+              target: targetEndpoint,
               curvature: 0.4,
               routingMode: cd.routingMode,
             });
@@ -829,23 +832,17 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
     const connectorMode = parseConnectorTool(activeTool);
     if (connectorMode) {
-      const nativeEl = elements.find((el) => {
-        const domEl = document.getElementById(`native-el-${el.id}`);
-        return domEl?.contains(target);
+      e.preventDefault();
+      e.stopPropagation();
+      const canvas = clientToCanvas(e.clientX, e.clientY);
+      const sourceNode = findConnectableElementAtPoint(elements, canvas);
+      setConnectorDraft({
+        source: createConnectorEndpointAtPoint(canvas, sourceNode, elements),
+        mouseX: canvas.x,
+        mouseY: canvas.y,
+        routingMode: connectorMode,
       });
-      if (nativeEl) {
-        e.preventDefault();
-        e.stopPropagation();
-        const canvas = clientToCanvas(e.clientX, e.clientY);
-        setConnectorDraft({
-          sourceId: nativeEl.id,
-          sourcePx: elementCenterPx(nativeEl),
-          mouseX: canvas.x,
-          mouseY: canvas.y,
-          routingMode: connectorMode,
-        });
-        return;
-      }
+      return;
     }
 
     const nativeWrapper = target.closest("[data-native-element-id]") as HTMLElement | null;
@@ -941,7 +938,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     activeTool,
     elements,
     clientToCanvas,
-    elementCenterPx,
     createElementAt,
     clearSelection,
     setSelectedElementId,
@@ -1466,6 +1462,36 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     syncCanvasStateToStore();
   }, [applyTransform, syncCanvasStateToStore, clampZoomHard]);
 
+  const connectorDraftPreview = (() => {
+    if (!connectorDraft) return null;
+    const pointer = { x: connectorDraft.mouseX, y: connectorDraft.mouseY };
+    const targetNode = findConnectableElementAtPoint(elements, pointer);
+    const target = createConnectorEndpointAtPoint(pointer, targetNode, elements);
+    const targetHint = resolveConnectorEndpoint(target, elements)?.referencePoint ?? pointer;
+    const sourceResolved = resolveConnectorEndpoint(connectorDraft.source, elements, targetHint);
+    const targetResolved = resolveConnectorEndpoint(target, elements, sourceResolved?.referencePoint);
+    if (!sourceResolved || !targetResolved) return null;
+    const points = computeElbowRoutePoints(
+      sourceResolved.edgePoint,
+      sourceResolved.direction,
+      targetResolved.edgePoint,
+      targetResolved.direction,
+    );
+    const curve = connectorDraft.routingMode === "curve"
+      ? computeClippedConnectorCurve(
+          computeConnectorCurveGeometry(sourceResolved.referencePoint, targetResolved.referencePoint),
+          getConnectorEndpointRect(connectorDraft.source, elements),
+          getConnectorEndpointRect(target, elements),
+        )
+      : null;
+    return {
+      path: connectorDraft.routingMode === "elbow"
+        ? computeRoundedElbowPath(points)
+        : curve?.path ?? "",
+      sourceReference: sourceResolved.referencePoint,
+    };
+  })();
+
   return (
     <div
       className="relative h-full overflow-hidden canvas-area conductor-canvas-surface"
@@ -1556,7 +1582,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           />
         ))}
 
-        {connectorDraft && (
+        {connectorDraftPreview && (
           <svg
             style={{
               position: "absolute",
@@ -1569,19 +1595,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             }}
           >
             <path
-              d={connectorDraft.routingMode === "elbow"
-                ? computeRoundedElbowPath(computeElbowRoutePoints(
-                    connectorDraft.sourcePx,
-                    autoDirection(connectorDraft.sourcePx, { x: connectorDraft.mouseX, y: connectorDraft.mouseY }),
-                    { x: connectorDraft.mouseX, y: connectorDraft.mouseY },
-                    autoDirection({ x: connectorDraft.mouseX, y: connectorDraft.mouseY }, connectorDraft.sourcePx),
-                  ))
-                : computeBezierPath(
-                    connectorDraft.sourcePx,
-                    autoDirection(connectorDraft.sourcePx, { x: connectorDraft.mouseX, y: connectorDraft.mouseY }),
-                    { x: connectorDraft.mouseX, y: connectorDraft.mouseY },
-                    autoDirection({ x: connectorDraft.mouseX, y: connectorDraft.mouseY }, connectorDraft.sourcePx),
-                  )}
+              d={connectorDraftPreview.path}
               fill="none"
               stroke="var(--conductor-accent)"
               strokeWidth={2}
@@ -1590,8 +1604,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               strokeLinejoin="round"
             />
             <circle
-              cx={connectorDraft.sourcePx.x}
-              cy={connectorDraft.sourcePx.y}
+              cx={connectorDraftPreview.sourceReference.x}
+              cy={connectorDraftPreview.sourceReference.y}
               r={5}
               fill="var(--canvas-bg)"
               stroke="var(--conductor-accent)"

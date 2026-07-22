@@ -130,6 +130,36 @@ describe('ConductorActionRequestSchema — group tool validation', () => {
   });
 });
 
+describe('ConductorActionRequestSchema — connector endpoints', () => {
+  it('accepts bound and free endpoint references with connector style fields', () => {
+    const result = ConductorActionRequestSchema.safeParse({
+      action: 'connector.create',
+      canvasId: 'c1',
+      source: { kind: 'bound', nodeId: 'node-1', bindingPoint: { u: 0.25, v: 0.75 } },
+      target: { kind: 'free', point: { x: 420, y: 180 } },
+      routingMode: 'elbow',
+      color: '#8b5cf6',
+      endMarker: 'arrow',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('keeps legacy anchored endpoints readable and rejects invalid binding ratios', () => {
+    expect(ConductorActionRequestSchema.safeParse({
+      action: 'connector.create',
+      canvasId: 'c1',
+      source: { nodeId: 'node-1', anchorId: 'bottom', edgePosition: 0.4 },
+      target: { nodeId: 'node-2', anchorId: 'top' },
+    }).success).toBe(true);
+    expect(ConductorActionRequestSchema.safeParse({
+      action: 'connector.create',
+      canvasId: 'c1',
+      source: { kind: 'bound', nodeId: 'node-1', bindingPoint: { u: 1.2, v: 0.5 } },
+      target: { kind: 'free', point: { x: 10, y: 20 } },
+    }).success).toBe(false);
+  });
+});
+
 import type { CanvasElement, ElementMetadata } from '../conductor';
 
 describe('ElementMetadata layout hints', () => {

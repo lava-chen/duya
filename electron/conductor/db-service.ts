@@ -77,6 +77,7 @@ function applyDefaultDimensions(
     'native/document': { w: 6, h: 5 },
     'native/text': { w: 10, h: 2 },
     'native/table': { w: 5, h: 1.5 },
+    'native/database': { w: 8, h: 5 },
     'native/image': { w: 5, h: 4 },
     'native/file': { w: 4, h: 3 },
     'native/link': { w: 4, h: 1 },
@@ -122,6 +123,9 @@ function summarizeElementForAgent(element: {
  */
 function resolveConnectorEndpoint(value: unknown): string {
   if (typeof value === 'string') return value || '?';
+  if (value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'free') {
+    return 'free';
+  }
   if (value && typeof value === 'object' && 'nodeId' in value) {
     return (value as { nodeId?: string }).nodeId || '?';
   }
@@ -182,18 +186,37 @@ export class ConductorDbService {
     return id;
   }
 
-  /**
-   * Normalize a connector endpoint value to { nodeId: string }.
-   * Accepts either a raw elementId string or an already-normalized
-   * { nodeId: string } object. Returns undefined for unresolvable input.
-   */
-  private normalizeConnectorEndpoint(value: unknown): { nodeId: string } | undefined {
+  /** Preserve the current endpoint contract while accepting pre-v2 values. */
+  private normalizeConnectorEndpoint(value: unknown): Record<string, unknown> | undefined {
     if (typeof value === 'string' && value) {
-      return { nodeId: value };
+      return { nodeId: value, anchorId: 'center' };
     }
-    if (value && typeof value === 'object' && 'nodeId' in value) {
-      const nodeId = (value as { nodeId?: string }).nodeId;
-      if (nodeId) return { nodeId };
+    if (!value || typeof value !== 'object') return undefined;
+    const endpoint = value as Record<string, unknown>;
+    if (endpoint.kind === 'free') {
+      const point = endpoint.point as Record<string, unknown> | undefined;
+      if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+        return { kind: 'free', point: { x: point.x, y: point.y } };
+      }
+      return undefined;
+    }
+    if (endpoint.kind === 'bound' && typeof endpoint.nodeId === 'string' && endpoint.nodeId) {
+      const bindingPoint = endpoint.bindingPoint as Record<string, unknown> | undefined;
+      if (bindingPoint && Number.isFinite(bindingPoint.u) && Number.isFinite(bindingPoint.v)) {
+        return {
+          kind: 'bound',
+          nodeId: endpoint.nodeId,
+          bindingPoint: { u: bindingPoint.u, v: bindingPoint.v },
+        };
+      }
+      return undefined;
+    }
+    if (typeof endpoint.nodeId === 'string' && endpoint.nodeId) {
+      return {
+        nodeId: endpoint.nodeId,
+        anchorId: typeof endpoint.anchorId === 'string' ? endpoint.anchorId : 'center',
+        ...(Number.isFinite(endpoint.edgePosition) ? { edgePosition: endpoint.edgePosition } : {}),
+      };
     }
     return undefined;
   }
@@ -434,6 +457,12 @@ export class ConductorDbService {
         const rows = Array.isArray(cfg.rows) ? cfg.rows.length : 3;
         return truncate(`${title} (${columns} columns × ${rows} rows)`, 60);
       }
+      case 'native/database': {
+        const title = typeof cfg.sourceTitle === 'string' && cfg.sourceTitle
+          ? cfg.sourceTitle
+          : 'Database';
+        return truncate(`${title} (database view)`, 60);
+      }
       case 'native/connector': {
         const src = resolveConnectorEndpoint(cfg.source);
         const tgt = resolveConnectorEndpoint(cfg.target);
@@ -547,6 +576,7 @@ export class ConductorDbService {
     if (kind === 'native/text') return 'Text';
     if (kind === 'native/document') return 'Documents';
     if (kind === 'native/table') return 'Tables';
+    if (kind === 'native/database') return 'Databases';
     if (kind === 'native/connector') return 'Connectors';
     if (kind === 'native/image') return 'Images';
     if (kind === 'native/file') return 'Files';
@@ -1478,12 +1508,12 @@ export class ConductorDbService {
     }
 
     const warnings: string[] = [];
-    const sourceId = (source as { nodeId?: string }).nodeId ?? (rawSource as string);
-    const targetId = (target as { nodeId?: string }).nodeId ?? (rawTarget as string);
-    if (!getElement(sourceId, canvasId)) {
+    const sourceId = typeof source.nodeId === 'string' ? source.nodeId : undefined;
+    const targetId = typeof target.nodeId === 'string' ? target.nodeId : undefined;
+    if (sourceId && !getElement(sourceId, canvasId)) {
       warnings.push(`Connector source element ${sourceId} not found on canvas ${canvasId}`);
     }
-    if (!getElement(targetId, canvasId)) {
+    if (targetId && !getElement(targetId, canvasId)) {
       warnings.push(`Connector target element ${targetId} not found on canvas ${canvasId}`);
     }
 

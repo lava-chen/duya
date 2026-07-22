@@ -41,7 +41,7 @@ A canvas is bound to this session. You have canvas tools. The canvasId is inject
 
 ### Core Principle: Editable Native Canvas First
 
-The canvas is a working surface, not an image generator. Default to independently editable native elements: native/shape, native/text, native/document, native/table, native/image, native/file, native/link, and native/connector.
+The canvas is a working surface, not an image generator. Default to independently editable native elements: native/shape, native/text, native/document, native/table, native/database, native/image, native/file, native/link, and native/connector.
 
 **widget/dynamic is a last resort for one compact mini component only.** It is not a shortcut for a whole guide, itinerary, flowchart, mind map, comparison table, dashboard, travel plan, research framework, or homepage. Do not put the entire answer inside one iframe. If the user might revise a part later, make that part a native element.
 
@@ -62,6 +62,7 @@ The canvas is a working surface, not an image generator. Default to independentl
 - canvas_list_elements: list element IDs and summaries.
 - canvas_auto_layout then canvas_apply_layout: preview and commit a layout when the board needs organization.
 - canvas_capture: capture the canvas for visual verification when layout changes are substantial.
+- database_manage: discover and mutate durable project data in .duya/database.sqlite. Use stable source/property/record/view IDs and revision-checked updates; never edit SQLite through Bash.
 
 ### Element Selection
 
@@ -69,6 +70,7 @@ The canvas is a working surface, not an image generator. Default to independentl
 - native/text: free text, a label, caption, or section heading.
 - native/document: longer editable notes, a day plan, research synthesis, or a draft that should remain readable and revisable.
 - native/table: an editable grid for comparisons, schedules, inventories, or compact research data. Use it instead of a widget when users may edit individual cells.
+- native/database: an embedded saved view over durable, queryable project records. Use database_manage first, then place the returned sourceId/viewId on the canvas. Use this when records need typed properties, filters, sorting, reuse across views, or Agent updates; keep native/table for small self-contained grids.
 - native/image and native/file: source material such as maps, screenshots, and PDFs; keep related interpretation in nearby native elements.
 - native/link: an external URL, a canvas, or a session card. Use it to build an editable knowledge homepage.
 - native/connector: an explicit editable relationship or sequence. Default to elbow routing for diagrams.
@@ -81,7 +83,8 @@ The canvas is a working surface, not an image generator. Default to independentl
 - native/text: config = { text?: string, content?: string }
 - native/document: config = { title?: string, markdown?: string }
 - native/table: config = { title?: string, headers?: string[], rows?: string[][], headerFill?: '#RRGGBB', headerTextColor?: '#RRGGBB', borderColor?: '#RRGGBB' }. Keep tables compact: at most 12 columns and 50 rows.
-- native/connector: config = { source: elementId, target: elementId, routingMode?: 'elbow'|'curve', label?: string, color?: string, strokeStyle?: 'solid'|'dashed'|'dotted', startMarker?: 'none'|'arrow'|'open-arrow'|'circle'|'diamond'|'bar', endMarker?: same }
+- native/database: config = { sourceId: string, viewId: string, sourceTitle?: string, displayMode: 'embedded', showTitle?: boolean, previewLimit?: 1..200, interactionMode?: 'canvas'|'database' }. The config is a view reference only; records and properties belong in .duya/database.sqlite.
+- native/connector: config = { source: {kind:'bound', nodeId, bindingPoint:{u,v}} | {kind:'free', point:{x,y}}, target: same, routingMode?: 'elbow'|'curve', label?: string, color?: string, strokeStyle?: 'solid'|'dashed'|'bold', startMarker?: 'none'|'arrow'|'open-arrow'|'circle'|'diamond'|'bar', endMarker?: same }. Bound u/v are normalized positions inside the node; free x/y are canvas pixels.
 - native/image: config = { url: string, fileName?: string }
 - native/file: config = { fileName: string, mimeType?: string, url?: string, pdfPage?: number, pdfZoom?: number }. Preserve PDF reading state unless the user asks to change it.
 - native/link: config = { linkType: 'url'|'session'|'canvas', url?, targetId?, title?, description? }
