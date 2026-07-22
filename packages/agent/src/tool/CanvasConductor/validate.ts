@@ -224,11 +224,45 @@ export function validateConnectorShape(config: Record<string, unknown>): Validat
   const source = config.source;
   const target = config.target;
 
+  const validateEndpoint = (value: unknown, field: 'source' | 'target'): void => {
+    if (!isRecord(value)) {
+      checks.push(fail(`connector config.${field} must be an endpoint object`));
+      return;
+    }
+    if (value.kind === 'free') {
+      const point = value.point;
+      if (!isRecord(point) || !isFiniteNumber(point.x) || !isFiniteNumber(point.y)) {
+        checks.push(fail(`connector config.${field}.point must contain finite canvas-pixel x and y`));
+      }
+      return;
+    }
+    if (value.kind === 'bound') {
+      const bindingPoint = value.bindingPoint;
+      const u = isRecord(bindingPoint) ? bindingPoint.u : undefined;
+      const v = isRecord(bindingPoint) ? bindingPoint.v : undefined;
+      if (typeof value.nodeId !== 'string' || !value.nodeId || !isRecord(bindingPoint) ||
+          typeof u !== 'number' || !Number.isFinite(u) || typeof v !== 'number' || !Number.isFinite(v) ||
+          u < 0 || u > 1 || v < 0 || v > 1) {
+        checks.push(fail(`connector config.${field} bound endpoint requires nodeId and bindingPoint u/v in 0..1`));
+      }
+      return;
+    }
+    const validLegacyAnchor = typeof value.anchorId === 'string' &&
+      ['top', 'bottom', 'left', 'right', 'center'].includes(value.anchorId);
+    if (typeof value.nodeId !== 'string' || !value.nodeId || !validLegacyAnchor) {
+      checks.push(fail(`connector config.${field} must be a bound, free, or legacy anchored endpoint`));
+    }
+  };
+
   if (source === undefined) {
     checks.push(fail('connector config.source is required'));
+  } else {
+    validateEndpoint(source, 'source');
   }
   if (target === undefined) {
     checks.push(fail('connector config.target is required'));
+  } else {
+    validateEndpoint(target, 'target');
   }
 
   const endMarker = config.endMarker;
@@ -293,6 +327,15 @@ export function validateConnectorShape(config: Record<string, unknown>): Validat
         }
       }
     }
+  }
+
+  const curveMidpointOffset = config.curveMidpointOffset;
+  if (curveMidpointOffset !== undefined && (
+    !isRecord(curveMidpointOffset) ||
+    !isFiniteNumber(curveMidpointOffset.x) ||
+    !isFiniteNumber(curveMidpointOffset.y)
+  )) {
+    checks.push(fail('connector curveMidpointOffset must contain finite x and y numbers'));
   }
 
   return combine(...checks);

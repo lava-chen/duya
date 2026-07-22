@@ -3,29 +3,30 @@
 import React, { useMemo } from "react";
 import type { CanvasElement } from "../..//types/conductor";
 import type {
-  AnchorId,
   ConnectorEndpoint,
   ConnectorMarker,
   ConnectorRoutingMode,
   CurveControlOffsets,
+  Direction,
   Point,
 } from "../..//types/canvas-node";
 import { useConductorStore } from "../..//stores/conductor-store";
 import {
   anchorToDirection,
   autoDirection,
-  computeBezierPath,
+  computeClippedConnectorCurve,
+  computeConnectorCurveGeometry,
+  computeConnectorCurvePath,
   computeElbowRoutePoints,
   computeRoundedElbowPath,
-  evaluateBezierPoint,
+  evaluateConnectorCurvePoint,
+  getConnectorEndpointNodeId,
+  getConnectorEndpointRect,
   GRID_PX,
-  getAnchorPosition,
-  getBezierControlPoints,
-  getConnectorEndpoint,
   getConnectorArrowGeometry,
   getPolylineMidpoint,
   orthogonalizeElbowPoints,
-  snapConnectorEdgePosition,
+  resolveConnectorEndpoint,
   simplifyOrthogonalPoints,
 } from "../..//domain/canvas/connector-renderer";
 
@@ -153,10 +154,20 @@ export interface ConnectorComputedData {
   tgtPoint: Point;
   sourceCenter: Point;
   targetCenter: Point;
+  sourceReference: Point;
+  targetReference: Point;
+  sourceDirection: Direction;
+  targetDirection: Direction;
   midPoint: Point;
   routingMode: ConnectorRoutingMode;
   sourceControl?: Point;
   targetControl?: Point;
+  curveGeometry?: import("../..//domain/canvas/connector-renderer").ConnectorCurveGeometry;
+  curveStartT?: number;
+  curveEndT?: number;
+  curveActivated?: boolean;
+  sourceArrowDirectionPoint?: Point;
+  targetArrowDirectionPoint?: Point;
   elbowPoints?: Point[];
 }
 
@@ -176,7 +187,7 @@ interface ConnectorPathProps {
   ) => void;
   onCurveControlPointerDown?: (
     connectorId: string,
-    control: "source" | "target",
+    control: "midpoint" | "source" | "target",
     point: Point,
     event: React.PointerEvent<SVGCircleElement>
   ) => void;
@@ -209,138 +220,77 @@ export function resolveConnectorMarkers(config: Record<string, unknown>): {
   };
 }
 
-function resolveEffectiveAnchor(
-  connector: CanvasElement,
-  endpointRole: "source" | "target",
-  elements: CanvasElement[],
-): Exclude<AnchorId, "center"> {
-  const endpoint = connector.config[endpointRole] as ConnectorEndpoint | undefined;
-  if (endpoint?.anchorId && endpoint.anchorId !== "center") return endpoint.anchorId;
-  const otherRole = endpointRole === "source" ? "target" : "source";
-  const otherEndpoint = connector.config[otherRole] as ConnectorEndpoint | undefined;
-  const node = endpoint ? elements.find((element) => element.id === endpoint.nodeId) : null;
-  const otherNode = otherEndpoint ? elements.find((element) => element.id === otherEndpoint.nodeId) : null;
-  if (!node || !otherNode) return "right";
-  const center = getAnchorPosition(node, "center", elements);
-  const otherCenter = getAnchorPosition(otherNode, "center", elements);
-  const halfWidth = Math.max(1, node.position.w * GRID_PX / 2);
-  const halfHeight = Math.max(1, node.position.h * GRID_PX / 2);
-  const otherHalfWidth = Math.max(1, otherNode.position.w * GRID_PX / 2);
-  const otherHalfHeight = Math.max(1, otherNode.position.h * GRID_PX / 2);
-  const deltaX = otherCenter.x - center.x;
-  const deltaY = otherCenter.y - center.y;
-
-  // Diagram layers may be much farther apart horizontally than vertically
-  // (a parent with several children). When their bounds are vertically
-  // separated, bottom-to-top is the natural attachment and preserves a
-  // shared vertical trunk before the horizontal branch.
-  const verticalGap = Math.abs(deltaY) - halfHeight - otherHalfHeight;
-  if (verticalGap >= 24) return deltaY >= 0 ? "bottom" : "top";
-
-  const horizontalGap = Math.abs(deltaX) - halfWidth - otherHalfWidth;
-  if (horizontalGap >= 24) return deltaX >= 0 ? "right" : "left";
-
-  const normalizedX = deltaX / halfWidth;
-  const normalizedY = deltaY / halfHeight;
-  if (Math.abs(normalizedX) >= Math.abs(normalizedY)) {
-    return normalizedX >= 0 ? "right" : "left";
-  }
-  return normalizedY >= 0 ? "bottom" : "top";
-}
-
-function resolveAutoAttachment(
-  connector: CanvasElement,
-  endpointRole: "source" | "target",
-  elements: CanvasElement[],
-): { anchorId: Exclude<AnchorId, "center">; edgePosition: number } | null {
-  const endpoint = connector.config[endpointRole] as ConnectorEndpoint | undefined;
-  if (!endpoint) return null;
-  const anchorId = resolveEffectiveAnchor(connector, endpointRole, elements);
-  const explicitPosition = Number.isFinite(endpoint.edgePosition)
-    ? Math.max(0, Math.min(1, endpoint.edgePosition as number))
-    : null;
-
-  // Outgoing connections leave a node through the centre of their resolved
-  // side. Nearby explicit ports are clustered as well, so separately drawn
-  // elbows can converge into one shared trunk without overriding deliberate
-  // ports that are visibly far apart.
-  if (endpointRole === "source") {
-    const position = explicitPosition ?? 0.5;
-    if (resolveConnectorRoutingMode(connector.config) !== "elbow") {
-      return { anchorId, edgePosition: position };
-    }
-    const node = elements.find((element) => element.id === endpoint.nodeId);
-    const edgeLengthPx = node
-      ? (anchorId === "top" || anchorId === "bottom" ? node.position.w : node.position.h) * GRID_PX
-      : GRID_PX * 3;
-    const peerPositions = elements.flatMap((candidate) => {
-      if (candidate.elementKind !== "native/connector" || resolveConnectorRoutingMode(candidate.config) !== "elbow") return [];
-      const candidateEndpoint = candidate.config.source as ConnectorEndpoint | undefined;
-      if (!candidateEndpoint || candidateEndpoint.nodeId !== endpoint.nodeId) return [];
-      if (resolveEffectiveAnchor(candidate, "source", elements) !== anchorId) return [];
-      return [Number.isFinite(candidateEndpoint.edgePosition)
-        ? Math.max(0, Math.min(1, candidateEndpoint.edgePosition as number))
-        : 0.5];
-    });
-    return {
-      anchorId,
-      edgePosition: snapConnectorEdgePosition(position, peerPositions, edgeLengthPx),
-    };
-  }
-
-  if (explicitPosition !== null) return { anchorId, edgePosition: explicitPosition };
-
-  const peers: Array<{ connectorId: string; endpointRole: "source" | "target" }> = [];
-  for (const candidate of elements) {
-    if (candidate.elementKind !== "native/connector") continue;
-    for (const role of ["source", "target"] as const) {
-      const candidateEndpoint = candidate.config[role] as ConnectorEndpoint | undefined;
-      if (!candidateEndpoint || candidateEndpoint.nodeId !== endpoint.nodeId || Number.isFinite(candidateEndpoint.edgePosition)) continue;
-      if (resolveEffectiveAnchor(candidate, role, elements) === anchorId) {
-        peers.push({ connectorId: candidate.id, endpointRole: role });
-      }
-    }
-  }
-  peers.sort((a, b) => `${a.connectorId}:${a.endpointRole}`.localeCompare(`${b.connectorId}:${b.endpointRole}`));
-  const index = Math.max(0, peers.findIndex((peer) => peer.connectorId === connector.id && peer.endpointRole === endpointRole));
-  const edgePosition = peers.length <= 1 ? 0.5 : 0.18 + (index * 0.64) / (peers.length - 1);
-  return { anchorId, edgePosition };
-}
-
 export function getComputedConnectorData(
   connector: CanvasElement,
   elements: CanvasElement[],
-  sourcePos: CanvasElement["position"] | null,
-  targetPos: CanvasElement["position"] | null
+  _sourcePos: CanvasElement["position"] | null = null,
+  _targetPos: CanvasElement["position"] | null = null
 ): ConnectorComputedData | null {
   const sourceEndpoint = connector.config.source as ConnectorEndpoint | undefined;
   const targetEndpoint = connector.config.target as ConnectorEndpoint | undefined;
-  if (!sourceEndpoint || !targetEndpoint || !sourcePos || !targetPos) return null;
+  if (!sourceEndpoint || !targetEndpoint) return null;
 
-  const sourceNode = elements.find((element) => element.id === sourceEndpoint.nodeId);
-  const targetNode = elements.find((element) => element.id === targetEndpoint.nodeId);
-  if (!sourceNode || !targetNode) return null;
+  const sourceHint = resolveConnectorEndpoint(sourceEndpoint, elements)?.referencePoint;
+  const targetHint = resolveConnectorEndpoint(targetEndpoint, elements)?.referencePoint;
+  const sourceResolved = resolveConnectorEndpoint(sourceEndpoint, elements, targetHint);
+  const targetResolved = resolveConnectorEndpoint(targetEndpoint, elements, sourceHint);
+  if (!sourceResolved || !targetResolved) return null;
 
-  const sourceAttachment = resolveAutoAttachment(connector, "source", elements);
-  const targetAttachment = resolveAutoAttachment(connector, "target", elements);
-  if (!sourceAttachment || !targetAttachment) return null;
-  const srcAnchor = sourceAttachment.anchorId;
-  const tgtAnchor = targetAttachment.anchorId;
-  const sourceCenter = getAnchorPosition(sourceNode, "center", elements);
-  const targetCenter = getAnchorPosition(targetNode, "center", elements);
-  const rawSrcPoint = getAnchorPosition(sourceNode, srcAnchor, elements, sourceAttachment.edgePosition);
-  const rawTgtPoint = getAnchorPosition(targetNode, tgtAnchor, elements, targetAttachment.edgePosition);
-  const srcPoint = getConnectorEndpoint(sourceNode, srcAnchor, elements, rawTgtPoint, sourceAttachment.edgePosition);
-  const tgtPoint = getConnectorEndpoint(targetNode, tgtAnchor, elements, rawSrcPoint, targetAttachment.edgePosition);
-  const srcDir = anchorToDirection(srcAnchor) || autoDirection(srcPoint, tgtPoint);
-  const tgtDir = anchorToDirection(tgtAnchor) || autoDirection(tgtPoint, srcPoint);
   const routingMode = resolveConnectorRoutingMode(connector.config);
+  if (routingMode === "curve") {
+    const sourceReference = sourceResolved.referencePoint;
+    const targetReference = targetResolved.referencePoint;
+    const midpointOffset = connector.config.curveMidpointOffset as Point | undefined;
+    const controlOffsets = connector.config.curveControlOffsets as CurveControlOffsets | undefined;
+    const geometry = computeConnectorCurveGeometry(
+      sourceReference,
+      targetReference,
+      midpointOffset,
+      controlOffsets,
+    );
+    const clipped = computeClippedConnectorCurve(
+      geometry,
+      getConnectorEndpointRect(sourceEndpoint, elements),
+      getConnectorEndpointRect(targetEndpoint, elements),
+    );
+    return {
+      path: clipped.path,
+      srcPoint: clipped.sourcePoint,
+      tgtPoint: clipped.targetPoint,
+      sourceCenter: sourceReference,
+      targetCenter: targetReference,
+      sourceReference,
+      targetReference,
+      sourceDirection: sourceResolved.direction,
+      targetDirection: targetResolved.direction,
+      midPoint: geometry.midpoint,
+      routingMode,
+      sourceControl: geometry.sourceControl,
+      targetControl: geometry.targetControl,
+      curveGeometry: geometry,
+      curveStartT: clipped.sourceT,
+      curveEndT: clipped.targetT,
+      curveActivated: geometry.activated,
+      sourceArrowDirectionPoint: clipped.sourceArrowDirectionPoint,
+      targetArrowDirectionPoint: clipped.targetArrowDirectionPoint,
+    };
+  }
 
+  const srcPoint = sourceResolved.edgePoint;
+  const tgtPoint = targetResolved.edgePoint;
+  const sourceCenter = sourceResolved.referencePoint;
+  const targetCenter = targetResolved.referencePoint;
+  const srcDir = sourceResolved.direction;
+  const tgtDir = targetResolved.direction;
   if (routingMode === "elbow") {
     const waypoints = Array.isArray(connector.config.waypoints)
       ? connector.config.waypoints as Point[]
       : undefined;
-    const obstacles = getConnectorObstacles(elements, sourceNode.id, targetNode.id);
+    const obstacles = getConnectorObstacles(
+      elements,
+      sourceResolved.nodeId ?? "",
+      targetResolved.nodeId ?? "",
+    );
     // Guard the render boundary as well as the route builder. Persisted
     // waypoints and future routing strategies must never be able to turn an
     // elbow connector into a diagonal segment.
@@ -353,40 +303,17 @@ export function getComputedConnectorData(
       tgtPoint,
       sourceCenter,
       targetCenter,
+      sourceReference: sourceResolved.referencePoint,
+      targetReference: targetResolved.referencePoint,
+      sourceDirection: srcDir,
+      targetDirection: tgtDir,
       midPoint: getPolylineMidpoint(points),
       routingMode,
       elbowPoints: points,
     };
   }
 
-  const curvature = Number(connector.config.curvature ?? 0.4);
-  const offsets = connector.config.curveControlOffsets as CurveControlOffsets | undefined;
-  const constrainControl = (offset: Point, endpoint: Point, center: Point): Point => {
-    const dx = endpoint.x - center.x;
-    const dy = endpoint.y - center.y;
-    const length = Math.hypot(dx, dy) || 1;
-    const outward = { x: dx / length, y: dy / length };
-    const tension = Math.max(24, offset.x * outward.x + offset.y * outward.y);
-    return { x: outward.x * tension, y: outward.y * tension };
-  };
-  const constrainedOffsets = offsets
-    ? {
-        source: constrainControl(offsets.source, srcPoint, sourceCenter),
-        target: constrainControl(offsets.target, tgtPoint, targetCenter),
-      }
-    : undefined;
-  const controls = getBezierControlPoints(srcPoint, srcDir, tgtPoint, tgtDir, curvature, constrainedOffsets);
-  return {
-    path: computeBezierPath(srcPoint, srcDir, tgtPoint, tgtDir, curvature, constrainedOffsets),
-    srcPoint,
-    tgtPoint,
-    sourceCenter,
-    targetCenter,
-    midPoint: evaluateBezierPoint(srcPoint, srcDir, tgtPoint, tgtDir, curvature, 0.5, constrainedOffsets),
-    routingMode,
-    sourceControl: controls.source,
-    targetControl: controls.target,
-  };
+  return null;
 }
 
 function ConnectorMarkerDefs({ prefix, color }: { prefix: string; color: string }) {
@@ -454,6 +381,78 @@ function ConnectorArrow({
   );
 }
 
+function isArrowMarker(marker: ConnectorMarker): boolean {
+  return marker === "arrow" || marker === "open-arrow";
+}
+
+function getArrowBasePoint(tip: Point, directionPoint: Point): Point {
+  const { left, right } = getConnectorArrowGeometry(tip, directionPoint);
+  return {
+    x: (left.x + right.x) / 2,
+    y: (left.y + right.y) / 2,
+  };
+}
+
+function getTrimmedConnectorPath(
+  data: ConnectorComputedData,
+  sourceLineEnd: Point | undefined,
+  targetLineEnd: Point | undefined,
+  cornerRadius: number,
+): string {
+  if (!sourceLineEnd && !targetLineEnd) return data.path;
+
+  const start = sourceLineEnd ?? data.srcPoint;
+  const end = targetLineEnd ?? data.tgtPoint;
+
+  if (data.routingMode === "elbow" && data.elbowPoints) {
+    const points = [...data.elbowPoints];
+    points[0] = start;
+    points[points.length - 1] = end;
+    return computeRoundedElbowPath(points, cornerRadius);
+  }
+
+  if (data.routingMode === "curve" && data.curveGeometry &&
+      data.curveStartT !== undefined && data.curveEndT !== undefined) {
+    const trimParameter = (fromSource: boolean): number => {
+      const startT = data.curveStartT as number;
+      const endT = data.curveEndT as number;
+      const geometry = data.curveGeometry as NonNullable<ConnectorComputedData["curveGeometry"]>;
+      const steps = 96;
+      const trimDistance = 10.5;
+      let previousT = fromSource ? startT : endT;
+      let previous = evaluateConnectorCurvePoint(geometry, previousT);
+      let travelled = 0;
+      for (let index = 1; index <= steps; index += 1) {
+        const ratio = index / steps;
+        const nextT = fromSource
+          ? startT + (endT - startT) * ratio
+          : endT - (endT - startT) * ratio;
+        const next = evaluateConnectorCurvePoint(geometry, nextT);
+        const segmentLength = Math.hypot(next.x - previous.x, next.y - previous.y);
+        if (travelled + segmentLength >= trimDistance && segmentLength > 0.001) {
+          const local = (trimDistance - travelled) / segmentLength;
+          return previousT + (nextT - previousT) * local;
+        }
+        travelled += segmentLength;
+        previousT = nextT;
+        previous = next;
+      }
+      return fromSource ? endT : startT;
+    };
+    const startT = sourceLineEnd ? trimParameter(true) : data.curveStartT;
+    const endT = targetLineEnd ? trimParameter(false) : data.curveEndT;
+    return computeConnectorCurvePath(data.curveGeometry, Math.min(startT, endT), Math.max(startT, endT));
+  }
+
+  if (data.sourceControl && data.targetControl) {
+    const sourceOffset = { x: start.x - data.srcPoint.x, y: start.y - data.srcPoint.y };
+    const targetOffset = { x: end.x - data.tgtPoint.x, y: end.y - data.tgtPoint.y };
+    return `M ${start.x} ${start.y} C ${data.sourceControl.x + sourceOffset.x} ${data.sourceControl.y + sourceOffset.y} ${data.targetControl.x + targetOffset.x} ${data.targetControl.y + targetOffset.y} ${end.x} ${end.y}`;
+  }
+
+  return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+}
+
 export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   connector,
   elements,
@@ -480,8 +479,8 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   const renderVisuals = layer === "all" || layer === "visual";
   const renderControls = layer === "all" || layer === "controls";
 
-  const sourceNodeId = sourceEndpoint?.nodeId;
-  const targetNodeId = targetEndpoint?.nodeId;
+  const sourceNodeId = getConnectorEndpointNodeId(sourceEndpoint);
+  const targetNodeId = getConnectorEndpointNodeId(targetEndpoint);
   const sourcePos = useConductorStore((state) => {
     const element = sourceNodeId ? state.elements.find((candidate) => candidate.id === sourceNodeId) : null;
     return element?.position ?? null;
@@ -502,18 +501,30 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   const targetAdjacent = computedData.routingMode === "elbow"
     ? computedData.elbowPoints?.[Math.max(0, (computedData.elbowPoints?.length ?? 1) - 2)]
     : computedData.targetControl;
-  const sourceArrowDirectionPoint = sourceAdjacent
+  const sourceArrowDirectionPoint = computedData.sourceArrowDirectionPoint ?? (sourceAdjacent
     ? { x: computedData.srcPoint.x * 2 - sourceAdjacent.x, y: computedData.srcPoint.y * 2 - sourceAdjacent.y }
-    : computedData.sourceCenter;
-  const targetArrowDirectionPoint = targetAdjacent
+    : computedData.sourceCenter);
+  const targetArrowDirectionPoint = computedData.targetArrowDirectionPoint ?? (targetAdjacent
     ? { x: computedData.tgtPoint.x * 2 - targetAdjacent.x, y: computedData.tgtPoint.y * 2 - targetAdjacent.y }
-    : computedData.targetCenter;
+    : computedData.targetCenter);
+  const sourceLineEnd = isArrowMarker(startMarker)
+    ? getArrowBasePoint(computedData.srcPoint, sourceArrowDirectionPoint)
+    : undefined;
+  const targetLineEnd = isArrowMarker(endMarker)
+    ? getArrowBasePoint(computedData.tgtPoint, targetArrowDirectionPoint)
+    : undefined;
+  const visualPath = getTrimmedConnectorPath(
+    computedData,
+    sourceLineEnd,
+    targetLineEnd,
+    Number(connector.config.cornerRadius ?? 12),
+  );
   const labelWidth = Math.max(48, Math.min(220, label.length * 7.4 + 20));
   const elbowHandles = computedData.elbowPoints?.slice(0, -1).flatMap((point, segmentIndex) => {
     const next = computedData.elbowPoints?.[segmentIndex + 1];
-    if (!next || segmentIndex === 0 || segmentIndex >= (computedData.elbowPoints?.length ?? 0) - 2) return [];
+    if (!next) return [];
     const length = Math.hypot(next.x - point.x, next.y - point.y);
-    if (length < 28) return [];
+    if (length < 16) return [];
     return [{
       segmentIndex,
       orientation: Math.abs(next.x - point.x) >= Math.abs(next.y - point.y)
@@ -535,11 +546,11 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
     >
       {renderVisuals && <ConnectorMarkerDefs prefix={markerPrefix} color={renderStroke} />}
       {renderVisuals && (isHovered || isSelected) && (
-        <path d={computedData.path} fill="none" stroke="var(--conductor-accent)" strokeWidth={strokeWidth + (isSelected ? 7 : 5)} strokeLinecap="round" strokeLinejoin="round" opacity={isSelected ? 0.16 : 0.09} style={{ pointerEvents: "none" }} />
+        <path d={visualPath} fill="none" stroke="var(--conductor-accent)" strokeWidth={strokeWidth + (isSelected ? 7 : 5)} strokeLinecap="round" strokeLinejoin="round" opacity={isSelected ? 0.16 : 0.09} style={{ pointerEvents: "none" }} />
       )}
       {renderVisuals && <path d={computedData.path} fill="none" stroke="transparent" strokeWidth={HIT_TARGET_WIDTH} strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "auto" }} />}
       {renderVisuals && <path
-        d={computedData.path}
+        d={visualPath}
         fill="none"
         stroke={renderStroke}
         strokeWidth={isSelected ? strokeWidth + 0.35 : strokeWidth}
@@ -560,41 +571,72 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
         </g>
       )}
 
-      {renderControls && isSelected && computedData.routingMode === "curve" && computedData.sourceControl && computedData.targetControl && (
+      {renderControls && isSelected && computedData.routingMode === "curve" && (
         <>
-          <path d={`M ${computedData.srcPoint.x} ${computedData.srcPoint.y} L ${computedData.sourceControl.x} ${computedData.sourceControl.y}`} stroke="var(--conductor-accent)" strokeWidth={1.4} strokeDasharray="5 5" opacity={0.65} />
-          <path d={`M ${computedData.tgtPoint.x} ${computedData.tgtPoint.y} L ${computedData.targetControl.x} ${computedData.targetControl.y}`} stroke="var(--conductor-accent)" strokeWidth={1.4} strokeDasharray="5 5" opacity={0.65} />
-          {(["source", "target"] as const).map((control) => {
-            const point = control === "source" ? computedData.sourceControl : computedData.targetControl;
-            if (!point) return null;
-            return <circle key={control} cx={point.x} cy={point.y} r={5} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2} style={{ cursor: "move", pointerEvents: "auto" }} onPointerDown={(event) => onCurveControlPointerDown?.(connector.id, control, point, event)} />;
-          })}
+          {computedData.curveActivated && computedData.sourceControl && computedData.targetControl && (
+            <>
+              {(["source", "target"] as const).map((control) => {
+                const point = control === "source" ? computedData.sourceControl : computedData.targetControl;
+                if (!point) return null;
+                return <circle data-testid={`connector-curve-${control}-control`} key={control} cx={point.x} cy={point.y} r={5} fill="var(--conductor-accent)" stroke="var(--conductor-accent)" strokeWidth={1.5} style={{ cursor: "move", pointerEvents: "auto" }} onPointerDown={(event) => onCurveControlPointerDown?.(connector.id, control, point, event)} />;
+              })}
+            </>
+          )}
+          <circle
+            data-testid="connector-curve-midpoint-control"
+            cx={computedData.midPoint.x}
+            cy={computedData.midPoint.y}
+            r={computedData.curveActivated ? 6 : 5}
+            fill={computedData.curveActivated ? "var(--canvas-bg)" : "var(--conductor-accent)"}
+            stroke="var(--conductor-accent)"
+            strokeWidth={computedData.curveActivated ? 2 : 1.5}
+            style={{ cursor: "move", pointerEvents: "auto" }}
+            onPointerDown={(event) => onCurveControlPointerDown?.(connector.id, "midpoint", computedData.midPoint, event)}
+          />
         </>
       )}
 
       {renderControls && isSelected && computedData.routingMode === "elbow" && elbowHandles.map((handle) => (
-        <rect
-          key={`${handle.segmentIndex}-${handle.orientation}`}
-          x={handle.point.x - (handle.orientation === "horizontal" ? 7 : 3.5)}
-          y={handle.point.y - (handle.orientation === "horizontal" ? 3.5 : 7)}
-          width={handle.orientation === "horizontal" ? 14 : 7}
-          height={handle.orientation === "horizontal" ? 7 : 14}
-          rx={2.5}
-          fill="var(--canvas-bg)"
-          stroke="var(--conductor-accent)"
-          strokeWidth={1.8}
-          style={{ cursor: handle.orientation === "horizontal" ? "ns-resize" : "ew-resize", pointerEvents: "auto" }}
-          onPointerDown={(event) => onElbowSegmentPointerDown?.(connector.id, handle.segmentIndex, handle.orientation, event)}
-        />
+        <g key={`${handle.segmentIndex}-${handle.orientation}`}>
+          <rect
+            data-testid="connector-elbow-handle"
+            data-segment-index={handle.segmentIndex}
+            x={handle.point.x - 11}
+            y={handle.point.y - 11}
+            width={22}
+            height={22}
+            fill="transparent"
+            style={{ cursor: handle.orientation === "horizontal" ? "ns-resize" : "ew-resize", pointerEvents: "auto" }}
+            onPointerDown={(event) => onElbowSegmentPointerDown?.(connector.id, handle.segmentIndex, handle.orientation, event)}
+          />
+          <rect
+            x={handle.point.x - (handle.orientation === "horizontal" ? 7 : 3.5)}
+            y={handle.point.y - (handle.orientation === "horizontal" ? 3.5 : 7)}
+            width={handle.orientation === "horizontal" ? 14 : 7}
+            height={handle.orientation === "horizontal" ? 7 : 14}
+            rx={2.5}
+            fill="var(--canvas-bg)"
+            stroke="var(--conductor-accent)"
+            strokeWidth={1.8}
+            style={{ pointerEvents: "none" }}
+          />
+        </g>
       ))}
 
       {renderControls && isSelected && (["source", "target"] as const).map((endpoint) => {
-        const point = endpoint === "source" ? computedData.srcPoint : computedData.tgtPoint;
-        const center = endpoint === "source" ? computedData.sourceCenter : computedData.targetCenter;
+        const edgePoint = endpoint === "source" ? computedData.srcPoint : computedData.tgtPoint;
+        const referencePoint = endpoint === "source" ? computedData.sourceReference : computedData.targetReference;
+        const guidePath = computedData.routingMode === "curve" && computedData.curveGeometry &&
+          computedData.curveStartT !== undefined && computedData.curveEndT !== undefined
+          ? endpoint === "source"
+            ? computeConnectorCurvePath(computedData.curveGeometry, 0, computedData.curveStartT)
+            : computeConnectorCurvePath(computedData.curveGeometry, computedData.curveEndT, 1)
+          : `M ${referencePoint.x} ${referencePoint.y} L ${edgePoint.x} ${edgePoint.y}`;
         return (
           <g key={endpoint}>
-            <path d={`M ${center.x} ${center.y} L ${point.x} ${point.y}`} stroke="var(--conductor-accent)" strokeWidth={1.4} strokeDasharray="5 5" opacity={0.65} style={{ pointerEvents: "none" }} />
-            <circle cx={point.x} cy={point.y} r={6} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2} style={{ cursor: "grab", pointerEvents: "auto" }} onPointerDown={(event) => onEndpointPointerDown?.(connector.id, endpoint, point, event)} />
+            <path d={guidePath} stroke="var(--conductor-accent)" fill="none" strokeWidth={1.4} strokeDasharray="5 5" opacity={0.65} style={{ pointerEvents: "none" }} />
+            <circle data-testid={`connector-${endpoint}-reference-handle`} cx={referencePoint.x} cy={referencePoint.y} r={12} fill="transparent" style={{ cursor: "grab", pointerEvents: "auto" }} onPointerDown={(event) => onEndpointPointerDown?.(connector.id, endpoint, referencePoint, event)} />
+            <circle cx={referencePoint.x} cy={referencePoint.y} r={6} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2} style={{ pointerEvents: "none" }} />
           </g>
         );
       })}

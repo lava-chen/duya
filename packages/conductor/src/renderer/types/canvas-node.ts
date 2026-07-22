@@ -35,12 +35,36 @@ export const Direction = {
 } as const;
 export type Direction = (typeof Direction)[keyof typeof Direction];
 
-export interface ConnectorEndpoint {
+export interface ConnectorBindingPoint {
+  /** Normalized horizontal position inside the bound element (0..1). */
+  u: number;
+  /** Normalized vertical position inside the bound element (0..1). */
+  v: number;
+}
+
+export interface BoundConnectorEndpoint {
+  kind: 'bound';
+  nodeId: string;
+  bindingPoint: ConnectorBindingPoint;
+}
+
+export interface FreeConnectorEndpoint {
+  kind: 'free';
+  point: Point;
+}
+
+/** Persisted before endpoint references and rendered for backward compatibility. */
+export interface LegacyConnectorEndpoint {
   nodeId: string;
   anchorId: AnchorId;
   /** Normalized position along the selected edge (0..1). Defaults to 0.5. */
   edgePosition?: number;
 }
+
+export type ConnectorEndpoint =
+  | BoundConnectorEndpoint
+  | FreeConnectorEndpoint
+  | LegacyConnectorEndpoint;
 
 export type ConnectorRoutingMode = 'elbow' | 'curve';
 export type ConnectorMarker = 'none' | 'arrow' | 'open-arrow' | 'circle' | 'diamond' | 'bar';
@@ -63,8 +87,10 @@ export interface ConnectorContent {
   labelPosition?: number;
   /** Elbow bend topology in canvas pixels. The generated SVG path is never persisted. */
   waypoints?: Point[];
-  /** Curve handles stored as endpoint-relative vectors so node moves keep the curve stable. */
+  /** Additional on-path curve controls stored as endpoint-relative vectors. */
   curveControlOffsets?: CurveControlOffsets;
+  /** Curve midpoint stored relative to the midpoint between the two endpoint references. */
+  curveMidpointOffset?: Point;
   cornerRadius?: number;
   style?: {
     stroke?: string;
