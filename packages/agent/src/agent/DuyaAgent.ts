@@ -238,7 +238,7 @@ export class duyaAgent {
   private visionClient?: LLMClient; // Optional vision model client
   private visionConfig?: import('../types.js').VisionConfig; // Vision model configuration
   private blockedDomains: string[] = [];
-  private browserBackendMode: 'auto' | 'extension' | 'built-in' = 'auto';
+  private browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
   private researchMemoryRuntime: ResearchMemory;
   private mcpManager: MCPManager | null = null;
   /**

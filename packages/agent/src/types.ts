@@ -303,8 +303,8 @@ export interface AgentOptions {
   visionConfig?: VisionConfig;
   /** Blocked domains for browser tool */
   blockedDomains?: string[];
-  /** Browser backend mode: 'auto' | 'extension' | 'built-in' */
-  browserBackendMode?: 'auto' | 'extension' | 'built-in';
+  /** Browser backend mode: 'auto' | 'extension' | 'built-in' | 'human-like' */
+  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
   /** Language preference for agent responses (e.g. 'Chinese', 'English') */
   language?: string;
   /** Default workspace directory for permission checking. Defaults to ~/.duya/workspace */
