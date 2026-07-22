@@ -1,5 +1,5 @@
 import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot } from "..//types/conductor";
-import type { ConnectorEndpoint } from "..//types/canvas-node";
+import type { ConnectorEndpoint, LinkSnapshotMode } from "..//types/canvas-node";
 
 export interface UploadedAsset {
   assetId: string;
@@ -46,6 +46,14 @@ function getConductorAPI() {
 
     uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }): Promise<UploadedAsset> =>
       conductor.uploadAsset(payload),
+
+    captureLinkSnapshot: (payload: {
+      canvasId: string;
+      elementId: string;
+      url: string;
+      mode: Exclude<LinkSnapshotMode, 'none'>;
+    }): Promise<{ assetId: string; url: string; width: number; height: number }> =>
+      conductor.captureLinkSnapshot(payload),
   };
 }
 
@@ -220,6 +228,17 @@ export async function uploadAsset(canvasId: string, file: File): Promise<Uploade
   if (!api) throw new Error("IPC not available");
   const buffer = await file.arrayBuffer();
   return api.uploadAsset({ canvasId, buffer, fileName: file.name, mimeType: file.type });
+}
+
+export async function captureLinkSnapshot(
+  canvasId: string,
+  elementId: string,
+  url: string,
+  mode: Exclude<LinkSnapshotMode, 'none'>,
+): Promise<{ assetId: string; url: string; width: number; height: number }> {
+  const api = getConductorAPI();
+  if (!api) throw new Error("IPC not available");
+  return api.captureLinkSnapshot({ canvasId, elementId, url, mode });
 }
 
 export { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot };

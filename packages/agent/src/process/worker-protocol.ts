@@ -22,7 +22,7 @@ export interface InitCommand {
   skillPaths?: string[];
   communicationPlatform?: string;
   blockedDomains?: string[];
-  browserBackendMode?: 'auto' | 'extension' | 'built-in';
+  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
   language?: string;
   sandboxEnabled?: boolean;
 }
@@ -93,7 +93,7 @@ export interface CompactCommand {
 export interface ConfigUpdateCommand {
   type: 'config:update';
   sessionId: string;
-  browserBackendMode?: 'auto' | 'extension' | 'built-in';
+  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
   blockedDomains?: string[];
 }
 

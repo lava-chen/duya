@@ -91,10 +91,10 @@ export const LinkCreateDialog: React.FC<LinkCreateDialogProps> = ({ open, onClos
   const selectItem = useCallback((item: SearchItem) => {
     const duya = parseDuyaLink(query);
     const content: LinkContent = duya
-      ? { linkType: duya.linkType, targetId: duya.targetId, title: item.title, expanded: true }
+      ? { linkType: duya.linkType, targetId: duya.targetId, title: item.title, snapshotMode: "none" }
       : item.type === "url"
-        ? { linkType: "url", url: item.subtitle, title: item.title, siteName: domainFromUrl(item.subtitle), expanded: false }
-        : { linkType: item.type, targetId: item.id, title: item.title, description: item.subtitle, expanded: true };
+        ? { linkType: "url", url: item.subtitle, title: item.title, siteName: domainFromUrl(item.subtitle), snapshotMode: "none" }
+        : { linkType: item.type, targetId: item.id, title: item.title, description: item.subtitle, snapshotMode: "none" };
     onConfirm(content);
     onClose();
   }, [onClose, onConfirm, query]);

@@ -48,18 +48,16 @@ function isImage(mimeType: string, fileName: string): boolean {
   return IMAGE_EXTENSIONS.has(ext);
 }
 
-export function uploadAsset(
-  canvasId: string,
-  buffer: ArrayBuffer,
-  fileName: string,
-  mimeType?: string,
-): UploadedAsset {
-  const assetId = randomUUID();
-  // Sanitize file name to avoid path traversal and invalid characters.
-  const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const dir = path.join(app.getPath('userData'), 'conductor-assets', canvasId);
-  fs.mkdirSync(dir, { recursive: true });
+function buildAssetUrl(filePath: string): string {
+  // Build a duya-file:// URL. The protocol handler in main.ts reads the
+  // pathname as an absolute path. Forward-slash separators work on all
+  // platforms; the handler converts them back to the OS separator.
+  return `duya-file:///${filePath.replace(/\\/g, '/')}`;
+}
 
+function writeAssetFile(dir: string, assetId: string, fileName: string, buffer: Buffer | ArrayBuffer, mimeType?: string): UploadedAsset {
+  fs.mkdirSync(dir, { recursive: true });
+  const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
   const filePath = path.join(dir, `${assetId}-${safeFileName}`);
   fs.writeFileSync(filePath, Buffer.from(buffer));
 
@@ -67,17 +65,41 @@ export function uploadAsset(
   const size = buffer.byteLength;
   const kind: 'image' | 'file' = isImage(detectedMime, fileName) ? 'image' : 'file';
 
-  // Build a duya-file:// URL. The protocol handler in main.ts reads the
-  // pathname as an absolute path. Forward-slash separators work on all
-  // platforms; the handler converts them back to the OS separator.
-  const url = `duya-file:///${filePath.replace(/\\/g, '/')}`;
-
   return {
     assetId,
-    url,
+    url: buildAssetUrl(filePath),
     fileName,
     mimeType: detectedMime,
     size,
     kind,
   };
+}
+
+export function uploadAsset(
+  canvasId: string,
+  buffer: Buffer | ArrayBuffer,
+  fileName: string,
+  mimeType?: string,
+): UploadedAsset {
+  const assetId = randomUUID();
+  const dir = path.join(app.getPath('userData'), 'conductor-assets', canvasId);
+  return writeAssetFile(dir, assetId, fileName, buffer, mimeType);
+}
+
+/**
+ * Upload an asset to the project-local `.duya/assets/{canvasId}/` directory.
+ * Falls back to the app userData directory when no project path is provided.
+ */
+export function uploadProjectAsset(
+  canvasId: string,
+  projectPath: string | null | undefined,
+  buffer: Buffer | ArrayBuffer,
+  fileName: string,
+  mimeType?: string,
+): UploadedAsset {
+  const assetId = randomUUID();
+  const dir = projectPath
+    ? path.join(projectPath, '.duya', 'assets', canvasId)
+    : path.join(app.getPath('userData'), 'conductor-assets', canvasId);
+  return writeAssetFile(dir, assetId, fileName, buffer, mimeType);
 }
