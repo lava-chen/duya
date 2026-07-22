@@ -36,6 +36,8 @@ export interface Thread {
   model?: string;
   /** Parent session ID for sub-agent sessions */
   parentId?: string | null;
+  /** Agent profile id (matches db: chat_sessions.agent_profile_id) */
+  agentProfileId?: string | null;
   /** Agent type: 'main' | 'sub-agent' */
   agentType?: string;
   /** Agent name for display */

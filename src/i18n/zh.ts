@@ -8,7 +8,7 @@ const zh: Record<TranslationKey, string> = {
   'nav.mcp': 'MCP',
   'nav.automation': '自动化',
   'nav.agents': 'Agents',
-  'nav.conductor': '指挥台',
+  'nav.conductor': '画布',
   'nav.memory': '记忆',
 
   'sidebar.toggleThemeAria': '切换主题',
@@ -184,6 +184,7 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.running.canvas.applyLayout': '正在应用自动布局…',
   'streaming.toolAction.running.canvas.capture': '正在截取画布画面…',
   'streaming.toolAction.running.canvas.getKnowledge': '正在获取画布设计知识…',
+  'streaming.toolAction.running.canvas.database': '正在更新项目数据库…',
   'streaming.toolAction.done.bash': '已运行',
   'streaming.toolAction.done.cli': '已执行',
   'streaming.toolAction.done.read': '已读',
@@ -214,6 +215,7 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.done.canvas.applyLayout': '已应用自动布局',
   'streaming.toolAction.done.canvas.capture': '已截取画布画面',
   'streaming.toolAction.done.canvas.getKnowledge': '已获取画布设计知识',
+  'streaming.toolAction.done.canvas.database': '已更新项目数据库',
   'streaming.toolAction.body.task.created': '已创建任务 #{id}：{subject}',
   'streaming.toolAction.body.task.completed': '任务 #{id}「{subject}」已完成',
   'streaming.toolAction.body.task.started': '任务 #{id}「{subject}」开始执行',
@@ -255,6 +257,7 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.error.canvas.applyLayout': '应用自动布局失败',
   'streaming.toolAction.error.canvas.capture': '截取画布画面失败',
   'streaming.toolAction.error.canvas.getKnowledge': '获取画布设计知识失败',
+  'streaming.toolAction.error.canvas.database': '更新项目数据库失败',
   // Generic tool group summary (≥2 consecutive tools collapsed into one row).
   // {count} = number of tool calls in that category within the group.
   // Each category gets its own singular + plural template so headers
@@ -1822,7 +1825,9 @@ const zh: Record<TranslationKey, string> = {
   'conductor.toolbar.document': 'Markdown 文档',
   'conductor.toolbar.shape': '图形',
   'conductor.toolbar.text': '文本',
-  'conductor.toolbar.table': '表格',
+    'conductor.toolbar.table': '表格',
+  'conductor.toolbar.database': '数据库',
+  'conductor.toolbar.databaseFolderRequired': '请先将画布绑定到项目文件夹，再创建数据库。',
   'conductor.toolbar.connector': '连接线',
   'conductor.toolbar.media': '媒体',
   'conductor.toolbar.link': '链接',
@@ -1904,6 +1909,17 @@ const zh: Record<TranslationKey, string> = {
   'conductor.document.agentPrompt': '请在当前画布创建一个 Markdown 文档。目标：{prompt}',
   'conductor.document.agentPromptEmpty': '请在当前画布创建一个 Markdown 文档，并先询问我希望这份草稿包含什么内容。',
   'conductor.document.startChatError': '启动文档聊天失败：{error}',
+  'conductor.presentation.label': '画布呈现模式',
+  'conductor.presentation.widgets': '文档',
+  'conductor.presentation.widgetsHint': '在有限工作区中排列文档、表格、链接、文字和媒体',
+  'conductor.presentation.canvas': '画布',
+  'conductor.presentation.canvasHint': '使用无限自由画布',
+  'conductor.presentation.moveWidget': '移动{name}',
+  'conductor.presentation.moveWidgetHandle': '移动组件',
+  'conductor.presentation.moveElement': '移动{name}',
+  'conductor.presentation.moveElementHandle': '移动元素',
+  'conductor.presentation.empty': '画布中还没有元素。',
+  'conductor.presentation.canvasOnly': '另有 {count} 个元素仅在画布模式中显示',
 
   // 元素通用操作
   'conductor.utility.rotate': '旋转 90°',

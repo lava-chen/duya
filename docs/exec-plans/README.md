@@ -33,7 +33,10 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [233-conductor-multi-canvas-management](./active/233-conductor-multi-canvas-management.md) | Agent canvas identity, listing, creation, switching, naming, and durable sidebar/session sync | P0 | In progress |
 | [235-human-like-browser-backend](./active/235-human-like-browser-backend.md) | Human-like browser backend using Midscene.js for visual mouse/keyboard automation | P1 | In progress |
 | [234-canvas-element-editing-and-scene-architecture](./active/234-canvas-element-editing-and-scene-architecture.md) | Capability-driven element editing/toolbars and Agent scene blueprints | P0 | Implementation complete; verification blockers recorded |
+| [235-conductor-finite-widget-layout](./active/235-conductor-finite-widget-layout.md) | Finite document-mode allowlist for document/table/link plus free-positioned text and media | P0 | Phase 1 complete |
+| [236-project-database-element](./active/236-project-database-element.md) | Project-local structured data source, saved table views, canvas database element, and Agent tools | P0 | MVP implemented; verification blockers recorded |
 | [231-cron-automation-ui-runtime-hardening](./active/231-cron-automation-ui-runtime-hardening.md) | Cron creation/editing UX, schedule presets, scheduler startup hardening, and default workspace | P0 | Implementation complete; verification blockers recorded |
+| [237-cron-shared-session](./active/237-cron-shared-session.md) | Cron `session_target='shared'` mode — single persistent session per cron, DB-authoritative history across runs | P0 | Planning |
 
 ### Agent Feature Parity Plans
 

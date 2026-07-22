@@ -123,11 +123,20 @@ function LearningEventCard({
 export function SkillLearningInbox() {
   const { events, loading, markRead } = useSkillLearning();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showReviewHistory, setShowReviewHistory] = useState(false);
   const setActiveThread = useConversationStore((state) => state.setActiveThread);
 
-  const unreadIds = useMemo(
-    () => events.filter((event) => event.read_at === null && event.status !== 'skipped').map((event) => event.id),
+  const publishedEvents = useMemo(
+    () => events.filter((event) => event.status === 'published'),
     [events],
+  );
+  const reviewEvents = useMemo(
+    () => events.filter((event) => event.status !== 'published'),
+    [events],
+  );
+  const unreadIds = useMemo(
+    () => publishedEvents.filter((event) => event.read_at === null).map((event) => event.id),
+    [publishedEvents],
   );
 
   const handleToggle = (event: SkillLearningEvent) => {
@@ -139,28 +148,40 @@ export function SkillLearningInbox() {
     return <div className="rounded-xl border border-border/35 px-4 py-5 text-sm text-muted-foreground">正在读取 Agent 学习动态…</div>;
   }
 
-  if (events.length === 0) {
+  if (publishedEvents.length === 0) {
     return (
       <SettingsCard variant="highlight" divided={false}>
         <div className="flex items-start gap-3 px-4 py-4">
           <MagicWandIcon size={18} className="mt-0.5 text-accent" />
           <div>
-            <p className="text-sm font-medium text-foreground">Agent 会从复杂工作中沉淀可复用的方法。</p>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">当它创建或更新 Skill 后，结果、来源和评估依据会在这里保留。</p>
+            <p className="text-sm font-medium text-foreground">还没有新的 Skill。</p>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">Agent 只会在确实沉淀出可复用方法后，把它显示在这里。</p>
+            {reviewEvents.length > 0 && (
+              <button
+                type="button"
+                className="mt-3 text-sm font-medium text-accent hover:underline"
+                onClick={() => setShowReviewHistory((current) => !current)}
+                aria-expanded={showReviewHistory}
+              >
+                {showReviewHistory ? '收起评审记录' : `查看 ${reviewEvents.length} 条评审记录`}
+              </button>
+            )}
           </div>
         </div>
+        {showReviewHistory && <ReviewHistory events={reviewEvents} onOpenSession={setActiveThread} />}
       </SettingsCard>
     );
   }
 
   return (
     <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">已沉淀 {publishedEvents.length} 个可用 Skill</p>
       {unreadIds.length > 0 && (
         <button type="button" onClick={() => void markRead(unreadIds)} className="text-xs font-medium text-accent hover:underline">
           将 {unreadIds.length} 条未读动态标为已读
         </button>
       )}
-      {events.map((event) => (
+      {publishedEvents.map((event) => (
         <LearningEventCard
           key={event.id}
           event={event}
@@ -168,6 +189,40 @@ export function SkillLearningInbox() {
           onToggle={() => handleToggle(event)}
           onOpenSession={() => void setActiveThread(event.session_id)}
         />
+      ))}
+      {reviewEvents.length > 0 && (
+        <button
+          type="button"
+          className="text-sm font-medium text-muted-foreground hover:text-foreground"
+          onClick={() => setShowReviewHistory((current) => !current)}
+          aria-expanded={showReviewHistory}
+        >
+          {showReviewHistory ? '收起评审记录' : `查看 ${reviewEvents.length} 条未产生 Skill 的评审`}
+        </button>
+      )}
+      {showReviewHistory && <ReviewHistory events={reviewEvents} onOpenSession={setActiveThread} />}
+    </div>
+  );
+}
+
+function ReviewHistory({
+  events,
+  onOpenSession,
+}: {
+  events: SkillLearningEvent[];
+  onOpenSession: (sessionId: string) => void;
+}) {
+  return (
+    <div className="divide-y divide-border/35 border-t border-border/35 px-4">
+      {events.map((event) => (
+        <div key={event.id} className="flex items-center gap-3 py-3 text-sm">
+          <ClockCounterClockwiseIcon size={16} className="shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 text-muted-foreground">本次评审未沉淀新的可用 Skill</span>
+          <button type="button" onClick={() => onOpenSession(event.session_id)} className="shrink-0 text-sm text-accent hover:underline">
+            查看会话
+          </button>
+          <span className="shrink-0 text-xs text-muted-foreground">{formatRelativeTime(event.created_at)}</span>
+        </div>
       ))}
     </div>
   );
