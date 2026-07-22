@@ -170,8 +170,17 @@ export async function createConnector(
   canvasId: string,
   source: ConnectorEndpoint,
   target: ConnectorEndpoint,
-  curvature?: number,
-  style?: Record<string, unknown>,
+  options: {
+    curvature?: number;
+    routingMode?: 'elbow' | 'curve';
+    label?: string;
+    strokeStyle?: 'solid' | 'dashed' | 'dotted';
+    lineWidth?: number;
+    color?: string;
+    startMarker?: string;
+    endMarker?: string;
+    style?: Record<string, unknown>;
+  } = {},
 ): Promise<any> {
   const api = getConductorAPI();
   if (!api) return;
@@ -180,8 +189,7 @@ export async function createConnector(
     canvasId,
     source,
     target,
-    curvature,
-    style,
+    ...options,
   });
 }
 

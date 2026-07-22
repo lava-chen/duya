@@ -81,7 +81,7 @@ The canvas is a working surface, not an image generator. Default to independentl
 - native/text: config = { text?: string, content?: string }
 - native/document: config = { title?: string, markdown?: string }
 - native/table: config = { title?: string, headers?: string[], rows?: string[][], headerFill?: '#RRGGBB', headerTextColor?: '#RRGGBB', borderColor?: '#RRGGBB' }. Keep tables compact: at most 12 columns and 50 rows.
-- native/connector: config = { source: elementId, target: elementId, routingMode?: 'elbow'|'curve', label?: string, color?: string, strokeStyle?: 'solid'|'dashed'|'dotted', startMarker?: 'none'|'arrow'|'open-arrow'|'circle'|'diamond'|'bar', endMarker?: same }
+- native/connector: config = { source: {kind:'bound', nodeId, bindingPoint:{u,v}} | {kind:'free', point:{x,y}}, target: same, routingMode?: 'elbow'|'curve', label?: string, color?: string, strokeStyle?: 'solid'|'dashed'|'dotted', startMarker?: 'none'|'arrow'|'open-arrow'|'circle'|'diamond'|'bar', endMarker?: same }. Bound u/v are normalized positions inside the node; free x/y are canvas pixels.
 - native/image: config = { url: string, fileName?: string }
 - native/file: config = { fileName: string, mimeType?: string, url?: string, pdfPage?: number, pdfZoom?: number }. Preserve PDF reading state unless the user asks to change it.
 - native/link: config = { linkType: 'url'|'session'|'canvas', url?, targetId?, title?, description? }
