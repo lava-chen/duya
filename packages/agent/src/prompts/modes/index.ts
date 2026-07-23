@@ -29,7 +29,7 @@ export const DEFAULT_PROMPT_PROFILE: PromptProfile = { base: 'full' }
 export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig> = {
   full: {
     enable: [
-      'intro', 'system', 'projectGrounding', 'projectContinuity', 'agentsMd',
+      'intro', 'system', 'multiAgentCollaboration', 'projectGrounding', 'projectContinuity', 'agentsMd',
       'taskHandling', 'actions', 'toolUsage', 'toneAndStyle', 'outputEfficiency',
       'visualVerification',
       'memory', 'memoryContent', 'skills', 'mcp', 'sessionGuidance', 'sessionSearch', 'recentSessions',
