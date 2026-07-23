@@ -29,6 +29,7 @@ import { getActionsSection } from './sections/static/actions.js'
 import { getToolUsageSection } from './sections/static/toolUsage.js'
 import { getToneAndStyleSection } from './sections/static/toneAndStyle.js'
 import { getOutputEfficiencySection } from './sections/static/outputEfficiency.js'
+import { getMultiAgentCollaborationSection } from './sections/static/multiAgentCollaboration.js'
 import {
   getProjectContinuitySection,
   getProjectGroundingSection,
@@ -97,6 +98,7 @@ export class GeneralPromptSystem extends PromptSystem {
     const sections: PromptSection[] = [
       m('intro', () => getIntroSection(context)),
       m('system', () => getSystemSection(context)),
+      m('multiAgentCollaboration', () => getMultiAgentCollaborationSection(context)),
       m('projectGrounding', () => getProjectGroundingSection(context)),
       m('projectContinuity', () => getProjectContinuitySection(context)),
       m('generalTaskGuidance', () => getGeneralTaskGuidanceSection(context)),
