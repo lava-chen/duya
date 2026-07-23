@@ -26,7 +26,20 @@ export const definition: Tool = {
     '  - When the user asks "how does it look"\n' +
     '  - After major rearrangement\n\n' +
     'Do NOT use to read text content (use canvas_list_elements instead).\n' +
-    'Token cost is significant — limit to once per 5 turns.',
+    'Token cost is significant — limit to once per 5 turns. Tip: pair with ' +
+    'canvas_auto_layout to put the area you want to inspect into the ' +
+    'viewport before calling this tool with scope="region".\n\n' +
+    'If the canvas is still loading (the StartupLanding boot overlay is ' +
+    'still visible, or the renderer has not yet mounted `.canvas-area`), ' +
+    'the tool returns an error rather than a file. Retry after the canvas ' +
+    'is visibly rendered.\n\n' +
+    'The `region` parameter (only used when scope="region") is expressed in ' +
+    '**viewport screen pixels relative to the visible .canvas-area top-left ' +
+    'corner** — i.e. exactly the coordinates that html2canvas expects. The ' +
+    'rectangle is clipped to the visible viewport; if x or y falls outside ' +
+    'the viewport, the renderer will reject the request with a clear error. ' +
+    'Always ensure the area you want to capture is currently panned/zoomed ' +
+    'into view before calling this tool.',
   input_schema: {
     type: 'object',
     properties: {
@@ -50,7 +63,13 @@ export const definition: Tool = {
           w: { type: 'number' },
           h: { type: 'number' },
         },
-        description: 'When scope is "region", the rectangle in canvas pixel coordinates.',
+        description:
+          'When scope is "region", the rectangle in viewport screen pixels ' +
+          'relative to the visible .canvas-area top-left corner. ' +
+          'x and y must be >= 0, w and h must be >= 1. The rectangle is ' +
+          'clipped to the visible viewport — make sure the area you want to ' +
+          'capture is currently panned/zoomed into view (call ' +
+          'canvas_auto_layout first if unsure).',
       },
     },
     required: [],

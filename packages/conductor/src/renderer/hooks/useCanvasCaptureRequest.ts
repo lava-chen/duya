@@ -70,9 +70,15 @@ export function useCanvasCaptureRequest(activeCanvasId?: string | null): void {
         );
 
         try {
-          const viewportEl = document.querySelector<HTMLElement>(".canvas-area");
-          const canvasInnerEl = document.querySelector<HTMLElement>(".canvas-inner");
+          // Wait for the canvas viewport to actually be mounted and to have
+          // finished its first paint. Without this gate, capture called
+          // during boot (StartupLanding overlay still up) or right after
+          // ConductorView exits its `isLoading` placeholder produces a PNG
+          // containing the splash screen or empty stage instead of the
+          // rendered canvas — silently invalidating visual verification.
+          await waitForCanvasViewport(req.requestId);
 
+          const viewportEl = document.querySelector<HTMLElement>(".canvas-area");
           if (!viewportEl) {
             send({
               requestId: req.requestId,
@@ -80,6 +86,7 @@ export function useCanvasCaptureRequest(activeCanvasId?: string | null): void {
             });
             return;
           }
+          const canvasInnerEl = document.querySelector<HTMLElement>(".canvas-inner");
 
           const result = await captureCanvasView(viewportEl, canvasInnerEl, {
             scope: req.scope as "viewport" | "element" | "region",
@@ -139,6 +146,75 @@ export function useCanvasCaptureRequest(activeCanvasId?: string | null): void {
       if (unsubscribe) unsubscribe();
     };
   }, [activeCanvasId]);
+}
+
+/**
+ * Resolves once `.canvas-area` exists in the DOM and `.canvas-inner`
+ * has finished its first paint — i.e. the agent will not receive a
+ * splash-screen PNG when calling `canvas_capture`.
+ *
+ * Returns a sentinel error when the viewport never becomes ready
+ * within the timeout so the caller can surface a clear message
+ * instead of saving a useless file.
+ *
+ * The "ready" condition is: `.canvas-area` is present AND
+ * `.canvas-inner` exists. An empty `.canvas-inner` is OK — that is
+ * the legitimate "canvas has no elements" state, not a loading state.
+ * The earlier failure modes we are protecting against are:
+ *   1. `.canvas-area` not yet mounted (ConductorView still in
+ *      `isLoading` shimmer-text placeholder);
+ *   2. `.canvas-area` mounted but `.canvas-inner` not yet rendered
+ *      (React commit in flight);
+ *   3. StartupLanding overlay still painting on top.
+ *
+ * Two `requestAnimationFrame`s after both `.canvas-area` and
+ * `.canvas-inner` are present give the browser a chance to flush
+ * layout and paint before html2canvas walks the DOM.
+ */
+const VIEWPORT_READY_TIMEOUT_MS = 4000;
+const VIEWPORT_POLL_INTERVAL_MS = 50;
+const POST_READY_FRAMES = 2;
+
+export async function waitForCanvasViewport(
+  requestId?: string,
+): Promise<void> {
+  const deadline = Date.now() + VIEWPORT_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const viewportEl = document.querySelector<HTMLElement>(".canvas-area");
+    const innerEl = document.querySelector<HTMLElement>(".canvas-inner");
+    if (viewportEl && innerEl) {
+      // Yield to the browser so layout and paint actually finish before
+      // html2canvas reads the DOM. Two rAFs is the empirical minimum
+      // for React commit + first paint of a freshly-mounted subtree.
+      for (let i = 0; i < POST_READY_FRAMES; i++) {
+        await nextAnimationFrame();
+      }
+      return;
+    }
+    await sleep(VIEWPORT_POLL_INTERVAL_MS);
+  }
+  throw new Error(
+    `Canvas viewport never became ready within ${VIEWPORT_READY_TIMEOUT_MS}ms ` +
+      (requestId ? `(requestId=${requestId}). ` : "") +
+      `The conductor view is likely still in the StartupLanding loading ` +
+      `overlay or the canvas store has not yet hydrated. ` +
+      `Retry canvas_capture after the canvas is visible.`,
+  );
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+    } else {
+      // Node test environment without rAF — fall back to a microtask.
+      setTimeout(resolve, 16);
+    }
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 interface CaptureRequest {

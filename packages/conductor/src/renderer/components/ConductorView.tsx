@@ -16,6 +16,7 @@ import { registerAllElements } from "../elements";
 import "../widgets";
 import { RefinePanel } from "..//refine/RefinePanel";
 import { useCanvasCaptureRequest } from "../hooks/useCanvasCaptureRequest";
+import { useCanvasManagement } from "../hooks/useCanvasManagement";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { CanvasPosition } from "..//types/conductor";
 
@@ -55,6 +56,13 @@ export function ConductorView() {
   // a shared hook so both this view and SidebarConductorView respond
   // to canvas_capture tool calls regardless of which one is mounted.
   useCanvasCaptureRequest(activeCanvasId);
+
+  // Subscribe to canvas lifecycle broadcasts (create / switch / rename)
+  // so the renderer's canvas list stays in sync with what the agent
+  // sees. Without this, canvas_manage create looks successful but the
+  // renderer's `canvases` is stale and follow-up tools target a canvas
+  // the renderer cannot see.
+  useCanvasManagement();
 
   useEffect(() => {
     let cancelled = false;
@@ -146,7 +154,9 @@ export function ConductorView() {
         {/* Header with Canvas Selector */}
         <div className="absolute top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-2">
           <CanvasSelector />
-          <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
+          {import.meta.env.DEV && (
+            <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
+          )}
         </div>
 
         {uiError && (
