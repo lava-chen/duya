@@ -4,13 +4,29 @@ import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl } f
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
 
-// Clickable inline image: renders as a thumbnail in the message stream and
-// opens the existing lightbox modal on click. External https/http URLs load
-// directly via the Electron renderer (no proxy, no download).
+// Inline media: renders <img> thumbnails that open the lightbox on click,
+// or <video controls> elements for common video extensions so the same
+// `![alt](url)` syntax handles both. External URLs load directly via the
+// Electron renderer; local files use absolute paths.
+const VIDEO_EXT_RE = /\.(mp4|webm|mov|ogg|m4v)(?:\?|#|$)/i;
+
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const [open, setOpen] = useState(false);
   if (!src) return null;
   const altText = alt ?? '';
+
+  if (VIDEO_EXT_RE.test(src)) {
+    return (
+      <video
+        controls
+        preload="metadata"
+        className="markdown-video"
+        aria-label={altText || 'video'}
+      >
+        <source src={src} />
+      </video>
+    );
+  }
 
   return (
     <>

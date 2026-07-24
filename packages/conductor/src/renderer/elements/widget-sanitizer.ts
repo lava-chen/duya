@@ -323,7 +323,7 @@ export function buildReceiverSrcdoc(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline' ${SCRIPT_SRC_ALLOWLIST}; connect-src 'none'; img-src 'self' duya-file: data: blob: https:;">
+<meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline' ${SCRIPT_SRC_ALLOWLIST}; connect-src 'none'; img-src 'self' data: blob: https:;">
 ${cdnScriptsHtml}
 <style>
   *, *::before, *::after { box-sizing: border-box; }

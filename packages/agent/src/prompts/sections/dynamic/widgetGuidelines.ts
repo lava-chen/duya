@@ -29,24 +29,14 @@ This is YOUR decision — no hook or middleware triggers it automatically. Modul
 - Text explanations go in regular response text, not inside widget_code
 - Each diagram is one tool call; interleave multiple calls with explanatory text
 
-## Embedding images inside widgets
-When you need to display any image file inside a widget (chart output, screenshots, photos, generated images):
+## Widget images
 
-1. ALWAYS use the \`duya-file://\` protocol with an absolute path
-2. ALWAYS use forward slashes in the path, even on Windows
-3. NEVER use relative paths — they will not render in the widget iframe
+Widget images must use \`https:\` or \`data:\` URLs only. The widget
+iframe's Content-Security-Policy blocks \`duya-file://\`, \`file://\`,
+and bare relative paths. To embed a generated image, encode it as a
+data URL or host it on a CDN the widget allowlist permits.
 
-Correct examples:
-- Windows: \`<img src="duya-file:///C:/Users/alice/project/output.png" alt="Chart">\`
-- macOS: \`<img src="duya-file:////Users/alice/project/output.png" alt="Chart">\`
-- Linux: \`<img src="duya-file:////home/alice/project/output.png" alt="Chart">\`
-
-Incorrect (will fail):
-- \`<img src="Attachments/image.png">\`
-- \`<img src="./output.png">\`
-- \`<img src="file:///C:/Users/...">\`
-
-Images embedded this way are interactive: users can click any image to open a full-screen preview lightbox.
+Clicking an image inside a widget opens DUYA's lightbox.
 
 ## Visual self-review (automatic)
 After every \`show_widget\` call, the platform automatically renders your widget headlessly and asks the configured vision model to critique it. The critique arrives as a second \`tool_result\` block with the same tool_call_id — it does NOT block streaming, so the widget still appears instantly for the user.
