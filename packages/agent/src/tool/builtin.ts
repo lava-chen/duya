@@ -51,6 +51,7 @@ import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
 import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
 import { ResearchMemory } from '../research-memory/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
+import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
 
 type ConductorToolProvider = {
   CANVAS_ORCHESTRATOR_TOOLS: import('../types.js').Tool[];
@@ -268,17 +269,13 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
 - Keep widgets self-contained - embed all data and styling inline
 - Specify fixed dimensions (e.g., width=600, height=400) for reliability
 - Avoid external API calls from widgets to prevent network errors
-- **Embedding images**: To include any image file (chart output, screenshot, photo, etc.) in a widget, you MUST use the custom protocol with an absolute path: <img src="duya-file:///ABSOLUTE_PATH">. Use forward slashes in the path. Examples:
-  - Windows: <img src="duya-file:///C:/Users/name/output.png">
-  - macOS/Linux: <img src="duya-file:////Users/name/output.png">
-  - NEVER use relative paths (e.g., src="Attachments/image.png") — they will not render
-  - The platform provides a click-to-preview lightbox for all embedded images`,
+- **Embedding images**: Widget images must use \`https:\` or \`data:\` URLs only. The widget iframe's Content-Security-Policy blocks local file paths (\`duya-file://\`, \`file://\`, bare relative paths). To embed a generated image, encode it as a data URL or host it temporarily on a CDN the widget allowlist permits. Clicking an embedded image opens DUYA's lightbox.`,
       input_schema: {
         type: 'object',
         properties: {
           widget_code: {
             type: 'string',
-            description: 'Raw HTML/SVG/JS content. For SVG diagrams, use injected CSS classes as defined in the design modules (loaded via read_module). Output order: <style> → content HTML → <script>. When including images, use duya-file:/// protocol with absolute paths.',
+            description: 'Raw HTML/SVG/JS content. For SVG diagrams, use injected CSS classes as defined in the design modules (loaded via read_module). Output order: <style> → content HTML → <script>. For images, use https: or data: URLs only — local file paths are blocked by the widget CSP.',
           },
         },
         required: ['widget_code'],
@@ -320,6 +317,13 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // when `applyModes` resolves the conductor modifier in `DuyaAgent.streamChat`.
   // The `conductorMode` option is now read from `ChatOptions` by the mode
   // registry, not by `createBuiltinRegistry`.
+
+  // Plan 241 Phase 1: ToolSearchTool must be in the registry so the LLM
+  // can call it. It's always exposed (Phase 1 does not yet filter by
+  // exposeMode). The actual `setSearchFn` injection lives in
+  // `DuyaAgent.streamChat` because it needs access to the per-call
+  // registry (including MCP-injected tools).
+  registry.register(toolSearchTool.toTool(), toolSearchTool);
 
   return registry;
 }
