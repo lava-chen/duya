@@ -4,6 +4,7 @@
  */
 
 import { ToolRegistry } from './registry.js';
+import type { ToolMetaInput } from './registry.js';
 import type { ToolUseContext } from '../types.js';
 
 // Import all tools
@@ -131,66 +132,66 @@ export function createBuiltinRegistry(
   }
 
   // Bash tool - class implements both Tool and ToolExecutor
-  registry.register(bashTool.toTool(), bashTool);
+  registry.register(bashTool.toTool(), bashTool, { exposeMode: 'always' });
   if (hasShellFamily('powershell')) {
-    registry.register(powerShellTool.toTool(), powerShellTool);
+    registry.register(powerShellTool.toTool(), powerShellTool, { exposeMode: 'always' });
   }
 
   // Read tool
   const readTool = new ReadTool();
-  registry.register(readTool.toTool(), readTool);
+  registry.register(readTool.toTool(), readTool, { exposeMode: 'always' });
 
   // Write tool - class implements both Tool and ToolExecutor
-  registry.register(writeTool.toTool(), writeTool);
+  registry.register(writeTool.toTool(), writeTool, { exposeMode: 'always' });
 
   // Grep tool
-  registry.register(grepTool.toTool(), grepTool);
+  registry.register(grepTool.toTool(), grepTool, { exposeMode: 'always' });
 
   // Edit tool
   const editToolInstance = new EditTool();
-  registry.register(editToolInstance.toTool(), editToolInstance);
+  registry.register(editToolInstance.toTool(), editToolInstance, { exposeMode: 'always' });
 
   // Glob tool
   const globToolInstance = new GlobTool();
-  registry.register(globToolInstance.toTool(), globToolInstance);
+  registry.register(globToolInstance.toTool(), globToolInstance, { exposeMode: 'always' });
 
   // SubagentTool - for spawning sub-agents
-  registry.register(subagentTool.toTool(), subagentTool);
+  registry.register(subagentTool.toTool(), subagentTool, { exposeMode: 'always' });
 
   // Team tools - for multi-agent team coordination
-  registry.register(teamCreateTool, teamCreateTool);
-  registry.register(teamDeleteTool, teamDeleteTool);
+  registry.register(teamCreateTool, teamCreateTool, { exposeMode: 'discoverable' });
+  registry.register(teamDeleteTool, teamDeleteTool, { exposeMode: 'discoverable' });
 
   // Phase 5: Task tool (unified)
-  registry.register(taskTool.toTool(), taskTool);
+  registry.register(taskTool.toTool(), taskTool, { exposeMode: 'always' });
 
   // Phase 5: Worktree tools
-  registry.register(enterWorktreeTool, enterWorktreeTool);
-  registry.register(exitWorktreeTool, exitWorktreeTool);
+  registry.register(enterWorktreeTool, enterWorktreeTool, { exposeMode: 'always' });
+  registry.register(exitWorktreeTool, exitWorktreeTool, { exposeMode: 'always' });
 
   // Phase 5: Plan mode tools
-  registry.register(enterPlanModeTool, enterPlanModeTool);
-  registry.register(exitPlanModeTool, exitPlanModeTool);
-  registry.register(switchModeTool, switchModeTool);
+  registry.register(enterPlanModeTool, enterPlanModeTool, { exposeMode: 'always' });
+  registry.register(exitPlanModeTool, exitPlanModeTool, { exposeMode: 'always' });
+  registry.register(switchModeTool, switchModeTool, { exposeMode: 'always' });
 
   // Phase 5: MCP resource tools
-  registry.register(listMcpResourcesTool, listMcpResourcesTool);
-  registry.register(readMcpResourceTool, readMcpResourceTool);
+  registry.register(listMcpResourcesTool, listMcpResourcesTool, { exposeMode: 'discoverable' });
+  registry.register(readMcpResourceTool, readMcpResourceTool, { exposeMode: 'discoverable' });
 
   // Phase 5: Web tools
   // Note: webSearchTool and webFetchTool are disabled (placeholders for future redesign)
   // registry.register(webSearchTool, webSearchTool);
   // registry.register(webFetchTool, webFetchTool);
-  registry.register(browserTool.toTool(), browserTool);
+  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'always' });
 
   // Phase 5: Other tools
-  registry.register(skillTool, skillTool);
-  registry.register(briefTool, briefTool);
-  registry.register(sessionSearchTool.toTool(), sessionSearchTool);
+  registry.register(skillTool, skillTool, { exposeMode: 'discoverable' });
+  registry.register(briefTool, briefTool, { exposeMode: 'discoverable' });
+  registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'always' });
   // Inter-agent communication tool — message another session's agent
-  registry.register(messageSessionTool.toTool(), messageSessionTool);
+  registry.register(messageSessionTool.toTool(), messageSessionTool, { exposeMode: 'discoverable' });
   const visionTool = new VisionTool();
-  registry.register(visionTool, visionTool);
+  registry.register(visionTool, visionTool, { exposeMode: 'discoverable' });
   // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
   // See `docs/exec-plans/active/99-duya-cli-argv-and-deprecate-cron-tool.md`.
 
@@ -205,36 +206,38 @@ export function createBuiltinRegistry(
   // pairing, plus the legacy read actions) are all reachable
   // through `duya_cli { argv: ["config", …] }` /
   // `duya_cli { argv: ["mcp", …] }`.
-  registry.register(duyaCliTool.toTool(), duyaCliTool);
+  registry.register(duyaCliTool.toTool(), duyaCliTool, { exposeMode: 'discoverable' });
 
   // Memory tool
   const memoryTool = getMemoryTool();
-  registry.register(memoryTool.toTool(), memoryTool);
+  registry.register(memoryTool.toTool(), memoryTool, { exposeMode: 'always' });
 
   // AskUserQuestion tool - prompt the user with multi-choice questions
-  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool);
+  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'always' });
 
   // ModuleTool - load design specification modules on demand
   // Agent calls read_module BEFORE show_widget or canvas tools to get style guides
-  registry.register(moduleTool.toTool(), moduleTool);
+  registry.register(moduleTool.toTool(), moduleTool, { exposeMode: 'discoverable' });
 
   // Skill management tool - for creating/updating skills
-  registry.register(skillManageTool, skillManageTool);
+  registry.register(skillManageTool, skillManageTool, { exposeMode: 'discoverable' });
 
   // Wiki tools - for searching and reading wiki knowledge base
   // Only register if wiki agent experimental mode is enabled
   if (options?.wikiAgentEnabled) {
-    registry.register(wikiSearchTool.toTool(), wikiSearchTool);
-    registry.register(wikiReadTool.toTool(), wikiReadTool);
+    registry.register(wikiSearchTool.toTool(), wikiSearchTool, { exposeMode: 'discoverable' });
+    registry.register(wikiReadTool.toTool(), wikiReadTool, { exposeMode: 'discoverable' });
   }
 
   // Bundled plugins - register plugin-owned tools via a single pluggable entrypoint
   registerBundledAgentPlugins(registry, options);
 
-  // Research memory tools are a profile subsystem (not plugin-owned assets)
+  // Research memory tools are a profile subsystem (not plugin-owned assets).
+  // All seven are research-only — default to discoverable so the LLM
+  // only loads them when a research task is underway.
   const researchMemory = new ResearchMemory();
   for (const tool of researchMemory.tools) {
-    registry.register(tool.toTool(), tool);
+    registry.register(tool.toTool(), tool, { exposeMode: 'discoverable' });
   }
 
   // show_widget tool - pass-through for generative UI widgets
@@ -309,7 +312,8 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
           pendingExtraResult: safePromise,
         };
       },
-    }
+    },
+    { exposeMode: 'discoverable' }
   );
 
   // Plan 224 Phase 3: canvas conductor tools are no longer registered
@@ -323,7 +327,7 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // exposeMode). The actual `setSearchFn` injection lives in
   // `DuyaAgent.streamChat` because it needs access to the per-call
   // registry (including MCP-injected tools).
-  registry.register(toolSearchTool.toTool(), toolSearchTool);
+  registry.register(toolSearchTool.toTool(), toolSearchTool, { exposeMode: 'always' });
 
   return registry;
 }

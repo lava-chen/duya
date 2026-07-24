@@ -18,6 +18,23 @@ export interface ToolExecutor {
 }
 
 /**
+ * Plan 241: how a tool is exposed to the LLM. `always` (default) =
+ * schema is always in the request's tool list; `discoverable` =
+ * reachable via `tool_search` but not in the default tool list;
+ * `internal` = not exposed to the LLM at all (debug helpers etc.).
+ */
+export type ExposeMode = 'always' | 'discoverable' | 'internal';
+
+/**
+ * Plan 241: persisted registration metadata. Forwarded to the
+ * third argument of `ToolRegistry.register`. All fields optional.
+ */
+export interface ToolMetaInput {
+  inputSchemaSummary?: string;
+  exposeMode?: ExposeMode;
+}
+
+/**
  * 注册的工具项
  */
 interface RegisteredTool {
@@ -32,6 +49,18 @@ interface RegisteredTool {
    * and used by `replaceByOwner` to scope MCP cleanup.
    */
   owner: 'non-mcp' | 'mcp';
+  /**
+   * Plan 241: search-time metadata. Persisted at registration so
+   * `tool_search` can surface `inputSchemaSummary` / `exposeMode`
+   * without re-deriving from `Tool.definition`.
+   *
+   * Optional: tools registered without explicit meta (Phase 1
+   * call sites, MCP tools via `registerWithKey`, plugin-injected
+   * tools) keep `meta === undefined` and are treated as
+   * `exposeMode: 'always'` by the prompt builder and the search
+   * scorer — preserves backward compatibility.
+   */
+  meta?: { inputSchemaSummary?: string; exposeMode?: ExposeMode };
 }
 
 /**
@@ -41,6 +70,17 @@ export interface ToolMeta {
   name: string;
   description: string;
   category: string;
+  /**
+   * Optional human-readable summary of the tool's input schema.
+   * Set when the registry persists metadata via the extended register
+   * variants; otherwise undefined (caller-safe).
+   */
+  inputSchemaSummary?: string;
+  /**
+   * How this tool is exposed to the LLM (Plan 241). Defaults to
+   * undefined which is treated as 'always' by the prompt builder.
+   */
+  exposeMode?: ExposeMode;
 }
 
 /**
@@ -51,9 +91,24 @@ export class ToolRegistry {
 
   /**
    * 注册一个工具
+   *
+   * Plan 241: `meta` is optional Plan 241 search metadata
+   * (`inputSchemaSummary`, `exposeMode`). Pass it from builtin
+   * registration sites so `tool_search` can surface the schema
+   * summary and the prompt builder can filter discoverable tools
+   * out of the default LLM request's tool list.
    */
-  register(definition: Tool, executor: ToolExecutor): void {
-    this.tools.set(definition.name, { definition, executor, owner: 'non-mcp' });
+  register(
+    definition: Tool,
+    executor: ToolExecutor,
+    meta?: ToolMetaInput,
+  ): void {
+    this.tools.set(definition.name, {
+      definition,
+      executor,
+      owner: 'non-mcp',
+      meta: meta ? { ...meta } : undefined,
+    });
   }
 
   /**
@@ -259,6 +314,26 @@ export class ToolRegistry {
    */
   getExecutor(name: string): ToolExecutor | undefined {
     return this.tools.get(name)?.executor;
+  }
+
+  /**
+   * Plan 241: get persisted registration metadata. Returns the
+   * shape stored via the third `meta` argument of `register`, or
+   * `undefined` for tools registered without explicit metadata.
+   */
+  getMeta(name: string): { inputSchemaSummary?: string; exposeMode?: ExposeMode } | undefined {
+    return this.tools.get(name)?.meta;
+  }
+
+  /**
+   * Plan 241: convenience accessor — returns the effective expose
+   * mode for a registered tool. Defaults to `'always'` for tools
+   * registered without explicit metadata (preserves Phase 1
+   * behaviour for MCP tools, plugin tools, and the ToolSearchTool
+   * itself).
+   */
+  getExposeMode(name: string): ExposeMode {
+    return this.tools.get(name)?.meta?.exposeMode ?? 'always';
   }
 
   /**
