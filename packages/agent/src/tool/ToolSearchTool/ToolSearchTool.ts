@@ -4,9 +4,17 @@ import type { ToolExecutor, ToolMeta } from '../registry.js';
 export const TOOL_SEARCH_NAME = 'tool_search';
 
 export const DESCRIPTION = `Search available tools by name, description, keyword, or category.
-Use when you need a tool for a specific operation but don't see it listed.
-Common high-frequency tools are listed directly; specialized tools can be
-discovered on-demand via this tool.`;
+Use when you need a tool for a specific operation but don't see it listed in this turn.
+
+Each returned result includes a 'description' (what the tool does) and 'inputSchemaSummary' (a
+concise description of the required/optional parameters). You can call the tool directly using
+those parameters — no further setup required. Common high-frequency tools (Read, Bash, Edit,
+Glob, Grep, Agent, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode, EnterWorktree,
+ExitWorktree, SwitchMode, browser, Memory, SessionSearch, ToolSearch) are listed directly;
+specialized tools (canvas_*, research_memory:*, wiki_*, MessageSession, Brief, duya_cli,
+show_widget, vision_analyze, read_module, anchor_memory, skill_manage, ListMcpResources,
+ReadMcpResource) can be discovered on-demand via this tool. Plan 241 Phase 1: inputSchemaSummary
+may be null when the registry has not yet persisted schema metadata (will be filled in Phase 2).`;
 
 export class ToolSearchTool implements Tool, ToolExecutor {
   readonly name = TOOL_SEARCH_NAME;
@@ -73,6 +81,8 @@ export class ToolSearchTool implements Tool, ToolExecutor {
             name: r.name,
             description: r.description,
             category: r.category,
+            inputSchemaSummary: r.inputSchemaSummary ?? null,
+            exposeMode: r.exposeMode ?? null,
           })),
           count: results.length,
         }),

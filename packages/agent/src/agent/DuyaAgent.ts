@@ -145,6 +145,9 @@ import { applyModes, collectActiveModes } from '../modes/apply-modes.js';
 
 import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
+import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
+import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
+import { harvestDiscoveredTools } from './tool-search-discovery.js';
 import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
 import type { CompactOptions } from '../compact/types.js';
@@ -754,6 +757,17 @@ export class duyaAgent {
 
     const { tools: baseTools, registry, agentDefinitions } = await this._resolveTools(options, appliedProfile);
     let tools = baseTools;
+
+    // Plan 241 Phase 1: wire tool_search to this registry so it can list
+    // every tool currently registered (including MCP-injected ones).
+    // The single ToolSearchTool instance is shared across the agent
+    // process; the most recently set registry wins (acceptable for the
+    // sequential streamChat model — concurrent streams would need a
+    // per-call registry override, planned for Phase 2).
+    toolSearchTool.setSearchFn((query, limit) =>
+      searchToolsFromRegistry(registry, query, limit),
+    );
+
     // Diagnostic: worker uses console.error for stderr (stdout is JSON-RPC).
     // eslint-disable-next-line no-console
     console.error(`[Agent-Process] streamChat tools (${tools.length}): conductorMode=${options?.conductorMode}, agentProfileId=${options?.agentProfileId}, mode=${options?.mode}, hasCanvasCreate=${tools.some(t => t.name === 'canvas_create_element')}`);
@@ -874,6 +888,12 @@ export class duyaAgent {
     const maxTurns = options?.maxTurns ?? 100;
     let runtimePromptMessageId: string | null = null;
 
+    // Plan 241 Phase 3: tools discovered via `tool_search` during this
+    // streamChat call are added to the next turn's tool list so the LLM
+    // can invoke them without searching again. Set is local to this call,
+    // so it is GC'd when streamChat finishes (no cross-session pollution).
+    const discoveredTools: Set<string> = new Set();
+
     // Generate a unique seq_index for this streamChat call
     // All messages created in this call (including multi-turn) will share this seq_index
     // This allows the UI to group all related messages into a single "round"
@@ -886,6 +906,43 @@ export class duyaAgent {
     while (!this.abortController.signal.aborted) {
       turnCount++;
       const turnStartTime = Date.now();
+
+      // Plan 241 Phase 3: surface tools previously discovered via
+      // `tool_search` so the LLM can call them on this turn. The
+      // base tool list (built by `_resolveTools` + `applyModes`) does
+      // not include discoverable tools by default; this loop
+      // merges in the discovered ones once per turn.
+      //
+      // We mutate the local `tools` array (which `toolUseContext`,
+      // `_buildSystemPrompt`, and the LLM client all consume) so the
+      // schema is visible to the next LLM request. No provider-level
+      // change required.
+      if (discoveredTools.size > 0) {
+        const visible = new Set(tools.map((t) => t.name));
+        let added = 0;
+        for (const name of discoveredTools) {
+          if (visible.has(name)) continue;
+          const def = registry.getTool(name);
+          if (!def) {
+            // Tool was discovered but is no longer registered (MCP
+            // server disconnected, plugin uninstalled, etc.). Skip
+            // silently rather than throwing — failing here would
+            // abort a streamChat that was working a moment ago.
+            logger.warn(
+              `[Agent] Plan 241 Phase 3: discovered tool '${name}' no longer registered, skipping`,
+            );
+            continue;
+          }
+          tools = [...tools, def];
+          visible.add(name);
+          added++;
+        }
+        if (added > 0) {
+          logger.info(
+            `[Agent] Turn ${turnCount}: Plan 241 Phase 3 added ${added} discovered tools to LLM request`,
+          );
+        }
+      }
 
       // Plan 224 Phase 3: re-evaluate function-form mode prompt prefixes
       // each turn so mode state that mutates during the stream (e.g.
@@ -1315,6 +1372,25 @@ export class duyaAgent {
             logger.debug(
               `[Agent] Turn ${turnCount}: getRemainingResults completed, toolResultMessageCount=${toolResultMessageCount}`
             );
+
+            // Plan 241 Phase 3: scan the tool_results we just appended
+            // to `messages` for `tool_search` payloads and surface the
+            // discovered tool names to the next turn's tool list.
+            //
+            // We re-scan `messages` from the end rather than threading
+            // a separate collector through `getRemainingResults` —
+            // simpler and avoids changing the executor's public surface.
+            // The cost is O(N) over the new tool_result batch, which
+            // is small (typically 1-3 per turn).
+            if (toolResultMessageCount > 0) {
+              const newToolResults = messages.slice(-toolResultMessageCount);
+              const addedCount = harvestDiscoveredTools(newToolResults, discoveredTools);
+              if (addedCount > 0) {
+                logger.info(
+                  `[Agent] Turn ${turnCount}: Plan 241 Phase 3 harvested ${addedCount} tool name(s) from tool_search results; will surface in next turn`,
+                );
+              }
+            }
 
             // widgetStyleHistory and canvasFreshness are stable references
             // injected into toolUseContext; canvas tools mutate them in
@@ -1763,8 +1839,28 @@ export class duyaAgent {
         }
       );
     }
+    // Plan 241 Phase 2: filter by exposeMode BEFORE the Layer 0/1/2
+    // filter pipeline. Discoverable tools (default for canvas_*,
+    // research_memory:*, TeamCreate/Delete, MCP resource tools,
+    // messageSession, vision_analyze, show_widget, read_module,
+    // anchor_memory, skill_manage, wiki_*, duya_cli, Brief, and any
+    // future MCP tools) are reachable via tool_search but never
+    // appear in the LLM request's default tool list.
+    //
+    // tool_search itself stays in the visible set — otherwise LLM
+    // has no entry point for discovery.
     const allTools = registry.getAllTools();
-    let tools: Tool[] = allTools;
+    let tools: Tool[] = allTools.filter((t) => {
+      const mode = registry.getExposeMode(t.name);
+      return mode !== 'internal';
+    });
+    const beforeExposeFilterCount = allTools.length;
+    const afterExposeFilterCount = tools.length;
+    if (beforeExposeFilterCount !== afterExposeFilterCount) {
+      logger.info(
+        `[Agent] streamChat: Plan 241 Phase 2 exposeMode filter applied, ${afterExposeFilterCount}/${beforeExposeFilterCount} tools exposed`,
+      );
+    }
 
     // Layer 0: caller-supplied allowlist (interagent minimal mode)
     if (options?.allowedTools?.length) {
@@ -2098,6 +2194,13 @@ export class duyaAgent {
       }
     );
     this.registerMCPTools(toolRegistry);
+
+    // Plan 241 Phase 1: wire tool_search to the orchestrator's registry
+    // so it sees the same tool surface that the orchestrator's main loop
+    // dispatches against.
+    toolSearchTool.setSearchFn((query, limit) =>
+      searchToolsFromRegistry(toolRegistry, query, limit),
+    );
 
     // Plan 224 Phase 3: if a modifier mode (conductor) is active alongside
     // this orchestrator mode (research), inject the modifier's tools into
