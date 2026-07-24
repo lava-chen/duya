@@ -39,6 +39,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [238-tool-history-integrity](./active/238-tool-history-integrity.md) | Strict provider-safe tool round ordering, durable message sequence, and legacy history repair | P0 | Implementation complete; live Electron verification pending |
 | [239-canvas-tool-find-empty-space-and-capture-region](./active/239-canvas-tool-find-empty-space-and-capture-region.md) | `canvas_find_empty_space` returns fully-empty rectangles (closest to canvas center) instead of bin-pack overlaps; `canvas_capture` `scope:'region'` documents and clips viewport-pixel coordinates with clear errors | P0 | Implementation complete; UI Electron verification pending |
 | [240-canvas-capture-splash-and-manage-broadcast](./active/240-canvas-capture-splash-and-manage-broadcast.md) | `canvas_capture` waits for first paint before screenshotting (no more splash-screen PNGs); renderer subscribes to `conductor:canvas:changed` so `canvas_manage create/switch/rename` actually update the visible canvas list | P0 | Implementation complete; live Electron verification pending |
+| [241-on-demand-tool-discovery](./active/241-on-demand-tool-discovery.md) | `tool_search` 接入 + schema 摘要 + 内置工具分档 + dispatch 循环动态注入三阶段 (Phase 1/2/3 全部完成) | P1 | Phase 1/2/3 ✅ |
 | [237-cron-shared-session](./active/237-cron-shared-session.md) | Cron `session_target='shared'` mode — single persistent session per cron, DB-authoritative history across runs | P0 | Planning |
 
 ### Agent Feature Parity Plans
@@ -118,6 +119,20 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [214-agent-core-audit](./active/214-agent-core-audit.md) | Agent Core Audit — full read-only audit of agent runtime, IPC, renderer, DB, lifecycle, packaging. Phased: Phase 1 audit done, Phase 2 gated by user. | P0 | Phase 1 ✅ (audit only), Phase 2 ⏳ awaiting confirmation |
 | [222-interagent-message-session](./active/222-interagent-message-session.md) | Inter-Agent Communication — MessageSession tool for cross-session agent Q&A with cycle detection and timeout | P1 | Phase 1-9 ✅ |
 | [226-mcp-security-layer-hardening](./active/226-mcp-security-layer-hardening.md) | MCP Security Layer Hardening — env allowlist + secret sanitization + prompt injection scan + sampling rate limiter (hermes-agent alignment) | P1 | Phase 1-2 ✅, 2.5 deferred |
+
+### Memory v2 Control Plane (Shadow Mode)
+
+> Design doc: [docs/design-docs/2026-07-24-memory-architecture-v2-design.md](../../design-docs/2026-07-24-memory-architecture-v2-design.md)
+>
+> Parent design is the v2 revision (job_status 拆出 / source version / lease heartbeat+CAS / memory_entries 实体 / schema 修正 / projects workspace root / 取消根级 summary / provenance 下沉 / extractor 保时序 / scheduler 长在 main / projection outbox). Phase 1 ships in **shadow mode** — v2 writes only to its own SQLite + projection files; the existing `MemoryManager` / `MemoryReviewService` / Plan 104 hooks continue to serve the user unchanged. Migration to dual-write or full takeover is decided in a future plan after 4 weeks of shadow data.
+
+| Plan | Description | Priority | Status |
+| ------ | ------------ | -------- | ------ |
+| [301-memory-v2-phase-1a-schema-projects-catalog](./active/301-memory-v2-phase-1a-schema-projects-catalog.md) | SQLite schema v2 (12 tables) + `db.ts` + migration runner + `ProjectResolver` (workspace > git root > parent scan > cwd) + `RolloutCatalog` indexer (jsonl → catalog) | P0 | Planning |
+| [302-memory-v2-phase-1a2-lease-heartbeat-cas](./active/302-memory-v2-phase-1a2-lease-heartbeat-cas.md) | `lease.ts`: acquire / heartbeat / CAS complete (vs. token / heartbeat / source version) / fail + backoff / retire at ≥10 attempts. Concurrency-correct, idempotency-token-aware. | P0 | Planning |
+| [303-memory-v2-phase-1a3-projection-outbox](./active/303-memory-v2-phase-1a3-projection-outbox.md) | `outbox.ts` (DB ↔ file atomicity via outbox sweeper, allowlisted paths, symlink-safe) + `reconcile.ts` (startup rebuild from DB). Migration 0003 adds `content_hash_at_write`. | P0 | Planning |
+| [304-memory-v2-phase-1b-extractor](./active/304-memory-v2-phase-1b-extractor.md) | Stage 1 extractor: `compactMessages` (chronological budgeted, preserves corrections/acceptances/exit codes/final artifacts per D9) + `prompt.ts` (enforces per-candidate provenance, blocks external→preference per D8) + `writer.ts` (Windows-safe filename per D11, credential redaction) + `extractor.ts` (lease → compact → LLM → parse → complete). | P0 | Planning |
+| [305-memory-v2-phase-1c-worker-main-process-e2e](./active/305-memory-v2-phase-1c-worker-main-process-e2e.md) | Long-lived `memory-worker.ts` in Electron main process; `DuyaAgent.startup()` fire-and-forget wakeup IPC; reconcile + outbox sweeper wiring; shadow-mode e2e suite (MockLLM, 10 tests); 30-min real-session manual validation; env-gated by `DUYA_MEMORY_V2_ENABLED` (default **off** until promotion plan). | P0 | Planning |
 
 ### Canvas V2 Whimsical 风格重设计
 
