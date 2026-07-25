@@ -66,7 +66,7 @@ export function AgentsSection() {
   const [styleFormName, setStyleFormName] = useState("");
   const [styleFormDescription, setStyleFormDescription] = useState("");
   const [styleFormPrompt, setStyleFormPrompt] = useState("");
-  const [styleFormKeepCoding, setStyleFormKeepCoding] = useState(true);
+  const [styleFormKeepCoding, setStyleFormKeepCoding] = useState(false);
   const [styleSaving, setStyleSaving] = useState(false);
   const [styleError, setStyleError] = useState<string | null>(null);
 
@@ -150,7 +150,7 @@ export function AgentsSection() {
     setStyleFormName("");
     setStyleFormDescription("");
     setStyleFormPrompt("");
-    setStyleFormKeepCoding(true);
+    setStyleFormKeepCoding(false);
     setStyleError(null);
     setIsCreatingStyle(true);
     setEditingStyle(null);
@@ -160,7 +160,7 @@ export function AgentsSection() {
     setStyleFormName(style.name);
     setStyleFormDescription(style.description || "");
     setStyleFormPrompt(style.prompt);
-    setStyleFormKeepCoding(style.keepCodingInstructions !== false);
+    setStyleFormKeepCoding(style.keepCodingInstructions === true);
     setStyleError(null);
     setEditingStyle(style);
     setIsCreatingStyle(false);

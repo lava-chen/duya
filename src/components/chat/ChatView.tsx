@@ -64,10 +64,10 @@ const NOOP_CLOSE_PANEL = () => {};
 const ACTIVE_PARENT_PHASES = new Set<string>([
   'starting',
   'streaming',
+  'tool_use',
   'awaiting_permission',
   'persisting',
 ]);
-const STOP_PARENT_PHASES = new Set<string>(['completed', 'error', 'idle']);
 
 function WorkspaceComposerLayer({
   expanded,
@@ -591,32 +591,37 @@ export function ChatView({
     if (!parentSessionId) return;
 
     let parentPhase: string = 'idle';
-    const unsubPhase = subscribeToPhase(parentSessionId, (phase) => {
-      parentPhase = phase;
-    });
-
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-    pollTimer = setInterval(() => {
-      // Stop polling the moment the parent leaves an active phase — we
-      // no longer need fresh sub-agent messages, and continuing to call
-      // loadThreadMessages would re-render the entire MessageList every
-      // 3s for no benefit. Sets are hoisted at module scope so the
-      // callback doesn't allocate them every tick.
-      if (STOP_PARENT_PHASES.has(parentPhase)) {
-        if (pollTimer) {
-          clearInterval(pollTimer);
-          pollTimer = null;
+    const stopPolling = () => {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+
+    const startPolling = () => {
+      if (pollTimer || !ACTIVE_PARENT_PHASES.has(parentPhase)) return;
+      pollTimer = setInterval(() => {
+        if (!ACTIVE_PARENT_PHASES.has(parentPhase)) {
+          stopPolling();
+          return;
         }
-        return;
-      }
-      if (ACTIVE_PARENT_PHASES.has(parentPhase)) {
         loadThreadMessagesRef.current(sessionId);
+      }, 3000);
+    };
+
+    const unsubPhase = subscribeToPhase(parentSessionId, (phase) => {
+      parentPhase = phase;
+      if (ACTIVE_PARENT_PHASES.has(parentPhase)) {
+        startPolling();
+      } else {
+        stopPolling();
       }
-    }, 3000);
+    });
 
     return () => {
-      if (pollTimer) clearInterval(pollTimer);
+      stopPolling();
       unsubPhase();
     };
   }, [sessionId, parentSessionId]);

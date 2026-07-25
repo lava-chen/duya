@@ -105,12 +105,16 @@ export function renderFlatActions(
         out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
       } else {
         const seg = segments[segIdx];
-        if (seg.kind === 'single' && seg.tool === action.tool) {
-          const isLastRunning = !seg.tool.result;
+        if (
+          seg.kind === 'single' &&
+          seg.entry.kind === 'tool' &&
+          seg.entry.tool === action.tool
+        ) {
+          const isLastRunning = !seg.entry.tool.result;
           out.push(
             <ToolActionRow
               key={`tool-${toolIdx}`}
-              tool={seg.tool}
+              tool={seg.entry.tool}
               streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
               agentProgressEvents={agentProgressEvents}
             />,
@@ -122,34 +126,26 @@ export function renderFlatActions(
             out.push(
               <Group
                 key={`group-${toolIdx}`}
-                tools={seg.tools}
+                entries={seg.entries}
                 flat
                 streamingToolOutput={streamingToolOutput}
                 agentProgressEvents={agentProgressEvents}
               />,
             );
-            toolIdx += seg.tools.length;
+            toolIdx += seg.entries.filter((e) => e.kind === 'tool').length;
           } else {
             // single fallback (shouldn't reach here)
             out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
             toolIdx++;
           }
           segIdx++;
-          // After rendering a group, the remaining tools in the group are
-          // already shown inside it. Skip past the next (groupSize - 1)
-          // tool actions in `actions` so they aren't re-rendered as
-          // standalone rows. Non-tool actions encountered in between are
-          // still rendered in their original position.
-          const groupSize = seg.kind === 'group' ? seg.tools.length : 1;
-          let toolsToSkip = groupSize - 1;
-          while (toolsToSkip > 0 && i + 1 < actions.length) {
-            i++;
-            if (actions[i].kind === 'tool') {
-              toolsToSkip--;
-            } else {
-              out.push(renderActionItem(actions[i], i, isStreaming, i === lastTextIdx));
-            }
-          }
+          // After rendering a group, advance past the rest of its
+          // entries in `actions` so they aren't re-rendered as
+          // standalone rows. A group's entries map 1:1 to positions
+          // in `actions` (segmenter never includes text/widget inside
+          // a group), so we can jump straight by entries.length.
+          const segSize = seg.kind === 'group' ? seg.entries.length : 1;
+          i = Math.min(i + segSize - 1, actions.length - 1);
         }
       }
     } else {
@@ -161,7 +157,7 @@ export function renderFlatActions(
 
 // For the indented body, we want to preserve the original action order
 // (thinking → tool → text → widget …). Walk `actions` and emit either
-// a grouped render unit (≥2 tool calls) or the original action item.
+// a grouped render unit (≥2 entries) or the original action item.
 export function renderOrderedBody(
   actions: ActionItem[],
   segments: Segment[],
@@ -181,7 +177,11 @@ export function renderOrderedBody(
         out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
       } else {
         const seg = segments[segIdx];
-        if (seg.kind === 'single' && seg.tool === action.tool) {
+        if (
+          seg.kind === 'single' &&
+          seg.entry.kind === 'tool' &&
+          seg.entry.tool === action.tool
+        ) {
           out.push(renderSegment(seg, [`tool-${toolIdx}`], lastRunningTool, streamingToolOutput, agentProgressEvents));
           toolIdx++;
           segIdx++;
@@ -190,28 +190,20 @@ export function renderOrderedBody(
           out.push(
             renderSegment(
               seg,
-              seg.tools.map((_t, k) => `tool-${toolIdx + k}`),
+              seg.entries.map((_e, k) => `entry-${toolIdx + k}`),
               lastRunningTool,
               streamingToolOutput,
               agentProgressEvents,
             ),
           );
-          toolIdx += seg.tools.length;
+          toolIdx += seg.entries.filter((e) => e.kind === 'tool').length;
           segIdx++;
-          // After rendering a group, the remaining tools in the group are
-          // already shown inside it. Skip past the next (groupSize - 1)
-          // tool actions in `actions` so they aren't re-rendered as
-          // standalone rows. Non-tool actions encountered in between are
-          // still rendered in their original position.
-          let toolsToSkip = seg.tools.length - 1;
-          while (toolsToSkip > 0 && i + 1 < actions.length) {
-            i++;
-            if (actions[i].kind === 'tool') {
-              toolsToSkip--;
-            } else {
-              out.push(renderActionItem(actions[i], i, isStreaming, i === lastTextIdx));
-            }
-          }
+          // After rendering a group, advance past the rest of its
+          // entries in `actions` (segmenter never includes text/widget
+          // inside a group, so entries map 1:1 to positions in
+          // `actions`).
+          const segSize = seg.entries.length;
+          i = Math.min(i + segSize - 1, actions.length - 1);
         } else {
           // defensive — render as a single
           out.push(renderSegment(seg, [`tool-${toolIdx}`], lastRunningTool, streamingToolOutput, agentProgressEvents));
@@ -234,20 +226,29 @@ function renderSegment(
   agentProgressEvents: AgentProgressEventWithMeta[] | undefined,
 ): React.ReactNode {
   if (seg.kind === 'single') {
-    const isLastRunning = lastRunningTool?.id === seg.tool.id;
+    if (seg.entry.kind === 'tool') {
+      const isLastRunning = lastRunningTool?.id === seg.entry.tool.id;
+      return (
+        <ToolActionRow
+          key={keys[0]}
+          tool={seg.entry.tool}
+          streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
+          agentProgressEvents={agentProgressEvents}
+        />
+      );
+    }
     return (
-      <ToolActionRow
+      <ThinkingRow
         key={keys[0]}
-        tool={seg.tool}
-        streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
-        agentProgressEvents={agentProgressEvents}
+        content={seg.entry.content}
+        isStreaming={seg.entry.isStreaming}
       />
     );
   }
   return (
     <Group
       key={keys.join('-')}
-      tools={seg.tools}
+      entries={seg.entries}
       streamingToolOutput={streamingToolOutput}
       agentProgressEvents={agentProgressEvents}
     />
@@ -285,12 +286,17 @@ export function computeSegmentActionKeys(segments: Segment[]): Array<{ segment: 
   const out: Array<{ segment: Segment; keys: string[] }> = [];
   let toolIdx = 0;
   for (const seg of segments) {
-    const count = seg.kind === 'single' ? 1 : seg.tools.length;
+    // Group keys: one per entry (entry-N). Single keys: a single
+    // tool-N (we still use tool-* for backward compat with downstream
+    // consumers like ToolActionsGroup's StreamingActionsBody, which
+    // assumes a 1:1 mapping between segments and tool indices).
+    const isGroup = seg.kind === 'group';
+    const count = isGroup ? seg.entries.length : 1;
     const keys: string[] = [];
     for (let k = 0; k < count; k++) {
-      keys.push(`tool-${toolIdx}`);
-      toolIdx++;
+      keys.push(isGroup ? `entry-${toolIdx + k}` : `tool-${toolIdx}`);
     }
+    if (!isGroup) toolIdx++;
     out.push({ segment: seg, keys });
   }
   return out;

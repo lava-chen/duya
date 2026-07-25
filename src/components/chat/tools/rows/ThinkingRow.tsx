@@ -1,17 +1,23 @@
 // ThinkingRow — collapsible row for the agent's "thinking" content.
 //
-// While streaming, the collapsed row shows a live preview of the actual
-// thinking text (paced by the adaptive typewriter) instead of a generic
-// "Thinking..." label. Clicking the row expands the full content inside a
-// left-bordered block. For stable rows we still prefer an explicit bold
-// span or heading as the summary, falling back to a one-line preview.
+// Collapsed header shows a short preview (bold or heading extracted
+// from the content, otherwise a 120-char trimmed snippet) via the
+// shared ActionRowChrome so the chrome matches every other tool row.
+//
+// Expanded view replaces the header preview with the full content
+// inside a `.tool-card` panel — the same surface used by BashToolRow,
+// FileEditToolRow, etc. — and clamps the inner scroll container at
+// `max-h-[160px]` so a long thought doesn't push the chat out of
+// view. While streaming the typewriter paces the preview in the
+// collapsed header (matches the previous behaviour); on expand the
+// full stream is shown.
 
 'use client';
 
 import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { BrainIcon, CaretRightIcon } from '@/components/icons';
 import { Shimmer } from '../../Shimmer';
+import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { useAdaptiveTypewriter } from '@/hooks/useAdaptiveTypewriter';
 
 interface ThinkingRowProps {
@@ -53,29 +59,25 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
 
   return (
     <div>
-      <button
-        type="button"
+      <ActionRowChrome
+        status="success"
+        // Thinking has no per-state verb ("已思考"/"Thought" feel
+        // redundant next to the content itself). Leave verbKey off
+        // so the chrome collapses verb + caret directly against the
+        // preview, matching the surrounding text alignment.
+        canExpand
+        expanded={expanded}
+        hovered={hovered}
         onClick={() => setExpanded((prev) => !prev)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="flex items-center gap-2 px-2 py-1 min-h-[28px] text-xs hover:bg-muted/30 rounded-sm transition-colors w-full"
       >
-        {hovered ? (
-          <CaretRightIcon
-            size={14}
-            className={`shrink-0 text-muted-foreground transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
-          />
+        {isStreaming && summary === 'Thinking...' ? (
+          <Shimmer duration={1.5}>{summary}</Shimmer>
         ) : (
-          <BrainIcon size={14} className="shrink-0 text-muted-foreground" />
+          summary
         )}
-        <span className="font-mono text-muted-foreground/60 truncate flex-1 text-left">
-          {isStreaming && summary === 'Thinking...' ? (
-            <Shimmer duration={1.5}>{summary}</Shimmer>
-          ) : (
-            summary
-          )}
-        </span>
-      </button>
+      </ActionRowChrome>
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div
@@ -85,8 +87,11 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="ml-4 px-2 py-1.5 text-xs text-muted-foreground/70 border-l-2 border-border/30 prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
-              {displayedContent}
+            <div className="mx-1 my-1 rounded-lg tool-card p-3 max-h-40 overflow-auto">
+              <div className="text-[11px] tool-card-muted font-medium mb-1.5">思考</div>
+              <div className="text-xs text-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
+                {displayedContent}
+              </div>
             </div>
           </motion.div>
         )}

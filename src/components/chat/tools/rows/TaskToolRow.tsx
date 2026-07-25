@@ -4,22 +4,14 @@
 // and the chrome summary / verb are dispatched from that action so the
 // header reads as natural language instead of dumping the raw JSON.
 //
-// Two behaviours beyond rendering:
-//
-// 1. On a successful `create` or `update` with status `completed`, the
-//    TaskDrawer auto-opens so the user sees the new state without
-//    needing to dig into the result. The trigger is one-shot per row
-//    via a ref — subsequent re-renders (e.g. when the same task tool
-//    stream updates the input) don't re-fire the drawer.
-//
-// 2. The expanded card shows the parsed JSON envelope so the user can
-//    inspect the resulting `task` payload (id, status, etc.) without
-//    expanding into the same mono dump the catch-all renderer used to
-//    produce.
+// The expanded card shows the parsed JSON envelope so the user can
+// inspect the resulting `task` payload (id, status, etc.) without
+// expanding into the same mono dump the catch-all renderer used to
+// produce.
 
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   CheckCircleIcon,
@@ -28,7 +20,6 @@ import {
 } from '@/components/icons';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus } from '../registry';
-import { setTaskDrawerOpen } from '@/components/layout/task-drawer-store';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import type { ToolAction, ToolStatus } from '../types';
@@ -47,15 +38,13 @@ function parseTaskInput(input: unknown): {
   action: TaskAction | null;
   subject: string;
   taskId: string;
-  status: string;
 } {
   const inp = (input || {}) as Record<string, unknown>;
   const rawAction = typeof inp.action === 'string' ? inp.action : '';
   const action = TASK_ACTIONS.has(rawAction as TaskAction) ? (rawAction as TaskAction) : null;
   const subject = typeof inp.subject === 'string' ? inp.subject.trim() : '';
   const taskId = typeof inp.taskId === 'string' ? inp.taskId.trim() : '';
-  const status = typeof inp.status === 'string' ? inp.status : '';
-  return { action, subject, taskId, status };
+  return { action, subject, taskId };
 }
 
 function verbKeyFor(action: TaskAction | null, status: ToolStatus): TranslationKey {
@@ -144,7 +133,7 @@ export function TaskToolRow({ tool }: TaskToolRowProps) {
   const [hovered, setHovered] = useState(false);
   const status = getStatus(tool);
   const hasResult = tool.result !== undefined && tool.result !== '';
-  const { action, subject, taskId, status: inputStatus } = useMemo(
+  const { action, subject, taskId } = useMemo(
     () => parseTaskInput(tool.input),
     [tool.input],
   );
@@ -152,22 +141,6 @@ export function TaskToolRow({ tool }: TaskToolRowProps) {
     () => parseResultForDisplay(tool.result, action),
     [tool.result, action],
   );
-
-  // Auto-open the TaskDrawer on a successful `create` or `update`
-  // (status: completed) so the user sees the new task without having to
-  // find the result manually. The ref ensures we only fire once per row
-  // — re-renders from streaming updates won't re-open the drawer if it
-  // was already opened, then closed, by the user.
-  const autoOpenedRef = useRef(false);
-  useEffect(() => {
-    if (autoOpenedRef.current) return;
-    if (!hasResult || status === 'error') return;
-    const isCreate = action === 'create';
-    const isCompleteUpdate = action === 'update' && inputStatus === 'completed';
-    if (!isCreate && !isCompleteUpdate) return;
-    autoOpenedRef.current = true;
-    setTaskDrawerOpen(true);
-  }, [hasResult, status, action, inputStatus]);
 
   // Header summary — reuse the registry's getSummary so the chrome
   // header and the row body stay byte-identical.

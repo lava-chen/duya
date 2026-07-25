@@ -190,7 +190,8 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     // per-action wording so the chrome reads as natural language
     // ("已创建 设计杂志风页面结构") instead of the raw JSON dump
     // ("task {\"action\":\"create\", ...}"). Each task gets routed to
-    // TaskToolRow which auto-opens the TaskDrawer on create / complete.
+    // TaskToolRow which renders the chrome summary and the JSON
+    // envelope body.
     match: (n) => n.toLowerCase() === 'task',
     icon: ListChecksIcon,
     labelKey: null,

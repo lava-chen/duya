@@ -117,6 +117,7 @@ function messagesEqual(a: Message[] | undefined, b: Message[] | undefined): bool
 const LazyMessageRow = React.memo(function LazyMessageRow({
   group,
   scrollRoot,
+  rowDomId,
   isAlwaysRendered,
   cachedHeight,
   onHeightChange,
@@ -125,6 +126,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
 }: {
   group: GroupedMessage;
   scrollRoot: React.RefObject<HTMLDivElement | null>;
+  rowDomId: string;
   isAlwaysRendered: boolean;
   cachedHeight?: number;
   onHeightChange: (messageId: string, height: number) => void;
@@ -189,6 +191,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   return (
     <div
       ref={rowRef}
+      id={rowDomId}
       data-message-id={group.message.id}
       className="transition-[min-height] duration-200 ease-out"
       style={shouldRender ? undefined : { minHeight: estimatedHeight }}
@@ -208,6 +211,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   prev.group.message === next.group.message
   && messagesEqual(prev.group.mergedMessages, next.group.mergedMessages)
   && toolResultsEqual(prev.group.toolResults, next.group.toolResults)
+  && prev.rowDomId === next.rowDomId
   && prev.isAlwaysRendered === next.isAlwaysRendered
   && prev.cachedHeight === next.cachedHeight
   && prev.isEditable === next.isEditable
@@ -221,7 +225,6 @@ interface MessageNavigatorItem {
   assistantPreview: string;
   files: string[];
   hiddenFileCount: number;
-  isActive: boolean;
 }
 
 function roleOrder(message: Message): number {
@@ -379,7 +382,7 @@ function findAssistantGroupForUser(groupedMessages: GroupedMessage[], startIndex
   return null;
 }
 
-function buildNavigatorItems(groupedMessages: GroupedMessage[], activeMessageId: string | null): MessageNavigatorItem[] {
+function buildNavigatorItems(groupedMessages: GroupedMessage[]): MessageNavigatorItem[] {
   const items: MessageNavigatorItem[] = [];
 
   for (let index = 0; index < groupedMessages.length; index += 1) {
@@ -419,7 +422,6 @@ function buildNavigatorItems(groupedMessages: GroupedMessage[], activeMessageId:
       assistantPreview: compactPreview(assistantText, assistantFallback),
       files: allFiles.slice(0, 3),
       hiddenFileCount: Math.max(0, allFiles.length - 3),
-      isActive: activeMessageId === group.message.id,
     });
   }
 
@@ -428,9 +430,11 @@ function buildNavigatorItems(groupedMessages: GroupedMessage[], activeMessageId:
 
 function ChatMessageNavigator({
   items,
+  activeMessageId,
   onJump,
 }: {
   items: MessageNavigatorItem[];
+  activeMessageId: string | null;
   onJump: (messageId: string) => void;
 }) {
   if (items.length <= 3) return null;
@@ -441,7 +445,7 @@ function ChatMessageNavigator({
         <button
           key={item.id}
           type="button"
-          className={`chat-message-navigator-dot ${item.isActive ? 'active' : ''}`}
+          className={`chat-message-navigator-dot ${item.targetMessageId === activeMessageId ? 'active' : ''}`}
           onClick={() => onJump(item.targetMessageId)}
           aria-label={`Jump to message ${index + 1}`}
         >
@@ -698,10 +702,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     return null;
   }, [groupedMessages]);
 
-  const navigatorItems = useMemo(
-    () => buildNavigatorItems(groupedMessages, activeMessageId),
-    [groupedMessages, activeMessageId]
-  );
+  const navigatorItems = useMemo(() => buildNavigatorItems(groupedMessages), [groupedMessages]);
 
   const shouldRenderStreamingMessage = isStreaming;
 
@@ -728,34 +729,23 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
     const containerTop = container.getBoundingClientRect().top;
     const readingLineOffset = 180; // reading position inside the message list viewport
-    const visibleAnchors: { id: string; top: number }[] = [];
+    let bestId: string | null = null;
 
     for (const item of navigatorItems) {
-      const el = container.querySelector(`[data-message-id="${item.targetMessageId}"]`);
-      if (!el) continue;
+      const el = document.getElementById(`message-row-${sessionId}-${item.targetMessageId}`);
+      if (!el || !container.contains(el)) continue;
       const top = el.getBoundingClientRect().top - containerTop;
-      visibleAnchors.push({ id: item.targetMessageId, top });
-    }
-
-    if (visibleAnchors.length === 0) return;
-
-    // Sort by vertical position so we can find the last user message that has
-    // scrolled past the reading line. This correctly attributes long assistant
-    // replies to the user turn that started the round, even when the reply
-    // fills most of the viewport.
-    visibleAnchors.sort((a, b) => a.top - b.top);
-
-    let bestId = visibleAnchors[0].id;
-    for (const anchor of visibleAnchors) {
-      if (anchor.top <= readingLineOffset) {
-        bestId = anchor.id;
+      if (bestId === null) bestId = item.targetMessageId;
+      if (top <= readingLineOffset) {
+        bestId = item.targetMessageId;
       } else {
         break;
       }
     }
 
+    if (bestId === null) return;
     setActiveMessageId(prev => (prev === bestId ? prev : bestId));
-  }, [navigatorItems]);
+  }, [navigatorItems, sessionId]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -786,13 +776,14 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     const container = containerRef.current;
     if (!container) return;
 
-    const el = container.querySelector(`[data-message-id="${messageId}"]`);
-    if (el) {
+    const target = document.getElementById(`message-row-${sessionId}-${messageId}`);
+    if (target && container.contains(target)) {
+      const el = target;
       el.scrollIntoView({ block: 'start', behavior: 'smooth' });
       setActiveMessageId(messageId);
       autoScrollRef.current = false;
     }
-  }, []);
+  }, [sessionId]);
 
   // Scroll to bottom (exposed to parent)
   const scrollToBottom = useCallback(() => {
@@ -841,8 +832,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       if (lastMsg.role === 'user' && userMessageIdRef.current !== lastMsg.id) {
         userMessageIdRef.current = lastMsg.id;
         requestAnimationFrame(() => {
-          const el = container.querySelector(`[data-message-id="${lastMsg.id}"]`);
-          if (el) {
+          const target = document.getElementById(`message-row-${sessionId}-${lastMsg.id}`);
+          if (target && container.contains(target)) {
+            const el = target;
             el.scrollIntoView({ block: 'nearest', behavior: 'instant' as ScrollBehavior });
           } else {
             scrollToBottom();
@@ -861,13 +853,17 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
     prevMessagesLengthRef.current = messages.length;
     wasStreamingRef.current = isStreaming;
-  }, [messages, isStreaming, scrollToBottom]);
+  }, [messages, isStreaming, scrollToBottom, sessionId]);
 
 
 
   return (
     <div ref={containerRef} className="message-list-scroll h-full overflow-y-auto scrollbar-thin pb-32">
-      <ChatMessageNavigator items={navigatorItems} onJump={scrollToMessage} />
+      <ChatMessageNavigator
+        items={navigatorItems}
+        activeMessageId={activeMessageId}
+        onJump={scrollToMessage}
+      />
 
       {hasMore && (
         <div className="flex justify-center p-4">
@@ -889,6 +885,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             key={group.message.id}
             group={group}
             scrollRoot={containerRef}
+            rowDomId={`message-row-${sessionId}-${group.message.id}`}
             isAlwaysRendered={index >= groupedMessages.length - ALWAYS_RENDER_TRAILING_ROWS}
             cachedHeight={rowHeightsRef.current.get(group.message.id)}
             onHeightChange={handleRowHeightChange}

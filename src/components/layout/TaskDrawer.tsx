@@ -4,14 +4,13 @@
 //   - task list state via useTaskList + mutation handlers (optimistic
 //     update + rollback)
 //   - sub-agent data (live SSE via useSubAgentProgress)
-//   - session-derived data: file changes / artifacts / sources
-//   - assembly of 6 section components (no header — the panel starts
+//   - session-derived data: git status / artifacts / sources
+//   - assembly of 5 section components (no header — the panel starts
 //     straight at EnvironmentInfoSection)
 //
 // Sub-panels live in their own files:
-//   ./EnvironmentInfoSection.tsx — session metadata + git-style totals
-//   ./MainAgentSection.tsx       — main-agent profile dropdown
-//   ./SubAgentListSection.tsx    — sub-agent rows + session jump
+//   ./EnvironmentInfoSection.tsx — git-changes row (returns null when not git)
+//   ./AgentListSection.tsx       — sub-agent rows + session jump
 //   ./TaskListSection.tsx        — task rows + status icons
 //   ./SourcesSection.tsx         — attachments / browser URLs / other refs
 //   ./ArtifactsSection.tsx       — files created by the agent
@@ -26,10 +25,10 @@ import { useSubAgentProgress } from '@/hooks/useSubAgentProgress';
 import { useTaskList } from '@/hooks/useTaskList';
 import { useSessionArtifacts } from '@/hooks/useSessionArtifacts';
 import { useSessionSources } from '@/hooks/useSessionSources';
+import { useGitStatus } from '@/hooks/useGitStatus';
 import { setTaskDrawerOpen, useTaskDrawerOpen } from './task-drawer-store';
 import { EnvironmentInfoSection } from './EnvironmentInfoSection';
-import { MainAgentSection } from './MainAgentSection';
-import { SubAgentListSection } from './SubAgentListSection';
+import { AgentListSection } from './AgentListSection';
 import { TaskListSection } from './TaskListSection';
 import { SourcesSection } from './SourcesSection';
 import { ArtifactsSection } from './ArtifactsSection';
@@ -45,8 +44,9 @@ export function TaskDrawer() {
 
   const { tasks, setTasks, loading, fetchTasks } = useTaskList(open ? activeThreadId : null);
   const agents = useSubAgentProgress(activeThreadId ?? "");
-  const { fileChanges, artifacts } = useSessionArtifacts(open ? activeThreadId : null);
+  const { artifacts } = useSessionArtifacts(open ? activeThreadId : null);
   const sources = useSessionSources(open ? activeThreadId : null);
+  const gitStatus = useGitStatus(thread?.workingDirectory ?? null, open);
 
   useEffect(() => {
     if (!open) return;
@@ -121,19 +121,9 @@ export function TaskDrawer() {
           >
             <div className="task-card-list">
               <div className="task-card-list-inner">
-                <EnvironmentInfoSection
-                  title={thread?.title ?? ''}
-                  workingDirectory={thread?.workingDirectory ?? null}
-                  model={thread?.model ?? null}
-                  fileChanges={fileChanges}
-                />
+                <EnvironmentInfoSection gitStatus={gitStatus} />
 
-                <MainAgentSection
-                  sessionId={activeThreadId}
-                  currentProfileId={thread?.agentProfileId ?? null}
-                />
-
-                <SubAgentListSection
+                <AgentListSection
                   agents={agents}
                   onOpen={(sessionId) =>
                     useConversationStore.getState().setActiveThread(sessionId)

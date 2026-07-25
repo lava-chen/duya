@@ -562,7 +562,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         </div>
 
         <div className="sidebar-bottom">
-          {skillLearningUnread > 0 && latestSkillLearning && (
+          {/* Self-improvement badge is a dev-only test feature — hidden in packaged builds. */}
+          {import.meta.env.DEV && skillLearningUnread > 0 && latestSkillLearning && (
             <button
               type="button"
               onClick={() => handleSettingsTabChange('skills')}

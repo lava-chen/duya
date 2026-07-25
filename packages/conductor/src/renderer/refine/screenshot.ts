@@ -129,10 +129,56 @@ export async function captureCanvasView(
       throw new Error("region scope requires region option");
     }
     targetEl = viewportEl;
-    captureX = options.region.x;
-    captureY = options.region.y;
-    captureW = options.region.w;
-    captureH = options.region.h;
+    const viewportRect = viewportEl.getBoundingClientRect();
+    const viewportW = Math.max(0, Math.floor(viewportRect.width));
+    const viewportH = Math.max(0, Math.floor(viewportRect.height));
+
+    const requested = options.region;
+    // Reject obviously-bad inputs up front. The contract is viewport
+    // screen pixels with non-negative origin and positive dimensions.
+    if (
+      !Number.isFinite(requested.x) ||
+      !Number.isFinite(requested.y) ||
+      !Number.isFinite(requested.w) ||
+      !Number.isFinite(requested.h)
+    ) {
+      throw new Error(
+        `region scope received non-finite coords: ${JSON.stringify(requested)}`,
+      );
+    }
+    if (requested.w <= 0 || requested.h <= 0) {
+      throw new Error(
+        `region scope requires positive w/h, got ${requested.w}x${requested.h}`,
+      );
+    }
+    if (requested.x >= viewportW || requested.y >= viewportH) {
+      throw new Error(
+        `region scope starts outside the visible viewport: ` +
+          `requested (x=${requested.x}, y=${requested.y}) vs viewport ` +
+          `${viewportW}x${viewportH}. Pan/zoom the canvas so the area is ` +
+          `in view before calling canvas_capture with scope='region'.`,
+      );
+    }
+
+    // Clip the rectangle to the visible viewport so html2canvas never
+    // receives an off-screen crop (it silently returns a blank image in
+    // that case). Caller learns the actual capture dimensions via the
+    // returned `width` / `height` fields.
+    const clippedX = Math.max(0, Math.floor(requested.x));
+    const clippedY = Math.max(0, Math.floor(requested.y));
+    const clippedW = Math.min(viewportW - clippedX, Math.floor(requested.w));
+    const clippedH = Math.min(viewportH - clippedY, Math.floor(requested.h));
+    if (clippedW <= 0 || clippedH <= 0) {
+      throw new Error(
+        `region scope clipped to zero area: requested ` +
+          `${requested.w}x${requested.h} starting at (${requested.x},${requested.y}) ` +
+          `but viewport is ${viewportW}x${viewportH}.`,
+      );
+    }
+    captureX = clippedX;
+    captureY = clippedY;
+    captureW = clippedW;
+    captureH = clippedH;
   } else {
     // viewport
     targetEl = viewportEl;

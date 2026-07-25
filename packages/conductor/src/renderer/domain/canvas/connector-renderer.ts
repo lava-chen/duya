@@ -92,14 +92,127 @@ function offsetPointAlongDirection(point: Point, direction: Direction, distance:
   };
 }
 
+// Minimum gap (px) between node rects before we trust the dominant axis to
+// pick a side. Below this threshold the rects are nearly overlapping on that
+// axis, so we fall back to the other axis (or to "right" if both are stuck).
+const AUTO_SIDE_AXIS_GAP_PX = 24;
+
+// When picking a side, clamp the in-edge position away from the corners
+// (top-left, top-right, …) so a freshly drawn connector never anchors at a
+// node corner — corners look broken and clip the outgoing stroke.
+const AUTO_EDGE_INSET_MIN = 0.1;
+const AUTO_EDGE_INSET_MAX = 0.9;
+
+/**
+ * Compute a default connector endpoint anchor (side + (u, v)) for a node
+ * whose connector target is `otherRect`. The endpoint:
+ *   - sits on the side of `srcRect` that faces `otherRect` (so the connector
+ *     exits through the near edge, not the far one),
+ *   - along that side, the in-edge position is biased toward the projection
+ *     of `otherRect`'s center so the line runs straight at the partner,
+ *   - clamps the in-edge position to [AUTO_EDGE_INSET_MIN, AUTO_EDGE_INSET_MAX]
+ *     so it never lands at a corner.
+ *
+ * Returns null when `otherRect` is missing — callers should fall back to the
+ * node center in that case.
+ */
+export function computeAutoEndpointAnchor(
+  srcRect: CanvasPixelRect,
+  otherRect?: CanvasPixelRect | null,
+): { side: ConnectorEdge; u: number; v: number } | null {
+  if (!otherRect) return null;
+
+  const srcCx = srcRect.x + srcRect.w / 2;
+  const srcCy = srcRect.y + srcRect.h / 2;
+  const otherCx = otherRect.x + otherRect.w / 2;
+  const otherCy = otherRect.y + otherRect.h / 2;
+
+  const dx = otherCx - srcCx;
+  const dy = otherCy - srcCy;
+
+  const verticalGap = Math.abs(dy) - Math.max(srcRect.h, otherRect.h) / 2;
+  const horizontalGap = Math.abs(dx) - Math.max(srcRect.w, otherRect.w) / 2;
+
+  let side: ConnectorEdge;
+  let u: number;
+  let v: number;
+
+  if (verticalGap >= AUTO_SIDE_AXIS_GAP_PX) {
+    if (dy >= 0) {
+      side = 'bottom';
+      v = AUTO_EDGE_INSET_MAX;
+      const targetX = otherCx;
+      u = srcRect.w > 0
+        ? clampUnitRange((targetX - srcRect.x) / srcRect.w, AUTO_EDGE_INSET_MIN, AUTO_EDGE_INSET_MAX)
+        : 0.5;
+    } else {
+      side = 'top';
+      v = AUTO_EDGE_INSET_MIN;
+      const targetX = otherCx;
+      u = srcRect.w > 0
+        ? clampUnitRange((targetX - srcRect.x) / srcRect.w, AUTO_EDGE_INSET_MIN, AUTO_EDGE_INSET_MAX)
+        : 0.5;
+    }
+  } else if (horizontalGap >= AUTO_SIDE_AXIS_GAP_PX) {
+    if (dx >= 0) {
+      side = 'right';
+      u = AUTO_EDGE_INSET_MAX;
+      const targetY = otherCy;
+      v = srcRect.h > 0
+        ? clampUnitRange((targetY - srcRect.y) / srcRect.h, AUTO_EDGE_INSET_MIN, AUTO_EDGE_INSET_MAX)
+        : 0.5;
+    } else {
+      side = 'left';
+      u = AUTO_EDGE_INSET_MIN;
+      const targetY = otherCy;
+      v = srcRect.h > 0
+        ? clampUnitRange((targetY - srcRect.y) / srcRect.h, AUTO_EDGE_INSET_MIN, AUTO_EDGE_INSET_MAX)
+        : 0.5;
+    }
+  } else {
+    // Rectangles nearly overlap on both axes (source and target stacked or
+    // nearly co-located). Prefer a horizontal exit so the line doesn't pop
+    // straight up/down through both rects.
+    if (dx >= 0) {
+      side = 'right';
+      u = AUTO_EDGE_INSET_MAX;
+      v = 0.5;
+    } else {
+      side = 'left';
+      u = AUTO_EDGE_INSET_MIN;
+      v = 0.5;
+    }
+  }
+
+  return { side, u: clampUnit(u), v: clampUnit(v) };
+}
+
+function clampUnitRange(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return 0.5;
+  if (min > max) return 0.5;
+  return Math.max(min, Math.min(max, value));
+}
+
 export function createBoundConnectorEndpoint(
   point: Point,
   node: CanvasElement,
   allNodes: CanvasElement[],
-  gridPx = CONNECTOR_BINDING_GRID_PX,
+  otherRect?: CanvasPixelRect | null,
 ): Extract<ConnectorEndpoint, { kind: 'bound' }> {
   const rect = getNodePixelRect(node, allNodes);
-  const safeGrid = Math.max(1, gridPx);
+  const anchor = computeAutoEndpointAnchor(rect, otherRect);
+  if (anchor) {
+    return {
+      kind: 'bound',
+      nodeId: node.id,
+      bindingPoint: { u: anchor.u, v: anchor.v },
+    };
+  }
+
+  // No partner known — fall back to where the user clicked inside the node,
+  // snapped to CONNECTOR_BINDING_GRID_PX. Preserves the "click to position"
+  // feel for draft previews when the target is not yet known.
+  const safeGrid = Math.max(1, CONNECTOR_BINDING_GRID_PX);
   const localX = Math.round((point.x - rect.x) / safeGrid) * safeGrid;
   const localY = Math.round((point.y - rect.y) / safeGrid) * safeGrid;
   return {
@@ -116,9 +229,10 @@ export function createConnectorEndpointAtPoint(
   point: Point,
   node: CanvasElement | null,
   allNodes: CanvasElement[],
+  otherRect?: CanvasPixelRect | null,
 ): ConnectorEndpoint {
   return node
-    ? createBoundConnectorEndpoint(point, node, allNodes)
+    ? createBoundConnectorEndpoint(point, node, allNodes, otherRect)
     : { kind: 'free', point: { x: point.x, y: point.y } };
 }
 

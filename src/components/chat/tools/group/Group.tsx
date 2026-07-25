@@ -1,9 +1,10 @@
-// Group — generic single-line toggle for ≥2 consecutive tool calls.
-//
-// Header summarizes the group by category (commands / files / times /
-// etc.), the expanded body lists each tool via ToolActionRow. The
-// browser-fallback banner appears only when the group contains a
-// browser tool running in fallback mode (extension not installed).
+// Group — generic single-line toggle for ≥2 consecutive tool / thinking
+// actions. The header summarises the group by tool category
+// (commands / files / times / etc.); the expanded body lists each
+// entry in its original action order — tool rows are rendered through
+// `ToolActionRow`, thinking rows through `ThinkingRow`. The browser-
+// fallback banner only appears when the group contains a browser tool
+// running in fallback mode.
 
 'use client';
 
@@ -16,17 +17,18 @@ import { buildGroupSummary } from './buildGroupSummary';
 import { isBrowserFallbackMode } from '../registry';
 import { isBrowserTool } from '../classify';
 import { ToolActionRow } from '../rows/ToolActionRow';
-import type { ToolAction, ToolStatus } from '../types';
+import { ThinkingRow } from '../rows/ThinkingRow';
+import type { SegmentEntry, ToolAction, ToolStatus } from '../types';
 
 interface GroupProps {
-  tools: ToolAction[];
+  entries: SegmentEntry[];
   flat?: boolean;
   streamingToolOutput?: string;
   agentProgressEvents?: AgentProgressEventWithMeta[];
 }
 
 export function Group({
-  tools,
+  entries,
   flat,
   streamingToolOutput,
   agentProgressEvents,
@@ -35,25 +37,61 @@ export function Group({
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
 
-  const hasRunning = tools.some((tool) => tool.result === undefined);
-  const hasError = tools.some((tool) => tool.isError);
+  // Tool-only subset. Thinking rows are not counted toward the header
+  // summary — they're a side-channel of the model's reasoning, not a
+  // separate user-visible step that deserves "已思考 N 次".
+  const tools = entries.filter(
+    (e): e is Extract<SegmentEntry, { kind: 'tool' }> => e.kind === 'tool'
+  );
+  const hasRunning = tools.some((entry) => entry.tool.result === undefined);
+  const hasError = tools.some((entry) => entry.tool.isError);
   const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
-  const summaryText = buildGroupSummary(tools, t, locale);
+  const summaryText = buildGroupSummary(
+    tools.map((entry) => entry.tool),
+    t,
+    locale
+  );
 
-  const containsBrowser = tools.some((tool) => isBrowserTool(tool.name));
-  const showBrowserFallback = containsBrowser && isBrowserFallbackMode(tools);
-  const lastRunningTool = tools.find((tool) => tool.result === undefined);
+  const containsBrowser = tools.some((entry) => isBrowserTool(entry.tool.name));
+  const showBrowserFallback = containsBrowser && isBrowserFallbackMode(
+    tools.map((entry) => entry.tool)
+  );
+  const lastRunningTool = tools.find((entry) => entry.tool.result === undefined)
+    ?.tool;
 
   // Re-render with a stable key based on the first tool's id so that
-  // streaming updates (more tools added to the group) don't unmount the
-  // whole subtree and re-trigger animations. Falls back to length when
-  // ids are missing (e.g. legacy fixtures).
-  const groupKey = `grp-${tools[0]?.id ?? 0}-${tools.length}`;
+  // streaming updates (more entries added to the group) don't unmount
+  // the whole subtree and re-trigger animations. Falls back to length
+  // when ids are missing (e.g. legacy fixtures). Length uses
+  // `entries.length` not `tools.length` because thinking entries
+  // count toward the streaming-visible group size even though they
+  // don't contribute to the header summary.
+  const groupKey = `grp-${tools[0]?.tool.id ?? 0}-${entries.length}`;
 
-  // Group header hides the caret until hover, just like single rows.
-  // No leading icon, no verb prefix — the summary text itself is a
-  // complete sentence (e.g. "已运行 3 次命令，编辑 1 个文件") that
-  // stands on its own.
+  const body = (
+    <div className="tool-group-body">
+      {showBrowserFallback && <BrowserFallbackBanner />}
+      {entries.map((entry, i) =>
+        entry.kind === 'tool' ? (
+          <GroupToolRow
+            key={entry.tool.id || `g-${i}`}
+            tool={entry.tool}
+            streamingToolOutput={
+              lastRunningTool?.id === entry.tool.id ? streamingToolOutput : undefined
+            }
+            agentProgressEvents={agentProgressEvents}
+          />
+        ) : (
+          <ThinkingRow
+            key={`thinking-${i}`}
+            content={entry.content}
+            isStreaming={entry.isStreaming}
+          />
+        )
+      )}
+    </div>
+  );
+
   const header = (
     <ActionRowChrome
       status={groupStatus}
@@ -70,26 +108,10 @@ export function Group({
   );
 
   if (flat) {
-    // In `flat` mode the group sits directly under the action list with
-    // no chrome border; show the expanded body inline so the user can
-    // see all tools at a glance (this matches the previous flat-mode
-    // behavior for ContextGroup / BrowserGroup).
     return (
       <div key={groupKey} className="tool-group mt-1.5">
         {header}
-        <div className="tool-group-body">
-          {showBrowserFallback && <BrowserFallbackBanner />}
-          {tools.map((tool, i) => (
-            <GroupToolRow
-              key={tool.id || `g-${i}`}
-              tool={tool}
-              streamingToolOutput={
-                lastRunningTool?.id === tool.id ? streamingToolOutput : undefined
-              }
-              agentProgressEvents={agentProgressEvents}
-            />
-          ))}
-        </div>
+        {body}
       </div>
     );
   }
@@ -106,19 +128,7 @@ export function Group({
             transition={{ duration: 0.15, ease: 'easeOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="tool-group-body">
-              {showBrowserFallback && <BrowserFallbackBanner />}
-              {tools.map((tool, i) => (
-                <GroupToolRow
-                  key={tool.id || `g-${i}`}
-                  tool={tool}
-                  streamingToolOutput={
-                    lastRunningTool?.id === tool.id ? streamingToolOutput : undefined
-                  }
-                  agentProgressEvents={agentProgressEvents}
-                />
-              ))}
-            </div>
+            {body}
           </motion.div>
         )}
       </AnimatePresence>
