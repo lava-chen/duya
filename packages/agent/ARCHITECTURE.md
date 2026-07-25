@@ -13,10 +13,11 @@
 
 ```
 packages/agent/src/
-├── index.ts                    # Main entry: duyaAgent class
+├── index.ts                    # Public API barrel
 ├── types.ts                    # Core type definitions
+├── agent/                      # duyaAgent implementation
+├── agent-profile/              # Base profile and tool filtering
 ├── compact/                    # Message history compression
-├── coordinator/                # Coordinator mode for multi-agent orchestration
 ├── hooks/                      # Event hook system for agent lifecycle
 ├── llm/                        # LLM client implementations
 │   ├── index.ts               # Factory: createLLMClient, inferProvider
@@ -24,9 +25,11 @@ packages/agent/src/
 │   ├── anthropic-client.ts    # Anthropic API implementation
 │   └── openai-client.ts       # OpenAI-compatible API implementation
 ├── mcp/                        # Model Context Protocol client
-├── memdir/                     # File-based persistent memory system
+├── memory/                     # Active persistent memory system
+├── modes/                      # Declarative ModeModifier registry
 ├── permissions/                # Permission checking and rule management
-├── prompts/                     # Prompt engineering system
+├── process/                    # Isolated worker process entry and protocol
+├── prompts/                    # Prompt engineering system
 │   ├── index.ts              # Main exports
 │   ├── PromptManager.ts      # System prompt orchestrator
 │   ├── types.ts              # Prompt types
@@ -35,7 +38,6 @@ packages/agent/src/
 │   └── sections/             # Individual prompt sections
 ├── sandbox/                     # Sandbox execution for security
 ├── session/                     # SQLite-backed session persistence
-├── swarm/                       # Team coordination utilities
 └── tool/                        # Tool system
     ├── registry.ts             # Tool registry
     ├── builtin.ts             # Built-in tools registration
@@ -45,8 +47,8 @@ packages/agent/src/
     ├── WriteTool.ts           # File writing
     ├── EditTool.ts            # File editing
     ├── GrepTool.ts            # Pattern search
-    ├── GlobTool.ts            # File globbing
-    ├── AgentTool/             # Sub-agent spawning tool
+    ├── GlobTool/               # File globbing
+    ├── SubagentTool/           # Sub-agent spawning tool
     └── [Task*Tool]/           # Task management tools
 ```
 
@@ -212,8 +214,8 @@ Manages concurrent tool execution with queue-based scheduling.
 **Concurrency Rules**:
 | Tool Type | Behavior |
 |-----------|----------|
-| Safe tools (read, write, edit, grep, glob, task_*, web_*, etc.) | Can run in parallel |
-| Unsafe tools (bash) | Run alone; errors cancel siblings |
+| Read-batch tools (read, grep, glob, browser, session search, etc.) | Can run in parallel |
+| System tools (shell, Agent, mode changes, canvas writes) | Run alone unless registry metadata explicitly marks them concurrency-safe |
 
 **Key Methods**:
 - `addTool(block)` - Queue a tool for execution
@@ -221,19 +223,9 @@ Manages concurrent tool execution with queue-based scheduling.
 - `getRemainingResults()` - Async generator yielding results
 - `discard()` - Abandon all pending tools
 
-**Concurrency-Safe Tools**:
-```typescript
-const CONCURRENCY_SAFE_TOOLS = new Set([
-  'read', 'write', 'edit', 'grep', 'glob',
-  'task_get', 'task_list', 'task_output', 'task_stop', 'task_update',
-  'enter_worktree', 'exit_worktree',
-  'enter_plan_mode', 'exit_plan_mode',
-  'list_mcp_resources', 'read_mcp_resource',
-  'web_search', 'web_fetch',
-  'lsp', 'repl', 'skill', 'brief', 'config',
-  'team_create', 'team_delete'
-])
-```
+Tool concurrency is derived from `classifyTool()` plus registry metadata.
+Unknown tools fail closed into the `SYSTEM` batch; no parallel-safety list of
+retired tool names is retained.
 
 ### Built-in Tools (`builtin.ts`)
 
@@ -249,11 +241,13 @@ Function `createBuiltinRegistry()` registers:
 | `Glob` | File globbing |
 | `Agent` | Spawn sub-agents |
 | `task_*` | Task management |
-| `enter/exit_worktree` | Git worktree management |
-| `enter/exit_plan_mode` | Plan mode control |
-| `list/read_mcp_resource` | MCP resource access |
-| `web_search`, `web_fetch` | Web browsing |
-| `team_create`, `team_delete` | Team management |
+| `enter/exit_plan_mode`, `SwitchMode` | Mode controls |
+| `browser` | Supported web browsing, search, and fetch surface |
+| `Skill`, `skill_manage`, `Brief` | Skill and task guidance |
+| `SessionSearch`, `MessageSession` | Session continuity and inter-agent messaging |
+| `vision_analyze`, `show_widget`, `read_module` | Vision and generative UI |
+| `duya_cli` | Desktop control-plane operations |
+| `memory`, `AskUserQuestion`, `tool_search` | Memory, interaction, and on-demand discovery |
 
 ### BashTool Security (`BashTool.ts`)
 
@@ -432,53 +426,7 @@ Prevents permission denial DoS:
 
 ---
 
-## 11. Memory System (`memdir/`)
-
-File-based persistent memory system.
-
-### Memory Types
-
-| Type | Scope | Description |
-|------|-------|-------------|
-| `user` | private | User's role, goals, preferences |
-| `feedback` | private/team | Guidance on approach (what to avoid/continue) |
-| `project` | private/team | Ongoing work, goals, bugs, incidents |
-| `reference` | team | Pointers to external systems |
-
-### Memory Paths
-
-```typescript
-getMemoryBaseDir()     // ~/.duya
-getAutoMemPath()       // ~/.duya/memory/
-getAutoMemEntrypoint() // ~/.duya/memory/MEMORY.md
-```
-
-### Memory Management
-
-- `MAX_ENTRYPOINT_LINES` = 200
-- `MAX_ENTRYPOINT_BYTES` = 25,000
-- MEMORY.md acts as index to all memories
-
----
-
-## 12. Coordinator System (`coordinator/`)
-
-Multi-agent orchestration mode.
-
-```typescript
-isCoordinatorMode()              // Check duya_COORDINATOR_MODE env var
-getCoordinatorSystemPrompt()     // Get coordinator system prompt
-getCoordinatorUserContext()       // Get worker tools context
-```
-
-**Coordinator Role**:
-- Orchestrates software engineering tasks across workers
-- Spawns agents via `Agent` tool
-- Synthesizes results and communicates with user
-
----
-
-## 13. Hooks System (`hooks/`)
+## 11. Hooks System (`hooks/`)
 
 Event hook system for agent lifecycle.
 
@@ -506,35 +454,7 @@ Event hook system for agent lifecycle.
 
 ---
 
-## 14. Swarm/Team System (`swarm/`)
-
-Team coordination utilities.
-
-```typescript
-type TeamMember = {
-  agentId: string
-  name: string
-  agentType?: string
-  model?: string
-  color?: string
-  joinedAt: number
-  tmuxPaneId: string
-  cwd: string
-  worktreePath?: string
-  sessionId?: string
-}
-```
-
-### Key Functions
-
-- `sanitizeName(name)` - Sanitize for tmux/file paths
-- `getTeamDir(teamName)` - Get team directory
-- `readTeamFile(teamName)` - Read team config (sync)
-- `writeTeamFileAsync(teamName, teamFile)` - Write team config
-
----
-
-## 15. Sandbox System (`sandbox/`)
+## 12. Sandbox System (`sandbox/`)
 
 Sandboxed command execution with filesystem/network restrictions.
 
@@ -549,7 +469,7 @@ addExcludedCommand(command: string): void
 
 ---
 
-## 16. Data Flows
+## 13. Data Flows
 
 ### Chat Streaming Flow
 
@@ -579,39 +499,47 @@ StreamingToolExecutor          Yield tool_use event
 
 ### Tool Execution Queue
 
+```text
+addTool() → classifyTool() → ToolBatch (READ / WRITE / SYSTEM)
+          → registry concurrency metadata
+          → processQueue() → execute → yield result
 ```
-addTool() called
-    │
-    ▼
-isConcurrencySafeTool() check
-    │
-    ├── Safe ──► Execute immediately (parallel)
-    │
-    └── Unsafe ──► Wait for queue empty, then execute
-    │
-    ▼
-Tool completes ──► getRemainingResults() yields
-```
+
+Unknown tools fail closed into `SYSTEM`. READ tools may run in parallel;
+WRITE tools serialize; SYSTEM tools run alone unless explicitly marked safe.
 
 ---
 
-## 17. Package Exports
+## 14. Package Exports
 
-```json
-{
-  "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-    "./session": { "types": "./dist/session/index.d.ts", "default": "./dist/session/index.js" }
-  },
-  "bin": {
-    "duya-agent": "./dist/cli/index.js"
-  }
-}
+The root entry exports only `duyaAgent`, core Agent types, and renderer Task
+types. Runtime subsystems import their owners directly instead of routing
+through the root barrel. Dedicated subpaths expose prompt, registry, session, query-engine, and
+file-parser contracts:
+
+```text
+@duya/agent
+@duya/agent/types
+@duya/agent/prompts[/types|/modes]
+@duya/agent/tool/registry
+@duya/agent/session
+@duya/agent/query-engine
+@duya/agent/file-parser
+@duya/agent/utils/shellDetector
 ```
+
+The declarative `conductor` mode lives in `src/modes/conductor-mode.ts` and
+injects Agent-owned `src/tool/CanvasConductor/` tools into the main chat
+runtime. The former dedicated Conductor worker, prompt system, and
+`@duya/agent/conductor/profile` contract were retired in Plan 242; canvas UI,
+state, capture, and database contracts remain owned by `@duya/conductor`.
+
+The standalone Agent CLI remains available through
+`node packages/agent/dist/cli/index.js`; it is not a package manifest `bin`.
 
 ---
 
-## 18. Key Interfaces Summary
+## 15. Key Interfaces Summary
 
 ### ToolExecutor
 ```typescript
@@ -646,14 +574,9 @@ interface AgentOptions {
 
 ---
 
-## 19. Dependencies
+## 16. Dependencies
 
-**Production**:
-- `@anthropic-ai/sdk` - Anthropic API client
-- `@modelcontextprotocol/sdk` - MCP protocol
-- `openai` - OpenAI API client
-- `better-sqlite3` - SQLite for session persistence
-- `execa` - Shell command execution
-- `zod` - Schema validation
-- `ws` - WebSocket support
-- `chokidar` - File watching
+The package declares only dependencies referenced by production source. The
+current 22-package runtime closure covers LLM clients, MCP, CLI/TUI, SQLite,
+file parsing, browser automation, and schema validation. Test-only DOCX fixture
+generation is declared in `devDependencies`.

@@ -24,19 +24,11 @@ export type {
   CanUseToolFn,
   CanUseToolDecision,
 } from './StreamingToolExecutor.js';
-export { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
-export { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools exports
 export { taskTool } from './TaskTool/TaskTool.js';
-export { enterWorktreeTool } from './EnterWorktreeTool/EnterWorktreeTool.js';
-export { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
-export { listMcpResourcesTool } from './ListMcpResourcesTool/ListMcpResourcesTool.js';
-export { readMcpResourceTool } from './ReadMcpResourceTool/ReadMcpResourceTool.js';
-export { webSearchTool } from './WebSearchTool/WebSearchTool.js';
-export { webFetchTool } from './WebFetchTool/WebFetchTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { AskUserQuestionTool, askUserQuestionTool, storePendingAnswer, clearPendingAnswer } from './AskUserQuestionTool/AskUserQuestionTool.js';

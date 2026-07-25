@@ -28,8 +28,6 @@ const SAFE_YOLO_ALLOWLISTED_TOOLS = new Set([
   'ExitPlanMode',
   'Skill',
   'LSP',
-  'ListMcpResourcesTool',
-  'ReadMcpResourceTool',
 ]);
 
 const CANVAS_TOOL_PREFIX = 'canvas_';

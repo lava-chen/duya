@@ -105,7 +105,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     // conductor mode.
     promptProfile: {
       enableSections: ['generalTaskGuidance'],
-      disableSections: ['taskHandling'],
+      disableSections: ['rules'],
     },
     promptSystem: 'general',
     userVisible: true,
@@ -135,9 +135,9 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     // canvas_* removed: conductor canvas tools are gated by the session
     // conductorMode toggle. Research mode can still use canvas tools when
     // the user explicitly enables conductor mode.
-    disallowedTools: ['Agent', 'skill_manage', 'duya_*', 'WebSearch', 'WebFetch'],
+    disallowedTools: ['Agent', 'skill_manage', 'duya_*'],
     promptProfile: {
-      disableSections: ['taskHandling', 'actions'],
+      disableSections: ['rules'],
     },
     promptSystem: 'research',
     userVisible: true,
@@ -213,20 +213,11 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'memory',
       'read_module',
       'task',
-      'EnterWorktree', 'ExitWorktree',
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
-      // These tools are currently file-backed coordination scaffolding and do
-      // not implement a complete team runtime. Never expose them to Gateway.
-      'TeamCreate', 'TeamDelete',
-      'ListMcpResources', 'ReadMcpResource',
       'vision_analyze',
-      'WebSearch', 'WebFetch',
     ],
     promptProfile: {
-      // GatewayPromptSystem ignores generalTaskGuidance/actions/toolUsage
-      // anyway (it does not render them), but keep the overrides for
-      // clarity and in case a future caller falls back to GeneralPromptSystem.
-      disableSections: ['memory', 'memoryContent', 'sessionGuidance', 'skills', 'generalTaskGuidance', 'actions', 'toolUsage', 'agentsMd', 'projectGrounding', 'projectContinuity', 'outputEfficiency'],
+      disableSections: ['memory', 'memoryContent', 'sessionGuidance', 'skills', 'generalTaskGuidance', 'rules', 'personality', 'agentsMd', 'projectGrounding', 'projectContinuity'],
     },
     promptSystem: 'gateway',
     userVisible: false,
@@ -249,15 +240,14 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'show_widget',
       'Agent',
       'canvas:*',
-      'TeamCreate', 'TeamDelete',
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
-      'EnterWorktree', 'ExitWorktree',
     ],
     promptProfile: {
-      // The 'actions' section repeatedly instructs "ask the user before
-      // proceeding" — in a cron context there is no user to ask, so the
-      // agent would hang. Remove it.
-      disableSections: ['actions'],
+      // The 'rules' chapter (which fuses the old 'doingTasks' and
+      // parts of the old 'actions' section) repeatedly instructs "ask
+      // the user before proceeding" — in a cron context there is no
+      // user to ask, so the agent would hang. Remove it.
+      disableSections: ['rules'],
     },
     promptSystem: 'general',
     userVisible: false,
@@ -285,12 +275,10 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'duya:*',
       'memory',
       'SessionSearch',
-      'WebSearch',
-      'WebFetch',
     ],
     promptProfile: {
       disableSections: [
-        'taskHandling',
+        'rules',
         'memory',
         'skills',
         'sessionGuidance',
@@ -299,7 +287,6 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
         'projectContinuity',
         'widgetGuidelines',
         'visionGuidelines',
-        'actions',
       ],
     },
     promptSystem: 'general',

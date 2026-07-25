@@ -48,18 +48,11 @@ import {
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
 import { classifyError, APIErrorType } from '../llm/errors.js';
-import { getDefaultPromptManager } from '../prompts/PromptManager.js';
 import { setSystemLocation } from '../prompts/systemLocation.js';
 import type { PromptProfile } from '../prompts/modes/types.js';
-import type { ConductorSnapshot } from '../conductor/ConductorProfile.js';
-// Note: `setConductorCanvasState` and `registerConductor` are loaded
-// lazily inside their call sites (see `handleConductorInit` /
-// `main`) to break the build-time cycle with the `@duya/conductor`
-// package. Importing the symbols statically here would force the
-// agent's tsc to follow the chain `agent → @duya/conductor → @duya/agent/conductor/profile → dist/conductor/ConductorProfile.d.ts`
-// and trigger TS5055 on re-builds (the .d.ts would be both an input
-// and an output of the same tsc invocation).
-import { buildSandboxImage, duyaAgent, setSandboxEnabled } from '../index.js';
+import { buildSandboxImage, setSandboxEnabled } from '../sandbox/index.js';
+import { duyaAgent } from '../agent/DuyaAgent.js';
+import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { browserTool } from '../tool/builtin.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
@@ -93,7 +86,6 @@ interface VisionConfig {
 interface InitMessage {
   type: 'init';
   sessionId: string;
-  mode?: 'chat' | 'conductor';
   providerConfig: {
     apiKey: string;
     baseURL?: string;
@@ -137,33 +129,6 @@ interface InitMessage {
     localeCountryCode: string | null;
     timezone: string;
   };
-}
-
-interface ConductorInitMessage {
-  type: 'conductor:init';
-  sessionId: string;
-  providerConfig: {
-    apiKey: string;
-    baseURL?: string;
-    model: string;
-    provider: 'anthropic' | 'openai' | 'ollama';
-    authStyle?: 'api_key' | 'auth_token';
-  };
-  snapshot: ConductorSnapshot;
-  systemPrompt?: string;
-  workingDirectory?: string;
-  language?: string;
-  visionConfig?: import('../types.js').VisionConfig;
-  permissionMode?: 'default' | 'auto' | 'bypass';
-}
-
-interface ConductorStartMessage {
-  type: 'conductor:agent:start';
-  sessionId: string;
-  prompt: string;
-  snapshot?: ConductorSnapshot;
-  language?: string;
-  permissionMode?: 'default' | 'auto' | 'bypass';
 }
 
 interface FileAttachment {
@@ -238,18 +203,7 @@ const visionTool = new VisionTool();
 const titleGeneratedBySession = new Map<string, string>();
 // Title generation model config (from settings)
 let titleGenerationModelConfig: { provider: string; apiKey: string; baseURL: string; model: string } | null = null;
-// Conductor permission mode (set on init from settings)
-let conductorPermissionMode: 'default' | 'auto' | 'bypass' = 'default';
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
-const nativeImport = new Function('specifier', 'return import(specifier)') as
-  <T>(specifier: string) => Promise<T>;
-
-// Conductor agent global state
-let conductorAgent: duyaAgent | null = null;
-let conductorSessionId: string | null = null;
-let conductorInitializing = false;
-let conductorInProgress = false;
-
 // Heartbeat tracking for long-running operations
 let lastPongTime = Date.now();
 const HEARTBEAT_INTERVAL = 5000; // Send pong every 5 seconds during streaming
@@ -592,6 +546,46 @@ function getToolResultIds(message: Message): string[] {
   ));
 }
 
+function assistantContentBlocks(message: Message): MessageContent[] {
+  if (Array.isArray(message.content)) return message.content;
+
+  if (message.msg_type === 'tool_use' && message.tool_call_id) {
+    let input: Record<string, unknown> = {};
+    if (message.tool_input) {
+      try {
+        const parsed = JSON.parse(message.tool_input);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          input = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Preserve the call with an empty input rather than dropping its result pair.
+      }
+    }
+    return [{
+      type: 'tool_use',
+      id: message.tool_call_id,
+      name: message.tool_name || 'unknown_tool',
+      input,
+    }];
+  }
+
+  return message.content ? [{ type: 'text', text: message.content }] : [];
+}
+
+function mergeAssistantToolRound(messages: readonly Message[]): Message {
+  if (messages.length === 1) return messages[0];
+
+  const first = messages[0];
+  return {
+    ...first,
+    content: messages.flatMap(assistantContentBlocks),
+    msg_type: undefined,
+    tool_call_id: undefined,
+    tool_name: undefined,
+    tool_input: undefined,
+  };
+}
+
 /**
  * Canonicalize complete tool rounds before a restored session is reused.
  *
@@ -606,25 +600,45 @@ function reorderCompleteToolRounds(messages: Message[]): Message[] {
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    const pendingIds = new Set(getToolUseIds(message));
+    const pendingToolUseIds = getToolUseIds(message);
+    const pendingIds = new Set(pendingToolUseIds);
     if (pendingIds.size === 0) {
       reordered.push(message);
       continue;
     }
 
+    // A model can correct a bad tool name before the executor flushes the
+    // first failure. Persisted as two assistant messages, that sequence is
+    // invalid for strict Anthropic-compatible providers. Group consecutive
+    // tool-bearing assistant messages into one canonical tool round.
+    const assistantRound = [message];
+    let firstNonAssistantIndex = index + 1;
+    while (firstNonAssistantIndex < messages.length) {
+      const candidate = messages[firstNonAssistantIndex];
+      const candidateIds = getToolUseIds(candidate);
+      if (candidateIds.length === 0) break;
+      assistantRound.push(candidate);
+      pendingToolUseIds.push(...candidateIds);
+      candidateIds.forEach((id) => pendingIds.add(id));
+      firstNonAssistantIndex++;
+    }
+
     const unresolvedIds = new Set(pendingIds);
-    const resultMessages: Message[] = [];
+    const resultMessages: Array<{ message: Message; order: number }> = [];
     const deferredMessages: Message[] = [];
     let resultEndIndex = -1;
 
-    for (let cursor = index + 1; cursor < messages.length && unresolvedIds.size > 0; cursor++) {
+    for (let cursor = firstNonAssistantIndex; cursor < messages.length && unresolvedIds.size > 0; cursor++) {
       const candidate = messages[cursor];
       if (candidate.role === 'assistant') break;
 
       const matchingIds = getToolResultIds(candidate).filter((id) => unresolvedIds.has(id));
       if (matchingIds.length > 0) {
         matchingIds.forEach((id) => unresolvedIds.delete(id));
-        resultMessages.push(candidate);
+        resultMessages.push({
+          message: candidate,
+          order: Math.min(...matchingIds.map((id) => pendingToolUseIds.indexOf(id))),
+        });
         resultEndIndex = cursor;
       } else {
         deferredMessages.push(candidate);
@@ -632,16 +646,18 @@ function reorderCompleteToolRounds(messages: Message[]): Message[] {
     }
 
     if (unresolvedIds.size > 0 || resultEndIndex === -1) {
-      reordered.push(message);
+      reordered.push(...assistantRound);
+      index = firstNonAssistantIndex - 1;
       continue;
     }
 
-    const alreadyOrdered = resultEndIndex === index + 1 && deferredMessages.length === 0;
-    reordered.push(message);
+    const alreadyOrdered = assistantRound.length === 1 && resultEndIndex === index + 1 && deferredMessages.length === 0;
+    reordered.push(alreadyOrdered ? message : mergeAssistantToolRound(assistantRound));
     if (alreadyOrdered) {
       reordered.push(messages[resultEndIndex]);
     } else {
-      reordered.push(...resultMessages, ...deferredMessages);
+      resultMessages.sort((left, right) => left.order - right.order);
+      reordered.push(...resultMessages.map(({ message: resultMessage }) => resultMessage), ...deferredMessages);
       repairedRounds++;
     }
     index = resultEndIndex;
@@ -849,7 +865,7 @@ async function initAgent(
   language?: string,
   sandboxEnabled?: boolean,
   communicationPlatform?: string,
-  browserBackendMode?: 'auto' | 'extension' | 'built-in',
+  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like',
   permissionRules?: InitMessage['permissionRules'],
 ): Promise<void> {
   // Store system prompt for use in chat
@@ -989,11 +1005,6 @@ async function initAgent(
 }
 
 async function loadAgentSkills(workDir?: string, skillPaths?: string[], securityScanEnabled?: boolean): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const agentModule = await import('../index.js') as any;
-  const loadSkills = agentModule.loadSkills;
-  const getSkillRegistry = agentModule.getSkillRegistry;
-
   try {
     const loadOptions: { additionalPaths?: string[]; syncBundled?: boolean; securityBypassSkills?: string[]; skipSecurityScan?: boolean } = {
       syncBundled: true,
@@ -1921,7 +1932,15 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // Use IncrementalSaveQueue to serialize saves and prevent race conditions
       if (Date.now() - lastIncrementalSave > INCREMENTAL_SAVE_INTERVAL) {
         lastIncrementalSave = Date.now();
-        const currentMessages = agent.getMessages();
+        let currentMessages = agent.getMessages();
+        // A stream can still have a running tool call here, so only reorder
+        // complete rounds. Full validation would incorrectly delete a pending
+        // tool_use before its executor produces a result.
+        const canonicalCurrentMessages = reorderCompleteToolRounds(currentMessages);
+        if (canonicalCurrentMessages !== currentMessages) {
+          agent.setMessages(canonicalCurrentMessages);
+          currentMessages = canonicalCurrentMessages;
+        }
         let newMessages = currentMessages.slice(existingMessageCount);
         applyRequestDisplayContent(newMessages, msg.options?.displayContent);
         // Attach the latest tokenUsage to the last assistant message before
@@ -2004,10 +2023,22 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
     }
 
-    const agentMessages = agent.getMessages();
+    let agentMessages = agent.getMessages();
     // Mark incremental queue as flushed and wait for any pending saves to complete
     incrementalSaveQueue.markFlushed();
     await incrementalSaveQueue.flush();
+
+    // Do not create a new poisoned history row at turn completion. In
+    // particular, a failed canvas tool followed by the model's corrected tool
+    // call can arrive as consecutive assistant messages before either result
+    // is written. Canonicalize the whole in-memory history before deriving the
+    // append-only delta so the database is valid on its first write.
+    const canonicalMessages = validateMessageHistory(agentMessages);
+    if (canonicalMessages !== agentMessages) {
+      agent.setMessages(canonicalMessages);
+      agentMessages = canonicalMessages;
+    }
+
     log(`[Agent-Process] Stream ended, tokenUsage present=${!!tokenUsage}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
     if (agentMessages.length > 0) {
       if (tokenUsage) {
@@ -2210,200 +2241,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   }
 }
 
-// ============================================================================
-// Conductor Agent Handlers
-// ============================================================================
-
-async function handleConductorInit(msg: ConductorInitMessage): Promise<void> {
-  const { setConductorCanvasState } = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor');
-  setConductorCanvasState(msg.snapshot);
-
-  const promptManager = getDefaultPromptManager();
-  if (msg.workingDirectory) {
-    promptManager.setWorkingDirectory(msg.workingDirectory);
-  }
-  if (msg.language) {
-    promptManager.updateOptions({ language: msg.language });
-  }
-
-  conductorAgent = new duyaAgent({
-    apiKey: msg.providerConfig.apiKey,
-    baseURL: msg.providerConfig.baseURL || '',
-    model: msg.providerConfig.model,
-    provider: msg.providerConfig.provider,
-    authStyle: msg.providerConfig.authStyle,
-    sessionId: msg.sessionId,
-    workingDirectory: msg.workingDirectory,
-    promptManager,
-    visionConfig: msg.visionConfig,
-    permissionMode: msg.permissionMode === 'bypass'
-      ? 'bypassPermissions'
-      : msg.permissionMode === 'auto'
-        ? 'dontAsk'
-        : 'default',
-  });
-
-  // Persist permission mode for downstream turn decisions
-  conductorPermissionMode = msg.permissionMode ?? 'default';
-
-  log('[Agent-Process] Conductor duyaAgent initialized for session:', msg.sessionId);
-}
-
-async function handleConductorStart(msg: ConductorStartMessage): Promise<void> {
-  if (!conductorAgent) {
-    sendToMain({ type: 'conductor:error', sessionId: msg.sessionId, message: 'Conductor agent not initialized' });
-    return;
-  }
-
-  if (msg.language) {
-    (conductorAgent as unknown as { promptManager?: { updateOptions: (options: { language?: string }) => void } })
-      .promptManager?.updateOptions({ language: msg.language });
-  }
-
-  // Refresh permission mode per-turn so the user can change the setting
-  // mid-session without restarting the agent process. The prompt section
-  // (actions.ts) reads this env var on every build.
-  if (msg.permissionMode) {
-    process.env.CONDUCTOR_PERMISSION_MODE = msg.permissionMode;
-    conductorPermissionMode = msg.permissionMode;
-  }
-
-  // Update canvas state snapshot for every message (not just init)
-  if (msg.snapshot) {
-    const { setConductorCanvasState } = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor');
-    setConductorCanvasState(msg.snapshot);
-  }
-
-  log('[Agent-Process] handleConductorStart:', { sessionId: msg.sessionId, promptLength: msg.prompt.length });
-
-  try {
-    log('[Agent-Process] handleConductorStart: starting...');
-
-    startChatHeartbeat();
-    sendToMain({ type: 'conductor:status', sessionId: msg.sessionId, status: 'streaming' });
-
-    log('[Agent-Process] handleConductorStart: calling streamChat...');
-    log('[Agent-Process] handleConductorStart: conductorAgent exists:', !!conductorAgent);
-    log('[Agent-Process] handleConductorStart: conductorAgent type:', typeof conductorAgent);
-    log('[Agent-Process] handleConductorStart: prompt length:', msg.prompt.length);
-
-    let stream;
-    try {
-      stream = conductorAgent.streamChat(msg.prompt, {
-        agentProfileId: 'conductor',
-        conductorIpc: {
-          sendToMain,
-          ipcRequest: conductorIpcRequest,
-        },
-      });
-      log('[Agent-Process] streamChat generator created successfully');
-    } catch (err) {
-      log('[Agent-Process] streamChat creation FAILED:', err);
-      sendToMain({
-        type: 'conductor:error',
-        sessionId: msg.sessionId,
-        message: `streamChat creation failed: ${err instanceof Error ? err.message : String(err)}`,
-      });
-      stopChatHeartbeat();
-      return;
-    }
-
-    let eventCount = 0;
-    let streamStarted = false;
-    for await (const event of stream) {
-      if (!streamStarted) {
-        log('[Agent-Process] First event received from stream!');
-        streamStarted = true;
-      }
-      eventCount++;
-      if (event.type === 'text' || event.type === 'thinking') {
-        log(`[Agent-Process] Event ${eventCount}: ${event.type}, len=${String((event as {data: string}).data).length}`);
-      } else {
-        log(`[Agent-Process] Event ${eventCount}: ${event.type}`);
-      }
-
-      switch (event.type) {
-        case 'text':
-          sendToMain({
-            type: 'conductor:text',
-            sessionId: msg.sessionId,
-            content: (event as { type: 'text'; data: string }).data,
-          });
-          break;
-
-        case 'thinking':
-          sendToMain({
-            type: 'conductor:thinking',
-            sessionId: msg.sessionId,
-            content: (event as { type: 'thinking'; data: string }).data,
-          });
-          break;
-
-        case 'tool_use':
-          sendToMain({
-            type: 'conductor:tool_use',
-            sessionId: msg.sessionId,
-            id: (event as { type: 'tool_use'; data: { id: string } }).data.id,
-            name: (event as { type: 'tool_use'; data: { name: string } }).data.name,
-            input: (event as { type: 'tool_use'; data: { input: Record<string, unknown> } }).data.input,
-          });
-          break;
-
-        case 'tool_result': {
-          const trData = (event as { type: 'tool_result'; data: { id: string; result: string; duration_ms?: number } }).data;
-          sendToMain({
-            type: 'conductor:tool_result',
-            sessionId: msg.sessionId,
-            id: trData.id,
-            result: trData.result,
-            duration_ms: trData.duration_ms,
-          });
-          break;
-        }
-
-        case 'done':
-          sendToMain({
-            type: 'conductor:done',
-            sessionId: msg.sessionId,
-          });
-
-          // Flush perception events and send as context update for next turn
-          const { getPerceptionEngine } = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor');
-          const perceptionContext = getPerceptionEngine().formatEventsAsContext();
-          if (perceptionContext) {
-            sendToMain({
-              type: 'conductor:perception_context',
-              sessionId: msg.sessionId,
-              context: perceptionContext,
-            });
-            getPerceptionEngine().drainEvents();
-          }
-          break;
-
-        case 'error':
-          sendToMain({
-            type: 'conductor:error',
-            sessionId: msg.sessionId,
-            message: (event as { type: 'error'; data: string }).data || 'Unknown error',
-          });
-          break;
-      }
-    }
-    log(`[Agent-Process] Stream completed, total events: ${eventCount}`);
-  } catch (err) {
-    log('[Agent-Process] Conductor error:', err);
-    sendToMain({
-      type: 'conductor:error',
-      sessionId: msg.sessionId,
-      message: err instanceof Error ? err.message : String(err),
-    });
-  } finally {
-    stopChatHeartbeat();
-    conductorInProgress = false;
-    sendToMain({ type: 'conductor:status', sessionId: msg.sessionId, status: 'idle' });
-  }
-}
-
 async function drainQueuedChatStart(): Promise<void> {
   // Atomic check-and-set: if a chat is already in progress, bail
   // out immediately. The finally block of the active chat will
@@ -2463,7 +2300,6 @@ async function discoverPluginSkillPaths(): Promise<string[]> {
 
 async function reloadSkills(): Promise<void> {
   try {
-    const getSkillRegistry = (await import('../index.js')).getSkillRegistry;
     const registry = getSkillRegistry();
     // Clear existing non-bundled skills
     const allSkills = registry.list();
@@ -2860,7 +2696,19 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             break;
           }
           try {
-            const result = await agent.compact();
+            // Extract optional compact options from message
+            const compactMsg = msg as unknown as {
+              strategy?: string;
+              maxMessagesToKeep?: number;
+              customInstructions?: string;
+              keepRecentTokens?: number;
+            };
+
+            const result = await agent.compact({
+              strategy: compactMsg.strategy,
+              maxMessagesToKeep: compactMsg.maxMessagesToKeep,
+              customInstructions: compactMsg.customInstructions,
+            });
             log('[Agent-Process] Compaction complete:', result);
             const currentMessages = agent.getMessages();
             // After compaction, agent holds a reduced/summarized set.
@@ -2909,65 +2757,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           // (inventory + issues + active keys) goes out as a
           // single `mcp:status:snapshot` event.
           sendToMain(buildMcpStatusSnapshot());
-          break;
-        }
-
-        case 'conductor:init': {
-          const conductorInitMsg = msg as unknown as ConductorInitMessage;
-          conductorSessionId = conductorInitMsg.sessionId;
-          log('[Agent-Process] Received conductor:init for session:', conductorSessionId);
-          if (conductorAgent) {
-            log('[Agent-Process] Conductor agent already initialized, skipping re-init');
-            // Use IPC channel for conductor:ready so AgentProcessPool can receive it
-            process.send?.({ type: 'conductor:ready', sessionId: conductorSessionId });
-            break;
-          }
-          if (conductorInitializing) {
-            log('[Agent-Process] Conductor init in progress, waiting...');
-            const waitForInit = setInterval(() => {
-              if (conductorAgent) {
-                clearInterval(waitForInit);
-                process.send?.({ type: 'conductor:ready', sessionId: conductorSessionId });
-              }
-            }, 50);
-            break;
-          }
-          conductorInitializing = true;
-          try {
-            await handleConductorInit(conductorInitMsg);
-          } finally {
-            conductorInitializing = false;
-          }
-          // Use IPC channel for conductor:ready so AgentProcessPool can receive it
-          process.send?.({ type: 'conductor:ready', sessionId: conductorSessionId });
-          break;
-        }
-
-        case 'conductor:agent:start': {
-          const conductorStartMsg = msg as unknown as ConductorStartMessage;
-          log('[Agent-Process] Received conductor:agent:start for session:', conductorStartMsg.sessionId);
-          if (conductorInProgress) {
-            log('[Agent-Process] Conductor already in progress, ignoring duplicate');
-            break;
-          }
-          if (conductorInitializing) {
-            log('[Agent-Process] Conductor still initializing, ignoring');
-            break;
-          }
-          conductorInProgress = true;
-          try {
-            await handleConductorStart(conductorStartMsg);
-          } finally {
-            conductorInProgress = false;
-          }
-          break;
-        }
-
-        case 'conductor:interrupt': {
-          log('[Agent-Process] Received conductor:interrupt');
-          if (conductorAgent) {
-            conductorAgent.interrupt();
-          }
           break;
         }
 
@@ -3071,51 +2860,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
 async function main(): Promise<void> {
   log('Process started, session:', process.env.SESSION_ID);
   log('cwd:', process.cwd());
-
-  // Wire the conductor subsystem into the host's registries.
-  // This must run before any `PromptsRegistry.get('conductor')` lookup,
-  // and before `createBuiltinRegistry()` returns a registry whose
-  // canvas-orchestrator tools depend on the conductor's IPC bridge.
-  //
-  // Tool registration happens per-turn via `createBuiltinRegistry()`.
-  // The ESM conductor package is loaded here once and injected into
-  // `builtin.ts` so the hot path remains synchronous.
-  try {
-    const { PromptsRegistry } = await import('../prompts/PromptsRegistry.js');
-    // Import the agent's own PromptSystem type so the host's
-    // `PromptSystemFactory.create` can return the local class identity
-    // (TypeScript otherwise sees the conductor's `PromptSystem` and the
-    // agent's `PromptSystem` as two distinct classes because of the
-    // `protected` members and module path).
-    const { PromptSystem: AgentPromptSystem } = await import(
-      '../prompts/PromptSystem.js'
-    );
-    const conductor = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor') as {
-      registerConductor: typeof import('@duya/conductor')['registerConductor'];
-    };
-    // Note: canvas tools now live in packages/agent/src/tool/CanvasConductor/
-    // and are registered per-turn by createBuiltinRegistry when
-    // ChatOptions.conductorMode is true. We only keep the conductor prompt
-    // system registration here for the standalone conductor agent path.
-    conductor.registerConductor({
-      prompt: {
-        registerPromptSystem: (name, factory) => {
-          PromptsRegistry.register(name, {
-            create: (profile) =>
-              factory(profile) as unknown as InstanceType<typeof AgentPromptSystem>,
-          });
-        },
-        registerOverlayPatch: (name, patch) => {
-          PromptsRegistry.registerOverlayPatch(name, patch);
-        },
-      },
-    });
-    log('[Agent-Process] Conductor subsystem registered');
-  } catch (err) {
-    // Conductor registration is best-effort at startup: if it fails the
-    // process must still be able to handle non-conductor sessions.
-    log('[Agent-Process] Conductor registration failed (non-fatal):', err);
-  }
 
   // Handle IPC messages from AgentProcessPool (cronjob, conductor, etc.)
   // Agent Server uses stdin/stdout, but AgentProcessPool uses IPC child.send()

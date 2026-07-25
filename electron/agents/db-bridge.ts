@@ -333,7 +333,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     case 'session:loadMessages': {
       const sessionId = p.sessionId as string;
-      const messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC').all(sessionId);
+      const messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC').all(sessionId);
       const attachmentRows = db.prepare(
         "SELECT * FROM message_attachments WHERE session_id = ? AND attachment_type = 'parsed_document' ORDER BY created_at ASC"
       ).all(sessionId) as Array<{
@@ -370,6 +370,9 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         ? (typeof p.attachments === 'string' ? p.attachments : JSON.stringify(p.attachments))
         : null;
       const displayContent = p.display_content ?? serializeDisplayContent(p.displayContent, p.role);
+      const seqIndex = p.seq_index ?? (db.prepare(
+        'SELECT COALESCE(MAX(seq_index), -1) + 1 AS next_seq_index FROM messages WHERE session_id = ?',
+      ).get(p.session_id) as { next_seq_index: number }).next_seq_index;
 
       db.prepare(`
         INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
@@ -383,14 +386,14 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         name: p.name ?? null,
         tool_call_id: p.tool_call_id ?? null,
         token_usage: p.token_usage ?? null,
-        msg_type: p.msg_type ?? 'text',
+        msg_type: p.role === 'tool' ? 'tool_result' : (p.msg_type ?? 'text'),
         thinking: p.thinking ?? null,
         tool_name: p.tool_name ?? null,
         tool_input: p.tool_input ?? null,
-        parent_tool_call_id: p.parent_tool_call_id ?? null,
+        parent_tool_call_id: p.role === 'tool' ? (p.tool_call_id ?? null) : (p.parent_tool_call_id ?? null),
         viz_spec: p.viz_spec ?? null,
         status: p.status ?? 'done',
-        seq_index: p.seq_index ?? null,
+        seq_index: seqIndex,
         duration_ms: p.duration_ms ?? null,
         sub_agent_id: p.sub_agent_id ?? null,
         attachments,
@@ -401,7 +404,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     case 'message:getBySession':
-      return db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC').all(p.sessionId);
+      return db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC').all(p.sessionId);
 
     case 'message:getCount': {
       const result = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(p.sessionId) as { count: number };
@@ -452,6 +455,9 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
       let count = 0;
       const txn = db.transaction(() => {
+        let nextSeqIndex = (db.prepare(
+          'SELECT COALESCE(MAX(seq_index), -1) + 1 AS next_seq_index FROM messages WHERE session_id = ?',
+        ).get(sessionId) as { next_seq_index: number }).next_seq_index;
         for (const msg of messages) {
           if (!msg.role) {
             continue;
@@ -463,7 +469,10 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
             (msg as Record<string, unknown>).displayContent ?? (msg as Record<string, unknown>).display_content,
             msg.role,
           );
-          let msgType = msg.msg_type || 'text';
+          let msgType = msg.role === 'tool' ? 'tool_result' : (msg.msg_type || 'text');
+          const parentToolCallId = msg.role === 'tool'
+            ? (msg.tool_call_id || null)
+            : ((msg as Record<string, unknown>).parent_tool_call_id as string || null);
           let thinking: string | null = msg.thinking || null;
           let toolName: string | null = msg.tool_name || null;
           let toolInput: string | null = msg.tool_input || null;
@@ -509,6 +518,10 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           }
 
           try {
+            const requestedSeqIndex = (msg as Record<string, unknown>).seq_index;
+            const seqIndex = typeof requestedSeqIndex === 'number'
+              ? requestedSeqIndex
+              : nextSeqIndex;
             const insertResult = insertStmt.run({
               id: msg.id,
               session_id: sessionId,
@@ -522,10 +535,10 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
               thinking,
               tool_name: toolName,
               tool_input: toolInput,
-              parent_tool_call_id: (msg as Record<string, unknown>).parent_tool_call_id as string || null,
+              parent_tool_call_id: parentToolCallId,
               viz_spec: (msg as Record<string, unknown>).viz_spec as string || null,
               status: (msg as Record<string, unknown>).status as string || 'done',
-              seq_index: (msg as Record<string, unknown>).seq_index as number || null,
+              seq_index: seqIndex,
               duration_ms: (msg as Record<string, unknown>).duration_ms as number || null,
               sub_agent_id: (msg as Record<string, unknown>).sub_agent_id as string || null,
               attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
@@ -536,6 +549,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
             // returned count reflects actually-appended rows.
             if (insertResult.changes > 0) {
               count++;
+              nextSeqIndex = Math.max(nextSeqIndex, seqIndex + 1);
             }
           } catch (insertErr) {
             getLogger().error('message:append insert failed', insertErr instanceof Error ? insertErr : new Error(String(insertErr)), { msgId: msg.id, sessionId }, LogComponent.AgentCommunicator);
@@ -616,11 +630,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
               roleValue,
             );
 
-            let msgType = (msg.msg_type as string) || 'text';
+            let msgType = roleValue === 'tool' ? 'tool_result' : ((msg.msg_type as string) || 'text');
             let thinking: string | null = (msg.thinking as string) || null;
             let toolName: string | null = (msg.tool_name as string) || null;
             let toolInput: string | null = (msg.tool_input as string) || null;
-            let parentToolCallId: string | null = (msg.parent_tool_call_id as string) || null;
+            let parentToolCallId: string | null = roleValue === 'tool'
+              ? ((msg.tool_call_id as string) || null)
+              : ((msg.parent_tool_call_id as string) || null);
 
             if (!msg.msg_type && Array.isArray(msg.content)) {
               const blocks = msg.content as Array<{ type: string; thinking?: string; name?: string; input?: unknown; tool_use_id?: string }>;
@@ -673,7 +689,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
               parent_tool_call_id: parentToolCallId,
               viz_spec: (msg.viz_spec as string) || null,
               status: (msg.status as string) || 'done',
-              seq_index: (msg.seq_index as number) ?? null,
+              seq_index: i,
               duration_ms: (msg.duration_ms as number) ?? null,
               sub_agent_id: (msg.sub_agent_id as string) || null,
               attachments,

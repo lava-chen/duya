@@ -34,7 +34,7 @@ export type QueryEngineMode = 'interactive' | 'print' | 'sdk' | 'background';
  */
 export interface QueryEngineOptions {
   /** duyaAgent instance */
-  agent?: import('../index.js').duyaAgent;
+  agent?: import('../agent/DuyaAgent.js').duyaAgent;
   /** Agent configuration (alternative to passing agent directly) */
   agentConfig?: {
     apiKey: string;
@@ -276,7 +276,7 @@ export interface CLIParsedArgs {
  */
 export interface AgentWrapperOptions {
   /** Agent instance */
-  agent: import('../index.js').duyaAgent;
+  agent: import('../agent/DuyaAgent.js').duyaAgent;
   /** Session manager */
   sessionManager?: import('../session/index.js').SessionManager;
   /** Working directory */

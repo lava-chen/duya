@@ -270,10 +270,9 @@ export interface SkillListResult {
 }
 
 const BUNDLED_SKILL_NAMES: { name: string; description?: string }[] = [
-  // The bundled (built-in) skills live in packages/agent/src/skills/registry
-  // and ship with the agent. Listing them here gives the model a complete
-  // picture without a separate query. Keep this list in sync with the
-  // SkillSystem registry; a future cleanup should auto-derive it.
+  // The bundled skills ship with the agent. Listing them here gives the
+  // model a complete picture without a separate query. A future cleanup
+  // should derive this catalog from the bundled skill definitions.
   { name: 'commit', description: 'Create a git commit with a clear message' },
   { name: 'review-pr', description: 'Review a pull request for correctness and style' },
 ];

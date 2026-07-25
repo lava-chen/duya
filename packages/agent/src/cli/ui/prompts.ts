@@ -8,11 +8,13 @@
  * - Escape to cancel
  */
 
-import select from '@inquirer/select';
-import checkbox from '@inquirer/checkbox';
-import input from '@inquirer/input';
-import password from '@inquirer/password';
-import confirm from '@inquirer/confirm';
+import {
+  checkbox,
+  confirm,
+  input,
+  password,
+  select,
+} from '@inquirer/prompts';
 
 // ASCII theme for Windows compatibility
 const asciiTheme = {

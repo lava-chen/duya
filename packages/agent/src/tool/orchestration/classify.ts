@@ -30,16 +30,6 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   task: ToolBatch.READ,
   Task: ToolBatch.READ,
 
-  // MCP resource tools — READ
-  list_mcp_resources: ToolBatch.READ,
-  ListMcpResources: ToolBatch.READ,
-  read_mcp_resource: ToolBatch.READ,
-  ReadMcpResource: ToolBatch.READ,
-
-  // Web tools (disabled but keep mapping for safety)
-  web_search: ToolBatch.READ,
-  web_fetch: ToolBatch.READ,
-
   // WRITE batch — 修改文件系统，串行
   write: ToolBatch.WRITE,
   edit: ToolBatch.WRITE,
@@ -51,16 +41,8 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   bash: ToolBatch.SYSTEM,
   powershell: ToolBatch.SYSTEM,
   Agent: ToolBatch.SYSTEM,
-  TeamCreate: ToolBatch.SYSTEM,
-  TeamDelete: ToolBatch.SYSTEM,
   show_widget: ToolBatch.SYSTEM,
   SwitchMode: ToolBatch.SYSTEM,
-
-  // Worktree tools — SYSTEM
-  enter_worktree: ToolBatch.SYSTEM,
-  EnterWorktree: ToolBatch.SYSTEM,
-  exit_worktree: ToolBatch.SYSTEM,
-  ExitWorktree: ToolBatch.SYSTEM,
 
   // Plan mode tools — SYSTEM
   enter_plan_mode: ToolBatch.SYSTEM,

@@ -366,14 +366,12 @@ If nothing is worth saving, just say 'Nothing to save.' and stop.`;
 // ============================================================================
 
 /**
- * Lazily import duyaAgent to break circular dependency between index.ts and SelfImprover.ts.
- * Both modules reference each other: index.ts imports SelfImprover, and SelfImprover needs
- * to create duyaAgent instances for creator/evaluator sub-agents.
- *
- * Dynamic import ensures the module graph resolves before duyaAgent is accessed at runtime.
+ * Lazily import duyaAgent to break the circular dependency between
+ * DuyaAgent.ts and SelfImprover.ts. Dynamic import ensures the module graph
+ * resolves before the constructor is accessed at runtime.
  */
-async function createSubAgent(options: AgentOptions): Promise<InstanceType<typeof import('../index.js').duyaAgent>> {
-  const { duyaAgent } = await import('../index.js');
+async function createSubAgent(options: AgentOptions): Promise<InstanceType<typeof import('../agent/DuyaAgent.js').duyaAgent>> {
+  const { duyaAgent } = await import('../agent/DuyaAgent.js');
   return new duyaAgent(options);
 }
 

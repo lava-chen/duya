@@ -234,8 +234,6 @@ ${Colors.BOLD}Usage:${Colors.RESET}
       return;
     }
 
-    const { format } = require('date-format');
-
     console.log(`\n${Colors.BRIGHT_CYAN}📁 Log Directory: ${logDir}${Colors.RESET}`);
 
     if (!fs.existsSync(logDir)) {

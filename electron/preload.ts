@@ -85,8 +85,6 @@ export interface AgentControlPortAPI {
 }
 
 export interface ConductorPortAPI {
-  startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string; language?: string; visionModel?: string; permissionMode?: string }) => void
-  interruptAgent: () => void
   onStatePatch: (callback: (data: Record<string, unknown>) => void) => () => void
   onCanvasChanged: (callback: (data: {
     operation: 'create' | 'switch' | 'rename'
@@ -94,15 +92,6 @@ export interface ConductorPortAPI {
     canvas: Record<string, unknown>
     currentCanvasId?: string
   }) => void) => () => void
-  onText: (callback: (data: { content: string; sessionId?: string }) => void) => () => void
-  onThinking: (callback: (data: { content: string; sessionId?: string }) => void) => () => void
-  onToolUse: (callback: (data: { id: string; name: string; input: unknown; sessionId?: string }) => void) => () => void
-  onToolResult: (callback: (data: { id: string; result: unknown; error?: boolean; sessionId?: string }) => void) => () => void
-  onStatus: (callback: (data: { status: string; sessionId?: string }) => void) => () => void
-  onError: (callback: (data: { message: string; sessionId?: string }) => void) => () => void
-  onDone: (callback: (data: { sessionId?: string }) => void) => () => void
-  onPermission: (callback: (data: { request: { id: string; toolName: string; toolInput: Record<string, unknown> }; sessionId?: string }) => void) => () => void
-  onDisconnected: (callback: (data: { sessionId?: string }) => void) => () => void
   /** Listen for canvas capture requests from the agent (via main process). */
   onCaptureRequest: (callback: (data: { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }) => void) => () => void
   /** Send a capture response back to the main process (which forwards to the agent). */
@@ -519,6 +508,28 @@ export interface ReferencesAPI {
   add: (workingDirectory: string, filePaths: string[]) => Promise<{ success: boolean; data?: string[]; error?: string }>
   delete: (workingDirectory: string, relativePath: string) => Promise<{ success: boolean; error?: string }>
   open: (workingDirectory: string, relativePath: string) => Promise<{ success: boolean; error?: string }>
+}
+
+export interface GitStatusFileChange {
+  path: string;
+  additions: number;
+  removals: number;
+}
+
+export interface GitStatusTotals {
+  additions: number;
+  removals: number;
+  fileCount: number;
+}
+
+export interface GitStatusResult {
+  isGitRepo: boolean;
+  fileChanges?: GitStatusFileChange[];
+  totals?: GitStatusTotals;
+}
+
+export interface GitAPI {
+  status: (cwd: string) => Promise<GitStatusResult>;
 }
 
 export interface PortStatusAPI {
@@ -1038,6 +1049,7 @@ export interface ElectronAPI {
   skills: SkillsAPI
   files: FilesAPI
   references: ReferencesAPI
+  git: GitAPI
   weixin: WeixinAccountAPI
   browserExtension: BrowserExtensionAPI
   browserWebview: BrowserWebviewAPI
@@ -1370,38 +1382,6 @@ function getConductorPortAPI(): ConductorPortAPI | null {
   };
 
   return {
-    /**
-     * @deprecated (plan 221 Phase 7) Spawning a dedicated conductor agent
-     * via MessagePort is no longer the primary path. In-canvas entry points
-     * (ObjectAgentPrompt / ConductorComposer) now forward their input to
-     * the main chat session, which drives canvas tools directly. Retained
-     * for legacy renderer code paths. `conductor:state:patch` and
-     * `conductor:capture:request` are NOT deprecated — they remain in use
-     * for canvas state sync.
-     */
-    startAgent: (data: { content: string; snapshot: unknown; canvasId?: string; model?: string; language?: string; visionModel?: string; permissionMode?: string }) => {
-      const sessionId = data.canvasId ? `conductor-${data.canvasId}` : `conductor-${Date.now()}`;
-      console.log('[preload] startAgent called:', { sessionId, contentLength: data.content?.length, canvasId: data.canvasId });
-      if (!conductorPort) {
-        console.error('[preload] startAgent: conductorPort is null!');
-        return;
-      }
-      console.log('[preload] startAgent: posting to conductorPort...');
-      conductorPort.postMessage({
-        type: 'conductor:agent:start',
-        sessionId,
-        prompt: data.content,
-        snapshot: data.snapshot,
-        model: data.model,
-        language: data.language,
-        visionModel: data.visionModel,
-        permissionMode: data.permissionMode,
-      });
-      console.log('[preload] startAgent: message posted successfully');
-    },
-    interruptAgent: () => {
-      conductorPort?.postMessage({ type: 'conductor:interrupt' });
-    },
     onStatePatch: (callback: (data: Record<string, unknown>) => void) => {
       return registerHandler('conductor:state:patch', (data) => callback(data as Record<string, unknown>));
     },
@@ -1412,33 +1392,6 @@ function getConductorPortAPI(): ConductorPortAPI | null {
         canvas: Record<string, unknown>;
         currentCanvasId?: string;
       }));
-    },
-    onText: (callback: (data: { content: string; sessionId?: string }) => void) => {
-      return registerHandler('conductor:text', (data) => callback(data as { content: string; sessionId?: string }));
-    },
-    onThinking: (callback: (data: { content: string; sessionId?: string }) => void) => {
-      return registerHandler('conductor:thinking', (data) => callback(data as { content: string; sessionId?: string }));
-    },
-    onToolUse: (callback: (data: { id: string; name: string; input: unknown; sessionId?: string }) => void) => {
-      return registerHandler('conductor:tool_use', (data) => callback(data as { id: string; name: string; input: unknown; sessionId?: string }));
-    },
-    onToolResult: (callback: (data: { id: string; result: unknown; error?: boolean; sessionId?: string }) => void) => {
-      return registerHandler('conductor:tool_result', (data) => callback(data as { id: string; result: unknown; error?: boolean; sessionId?: string }));
-    },
-    onStatus: (callback: (data: { status: string; sessionId?: string }) => void) => {
-      return registerHandler('conductor:status', (data) => callback(data as { status: string; sessionId?: string }));
-    },
-    onError: (callback: (data: { message: string; sessionId?: string }) => void) => {
-      return registerHandler('conductor:error', (data) => callback(data as { message: string; sessionId?: string }));
-    },
-    onDone: (callback: (data: { sessionId?: string }) => void) => {
-      return registerHandler('conductor:done', (data) => callback(data as { sessionId?: string }));
-    },
-    onPermission: (callback: (data: { request: { id: string; toolName: string; toolInput: Record<string, unknown> }; sessionId?: string }) => void) => {
-      return registerHandler('conductor:permission', (data) => callback(data as { request: { id: string; toolName: string; toolInput: Record<string, unknown> }; sessionId?: string }));
-    },
-    onDisconnected: (callback: (data: { sessionId?: string }) => void) => {
-      return registerHandler('conductor:disconnected', (data) => callback(data as { sessionId?: string }));
     },
     onCaptureRequest: (callback: (data: { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }) => void) => {
       return registerHandler('conductor:capture:request', (data) => callback(data as { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }));
@@ -1916,6 +1869,9 @@ const electronAPI: ElectronAPI = {
     preview: (targetPath: string, rootPath: string) => ipcRenderer.invoke('files:preview', targetPath, rootPath),
     delete: (targetPath: string) => ipcRenderer.invoke('files:delete', targetPath),
     rename: (targetPath: string, newName: string) => ipcRenderer.invoke('files:rename', targetPath, newName),
+  },
+  git: {
+    status: (cwd: string) => ipcRenderer.invoke('git:status', cwd),
   },
   references: {
     list: (workingDirectory: string) => ipcRenderer.invoke('references:list', workingDirectory),

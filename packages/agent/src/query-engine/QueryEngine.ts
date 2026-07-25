@@ -24,7 +24,7 @@ import type {
   TokenUsage,
   SSEEvent,
 } from '../types.js';
-import { duyaAgent } from '../index.js';
+import { duyaAgent } from '../agent/DuyaAgent.js';
 import { SessionManager, type SessionStore } from '../session/index.js';
 import type { CompactionManager } from '../compact/index.js';
 import type { HookSystem } from './types.js';

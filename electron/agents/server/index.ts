@@ -2,9 +2,6 @@ import * as http from 'http';
 import { SessionManager } from './session-store';
 import { WorkerManager } from './worker-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
-// @deprecated (plan 221 Phase 7) ConductorService is retained for legacy
-// HTTP/SSE routes but no longer the primary execution path.
-import { ConductorService } from './conductor-service';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps } from './router';
 import { InteragentRouter } from './interagent-router';
@@ -97,11 +94,6 @@ function dbRequest(action: string, payload: Record<string, unknown>): Promise<un
   });
 }
 
-// @deprecated (plan 221 Phase 7) ConductorService is retained for legacy
-// HTTP/SSE routes but no longer the primary execution path. The main chat
-// agent now drives conductor mode via injection.
-const conductorService = new ConductorService(workerManager, dbRequest);
-
 const interagentRouter = new InteragentRouter({
   workerManager,
   sessionManager,
@@ -192,7 +184,6 @@ const deps: RouterDeps = {
   sessionManager,
   workerManager,
   checkpointBatcher,
-  conductorService,
   logger,
   httpLogger,
   sessionLogger,
@@ -218,7 +209,6 @@ function gracefulShutdown(): void {
   logger.info('Starting graceful shutdown', { sessionCount: sessionManager.getSessionCount(), workerCount: workerManager.workerCount });
 
   checkpointBatcher.stop();
-  conductorService.destroyAll();
   workerManager.killAll();
 
   server.close(() => {
