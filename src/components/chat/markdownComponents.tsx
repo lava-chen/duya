@@ -7,15 +7,51 @@ import { ImagePreviewModal } from './ImagePreviewModal';
 // Inline media: renders <img> thumbnails that open the lightbox on click,
 // or <video controls> elements for common video extensions so the same
 // `![alt](url)` syntax handles both. External URLs load directly via the
-// Electron renderer; local files use absolute paths.
+// Electron renderer; absolute filesystem paths route through the
+// `duya-file://` custom protocol so the renderer can read local files.
 const VIDEO_EXT_RE = /\.(mp4|webm|mov|ogg|m4v)(?:\?|#|$)/i;
+
+// Detect a Windows absolute path like `C:/...` or `C:\...`. Unix
+// absolute paths start with `/`; the renderer treats `/...` as a URL
+// scheme so we must distinguish "filesystem path" from "URL with a
+// weird scheme".
+function isWindowsAbsolutePath(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value);
+}
+function isUnixAbsolutePath(value: string): boolean {
+  return value.startsWith('/');
+}
+
+/**
+ * Rewrite a markdown image `src` so the renderer can actually load it.
+ * Standard web URLs pass through unchanged. Absolute filesystem paths
+ * are mapped to the `duya-file://` custom protocol registered in the
+ * Electron main process; agents never have to write `duya-file://`
+ * themselves.
+ */
+function rewriteMediaSrc(src: string): string {
+  if (!src) return src;
+  // Windows absolute paths look like `C:/...` or `C:\...` — the `C:`
+  // prefix could be mistaken for a URL scheme, so check this first.
+  if (isWindowsAbsolutePath(src)) {
+    return `duya-file:///${src.replace(/\\/g, '/')}`;
+  }
+  // Scheme-bearing URL (`http:`, `https:`, `data:`, `blob:`, ...) passes
+  // through. Anything else that begins with `/` is a Unix absolute path.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src;
+  if (isUnixAbsolutePath(src)) {
+    return `duya-file://${src}`;
+  }
+  return src;
+}
 
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const [open, setOpen] = useState(false);
   if (!src) return null;
   const altText = alt ?? '';
+  const resolvedSrc = rewriteMediaSrc(src);
 
-  if (VIDEO_EXT_RE.test(src)) {
+  if (VIDEO_EXT_RE.test(resolvedSrc)) {
     return (
       <video
         controls
@@ -23,7 +59,7 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
         className="markdown-video"
         aria-label={altText || 'video'}
       >
-        <source src={src} />
+        <source src={resolvedSrc} />
       </video>
     );
   }
@@ -36,14 +72,14 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
         onClick={() => setOpen(true)}
         aria-label={`Enlarge image: ${altText}`}
       >
-        <img src={src} alt={altText} className="markdown-image" loading="lazy" />
+        <img src={resolvedSrc} alt={altText} className="markdown-image" loading="lazy" />
         {altText && (
           <span className="markdown-image-caption">{altText}</span>
         )}
       </button>
       {open && (
         <ImagePreviewModal
-          src={src}
+          src={resolvedSrc}
           alt={altText || 'image'}
           onClose={() => setOpen(false)}
         />

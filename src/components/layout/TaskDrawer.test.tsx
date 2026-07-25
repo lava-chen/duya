@@ -19,8 +19,6 @@ const mocks = vi.hoisted(() => ({
       model: 'claude-sonnet',
     },
   ],
-  messages: {} as Record<string, unknown[]>,
-  fileChanges: [] as Array<{ path: string; name: string; additions: number; removals: number; kind: 'edit' | 'create' }>,
   artifacts: [] as Array<{ path: string; name: string; kindLabel: string }>,
   sources: {
     userAttachments: [] as Array<{ id: string; name: string; kind?: string; metadata?: unknown }>,
@@ -37,6 +35,14 @@ const mocks = vi.hoisted(() => ({
       sessionId: 'sub-session-1',
     },
   ],
+  // Git status mock — defaults to "not a git repo" so the
+  // EnvironmentInfoSection returns null. Individual tests override
+  // this to assert the rendered content of the section.
+  gitStatus: {
+    isGitRepo: false,
+    fileChanges: [] as Array<{ path: string; additions: number; removals: number }>,
+    totals: { additions: 0, removals: 0, fileCount: 0 },
+  },
 }));
 
 vi.mock('@/hooks/useSubAgentProgress', () => ({
@@ -44,11 +50,15 @@ vi.mock('@/hooks/useSubAgentProgress', () => ({
 }));
 
 vi.mock('@/hooks/useSessionArtifacts', () => ({
-  useSessionArtifacts: () => ({ fileChanges: mocks.fileChanges, artifacts: mocks.artifacts }),
+  useSessionArtifacts: () => ({ fileChanges: [], artifacts: mocks.artifacts }),
 }));
 
 vi.mock('@/hooks/useSessionSources', () => ({
   useSessionSources: () => mocks.sources,
+}));
+
+vi.mock('@/hooks/useGitStatus', () => ({
+  useGitStatus: () => mocks.gitStatus,
 }));
 
 vi.mock('@/stores/conversation-store', () => {
@@ -88,19 +98,12 @@ vi.mock('@/components/icons', () => ({
   TerminalIcon: () => <span />,
   CaretDownIcon: () => <span />,
   ExternalLinkIcon: () => <span />,
+  GitBranchIcon: () => <span />,
   SpinnerIcon: () => <span data-testid="agent-spinner" />,
   TrashIcon: () => <span />,
   ArrowCounterClockwiseIcon: () => <span />,
   RobotIcon: () => <span data-testid="agent-icon" />,
   XIcon: () => <span />,
-}));
-
-vi.mock('@/components/chat/AgentProfileSelector', () => ({
-  AgentProfileSelector: ({ sessionId }: { sessionId: string | null }) => (
-    <div data-testid="agent-profile-selector" data-session-id={sessionId ?? ''}>
-      Default Agent
-    </div>
-  ),
 }));
 
 import { TaskDrawer } from './TaskDrawer';
@@ -118,7 +121,6 @@ describe('TaskDrawer session-detail panel', () => {
         sessionId: 'sub-session-1',
       },
     ];
-    mocks.fileChanges = [];
     mocks.artifacts = [];
     mocks.sources = { userAttachments: [], browserUrls: [], others: [] };
     mocks.threads = [
@@ -131,6 +133,12 @@ describe('TaskDrawer session-detail panel', () => {
         model: 'claude-sonnet',
       },
     ];
+    // Default: not a git repo — EnvironmentInfoSection should not render.
+    mocks.gitStatus = {
+      isGitRepo: false,
+      fileChanges: [],
+      totals: { additions: 0, removals: 0, fileCount: 0 },
+    };
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -156,25 +164,48 @@ describe('TaskDrawer session-detail panel', () => {
     expect(mocks.setActiveThread).toHaveBeenCalledWith('sub-session-1');
   });
 
-  it('renders all sections with no header at the top', () => {
+  it('hides EnvironmentInfoSection entirely when not a git repo', () => {
     render(<TaskDrawer />);
 
-    // Environment info section
-    expect(screen.getByText('环境信息')).toBeInTheDocument();
-    expect(screen.getByText('Refactor session')).toBeInTheDocument();
-    expect(screen.getByText('duya')).toBeInTheDocument();
-    expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
+    // Not a git repo → the section is gone (label and row are both gone).
+    expect(screen.queryByText('环境信息')).not.toBeInTheDocument();
+    expect(screen.queryByText('变更')).not.toBeInTheDocument();
 
-    // Main agent section
-    expect(screen.getByText('Main Agent')).toBeInTheDocument();
-    expect(screen.getByTestId('agent-profile-selector')).toBeInTheDocument();
-
-    // Sources + Artifacts labels render even when empty
+    // Other sections still render.
     expect(screen.getByText('来源')).toBeInTheDocument();
     expect(screen.getByText('产物')).toBeInTheDocument();
+  });
 
-    // No leftover header chrome (header had a Tasks title + Close button)
+  it('renders EnvironmentInfoSection when the cwd is a git repo with changes', () => {
+    mocks.gitStatus = {
+      isGitRepo: true,
+      fileChanges: [
+        { path: 'README.md', additions: 12, removals: 3 },
+        { path: 'src/foo.ts', additions: 5, removals: 0 },
+      ],
+      totals: { additions: 17, removals: 3, fileCount: 2 },
+    };
+
+    render(<TaskDrawer />);
+
+    expect(screen.getByText('环境信息')).toBeInTheDocument();
+    expect(screen.getByText('变更')).toBeInTheDocument();
+    expect(screen.getByText('+17')).toBeInTheDocument();
+    expect(screen.getByText('-3')).toBeInTheDocument();
+    expect(screen.getByText('2 个文件')).toBeInTheDocument();
+  });
+
+  it('never renders a header, agent profile selector, or model label', () => {
+    render(<TaskDrawer />);
+
+    // The old header is gone.
     expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Close')).not.toBeInTheDocument();
+
+    // The agent selector and main-agent label are gone too.
+    expect(screen.queryByTestId('agent-profile-selector')).not.toBeInTheDocument();
+    expect(screen.queryByText('Main Agent')).not.toBeInTheDocument();
+    expect(screen.queryByText('Refactor session')).not.toBeInTheDocument();
+    expect(screen.queryByText('claude-sonnet')).not.toBeInTheDocument();
   });
 });

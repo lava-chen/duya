@@ -77,8 +77,8 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
   const isReadModule = isModuleTool(tool.name);
   // TaskTool uses the same tool name as the legacy subagent
   // dispatcher; the predicate inspects `input.action` to disambiguate.
-  // Routing TaskTool here means TaskToolRow owns the chrome summary,
-  // the JSON envelope body, and the drawer auto-open trigger.
+  // Routing TaskTool here means TaskToolRow owns the chrome summary
+  // and the JSON envelope body.
   const isTaskTool = isTaskToolAction(tool.input);
   const isMessageSession = isMessageSessionTool(tool.name);
   const isVisionAnalyze = tool.name.toLowerCase() === 'vision_analyze';
@@ -136,8 +136,7 @@ export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }
     // TaskTool returns a JSON envelope `{ task: { id, subject } }`
     // (or `{ taskId, status, ... }` for update/output/stop). Route to
     // TaskToolRow so the chrome summary renders natural language
-    // ("已创建 设计杂志风...") per-action and a successful create /
-    // status=completed update auto-opens the TaskDrawer.
+    // ("已创建 设计杂志风...") per-action.
     return <TaskToolRow tool={tool} />;
   }
 

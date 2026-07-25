@@ -35,12 +35,26 @@ export type ActionItem =
   | { kind: 'widget'; content: string; sourceMessageId?: string; sourceLabel?: string };
 
 /**
- * Segment produced by `computeSegments`. A run of consecutive tool
- * actions either becomes a Group (≥2) or a single standalone row (1).
+ * One element of a Segment's run. Tool actions render through
+ * `ToolActionRow`; thinking rows render through `ThinkingRow`. Both
+ * kinds share the same ordering inside a group, so a sequence like
+ * [tool, thinking, tool] becomes a single Group with three entries
+ * interleaved in their original action order.
+ */
+export type SegmentEntry =
+  | { kind: 'tool'; tool: ToolAction }
+  | { kind: 'thinking'; content: string; isStreaming?: boolean };
+
+/**
+ * Segment produced by `computeSegments`. A run of consecutive tool /
+ * thinking actions either becomes a Group (≥2) or a single standalone
+ * entry (1). Only `text` and `widget` actions break the run —
+ * thinking joins the run because it's a side-channel of the model's
+ * reasoning, not a separate user-visible step.
  */
 export type Segment =
-  | { kind: 'group'; tools: ToolAction[] }
-  | { kind: 'single'; tool: ToolAction };
+  | { kind: 'group'; entries: SegmentEntry[] }
+  | { kind: 'single'; entry: SegmentEntry };
 
 /**
  * Coarse-grained category the group summary uses to count tool calls.

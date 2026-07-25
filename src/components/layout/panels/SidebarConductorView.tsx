@@ -63,7 +63,10 @@ export function SidebarConductorView({
   }, [tab?.id, targetCanvasName, updateTabTitle]);
 
   const [isLoading, setIsLoading] = useState(true);
-  const [presentationMode, setPresentationMode] = useState<CanvasPresentationMode>("finite");
+  // Default to the infinite canvas view. The "finite" / document view
+  // is still in development — keep it reachable via the toggle in dev,
+  // but ship production users on the canvas view.
+  const [presentationMode, setPresentationMode] = useState<CanvasPresentationMode>("infinite");
 
   // Register the agent-initiated canvas capture listener so the
   // sidebar canvas can respond to canvas_capture tool calls. Without
@@ -185,7 +188,9 @@ export function SidebarConductorView({
     <div className="sidebar-conductor">
       <div className="sidebar-conductor-header">
         <CanvasSelector />
-        <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
+        {import.meta.env.DEV && (
+          <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
+        )}
       </div>
 
       {uiError && (

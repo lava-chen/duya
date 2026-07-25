@@ -71,37 +71,46 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
 
 export function useStreamingActions(sessionId: string): ActionItem[] {
   const [actions, setActions] = useState<ActionItem[]>([]);
-  // Keep the last `events` reference and the derived `actions` array so
-  // we can short-circuit the listener when the store mutates in place.
-  // The stream-session-manager appends text/thinking deltas to the
-  // trailing event's `content` field instead of allocating a new array
-  // (see stream-session-manager.ts handleTextEvent / handleThinkingEvent),
-  // so a re-emit with the same `events` reference means nothing the
-  // renderer cares about changed and we can keep returning the same
-  // `ActionItem[]` reference. Without this, every SSE text delta would
-  // create a new array → new props → full ToolActionsGroup re-render.
-  const lastEventsRef = useRef<StreamingEvent[] | null>(null);
-  const lastActionsRef = useRef<ActionItem[]>([]);
+  // Text and thinking deltas mutate the trailing StreamingEvent in place.
+  // Keep the newest snapshot and derive actions at most once per animation
+  // frame: reference equality cannot tell whether an in-place event changed.
+  const latestEventsRef = useRef<StreamingEvent[] | null>(null);
+  const frameRef = useRef<number | null>(null);
 
   useEffect(() => {
     // Reset on sessionId change so a new session starts fresh.
-    lastEventsRef.current = null;
-    lastActionsRef.current = [];
+    latestEventsRef.current = null;
     setActions([]);
 
-    const unsubscribe = subscribeToStreamingEvents(sessionId, (events) => {
-      if (lastEventsRef.current === events) {
-        // Same reference as last notify → store mutated in place (text /
-        // thinking delta append). Keep returning the same array so the
-        // downstream `React.memo`'d ToolActionsGroup skips re-render.
+    const flush = () => {
+      frameRef.current = null;
+      const events = latestEventsRef.current;
+      if (events) {
+        setActions(streamingEventsToActions(events));
+      }
+    };
+
+    const scheduleFlush = () => {
+      if (frameRef.current !== null) return;
+      if (typeof requestAnimationFrame === 'undefined') {
+        flush();
         return;
       }
-      lastEventsRef.current = events;
-      const next = streamingEventsToActions(events);
-      lastActionsRef.current = next;
-      setActions(next);
+      frameRef.current = requestAnimationFrame(flush);
+    };
+
+    const unsubscribe = subscribeToStreamingEvents(sessionId, (events) => {
+      latestEventsRef.current = events;
+      scheduleFlush();
     });
-    return unsubscribe;
+
+    return () => {
+      unsubscribe();
+      if (frameRef.current !== null && typeof cancelAnimationFrame !== 'undefined') {
+        cancelAnimationFrame(frameRef.current);
+      }
+      frameRef.current = null;
+    };
   }, [sessionId]);
 
   return actions;
