@@ -3,23 +3,39 @@
  * Uses LLM to generate a comprehensive session summary that preserves
  * key decisions, tool calls, and conclusions.
  *
- * Enhanced features from claude-code-haha:
+ * Enhanced features:
  * 1. Structured memory extraction with key sections
  * 2. File change tracking for post-compact restoration
  * 3. Skill invocation tracking
  * 4. Agent state preservation
+ * 5. Token budget cut point algorithm (from pi)
+ * 6. Iterative summary updates with previous summary injection (from pi)
+ * 7. Split turn handling for oversized turns (from pi)
+ * 8. Cross-compaction file operation tracking (from pi)
  */
 
 import type { CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
 import { COMPACTION_THRESHOLDS } from '../types.js'
 import { estimateMessagesTokens } from '../tokenBudget.js'
 import { adjustSliceBoundary } from '../compact.js'
+import {
+  findCutPoint,
+  buildSummarizationPrompt,
+  serializeMessagesForSummary,
+  extractFileOpsFromMessages,
+  computeFileLists,
+  formatFileOperations,
+  createFileOps,
+  generateTurnPrefixSummary,
+  DEFAULT_CUT_CONFIG,
+  type FileOperations,
+} from '../tokenBudgetCut.js'
 
 /**
  * Configuration for Session Memory Compact
  */
 export interface SessionMemoryCompactConfig {
-  /** Keep the most recent N messages */
+  /** Keep the most recent N messages (legacy fallback) */
   maxMessagesToKeep: number
   /** System prompt for the summarizer */
   summarizationPrompt: string
@@ -29,6 +45,12 @@ export interface SessionMemoryCompactConfig {
   maxFilesToRestore?: number
   /** Enable skill tracking */
   enableSkillTracking?: boolean
+  /** Number of recent tokens to keep (not summarize) - if set, overrides maxMessagesToKeep */
+  keepRecentTokens?: number
+  /** Previous summary from last compaction (for iterative updates) */
+  previousSummary?: string
+  /** Accumulated file operations from previous compactions */
+  accumulatedFileOps?: FileOperations
 }
 
 /**
@@ -326,7 +348,24 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       maxTokensPerFile: config.maxTokensPerFile ?? 5000,
       maxFilesToRestore: config.maxFilesToRestore ?? 5,
       enableSkillTracking: config.enableSkillTracking ?? true,
+      keepRecentTokens: config.keepRecentTokens ?? DEFAULT_CUT_CONFIG.keepRecentTokens,
+      previousSummary: config.previousSummary,
+      accumulatedFileOps: config.accumulatedFileOps ?? createFileOps(),
     }
+  }
+
+  /**
+   * Update the previous summary for iterative compaction
+   */
+  setPreviousSummary(summary: string): void {
+    this.config.previousSummary = summary
+  }
+
+  /**
+   * Get accumulated file operations
+   */
+  getAccumulatedFileOps(): FileOperations {
+    return this.config.accumulatedFileOps ?? createFileOps()
   }
 
   /**
@@ -434,7 +473,7 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
   }
 
   /**
-   * Execute session memory compaction
+   * Execute session memory compaction with token budget cut point and iterative summary updates
    */
   async compact(messages: Message[], stats: CompactionStats): Promise<CompactionResult> {
     const SYSTEM_MESSAGE_PREFIXES = ['system', 'instruction', 'You are', 'You are a', 'This session is being continued']
@@ -467,34 +506,79 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       }
     }
 
-    // Split into messages to keep (recent) and messages to summarize (older).
-    // Adjust the boundary so we don't cut in the middle of a
-    // tool_use/tool_result round-trip (orphaned tool_result).
-    let splitIndex = Math.max(0, conversationMessages.length - this.config.maxMessagesToKeep)
-    splitIndex = adjustSliceBoundary(conversationMessages, splitIndex)
-    const recentMessages = conversationMessages.slice(splitIndex)
-    const olderMessages = conversationMessages.slice(0, splitIndex)
+    // Use token budget cut point algorithm (from pi)
+    const keepRecentTokens = this.config.keepRecentTokens ?? DEFAULT_CUT_CONFIG.keepRecentTokens
+    const cutPoint = findCutPoint(conversationMessages, 0, conversationMessages.length, keepRecentTokens)
+
+    // Extract messages based on cut point
+    const recentMessages = conversationMessages.slice(cutPoint.firstKeptIndex)
+    const olderMessages = conversationMessages.slice(0, cutPoint.firstKeptIndex)
+
+    // Handle split turn if necessary
+    let turnPrefixSummary = ''
+    if (cutPoint.isSplitTurn && cutPoint.turnStartIndex >= 0) {
+      const turnPrefixMessages = conversationMessages.slice(cutPoint.turnStartIndex, cutPoint.firstKeptIndex)
+      if (turnPrefixMessages.length > 0 && this.summarizer) {
+        try {
+          turnPrefixSummary = await generateTurnPrefixSummary(
+            turnPrefixMessages,
+            this.summarizer,
+            serializeMessagesForSummary,
+          )
+        } catch (error) {
+          // Log but continue - turn prefix summary is optional
+          console.warn('Turn prefix summarization failed:', error)
+        }
+      }
+    }
 
     // Calculate tokens saved
     const tokensRemoved = estimateMessagesTokens(olderMessages)
     const tokensRetained = estimateMessagesTokens([...systemMessages, ...recentMessages])
 
-    // Generate comprehensive session memory
+    // Extract file operations (accumulate with previous compactions)
+    const fileOps = this.config.accumulatedFileOps ?? createFileOps()
+    extractFileOpsFromMessages(olderMessages, fileOps)
+    if (cutPoint.isSplitTurn && cutPoint.turnStartIndex >= 0) {
+      const turnPrefixMessages = conversationMessages.slice(cutPoint.turnStartIndex, cutPoint.firstKeptIndex)
+      extractFileOpsFromMessages(turnPrefixMessages, fileOps)
+    }
+    const { readFiles, modifiedFiles } = computeFileLists(fileOps)
+
+    // Generate comprehensive session memory with iterative update support
     let summaryText = ''
     if (this.summarizer && olderMessages.length > 0) {
       try {
         const cleanedMessages = this.stripImagesFromMessages(olderMessages)
-        const conversationText = this.extractTextFromMessages(cleanedMessages)
+        const conversationText = serializeMessagesForSummary(cleanedMessages)
+
+        // Build prompt with previous summary for iterative updates
+        const prompt = buildSummarizationPrompt(
+          conversationText,
+          this.config.previousSummary,
+          undefined, // customInstructions
+        )
 
         // Add metadata about the conversation to help the summarizer
         const toolCount = countToolCalls(olderMessages)
-        const fileOps = extractFileOperations(olderMessages)
+        const fileOpsList = extractFileOperations(olderMessages)
         const hasRecentToolCalls = hasToolCallsInLastTurn(olderMessages)
 
-        const enhancedPrompt = `${this.config.summarizationPrompt}\n\n---\n\nConversation Statistics:\n- Total older messages: ${olderMessages.length}\n- Tool calls: ${toolCount}\n- File operations: ${fileOps.length}\n- Has tool calls in last turn: ${hasRecentToolCalls}`
+        const enhancedPrompt = `${prompt}\n\n---\n\nConversation Statistics:\n- Total older messages: ${olderMessages.length}\n- Tool calls: ${toolCount}\n- File operations: ${fileOpsList.length}\n- Has tool calls in last turn: ${hasRecentToolCalls}`
 
         const rawSummary = await this.summarizer(conversationText, enhancedPrompt)
         summaryText = formatSessionMemorySummary(rawSummary)
+
+        // Append file operations to summary
+        summaryText += formatFileOperations(readFiles, modifiedFiles)
+
+        // Merge with turn prefix summary if split turn
+        if (turnPrefixSummary) {
+          summaryText = `${summaryText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixSummary}`
+        }
+
+        // Update previous summary for next iteration
+        this.config.previousSummary = summaryText
       } catch {
         summaryText = `[Session memory unavailable - ${olderMessages.length} messages truncated]`
       }
@@ -518,9 +602,12 @@ Continue the conversation from where it left off without asking the user any fur
       metadata: {
         strategy: 'session_memory',
         messagesCompressed: olderMessages.length,
-        fileOperations: extractFileOperations(olderMessages).length,
+        fileOperations: modifiedFiles.length,
         toolCalls: countToolCalls(olderMessages),
         compactedAt: Date.now(),
+        isSplitTurn: cutPoint.isSplitTurn,
+        readFiles: readFiles.length,
+        modifiedFiles: modifiedFiles.length,
       },
     }
 
@@ -543,8 +630,28 @@ Continue the conversation from where it left off without asking the user any fur
    * Get file operations from the most recent compaction (for external use)
    */
   getFileOperations(): FileChangeRecord[] {
-    // This would be populated during compact() call
-    return []
+    const fileOps = this.getAccumulatedFileOps()
+    const { readFiles, modifiedFiles } = computeFileLists(fileOps)
+
+    const result: FileChangeRecord[] = []
+
+    for (const filePath of readFiles) {
+      result.push({
+        filePath,
+        operation: 'read',
+        timestamp: Date.now(),
+      })
+    }
+
+    for (const filePath of modifiedFiles) {
+      result.push({
+        filePath,
+        operation: 'edit',
+        timestamp: Date.now(),
+      })
+    }
+
+    return result
   }
 
   /**

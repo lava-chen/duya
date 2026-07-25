@@ -224,7 +224,7 @@ describe('resolveAllowedTools', () => {
     expect(result.allowed).not.toContain('gateway:http');
   });
 
-  it('gives Gateway shell access while blocking incomplete team tools', () => {
+  it('gives Gateway shell access while blocking recursive and mode tools', () => {
     const gateway = PRESET_AGENT_PROFILES.find((profile) => profile.id === 'gateway');
     expect(gateway).toBeDefined();
 
@@ -236,16 +236,10 @@ describe('resolveAllowedTools', () => {
       'grep',
       'MessageSession',
       'SessionSearch',
-      'TeamCreate',
-      'TeamDelete',
       'Agent',
-      'EnterWorktree',
-      'ExitWorktree',
       'EnterPlanMode',
       'ExitPlanMode',
       'SwitchMode',
-      'ListMcpResources',
-      'ReadMcpResource',
     ];
     const result = resolveAllowedTools(gateway!, registeredGatewaySurface);
 
@@ -259,19 +253,11 @@ describe('resolveAllowedTools', () => {
       'SessionSearch',
     ]));
     expect(result.allowed).not.toEqual(expect.arrayContaining([
-      'TeamCreate',
-      'TeamDelete',
       'Agent',
-      'EnterWorktree',
-      'ExitWorktree',
       'EnterPlanMode',
       'ExitPlanMode',
       'SwitchMode',
-      'ListMcpResources',
-      'ReadMcpResource',
     ]));
-    expect(result.diagnostics.unmatchedPatterns).not.toContain('TeamCreate');
-    expect(result.diagnostics.unmatchedPatterns).not.toContain('TeamDelete');
   });
 });
 

@@ -25,13 +25,8 @@
  * surrounding logic separately.
  */
 
-// Note: the regression test spends ~9s in the dynamic import
-// resolution of `../../src/index.js` (the real module is heavy — it
-// pulls in the whole agent). The 10s default timeout in
-// packages/agent/tests/vitest.config.ts is too tight, so we override
-// it for this file specifically. This is the only file in the
-// self-improver suite that exercises the real module graph; the
-// other tests run on the unit state machine alone and are fast.
+// The constructor module is mocked directly so this regression test does not
+// initialize the full worker/runtime graph.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
@@ -53,16 +48,14 @@ vi.mock('node:os', async () => {
 type CapturedCall = { prompt: unknown; options: Record<string, unknown> };
 const capturedCalls: CapturedCall[] = [];
 
-// Mock duyaAgent with a minimal fake. SelfImprover does
-//   const { duyaAgent } = await import('../index.js');
-//   return new duyaAgent(options)
-// then iterates over creatorAgent.streamChat(prompt, options).
+// Mock duyaAgent with a minimal fake. SelfImprover dynamically imports the
+// implementation module, constructs the class, then iterates over
+// creatorAgent.streamChat(prompt, options).
 //
 // The fake streamChat captures the call args and yields a benign
 // "nothing to save" text response so the public initiateSkillCreation
 // path exits cleanly without entering the evaluator loop.
-vi.mock('../../src/index.js', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>('../../src/index.js');
+vi.mock('../../src/agent/DuyaAgent.js', () => {
   class FakeDuyaAgent {
     private messages: unknown[] = [];
     constructor(_opts: unknown) {
@@ -90,7 +83,6 @@ vi.mock('../../src/index.js', async () => {
     }
   }
   return {
-    ...actual,
     duyaAgent: FakeDuyaAgent,
   };
 });

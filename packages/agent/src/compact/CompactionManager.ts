@@ -41,6 +41,10 @@ export interface CompactionManagerConfig {
   enableReinjection?: boolean
   /** Reinjection configuration */
   reinjectionConfig?: Partial<ReinjectorConfig>
+  /** Number of recent tokens to keep (not summarize) */
+  keepRecentTokens?: number
+  /** Enable iterative summary updates */
+  enableIterativeSummary?: boolean
 }
 
 /**
@@ -78,6 +82,9 @@ export class CompactionManager {
   private summarizer?: (text: string, prompt: string) => Promise<string>
   private reactiveStrategy?: ReactiveCompactStrategy
   private reinjector?: PostCompactReinjector
+  private keepRecentTokens?: number
+  private enableIterativeSummary: boolean
+  private lastSummary?: string
 
   constructor(config: CompactionManagerConfig = {}) {
     const maxTokens = config.maxTokens ?? DEFAULT_CONTEXT_WINDOW
@@ -90,6 +97,10 @@ export class CompactionManager {
       systemPromptTokens,
       reservedTokens,
     })
+
+    // Store config for strategy initialization
+    this.keepRecentTokens = config.keepRecentTokens
+    this.enableIterativeSummary = config.enableIterativeSummary ?? true
 
     // Register default strategies
     this.registerDefaultStrategies()
@@ -114,8 +125,11 @@ export class CompactionManager {
     const micro = new MicroCompactStrategy()
     this.strategies.set('micro', micro)
 
-    // Session Memory Compact (medium)
-    const sessionMemory = new SessionMemoryCompactStrategy()
+    // Session Memory Compact (medium) - with iterative summary support
+    const sessionMemory = new SessionMemoryCompactStrategy({
+      keepRecentTokens: this.keepRecentTokens,
+      previousSummary: this.enableIterativeSummary ? this.lastSummary : undefined,
+    })
     this.strategies.set('session_memory', sessionMemory)
 
     // Snip Compact (heaviest - last resort)
@@ -275,6 +289,20 @@ export class CompactionManager {
       this.contextTokens = estimateMessagesTokens(finalMessages)
       this.budget.setContextTokens(this.contextTokens)
       this.consecutiveFailures = 0
+
+      // Store summary for iterative updates (if session_memory strategy was used)
+      if (strategy.name === 'session_memory' && this.enableIterativeSummary) {
+        // Extract summary from the summary message
+        const summaryMessage = finalMessages.find(m => m.isCompactSummary)
+        if (summaryMessage && typeof summaryMessage.content === 'string') {
+          // Extract the summary text (remove the continuation instruction)
+          const content = summaryMessage.content
+          const summaryMatch = content.match(/The session memory below covers the earlier portion of the conversation\.\n\n([\s\S]+?)\n\nContinue the conversation/)
+          if (summaryMatch) {
+            this.lastSummary = summaryMatch[1]
+          }
+        }
+      }
 
       const result: EnhancedCompactionResult = {
         ...baseResult,

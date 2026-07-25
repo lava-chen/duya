@@ -582,28 +582,50 @@ function normalizeToolResultOrdering(
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    const pendingIds = new Set<string>();
-    if (message.role === 'assistant' && Array.isArray(message.content)) {
-      for (const block of message.content) {
-        if (typeof block === 'object' && block !== null && (block as { type?: string }).type === 'tool_use') {
-          const id = (block as { id?: string }).id;
-          if (id) pendingIds.add(id);
+    const toolUseIds = (candidate: MessageParam): string[] => {
+      if (candidate.role !== 'assistant' || !Array.isArray(candidate.content)) return [];
+      return candidate.content.flatMap((block) => {
+        if (typeof block !== 'object' || block === null || (block as { type?: string }).type !== 'tool_use') {
+          return [];
         }
-      }
-    }
+        const id = (block as { id?: string }).id;
+        return id ? [id] : [];
+      });
+    };
+
+    // Persistence can record a model correction as another assistant message
+    // before the executor writes either result. Treat consecutive assistant
+    // tool messages as one round so compatible providers receive every result
+    // in the tool-call order, immediately after the combined assistant turn.
+    const pendingToolUseIds = toolUseIds(message);
+    const pendingIds = new Set(pendingToolUseIds);
 
     if (pendingIds.size === 0) {
       normalized.push(message);
       continue;
     }
 
+    const assistantRound = [message];
+    let firstNonAssistantIndex = index + 1;
+    while (firstNonAssistantIndex < messages.length) {
+      const candidate = messages[firstNonAssistantIndex];
+      const candidateIds = toolUseIds(candidate);
+      if (candidateIds.length === 0) break;
+      assistantRound.push(candidate);
+      for (const id of candidateIds) {
+        pendingToolUseIds.push(id);
+        pendingIds.add(id);
+      }
+      firstNonAssistantIndex++;
+    }
+
     const unresolvedIds = new Set(pendingIds);
-    const resultBlocks: ContentBlockParam[] = [];
+    const resultBlocksById = new Map<string, ContentBlockParam[]>();
     const deferred: MessageParam[] = [];
     let resultEndIndex = -1;
-    let roundEndIndex = index;
+    let roundEndIndex = firstNonAssistantIndex - 1;
 
-    for (let cursor = index + 1; cursor < messages.length && unresolvedIds.size > 0; cursor++) {
+    for (let cursor = firstNonAssistantIndex; cursor < messages.length && unresolvedIds.size > 0; cursor++) {
       const candidate = messages[cursor];
       if (candidate.role === 'assistant') {
         break;
@@ -622,9 +644,13 @@ function normalizeToolResultOrdering(
         if (matchingResults.length > 0) {
           for (const block of matchingResults) {
             const toolUseId = (block as { tool_use_id?: string }).tool_use_id;
-            if (toolUseId) unresolvedIds.delete(toolUseId);
+            if (toolUseId) {
+              unresolvedIds.delete(toolUseId);
+              const blocks = resultBlocksById.get(toolUseId) ?? [];
+              blocks.push(block);
+              resultBlocksById.set(toolUseId, blocks);
+            }
           }
-          resultBlocks.push(...matchingResults);
           resultEndIndex = cursor;
 
           const remainingContent = candidate.content.filter((block) => !matchingResults.includes(block));
@@ -645,27 +671,36 @@ function normalizeToolResultOrdering(
     // strict recovery cleanup below.
     if (unresolvedIds.size > 0 || resultEndIndex === -1) {
       if (synthesizeMissingToolResults) {
-        const synthesizedResults = Array.from(unresolvedIds, (toolUseId) => ({
+        const synthesizedResultsById = new Map<string, ContentBlockParam[]>();
+        for (const toolUseId of unresolvedIds) {
+          synthesizedResultsById.set(toolUseId, [{
           type: 'tool_result' as const,
           tool_use_id: toolUseId,
           content: '<tool_error>Tool execution did not complete. This result was synthesized during conversation recovery.</tool_error>',
           is_error: true,
-        })) as ContentBlockParam[];
+          } as ContentBlockParam]);
+        }
+        const resultBlocks = pendingToolUseIds.flatMap((toolUseId) => [
+          ...(resultBlocksById.get(toolUseId) ?? []),
+          ...(synthesizedResultsById.get(toolUseId) ?? []),
+        ]);
 
-        normalized.push(message);
-        normalized.push({ role: 'user', content: [...resultBlocks, ...synthesizedResults] });
+        normalized.push(...assistantRound);
+        normalized.push({ role: 'user', content: resultBlocks });
         normalized.push(...deferred);
-        synthesizedCount += synthesizedResults.length;
+        synthesizedCount += unresolvedIds.size;
         reorderedRounds++;
         index = roundEndIndex;
         continue;
       }
-      normalized.push(message);
+      normalized.push(...assistantRound);
+      index = firstNonAssistantIndex - 1;
       continue;
     }
 
-    const alreadyAdjacent = resultEndIndex === index + 1 && deferred.length === 0;
-    normalized.push(message);
+    const resultBlocks = pendingToolUseIds.flatMap((toolUseId) => resultBlocksById.get(toolUseId) ?? []);
+    const alreadyAdjacent = assistantRound.length === 1 && resultEndIndex === index + 1 && deferred.length === 0;
+    normalized.push(...assistantRound);
     if (alreadyAdjacent) {
       normalized.push(messages[resultEndIndex]);
     } else {

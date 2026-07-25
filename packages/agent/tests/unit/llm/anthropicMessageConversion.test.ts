@@ -737,4 +737,48 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
     );
     expect(lateResults).toHaveLength(1);
   });
+
+  it('groups consecutive canvas tool calls and orders their results (case 16)', async () => {
+    const client = makeClient();
+    const firstToolId = 'call_00_5FNUZAdUBu0fkhUjWKjQ9723';
+    const correctedToolId = 'call_00_1jFLiR5xeARKeqDcgrqU7471';
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Create a CREST mind map', timestamp: 1 },
+      {
+        id: 'a1', role: 'assistant', timestamp: 2,
+        content: [
+          { type: 'text', text: 'I will rename the canvas first.' },
+          { type: 'tool_use', id: firstToolId, name: 'canvas_rename', input: { name: 'CREST mind map' } },
+        ],
+      },
+      {
+        id: 'a2', role: 'assistant', timestamp: 3,
+        content: [
+          { type: 'text', text: 'That tool name was wrong; using canvas_manage.' },
+          { type: 'tool_use', id: correctedToolId, name: 'canvas_manage', input: { action: 'rename', name: 'CREST mind map' } },
+        ],
+      },
+      { id: 't1', role: 'tool', content: '<tool_error>No such tool available: canvas_rename</tool_error>', tool_call_id: firstToolId, timestamp: 4 },
+      { id: 't2', role: 'tool', content: '{"action":"rename"}', tool_call_id: correctedToolId, timestamp: 5 },
+    ];
+
+    const body = await captureRequestBody(client, messages);
+    const toolRoundIndex = body.messages.findIndex((message: any) =>
+      message.role === 'assistant' &&
+      Array.isArray(message.content) &&
+      message.content.some((block: any) => block.type === 'tool_use' && block.id === firstToolId),
+    );
+    expect(toolRoundIndex).toBeGreaterThanOrEqual(0);
+
+    const toolRound = body.messages[toolRoundIndex];
+    expect(toolRound.content
+      .filter((block: any) => block.type === 'tool_use')
+      .map((block: any) => block.id)).toEqual([firstToolId, correctedToolId]);
+
+    const immediateResults = body.messages[toolRoundIndex + 1];
+    expect(immediateResults).toMatchObject({ role: 'user' });
+    expect(immediateResults.content
+      .filter((block: any) => block.type === 'tool_result')
+      .map((block: any) => block.tool_use_id)).toEqual([firstToolId, correctedToolId]);
+  });
 });

@@ -1,53 +1,59 @@
 /**
  * Plan 241 Phase 3: tool_search discovery scanner.
  *
- * Pulls tool names out of `tool_search` `tool_result` content so the
- * caller can add them to the active tool set for the next turn.
- *
- * The agent runtime already pairs `assistant_message.tool_use[id]`
- * with `tool_result.tool_use_id` blocks; this helper operates on the
- * tool_result payload and assumes the caller has already filtered to
- * `tool_search` invocations (or is willing to ignore non-tool_search
- * JSON results — both are safe).
+ * Pulls tool names out of the stable Markdown headings emitted by
+ * `ToolSearchTool.execute`. Results carry a marker so arbitrary tool
+ * output cannot accidentally activate a registered tool.
  */
 
 import type { Message, MessageContent } from '../types.js';
+import type { ToolRegistry } from '../tool/registry.js';
+
+const TOOL_SEARCH_RESULT_MARKER = '<!-- duya-tool-search-result -->';
+const TOOL_HEADING_PATTERN = /^## Tool: `([^`]+)`\s*$/gm;
 
 /**
- * Extract tool names from a tool_result JSON payload produced by
- * `ToolSearchTool.execute`. The result shape is:
- *   {
- *     "query": "...",
- *     "results": [{ "name": "...", "description": "...", ... }, ...],
- *     "count": N
- *   }
+ * Extract tool names from the Markdown payload produced by
+ * `ToolSearchTool.execute`.
  *
- * Returns an empty array on parse failure or missing fields. Never
- * throws — caller can drop the result on the floor without aborting
- * the streamChat.
+ * Returns an empty array when the stable marker or headings are absent.
+ * Never throws, so callers may safely scan a mixed tool-result batch.
  */
 export function extractToolNamesFromSearchResult(resultText: string): string[] {
   if (!resultText || typeof resultText !== 'string') return [];
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(resultText);
-  } catch {
-    return [];
-  }
-
-  if (!parsed || typeof parsed !== 'object') return [];
-  const obj = parsed as Record<string, unknown>;
-  const results = obj.results;
-  if (!Array.isArray(results)) return [];
+  if (!resultText.includes(TOOL_SEARCH_RESULT_MARKER)) return [];
 
   const names: string[] = [];
-  for (const entry of results) {
-    if (entry && typeof entry === 'object' && typeof (entry as unknown as Record<string, unknown>).name === 'string') {
-      names.push((entry as { name: string }).name);
+  const seen = new Set<string>();
+  for (const match of resultText.matchAll(TOOL_HEADING_PATTERN)) {
+    const name = match[1]?.trim();
+    if (name && !seen.has(name)) {
+      names.push(name);
+      seen.add(name);
     }
   }
   return names;
+}
+
+export function getDiscoveredToolPrompts(
+  registry: ToolRegistry,
+  toolNames: ReadonlySet<string>,
+): string[] {
+  const prompts: string[] = [];
+  const seen = new Set<string>();
+
+  for (const name of toolNames) {
+    const executor = registry.getExecutor(name);
+    if (!executor?.getPrompt) continue;
+
+    const prompt = executor.getPrompt().trim();
+    if (prompt && !seen.has(prompt)) {
+      prompts.push(prompt);
+      seen.add(prompt);
+    }
+  }
+
+  return prompts;
 }
 
 /**

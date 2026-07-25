@@ -128,10 +128,6 @@ export const researchMode: ModeModifier = {
       'bash',
       'edit',
       'write',
-      'enter_worktree',
-      'exit_worktree',
-      'team_create',
-      'team_delete',
       'skill_manage',
       'module',
 

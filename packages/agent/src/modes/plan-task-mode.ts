@@ -7,9 +7,8 @@
  * side-effectful commands while planning.
  *
  * The modifier paradigm (tools.block + prompt.prefix) composes with the
- * normal agent loop — no orchestrator takeover. This fixes the
- * long-standing "Unknown mode: plan" broken chain (the popover exposed
- * `modeValue: 'plan'` but `ModeRegistry` only registered 'research').
+ * normal agent loop — no orchestrator takeover. It also replaces the old
+ * class-based mode dispatch that could not resolve the popover's plan mode.
  *
  * Mutual exclusion: plan-task conflicts with research (research has its
  * own multi-stage flow that shouldn't be mixed with planning) and
@@ -37,7 +36,7 @@ You are now in **Plan Mode** — a read-only analysis mode. Your goal is to inve
 
 - **Do NOT modify, create, or delete any files.** Write/edit/bash tools are blocked.
 - **Do NOT execute commands with side effects.** Bash is blocked.
-- **Do NOT create background agents or worktrees.** Team/worktree tools are blocked.
+- Use read-only exploration tools to inspect the codebase and gather evidence.
 - Use only read-only tools: \`read\`, \`glob\`, \`grep\`, \`task\` (for structuring the plan), \`session_search\`, \`ask_user_question\`, \`web_search\`, \`web_fetch\`, \`wiki_search\`, \`wiki_read\`.
 
 ## Workflow
@@ -105,10 +104,6 @@ export const planTaskMode: ModeModifier = {
       'powershell',
       'edit',
       'write',
-      'EnterWorktree',
-      'ExitWorktree',
-      'TeamCreate',
-      'TeamDelete',
       'skill_manage',
       'module',
     ],
