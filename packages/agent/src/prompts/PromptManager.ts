@@ -57,22 +57,12 @@ import { getMemoryContextSection } from './sections/dynamic/memoryContextSection
 import { getWidgetGuidelinesSection } from './sections/dynamic/widgetGuidelines.js'
 import { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
 import { getVisualVerificationSection } from './sections/dynamic/visualVerification.js'
-// Conductor canvas section is owned by `@duya/conductor` and is registered
-// into the prompt system via `registerConductor()` at host startup. The
-// section itself is shared between the conductor's own
-// `ConductorPromptSystem` and this standard `PromptManager` path. We
-// look it up lazily so the agent's tsc does not have a hard build-time
-// dependency on `@duya/conductor`'s dist (the conductor package depends
-// on the agent's dist, so a static import here would form a cycle).
 import { getMemoryManager } from '../memory/index.js'
 import { getShellForPrompt } from '../utils/shellDetector.js'
 import {
   initializeAgentsMd,
 } from './sections/dynamic/agentsMdSection.js'
 import { getAgentsMdManager } from '../agentsmd/index.js'
-
-const nativeImport = new Function('specifier', 'return import(specifier)') as
-  <T>(specifier: string) => Promise<T>;
 
 // ============================================================
 // Prompt Manager
@@ -126,7 +116,15 @@ export class PromptManager {
     const context = this.buildContext(enabledTools, mcpServers, location)
 
     const outputStyleConfig = this.options.outputStyleConfig ?? null
-    const keepCodingInstructions = outputStyleConfig?.keepCodingInstructions !== false
+    // keepCodingInstructions semantics:
+    //   - outputStyleConfig === null/undefined  → default, all sections injected
+    //   - keepCodingInstructions === true      → keep taskHandling despite the
+    //     selected style (legacy behaviour for built-in styles)
+    //   - anything else                         → omit taskHandling; let the
+    //     style's prompt own the output rules
+    const keepCodingInstructions = outputStyleConfig == null
+      ? true
+      : outputStyleConfig.keepCodingInstructions === true
 
     // Initialize AGENTS.md only when enabled for this profile
     if (isSectionEnabled(this.profile, 'agentsMd')) {
@@ -188,15 +186,6 @@ export class PromptManager {
       maybeVolatile('widgetGuidelines', () => getWidgetGuidelinesSection(context), 'Widget creation guidelines for generative UI'),
       maybeVolatile('visionGuidelines', () => getVisionGuidelinesSection(context), 'Vision tool guidelines for image analysis'),
       maybeVolatile('visualVerification', () => getVisualVerificationSection(context), 'Visual tasks require rendered-output verification'),
-      maybeVolatile('conductorCanvas', async () => {
-        // Lazy load to break the build-time cycle with @duya/conductor.
-        // The conductor's own ConductorPromptSystem uses the same factory
-        // — this code path is only reached when the `conductorCanvas`
-        // overlay is enabled in the profile, which only happens when
-        // `registerConductor()` has been called at startup.
-        const { buildConductorCanvasSection } = await nativeImport<typeof import('@duya/conductor')>('@duya/conductor');
-        return buildConductorCanvasSection(context);
-      }, 'Canvas workspace context for conductor profile'),
     ].filter((s): s is PromptSection => s !== null)
 
     // Resolve static sections (cached)

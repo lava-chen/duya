@@ -13,8 +13,8 @@ export type PromptBaseMode = 'full' | 'minimal' | 'bare'
 
 /**
  * Overlay: small adjustments that don't introduce new top-level semantics
- * - coding: Emphasizes code quality/constraints (e.g. keeps taskHandling, outputEfficiency)
- * - chat: Emphasizes conversation experience (e.g. weakens verbose tool instructions, strengthens toneAndStyle)
+ * - coding: Emphasizes code quality/constraints (e.g. keeps rules, personality)
+ * - chat: Emphasizes conversation experience (e.g. weakens verbose tool instructions, strengthens personality)
  *
  * Subsystems (e.g. `@duya/conductor`) may register additional overlay
  * names at runtime via `PromptsRegistry.registerOverlayPatch()`. The

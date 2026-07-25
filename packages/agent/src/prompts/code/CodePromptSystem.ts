@@ -18,32 +18,38 @@ import type { PromptProfile } from '../modes/types.js'
 import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from '../modes/index.js'
 import { getMemoryManager } from '../../memory/index.js'
 import { getShellForPrompt } from '../../utils/shellDetector.js'
-import { initializeAgentsMd } from './sections/dynamic/agentsMd.js'
+import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { getAgentsMdManager } from '../../agentsmd/index.js'
 
-// Static sections
-import { getIntroSection } from './sections/static/intro.js'
-import { getSystemSection } from './sections/static/system.js'
-import { getTaskHandlingSection } from './sections/static/taskHandling.js'
-import { getActionsSection } from './sections/static/actions.js'
-import { getToolUsageSection } from './sections/static/toolUsage.js'
-import { getToneAndStyleSection } from './sections/static/toneAndStyle.js'
-import { getOutputEfficiencySection } from './sections/static/outputEfficiency.js'
+// Static sections — flat layout, one chapter per file. Project grounding
+// and continuity live in the shared sections/ tree because both `code` and
+// `general` render them verbatim. The three Codex-aligned chapters
+// (`personality`, `workingWithTheUser`, `rules`) replace the previous
+// `communicationStyle`, `doingTasks`, and `tools` sections.
+import { getIdentitySection } from './sections/identity.js'
+import { getSystemSection } from './sections/system.js'
+import { getPersonalitySection } from './sections/personality.js'
+import { getWorkingWithTheUserSection } from './sections/workingWithTheUser.js'
+import { getRulesSection } from './sections/rules.js'
 import {
   getProjectContinuitySection,
   getProjectGroundingSection,
 } from '../sections/projectGrounding.js'
+import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
 
-// Dynamic sections
-import { getEnvironmentSection } from './sections/dynamic/environment.js'
+// Dynamic sections — shared with the `general` profile via the
+// `sections/dynamic/` tree. No per-profile overrides here: the runtime
+// state (environment, MCP, skills, language, etc.) is identical across
+// profiles, so each section lives in exactly one place.
+import { getEnvironmentSection } from '../sections/dynamic/environment.js'
+import { getSessionGuidanceSection } from '../sections/dynamic/sessionGuidance.js'
+import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js'
+import { getMemorySection } from '../sections/dynamic/memorySection.js'
+import { getLanguageSection } from '../sections/dynamic/language.js'
+import { getOutputStyleSection } from '../sections/dynamic/outputStyle.js'
+import { getMcpInstructionsSection } from '../sections/dynamic/mcpInstructions.js'
+import { getScratchpadSection } from '../sections/dynamic/scratchpad.js'
 import { getPlatformSection } from '../sections/dynamic/platform.js'
-import { getMcpInstructionsSection } from './sections/dynamic/mcpInstructions.js'
-import { getSessionGuidanceSection } from './sections/dynamic/sessionGuidance.js'
-import { getSkillsMetadataSection } from './sections/dynamic/skillsMetadata.js'
-import { getLanguageSection } from './sections/dynamic/language.js'
-import { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
-import { getScratchpadSection } from './sections/dynamic/scratchpad.js'
-import { getMemorySection } from './sections/dynamic/memory.js'
 import { getSessionSearchSection } from '../sections/dynamic/sessionSearchSection.js'
 import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
@@ -86,7 +92,15 @@ export class CodePromptSystem extends PromptSystem {
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
   ): PromptSection[] {
-    const keepCodingInstructions = context.outputStyleConfig?.keepCodingInstructions !== false
+    // keepCodingInstructions semantics:
+    //   - outputStyleConfig === null/undefined  → default, personality injected
+    //   - keepCodingInstructions === true      → keep personality despite
+    //     the selected style (legacy behaviour for built-in styles)
+    //   - anything else                         → omit personality; let
+    //     the style's prompt own the output rules
+    const keepCodingInstructions = context.outputStyleConfig == null
+      ? true
+      : context.outputStyleConfig.keepCodingInstructions === true
 
     const m = (name: string, compute: () => string | null | Promise<string | null>): PromptSection | null => {
       if (!isSectionEnabled(this.profile, name)) return null
@@ -94,17 +108,16 @@ export class CodePromptSystem extends PromptSystem {
     }
 
     const sections: PromptSection[] = [
-      m('intro', () => getIntroSection(context)),
+      m('identity', () => getIdentitySection(context)),
       m('system', () => getSystemSection(context)),
+      m('duyaDesktopContext', () => getDuyaDesktopContextSection(context)),
       m('projectGrounding', () => getProjectGroundingSection(context)),
       m('projectContinuity', () => getProjectContinuitySection(context)),
-      m('taskHandling', () => getTaskHandlingSection(context)),
-      m('actions', () => getActionsSection(context)),
-      m('toolUsage', () => getToolUsageSection(context, this.getToolContributions())),
-      m('toneAndStyle', () => getToneAndStyleSection(context)),
       keepCodingInstructions
-        ? m('outputEfficiency', () => getOutputEfficiencySection(context))
+        ? m('personality', () => getPersonalitySection(context))
         : null,
+      m('workingWithTheUser', () => getWorkingWithTheUserSection(context)),
+      m('rules', () => getRulesSection(context)),
       m('agentsMd', () => getAgentsMdManager().buildAgentsMdPrompt()),
       m('memory', () => getMemorySection(context)),
       m('memoryContent', () => getMemoryManager().buildCombinedMemoryPrompt()),

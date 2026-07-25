@@ -22,13 +22,11 @@ describe('prompt modes', () => {
   describe('DEFAULT_BASE_SECTION_SETS', () => {
     it('full mode should enable all governance sections', () => {
       const full = DEFAULT_BASE_SECTION_SETS.full;
-      expect(full.enable).toContain('intro');
+      expect(full.enable).toContain('identity');
       expect(full.enable).toContain('system');
-      expect(full.enable).toContain('taskHandling');
-      expect(full.enable).toContain('actions');
-      expect(full.enable).toContain('toolUsage');
-      expect(full.enable).toContain('toneAndStyle');
-      expect(full.enable).toContain('outputEfficiency');
+      expect(full.enable).toContain('rules');
+      expect(full.enable).toContain('personality');
+      expect(full.enable).toContain('workingWithTheUser');
       expect(full.enable).toContain('memory');
       expect(full.enable).toContain('skills');
       expect(full.enable).toContain('mcp');
@@ -45,8 +43,8 @@ describe('prompt modes', () => {
     it('minimal mode should keep essential project grounding without coordinator governance', () => {
       const minimal = DEFAULT_BASE_SECTION_SETS.minimal;
       expect(minimal.enable).toEqual([
-        'intro', 'system', 'projectGrounding', 'agentsMd', 'actions',
-        'toolUsage', 'visualVerification', 'environment', 'language',
+        'identity', 'system', 'projectGrounding', 'agentsMd', 'rules',
+        'visualVerification', 'environment', 'language',
       ]);
       expect(minimal.disable).toContain('memory');
       expect(minimal.disable).toContain('skills');
@@ -58,23 +56,22 @@ describe('prompt modes', () => {
     it('bare mode should retain project instructions without main-agent continuity', () => {
       const bare = DEFAULT_BASE_SECTION_SETS.bare;
       expect(bare.enable).toEqual([
-        'intro', 'system', 'projectGrounding', 'agentsMd', 'actions',
-        'toolUsage', 'environment', 'language',
+        'identity', 'system', 'projectGrounding', 'agentsMd', 'rules',
+        'environment', 'language',
       ]);
       expect(bare.disable).toContain('memory');
       expect(bare.disable).toContain('skills');
       expect(bare.disable).toContain('sessionGuidance');
       expect(bare.disable).toContain('projectContinuity');
       expect(bare.disable).toContain('recentSessions');
-      expect(bare.disable).toContain('toneAndStyle');
+      expect(bare.disable).toContain('personality');
     });
 
-    it('bare mode should still retain safety guardrails (intro, system, actions)', () => {
+    it('bare mode should still retain safety guardrails (identity, system, rules)', () => {
       const bare = DEFAULT_BASE_SECTION_SETS.bare;
-      expect(bare.enable).toContain('intro');
+      expect(bare.enable).toContain('identity');
       expect(bare.enable).toContain('system');
-      expect(bare.enable).toContain('actions');
-      expect(bare.enable).toContain('toolUsage');
+      expect(bare.enable).toContain('rules');
     });
   });
 
@@ -83,13 +80,11 @@ describe('prompt modes', () => {
       const profile: PromptProfile = { base: 'full' };
       const enabled = resolveEnabledSections(profile);
 
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
-      expect(enabled.has('taskHandling')).toBe(true);
-      expect(enabled.has('actions')).toBe(true);
-      expect(enabled.has('toolUsage')).toBe(true);
-      expect(enabled.has('toneAndStyle')).toBe(true);
-      expect(enabled.has('outputEfficiency')).toBe(true);
+      expect(enabled.has('rules')).toBe(true);
+      expect(enabled.has('personality')).toBe(true);
+      expect(enabled.has('workingWithTheUser')).toBe(true);
       expect(enabled.has('memory')).toBe(true);
       expect(enabled.has('skills')).toBe(true);
       expect(enabled.has('mcp')).toBe(true);
@@ -105,18 +100,16 @@ describe('prompt modes', () => {
       const profile: PromptProfile = { base: 'minimal' };
       const enabled = resolveEnabledSections(profile);
 
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
-      expect(enabled.has('actions')).toBe(true);
-      expect(enabled.has('toolUsage')).toBe(true);
+      expect(enabled.has('rules')).toBe(true);
       expect(enabled.has('projectGrounding')).toBe(true);
       expect(enabled.has('agentsMd')).toBe(true);
       expect(enabled.has('environment')).toBe(true);
       expect(enabled.has('language')).toBe(true);
 
-      expect(enabled.has('taskHandling')).toBe(false);
-      expect(enabled.has('toneAndStyle')).toBe(false);
-      expect(enabled.has('outputEfficiency')).toBe(false);
+      expect(enabled.has('personality')).toBe(false);
+      expect(enabled.has('workingWithTheUser')).toBe(false);
       expect(enabled.has('memory')).toBe(false);
       expect(enabled.has('skills')).toBe(false);
       expect(enabled.has('mcp')).toBe(false);
@@ -125,65 +118,55 @@ describe('prompt modes', () => {
       expect(enabled.has('recentSessions')).toBe(false);
     });
 
-    it('bare mode should not have toneAndStyle', () => {
+    it('bare mode should not have personality', () => {
       const profile: PromptProfile = { base: 'bare' };
       const enabled = resolveEnabledSections(profile);
 
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
-      expect(enabled.has('actions')).toBe(true);
-      expect(enabled.has('toolUsage')).toBe(true);
+      expect(enabled.has('rules')).toBe(true);
       expect(enabled.has('projectGrounding')).toBe(true);
       expect(enabled.has('agentsMd')).toBe(true);
       expect(enabled.has('environment')).toBe(true);
 
-      expect(enabled.has('toneAndStyle')).toBe(false);
+      expect(enabled.has('personality')).toBe(false);
       expect(enabled.has('memory')).toBe(false);
       expect(enabled.has('skills')).toBe(false);
       expect(enabled.has('sessionGuidance')).toBe(false);
       expect(enabled.has('recentSessions')).toBe(false);
     });
 
-    it('coding overlay should add taskHandling and outputEfficiency', () => {
+    it('coding overlay should add rules and personality', () => {
       const profile: PromptProfile = { base: 'minimal', overlays: ['coding'] };
       const enabled = resolveEnabledSections(profile);
 
-      expect(enabled.has('taskHandling')).toBe(true);
-      expect(enabled.has('outputEfficiency')).toBe(true);
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('rules')).toBe(true);
+      expect(enabled.has('personality')).toBe(true);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
-      expect(enabled.has('actions')).toBe(true);
-      expect(enabled.has('toolUsage')).toBe(true);
 
       expect(enabled.has('memory')).toBe(false);
       expect(enabled.has('skills')).toBe(false);
     });
 
-    it('chat overlay should add toneAndStyle', () => {
+    it('chat overlay should add personality', () => {
       const profile: PromptProfile = { base: 'minimal', overlays: ['chat'] };
       const enabled = resolveEnabledSections(profile);
 
-      expect(enabled.has('toneAndStyle')).toBe(true);
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('personality')).toBe(true);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
-      expect(enabled.has('actions')).toBe(true);
-      expect(enabled.has('toolUsage')).toBe(true);
-
-      expect(enabled.has('taskHandling')).toBe(false);
-      expect(enabled.has('outputEfficiency')).toBe(false);
+      expect(enabled.has('rules')).toBe(true);
     });
 
     it('multiple overlays should combine correctly', () => {
       const profile: PromptProfile = { base: 'bare', overlays: ['coding', 'chat'] };
       const enabled = resolveEnabledSections(profile);
 
-      expect(enabled.has('taskHandling')).toBe(true);
-      expect(enabled.has('outputEfficiency')).toBe(true);
-      expect(enabled.has('toneAndStyle')).toBe(true);
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('rules')).toBe(true);
+      expect(enabled.has('personality')).toBe(true);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
-      expect(enabled.has('actions')).toBe(true);
-      expect(enabled.has('toolUsage')).toBe(true);
 
       expect(enabled.has('memory')).toBe(false);
       expect(enabled.has('skills')).toBe(false);
@@ -198,10 +181,9 @@ describe('prompt modes', () => {
       const enabled = resolveEnabledSections(profile);
 
       expect(enabled.has('memory')).toBe(true);
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
-      expect(enabled.has('actions')).toBe(true);
-      expect(enabled.has('toolUsage')).toBe(true);
+      expect(enabled.has('rules')).toBe(true);
     });
 
     it('overrides should disable specific sections', () => {
@@ -213,7 +195,7 @@ describe('prompt modes', () => {
 
       expect(enabled.has('memory')).toBe(false);
       expect(enabled.has('skills')).toBe(false);
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
     });
 
@@ -222,23 +204,22 @@ describe('prompt modes', () => {
         base: 'minimal',
         overrides: {
           enableSections: ['memory'],
-          disableSections: ['toolUsage'],
+          disableSections: ['rules'],
         },
       };
       const enabled = resolveEnabledSections(profile);
 
       expect(enabled.has('memory')).toBe(true);
-      expect(enabled.has('toolUsage')).toBe(false);
-      expect(enabled.has('intro')).toBe(true);
+      expect(enabled.has('rules')).toBe(false);
+      expect(enabled.has('identity')).toBe(true);
       expect(enabled.has('system')).toBe(true);
-      expect(enabled.has('actions')).toBe(true);
     });
   });
 
   describe('isSectionEnabled', () => {
     it('should return true for enabled sections', () => {
       const profile: PromptProfile = { base: 'full' };
-      expect(isSectionEnabled(profile, 'intro')).toBe(true);
+      expect(isSectionEnabled(profile, 'identity')).toBe(true);
       expect(isSectionEnabled(profile, 'memory')).toBe(true);
     });
 

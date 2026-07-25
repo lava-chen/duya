@@ -24,6 +24,12 @@ describe('prompt language and user-visible progress guidance', () => {
     expect(prompt).toContain('Always respond in Simplified Chinese.');
     expect(prompt).toContain('If the user writes in Chinese');
     expect(prompt).toContain('Keep user-visible progress separate from execution details.');
-    expect(prompt).toContain('avoid phrases like "Let me trace", "Now I have", "Excellent", "Very interesting"');
+    // The previous outputEfficiency section rendered "avoid phrases" on a
+    // single line; the new workingWithTheUser → Writing for the reader
+    // section wraps the example list across lines. Assert presence of
+    // both the rule and the leading example phrase, ignoring whitespace
+    // and layout between them.
+    expect(prompt).toContain('avoid phrases');
+    expect(prompt).toContain('"Let me trace"');
   });
 });

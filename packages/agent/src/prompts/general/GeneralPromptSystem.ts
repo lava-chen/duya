@@ -18,7 +18,7 @@ import type { PromptProfile } from '../modes/types.js'
 import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from '../modes/index.js'
 import { getMemoryManager } from '../../memory/index.js'
 import { getShellForPrompt } from '../../utils/shellDetector.js'
-import { initializeAgentsMd } from './sections/dynamic/agentsMd.js'
+import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { getAgentsMdManager } from '../../agentsmd/index.js'
 
 // Static sections
@@ -30,23 +30,26 @@ import { getToolUsageSection } from './sections/static/toolUsage.js'
 import { getToneAndStyleSection } from './sections/static/toneAndStyle.js'
 import { getOutputEfficiencySection } from './sections/static/outputEfficiency.js'
 import { getMultiAgentCollaborationSection } from './sections/static/multiAgentCollaboration.js'
+import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
 import {
   getProjectContinuitySection,
   getProjectGroundingSection,
 } from '../sections/projectGrounding.js'
 
-// Dynamic sections
-import { getEnvironmentSection } from './sections/dynamic/environment.js'
-import { getMcpInstructionsSection } from './sections/dynamic/mcpInstructions.js'
-import { getSessionGuidanceSection } from './sections/dynamic/sessionGuidance.js'
-import { getSkillsMetadataSection } from './sections/dynamic/skillsMetadata.js'
-import { getLanguageSection } from './sections/dynamic/language.js'
-import { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
-import { getScratchpadSection } from './sections/dynamic/scratchpad.js'
-import { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
+// Dynamic sections — shared with the `code` profile via the
+// `sections/dynamic/` tree. No per-profile overrides here: runtime state
+// (environment, MCP, skills, language, etc.) is identical across profiles.
+import { getEnvironmentSection } from '../sections/dynamic/environment.js'
+import { getMcpInstructionsSection } from '../sections/dynamic/mcpInstructions.js'
+import { getSessionGuidanceSection } from '../sections/dynamic/sessionGuidance.js'
+import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js'
+import { getLanguageSection } from '../sections/dynamic/language.js'
+import { getOutputStyleSection } from '../sections/dynamic/outputStyle.js'
+import { getScratchpadSection } from '../sections/dynamic/scratchpad.js'
+import { getVisionGuidelinesSection } from '../sections/dynamic/visionGuidelines.js'
 import { getSessionSearchSection } from '../sections/dynamic/sessionSearchSection.js'
 import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
-import { getMemorySection } from './sections/dynamic/memory.js'
+import { getMemorySection } from '../sections/dynamic/memorySection.js'
 import { getPlatformSection } from '../sections/dynamic/platform.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 
@@ -88,7 +91,15 @@ export class GeneralPromptSystem extends PromptSystem {
     _enabledTools?: Set<string>,
     _mcpServers?: PromptContext['mcpServers'],
   ): PromptSection[] {
-    const keepCodingInstructions = context.outputStyleConfig?.keepCodingInstructions !== false
+    // keepCodingInstructions semantics:
+    //   - outputStyleConfig === null/undefined  → default, outputEfficiency injected
+    //   - keepCodingInstructions === true      → keep outputEfficiency despite
+    //     the selected style (legacy behaviour for built-in styles)
+    //   - anything else                         → omit outputEfficiency; let
+    //     the style's prompt own the output rules
+    const keepCodingInstructions = context.outputStyleConfig == null
+      ? true
+      : context.outputStyleConfig.keepCodingInstructions === true
 
     const m = (name: string, compute: () => string | null | Promise<string | null>): PromptSection | null => {
       if (!isSectionEnabled(this.profile, name)) return null
@@ -99,6 +110,7 @@ export class GeneralPromptSystem extends PromptSystem {
       m('intro', () => getIntroSection(context)),
       m('system', () => getSystemSection(context)),
       m('multiAgentCollaboration', () => getMultiAgentCollaborationSection(context)),
+      m('duyaDesktopContext', () => getDuyaDesktopContextSection(context)),
       m('projectGrounding', () => getProjectGroundingSection(context)),
       m('projectContinuity', () => getProjectContinuitySection(context)),
       m('generalTaskGuidance', () => getGeneralTaskGuidanceSection(context)),
