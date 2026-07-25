@@ -151,9 +151,9 @@ DUYA 采用 **Multi-Agent Process** 模式，每个 Agent 运行在独立的 **C
 - The Gateway profile can use read/search plus Bash/PowerShell. Read-only shell
   commands execute directly, while the shell security classifier retains
   confirmation requirements for risky commands.
-- Desktop-only, recursive-agent, mode/worktree, and the incomplete file-backed
-  `TeamCreate` / `TeamDelete` tools are excluded using their exact,
-  case-sensitive wire names.
+- Desktop-only, recursive-agent, and mode-switching tools are excluded from
+  the Gateway profile. The incomplete file-backed Team/Swarm tools were
+  removed in Plan 242 rather than maintained as permanently blocked entries.
 - Channel media delivery accepts accessible absolute paths through
   `MEDIA:<absolute-path>`; a file does not need to be copied into the Gateway
   workspace first.
@@ -1019,6 +1019,14 @@ DUYA 的"agent 配置"由三个正交层组合而成。每一层独立选择、�
 
 两种范式共享 `modeModifierRegistry` 的注册、互斥（`exclusiveWith`）、UI 元数据（`display`）机制。
 
+Plan 242 已移除旧的独立 Conductor Agent：不再存在
+`conductor:init` / `conductor:agent:start` worker 命令、Agent Server
+`/conductor/*` HTTP/SSE 执行面、独立 prompt system 或
+`@duya/agent/conductor/profile` 契约。当前 Conductor 只通过主 chat Agent
+的声明式 `conductor` modifier 注入 `CanvasConductor` 工具；画布 IPC、状态
+patch、截图、canvas management broadcast 和 executor RPC 仍由现有
+Electron/`@duya/conductor` 路径负责。
+
 ### 互斥规则
 
 `exclusiveWith` 字段定义两两互斥关系，对称声明：
@@ -1042,7 +1050,7 @@ DUYA 的"agent 配置"由三个正交层组合而成。每一层独立选择、�
 | 文件 | 作用 |
 |------|------|
 | `packages/agent/src/modes/types.ts` | `ModeModifier` / `ModeModifierContext` / `ResolvedMode` / `ToolRegistration` 类型定义 |
-| `packages/agent/src/modes/registry.ts` | `ModeModifierRegistry`：注册 + `resolve(ids)` 合并互斥规则 |
+| `packages/agent/src/modes/registry.ts` | `ModeModifierRegistry`：注册 + `resolve(ids)` 合并互斥规则；Plan 242 已删除无注册项的旧 `ModeRegistry` / `BaseMode` 接管 API |
 | `packages/agent/src/modes/apply-modes.ts` | `applyModes`：单入口执行 onEnter hooks → prompt prefix/suffix → tools 合并 → toolUseContextPatch → beforeStream hooks；`collectActiveModes` 从 ChatOptions 提取激活 mode ids |
 | `packages/agent/src/modes/conductor-mode.ts` | Conductor modifier（session 级，注入 canvas 工具） |
 | `packages/agent/src/modes/plan-task-mode.ts` | Plan-task modifier（message 级，只读规划） |
@@ -1061,11 +1069,11 @@ DUYA 的"agent 配置"由三个正交层组合而成。每一层独立选择、�
 | Phase 2 | `ToolRegistry.register` 持久化元信息,按 `exposeMode` 裁剪 LLM 请求的 tools 数组;~40 个 builtin 工具打档 | ✅ 实施完成 (2026-07-24) |
 | Phase 3 | tool dispatch 循环按需把目标工具 schema 注入后续 turn | ✅ 实施完成 (2026-07-24) |
 
-Phase 1 改动要点:`ToolMeta` 扩两个 optional 字段(`inputSchemaSummary`、`exposeMode`,均独立导出 `ExposeMode` 类型),`ToolSearchTool.execute` 的 result JSON 携带新字段,`DuyaAgent.streamChat` 在 normal / orchestrator 两个分支都通过 `toolSearchTool.setSearchFn(searchToolsFromRegistry)` 注入关键词搜索实现。
+Phase 1 改动要点:`ToolMeta` 扩两个 optional 字段(`inputSchemaSummary`、`exposeMode`,均独立导出 `ExposeMode` 类型),`ToolSearchTool.execute` 返回带稳定 marker 和工具标题的 Markdown 结果,`DuyaAgent.streamChat` 通过 `toolSearchTool.setSearchFn(searchToolsFromRegistry)` 注入关键词搜索实现。
 
-Phase 2 改动要点:`ToolRegistry.register` 重载接受第三参数 `ToolMetaInput`(`{ inputSchemaSummary?, exposeMode? }`),新增 `getMeta(name)` / `getExposeMode(name)` accessor(后者在未持久化时默认 `'always'`,向后兼容 MCP / plugin / 旧 builtin 路径);`searchToolsFromRegistry` 从 registry meta 字段填充 result 的 `exposeMode` / `inputSchemaSummary`;`createBuiltinRegistry` 给 ~40 个 builtin 工具打档(`always` 档:bash/read/write/edit/grep/glob/Agent/task/5 个 mode 控制/browser/Memory/SessionSearch/ToolSearch/AskUserQuestion;`discoverable` 档:canvas_\*/research_memory:\*/TeamCreate/Delete/MCP resource tools/messageSession/vision_analyze/show_widget/moduleTool/anchor_memory/skillManage/wiki_\*/duya_cli/skillTool/Brief);`DuyaAgent._resolveTools` 在 Layer 0/1/2 过滤之前按 `exposeMode !== 'internal'` 裁剪 baseTools。
+Phase 2 改动要点:`ToolRegistry.register` 重载接受第三参数 `ToolMetaInput`(`{ inputSchemaSummary?, exposeMode? }`),新增 `getMeta(name)` / `getExposeMode(name)` accessor(后者在未持久化时默认 `'always'`,向后兼容 MCP / plugin 路径);`searchToolsFromRegistry` 从 registry meta 字段填充 result 的 `exposeMode` / `inputSchemaSummary`;`createBuiltinRegistry` 默认暴露平台原生 shell、read/write/edit/grep/glob、Agent、Task 与 ToolSearch,其余 mode/browser/memory/session/vision/widget/module/skill/CLI/research/wiki 工具按需发现。Plan 242 删除了未完成的 Team/Swarm、独立 MCP resource 和禁用 WebSearch/WebFetch 占位工具;MCP server 动态工具不受影响。`DuyaAgent._resolveTools` 在 Layer 0/1/2 过滤之前按 `exposeMode !== 'internal'` 裁剪 baseTools。
 
-Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredTools: Set<string>`,每轮 while 开头把 `registry.getTool(name)` 合并到局部 `tools` 数组,实现"LLM 调 `tool_search` 后下一轮 LLM 请求的工具列表自动包含搜到的工具";扫描由 [packages/agent/src/agent/tool-search-discovery.ts](./packages/agent/src/agent/tool-search-discovery.ts) 提供 (`extractToolNamesFromSearchResult` + `harvestDiscoveredTools`),在每次 `executor.getRemainingResults()` 完成后从 messages 末尾 batch 抽取 `tool_search` 返回的 `results[].name`。边界:`Set` 自动去重;`registry.getTool(name)` 返回 undefined 时静默 skip(MCP server 断开 / plugin 卸载后);orchestrator (`research`) 路径的 `deps.toolRegistry` 也走 builtin registry,自动继承 Phase 2 裁剪。
+Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredTools: Set<string>`,每轮 while 开头把 `registry.getTool(name)` 合并到局部 `tools` 数组,实现"LLM 调 `tool_search` 后下一轮 LLM 请求的工具列表自动包含搜到的工具";扫描由 [packages/agent/src/agent/tool-search-discovery.ts](./packages/agent/src/agent/tool-search-discovery.ts) 提供 (`extractToolNamesFromSearchResult` + `harvestDiscoveredTools`),在每次 `executor.getRemainingResults()` 完成后从 messages 末尾 batch 抽取带稳定 marker 的 `## Tool: \`name\`` 标题。边界:`Set` 自动去重;`registry.getTool(name)` 返回 undefined 时静默 skip(MCP server 断开 / plugin 卸载后)。
 
 27 个单测覆盖 Phase 1/2/3 全链路([packages/agent/tests/unit/ToolSearchTool.test.ts](./packages/agent/tests/unit/ToolSearchTool.test.ts) 17 条 + [packages/agent/tests/unit/tool-search-discovery.test.ts](./packages/agent/tests/unit/tool-search-discovery.test.ts) 10 条),全绿。
 

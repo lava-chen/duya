@@ -6,11 +6,11 @@
  * Unified system for CLI, Telegram, and other platforms
  */
 
-import select from '@inquirer/select';
+import { select } from '@inquirer/prompts';
 import { Colors, color } from './colors.js';
 import { resolve } from 'path';
 import { existsSync, statSync } from 'fs';
-import type { duyaAgent } from '../index.js';
+import type { duyaAgent } from '../agent/DuyaAgent.js';
 import { getActiveCliProvider } from './config/db-config.js';
 
 export interface SlashCommandContext {

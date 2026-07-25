@@ -147,7 +147,10 @@ import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
-import { harvestDiscoveredTools } from './tool-search-discovery.js';
+import {
+  getDiscoveredToolPrompts,
+  harvestDiscoveredTools,
+} from './tool-search-discovery.js';
 import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
 import type { CompactOptions } from '../compact/types.js';
@@ -893,6 +896,7 @@ export class duyaAgent {
     // can invoke them without searching again. Set is local to this call,
     // so it is GC'd when streamChat finishes (no cross-session pollution).
     const discoveredTools: Set<string> = new Set();
+    let discoveredToolPromptSuffix = '';
 
     // Generate a unique seq_index for this streamChat call
     // All messages created in this call (including multi-turn) will share this seq_index
@@ -904,6 +908,20 @@ export class duyaAgent {
     const streamStartTime = Date.now();
 
     while (!this.abortController.signal.aborted) {
+      // Remove the prior turn's dynamic guide before rebuilding this turn.
+      // This prevents duplicate prompt sections when a discovered tool stays
+      // active across multiple tool-use turns.
+      if (
+        discoveredToolPromptSuffix &&
+        systemPromptContent.endsWith(discoveredToolPromptSuffix)
+      ) {
+        systemPromptContent = systemPromptContent.slice(
+          0,
+          -discoveredToolPromptSuffix.length,
+        );
+      }
+      discoveredToolPromptSuffix = '';
+
       turnCount++;
       const turnStartTime = Date.now();
 
@@ -963,6 +981,22 @@ export class duyaAgent {
           prefix += typeof p === 'function' ? p(this.modeCtx, this.baseSystemPromptWithoutModes) : p;
         }
         systemPromptContent = prefix + '\n\n' + this.baseSystemPromptWithoutModes;
+      }
+
+      // A discoverable tool receives the exact same full schema object that
+      // an always-exposed tool receives. If its executor also provides a
+      // usage guide (BrowserTool.getPrompt, for example), append that guide
+      // to this turn's system prompt as well.
+      const discoveredPrompts = getDiscoveredToolPrompts(registry, discoveredTools);
+      if (discoveredPrompts.length > 0) {
+        discoveredToolPromptSuffix = [
+          '',
+          '',
+          '## On-Demand Tool Guides',
+          '',
+          ...discoveredPrompts,
+        ].join('\n');
+        systemPromptContent += discoveredToolPromptSuffix;
       }
 
       // Pick up background results that completed after a previous user-facing
@@ -1834,18 +1868,17 @@ export class duyaAgent {
         {
           enabledPluginIds,
           wikiAgentEnabled: options?.wikiAgentEnabled,
-          mcpManagerProvider: () => this.mcpManager ?? undefined,
           browserBackendMode: this.browserBackendMode,
         }
       );
     }
-    // Plan 241 Phase 2: filter by exposeMode BEFORE the Layer 0/1/2
-    // filter pipeline. Discoverable tools (default for canvas_*,
-    // research_memory:*, TeamCreate/Delete, MCP resource tools,
-    // messageSession, vision_analyze, show_widget, read_module,
-    // anchor_memory, skill_manage, wiki_*, duya_cli, Brief, and any
-    // future MCP tools) are reachable via tool_search but never
-    // appear in the LLM request's default tool list.
+    // Plan 241: filter by exposeMode BEFORE the Layer 0/1/2
+    // filter pipeline. The initial list is intentionally limited to
+    // file/search tools, task delegation, tool_search, and one native
+    // shell (PowerShell on Windows, Bash elsewhere). Browser, memory,
+    // session, mode, canvas, research, wiki, MCP, and UI tools remain
+    // registered and reachable through tool_search without adding their
+    // schemas to every LLM request.
     //
     // tool_search itself stays in the visible set — otherwise LLM
     // has no entry point for discovery.
@@ -2189,7 +2222,6 @@ export class duyaAgent {
       {
         enabledPluginIds,
         wikiAgentEnabled: options?.wikiAgentEnabled,
-        mcpManagerProvider: () => this.mcpManager ?? undefined,
         browserBackendMode: this.browserBackendMode,
       }
     );
@@ -2487,10 +2519,9 @@ export class duyaAgent {
   getNonMCPModelVisibleToolNames(): Set<string> {
     const builtin = new Set<string>([
       'bash', 'powershell', 'read', 'write', 'edit', 'glob', 'grep',
-      'agent', 'team_create', 'team_delete',
-      'task', 'enter_worktree', 'exit_worktree',
+      'agent',
+      'task',
       'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
-      'list_mcp_resources', 'read_mcp_resource',
       'browser', 'skill', 'brief', 'session_search',
       'vision', 'cron', 'duya_info',
       'duya_health', 'memory', 'ask_user_question',

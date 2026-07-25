@@ -277,6 +277,9 @@ export function registerDbHandlers(): void {
     const now = Date.now();
     const database = getDb();
     const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, data.role);
+    const seqIndex = data.seq_index ?? (database.prepare(
+      'SELECT COALESCE(MAX(seq_index), -1) + 1 AS next_seq_index FROM messages WHERE session_id = ?',
+    ).get(data.session_id) as { next_seq_index: number }).next_seq_index;
     database.prepare(`
       INSERT OR REPLACE INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
       VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
@@ -289,14 +292,14 @@ export function registerDbHandlers(): void {
       name: data.name ?? null,
       tool_call_id: data.tool_call_id ?? null,
       token_usage: data.token_usage ?? null,
-      msg_type: data.msg_type ?? 'text',
+      msg_type: data.role === 'tool' ? 'tool_result' : (data.msg_type ?? 'text'),
       thinking: data.thinking ?? null,
       tool_name: data.tool_name ?? null,
       tool_input: data.tool_input ?? null,
-      parent_tool_call_id: data.parent_tool_call_id ?? null,
+      parent_tool_call_id: data.role === 'tool' ? (data.tool_call_id ?? null) : (data.parent_tool_call_id ?? null),
       viz_spec: data.viz_spec ?? null,
       status: data.status ?? 'done',
-      seq_index: data.seq_index ?? null,
+      seq_index: seqIndex,
       duration_ms: data.duration_ms ?? null,
       sub_agent_id: data.sub_agent_id ?? null,
       attachments: data.attachments ? JSON.stringify(data.attachments) : null,
@@ -310,7 +313,7 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:message:getBySession', (_event, sessionId: string) => {
     const result = getDb().prepare(
-      'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
+      'SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC'
     ).all(sessionId);
     return result;
   });
@@ -392,13 +395,15 @@ export function registerDbHandlers(): void {
           VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
         `);
 
-        for (const rawMsg of messages) {
+        for (const [index, rawMsg] of messages.entries()) {
           const msg = rawMsg as Record<string, unknown>;
-          let msgType = (msg.msg_type as string) || 'text';
+          let msgType = msg.role === 'tool' ? 'tool_result' : ((msg.msg_type as string) || 'text');
           let thinking: string | null = (msg.thinking as string) || null;
           let toolName: string | null = (msg.tool_name as string) || null;
           let toolInput: string | null = (msg.tool_input as string) || null;
-          let parentToolCallId: string | null = (msg.parent_tool_call_id as string) || null;
+          let parentToolCallId: string | null = msg.role === 'tool'
+            ? ((msg.tool_call_id as string) || null)
+            : ((msg.parent_tool_call_id as string) || null);
           let contentStr = serializeMessageContent(msg.content, msg.role);
           const displayContentStr = serializeDisplayContent(msg.displayContent ?? msg.display_content, msg.role);
 
@@ -463,7 +468,7 @@ export function registerDbHandlers(): void {
             parent_tool_call_id: parentToolCallId,
             viz_spec: (msg.viz_spec as string) || null,
             status: (msg.status as string) || 'done',
-            seq_index: (msg.seq_index as number) ?? null,
+            seq_index: (msg.seq_index as number) ?? index,
             duration_ms: (msg.duration_ms as number) ?? null,
             sub_agent_id: (msg.sub_agent_id as string) || null,
             attachments,

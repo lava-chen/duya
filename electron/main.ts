@@ -44,11 +44,11 @@ import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
 import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
 import { registerImportHandlers } from './import/import-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
+import { registerGitHandlers } from './ipc/git-handlers';
 import { getMarketplaceSyncManager } from './plugins/marketplace';
 import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
 import { initWikiAgentRuntime } from './wiki-agent/WikiAgentRuntime';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
-import type { ExecutorRpcRequest } from './conductor/executor-types';
 import { getJsonSetting } from './db/queries/settings';
 
 // =============================================================================
@@ -512,248 +512,7 @@ if (gotTheLock) {
     const { setConductorExecutorProxy } = await import('./agents/agent-server-lifecycle');
     setConductorExecutorProxy(conductorExecutorProxy);
 
-    const handleExecutorRpc = async (rpcMsg: Record<string, unknown>, sessionId: string) => {
-      const request: ExecutorRpcRequest = {
-        requestId: rpcMsg.requestId as string,
-        action: rpcMsg.action as ExecutorRpcRequest['action'],
-        payload: rpcMsg.payload as Record<string, unknown>,
-        sessionId,
-      };
-
-      const response = await conductorExecutorProxy.execute(request);
-      agentPool.send(sessionId, {
-        type: 'conductor:executor:rpc:response',
-        ...response,
-      });
-    };
-
-    const handleConductorMessage = async (data: unknown) => {
-      const msg = data as {
-        type: string;
-        sessionId?: string;
-        prompt?: string;
-        snapshot?: unknown;
-        model?: string;
-        visionModel?: string;
-        permissionMode?: 'default' | 'auto' | 'bypass';
-        language?: string;
-      };
-      const interruptedSessions = new Set<string>();
-
-      // @deprecated (plan 221 Phase 7) Legacy conductor MessagePort spawn
-      // path. In-canvas entry points now forward to the main chat session;
-      // this handler remains for backward compatibility with older
-      // renderer builds that still post `conductor:agent:start`.
-      if (msg.type === 'conductor:agent:start' && msg.sessionId && msg.prompt) {
-        const conductorSessionId = msg.sessionId;
-
-        try {
-          const { isNew } = await agentPool.acquire(conductorSessionId);
-
-          const setupAndStart = async () => {
-            const configManager = getConfigManager();
-
-            // Parse model: "[providerName] modelId" -> { providerName, modelId }
-            let selectedModel: string | undefined;
-            let targetProvider = null;
-
-            if (msg.model) {
-              const match = msg.model.match(/^\[(.+?)\]\s+(.+)$/);
-              if (match) {
-                const providerName = match[1];
-                const cleanModelId = match[2];
-                selectedModel = cleanModelId;
-
-                const allProviders = configManager?.getAllProviders();
-                if (allProviders) {
-                  targetProvider = Object.values(allProviders).find(
-                    (p) => p.name === providerName
-                  );
-                }
-              }
-            }
-
-            // Fall back to default provider if no model specified
-            // or provider not found. The "active provider" concept
-            // is gone; the soft default is the implicit fallback.
-            if (!targetProvider) {
-              targetProvider = configManager?.getDefaultProvider();
-            }
-
-            if (!targetProvider) {
-              logger.error('No default provider configured for conductor agent', undefined, { sessionId: conductorSessionId }, LogComponent.Main);
-              channelManager.sendToChannel('conductor', {
-                type: 'conductor:error',
-                sessionId: conductorSessionId,
-                message: 'No default provider configured',
-              });
-              return;
-            }
-
-            // Pin this session to the chosen provider so that the
-            // pool's `sendProviderInit` uses this provider for the
-            // rest of the session's life. With the multi-provider
-            // model, every session is bound to the provider the
-            // user actually picked (from the model dropdown), not
-            // whatever the global default happens to be at any
-            // given moment.
-            agentPool.setSessionProvider(conductorSessionId, targetProvider.id);
-
-            const providerModel = selectedModel ||
-              targetProvider.options?.defaultModel ||
-              targetProvider.options?.model ||
-              '';
-
-            const llmProvider = toLLMProvider(targetProvider.providerType);
-
-            // Resolve vision model: parse "[providerName] modelId" the same way
-            // as the primary model. Falls back to undefined (no vision) when
-            // the user has not picked a vision model or the parse fails.
-            let visionConfig: {
-              provider: string;
-              model: string;
-              baseURL: string;
-              apiKey: string;
-              enabled: boolean;
-            } | undefined;
-            if (msg.visionModel) {
-              const vmatch = msg.visionModel.match(/^\[(.+?)\]\s+(.+)$/);
-              if (vmatch) {
-                const vProviderName = vmatch[1];
-                const vModelId = vmatch[2];
-                const allProviders = configManager?.getAllProviders();
-                const vProvider = allProviders
-                  ? Object.values(allProviders).find((p) => p.name === vProviderName)
-                  : null;
-                if (vProvider) {
-                  visionConfig = {
-                    provider: vProvider.providerType,
-                    model: vModelId,
-                    baseURL: vProvider.baseUrl || '',
-                    apiKey: vProvider.apiKey,
-                    enabled: true,
-                  };
-                }
-              } else {
-                // Vision model referenced by bare id — assume the same provider
-                visionConfig = {
-                  provider: targetProvider.providerType,
-                  model: msg.visionModel,
-                  baseURL: targetProvider.baseUrl || '',
-                  apiKey: targetProvider.apiKey,
-                  enabled: true,
-                };
-              }
-            }
-
-            // Expose the permission mode to the prompt subsystem inside the
-            // agent process. actions.ts reads process.env.CONDUCTOR_PERMISSION_MODE
-            // and tailors the prompt section accordingly.
-            if (msg.permissionMode) {
-              process.env.CONDUCTOR_PERMISSION_MODE = msg.permissionMode;
-            }
-
-            logger.info('Sending conductor:init to agent process', { sessionId: conductorSessionId, model: providerModel, provider: llmProvider, hasVision: !!visionConfig, permissionMode: msg.permissionMode ?? 'default' }, LogComponent.Main);
-            const conductorInitSent = agentPool.send(conductorSessionId, {
-              type: 'conductor:init',
-              sessionId: conductorSessionId,
-              providerConfig: {
-                apiKey: targetProvider.apiKey,
-                baseURL: targetProvider.baseUrl || undefined,
-                model: providerModel,
-                provider: llmProvider,
-                authStyle: 'api_key',
-              },
-              snapshot: msg.snapshot,
-              workingDirectory: '',
-              systemPrompt: '',
-              visionConfig,
-              permissionMode: msg.permissionMode,
-              language: msg.language,
-            });
-
-            if (!conductorInitSent) {
-              logger.error('Failed to send conductor:init to agent process', undefined, { sessionId: conductorSessionId }, LogComponent.Main);
-              channelManager.sendToChannel('conductor', {
-                type: 'conductor:error',
-                sessionId: conductorSessionId,
-                message: 'Failed to initialize conductor agent process',
-              });
-              return;
-            }
-
-            // Set up message forwarding: agent process -> renderer via conductor channel
-            agentPool.onMessage(conductorSessionId, (agentMsg) => {
-              const am = agentMsg as Record<string, unknown>;
-              if (am.type === 'conductor:text' || am.type === 'conductor:thinking' ||
-                  am.type === 'conductor:tool_use' || am.type === 'conductor:tool_result' ||
-                  am.type === 'conductor:status' || am.type === 'conductor:error' ||
-                  am.type === 'conductor:done' || am.type === 'conductor:permission' ||
-                  am.type === 'conductor:ready' || am.type === 'conductor:perception_context') {
-                channelManager.sendToChannel('conductor', am);
-              } else if (am.type === 'conductor:executor:rpc') {
-                // Route to main process IPC handler (not renderer)
-                handleExecutorRpc(am, conductorSessionId);
-              } else if (am.type === 'pong') {
-                // Heartbeat, ignore
-              } else if (am.type === 'process:disconnected') {
-                channelManager.sendToChannel('conductor', {
-                  type: 'conductor:disconnected',
-                  sessionId: conductorSessionId,
-                });
-              }
-            });
-          };
-
-          if (isNew) {
-            await setupAndStart();
-
-            // Wait for conductor:ready before sending start (only for new processes)
-            agentPool.waitForReady(conductorSessionId, 30000).then(() => {
-              agentPool.send(conductorSessionId, {
-                type: 'conductor:agent:start',
-                sessionId: conductorSessionId,
-                prompt: msg.prompt,
-                snapshot: msg.snapshot,
-                permissionMode: msg.permissionMode,
-                language: msg.language,
-              });
-            }).catch((err: Error) => {
-              if (!interruptedSessions.has(conductorSessionId)) {
-                channelManager.sendToChannel('conductor', {
-                  type: 'conductor:error',
-                  sessionId: conductorSessionId,
-                  message: `Conductor agent ready timeout: ${err.message}`,
-                });
-              }
-            });
-          } else {
-            // Existing process — agent already sent ready, start directly
-            agentPool.send(conductorSessionId, {
-              type: 'conductor:agent:start',
-              sessionId: conductorSessionId,
-              prompt: msg.prompt,
-              snapshot: msg.snapshot,
-              permissionMode: msg.permissionMode,
-              language: msg.language,
-            });
-          }
-        } catch (err) {
-          logger.error('Failed to start conductor agent', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
-          channelManager.sendToChannel('conductor', {
-            type: 'conductor:error',
-            sessionId: msg.sessionId,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
-      } else if (msg.type === 'conductor:interrupt' && msg.sessionId) {
-        interruptedSessions.add(msg.sessionId);
-        agentPool.send(msg.sessionId, { type: 'conductor:interrupt' });
-        agentPool.release(msg.sessionId);
-      }
-    };
-
-    await createWindow(handleConductorMessage);
+    await createWindow();
     recapService.init(getMainWindow()!);
     createTray();
 
@@ -768,7 +527,7 @@ if (gotTheLock) {
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow(handleConductorMessage).then(() => {
+        createWindow().then(() => {
           const mw = getMainWindow();
           if (mw) recapService.init(mw);
         });
@@ -797,6 +556,7 @@ registerLiteratureHandlers();
 registerImportHandlers();
 registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
+registerGitHandlers();
 
 // =============================================================================
 // Step 4.6: Start CLI API server (Phase 0 — read-only control plane)

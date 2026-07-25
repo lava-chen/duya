@@ -16,20 +16,12 @@ import { GrepTool } from './GrepTool/GrepTool.js';
 import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 import { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
 import { subagentTool } from './SubagentTool/index.js';
-import { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
-import { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools imports
 import { taskTool } from './TaskTool/TaskTool.js';
-import { enterWorktreeTool } from './EnterWorktreeTool/EnterWorktreeTool.js';
-import { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 import { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 import { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 import { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
-import { listMcpResourcesTool, setMcpManagerProvider } from './ListMcpResourcesTool/ListMcpResourcesTool.js';
-import { readMcpResourceTool } from './ReadMcpResourceTool/ReadMcpResourceTool.js';
-import { webSearchTool } from './WebSearchTool/WebSearchTool.js';
-import { webFetchTool } from './WebFetchTool/WebFetchTool.js';
 import { browserTool } from './BrowserTool/BrowserTool.js';
 import type { DomainBlockerConfig } from './BrowserTool/DomainBlocker.js';
 import type { BrowserBackendMode } from './BrowserTool/backend-resolver.js';
@@ -42,10 +34,6 @@ import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
-// Conductor canvas tools are owned by `@duya/conductor`. The agent
-// process loads that ESM package once at async startup and injects the
-// tool provider here so `createBuiltinRegistry` can stay synchronous in
-// per-turn hot paths.
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { runVisualSelfReview } from './WidgetRenderer/runVisualSelfReview.js';
 import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
@@ -53,20 +41,6 @@ import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js
 import { ResearchMemory } from '../research-memory/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
 import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
-
-type ConductorToolProvider = {
-  CANVAS_ORCHESTRATOR_TOOLS: import('../types.js').Tool[];
-  getCanvasOrchestratorExecutors: () => Record<
-    string,
-    import('./registry.js').ToolExecutor
-  >;
-};
-
-let conductorToolProvider: ConductorToolProvider | null = null;
-
-export function setConductorToolProvider(provider: ConductorToolProvider | null): void {
-  conductorToolProvider = provider;
-}
 
 /**
  * BashTool instance
@@ -92,13 +66,6 @@ export function createBuiltinRegistry(
   options?: {
     enabledPluginIds?: Set<string>;
     wikiAgentEnabled?: boolean;
-    // Optional accessor that returns the live MCPManager. Wired into
-    // ListMcpResourcesTool so it can list real resources from connected
-    // servers (the previous version was a stub that always returned
-    // "no resources"). Pass a closure that returns the current manager
-    // (not the manager itself) so the tool always sees the latest
-    // connection state without re-registration.
-    mcpManagerProvider?: () => import('../mcp/index.js').MCPManager | undefined;
     // Browser backend mode: 'auto' (degradation chain) | 'extension' | 'built-in'
     browserBackendMode?: BrowserBackendMode;
     /**
@@ -124,17 +91,16 @@ export function createBuiltinRegistry(
     });
   }
 
-  // Wire the MCP resources tool to the live manager. If no provider was
-  // passed (e.g. tests, ad-hoc CLI), the tool falls back to a snapshot
-  // pushed via setMcpResources() — same behavior as before, just explicit.
-  if (options?.mcpManagerProvider) {
-    setMcpManagerProvider(options.mcpManagerProvider);
-  }
-
-  // Bash tool - class implements both Tool and ToolExecutor
-  registry.register(bashTool.toTool(), bashTool, { exposeMode: 'always' });
+  // Expose one native shell initially. Keep the alternate shell
+  // discoverable when it is available on the current platform.
+  const isWindows = process.platform === 'win32';
+  registry.register(bashTool.toTool(), bashTool, {
+    exposeMode: isWindows ? 'discoverable' : 'always',
+  });
   if (hasShellFamily('powershell')) {
-    registry.register(powerShellTool.toTool(), powerShellTool, { exposeMode: 'always' });
+    registry.register(powerShellTool.toTool(), powerShellTool, {
+      exposeMode: isWindows ? 'always' : 'discoverable',
+    });
   }
 
   // Read tool
@@ -158,36 +124,21 @@ export function createBuiltinRegistry(
   // SubagentTool - for spawning sub-agents
   registry.register(subagentTool.toTool(), subagentTool, { exposeMode: 'always' });
 
-  // Team tools - for multi-agent team coordination
-  registry.register(teamCreateTool, teamCreateTool, { exposeMode: 'discoverable' });
-  registry.register(teamDeleteTool, teamDeleteTool, { exposeMode: 'discoverable' });
-
   // Phase 5: Task tool (unified)
   registry.register(taskTool.toTool(), taskTool, { exposeMode: 'always' });
 
-  // Phase 5: Worktree tools
-  registry.register(enterWorktreeTool, enterWorktreeTool, { exposeMode: 'always' });
-  registry.register(exitWorktreeTool, exitWorktreeTool, { exposeMode: 'always' });
+  // Plan mode controls are available through tool_search when needed.
+  registry.register(enterPlanModeTool, enterPlanModeTool, { exposeMode: 'discoverable' });
+  registry.register(exitPlanModeTool, exitPlanModeTool, { exposeMode: 'discoverable' });
+  registry.register(switchModeTool, switchModeTool, { exposeMode: 'discoverable' });
 
-  // Phase 5: Plan mode tools
-  registry.register(enterPlanModeTool, enterPlanModeTool, { exposeMode: 'always' });
-  registry.register(exitPlanModeTool, exitPlanModeTool, { exposeMode: 'always' });
-  registry.register(switchModeTool, switchModeTool, { exposeMode: 'always' });
-
-  // Phase 5: MCP resource tools
-  registry.register(listMcpResourcesTool, listMcpResourcesTool, { exposeMode: 'discoverable' });
-  registry.register(readMcpResourceTool, readMcpResourceTool, { exposeMode: 'discoverable' });
-
-  // Phase 5: Web tools
-  // Note: webSearchTool and webFetchTool are disabled (placeholders for future redesign)
-  // registry.register(webSearchTool, webSearchTool);
-  // registry.register(webFetchTool, webFetchTool);
-  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'always' });
+  // Browser is the supported web search and fetch surface.
+  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'discoverable' });
 
   // Phase 5: Other tools
   registry.register(skillTool, skillTool, { exposeMode: 'discoverable' });
   registry.register(briefTool, briefTool, { exposeMode: 'discoverable' });
-  registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'always' });
+  registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'discoverable' });
   // Inter-agent communication tool — message another session's agent
   registry.register(messageSessionTool.toTool(), messageSessionTool, { exposeMode: 'discoverable' });
   const visionTool = new VisionTool();
@@ -210,10 +161,10 @@ export function createBuiltinRegistry(
 
   // Memory tool
   const memoryTool = getMemoryTool();
-  registry.register(memoryTool.toTool(), memoryTool, { exposeMode: 'always' });
+  registry.register(memoryTool.toTool(), memoryTool, { exposeMode: 'discoverable' });
 
   // AskUserQuestion tool - prompt the user with multi-choice questions
-  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'always' });
+  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'discoverable' });
 
   // ModuleTool - load design specification modules on demand
   // Agent calls read_module BEFORE show_widget or canvas tools to get style guides
@@ -272,7 +223,7 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
 - Keep widgets self-contained - embed all data and styling inline
 - Specify fixed dimensions (e.g., width=600, height=400) for reliability
 - Avoid external API calls from widgets to prevent network errors
-- **Embedding images**: Widget images must use \`https:\` or \`data:\` URLs only. The widget iframe's Content-Security-Policy blocks local file paths (\`duya-file://\`, \`file://\`, bare relative paths). To embed a generated image, encode it as a data URL or host it temporarily on a CDN the widget allowlist permits. Clicking an embedded image opens DUYA's lightbox.`,
+- **Embedding images**: Widget images must use \`https:\` or \`data:\` URLs only. The widget iframe's Content-Security-Policy blocks local file paths (\`file://\`, bare relative paths). To embed a generated image, encode it as a data URL or host it temporarily on a CDN the widget allowlist permits. Clicking an embedded image opens DUYA's lightbox.`,
       input_schema: {
         type: 'object',
         properties: {
@@ -343,20 +294,12 @@ export { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 export { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
 export { getSubagentToolDefinition, getAgentDefinitions, getPrompt } from './SubagentTool/index.js';
 export type { AgentDefinition, SubagentToolInput, SubagentToolResult } from './SubagentTool/index.js';
-export { teamCreateTool } from './TeamCreateTool/TeamCreateTool.js';
-export { teamDeleteTool } from './TeamDeleteTool/TeamDeleteTool.js';
 
 // Phase 5 tools exports
 export { taskTool } from './TaskTool/TaskTool.js';
-export { enterWorktreeTool } from './EnterWorktreeTool/EnterWorktreeTool.js';
-export { exitWorktreeTool } from './ExitWorktreeTool/ExitWorktreeTool.js';
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 export { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
-export { listMcpResourcesTool } from './ListMcpResourcesTool/ListMcpResourcesTool.js';
-export { readMcpResourceTool } from './ReadMcpResourceTool/ReadMcpResourceTool.js';
-export { webSearchTool } from './WebSearchTool/WebSearchTool.js';
-export { webFetchTool } from './WebFetchTool/WebFetchTool.js';
 export { browserTool } from './BrowserTool/BrowserTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';
 export { skillManageTool } from './SkillManageTool.js';

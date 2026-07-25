@@ -43,6 +43,7 @@ import type {
 import { binPack } from './layout/binPack';
 import { flowLayout } from './layout/flowLayout';
 import { viewportAwarePack } from './layout/viewport';
+import { findEmptySpace } from './layout/findEmptySpace';
 import type { LayoutElement, LayoutResult } from './layout/types';
 import { prepareCanvasDocument, syncCanvasDocument } from './document-service';
 
@@ -354,46 +355,58 @@ export class ConductorDbService {
     }
     const snapshotData = snapshot.result as CanvasSnapshotResult;
 
-    // Build the incoming element with the requested size at the preferred
-    // position; viewportAwarePack will place it avoiding existing elements.
-    const incoming: LayoutElement = {
-      id: '__find_empty_space__',
-      position: { x: preferredX, y: preferredY, w, h, zIndex: 0, rotation: 0 },
-      metadata: { locked: false, priority: 'high' },
-    };
-
-    const existing: LayoutElement[] = snapshotData.elements
+    // Treat every non-connector element as a solid rectangle obstacle.
+    // bin-pack was the previous implementation but it only guarantees the
+    // anchor row fits, not that the entire rectangle is fully outside
+    // every obstacle — leading to visibly overlapping placements. The new
+    // findEmptySpace algorithm verifies that every point of the candidate
+    // rectangle is empty and picks the placement closest to canvas center.
+    const obstacles = snapshotData.elements
       .filter(el => el.elementKind !== 'native/connector')
-      .map(el => ({
-        id: el.id,
-        position: el.position as LayoutElement['position'],
-        metadata: (el.metadata as LayoutElement['metadata']) ?? { locked: false, priority: 'mid' },
-      }));
+      .map(el => {
+        const pos = el.position as { x?: number; y?: number; w?: number; h?: number };
+        return {
+          x: Number.isFinite(pos.x) ? (pos.x as number) : 0,
+          y: Number.isFinite(pos.y) ? (pos.y as number) : 0,
+          w: Number.isFinite(pos.w) ? (pos.w as number) : 0,
+          h: Number.isFinite(pos.h) ? (pos.h as number) : 0,
+        };
+      })
+      // Drop zero-area geometry (defensive — should not happen in practice
+      // because connectors are filtered and other kinds always have w/h).
+      .filter(obs => obs.w > 0 && obs.h > 0);
 
-    const results = viewportAwarePack(existing, [incoming], {
+    const placed = findEmptySpace(obstacles, { w, h }, {
       viewport: { width: CANVAS_WIDTH_UNITS, height: CANVAS_HEIGHT_UNITS },
       gap: 0.25,
-      preserveLocked: true,
-      maxFreeRects: 32,
-      priorityWeight: { high: 0, mid: 1, low: 2 },
     });
 
-    if (results.length === 0) {
+    if (!placed) {
+      // Soft failure: no rectangle of the requested size fits in the
+      // current viewport. Return the agent's preferred spot but flag
+      // the overlap so the caller can shrink the element or auto-layout.
       return {
         success: true,
-        result: { x: preferredX, y: preferredY, w, h, overlapsExisting: true },
+        result: {
+          x: preferredX,
+          y: preferredY,
+          w,
+          h,
+          overlapsExisting: true,
+          reason: 'No fully empty rectangle of the requested size fits inside the viewport; consider a smaller w/h or call canvas_auto_layout first.',
+        },
       };
     }
 
-    const placed = results[0];
     return {
       success: true,
       result: {
-        x: placed.position.x,
-        y: placed.position.y,
+        x: placed.x,
+        y: placed.y,
         w,
         h,
         overlapsExisting: false,
+        cornerDistance: placed.score,
       },
     };
   }

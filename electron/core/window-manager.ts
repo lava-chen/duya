@@ -121,9 +121,7 @@ export async function getRendererUrl(): Promise<string> {
 // Main Window
 // =============================================================================
 
-export async function createWindow(
-  handleConductorMessage: (data: unknown) => void,
-): Promise<void> {
+export async function createWindow(): Promise<void> {
   const isHiddenLaunch = wasLaunchedAsHidden();
   if (isHiddenLaunch) {
     logger.info('App launched as hidden login item, starting minimized to tray', undefined, LogComponent.Main);
@@ -250,8 +248,6 @@ export async function createWindow(
       const conductorChannel = new MessageChannelMain();
       channelManager.registerChannel('conductor', conductorChannel.port1);
       mainWindow?.webContents.postMessage('conductor-port', null, [conductorChannel.port2]);
-
-      channelManager.onChannelMessage('conductor', handleConductorMessage);
 
       logger.info('Conductor port sent to renderer', undefined, LogComponent.Main);
     }
