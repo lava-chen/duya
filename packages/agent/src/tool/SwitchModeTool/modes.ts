@@ -24,16 +24,10 @@ const ALWAYS_ALLOWED_TOOLS = new Set([
   'Grep',
   'Bash', // Bash is allowed but limited to read-only commands in read-only modes
   'Agent',
-  'ListMcpResources',
-  'ReadMcpResource',
-  'WebSearch',
-  'WebFetch',
   'Task', // Unified task tool with actions: create, get, list, update, output, stop
   'EnterPlanMode',
   'ExitPlanMode',
   'SwitchMode',
-  'EnterWorktree',
-  'ExitWorktree',
   'Brief',
   'Browser',
   'SessionSearch',

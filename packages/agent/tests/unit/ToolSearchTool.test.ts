@@ -95,14 +95,17 @@ describe('ToolSearchTool.execute', () => {
     const fresh = new ToolSearchTool();
     const result = await fresh.execute({ query: 'read', limit: 5 });
     expect(result.error).toBe(true);
-    const parsed = JSON.parse(result.result);
-    expect(parsed.error).toBe('Tool search not configured');
+    expect(result.result).toContain('# Tool Search Error');
+    expect(result.result).toContain('Tool search is not configured');
   });
 
-  it('returns result JSON with the new schema fields once searchFn is wired', async () => {
+  it('returns marked Markdown with tool metadata once searchFn is wired', async () => {
     const registry = new ToolRegistry();
     const { tool, executor } = makeToolAndExecutor('read', 'read a file from disk');
-    registry.register(tool, executor);
+    registry.register(tool, executor, {
+      exposeMode: 'discoverable',
+      inputSchemaSummary: 'path, optional offset and limit',
+    });
 
     const fresh = new ToolSearchTool();
     fresh.setSearchFn((query, limit) =>
@@ -111,28 +114,21 @@ describe('ToolSearchTool.execute', () => {
 
     const result = await fresh.execute({ query: 'read', limit: 5 });
     expect(result.error).toBeFalsy();
-    const parsed = JSON.parse(result.result);
-    expect(parsed.query).toBe('read');
-    expect(Array.isArray(parsed.results)).toBe(true);
-    expect(parsed.results.length).toBeGreaterThan(0);
-
-    const first = parsed.results[0];
-    expect(first).toHaveProperty('name');
-    expect(first).toHaveProperty('description');
-    expect(first).toHaveProperty('category');
-    expect(first).toHaveProperty('inputSchemaSummary');
-    expect(first).toHaveProperty('exposeMode');
-    // Phase 1: registry does not persist these, so both are null.
-    expect(first.inputSchemaSummary).toBeNull();
-    expect(first.exposeMode).toBeNull();
+    expect(result.result).toContain('<!-- duya-tool-search-result -->');
+    expect(result.result).toContain('# Tool Search Results');
+    expect(result.result).toContain('## Tool: `read`');
+    expect(result.result).toContain('**Exposure:** discoverable');
+    expect(result.result).toContain('**Input summary:** path, optional offset and limit');
+    expect(result.result).toContain('read a file from disk');
   });
 
-  it('returns the query-required error when the query is empty', async () => {
+  it('returns a Markdown error when the query is empty', async () => {
     const fresh = new ToolSearchTool();
     const result = await fresh.execute({ query: '' });
     expect(result.error).toBe(true);
-    const parsed = JSON.parse(result.result);
-    expect(parsed.error).toBe('query is required');
+    expect(result.result).toContain('<!-- duya-tool-search-result -->');
+    expect(result.result).toContain('# Tool Search Error');
+    expect(result.result).toContain('`query` parameter is required');
   });
 
   it('clamps limit to 20', async () => {
@@ -149,8 +145,7 @@ describe('ToolSearchTool.execute', () => {
     });
     const result = await fresh.execute({ query: 't_', limit: 100 });
     expect(observedLimit).toBe(20);
-    const parsed = JSON.parse(result.result);
-    expect(parsed.results).toHaveLength(20);
+    expect((result.result.match(/^## Tool: /gm) ?? [])).toHaveLength(20);
   });
 });
 
@@ -229,15 +224,8 @@ describe('Plan 241 Phase 2: ToolRegistry metadata persistence', () => {
 
 /**
  * Plan 241 Phase 2 tests — builtin registry exposeMode classification.
- * Validates that the shipped `createBuiltinRegistry` categorizes tools
- * according to the plan:
- *   - always: high-frequency (bash, read, write, edit, grep, glob, task,
- *             Agent, AskUserQuestion, mode controls, browser, Memory,
- *             SessionSearch, ToolSearch)
- *   - discoverable: canvas_*, research_memory:*, TeamCreate/Delete,
- *                  MCP resource tools, duya_cli, show_widget, vision_*,
- *                  brief, messageSession, read_module, anchor_memory,
- *                  skill_manage, wiki_*
+ * The concrete always/discoverable split evolves with the runtime surface;
+ * these tests pin registry metadata behavior and representative dynamic tools.
  */
 describe('Plan 241 Phase 2: builtin registry exposeMode classification', () => {
   it('classifies BashTool as always', () => {

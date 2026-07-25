@@ -11,13 +11,9 @@ const GREP_TOOL_NAME = 'Grep'
 const BROWSER_TOOL_NAME = 'browser'
 const SKILL_TOOL_NAME = 'Skill'
 const SKILL_MANAGE_TOOL_NAME = 'skill_manage'
-const MCP_LIST_TOOL_NAME = 'ListMcpResources'
-const MCP_READ_TOOL_NAME = 'ReadMcpResource'
 const SHOW_WIDGET_TOOL_NAME = 'show_widget'
 const DUYA_INFO_TOOL_NAME = 'duya_info'
 const DUYA_HEALTH_TOOL_NAME = 'duya_health'
-const WEB_SEARCH_TOOL_NAME = 'WebSearch'
-const WEB_FETCH_TOOL_NAME = 'WebFetch'
 
 const CANVAS_TOOL_NAMES = [
   'canvas_create_element',
@@ -72,10 +68,8 @@ function getResearchSystemPrompt(_params: {
 ### Visualization
 - ${SHOW_WIDGET_TOOL_NAME}: Create interactive charts, diagrams, calculators, and mini-apps
 
-### Skills & MCP
+### Skills
 - ${SKILL_TOOL_NAME}: Load and execute skills for specialized workflows
-- ${MCP_LIST_TOOL_NAME}: List available MCP resources
-- ${MCP_READ_TOOL_NAME}: Read content from MCP resources
 
 ## Output Format
 
@@ -118,8 +112,6 @@ export const RESEARCH_AGENT: BuiltInAgentDefinition = {
     SKILL_MANAGE_TOOL_NAME,
     DUYA_INFO_TOOL_NAME,
     DUYA_HEALTH_TOOL_NAME,
-    WEB_SEARCH_TOOL_NAME,
-    WEB_FETCH_TOOL_NAME,
     ...CANVAS_TOOL_NAMES,
   ],
   source: 'built-in',

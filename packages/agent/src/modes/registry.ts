@@ -1,14 +1,9 @@
 /**
  * ModeModifierRegistry — declarative mode registry (plan 224).
  *
- * Distinct from the legacy {@link ModeRegistry} in `index.ts`, which
- * handles `BaseMode` class instances (Research mode). This registry
- * handles {@link ModeModifier} declarative objects and supports
- * composable resolution via {@link resolve}.
- *
- * Migration: once Research mode is ported to ModeModifier (Phase 2 of
- * plan 224), the legacy `ModeRegistry` will be deleted and this file
- * becomes the single mode registry.
+ * Registry for all declarative {@link ModeModifier} objects. It supports
+ * composable resolution via {@link resolve}; mode registration happens in
+ * `modes/index.ts`.
  */
 
 import type {
@@ -162,8 +157,7 @@ export class ModeModifierRegistry {
  * Singleton instance. Mode authors register their {@link ModeModifier}
  * objects against this in `packages/agent/src/modes/index.ts`.
  *
- * NOTE: named `modeModifierRegistry` to avoid colliding with the legacy
- * `ModeRegistry` singleton from `index.ts`. Will be renamed to
- * `modeRegistry` once the legacy registry is removed.
+ * The established public name remains `modeModifierRegistry` to make its
+ * declarative role explicit.
  */
 export const modeModifierRegistry = new ModeModifierRegistry();

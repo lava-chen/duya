@@ -1,5 +1,7 @@
 import type { Message, MessageContent, ToolResultContent } from '../types.js'
 
+// WebSearch/WebFetch are retained only as historical wire names so old
+// persisted conversations still receive the same micro-compaction behavior.
 const COMPACTABLE_TOOLS = new Set([
   'Read', 'Bash', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Edit', 'Write',
 ])

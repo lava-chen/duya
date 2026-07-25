@@ -1,67 +1,78 @@
-/**
- * Tests for Plan 241 Phase 3: tool_search discovery scanner.
- *
- * Covers:
- *   - extractToolNamesFromSearchResult: parse JSON, extract names, graceful
- *     fallback on bad input
- *   - harvestDiscoveredTools: scan tool_result messages, populate Set,
- *     report new-name count, skip already-seen names
- */
-
 import { describe, it, expect } from 'vitest';
 import {
   extractToolNamesFromSearchResult,
+  getDiscoveredToolPrompts,
   harvestDiscoveredTools,
 } from '../../src/agent/tool-search-discovery.js';
-import type { Message, MessageContent } from '../../src/types.js';
+import type { Message, MessageContent, Tool } from '../../src/types.js';
+import { ToolRegistry } from '../../src/tool/registry.js';
+
+const marker = '<!-- duya-tool-search-result -->';
+
+function markdownFor(...toolNames: string[]): string {
+  return [marker, ...toolNames.map((name) => `## Tool: \`${name}\``)].join('\n');
+}
 
 describe('extractToolNamesFromSearchResult', () => {
-  it('extracts names from a well-formed tool_search result payload', () => {
-    const json = JSON.stringify({
-      query: 'canvas',
-      results: [
-        { name: 'canvas_manage', description: '...', category: 'canvas' },
-        { name: 'canvas_capture', description: '...', category: 'canvas' },
-      ],
-      count: 2,
-    });
-    expect(extractToolNamesFromSearchResult(json)).toEqual(['canvas_manage', 'canvas_capture']);
+  it('extracts names from marked Markdown headings', () => {
+    expect(extractToolNamesFromSearchResult(
+      markdownFor('canvas_manage', 'canvas_capture'),
+    )).toEqual(['canvas_manage', 'canvas_capture']);
   });
 
-  it('returns an empty array for empty input', () => {
+  it('ignores empty, unmarked, and legacy JSON input', () => {
     expect(extractToolNamesFromSearchResult('')).toEqual([]);
+    expect(extractToolNamesFromSearchResult('## Tool: `browser`')).toEqual([]);
+    expect(extractToolNamesFromSearchResult('{"results":[{"name":"browser"}]}')).toEqual([]);
   });
 
-  it('returns an empty array on malformed JSON', () => {
-    expect(extractToolNamesFromSearchResult('{not json')).toEqual([]);
-    expect(extractToolNamesFromSearchResult('null')).toEqual([]);
+  it('deduplicates repeated tool headings', () => {
+    expect(extractToolNamesFromSearchResult(markdownFor('browser', 'browser')))
+      .toEqual(['browser']);
   });
+});
 
-  it('returns an empty array when results is missing', () => {
-    expect(extractToolNamesFromSearchResult(JSON.stringify({ query: 'x' }))).toEqual([]);
-  });
-
-  it('skips entries without a string name', () => {
-    const json = JSON.stringify({
-      results: [
-        { name: 'good', description: '...' },
-        { description: 'no name field' },
-        { name: 42 }, // not a string
-      ],
+describe('getDiscoveredToolPrompts', () => {
+  it('returns the usage guide for a discovered tool executor', () => {
+    const registry = new ToolRegistry();
+    const definition = {
+      name: 'browser',
+      description: 'Browse pages',
+      input_schema: { type: 'object', properties: {} },
+    } as unknown as Tool;
+    registry.register(definition, {
+      execute: async () => ({ id: 'x', name: 'browser', result: '' }),
+      getPrompt: () => '## Browser Tool\n\nUse snapshots and refs.',
     });
-    expect(extractToolNamesFromSearchResult(json)).toEqual(['good']);
+
+    expect(getDiscoveredToolPrompts(registry, new Set(['browser'])))
+      .toEqual(['## Browser Tool\n\nUse snapshots and refs.']);
+  });
+
+  it('skips tools without a usage guide', () => {
+    const registry = new ToolRegistry();
+    const definition = {
+      name: 'plain',
+      description: 'Plain tool',
+      input_schema: { type: 'object', properties: {} },
+    } as unknown as Tool;
+    registry.register(definition, {
+      execute: async () => ({ id: 'x', name: 'plain', result: '' }),
+    });
+
+    expect(getDiscoveredToolPrompts(registry, new Set(['plain']))).toEqual([]);
   });
 });
 
 describe('harvestDiscoveredTools', () => {
-  function makeToolResultMessage(payload: object, role: 'user' | 'tool' = 'user'): Message {
+  function makeToolResultMessage(toolNames: string[], role: 'user' | 'tool' = 'user'): Message {
+    const payload = markdownFor(...toolNames);
     if (role === 'user') {
-      // Anthropic-style tool_result content block
       const content: MessageContent[] = [
         {
           type: 'tool_result',
           tool_use_id: 'tool_search_0',
-          content: JSON.stringify(payload),
+          content: payload,
           is_error: false,
         } as MessageContent,
       ];
@@ -72,59 +83,51 @@ describe('harvestDiscoveredTools', () => {
         timestamp: 0,
       };
     }
-    // OpenAI-style 'tool' role with string content
     return {
       id: 'msg-2',
       role: 'tool',
-      content: JSON.stringify(payload),
+      content: payload,
       timestamp: 0,
     };
   }
 
-  it('adds names from a tool_result user-role message', () => {
-    const messages = [
-      makeToolResultMessage({
-        results: [
-          { name: 'canvas_manage' },
-          { name: 'canvas_capture' },
-        ],
-      }),
-    ];
+  it('adds names from a user-role tool_result message', () => {
     const acc = new Set<string>();
-    const added = harvestDiscoveredTools(messages, acc);
+    const added = harvestDiscoveredTools([
+      makeToolResultMessage(['canvas_manage', 'canvas_capture']),
+    ], acc);
     expect(added).toBe(2);
-    expect(acc.has('canvas_manage')).toBe(true);
-    expect(acc.has('canvas_capture')).toBe(true);
+    expect([...acc]).toEqual(['canvas_manage', 'canvas_capture']);
   });
 
-  it('adds names from a tool-role message with string content', () => {
-    const messages = [
-      makeToolResultMessage({ results: [{ name: 'research_memory:propose' }] }, 'tool'),
-    ];
+  it('adds names from a tool-role string message', () => {
     const acc = new Set<string>();
-    const added = harvestDiscoveredTools(messages, acc);
+    const added = harvestDiscoveredTools([
+      makeToolResultMessage(['research_memory:propose'], 'tool'),
+    ], acc);
     expect(added).toBe(1);
     expect(acc.has('research_memory:propose')).toBe(true);
   });
 
-  it('does not double-count names already in the accumulator', () => {
+  it('does not double-count names already accumulated', () => {
     const acc = new Set<string>(['canvas_manage']);
-    const messages = [
-      makeToolResultMessage({
-        results: [{ name: 'canvas_manage' }, { name: 'canvas_capture' }],
-      }),
-    ];
-    const added = harvestDiscoveredTools(messages, acc);
+    const added = harvestDiscoveredTools([
+      makeToolResultMessage(['canvas_manage', 'canvas_capture']),
+    ], acc);
     expect(added).toBe(1);
     expect(acc.size).toBe(2);
   });
 
-  it('returns 0 when no tool_result payloads match', () => {
-    const messages = [
-      makeToolResultMessage({ unrelated: 'shape' }),
-    ];
+  it('returns zero when no marked tool headings exist', () => {
     const acc = new Set<string>();
-    const added = harvestDiscoveredTools(messages, acc);
+    const added = harvestDiscoveredTools([
+      {
+        id: 'msg-unrelated',
+        role: 'tool',
+        content: 'ordinary tool output',
+        timestamp: 0,
+      },
+    ], acc);
     expect(added).toBe(0);
     expect(acc.size).toBe(0);
   });
@@ -137,12 +140,12 @@ describe('harvestDiscoveredTools', () => {
         content: 'just text, no tool_result',
         timestamp: 0,
       },
-      makeToolResultMessage({ results: [{ name: 'a' }] }),
-      makeToolResultMessage({ results: [{ name: 'b' }, { name: 'c' }] }, 'tool'),
+      makeToolResultMessage(['a']),
+      makeToolResultMessage(['b', 'c'], 'tool'),
     ];
     const acc = new Set<string>();
     const added = harvestDiscoveredTools(messages, acc);
     expect(added).toBe(3);
-    expect(acc.size).toBe(3);
+    expect([...acc]).toEqual(['a', 'b', 'c']);
   });
 });

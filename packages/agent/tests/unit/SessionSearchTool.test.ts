@@ -167,3 +167,75 @@ describe('sessionSearchTool singleton', () => {
     expect(sessionSearchTool.name).toBe(SESSION_SEARCH_TOOL_NAME);
   });
 });
+
+describe('SessionSearchTool parseSearchQuery', () => {
+  // The outer describe provides a `tool` via beforeEach; re-declare locally so
+  // this describe block stands on its own (vitest does not auto-inherit
+  // beforeEach from a sibling describe).
+  let parseTool: SessionSearchTool;
+  beforeEach(() => {
+    parseTool = new SessionSearchTool();
+  });
+  // Access the private parser for direct unit testing.
+  const parse = (q: string): string | null =>
+    (parseTool as unknown as { parseSearchQuery(q: string): string | null }).parseSearchQuery(q);
+
+  it('returns null for empty / whitespace-only / single-char input', () => {
+    expect(parse('')).toBeNull();
+    expect(parse('   ')).toBeNull();
+    expect(parse('a')).toBeNull();
+    expect(parse(' + - ! ')).toBeNull();
+  });
+
+  it('joins bare words with AND (FTS5 default) and lowercases', () => {
+    expect(parse('Duya Agent')).toBe('duya agent');
+    expect(parse('Hello   World')).toBe('hello world');
+  });
+
+  it('preserves quoted phrases', () => {
+    expect(parse('"duya agent"')).toBe('"duya agent"');
+    expect(parse('"hello world"')).toBe('"hello world"');
+  });
+
+  it('keeps the OR keyword uppercase and routes around it', () => {
+    expect(parse('auth OR login')).toBe('auth OR login');
+    expect(parse('"rate limit" OR quota')).toBe('"rate limit" OR quota');
+  });
+
+  it('honors + and - operators', () => {
+    expect(parse('+auth -tool')).toBe('+auth -tool');
+    expect(parse('+openai -deprecated')).toBe('+openai -deprecated');
+  });
+
+  it('drops 1- and 2-character Latin/digit tokens (trigram requires >= 3 chars)', () => {
+    expect(parse('a')).toBeNull();
+    expect(parse('ab')).toBeNull();
+    // Mid and long Latin/digit terms are kept as-is; trigram handles substring recall.
+    expect(parse('auth')).toBe('auth');
+    expect(parse('login')).toBe('login');
+    expect(parse('authentication')).toBe('authentication');
+  });
+
+  it('preserves user-supplied wildcards', () => {
+    expect(parse('auth*')).toBe('auth*');
+    expect(parse('aut* login*')).toBe('aut* login*');
+  });
+
+  it('passes CJK / mixed-script terms through unchanged', () => {
+    expect(parse('智能体')).toBe('智能体');
+    expect(parse('杜亚 agent')).toBe('杜亚 agent');
+  });
+
+  it('strips stray FTS5 operators from bare tokens', () => {
+    // Bare `+` or `-` alone should not produce a syntax error.
+    expect(parse('+')).toBeNull();
+    expect(parse('-')).toBeNull();
+    // Embedded operators are turned into whitespace, then terms re-tokenized.
+    expect(parse('foo+bar')).toBe('foo bar');
+    expect(parse('foo|bar')).toBe('foo bar');
+  });
+
+  it('strips FTS5 operators inside phrases too', () => {
+    expect(parse('"foo|bar"')).toBe('"foo bar"');
+  });
+});

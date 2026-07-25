@@ -966,7 +966,62 @@ function initializeSchema(db: BetterSqlite3.Database): void {
 }
 
 /**
- * Initialize FTS5 virtual table for full-text search on messages.
+ * Normalize text for FTS5 trigram indexing.
+ *
+ * Why: trigram tokenizer is case-sensitive and does not split camelCase / digit
+ * boundaries. Pre-normalizing once at insert time makes the index case-insensitive
+ * and lets `duya agent` reliably match `DuyaAgent` content.
+ *
+ * We index BOTH the split form and the unsplit (lowercased) form, joined by a
+ * single space. This is so a user search like `openai` still hits `OpenAI`
+ * content (where the splitter inserts a space and turns it into `open ai`),
+ * while a search like `duya agent` still hits `DuyaAgent` content (where the
+ * splitter correctly separates the two words).
+ *
+ *   DuyaAgent          -> "duya agent duyaagent"
+ *   OpenAI             -> "open ai openai"
+ *   XMLHttpRequest     -> "xml http request xmlhttprequest"
+ *   foo123bar          -> "foo 123 bar foo123bar"
+ *   message_attachments -> "message_attachments message_attachments" (no split)
+ *   中文内容            -> "中文内容 中文内容" (no split, trigram handles substring)
+ */
+export function normalizeForFts(s: string | null | undefined): string {
+  if (s === null || s === undefined) return '';
+  const collapse = (x: string) => x.replace(/\s+/g, ' ').trim();
+  const original = collapse(String(s).toLowerCase());
+  const split = collapse(
+    String(s)
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .replace(/([A-Za-z])([0-9])/g, '$1 $2')
+      .replace(/([0-9])([A-Za-z])/g, '$1 $2')
+      .toLowerCase(),
+  );
+  if (original === split) return original;
+  return `${split} ${original}`;
+}
+
+/**
+ * Register the SQL UDF used by FTS5 triggers to normalize content at insert time.
+ * Must be called on the same DB connection that owns the FTS5 virtual tables.
+ */
+function registerFtsUdfs(db: BetterSqlite3.Database): void {
+  db.function('fts_normalize', { deterministic: true }, (s: unknown) => {
+    return normalizeForFts(typeof s === 'string' ? s : null);
+  });
+}
+
+/**
+ * Initialize FTS5 virtual tables for session search.
+ *
+ * Schema:
+ *   - messages_fts: per-message content, trigram tokenizer, used for body hits.
+ *   - sessions_fts: per-session metadata (title / model / project_name / agent_name),
+ *                   used for metadata hits (search by conversation title, model, etc.).
+ *
+ * Migration: existing installs may have messages_fts built with `porter unicode61`,
+ * which does not handle CJK or substring matching. We detect the old schema via
+ * sqlite_master and drop+rebuild it; the new triggers then repopulate from messages.
  */
 function initializeFts5(db: BetterSqlite3.Database): void {
   try {
@@ -977,19 +1032,40 @@ function initializeFts5(db: BetterSqlite3.Database): void {
       return;
     }
 
-    // Create FTS5 virtual table if not exists
+    // Register UDFs used by FTS triggers before any trigger that references them.
+    registerFtsUdfs(db);
+
+    // Detect old (porter unicode61) messages_fts and drop it so we can rebuild with trigram.
+    const oldSchema = db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'messages_fts'")
+      .get() as { sql: string | null } | undefined;
+    if (oldSchema?.sql && /porter unicode61/i.test(oldSchema.sql)) {
+      logger.warn(
+        'Rebuilding messages_fts: porter unicode61 -> trigram (one-time migration)',
+        undefined,
+        'DB',
+      );
+      db.exec(`
+        DROP TRIGGER IF EXISTS messages_ai;
+        DROP TRIGGER IF EXISTS messages_ad;
+        DROP TRIGGER IF EXISTS messages_au;
+        DROP TABLE IF EXISTS messages_fts;
+      `);
+    }
+
+    // Per-message content index. trigram tokenizer handles CJK + substring + case via fts_normalize().
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-        session_id,
+        session_id UNINDEXED,
         content,
-        tokenize='porter unicode61'
+        tokenize='trigram'
       );
     `);
 
     db.exec(`
       CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages WHEN new.msg_type IN ('text', 'tool_result') BEGIN
         INSERT INTO messages_fts(rowid, session_id, content)
-        VALUES (new.rowid, new.session_id, new.content);
+        VALUES (new.rowid, new.session_id, fts_normalize(new.content));
       END;
 
       CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages WHEN old.msg_type IN ('text', 'tool_result') BEGIN
@@ -999,20 +1075,84 @@ function initializeFts5(db: BetterSqlite3.Database): void {
       CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages WHEN old.msg_type IN ('text', 'tool_result') OR new.msg_type IN ('text', 'tool_result') BEGIN
         DELETE FROM messages_fts WHERE rowid = old.rowid;
         INSERT INTO messages_fts(rowid, session_id, content)
-        VALUES (new.rowid, new.session_id, new.content);
+        VALUES (new.rowid, new.session_id, fts_normalize(new.content));
       END;
     `);
 
+    // Build the index if empty (covers fresh installs and post-migration rebuild).
     const ftsCount = db.prepare('SELECT COUNT(*) as cnt FROM messages_fts').get() as { cnt: number };
     if (ftsCount.cnt === 0) {
       db.exec(`
         INSERT INTO messages_fts(rowid, session_id, content)
-        SELECT rowid, session_id, content FROM messages WHERE msg_type IN ('text', 'tool_result');
+        SELECT rowid, session_id, fts_normalize(content)
+        FROM messages WHERE msg_type IN ('text', 'tool_result');
       `);
-      logger.info('FTS5 populated with text + tool_result messages', undefined, 'DB');
+      logger.info('FTS5 messages_fts populated (trigram)', undefined, 'DB');
     }
 
-    logger.info('FTS5 initialized successfully', undefined, 'DB');
+    // Per-session metadata index. title heavily weighted in the search query.
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+        session_id UNINDEXED,
+        title,
+        model,
+        project_name,
+        agent_name,
+        tokenize='trigram'
+      );
+    `);
+
+    // Keep sessions_fts in sync with chat_sessions. Soft delete is handled at query
+    // time (s.is_deleted = 0) so the same trigger covers all update paths.
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS chat_sessions_ai_fts AFTER INSERT ON chat_sessions BEGIN
+        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
+        VALUES (
+          new.rowid,
+          new.id,
+          fts_normalize(coalesce(new.title, '')),
+          fts_normalize(coalesce(new.model, '')),
+          fts_normalize(coalesce(new.project_name, '')),
+          fts_normalize(coalesce(new.agent_name, ''))
+        );
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS chat_sessions_ad_fts AFTER DELETE ON chat_sessions BEGIN
+        DELETE FROM sessions_fts WHERE session_id = old.id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS chat_sessions_au_fts AFTER UPDATE ON chat_sessions BEGIN
+        DELETE FROM sessions_fts WHERE session_id = old.id;
+        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
+        VALUES (
+          new.rowid,
+          new.id,
+          fts_normalize(coalesce(new.title, '')),
+          fts_normalize(coalesce(new.model, '')),
+          fts_normalize(coalesce(new.project_name, '')),
+          fts_normalize(coalesce(new.agent_name, ''))
+        );
+      END;
+    `);
+
+    const sessionsFtsCount = db
+      .prepare('SELECT COUNT(*) as cnt FROM sessions_fts')
+      .get() as { cnt: number };
+    if (sessionsFtsCount.cnt === 0) {
+      db.exec(`
+        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
+        SELECT rowid,
+               id,
+               fts_normalize(coalesce(title, '')),
+               fts_normalize(coalesce(model, '')),
+               fts_normalize(coalesce(project_name, '')),
+               fts_normalize(coalesce(agent_name, ''))
+        FROM chat_sessions;
+      `);
+      logger.info('FTS5 sessions_fts populated (trigram)', undefined, 'DB');
+    }
+
+    logger.info('FTS5 initialized successfully (trigram + sessions_fts)', undefined, 'DB');
   } catch (error) {
     logger.error('Failed to initialize FTS5', error instanceof Error ? error : undefined, undefined, 'DB');
   }
@@ -1277,6 +1417,13 @@ export function addMessage(data: CreateMessageData): MessageRow {
   const now = Date.now();
   const content = serializeMessageContent(data.content, data.role);
   const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, data.role);
+  const seqIndex = data.seq_index ?? (db.prepare(
+    'SELECT COALESCE(MAX(seq_index), -1) + 1 AS next_seq_index FROM messages WHERE session_id = ?',
+  ).get(data.session_id) as { next_seq_index: number }).next_seq_index;
+  const msgType = data.role === 'tool' ? 'tool_result' : (data.msg_type ?? 'text');
+  const parentToolCallId = data.role === 'tool'
+    ? (data.tool_call_id ?? null)
+    : (data.parent_tool_call_id ?? null);
 
   const stmt = db.prepare(`
     INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
@@ -1292,14 +1439,14 @@ export function addMessage(data: CreateMessageData): MessageRow {
     name: data.name ?? null,
     tool_call_id: data.tool_call_id ?? null,
     token_usage: data.token_usage ?? null,
-    msg_type: data.msg_type ?? 'text',
+    msg_type: msgType,
     thinking: data.thinking ?? null,
     tool_name: data.tool_name ?? null,
     tool_input: data.tool_input ?? null,
-    parent_tool_call_id: data.parent_tool_call_id ?? null,
+    parent_tool_call_id: parentToolCallId,
     viz_spec: data.viz_spec ?? null,
     status: data.status ?? 'done',
-    seq_index: data.seq_index ?? null,
+    seq_index: seqIndex,
     duration_ms: data.duration_ms ?? null,
     sub_agent_id: data.sub_agent_id ?? null,
     attachments: data.attachments
@@ -1321,14 +1468,14 @@ export function addMessage(data: CreateMessageData): MessageRow {
     name: data.name ?? null,
     tool_call_id: data.tool_call_id ?? null,
     token_usage: data.token_usage ?? null,
-    msg_type: data.msg_type ?? 'text',
+    msg_type: msgType,
     thinking: data.thinking ?? null,
     tool_name: data.tool_name ?? null,
     tool_input: data.tool_input ?? null,
-    parent_tool_call_id: data.parent_tool_call_id ?? null,
+    parent_tool_call_id: parentToolCallId,
     viz_spec: data.viz_spec ?? null,
     status: data.status ?? 'done',
-    seq_index: data.seq_index ?? null,
+    seq_index: seqIndex,
     duration_ms: data.duration_ms ?? null,
     sub_agent_id: data.sub_agent_id ?? null,
     attachments: data.attachments
@@ -1349,7 +1496,7 @@ export function getMessages(sessionId: string): MessageRow[] {
   }
 
   const db = getDb();
-  const stmt = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC');
+  const stmt = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC');
   return stmt.all(sessionId) as MessageRow[];
 }
 
@@ -1365,7 +1512,7 @@ export function getMessagesWithAttachments(sessionId: string): Message[] {
   }
 
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC').all(sessionId) as MessageRow[];
+  const rows = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC').all(sessionId) as MessageRow[];
 
   // Bulk-load all attachments for the session for efficient rehydration
   const attachmentMap = getAttachmentsForSession(sessionId);
@@ -2074,12 +2221,14 @@ export async function replaceMessages(
         VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
       `);
 
-      for (const msg of messages) {
-        let msgType = msg.msg_type || 'text';
+      for (const [index, msg] of messages.entries()) {
+        let msgType = msg.role === 'tool' ? 'tool_result' : (msg.msg_type || 'text');
         let thinking: string | null = msg.thinking || null;
         let toolName: string | null = msg.tool_name || null;
         let toolInput: string | null = msg.tool_input || null;
-        let parentToolCallId: string | null = msg.parent_tool_call_id || null;
+        let parentToolCallId: string | null = msg.role === 'tool'
+          ? (msg.tool_call_id || null)
+          : (msg.parent_tool_call_id || null);
         let vizSpec: string | null = msg.viz_spec || null;
         const effectiveContent = msg.content;
         let contentStr = serializeMessageContent(effectiveContent, msg.role);
@@ -2155,7 +2304,7 @@ export async function replaceMessages(
           parent_tool_call_id: parentToolCallId,
           viz_spec: vizSpec,
           status: messageStatus || 'done',
-          seq_index: msg.seq_index ?? null,
+          seq_index: msg.seq_index ?? index,
           duration_ms: msg.duration_ms ?? null,
           sub_agent_id: msg.sub_agent_id || null,
           attachments: msg.attachments
@@ -2262,7 +2411,10 @@ export async function appendMessages(
           }
         }
 
-        let msgType = msg.msg_type || null;
+        let msgType = msg.role === 'tool' ? 'tool_result' : (msg.msg_type || null);
+        const parentToolCallId = msg.role === 'tool'
+          ? (msg.tool_call_id || null)
+          : ((msg as unknown as Record<string, unknown>).parent_tool_call_id as string || null);
         let thinking: string | null = null;
         let toolName: string | null = null;
         let toolInput: string | null = null;
@@ -2322,7 +2474,7 @@ export async function appendMessages(
             thinking,
             tool_name: toolName,
             tool_input: toolInput,
-            parent_tool_call_id: (msg as unknown as Record<string, unknown>).parent_tool_call_id as string || null,
+            parent_tool_call_id: parentToolCallId,
             viz_spec: (msg as unknown as Record<string, unknown>).viz_spec as string || null,
             status: (msg as unknown as Record<string, unknown>).status as string || 'done',
             seq_index: (msg as unknown as Record<string, unknown>).seq_index as number || null,

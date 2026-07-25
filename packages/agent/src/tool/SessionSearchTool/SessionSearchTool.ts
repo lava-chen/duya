@@ -514,49 +514,28 @@ export class SessionSearchTool extends BaseTool {
       ? roleFilter.split(',').map(r => r.trim()).filter(r => r.length > 0)
       : null;
 
+    // Parse the user query into a FTS5 MATCH expression. Returns null when no
+    // usable tokens are left (so we can short-circuit instead of issuing a query
+    // that would match everything or fail with a syntax error).
+    const ftsQuery = this.parseSearchQuery(query);
+    if (ftsQuery === null) {
+      return [];
+    }
+
     // Try FTS5 search first
     try {
-      const ftsQuery = this.prepareFtsQuery(query);
+      // Body hits: search inside message content.
+      const bodyRows = this.searchBodyMessages(db, ftsQuery, roleList, limit * 4);
 
-      let sql = `
-        SELECT
-          s.id as sessionId,
-          s.title,
-          s.project_name as projectName,
-          s.working_directory as workingDirectory,
-          s.created_at as sessionStarted,
-          s.model
-        FROM messages_fts
-        JOIN chat_sessions s ON messages_fts.session_id = s.id
-        WHERE messages_fts MATCH ?
-          AND s.is_deleted = 0
-      `;
+      // Metadata hits: search session title / model / project_name / agent_name.
+      // Boosts recall when users remember the conversation title or model.
+      const metaRows = this.searchSessionMetadata(db, ftsQuery, limit * 4);
 
-      const params: (string | number)[] = [ftsQuery];
-
-      // Add role filter if specified (need to join with messages table)
-      if (roleList && roleList.length > 0) {
-        sql += ` AND messages_fts.rowid IN (
-          SELECT rowid FROM messages WHERE role IN (${roleList.map(() => '?').join(',')})
-        )`;
-        params.push(...roleList);
-      }
-
-      sql += ` ORDER BY rank LIMIT ?`;
-      params.push(limit * 8); // Fetch more to account for lineage and project filtering
-
-      const stmt = db.prepare(sql);
-      const rows = stmt.all(...params) as Array<{
-        sessionId: string;
-        title: string;
-        projectName?: string;
-        workingDirectory?: string;
-        sessionStarted: number;
-        model?: string;
-      }>;
+      // Merge body + metadata hits, deduplicate, and sort by combined score.
+      const merged = this.mergeSearchHits(bodyRows, metaRows);
 
       return this.deduplicateAndExcludeRows(
-        rows,
+        merged,
         limit,
         db,
         currentRoot,
@@ -581,7 +560,162 @@ export class SessionSearchTool extends BaseTool {
   }
 
   /**
-   * Fallback LIKE search when FTS5 is unavailable
+   * Query messages_fts for hits inside message content. Returns rows in BM25
+   * rank order, already joined with chat_sessions for downstream fields.
+   */
+  private searchBodyMessages(
+    db: BetterSqlite3.Database,
+    ftsQuery: string,
+    roleList: string[] | null,
+    fetchLimit: number,
+  ): Array<{
+    sessionId: string;
+    title: string;
+    projectName: string;
+    workingDirectory: string;
+    sessionStarted: number;
+    model: string;
+    ftsScore: number;
+  }> {
+    let sql = `
+      SELECT
+        s.id as sessionId,
+        s.title,
+        s.project_name as projectName,
+        s.working_directory as workingDirectory,
+        s.created_at as sessionStarted,
+        s.model,
+        bm25(messages_fts, 1.0, 1.0, 0.5) as ftsScore
+      FROM messages_fts
+      JOIN chat_sessions s ON messages_fts.session_id = s.id
+      WHERE messages_fts MATCH ?
+        AND s.is_deleted = 0
+    `;
+
+    const params: (string | number)[] = [ftsQuery];
+
+    if (roleList && roleList.length > 0) {
+      sql += ` AND messages_fts.rowid IN (
+        SELECT rowid FROM messages WHERE role IN (${roleList.map(() => '?').join(',')})
+      )`;
+      params.push(...roleList);
+    }
+
+    sql += ` ORDER BY ftsScore LIMIT ?`;
+    params.push(fetchLimit);
+
+    return db.prepare(sql).all(...params) as Array<{
+      sessionId: string;
+      title: string;
+      projectName: string;
+      workingDirectory: string;
+      sessionStarted: number;
+      model: string;
+      ftsScore: number;
+    }>;
+  }
+
+  /**
+   * Query sessions_fts for hits on session metadata (title / model / project /
+   * agent name). Column weights bias the score toward title matches.
+   */
+  private searchSessionMetadata(
+    db: BetterSqlite3.Database,
+    ftsQuery: string,
+    fetchLimit: number,
+  ): Array<{
+    sessionId: string;
+    title: string;
+    projectName: string;
+    workingDirectory: string;
+    sessionStarted: number;
+    model: string;
+    ftsScore: number;
+  }> {
+    const sql = `
+      SELECT
+        s.id as sessionId,
+        s.title,
+        s.project_name as projectName,
+        s.working_directory as workingDirectory,
+        s.created_at as sessionStarted,
+        s.model,
+        bm25(sessions_fts, 4.0, 2.0, 2.0, 1.0, 1.0, 0.5) as ftsScore
+      FROM sessions_fts
+      JOIN chat_sessions s ON sessions_fts.session_id = s.id
+      WHERE sessions_fts MATCH ?
+        AND s.is_deleted = 0
+      ORDER BY ftsScore
+      LIMIT ?
+    `;
+    return db.prepare(sql).all(ftsQuery, fetchLimit) as Array<{
+      sessionId: string;
+      title: string;
+      projectName: string;
+      workingDirectory: string;
+      sessionStarted: number;
+      model: string;
+      ftsScore: number;
+    }>;
+  }
+
+  /**
+   * Merge body + metadata hits per session. Sessions that appear in both lists
+   * are boosted (the lower / better BM25 score wins, then halved as a soft
+   * "double hit" bonus). Sessions present in only one list keep that list's
+   * score.
+   */
+  private mergeSearchHits(
+    bodyRows: Array<{ sessionId: string; title: string; projectName: string; workingDirectory: string; sessionStarted: number; model: string; ftsScore: number }>,
+    metaRows: Array<{ sessionId: string; title: string; projectName: string; workingDirectory: string; sessionStarted: number; model: string; ftsScore: number }>,
+  ): Array<{
+    sessionId: string;
+    title: string;
+    projectName: string;
+    workingDirectory: string;
+    sessionStarted: number;
+    model: string;
+    ftsScore: number;
+  }> {
+    type Row = (typeof bodyRows)[number];
+    const bySession = new Map<string, { body?: Row; meta?: Row; score: number }>();
+
+    const DOUBLE_HIT_BOOST = 0.5;
+
+    for (const row of bodyRows) {
+      bySession.set(row.sessionId, { body: row, score: row.ftsScore });
+    }
+    for (const row of metaRows) {
+      const existing = bySession.get(row.sessionId);
+      if (existing?.body) {
+        // Both body and metadata matched. Keep the better rank and apply boost.
+        const best = Math.min(existing.body.ftsScore, row.ftsScore);
+        existing.meta = row;
+        existing.score = best * DOUBLE_HIT_BOOST;
+      } else if (existing) {
+        existing.meta = row;
+        existing.score = row.ftsScore;
+      } else {
+        bySession.set(row.sessionId, { meta: row, score: row.ftsScore });
+      }
+    }
+
+    // Pick the most informative row for fields (prefer the body row when both exist
+    // so message-derived projectName / workingDirectory stays authoritative).
+    const merged: Row[] = [];
+    for (const entry of bySession.values()) {
+      const source = entry.body ?? entry.meta!;
+      merged.push({ ...source, ftsScore: entry.score });
+    }
+    merged.sort((a, b) => a.ftsScore - b.ftsScore);
+    return merged;
+  }
+
+  /**
+   * Fallback LIKE search when FTS5 is unavailable.
+   * Splits the query into individual tokens and ORs them as substrings so that
+   * a multi-word query (which the previous `%query%` implementation treated as
+   * a single literal substring) still produces useful recall.
    */
   private searchSessionsFallback(
     query: string,
@@ -593,7 +727,12 @@ export class SessionSearchTool extends BaseTool {
     scope: SessionDirectoryScope,
     workingDirectory: string,
   ): SessionMatchInfo[] {
-    const likeQuery = `%${query}%`;
+    // Tokenize the query the same way parseSearchQuery does, but instead of
+    // building an FTS5 expression we build a list of LIKE patterns.
+    const tokens = this.tokenizeForFallback(query);
+    if (tokens.length === 0) {
+      return [];
+    }
 
     let sql = `
       SELECT DISTINCT
@@ -605,11 +744,11 @@ export class SessionSearchTool extends BaseTool {
         s.model
       FROM messages m
       JOIN chat_sessions s ON m.session_id = s.id
-      WHERE m.content LIKE ?
-        AND s.is_deleted = 0
+      WHERE s.is_deleted = 0
+        AND (${tokens.map(() => 'm.content LIKE ?').join(' OR ')})
     `;
 
-    const params: (string | number)[] = [likeQuery];
+    const params: (string | number)[] = tokens.map(t => `%${t}%`);
 
     if (roleList && roleList.length > 0) {
       sql += ` AND m.role IN (${roleList.map(() => '?').join(',')})`;
@@ -638,6 +777,26 @@ export class SessionSearchTool extends BaseTool {
       scope,
       workingDirectory,
     );
+  }
+
+  /**
+   * Tokenize a user query into plain lowercase words for the LIKE fallback.
+   * Phrase queries collapse to their constituent words (we lose phrase
+   * semantics but still match the content).
+   */
+  private tokenizeForFallback(query: string): string[] {
+    const result: string[] = [];
+    const phraseRe = /"([^"]+)"|(\S+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = phraseRe.exec(query)) !== null) {
+      const raw = (m[1] ?? m[2] ?? '').toLowerCase();
+      // Split on whitespace, drop single chars, drop operator-only tokens.
+      for (const w of raw.split(/\s+/)) {
+        const cleaned = w.replace(/[+\-&|!(){}[\]^~*?:]/g, '');
+        if (cleaned.length >= 2) result.push(cleaned);
+      }
+    }
+    return Array.from(new Set(result));
   }
 
   /**
@@ -686,18 +845,80 @@ export class SessionSearchTool extends BaseTool {
   }
 
   /**
-   * Prepare query for FTS5 - escape special chars and handle prefixes
+   * Parse a user search query into an FTS5 MATCH expression.
+   *
+   * Supported syntax:
+   *   "exact phrase"   preserved as an FTS5 phrase query
+   *   +required        FTS5 required term (`+term`)
+   *   -excluded        FTS5 NOT term (`-term`)
+   *   foo OR bar       FTS5 OR (case-sensitive keyword)
+   *   auth*            explicit prefix (preserved)
+   *   auth             bare term; lowercased and emitted as-is.
+   *                    Trigram tokenizer handles substring matching natively,
+   *                    so no auto-`*` is needed for prefix recall.
+   *   a / ab           1- and 2-character Latin/digit tokens are dropped
+   *                    (FTS5 trigram needs at least 3 characters to produce a trigram).
+   *   \u4e2d\u6587       CJK / non-Latin scripts pass through unchanged; trigram handles substrings.
+   *
+   * Returns null when the query has no usable tokens, so callers can short-circuit
+   * instead of issuing a query that would match nothing or trip a syntax error.
    */
-  private prepareFtsQuery(query: string): string {
-    const escaped = query
-      .replace(/['"]/g, '')
-      .replace(/[+\-&|!(){}[\]^~*?:]/g, ' ')
-      .trim();
+  private parseSearchQuery(query: string): string | null {
+    const tokens: Array<{ kind: 'word' | 'phrase' | 'or' | 'plus' | 'minus'; text: string }> = [];
+    const re = /"([^"]+)"|(\S+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(query)) !== null) {
+      if (m[1] !== undefined) {
+        tokens.push({ kind: 'phrase', text: m[1] });
+        continue;
+      }
+      const raw = m[2];
+      if (raw === 'OR') {
+        tokens.push({ kind: 'or', text: 'OR' });
+      } else if (raw.startsWith('+') && raw.length > 1) {
+        tokens.push({ kind: 'plus', text: raw.slice(1) });
+      } else if (raw.startsWith('-') && raw.length > 1) {
+        tokens.push({ kind: 'minus', text: raw.slice(1) });
+      } else {
+        tokens.push({ kind: 'word', text: raw });
+      }
+    }
 
-    const words = escaped.split(/\s+/).filter(w => w.length > 0);
-    if (words.length === 0) return '""';
+    const parts: string[] = [];
+    // Strip FTS5 operator characters that the user might have typed inside a term
+    // (e.g. `foo+bar` => `foo bar`). Preserve `*` and `?` since they are FTS5
+    // wildcards users may legitimately include (e.g. `auth*`).
+    const stripOps = (s: string) => s.replace(/[+\-&|!(){}[\]^~:]/g, ' ').trim();
 
-    return words.map(w => `${w}*`).join(' ');
+    const isLatinOrDigit = (s: string) => /^[a-z0-9]+$/.test(s);
+    const hasWildcard = (s: string) => s.endsWith('*') || s.endsWith('?');
+
+    for (const tok of tokens) {
+      if (tok.kind === 'or') {
+        parts.push('OR');
+        continue;
+      }
+      if (tok.kind === 'phrase') {
+        const inner = stripOps(tok.text).replace(/\s+/g, ' ').toLowerCase();
+        if (inner.length >= 2) parts.push(`"${inner.replace(/"/g, '""')}"`);
+        continue;
+      }
+
+      const cleaned = stripOps(tok.text).toLowerCase();
+      if (cleaned.length === 0) continue;
+      // FTS5 trigram produces 0 trigrams for 1- and 2-character inputs; drop them
+      // so we don't issue a guaranteed-empty query.
+      if (cleaned.length < 3 && isLatinOrDigit(cleaned)) continue;
+
+      const term = hasWildcard(cleaned) ? cleaned : cleaned;
+
+      if (tok.kind === 'plus') parts.push(`+${term}`);
+      else if (tok.kind === 'minus') parts.push(`-${term}`);
+      else parts.push(term);
+    }
+
+    if (parts.length === 0) return null;
+    return parts.join(' ');
   }
 
   /**
