@@ -1,10 +1,5 @@
 /**
  * Prompts Registry - Register built-in prompt systems.
- *
- * The conductor prompt system is registered at runtime by
- * `@duya/conductor` (see `registerConductor()` in that package),
- * not here — this keeps agent ↔ conductor a one-way dependency
- * at the source level.
  */
 
 import { CodePromptSystem } from './code/CodePromptSystem.js'
@@ -36,8 +31,6 @@ const wikiAgentFactory = {
   create: (profile?: PromptProfile) => new WikiAgentPromptSystem(profile),
 }
 
-// Register built-in systems. The 'conductor' system is registered
-// at runtime by `@duya/conductor` via `registerConductor()`.
 PromptsRegistry.register('code', codeFactory)
 PromptsRegistry.register('general', generalFactory)
 PromptsRegistry.register('research', researchFactory)
@@ -49,7 +42,7 @@ PromptsRegistry.register('wiki-agent', wikiAgentFactory)
  * Defaults to 'general' if no promptSystem is specified.
  */
 export function resolvePromptSystemName(
-  promptSystem?: 'general' | 'code' | 'conductor' | 'research' | string,
+  promptSystem?: 'general' | 'code' | 'research' | string,
 ): string {
   return promptSystem ?? 'general'
 }

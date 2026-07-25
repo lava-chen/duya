@@ -15,6 +15,8 @@ export interface ToolExecutor {
     workingDirectory?: string,
     context?: ToolUseContext
   ): Promise<ToolResult>;
+  /** Optional tool-specific usage guide injected after on-demand discovery. */
+  getPrompt?(): string;
 }
 
 /**

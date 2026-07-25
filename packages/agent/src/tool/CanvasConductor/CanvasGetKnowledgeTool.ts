@@ -9,7 +9,7 @@
  *
  * This tool does NOT go through IPC and does NOT need a bound
  * canvasId. The knowledge is static markdown kept in
- * \`knowledge-sections.ts\`. It works in any mode but is most
+ * \`knowledge/sections/*.ts\`. It works in any mode but is most
  * useful in conductor mode.
  *
  * The model is expected to call this sparingly — only when it
@@ -23,7 +23,7 @@ import {
   KNOWLEDGE_SECTIONS,
   KNOWLEDGE_SECTION_NAMES,
   type KnowledgeSection,
-} from './knowledge-sections.js';
+} from './knowledge/index.js';
 
 export const TOOL_NAME = 'canvas_get_knowledge';
 
@@ -42,7 +42,7 @@ export const definition: Tool = {
     properties: {
       section: {
         type: 'string',
-        enum: ['sticky-style', 'connector-style', 'widget-usage', 'widget-design-system', 'widget-todolist', 'flowchart-layout', 'mindmap-layout', 'travel-guide'],
+        enum: ['sticky-style', 'connector-style', 'widget-usage', 'widget-design-system', 'widget-todolist', 'flowchart-layout', 'mindmap-layout', 'scene-blueprints', 'travel-guide'],
         description: 'Which knowledge section to retrieve.',
       },
     },

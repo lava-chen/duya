@@ -41,7 +41,7 @@ import { getToneAndStyleSection } from '../general/sections/static/toneAndStyle.
 
 // Reused dynamic sections
 import { getPlatformSection } from '../sections/dynamic/platform.js'
-import { getLanguageSection } from '../general/sections/dynamic/language.js'
+import { getLanguageSection } from '../sections/dynamic/language.js'
 import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 
 export class GatewayPromptSystem extends PromptSystem {

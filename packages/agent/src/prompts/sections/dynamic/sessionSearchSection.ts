@@ -30,5 +30,7 @@ Search with concrete identifiers from the request: feature name, subsystem, file
 
 When a Recent Session Directory is present, treat it only as a discovery index. Start with \`scope="same_project"\` for project work. Use \`scope="other_projects"\` only when the request plausibly depends on work from another project. Do not contact sessions solely because they are recent.
 
-Results are summarized evidence, not current truth. Verify any drift-prone claim against the workspace before acting. If a recovered decision materially changes the task, record it in the canonical project artifact instead of leaving it only in chat history.`;
+Results are summarized evidence, not current truth. Verify any drift-prone claim against the workspace before acting. If a recovered decision materially changes the task, record it in the canonical project artifact instead of leaving it only in chat history.
+
+If a SessionSearch result is not enough to resolve your blocker or question, do not stop at the assumption — evaluate whether to reach the relevant session directly via \`MessageSession\` (mode selection follows the multi-agent collaboration guidance). Prefer \`minimal\` mode for read-only questions; reserve \`full\` mode for cases where the target session needs to write or execute on your behalf.`;
 }

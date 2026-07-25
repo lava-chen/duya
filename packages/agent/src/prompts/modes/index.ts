@@ -29,8 +29,8 @@ export const DEFAULT_PROMPT_PROFILE: PromptProfile = { base: 'full' }
 export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig> = {
   full: {
     enable: [
-      'intro', 'system', 'multiAgentCollaboration', 'projectGrounding', 'projectContinuity', 'agentsMd',
-      'taskHandling', 'actions', 'toolUsage', 'toneAndStyle', 'outputEfficiency',
+      'identity', 'system', 'multiAgentCollaboration', 'projectGrounding', 'projectContinuity', 'agentsMd',
+      'personality', 'workingWithTheUser', 'rules',
       'visualVerification',
       'memory', 'memoryContent', 'skills', 'mcp', 'sessionGuidance', 'sessionSearch', 'recentSessions',
       'widgetGuidelines', 'visionGuidelines', 'platform', 'environment',
@@ -40,23 +40,23 @@ export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig>
   },
   minimal: {
     enable: [
-      'intro', 'system', 'projectGrounding', 'agentsMd', 'actions', 'toolUsage',
+      'identity', 'system', 'projectGrounding', 'agentsMd', 'rules',
       'visualVerification', 'environment', 'language',
     ],
     disable: [
       'projectContinuity', 'memory', 'memoryContent', 'skills',
-      'sessionGuidance', 'sessionSearch', 'recentSessions', 'widgetGuidelines', 'conductorCanvas',
+      'sessionGuidance', 'sessionSearch', 'recentSessions', 'widgetGuidelines',
     ],
   },
   bare: {
     // Bare is lean, but project constraints and environment remain safety rails.
     enable: [
-      'intro', 'system', 'projectGrounding', 'agentsMd', 'actions', 'toolUsage',
+      'identity', 'system', 'projectGrounding', 'agentsMd', 'rules',
       'environment', 'language',
     ],
     disable: [
       'projectContinuity', 'memory', 'memoryContent', 'skills',
-      'sessionGuidance', 'sessionSearch', 'recentSessions', 'toneAndStyle',
+      'sessionGuidance', 'sessionSearch', 'recentSessions', 'personality',
     ],
   },
 }
@@ -71,12 +71,12 @@ export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig>
  */
 export const OVERLAY_SECTION_PATCHES: Record<PromptOverlay, OverlayPatchConfig> = {
   coding: {
-    enable: ['taskHandling', 'outputEfficiency'],
+    enable: ['rules', 'personality'],
   },
   chat: {
-    enable: ['toneAndStyle'],
+    enable: ['personality'],
     // chat overlay != "no tool instructions", it just weakens verbose tool guidance
-    // Specific behavior controlled internally by toolUsage section based on profile
+    // Specific behavior controlled internally by the rules section based on profile
   },
 };
 

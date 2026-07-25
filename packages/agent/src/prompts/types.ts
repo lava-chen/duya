@@ -400,54 +400,466 @@ export const DEFAULT_SYSTEM_PROMPT = 'You are a helpful AI assistant.'
 export const CYBER_RISK_INSTRUCTION = `Cybersecurity is a critical concern for the user. You must not introduce vulnerabilities, expose secrets, or facilitate attacks. Always follow security best practices.`
 
 /**
- * Knowledge cutoff dates for different models.
- * Based on official documentation and model release information.
+ * Models' reliable knowledge cutoff dates.
+ *
+ * Format:
+ * - YYYY-MM-DD: vendor disclosed an exact date
+ * - YYYY-MM: vendor only disclosed a month
+ * - null: not disclosed, alias is rolling, or otherwise not reliable
  */
-export const KNOWLEDGE_CUTOFFS: Record<string, string> = {
-  // Claude models
-  'claude-sonnet-4-6': 'August 2025',
-  'claude-opus-4-6': 'May 2025',
-  'claude-opus-4-5': 'May 2025',
-  'claude-haiku-4': 'February 2025',
-  'claude-opus-4': 'January 2025',
-  'claude-sonnet-4': 'January 2025',
+export type KnowledgeCutoff = string | null
 
-  // OpenAI models
-  'gpt-4o': 'October 2023',
-  'gpt-4o-mini': 'October 2023',
-  'gpt-4.5': 'October 2023',
-  'o1': 'October 2023',
-  'o3-mini': 'October 2023',
-  'o4-mini': 'May 2025',
+/**
+ * Exact IDs and models that need special handling.
+ *
+ * It is not advisable to guess cutoffs for rolling aliases:
+ * deepseek-chat, qwen-plus, kimi, etc. can swap underlying models without
+ * renaming.
+ */
+export const KNOWLEDGE_CUTOFFS = {
+  // ---------------------------------------------------------------------------
+  // Anthropic Claude
+  // ---------------------------------------------------------------------------
 
-  // Google Gemini models
-  'gemini-2.5': 'January 2025',
-  'gemini-1.5-pro': 'November 2023',
-  'gemini-1.5-flash': 'November 2023',
-  'gemini-1.5': 'November 2023',
+  'claude-fable-5': '2026-01',
+  'claude-mythos-5': '2026-01',
+  'claude-opus-4-8': '2026-01',
+  'claude-opus-4-7': '2026-01',
+  'claude-sonnet-5': '2026-01',
 
-  // DeepSeek models
-  'deepseek-v3': 'December 2024',
-  'deepseek-r1': 'December 2024',
-  'deepseek': 'December 2024',
+  'claude-opus-4-6': '2025-05',
+  'claude-sonnet-4-6': '2025-05',
+  'claude-opus-4-5': '2025-05',
+  'claude-haiku-4-5': '2025-02',
+  'claude-sonnet-4-5': '2025-01',
 
-  // Qwen models
-  'qwen-max': 'April 2025',
-  'qwen-plus': 'April 2025',
-  'qwen-turbo': 'April 2025',
-  'qwen-coder': 'April 2025',
-  'qwen': 'April 2025',
+  'claude-opus-4-1': '2025-01',
+  'claude-opus-4': '2025-01',
+  'claude-sonnet-4': '2025-01',
 
-  // MiniMax models
-  'minimax': 'March 2025',
-  'MiniMax-M3': 'June 2026',
+  // Unofficial compat aliases. Some aggregators may name models this way.
+  'claude-haiku-4': '2025-02',
 
-  // Kimi models
-  'moonshot': 'March 2025',
-  'kimi': 'March 2025',
+  // ---------------------------------------------------------------------------
+  // OpenAI GPT / o-series
+  // ---------------------------------------------------------------------------
 
-  // Zhipu GLM models
-  'glm-5': 'April 2025',
-  'glm-4': 'January 2025',
-  'glm': 'April 2025',
+  'gpt-5.6': '2026-02-16',
+  'gpt-5.6-sol': '2026-02-16',
+  'gpt-5.6-terra': '2026-02-16',
+  'gpt-5.6-luna': '2026-02-16',
+
+  'gpt-5.5': '2025-12-01',
+
+  'gpt-5.4': '2025-08-31',
+  'gpt-5.4-pro': '2025-08-31',
+  'gpt-5.4-mini': '2025-08-31',
+  'gpt-5.4-nano': '2025-08-31',
+
+  'gpt-5.3-codex': '2025-08-31',
+
+  'gpt-5.2': '2025-08-31',
+  'gpt-5.2-pro': '2025-08-31',
+  'gpt-5.2-codex': '2025-08-31',
+  'gpt-5.2-chat-latest': '2025-08-31',
+
+  'gpt-5.1': '2024-09-30',
+  'gpt-5.1-chat-latest': '2024-09-30',
+  'gpt-5.1-codex': '2024-09-30',
+  'gpt-5.1-codex-mini': '2024-09-30',
+  'gpt-5.1-codex-max': '2024-09-30',
+
+  'gpt-5': '2024-09-30',
+  'gpt-5-codex': '2024-09-30',
+  'gpt-5-mini': '2024-05-31',
+  'gpt-5-nano': '2024-05-31',
+
+  'gpt-4.1': '2024-06-01',
+  'gpt-4.1-mini': '2024-06-01',
+  'gpt-4.1-nano': '2024-06-01',
+
+  o3: '2024-06-01',
+  'o3-pro': '2024-06-01',
+  'o3-deep-research': '2024-06-01',
+
+  'o4-mini': '2024-06-01',
+  'o4-mini-deep-research': '2024-06-01',
+
+  'o3-mini': '2023-10-01',
+
+  o1: '2023-10-01',
+  'o1-pro': '2023-10-01',
+  'o1-mini': '2023-10-01',
+
+  'gpt-4o': '2023-10-01',
+  'gpt-4o-mini': '2023-10-01',
+  'chatgpt-4o-latest': '2023-10-01',
+  'gpt-4.5': '2023-10-01',
+  'gpt-4': '2023-12-01',
+
+  // When the official cutoff is not clearly disclosed, do not pass off the
+  // release date as the knowledge cutoff.
+  'gpt-oss-120b': null,
+  'gpt-oss-20b': null,
+
+  // ---------------------------------------------------------------------------
+  // Google Gemini
+  // ---------------------------------------------------------------------------
+
+  'gemini-3.5-flash': '2025-01',
+
+  'gemini-3.1-pro': '2025-01',
+  'gemini-3.1-pro-preview': '2025-01',
+  'gemini-3.1-flash': '2025-01',
+  'gemini-3.1-flash-live-preview': '2025-01',
+  'gemini-3.1-flash-lite': '2025-01',
+  'gemini-3.1-flash-lite-image': '2025-01',
+
+  'gemini-3-pro': '2025-01',
+  'gemini-3-pro-preview': '2025-01',
+  'gemini-3-flash': '2025-01',
+
+  'gemini-2.5-pro': '2025-01',
+  'gemini-2.5-flash': '2025-01',
+  'gemini-2.5-flash-lite': '2025-01',
+
+  // Image models are an exception: Google disclosed a cutoff of 2025-06.
+  'gemini-2.5-flash-image': '2025-06',
+
+  'gemini-2.0-pro': '2024-08',
+  'gemini-2.0-flash': '2024-08',
+  'gemini-2.0-flash-lite': '2024-08',
+
+  'gemini-1.5-pro': '2023-11',
+  'gemini-1.5-flash': '2023-11',
+  'gemini-1.5': '2023-11',
+
+  // ---------------------------------------------------------------------------
+  // xAI Grok
+  // ---------------------------------------------------------------------------
+
+  'grok-4.5': '2026-02-01',
+  'grok-4.5-latest': '2026-02-01',
+
+  'grok-4': '2024-11',
+  'grok-4-latest': '2024-11',
+  'grok-4-fast': '2024-11',
+
+  'grok-3': '2024-11',
+  'grok-3-latest': '2024-11',
+  'grok-3-mini': '2024-11',
+
+  // Newer model IDs should not silently inherit Grok 4's old date.
+  'grok-4.20': null,
+  'grok-code-fast-1': null,
+
+  // ---------------------------------------------------------------------------
+  // DeepSeek
+  // ---------------------------------------------------------------------------
+
+  // Current production IDs, but DeepSeek has not stably disclosed cutoffs
+  // suitable for engineering judgement.
+  'deepseek-v4-pro': null,
+  'deepseek-v4-flash': null,
+  'deepseek-v3.2': null,
+  'deepseek-v3.2-speciale': null,
+  'deepseek-v3.1': null,
+  'deepseek-v3': null,
+  'deepseek-r1': null,
+  'deepseek-r1-0528': null,
+
+  // Rolling aliases whose underlying model can change.
+  'deepseek-chat': null,
+  'deepseek-reasoner': null,
+  'deepseek-coder': null,
+  deepseek: null,
+
+  // ---------------------------------------------------------------------------
+  // Alibaba Qwen
+  // ---------------------------------------------------------------------------
+
+  'qwen3.7-max': null,
+  'qwen3.7-plus': null,
+  'qwen3.6-plus': null,
+  'qwen3.6-35b-a3b': null,
+  'qwen3.5-397b-a17b': null,
+  'qwen3.5-122b-a10b': null,
+  'qwen3.5-35b-a3b': null,
+  'qwen3.5-27b': null,
+
+  'qwen3-max': null,
+  'qwen3-plus': null,
+  'qwen3-coder': null,
+  'qwen3-235b-a22b': null,
+  'qwen3-32b': null,
+  'qwen3-30b-a3b': null,
+  'qwen3-14b': null,
+  'qwen3-8b': null,
+
+  'qwen-max': null,
+  'qwen-plus': null,
+  'qwen-turbo': null,
+  'qwen-flash': null,
+  'qwen-long': null,
+  'qwen-coder': null,
+  qwen: null,
+  qwq: null,
+  qvq: null,
+
+  // ---------------------------------------------------------------------------
+  // MiniMax
+  // ---------------------------------------------------------------------------
+
+  'minimax-m3': null,
+  'minimax-m2.7': null,
+  'minimax-m2.7-highspeed': null,
+  'minimax-m2.5': null,
+  'minimax-m2.5-highspeed': null,
+  'minimax-m2.1': null,
+  'minimax-m2.1-highspeed': null,
+  'minimax-m2': null,
+  minimax: null,
+
+  // ---------------------------------------------------------------------------
+  // Moonshot / Kimi
+  // ---------------------------------------------------------------------------
+
+  'kimi-k3': null,
+  'kimi-k2.7-code': null,
+  'kimi-k2.7-code-highspeed': null,
+  'kimi-k2.6': null,
+  'kimi-k2.5': null,
+  'kimi-k2-thinking': null,
+  'kimi-k2-thinking-turbo': null,
+  'kimi-k2-0905-preview': null,
+  'kimi-k2-turbo-preview': null,
+
+  'moonshot-v1-8k': null,
+  'moonshot-v1-32k': null,
+  'moonshot-v1-128k': null,
+  moonshot: null,
+  kimi: null,
+
+  // ---------------------------------------------------------------------------
+  // Zhipu / Z.ai GLM
+  // ---------------------------------------------------------------------------
+
+  'glm-5.1': null,
+  'glm-5': null,
+  'glm-4.7': null,
+  'glm-4.6': null,
+  'glm-4.5': null,
+  'glm-4-plus': null,
+  'glm-4-air': null,
+  'glm-4-flash': null,
+  'glm-4-long': null,
+  'glm-4': null,
+  glm: null,
+
+  // ---------------------------------------------------------------------------
+  // Other major providers and open model families
+  // ---------------------------------------------------------------------------
+
+  // Mistral
+  'mistral-large': null,
+  'mistral-medium': null,
+  'mistral-small': null,
+  'mistral-nemo': null,
+  'mistral-saba': null,
+  codestral: null,
+  'codestral-latest': null,
+  'magistral-medium': null,
+  'magistral-small': null,
+
+  // Meta
+  'llama-4-maverick': null,
+  'llama-4-scout': null,
+  'llama-3.3-70b-instruct': null,
+  'llama-3.2-90b-vision-instruct': null,
+  'llama-3.1-405b-instruct': null,
+
+  // Google open models
+  'gemma-3': null,
+  'gemma-3n': null,
+  codegemma: null,
+
+  // Cohere
+  'command-a': null,
+  'command-r': null,
+  'command-r-plus': null,
+  'command-r7b': null,
+
+  // Amazon
+  'amazon-nova-premier': null,
+  'amazon-nova-pro': null,
+  'amazon-nova-lite': null,
+  'amazon-nova-micro': null,
+
+  // AI21
+  'jamba-1.5-large': null,
+  'jamba-1.5-mini': null,
+
+  // Perplexity
+  sonar: null,
+  'sonar-pro': null,
+  'sonar-reasoning': null,
+  'sonar-reasoning-pro': null,
+  'sonar-deep-research': null,
+
+  // NVIDIA
+  'nemotron-ultra': null,
+  'nemotron-super': null,
+  'nemotron-nano': null,
+
+  // Other Chinese model families
+  ernie: null,
+  doubao: null,
+  hunyuan: null,
+  baichuan: null,
+  'yi-large': null,
+  'step-2': null,
+} as const satisfies Readonly<Record<string, KnowledgeCutoff>>
+
+type KnowledgeCutoffRule = readonly [
+  pattern: RegExp,
+  cutoff: KnowledgeCutoff,
+]
+
+/**
+ * Rules used to recognise:
+ * - dated snapshots, e.g. gpt-5.2-2025-12-11
+ * - preview IDs, e.g. gemini-2.5-flash-preview-09-2025
+ * - Claude date suffixes, e.g. claude-haiku-4-5-20251001
+ * - extension suffixes added by aggregator platforms
+ *
+ * Order must go from specific to broad.
+ */
+const KNOWLEDGE_CUTOFF_RULES: readonly KnowledgeCutoffRule[] = [
+  // Anthropic
+  [/^claude-(?:fable|mythos)-5(?:-|$)/, '2026-01'],
+  [/^claude-opus-4-8(?:-|$)/, '2026-01'],
+  [/^claude-opus-4-7(?:-|$)/, '2026-01'],
+  [/^claude-sonnet-5(?:-|$)/, '2026-01'],
+  [/^claude-(?:opus|sonnet)-4-6(?:-|$)/, '2025-05'],
+  [/^claude-opus-4-5(?:-|$)/, '2025-05'],
+  [/^claude-haiku-4-5(?:-|$)/, '2025-02'],
+  [/^claude-sonnet-4-5(?:-|$)/, '2025-01'],
+  [/^claude-(?:opus-4-1|opus-4|sonnet-4)(?:-|$)/, '2025-01'],
+
+  // OpenAI
+  [/^gpt-5\.6(?:-|$)/, '2026-02-16'],
+  [/^gpt-5\.5(?:-|$)/, '2025-12-01'],
+  [/^gpt-5\.4(?:-|$)/, '2025-08-31'],
+  [/^gpt-5\.3-codex(?:-|$)/, '2025-08-31'],
+  [/^gpt-5\.2(?:-|$)/, '2025-08-31'],
+  [/^gpt-5\.1(?:-|$)/, '2024-09-30'],
+
+  // mini/nano MUST come before the broad GPT-5 rule.
+  [/^gpt-5-(?:mini|nano)(?:-|$)/, '2024-05-31'],
+  [/^gpt-5(?:-codex)?(?:-\d{4}-\d{2}-\d{2})?$/, '2024-09-30'],
+
+  [/^gpt-4\.1(?:-|$)/, '2024-06-01'],
+  [/^o3-mini(?:-|$)/, '2023-10-01'],
+  [/^o3(?:-|$)/, '2024-06-01'],
+  [/^o4-mini(?:-|$)/, '2024-06-01'],
+  [/^o1(?:-|$)/, '2023-10-01'],
+  [/^(?:gpt-4o|chatgpt-4o)(?:-|$)/, '2023-10-01'],
+  [/^gpt-4\.5(?:-|$)/, '2023-10-01'],
+
+  // Gemini: the image exception must precede the general Gemini 2.5 rule.
+  [/^gemini-2\.5-flash-image(?:-|$)/, '2025-06'],
+  [/^gemini-3\.5(?:-|$)/, '2025-01'],
+  [/^gemini-3\.1(?:-|$)/, '2025-01'],
+  [/^gemini-3(?:-|$)/, '2025-01'],
+  [/^gemini-2\.5(?:-|$)/, '2025-01'],
+  [/^gemini-2\.0(?:-|$)/, '2024-08'],
+  [/^gemini-1\.5(?:-|$)/, '2023-11'],
+
+  // xAI
+  [/^grok-4\.5(?:-|$)/, '2026-02-01'],
+  [/^grok-3(?:-|$)/, '2024-11'],
+
+  // Model families that have been seen but where the vendor has not
+  // reliably disclosed a cutoff.
+  [
+    /^(?:deepseek|qwen|qwq|qvq|kimi|moonshot|minimax|glm)(?:[-.]|$)/,
+    null,
+  ],
+  [
+    /^(?:mistral|codestral|magistral|llama|gemma|command|cohere)(?:[-.]|$)/,
+    null,
+  ],
+  [
+    /^(?:amazon-nova|nova|jamba|ernie|doubao|hunyuan|baichuan|yi|step)(?:[-.]|$)/,
+    null,
+  ],
+  [/^(?:nemotron|sonar)(?:[-.]|$)/, null],
+]
+
+/**
+ * Normalise model IDs returned by different platforms.
+ *
+ * Supports:
+ * - openai/gpt-5.4
+ * - anthropic/claude-sonnet-4-6
+ * - deepseek-ai/DeepSeek-V4-Flash
+ * - models/gemini-2.5-pro
+ * - us.anthropic.claude-sonnet-4-5-20250929-v1:0
+ * - openai/gpt-4o:free
+ */
+export function normalizeModelId(modelId: string): string {
+  let normalized = modelId.trim().toLowerCase()
+
+  // Strip URL query params.
+  normalized = normalized.split('?', 1)[0]
+
+  // OpenRouter, Vertex, Hugging Face, etc. frequently use provider/model.
+  const lastSlashIndex = normalized.lastIndexOf('/')
+  if (lastSlashIndex >= 0) {
+    normalized = normalized.slice(lastSlashIndex + 1)
+  }
+
+  // Amazon Bedrock Claude prefix.
+  normalized = normalized.replace(
+    /^(?:(?:global|us|eu|apac)\.)?anthropic\./,
+    '',
+  )
+
+  // Bedrock version suffix, e.g. -v1:0.
+  normalized = normalized.replace(/-v\d+:\d+$/, '')
+
+  // Common OpenRouter variant suffixes.
+  normalized = normalized.replace(
+    /:(?:free|online|thinking|extended)$/,
+    '',
+  )
+
+  return normalized
+}
+
+/**
+ * Returns null when no cutoff is found, the vendor has not disclosed one,
+ * or the model is a rolling alias.
+ *
+ * For time-sensitive questions, null should be interpreted as:
+ * "do not rely on parameter knowledge — prefer search or external data tools".
+ */
+export function getKnowledgeCutoff(modelId: string): KnowledgeCutoff {
+  const normalized = normalizeModelId(modelId)
+
+  if (
+    Object.prototype.hasOwnProperty.call(KNOWLEDGE_CUTOFFS, normalized)
+  ) {
+    return KNOWLEDGE_CUTOFFS[
+      normalized as keyof typeof KNOWLEDGE_CUTOFFS
+    ]
+  }
+
+  for (const [pattern, cutoff] of KNOWLEDGE_CUTOFF_RULES) {
+    if (pattern.test(normalized)) {
+      return cutoff
+    }
+  }
+
+  return null
 }
