@@ -7,9 +7,14 @@ export const TOOL_NAME = 'canvas_find_empty_space';
 export const definition: Tool = {
   name: TOOL_NAME,
   description:
-    'Find an empty rectangular region on the canvas that does not overlap existing elements. ' +
-    'Returns recommended {x, y, w, h} in grid units. Use this when you need to place a new element ' +
-    'but are unsure of coordinates.',
+    'Find a non-overlapping rectangular region on the canvas — the returned ' +
+    '{x, y, w, h} rectangle is verified to NOT intersect any existing ' +
+    'element (every point of it is empty). When multiple positions qualify, ' +
+    'returns the one closest to canvas center. Use this when you need to ' +
+    'place a new element but are unsure of coordinates. The result also ' +
+    'includes `cornerDistance` (squared distance from canvas center) and ' +
+    '`overlapsExisting` (true when no fully empty placement fits at the ' +
+    'requested size — shrink w/h or call canvas_auto_layout first).',
   input_schema: {
     type: 'object',
     properties: {
