@@ -412,6 +412,24 @@ export class AgentServerClient {
     }
   }
 
+  /**
+   * Fetches the persisted research snapshot row for a session.
+   * Returns null when no research run exists for the session (HTTP 204)
+   * or when the backend is unreachable.
+   */
+  async getResearchSnapshot(sessionId: string): Promise<Record<string, unknown> | null> {
+    const baseUrl = await this.getBaseUrl();
+    if (!baseUrl) return null;
+
+    try {
+      const response = await fetch(`${baseUrl}/api/research/snapshot/${encodeURIComponent(sessionId)}`);
+      if (!response.ok || response.status === 204) return null;
+      return (await response.json()) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
   onEvent(sessionId: string, handler: EventHandler): () => void {
     let handlers = this.eventHandlers.get(sessionId);
     if (!handlers) {

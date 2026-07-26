@@ -243,7 +243,7 @@ Function `createBuiltinRegistry()` registers:
 | `task_*` | Task management |
 | `enter/exit_plan_mode`, `SwitchMode` | Mode controls |
 | `browser` | Supported web browsing, search, and fetch surface |
-| `Skill`, `skill_manage`, `Brief` | Skill and task guidance |
+| `Skill`, `Brief` | Skill and task guidance |
 | `SessionSearch`, `MessageSession` | Session continuity and inter-agent messaging |
 | `vision_analyze`, `show_widget`, `read_module` | Vision and generative UI |
 | `duya_cli` | Desktop control-plane operations |

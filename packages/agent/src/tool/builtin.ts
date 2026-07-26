@@ -26,7 +26,6 @@ import { browserTool } from './BrowserTool/BrowserTool.js';
 import type { DomainBlockerConfig } from './BrowserTool/DomainBlocker.js';
 import type { BrowserBackendMode } from './BrowserTool/backend-resolver.js';
 import { skillTool } from './SkillTool/SkillTool.js';
-import { skillManageTool } from './SkillManageTool.js';
 import { briefTool } from './BriefTool/BriefTool.js';
 import { sessionSearchTool } from './SessionSearchTool/index.js';
 import { messageSessionTool } from './MessageSessionTool/index.js';
@@ -170,9 +169,6 @@ export function createBuiltinRegistry(
   // Agent calls read_module BEFORE show_widget or canvas tools to get style guides
   registry.register(moduleTool.toTool(), moduleTool, { exposeMode: 'discoverable' });
 
-  // Skill management tool - for creating/updating skills
-  registry.register(skillManageTool, skillManageTool, { exposeMode: 'discoverable' });
-
   // Wiki tools - for searching and reading wiki knowledge base
   // Only register if wiki agent experimental mode is enabled
   if (options?.wikiAgentEnabled) {
@@ -302,7 +298,6 @@ export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 export { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
 export { browserTool } from './BrowserTool/BrowserTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';
-export { skillManageTool } from './SkillManageTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { VisionTool } from './VisionTool/VisionTool.js';
 export { messageSessionTool, MessageSessionTool } from './MessageSessionTool/index.js';

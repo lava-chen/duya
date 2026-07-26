@@ -132,7 +132,6 @@ export interface AgentSettings {
   temperature: number;
   maxTokens: number;
   sandboxEnabled: boolean;
-  skillNudgeInterval: number;
   maxConcurrentTools: number;
   enableDetailedProgress: boolean;
   enableRetry: boolean;
@@ -259,9 +258,6 @@ function validateAgentSettings(key: string, value: unknown): { valid: boolean; e
   if (settings.sandboxEnabled !== undefined && typeof settings.sandboxEnabled !== 'boolean') {
     return { valid: false, error: 'sandboxEnabled must be a boolean' };
   }
-  if (settings.skillNudgeInterval !== undefined && (typeof settings.skillNudgeInterval !== 'number' || settings.skillNudgeInterval < 0)) {
-    return { valid: false, error: 'skillNudgeInterval must be a non-negative number' };
-  }
 
   return { valid: true };
 }
@@ -351,7 +347,6 @@ const DEFAULT_CONFIG: AppConfig = {
     temperature: 0.7,
     maxTokens: 8192,
     sandboxEnabled: true,
-    skillNudgeInterval: 10,
     maxConcurrentTools: 3,
     enableDetailedProgress: true,
     enableRetry: true,
@@ -785,8 +780,31 @@ export class ConfigManager {
    * @deprecated The single-active concept has been replaced by a soft
    * `defaultProviderId`. Use `setDefaultProvider(id)` instead. Will be removed
    * once all callers migrate.
+   *
+   * For backward compatibility this still toggles the `isActive` flag on the
+   * stored ApiProvider records (legacy callers and tests rely on it). The
+   * modern `defaultProviderId` pointer is updated as well so new code paths
+   * keep working.
    */
   activateProvider(providerId: string): boolean {
+    const providers = { ...this.config.apiProviders };
+    let found = false;
+    for (const [id, p] of Object.entries(providers)) {
+      providers[id] = { ...p, isActive: id === providerId };
+      if (id === providerId) found = true;
+    }
+    if (!found) {
+      this.logger.error(
+        `activateProvider: provider not found: ${providerId}`,
+        undefined,
+        undefined,
+        LogComponent.ConfigManager,
+      );
+      return false;
+    }
+    if (!this.setConfig('apiProviders', providers)) {
+      return false;
+    }
     return this.setDefaultProvider(providerId);
   }
 

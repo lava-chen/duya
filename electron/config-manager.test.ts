@@ -329,7 +329,6 @@ describe('ConfigManager', () => {
         temperature: 0.5,
         maxTokens: 4096,
         sandboxEnabled: false,
-        skillNudgeInterval: 5,
         maxConcurrentTools: 3,
         enableDetailedProgress: true,
         enableRetry: false,

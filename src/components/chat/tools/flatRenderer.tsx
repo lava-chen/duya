@@ -84,6 +84,48 @@ function WidgetActionItem({
   );
 }
 
+// Build a map from action index → group segment that starts at that
+// index. Only GROUP segments are included — single segments (lone
+// tool / thinking) render through the standalone path.
+//
+// This map is what fixes the "group starts with thinking" bug: the
+// old loop only entered the segment-matching path when
+// `action.kind === 'tool'`, so a group whose first entry was a
+// thinking row rendered that thinking as a standalone item FIRST,
+// then rendered the whole group (including the thinking again) —
+// producing a duplicate thinking row that looked like the group was
+// split. By pre-computing the start index of every group, the loop
+// can recognize a group starting with thinking and render it once.
+type GroupSegment = Extract<Segment, { kind: 'group' }>;
+
+function buildGroupStartMap(
+  actions: ActionItem[],
+  segments: Segment[],
+): Map<number, { seg: GroupSegment; size: number }> {
+  const map = new Map<number, { seg: GroupSegment; size: number }>();
+  let actionIdx = 0;
+  for (const seg of segments) {
+    // Skip text / widget actions — they're never inside a segment.
+    while (
+      actionIdx < actions.length &&
+      (actions[actionIdx].kind === 'text' || actions[actionIdx].kind === 'widget')
+    ) {
+      actionIdx++;
+    }
+    if (seg.kind === 'group') {
+      const size = seg.entries.length;
+      if (actionIdx < actions.length) {
+        map.set(actionIdx, { seg, size });
+      }
+      actionIdx += size;
+    } else {
+      // single segment — not added to map, just advance.
+      actionIdx += 1;
+    }
+  }
+  return map;
+}
+
 // Renders the `flat` body — preserves action order but collapses
 // consecutive browser / context tools into groups.
 export function renderFlatActions(
@@ -95,61 +137,43 @@ export function renderFlatActions(
   agentProgressEvents: AgentProgressEventWithMeta[] | undefined,
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  let toolIdx = 0;
-  let segIdx = 0;
   const lastTextIdx = findLastTextIndex(actions);
+  const groupStartMap = buildGroupStartMap(actions, segments);
+
+  let toolIdx = 0;
   for (let i = 0; i < actions.length; i++) {
-    const action = actions[i];
-    if (action.kind === 'tool') {
-      if (segIdx >= segments.length) {
-        out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
-      } else {
-        const seg = segments[segIdx];
-        if (
-          seg.kind === 'single' &&
-          seg.entry.kind === 'tool' &&
-          seg.entry.tool === action.tool
-        ) {
-          const isLastRunning = !seg.entry.tool.result;
-          out.push(
-            <ToolActionRow
-              key={`tool-${toolIdx}`}
-              tool={seg.entry.tool}
-              streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
-              agentProgressEvents={agentProgressEvents}
-            />,
-          );
-          toolIdx++;
-          segIdx++;
-        } else {
-          if (seg.kind === 'group') {
-            out.push(
-              <Group
-                key={`group-${toolIdx}`}
-                entries={seg.entries}
-                flat
-                streamingToolOutput={streamingToolOutput}
-                agentProgressEvents={agentProgressEvents}
-              />,
-            );
-            toolIdx += seg.entries.filter((e) => e.kind === 'tool').length;
-          } else {
-            // single fallback (shouldn't reach here)
-            out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
-            toolIdx++;
-          }
-          segIdx++;
-          // After rendering a group, advance past the rest of its
-          // entries in `actions` so they aren't re-rendered as
-          // standalone rows. A group's entries map 1:1 to positions
-          // in `actions` (segmenter never includes text/widget inside
-          // a group), so we can jump straight by entries.length.
-          const segSize = seg.kind === 'group' ? seg.entries.length : 1;
-          i = Math.min(i + segSize - 1, actions.length - 1);
-        }
-      }
+    const groupStart = groupStartMap.get(i);
+    if (groupStart) {
+      const { seg, size } = groupStart;
+      out.push(
+        <Group
+          key={`group-${toolIdx}`}
+          entries={seg.entries}
+          flat
+          streamingToolOutput={streamingToolOutput}
+          agentProgressEvents={agentProgressEvents}
+        />,
+      );
+      toolIdx += seg.entries.filter((e) => e.kind === 'tool').length;
+      // Advance past all entries in this group (tools + thinking).
+      // The for-loop's i++ handles the +1, so we add size - 1.
+      i += size - 1;
     } else {
-      out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+      const action = actions[i];
+      if (action.kind === 'tool') {
+        const isRunning = !action.tool.result;
+        out.push(
+          <ToolActionRow
+            key={`tool-${toolIdx}`}
+            tool={action.tool}
+            streamingToolOutput={isRunning ? streamingToolOutput : undefined}
+            agentProgressEvents={agentProgressEvents}
+          />,
+        );
+        toolIdx++;
+      } else {
+        out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+      }
     }
   }
   return out;
@@ -167,92 +191,47 @@ export function renderOrderedBody(
   isStreaming: boolean | undefined,
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  let toolIdx = 0;
-  let segIdx = 0;
   const lastTextIdx = findLastTextIndex(actions);
+  const groupStartMap = buildGroupStartMap(actions, segments);
+
+  let toolIdx = 0;
   for (let i = 0; i < actions.length; i++) {
-    const action = actions[i];
-    if (action.kind === 'tool') {
-      if (segIdx >= segments.length) {
-        out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
-      } else {
-        const seg = segments[segIdx];
-        if (
-          seg.kind === 'single' &&
-          seg.entry.kind === 'tool' &&
-          seg.entry.tool === action.tool
-        ) {
-          out.push(renderSegment(seg, [`tool-${toolIdx}`], lastRunningTool, streamingToolOutput, agentProgressEvents));
-          toolIdx++;
-          segIdx++;
-        } else if (seg.kind === 'group') {
-          // group segment
-          out.push(
-            renderSegment(
-              seg,
-              seg.entries.map((_e, k) => `entry-${toolIdx + k}`),
-              lastRunningTool,
-              streamingToolOutput,
-              agentProgressEvents,
-            ),
-          );
-          toolIdx += seg.entries.filter((e) => e.kind === 'tool').length;
-          segIdx++;
-          // After rendering a group, advance past the rest of its
-          // entries in `actions` (segmenter never includes text/widget
-          // inside a group, so entries map 1:1 to positions in
-          // `actions`).
-          const segSize = seg.entries.length;
-          i = Math.min(i + segSize - 1, actions.length - 1);
-        } else {
-          // defensive — render as a single
-          out.push(renderSegment(seg, [`tool-${toolIdx}`], lastRunningTool, streamingToolOutput, agentProgressEvents));
-          toolIdx++;
-          segIdx++;
-        }
-      }
+    const groupStart = groupStartMap.get(i);
+    if (groupStart) {
+      const { seg, size } = groupStart;
+      out.push(
+        <Group
+          key={`group-${toolIdx}`}
+          entries={seg.entries}
+          streamingToolOutput={streamingToolOutput}
+          agentProgressEvents={agentProgressEvents}
+        />,
+      );
+      toolIdx += seg.entries.filter((e) => e.kind === 'tool').length;
+      // Advance past all entries in this group (tools + thinking).
+      i += size - 1;
     } else {
-      out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+      const action = actions[i];
+      if (action.kind === 'tool') {
+        // Only the last running tool receives the live streaming
+        // output — every other finished tool renders its persisted
+        // result.
+        const isLastRunning = lastRunningTool?.id === action.tool.id;
+        out.push(
+          <ToolActionRow
+            key={`tool-${toolIdx}`}
+            tool={action.tool}
+            streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
+            agentProgressEvents={agentProgressEvents}
+          />,
+        );
+        toolIdx++;
+      } else {
+        out.push(renderActionItem(action, i, isStreaming, i === lastTextIdx));
+      }
     }
   }
   return out;
-}
-
-function renderSegment(
-  seg: Segment,
-  keys: string[],
-  lastRunningTool: ToolAction | undefined,
-  streamingToolOutput: string | undefined,
-  agentProgressEvents: AgentProgressEventWithMeta[] | undefined,
-): React.ReactNode {
-  if (seg.kind === 'single') {
-    if (seg.entry.kind === 'tool') {
-      const isLastRunning = lastRunningTool?.id === seg.entry.tool.id;
-      return (
-        <ToolActionRow
-          key={keys[0]}
-          tool={seg.entry.tool}
-          streamingToolOutput={isLastRunning ? streamingToolOutput : undefined}
-          agentProgressEvents={agentProgressEvents}
-        />
-      );
-    }
-    return (
-      <ThinkingRow
-        key={keys[0]}
-        content={seg.entry.content}
-        isStreaming={seg.entry.isStreaming}
-      />
-    );
-  }
-  return (
-    <Group
-      key={keys.join('-')}
-      entries={seg.entries}
-      streamingToolOutput={streamingToolOutput}
-      agentProgressEvents={agentProgressEvents}
-    />
-  );
 }
 
 export function computeSummaryFromActions(

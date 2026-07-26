@@ -10,8 +10,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   serializeParseResult,
-  isMalwareExempt,
-  MALWARE_REMINDER,
 } from '../result-builder.js';
 import type { ParseResult } from '../../../file-parser/index.js';
 
@@ -85,42 +83,20 @@ describe('serializeParseResult', () => {
     // body or in the trailing system-reminder).
     const bodyTruncated = /truncated/i.test(out.result);
     expect(bodyTruncated).toBe(true);
+    expect(out.result).not.toContain('<system-reminder>');
     expect(out.metadata.truncated).toBe(true);
     // Single-chunk scenario: the chunk is included but its content
     // was cut, so we expect truncatedWithinLastChunk = true.
     expect(out.metadata.truncatedWithinLastChunk).toBe(true);
   });
 
-  it('omits the malware reminder when model is in the exempt set', () => {
-    const out = serializeParseResult(
-      makeResult({ chunks: makeTextChunks('hello') }),
-      { resolvedPath: '/x', model: 'claude-opus-4-6' },
-    );
-    expect(out.result).not.toContain('malware');
-  });
-
-  it('appends the malware reminder by default', () => {
+  it('does not append a malware instruction for document reads', () => {
     const out = serializeParseResult(
       makeResult({ chunks: makeTextChunks('hello') }),
       { resolvedPath: '/x' },
     );
-    expect(out.result).toContain('malware');
-  });
-
-  it('appends the malware reminder for unknown model ids', () => {
-    const out = serializeParseResult(
-      makeResult({ chunks: makeTextChunks('hi') }),
-      { resolvedPath: '/x', model: 'claude-sonnet-4-6' },
-    );
-    expect(out.result).toContain('malware');
-  });
-
-  it('handles fully-qualified model ids (e.g. "anthropic/claude-opus-4-6")', () => {
-    const out = serializeParseResult(
-      makeResult({ chunks: makeTextChunks('hi') }),
-      { resolvedPath: '/x', model: 'anthropic/claude-opus-4-6' },
-    );
     expect(out.result).not.toContain('malware');
+    expect(out.result).not.toContain('<system-reminder>');
   });
 
   it('emits image reminder when document has image chunks', () => {
@@ -135,6 +111,7 @@ describe('serializeParseResult', () => {
     );
     expect(out.result).toContain('image(s)');
     expect(out.result).toContain('vision tool');
+    expect(out.result).not.toContain('<system-reminder>');
     expect((out.metadata.imageCount as number)).toBe(1);
   });
 
@@ -164,35 +141,5 @@ describe('serializeParseResult', () => {
     expect(out.result).toContain('beta');
     expect(out.result).toContain('gamma');
     expect(out.metadata.truncated).toBeFalsy();
-  });
-});
-
-describe('isMalwareExempt', () => {
-  it('returns false for undefined model (default: inject reminder)', () => {
-    expect(isMalwareExempt(undefined)).toBe(false);
-  });
-
-  it('returns true for the explicit exempt set', () => {
-    expect(isMalwareExempt('claude-opus-4-6')).toBe(true);
-  });
-
-  it('matches the short name from a fully-qualified id', () => {
-    expect(isMalwareExempt('anthropic/claude-opus-4-6')).toBe(true);
-    // Other Anthropic-style prefixes also extract the short name
-    // (everything after the last "/" dot-or-dash is the canonical id)
-    expect(isMalwareExempt('us.anthropic/claude-opus-4-6')).toBe(true);
-  });
-
-  it('returns false for non-exempt models', () => {
-    expect(isMalwareExempt('claude-sonnet-4-6')).toBe(false);
-    expect(isMalwareExempt('gpt-4')).toBe(false);
-  });
-});
-
-describe('MALWARE_REMINDER', () => {
-  it('contains the canonical phrasing', () => {
-    expect(MALWARE_REMINDER).toContain('<system-reminder>');
-    expect(MALWARE_REMINDER).toContain('malware');
-    expect(MALWARE_REMINDER).toContain('MUST refuse to improve or augment');
   });
 });

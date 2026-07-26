@@ -97,9 +97,23 @@ export function expandPath(filePath: string, baseDir?: string): string {
 
 /**
  * Expand tilde at the start of a path (legacy function, use expandPath instead)
+ *
+ * Only handles leading `~` expansion — does NOT resolve relative paths,
+ * normalize separators, or collapse `..` segments. Anything that isn't
+ * a tilde-prefixed path is returned verbatim so callers can distinguish
+ * "expand ~" from "resolve this path".
  */
 export function expandTilde(filePath: string): string {
-  return expandPath(filePath);
+  if (filePath === '~') {
+    return homedir();
+  }
+  if (filePath.startsWith('~/')) {
+    return homedir() + '/' + filePath.slice(2);
+  }
+  if (filePath.startsWith('~\\')) {
+    return homedir() + '\\' + filePath.slice(2);
+  }
+  return filePath;
 }
 
 /**

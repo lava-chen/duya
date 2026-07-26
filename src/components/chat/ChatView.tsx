@@ -9,7 +9,6 @@ import type { Message } from '@/types';
 import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { PermissionPrompt } from './PermissionPrompt';
-import { SkillReviewIndicator } from './SkillReviewIndicator';
 import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase } from '@/lib/stream-session-manager';
 import { Info, CaretDown } from '@phosphor-icons/react';
@@ -167,6 +166,7 @@ export function ChatView({
   const [effort, setEffort] = useState<string | undefined>(undefined);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
+  const [compactionStatus, setCompactionStatus] = useState<'idle' | 'compacting' | 'done' | 'error'>('idle');
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
@@ -871,17 +871,23 @@ export function ChatView({
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
     setIsCompacting(true);
+    setCompactionStatus('compacting');
     compactContext(sessionId, {
       onDone: (result) => {
         setIsCompacting(false);
+        setCompactionStatus('done');
         const removedMsg = result.removedCount != null ? `${result.removedCount} messages compacted` : 'Context compressed';
         const tokenMsg = result.tokenReduction != null ? `, ~${Math.round(result.tokenReduction)} tokens saved` : '';
         setCompressionNotification(`${removedMsg}${tokenMsg}.`);
         loadThreadMessages(sessionId);
+        // Clear the "done" divider after a short delay so it doesn't linger
+        setTimeout(() => setCompactionStatus('idle'), 4000);
       },
       onError: (error) => {
         setIsCompacting(false);
+        setCompactionStatus('error');
         setCompressionNotification(`Compression failed: ${error}`);
+        setTimeout(() => setCompactionStatus('idle'), 5000);
       },
     });
   }, [sessionId, loadThreadMessages]);
@@ -1053,7 +1059,6 @@ export function ChatView({
                 {/* Input between selector and recent threads */}
                 <WorkspaceComposerLayer expanded={workspaceExpanded}>
                 <div className={`w-full welcome-message-input workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
-                  <SkillReviewIndicator sessionId={sessionId} />
                   <MessageInput
                     onSend={handleSend}
                     onRecapRequest={requestRecap}
@@ -1073,6 +1078,8 @@ export function ChatView({
                     messages={messages}
                     conductorEnabled={conductorEnabled}
                     onConductorChange={handleConductorChange}
+                    onCompact={handleCompact}
+                    isCompacting={isCompacting}
                     // Welcome page: input sits in the middle, popup must open
                     // below so it doesn't cover the heading / selector above.
                     popoverPlacement="bottom"
@@ -1113,6 +1120,7 @@ export function ChatView({
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
               onEditSend={handleEditSend}
+              compactionStatus={compactionStatus}
             />
           </div>
         )}
@@ -1179,6 +1187,8 @@ export function ChatView({
                 messages={messages}
                 conductorEnabled={conductorEnabled}
                 onConductorChange={handleConductorChange}
+                onCompact={handleCompact}
+                isCompacting={isCompacting}
               />
             )}
 

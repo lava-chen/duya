@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CodePromptSystem } from '../../../src/prompts/code/CodePromptSystem.js'
+import { PromptsRegistry } from '../../../src/prompts/registry.js'
 import {
   getProjectContinuitySection,
   getProjectGroundingSection,
@@ -34,27 +34,14 @@ describe('project harness prompt', () => {
     expect(continuity).toContain('not raw terminal output')
   })
 
-  it('keeps continuity on full prompts but only grounding on worker prompts', () => {
+  it('keeps grounding + continuity in the code config static sections', async () => {
     const context = makeContext()
-    const fullNames = new CodePromptSystem({ base: 'full' })
-      .getStaticSections(context)
-      .map(section => section.name)
-    const minimalNames = new CodePromptSystem({ base: 'minimal' })
-      .getStaticSections(context)
-      .map(section => section.name)
-    const bareNames = new CodePromptSystem({ base: 'bare' })
-      .getStaticSections(context)
-      .map(section => section.name)
+    const promptSystem = PromptsRegistry.getOrCreate('code')!
+    const staticNames = promptSystem.getStaticSections(context).map(section => section.name)
 
-    expect(fullNames).toContain('projectGrounding')
-    expect(fullNames).toContain('projectContinuity')
-    expect(fullNames).toContain('agentsMd')
-    expect(minimalNames).toContain('projectGrounding')
-    expect(minimalNames).toContain('agentsMd')
-    expect(minimalNames).not.toContain('projectContinuity')
-    expect(bareNames).toContain('projectGrounding')
-    expect(bareNames).toContain('agentsMd')
-    expect(bareNames).not.toContain('projectContinuity')
+    expect(staticNames).toContain('projectGrounding')
+    expect(staticNames).toContain('projectContinuity')
+    expect(staticNames).toContain('agentsMd')
   })
 
   it('only emits past-session recovery guidance when SessionSearch exists', () => {

@@ -19,6 +19,7 @@ import { registerWikiAgentHandlers } from './wiki-agent-handlers';
 import { registerPluginHandlers } from './plugin-handlers';
 import { registerProjectDatabaseHandlers } from './project-database-handlers';
 import { registerGitHandlers } from './git-handlers';
+import { registerMemoryWakeupHandlers } from './memory-wakeup';
 
 export {
   registerSystemHandlers,
@@ -38,6 +39,7 @@ export {
   registerPluginHandlers,
   registerProjectDatabaseHandlers,
   registerGitHandlers,
+  registerMemoryWakeupHandlers,
 };
 
 /**
@@ -59,4 +61,5 @@ export function registerAllIpcHandlers(): void {
   registerPluginHandlers();
   registerProjectDatabaseHandlers();
   registerGitHandlers();
+  registerMemoryWakeupHandlers();
 }

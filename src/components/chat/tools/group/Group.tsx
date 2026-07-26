@@ -20,6 +20,37 @@ import { ToolActionRow } from '../rows/ToolActionRow';
 import { ThinkingRow } from '../rows/ThinkingRow';
 import type { SegmentEntry, ToolAction, ToolStatus } from '../types';
 
+// Module-level expansion-state store. Keyed by the group's stable
+// identity (first tool's id, or a positional fallback). This survives
+// streaming updates that rebuild the `entries` array — the Group
+// component re-renders with new entries but its `expanded` state is
+// rehydrated from this Map instead of resetting to false.
+//
+// Without this, when the agent is mid-flight and the user clicks to
+// expand a group, the next streaming SSE event rebuilds the actions
+// array, which rebuilds the segments, which can cause React to
+// remount the Group subtree (new segment identity even though the
+// logical group is the same) — losing the user's expansion state and
+// forcing them to re-click.
+//
+// The Map is bounded to prevent unbounded growth across a long
+// session; when it exceeds the limit the oldest entry is evicted
+// (Map preserves insertion order in JS).
+const GROUP_EXPANSION_LIMIT = 500;
+const groupExpansionState = new Map<string, boolean>();
+
+function getGroupExpansion(key: string): boolean {
+  return groupExpansionState.get(key) ?? false;
+}
+
+function setGroupExpansion(key: string, value: boolean): void {
+  if (groupExpansionState.size >= GROUP_EXPANSION_LIMIT) {
+    const firstKey = groupExpansionState.keys().next().value;
+    if (firstKey !== undefined) groupExpansionState.delete(firstKey);
+  }
+  groupExpansionState.set(key, value);
+}
+
 interface GroupProps {
   entries: SegmentEntry[];
   flat?: boolean;
@@ -34,8 +65,6 @@ export function Group({
   agentProgressEvents,
 }: GroupProps) {
   const { t, locale } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
-  const [hovered, setHovered] = useState(false);
 
   // Tool-only subset. Thinking rows are not counted toward the header
   // summary — they're a side-channel of the model's reasoning, not a
@@ -59,14 +88,32 @@ export function Group({
   const lastRunningTool = tools.find((entry) => entry.tool.result === undefined)
     ?.tool;
 
-  // Re-render with a stable key based on the first tool's id so that
-  // streaming updates (more entries added to the group) don't unmount
-  // the whole subtree and re-trigger animations. Falls back to length
-  // when ids are missing (e.g. legacy fixtures). Length uses
-  // `entries.length` not `tools.length` because thinking entries
-  // count toward the streaming-visible group size even though they
-  // don't contribute to the header summary.
-  const groupKey = `grp-${tools[0]?.tool.id ?? 0}-${entries.length}`;
+  // Stable key based on the first tool's id so streaming updates
+  // (more entries added to the group) don't unmount the whole
+  // subtree and re-trigger animations. The key must NOT depend on
+  // `entries.length` or `tools.length` — those change as streaming
+  // appends entries. When the first tool id is missing (legacy
+  // fixtures), fall back to a positional key derived from the first
+  // entry kind so siblings still disambiguate.
+  //
+  // This key is also used to persist expansion state in the
+  // module-level Map above — computed before useState so the lazy
+  // initializer can read the persisted value.
+  const groupKey = `grp-${tools[0]?.tool.id ?? `idx0-${entries[0]?.kind ?? 'unknown'}`}`;
+
+  // Rehydrate expansion state from the module-level Map. The lazy
+  // initializer only runs on mount, so subsequent updates to the Map
+  // (from this or other Group instances) don't override local state.
+  const [expanded, setExpanded] = useState(() => getGroupExpansion(groupKey));
+  const [hovered, setHovered] = useState(false);
+
+  const toggleExpanded = () => {
+    setExpanded((prev) => {
+      const next = !prev;
+      setGroupExpansion(groupKey, next);
+      return next;
+    });
+  };
 
   const body = (
     <div className="tool-group-body">
@@ -99,7 +146,7 @@ export function Group({
       canExpand
       expanded={expanded}
       hovered={hovered}
-      onClick={() => setExpanded((prev) => !prev)}
+      onClick={toggleExpanded}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >

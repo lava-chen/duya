@@ -146,6 +146,23 @@ describe('ReadTool', () => {
       expect(tool.generateUserFacingDescription({ file_path: '/test.txt' })).toBe('read: /test.txt');
       expect(tool.generateUserFacingDescription({ file_path: '/test.txt', line_range: { start: 1, end: 10 } })).toBe('read: /test.txt:1-10');
     });
+
+    it('does not append a malware instruction to ordinary text reads', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'read-log-'));
+      const path = join(dir, 'training.log');
+      writeFileSync(path, 'epoch=1 loss=0.20\n');
+      try {
+        const tool = new ReadTool();
+        const result = await tool.execute({ file_path: path });
+
+        expect(result.error).toBeFalsy();
+        expect(result.result).toContain('epoch=1 loss=0.20');
+        expect(result.result).not.toContain('malware');
+        expect(result.result).not.toContain('<system-reminder>');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });
 
@@ -199,7 +216,7 @@ describe('ReadTool .ipynb dispatch', () => {
     }
   });
 
-  it('returns a system reminder when cell_range is set for non-ipynb files', async () => {
+  it('returns read metadata when cell_range is set for non-ipynb files', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
     const path = join(dir, 'foo.txt');
     writeFileSync(path, 'hello\nworld\n');

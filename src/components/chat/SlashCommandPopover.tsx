@@ -76,6 +76,10 @@ interface SlashCommandPopoverProps {
   onToggleMcpServer: (name: string, enabled: boolean) => void;
   onAddFiles: () => void;
 
+  // Manual context compaction
+  onCompact?: () => void;
+  isCompacting?: boolean;
+
   // Session action sub-views
   onRequestRecap: () => Promise<RecapRequestResult>;
 
@@ -119,6 +123,9 @@ export function SlashCommandPopover({
   mcpServers,
   onToggleMcpServer,
   onAddFiles,
+
+  onCompact,
+  isCompacting,
 
   onRequestRecap,
 
@@ -174,6 +181,9 @@ export function SlashCommandPopover({
         } else if (item.value === '/recap') {
           setSubView('recap');
           void requestRecap();
+        } else if (item.value === '__compact') {
+          onCompact?.();
+          onClosePopover();
         } else {
           onClosePopover();
         }

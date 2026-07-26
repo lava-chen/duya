@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { CodePromptSystem } from '../../../src/prompts/code/index.js';
-import { resolveEnabledSections } from '../../../src/prompts/modes/index.js';
+import { PromptsRegistry } from '../../../src/prompts/registry.js';
+import { isSectionEnabled, DEFAULT_PROMPT_PROFILE } from '../../../src/prompts/modes/index.js';
 
 describe('prompt language and user-visible progress guidance', () => {
-  it('enables language guidance for every default profile', () => {
-    expect(resolveEnabledSections({ base: 'full' }).has('language')).toBe(true);
-    expect(resolveEnabledSections({ base: 'minimal' }).has('language')).toBe(true);
-    expect(resolveEnabledSections({ base: 'bare' }).has('language')).toBe(true);
+  it('keeps language guidance enabled by default and respects disableSections', () => {
+    expect(isSectionEnabled(DEFAULT_PROMPT_PROFILE, 'language')).toBe(true);
+    expect(
+      isSectionEnabled({ disableSections: ['language'] }, 'language'),
+    ).toBe(false);
   });
 
   it('turns zh into a Simplified Chinese hard requirement', async () => {
-    const promptSystem = new CodePromptSystem();
+    const promptSystem = PromptsRegistry.getOrCreate('code')!;
     const context = promptSystem.buildContext({
       workingDirectory: 'E:\\Projects\\duya',
       modelId: 'MiniMax-M3',

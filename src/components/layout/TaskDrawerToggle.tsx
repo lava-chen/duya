@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { usePanel } from "@/hooks/usePanel";
 import { useTaskCount } from "@/hooks/useTaskCount";
 import { useSubAgentProgress } from "@/hooks/useSubAgentProgress";
+import { useBashTasks } from "@/hooks/useBashTasks";
 import { useConversationStore } from "@/stores/conversation-store";
 import { setTaskDrawerOpen, useTaskDrawerOpen } from "./task-drawer-store";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -18,7 +19,8 @@ export function TaskDrawerToggle() {
   const { pending, active } = useTaskCount();
   const agents = useSubAgentProgress(activeThreadId ?? "");
   const runningAgents = agents.filter((agent) => agent.status === "running" || agent.status === "waiting").length;
-  const taskBadgeCount = pending + active + runningAgents;
+  const { runningCount: runningBashCount } = useBashTasks(activeThreadId ?? "");
+  const taskBadgeCount = pending + active + runningAgents + runningBashCount;
 
   useEffect(() => {
     if (workspaceExpanded && taskDrawerOpen) {
@@ -37,17 +39,21 @@ export function TaskDrawerToggle() {
   return (
     <button
       type="button"
-      className={`workspace-task-toggle${taskDrawerOpen ? " active" : ""}`}
+      className={`workspace-task-toggle${taskDrawerOpen ? " active" : ""}${runningBashCount > 0 ? " has-background-tasks" : ""}`}
       style={position}
       onClick={() => setTaskDrawerOpen(!taskDrawerOpen)}
-      title={t('panel.taskList')}
+      title={
+        runningBashCount > 0
+          ? t('panel.taskList') + ` · ${runningBashCount} background command${runningBashCount > 1 ? 's' : ''} running`
+          : t('panel.taskList')
+      }
       aria-label={t('panel.taskList')}
       aria-pressed={taskDrawerOpen}
       data-testid="task-card-trigger"
     >
       <CheckSquareIcon size={16} weight="regular" />
       {taskBadgeCount > 0 && (
-        <span className="panel-task-toggle-badge">
+        <span className={`panel-task-toggle-badge${runningBashCount > 0 ? " pulse" : ""}`}>
           {taskBadgeCount > 99 ? "99+" : taskBadgeCount}
         </span>
       )}

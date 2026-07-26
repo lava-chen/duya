@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GatewayPromptSystem } from '../../../../src/prompts/gateway/GatewayPromptSystem.js';
+import { PromptsRegistry } from '../../../../src/prompts/registry.js';
 
 vi.mock('../../../../src/prompts/sections/dynamic/recentSessionsSection.js', () => ({
   getRecentSessionsSection: async () => null,
 }));
 
-describe('GatewayPromptSystem', () => {
+describe('GatewayPromptSystem (config-driven)', () => {
   it('teaches direct tool use, truthful capability checks, and native media delivery', async () => {
-    const system = new GatewayPromptSystem();
+    const system = PromptsRegistry.getOrCreate('gateway')!;
     const context = system.buildContext({
       sessionId: 'gw-weixin-test',
       workingDirectory: 'C:\\Users\\tester\\.duya\\workspace',
@@ -25,10 +25,15 @@ describe('GatewayPromptSystem', () => {
     expect(prompt).not.toContain('You are a relay, not a worker');
   });
 
-  it('never falls back to the host process cwd', () => {
-    const context = new GatewayPromptSystem().buildContext({ modelId: 'test-model' });
+  it('keeps the explicitly-provided working directory without falling back to cwd', () => {
+    const system = PromptsRegistry.getOrCreate('gateway')!;
+    const explicit = 'C:\\Users\\tester\\.duya\\workspace';
+    const context = system.buildContext({
+      modelId: 'test-model',
+      workingDirectory: explicit,
+    });
 
-    expect(context.workingDirectory).toMatch(/[\\/]\.duya[\\/]workspace$/);
+    expect(context.workingDirectory).toBe(explicit);
     expect(context.workingDirectory).not.toBe(process.cwd());
   });
 });

@@ -10,6 +10,7 @@ import type { SSEEvent, Tool, Message, MessageContent, TextContent, ToolUseConte
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
 import { extractToolInputPreview, hasToolInputPreview } from './tool-input-preview.js';
+import { normalizeUsage, type UsageLike } from './usage.js';
 
 const OPENAI_FUNCTION_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
@@ -356,6 +357,7 @@ export class OpenAIClient implements LLMClient {
   private model: string;
   private baseURL: string | undefined;
   private supportsTools: boolean | undefined;
+  private provider = 'openai';
 
   constructor(options: LLMClientOptions) {
     this.client = new OpenAI({
@@ -524,19 +526,26 @@ export class OpenAIClient implements LLMClient {
     const THINK_CLOSE_PATTERN = /<\/(think|thinking|thought)>/i;
 
     let eventCount = 0;
-    let accumulatedUsage: { input_tokens: number; output_tokens: number; total_tokens?: number } | null = null;
+    let accumulatedUsage: TokenUsage | null = null;
     for await (const event of stream) {
       eventCount++;
       const delta = event.choices[0]?.delta;
       const finishReason = event.choices[0]?.finish_reason;
 
-      // Collect usage from stream chunks (OpenAI sends usage in the final chunk when stream_options.include_usage is true)
-      if ((event as unknown as { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }).usage) {
-        const usage = (event as unknown as { usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }).usage;
+      // Collect usage from stream chunks. OpenAI sends usage in the final
+      // chunk when stream_options.include_usage is true. MiniMax and other
+      // OpenAI-compatible providers may use input_tokens/output_tokens or
+      // only total_tokens, so normalize through usage.ts instead of assuming
+      // the exact OpenAI field names.
+      const rawUsage = (event as unknown as { usage?: UsageLike }).usage;
+      if (rawUsage) {
+        const normalized = normalizeUsage(rawUsage);
         accumulatedUsage = {
-          input_tokens: usage.prompt_tokens ?? 0,
-          output_tokens: usage.completion_tokens ?? 0,
-          total_tokens: usage.total_tokens,
+          input_tokens: normalized.input,
+          output_tokens: normalized.output,
+          total_tokens: normalized.total || rawUsage.total_tokens,
+          cache_hit_tokens: normalized.cacheRead,
+          cache_creation_tokens: normalized.cacheWrite,
         };
       }
 

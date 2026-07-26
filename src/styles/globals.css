@@ -502,6 +502,90 @@ html[data-font="system"] .message-content li {
   overflow-wrap: normal !important;
 }
 
+/* Markdown tables should read as a compact data sheet: clear row rhythm,
+ * natural column sizing, and a single visual unit for local file links. */
+.markdown-table-scroll {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+}
+
+.markdown-table {
+  width: 100%;
+  min-width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  color: var(--text);
+  font-size: 15px;
+  text-align: left;
+}
+
+.markdown-table__heading,
+.markdown-table__cell {
+  padding: 0.7rem 0.9rem;
+  vertical-align: top;
+}
+
+.markdown-table__heading {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 28%, transparent);
+  color: var(--text);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.markdown-table__cell {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.markdown-table tr:last-child .markdown-table__cell {
+  border-bottom: 0;
+}
+
+.markdown-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  color: #2563eb;
+  cursor: pointer;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  text-decoration: none;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  transition: color 150ms ease, text-decoration-color 150ms ease;
+  vertical-align: middle;
+}
+
+.markdown-file-link:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.markdown-file-link:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid rgb(37 99 235 / 0.5);
+  outline-offset: 2px;
+}
+
+.markdown-file-link > svg {
+  display: block;
+  flex: 0 0 1rem;
+}
+
+.markdown-file-link__name {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+[data-theme="dark"] .markdown-file-link {
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .markdown-file-link:hover {
+  color: #bfdbfe;
+}
+
 /* Keep dark theme inline code background as before */
 [data-theme="dark"] .prose code,
 [data-theme="dark"] .prose-sm code,
@@ -10396,6 +10480,34 @@ html[data-message-font-size="large"] .prose h3 {
 .workspace-task-toggle.active {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
+}
+
+/* Pulse badge when background bash commands are running — draws the
+   user's attention to detached work even when the drawer is closed. */
+.panel-task-toggle-badge.pulse {
+  background: var(--accent);
+  animation: panel-task-toggle-pulse 1.6s ease-in-out infinite;
+}
+
+.workspace-task-toggle.has-background-tasks {
+  color: var(--accent);
+}
+
+@keyframes panel-task-toggle-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+
+/* Monospace title variant for command-line previews inside the drawer. */
+.task-card-row-title-mono {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  letter-spacing: -0.01em;
+  word-break: break-all;
 }
 
 .chat-body-row {

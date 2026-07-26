@@ -13,6 +13,8 @@ import * as fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
+import { enqueuePendingNotification } from '../queue/index.js';
+import { buildTaskNotificationXml } from '../lifecycle/buildTaskNotification.js';
 
 const execAsync = promisify(exec);
 
@@ -83,6 +85,10 @@ export interface WorkerResult {
 // Extended task interface with output callback
 export interface WorkerTaskExtended extends WorkerTask {
   onOutput?: (stream: 'stdout' | 'stderr', data: string) => void;
+  /** Parent session id, used to route background-task completion
+   *  notifications back to the originating conversation via
+   *  enqueuePendingNotification(). */
+  sessionId?: string;
 }
 
 interface ActiveWorker {
@@ -469,7 +475,38 @@ export class WorkerPool {
           if (msgTaskId && msgTaskId !== task.id) return;
 
           const registry = getBashTaskRegistry();
-          registry.markCompleted(task.id, (msg.exitCode as number) ?? -1, (msg.error as string | undefined));
+          const exitCode = (msg.exitCode as number) ?? -1;
+          const errorMsg = msg.error as string | undefined;
+          registry.markCompleted(task.id, exitCode, errorMsg);
+
+          // Notify the parent conversation so the LLM can resume with the
+          // completion result. Mirrors BackgroundAgentLifecycle.enqueueTaskNotification.
+          // Skip when sessionId is missing (e.g. ad-hoc CLI runs without a session).
+          const parentSessionId = task.sessionId;
+          if (parentSessionId) {
+            const completedTask = registry.getTask(task.id);
+            const command = completedTask?.command
+              ?? (task.input.command as string)
+              ?? 'background-bash';
+            const outputFile = completedTask?.outputFile ?? '';
+            const status = exitCode === 0 && !errorMsg ? 'completed' : 'failed';
+            const finalMessage = errorMsg
+              ? `Background command failed: ${errorMsg} (exit code ${exitCode})`
+              : `Background command completed with exit code ${exitCode}.`;
+            const xml = buildTaskNotificationXml({
+              taskId: task.id,
+              status,
+              agentType: 'bash',
+              agentName: command,
+              description: command,
+              outputFilePath: outputFile,
+              finalMessage,
+              totalDurationMs: completedTask?.endTime && completedTask?.startTime
+                ? completedTask.endTime - completedTask.startTime
+                : undefined,
+            });
+            enqueuePendingNotification(xml, { taskId: task.id, status }, parentSessionId);
+          }
 
           // Release the worker back to pool
           cleanup();

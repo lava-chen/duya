@@ -281,6 +281,62 @@ if (gotTheLock) {
       logger.error('Failed to initialize automation scheduler', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
+    // ============================================================
+    // Memory v2 worker (Plan 305, shadow mode)
+    // ============================================================
+    // Gated by DUYA_MEMORY_V2_ENABLED. When enabled, bootstraps the
+    // memory-state DB (next to duya-main.db), constructs an LLM client
+    // from the active provider, and starts the long-lived worker that
+    // runs Stage 1 extraction + outbox sweeper + reconcile.
+    //
+    // Shadow mode: writes only to memory-state.db and ~/.duya/memory
+    // projection files. Never touches packages/agent/src/memory/.
+    if (process.env.DUYA_MEMORY_V2_ENABLED === '1' || process.env.DUYA_MEMORY_V2_ENABLED === 'true') {
+      try {
+        const { bootstrap } = await import('./memory-state');
+        const { startMemoryWorker } = await import('./memory/memory-worker');
+        const { createRetryableLLMClient } = await import('../packages/agent/src/llm/index.js');
+        const { getDatabasePath } = await import('./config/boot-config');
+        const { toLLMProvider } = await import('./config/index');
+
+        const mainDb = getDatabase();
+        if (!mainDb) {
+          throw new Error('Main DB not available for memory worker');
+        }
+
+        const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
+
+        // Construct LLM client from the active provider. Falls back
+        // gracefully if no provider is configured — the worker will
+        // still run reconcile + outbox, just no extraction.
+        let llmClient = null;
+        try {
+          const cm = getConfigManager();
+          const provider = cm.getActiveProvider();
+          if (provider) {
+            llmClient = createRetryableLLMClient(
+              toLLMProvider(provider.providerType, provider.baseUrl),
+              { apiKey: provider.apiKey, baseURL: provider.baseUrl, model: provider.model || 'gpt-4o-mini' },
+            );
+          }
+        } catch (llmErr) {
+          logger.warn('Memory worker: LLM client construction failed; extraction disabled', { error: llmErr instanceof Error ? llmErr.message : String(llmErr) }, LogComponent.DB);
+        }
+
+        if (llmClient) {
+          startMemoryWorker(
+            { memoryDb, mainDb, llmClient },
+            { instancesPerMinute: 60, concurrency: 2 },
+          );
+          logger.info('Memory v2 worker started (shadow mode)', undefined, LogComponent.DB);
+        } else {
+          logger.warn('Memory v2 worker: no LLM client; worker not started (DB bootstrapped for manual inspection)', undefined, LogComponent.DB);
+        }
+      } catch (error) {
+        logger.error('Failed to start memory v2 worker', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DB);
+      }
+    }
+
     try {
       const docParser = initDocumentParser();
       await docParser.start();

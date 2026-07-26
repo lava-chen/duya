@@ -35,6 +35,7 @@ import {
   parseBrowserReferenceDisplayContent,
   type BrowserReferenceDisplayData,
 } from '@/lib/browser-reference-display';
+import { parseToolInputSafe, buildToolAction } from './tools/normalize';
 
 function isImageAttachment(attachment: FileAttachment): boolean {
   if (attachment.kind === 'image') return true;
@@ -327,14 +328,13 @@ function messageToActionItems(
     const result = toolUseId ? toolResultMap.get(toolUseId) : undefined;
     actions.push({
       kind: 'tool',
-      tool: {
-        id: toolUseId,
-        name: msg.toolName,
-        input: msg.toolInput ? JSON.parse(msg.toolInput) : {},
-        result: result?.content,
-        isError: result?.is_error,
-        durationMs: result?.duration_ms ?? msg.durationMs,
-      },
+      tool: buildToolAction(
+        toolUseId,
+        msg.toolName,
+        parseToolInputSafe(msg.toolInput),
+        result,
+        msg.durationMs,
+      ),
     });
     return actions;
   }
@@ -358,14 +358,12 @@ function messageToActionItems(
         const result = toolId ? toolResultMap.get(toolId) : undefined;
         actions.push({
           kind: 'tool',
-          tool: {
-            id: toolId,
-            name: String(b.name || ''),
-            input: (b.input as Record<string, unknown>) || {},
-            result: result?.content,
-            isError: result?.is_error,
-            durationMs: result?.duration_ms,
-          },
+          tool: buildToolAction(
+            toolId,
+            String(b.name || ''),
+            (b.input as Record<string, unknown>) || {},
+            result,
+          ),
         });
       } else if (b.type === 'thinking' && b.thinking) {
         const rawThinking = b.thinking;
@@ -842,17 +840,6 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
               ))}
             </div>
           )}
-          {/* Legacy browser-ref cards (from markers in old messages). */}
-          {userBrowserReferences.references.length > 0 && refAttachments.length === 0 && (
-            <div className="flex w-full flex-col gap-2 mb-2">
-              {userBrowserReferences.references.map((reference, index) => (
-                <BrowserReferenceCard
-                  key={`${reference.kind}-${reference.url}-${index}`}
-                  reference={reference}
-                />
-              ))}
-            </div>
-          )}
           {isEditing ? (
             <div
               className="rounded-2xl rounded-tr-sm border overflow-hidden transition-all duration-200"
@@ -939,7 +926,16 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
   const hasActions = actions.length > 0;
   const hasWidgets = actions.some(a => a.kind === 'widget');
   const hasToolActions = actions.some(a => a.kind === 'tool' || a.kind === 'thinking');
-  const toolOnlyActions = actions.filter(a => a.kind !== 'widget');
+  // When widgets are present, text and widget blocks are interleaved via
+  // InterleavedContent (which already renders `text` through MarkdownRenderer
+  // and `widget` through WidgetRenderer, skipping tool/thinking). Passing
+  // text actions into ToolActionsGroup here as well would render every text
+  // block twice — once as a TextRow, once as MarkdownRenderer. So when
+  // hasWidgets, keep only tool/thinking for the group; when no widgets,
+  // pass the full actions array (TextRow handles text inside the group).
+  const toolOnlyActions = hasWidgets
+    ? actions.filter(a => a.kind === 'tool' || a.kind === 'thinking')
+    : actions;
 
   return (
     <div data-message-id={message.id} className="py-3 px-4">

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { CodeBlock } from './CodeBlock';
-import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl } from '@/lib/chat-file-links';
+import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
+import { FileIcon } from '../icons';
 
 // Inline media: renders <img> thumbnails that open the lightbox on click,
 // or <video controls> elements for common video extensions so the same
@@ -88,11 +89,30 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   );
 }
 
+// Match a bare filename or filename with a line suffix, e.g. `network.py`
+// or `network.py:12`. We deliberately exclude anything that contains a slash
+// or a scheme so we can fall back to the normal link logic for real paths.
+const BARE_FILE_REFERENCE_RE = /^[^/\\:?#\s]+\.\w+(?::\d+)?$/;
+
 function MarkdownAnchor({ href, children }: { href?: string; children?: React.ReactNode }) {
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const threads = useConversationStore((s) => s.threads);
   const cwd = threads.find((thread) => thread.id === activeThreadId)?.workingDirectory;
-  const isLocalFile = typeof href === 'string' && isLikelyLocalFileReference(href);
+
+  // If the model only wrote a bare filename (e.g. `network.py` or
+  // `network.py:12`) and we know the working directory, resolve it against
+  // the workspace root so it still renders as a clickable file pill. This
+  // is a renderer-side safety net for models that fail to supply an
+  // absolute or relative path.
+  let resolvedHref = href;
+  let isBareFileName = false;
+  if (typeof href === 'string' && cwd && BARE_FILE_REFERENCE_RE.test(href)) {
+    const separator = /[\\/]/.test(cwd) ? cwd.match(/[\\/]/)?.[0] ?? '/' : '/';
+    resolvedHref = `${cwd.replace(/[\\/]+$/, '')}${separator}${href}`;
+    isBareFileName = true;
+  }
+
+  const isLocalFile = typeof resolvedHref === 'string' && isLikelyLocalFileReference(resolvedHref);
   // Localhost URLs (e.g. `http://localhost:8000/`) flow into the
   // side-panel browser instead of an external tab. External http(s)
   // keeps the default target=_blank behaviour.
@@ -115,17 +135,31 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
     );
   }
 
+  // Local file references render as a pill: file icon + blue filename.
+  // The raw link target may be a full path with a line suffix; the visible
+  // text should be the clean filename (matching the iconography users see
+  // in the rest of the DUYA UI).
+  if (isLocalFile && resolvedHref) {
+    const displayName = fileNameFromPath(resolvedHref);
+    return (
+      <button
+        type="button"
+        className="markdown-file-link"
+        onClick={() => openLocalArtifactTarget(resolvedHref, cwd)}
+        title={resolvedHref}
+      >
+        <FileIcon size={16} weight="regular" aria-hidden="true" />
+        <span className="markdown-file-link__name">{displayName}</span>
+      </button>
+    );
+  }
+
   return (
     <a
       href={href}
       className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors"
-      target={isLocalFile ? undefined : '_blank'}
-      rel={isLocalFile ? undefined : 'noopener noreferrer'}
-      onClick={(event) => {
-        if (!href || !isLocalFile) return;
-        event.preventDefault();
-        openLocalArtifactTarget(href, cwd);
-      }}
+      target='_blank'
+      rel='noopener noreferrer'
     >
       {children}
     </a>
@@ -196,24 +230,18 @@ export const markdownComponents = {
   ),
   hr: () => <hr className="border-border/50 my-3" />,
   table: ({ children }: { children?: React.ReactNode }) => (
-    <div className="overflow-x-auto my-1 scrollbar-thin">
-      <table className="w-full text-[15px] text-left border-collapse border-spacing-0">{children}</table>
+    <div className="markdown-table-scroll scrollbar-thin">
+      <table className="markdown-table">{children}</table>
     </div>
   ),
-  thead: ({ children }: { children?: React.ReactNode }) => (
-    <thead className="border-b border-foreground/30">{children}</thead>
-  ),
-  tbody: ({ children }: { children?: React.ReactNode }) => (
-    <tbody className="border-b border-foreground/30">{children}</tbody>
-  ),
-  tr: ({ children }: { children?: React.ReactNode }) => (
-    <tr className="border-b border-foreground/20 last:border-b-0">{children}</tr>
-  ),
+  thead: ({ children }: { children?: React.ReactNode }) => <thead>{children}</thead>,
+  tbody: ({ children }: { children?: React.ReactNode }) => <tbody>{children}</tbody>,
+  tr: ({ children }: { children?: React.ReactNode }) => <tr>{children}</tr>,
   th: ({ children }: { children?: React.ReactNode }) => (
-    <th className="px-3 py-2 font-semibold text-foreground text-left min-w-[120px]">{children}</th>
+    <th className="markdown-table__heading">{children}</th>
   ),
   td: ({ children }: { children?: React.ReactNode }) => (
-    <td className="px-3 py-2 text-foreground align-top min-w-[120px]">{children}</td>
+    <td className="markdown-table__cell">{children}</td>
   ),
   strong: ({ children }: { children?: React.ReactNode }) => (
     <strong className="font-semibold text-foreground">{children}</strong>

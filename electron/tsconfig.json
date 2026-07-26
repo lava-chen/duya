@@ -25,6 +25,8 @@
     "./ipc/**/*.ts",
     "./logging/**/*.ts",
     "./messaging/**/*.ts",
+    "./memory-state/**/*.ts",
+    "./memory/**/*.ts",
     "./project-database/**/*.ts",
     "./services/**/*.ts",
     "./wiki-agent/**/*.ts",

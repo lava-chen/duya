@@ -93,6 +93,9 @@ export function getAgentRuntimeCommand(
       ...env,
       ELECTRON_RUN_AS_NODE: '1',
       DUYA_BETTER_SQLITE3_PATH: betterSqlite3Path || path.join(process.cwd(), 'node_modules', 'better-sqlite3'),
+      // Dev-only flag: lets agent internals (e.g. API traffic logger) know it is
+      // safe to enable expensive diagnostics. Never set in packaged builds.
+      DUYA_DEV: '1',
     },
   };
 }

@@ -107,6 +107,18 @@ workerManager.setMessageHandler((sessionId, msg) => {
     return;
   }
 
+  if (msg.type === 'bash_task:update' && msg.sessionId === sessionId) {
+    // Forward the bash background task snapshot to the main process so it
+    // can rebroadcast to every BrowserWindow. The renderer subscribes via
+    // electronAPI.onBashTaskUpdate() and updates the TaskDrawer list.
+    process.send?.({
+      type: 'bash_task:update',
+      sessionId,
+      tasks: msg.tasks,
+    });
+    return;
+  }
+
   if (msg.type === 'interagent:invoke') {
     // Fire and forget — errors are handled internally and sent as chat:error
     void interagentRouter.handleInvoke({

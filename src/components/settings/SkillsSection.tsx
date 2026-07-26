@@ -11,7 +11,6 @@ import {
   WarningIcon,
   ProhibitIcon,
   SpinnerGapIcon,
-  LightningIcon,
 } from "@/components/icons";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import {
@@ -20,7 +19,6 @@ import {
   SettingsRow,
 } from "@/components/settings/ui";
 import { useTranslation } from "@/hooks/useTranslation";
-import { SkillLearningInbox } from "@/components/skills/SkillLearningInbox";
 
 interface SkillFinding {
   patternId: string;
@@ -544,17 +542,6 @@ export function SkillsSection() {
 
   return (
     <div className="settings-section">
-      {/* Self-improvement section is a dev-only test feature — hidden in packaged builds. */}
-      {import.meta.env.DEV && (
-        <SettingsSection
-          title="Agent 学习动态"
-          description="查看 Agent 为什么创建或更新 Skill，以及它如何验证这项经验。"
-          icon={<LightningIcon size={17} />}
-        >
-          <SkillLearningInbox />
-        </SettingsSection>
-      )}
-
       {/* Search */}
       <SettingsSection title={t('skills.title')} description={t('skills.description')}>
         <div className="relative mb-6">

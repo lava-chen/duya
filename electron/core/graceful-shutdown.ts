@@ -118,6 +118,20 @@ export async function performGracefulShutdown(): Promise<void> {
     logger.error('Error cleaning up updater', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
   }
 
+  // 6.65 Stop memory v2 worker (Plan 305). Awaits in-flight extracts so
+  // we don't leave dangling leases. No-op when the worker was never
+  // started (env gate unset).
+  try {
+    const { getMemoryWorkerHandle } = await import('../memory/memory-worker');
+    const handle = getMemoryWorkerHandle();
+    if (handle) {
+      await handle.shutdown();
+      logger.info('Memory v2 worker stopped', undefined, 'Main');
+    }
+  } catch (err) {
+    logger.error('Error shutting down memory v2 worker', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
   // 7. Shutdown config manager
   try {
     getConfigManager().shutdown();

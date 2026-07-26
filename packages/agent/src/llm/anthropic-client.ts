@@ -135,25 +135,21 @@ function isMiniMaxEndpoint(baseURL?: string): boolean {
 }
 
 export function getMiniMaxAnthropicMaxTokens(model: string, configuredMaxTokens?: number): number {
-  if (typeof configuredMaxTokens === 'number' && configuredMaxTokens > 0) {
-    return configuredMaxTokens;
-  }
-
   const normalizedModel = model.trim().toLowerCase();
+  let ceiling: number;
   if (normalizedModel === 'minimax-m3') {
-    return MINIMAX_M3_MAX_TOKENS;
+    ceiling = MINIMAX_M3_MAX_TOKENS;
+  } else if (normalizedModel.includes('highspeed')) {
+    // Highspeed variants have a lower max_tokens ceiling than their base
+    // models. Check before the generic minimax-m prefix branch so the
+    // more specific case wins.
+    ceiling = MINIMAX_HIGHSPEED_MAX_TOKENS;
+  } else {
+    ceiling = MINIMAX_DEFAULT_MAX_TOKENS;
   }
-  // Highspeed variants have a lower max_tokens ceiling than their base
-  // models. Check before the generic minimax-m prefix branch so the
-  // more specific case wins.
-  if (normalizedModel.includes('highspeed')) {
-    return MINIMAX_HIGHSPEED_MAX_TOKENS;
-  }
-  if (normalizedModel.startsWith('minimax-m')) {
-    return MINIMAX_DEFAULT_MAX_TOKENS;
-  }
-
-  return MINIMAX_DEFAULT_MAX_TOKENS;
+  return typeof configuredMaxTokens === 'number' && configuredMaxTokens > 0
+    ? Math.min(configuredMaxTokens, ceiling)
+    : ceiling;
 }
 
 export function extractAnthropicThinkingDelta(delta: unknown): string {
@@ -1360,6 +1356,12 @@ export class AnthropicClient implements LLMClient {
 
     logger.debug(`[AnthropicClient] Creating stream with model=${this.model}`);
     let stream;
+    const maxTokens = this.isMiniMax
+      ? Math.min(
+          options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+          getMiniMaxAnthropicMaxTokens(this.model, options?.maxOutputTokens),
+        )
+      : options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     try {
       // Map UI effort level to Anthropic `thinking` field. Auto
       // (undefined/empty) omits the field entirely so behavior matches
@@ -1371,9 +1373,6 @@ export class AnthropicClient implements LLMClient {
         high: 16384,
         max: 32000,
       };
-      const maxTokens = this.isMiniMax
-        ? getMiniMaxAnthropicMaxTokens(this.model, options?.maxOutputTokens ?? options?.contextWindow)
-        : options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
       const effort = options?.effort;
       const hasEffort = typeof effort === 'string' && effort.length > 0;
 
@@ -1392,16 +1391,17 @@ export class AnthropicClient implements LLMClient {
               ? { type: 'enabled' as const, budget_tokens: budget }
               : undefined;
           })();
+      const requestParams = {
+        model: this.model,
+        max_tokens: maxTokens,
+        temperature: options?.temperature ?? 1,
+        system: options?.systemPrompt || '',
+        messages: anthropicMessages as MessageParam[],
+        tools: tools?.length ? tools : undefined,
+        ...(thinking ? { thinking } : {}),
+      };
       stream = await this.client.messages.stream(
-        {
-          model: this.model,
-          max_tokens: maxTokens,
-          temperature: options?.temperature ?? 1,
-          system: options?.systemPrompt || '',
-          messages: anthropicMessages as MessageParam[],
-          tools: tools?.length ? tools : undefined,
-          ...(thinking ? { thinking } : {}),
-        },
+        requestParams,
         options?.signal ? { signal: options.signal } : undefined
       );
       logger.debug('Stream created successfully', undefined, 'AnthropicClient');
@@ -1423,20 +1423,18 @@ export class AnthropicClient implements LLMClient {
         'AnthropicClient',
       );
       try {
+        const retryParams = {
+          model: this.model,
+          max_tokens: isMiniMax2013
+            ? Math.min(maxTokens, MINIMAX_RECOVERY_MAX_TOKENS)
+            : maxTokens,
+          temperature: options?.temperature ?? 1,
+          system: options?.systemPrompt || '',
+          messages: anthropicMessages,
+          tools: tools?.length ? tools : undefined,
+        };
         stream = await this.client.messages.stream(
-          {
-            model: this.model,
-            max_tokens: isMiniMax2013
-              ? Math.min(
-                  getMiniMaxAnthropicMaxTokens(this.model, options?.maxOutputTokens ?? options?.contextWindow),
-                  MINIMAX_RECOVERY_MAX_TOKENS,
-                )
-              : options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-            temperature: options?.temperature ?? 1,
-            system: options?.systemPrompt || '',
-            messages: anthropicMessages,
-            tools: tools?.length ? tools : undefined,
-          },
+          retryParams,
           options?.signal ? { signal: options.signal } : undefined,
         );
         logger.info('Tool-result pairing recovery retry created stream successfully', undefined, 'AnthropicClient');

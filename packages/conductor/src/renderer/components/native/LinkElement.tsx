@@ -350,11 +350,10 @@ export const LinkElement: React.FC<{ element: CanvasElement }> = ({ element }) =
     );
   }
 
-  const isInternal = config.linkType !== "url";
   return (
     <article className={`canvas-link canvas-link--expanded canvas-link--${config.linkType}`} role="link" tabIndex={0} onKeyDown={onKeyDown} onClick={open}>
       {config.linkType === "canvas" && <CanvasLinkPreview canvasId={config.targetId} title={title} />}
-      {isInternal && config.linkType === "session" && <div className="canvas-link__preview canvas-link__preview--session" aria-hidden="true"><span className="canvas-link__preview-empty">Conversation</span></div>}
+      {config.linkType === "session" && <div className="canvas-link__preview canvas-link__preview--session" aria-hidden="true"><span className="canvas-link__preview-empty">Conversation</span></div>}
       <header><LinkMark type={config.linkType} faviconUrl={config.faviconUrl} /><div><span className="canvas-link__eyebrow">{LINK_LABEL[config.linkType]}</span><h3>{title}</h3><p>{meta}</p></div></header>
       {config.description && <p className="canvas-link__description">{config.description}</p>}
       <footer><button type="button" onClick={copy}>Copy link</button><span>↗ Open</span></footer>

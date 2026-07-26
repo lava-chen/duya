@@ -201,18 +201,19 @@ function getMiniMaxWeeklyStatus(model: Record<string, unknown>): number {
 }
 
 function hasMiniMaxQuota(model: Record<string, unknown>): boolean {
-  // Include active plans (status === 1) and exhausted plans (status === 3) as
-  // long as a percent value is present. When a user hits their quota limit
-  // MiniMax switches status from 1 to 3, but the percent field (usually 0)
-  // is still returned. Without this the UI shows "No active quota" instead
-  // of the expected 0% bar.
+  // A row is usable only when its status is active (=== 1) AND a
+  // `*_remaining_percent` value is present. Status values observed in the
+  // wild: 1 = active, 3 = inactive / not on plan. Earlier code also accepted
+  // status 3 to keep rendering a 0% bar, but that surfaced inactive models
+  // (e.g. "video" on accounts without a video plan) as if they had quota,
+  // which broke the "skips inactive models" contract.
   const sessionStatus = getMiniMaxSessionStatus(model);
   const weeklyStatus = getMiniMaxWeeklyStatus(model);
   const sessionPercent = getMiniMaxSessionPercent(model);
   const weeklyPercent = getMiniMaxWeeklyPercent(model);
 
-  const sessionValid = (sessionStatus === 1 || sessionStatus === 3) && sessionPercent != null;
-  const weeklyValid = (weeklyStatus === 1 || weeklyStatus === 3) && weeklyPercent != null;
+  const sessionValid = sessionStatus === 1 && sessionPercent != null;
+  const weeklyValid = weeklyStatus === 1 && weeklyPercent != null;
   return sessionValid || weeklyValid;
 }
 
@@ -260,9 +261,10 @@ function addMiniMaxPercentQuota(
   const status = getStatus(model);
   const percent = getPercent(model);
   if (percent == null) return;
-  // Accept active plans (status 1) and exhausted plans (status 3) so that
-  // a 0% remaining quota is still rendered in the UI.
-  if (status !== 1 && status !== 3) return;
+  // Only render quota for active plans (status === 1). Status 3 means the
+  // model is inactive / not on plan and must be skipped so it doesn't show
+  // up as a phantom 100% bar in the UI.
+  if (status !== 1) return;
   quotas[key] = buildMiniMaxPercentQuota(percent, getMiniMaxResetAt(model, ...resetArgs));
 }
 

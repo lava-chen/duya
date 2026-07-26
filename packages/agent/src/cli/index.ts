@@ -185,7 +185,6 @@ function buildToolPreview(toolName: string, args: Record<string, unknown>): stri
     execute_code: 'code',
     delegate_task: 'goal',
     clarify: 'question',
-    skill_manage: 'name',
     todo: 'todos',
     memory: 'action',
     session_search: 'query',

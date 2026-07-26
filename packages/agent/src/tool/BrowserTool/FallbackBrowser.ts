@@ -5,6 +5,9 @@
  */
 
 import axios from 'axios';
+import { readFile } from 'node:fs/promises';
+import { isAbsolute, relative, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isSafeUrl } from '../../utils/urlSafety.js';
 
 export interface FallbackSnapshot {
@@ -18,6 +21,7 @@ export interface FallbackSnapshot {
 
 const FETCH_TIMEOUT = 15000;
 const MAX_CONTENT_LENGTH = 500000;
+const ALLOWED_LOCAL_EXTENSIONS = ['.html', '.htm'];
 
 /**
  * Fallback browser using regex-based static HTML parsing
@@ -27,6 +31,11 @@ export class FallbackBrowser {
   private refCounter = 0;
   private lastHtml = '';
   private lastUrl = '';
+  private workingDir: string | null;
+
+  constructor(workingDir?: string) {
+    this.workingDir = workingDir ?? null;
+  }
 
   /**
    * Navigate and get snapshot
@@ -35,6 +44,11 @@ export class FallbackBrowser {
     if (!url && this.lastUrl) {
       // Return cached snapshot
       return this.buildSnapshot(this.lastUrl, this.lastHtml);
+    }
+
+    // Handle local file:// URLs separately - isSafeUrl only permits http/https
+    if (url.startsWith('file://')) {
+      return this.navigateLocalFile(url);
     }
 
     // SSRF protection: validate URL before fetching
@@ -68,6 +82,71 @@ export class FallbackBrowser {
       this.lastHtml = html;
       this.lastUrl = url;
 
+      return this.buildSnapshot(url, html);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        url,
+        title: 'Error',
+        snapshot: `Failed to load page: ${errorMessage}`,
+        interactiveElements: [],
+        truncated: false,
+        source: 'fallback',
+      };
+    }
+  }
+
+  /**
+   * Navigate to a local file:// URL with working-directory confinement.
+   * Blocks paths outside the working directory and non-HTML file types.
+   */
+  private async navigateLocalFile(url: string): Promise<FallbackSnapshot> {
+    let filePath: string;
+    try {
+      filePath = fileURLToPath(url);
+    } catch {
+      return {
+        url,
+        title: 'Blocked',
+        snapshot: 'Blocked: Invalid file URL.',
+        interactiveElements: [],
+        truncated: false,
+        source: 'fallback',
+      };
+    }
+
+    // Constrain access to the working directory when configured
+    if (this.workingDir) {
+      const rel = relative(this.workingDir, filePath);
+      if (rel.startsWith('..') || isAbsolute(rel)) {
+        return {
+          url,
+          title: 'Blocked',
+          snapshot: 'Blocked: file path is outside the working directory.',
+          interactiveElements: [],
+          truncated: false,
+          source: 'fallback',
+        };
+      }
+    }
+
+    // Only allow HTML files to be loaded as pages
+    const ext = extname(filePath).toLowerCase();
+    if (!ALLOWED_LOCAL_EXTENSIONS.includes(ext)) {
+      return {
+        url,
+        title: 'Blocked',
+        snapshot: 'Blocked: Unsupported local file type. Only HTML files are supported.',
+        interactiveElements: [],
+        truncated: false,
+        source: 'fallback',
+      };
+    }
+
+    try {
+      const html = await readFile(filePath, 'utf8');
+      this.lastHtml = html;
+      this.lastUrl = url;
       return this.buildSnapshot(url, html);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

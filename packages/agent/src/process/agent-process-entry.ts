@@ -30,9 +30,10 @@ import {
   pluginDb,
   settingDb,
   sessionDb,
-  skillLearningDb,
 } from '../ipc/db-client.js';
 import { IncrementalSaveQueue } from './incremental-save-queue.js';
+import { sendMemoryWakeup } from '../memory-rollout/wakeup.js';
+import { getRolloutLogger, type RolloutTurn } from '../session/rollout-logger.js';
 import {
   enqueue,
   enqueuePendingNotification,
@@ -48,12 +49,12 @@ import {
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
 import { classifyError, APIErrorType } from '../llm/errors.js';
-import { setSystemLocation } from '../prompts/systemLocation.js';
 import type { PromptProfile } from '../prompts/modes/types.js';
 import { buildSandboxImage, setSandboxEnabled } from '../sandbox/index.js';
 import { duyaAgent } from '../agent/DuyaAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { browserTool } from '../tool/builtin.js';
+import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
@@ -65,7 +66,6 @@ import { detectModelCapability } from '../llm/model-capability-cache.js';
 import type { ProbeConfig } from '../llm/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
 import type { ToolExecutor } from '../tool/registry.js';
-import type { ImprovementResult } from '../self-improver/SelfImprover.js';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -232,6 +232,31 @@ function scheduleBackgroundTaskResume(): void {
 // foreground turn otherwise has no reason to inspect that queue again, so
 // wake the renderer to start an internal follow-up request for this session.
 subscribeToCommandQueue(scheduleBackgroundTaskResume);
+
+// ----------------------------------------------------------------------------
+// Bash background task list — push snapshot to renderer on any change.
+// Throttled so rapid progress events coalesce into a single update per tick.
+// ----------------------------------------------------------------------------
+const BASH_TASK_PUSH_THROTTLE_MS = 300;
+let bashTaskPushScheduled = false;
+
+function pushBashTaskSnapshot(): void {
+  const activeSessionId = sessionId;
+  if (!activeSessionId) return;
+  const tasks = getBashTaskRegistry().listTasks();
+  sendToMain({ type: 'bash_task:update', sessionId: activeSessionId, tasks });
+}
+
+function scheduleBashTaskPush(): void {
+  if (bashTaskPushScheduled) return;
+  bashTaskPushScheduled = true;
+  setTimeout(() => {
+    bashTaskPushScheduled = false;
+    pushBashTaskSnapshot();
+  }, BASH_TASK_PUSH_THROTTLE_MS);
+}
+
+getBashTaskRegistry().onAnyChange(scheduleBashTaskPush);
 
 function startChatHeartbeat(): void {
   if (chatHeartbeatTimer) {
@@ -908,7 +933,6 @@ async function initAgent(
     authStyle: config.authStyle,
     provider: config.provider,
     sessionId: sessionId!,
-    skillNudgeInterval: 10,
     communicationPlatform: (communicationPlatform as 'cli' | 'duya-app' | 'weixin' | 'feishu' | 'telegram' | 'web' | 'api') ?? 'duya-app',
     workingDirectory: workDir,
     visionConfig: config.visionConfig,
@@ -943,51 +967,6 @@ async function initAgent(
       .catch((err) => {
         log('[Agent-Process] Compaction persist failed:', err instanceof Error ? err.message : String(err));
       });
-  };
-
-  agent.onSkillReviewCompleted = async (result: ImprovementResult) => {
-    const evaluation = result.evaluationResult;
-    const status = result.finalSkillPath
-      ? 'published'
-      : result.error
-        ? 'failed'
-        : 'skipped';
-    let activityId: string | undefined;
-    try {
-      const stored = await skillLearningDb.create({
-        sessionId: sessionId!,
-        skillName: result.creatorResult?.skillName,
-        status,
-        reason: result.creatorResult?.reason ?? 'No reusable skill was created',
-        score: evaluation?.score,
-        feedback: evaluation?.feedback,
-        executedTask: evaluation?.executedTask,
-        dimensions: evaluation?.dimensions,
-        iterationCount: result.iterationCount,
-        maxIterations: result.maxIterations,
-        finalPath: result.finalSkillPath,
-        error: result.error,
-      }) as { id?: string };
-      activityId = stored.id;
-    } catch (error) {
-      log('[Agent-Process] Skill learning event persistence failed:', error);
-    }
-
-    sendToMain({
-      type: 'chat:skill_review_completed',
-      sessionId: sessionId!,
-      data: {
-        passed: status === 'published',
-        score: evaluation?.score ?? 0,
-        feedback: evaluation?.feedback ?? '',
-        iterations: result.iterationCount,
-        maxIterations: result.maxIterations,
-        finalPath: result.finalSkillPath,
-        skillName: result.creatorResult?.skillName,
-        error: result.error,
-        activityId,
-      },
-    });
   };
 
   if (setSandboxEnabled) {
@@ -1176,10 +1155,6 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       return { type: 'chat:token_usage', ...(event.data as object) };
     case 'turn_start':
       return { type: 'chat:status', message: `Turn ${(event.data as { turnCount?: number })?.turnCount ?? ''}` };
-    case 'skill_review_started':
-      return { type: 'chat:skill_review_started', sessionId: (event as { sessionId?: string }).sessionId };
-    case 'skill_review_completed':
-      return { type: 'chat:skill_review_completed', data: event.data };
     case 'system': {
       const metadata = (event as { metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number } }).metadata;
       if (metadata?.retryAttempt !== undefined) {
@@ -1318,6 +1293,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     return;
   }
 
+  let rolloutLogger: ReturnType<typeof getRolloutLogger> = null;
+  let rolloutTurn: RolloutTurn | null = null;
+
   // Update title generation model config from chat options
   const titleModelOption = msg.options?.titleGenerationModel;
   const titleModelConfigOption = msg.options?.titleGenerationModelConfig;
@@ -1346,8 +1324,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     titleGenerationModelConfig = null;
   }
 
-  if (msg.options?.language && agent?.promptManager?.updateOptions) {
-    agent.promptManager.updateOptions({ language: msg.options.language });
+  if (msg.options?.language && agent) {
+    agent.setLanguage(msg.options.language);
   }
 
   log('[Agent-Process] handleChatStart:', {
@@ -1828,6 +1806,22 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
     }
 
+    rolloutLogger = getRolloutLogger(msg.sessionId);
+    const startRolloutTurn = (systemPrompt: string, toolNames: string[]): void => {
+      if (!rolloutLogger || rolloutTurn) return;
+      rolloutTurn = rolloutLogger.startTurn({
+        cwd: agent.workingDirectory || process.cwd(),
+        provider: agent.provider || 'unknown',
+        model: agent.model || 'unknown',
+        systemPrompt,
+        userContent: messageContent,
+        permissionMode: resolved.agentMode,
+        mode: msg.options?.mode,
+        language: msg.options?.language,
+        toolNames,
+      });
+    };
+
     // Defensive sync: ensure agent's in-memory messages match the DB state.
     // During long-running sessions, the agent accumulates messages in memory.
     // If an out-of-band modification occurs (e.g., concurrent process, crash
@@ -1886,6 +1880,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       displayContent: msg.options?.displayContent,
       effort: msg.options?.effort,
       allowedTools: msg.options?.allowedTools,
+      onSystemPromptReady: (snapshot: { systemPrompt: string; toolNames: string[]; turn: number }) => {
+        startRolloutTurn(snapshot.systemPrompt, snapshot.toolNames);
+      },
       conductorMode: msg.options?.conductorMode ? true : undefined,
       conductorCanvasId: msg.options?.conductorCanvasId,
       conductorIpc: msg.options?.conductorMode
@@ -1896,6 +1893,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
     let tokenUsage: { input_tokens: number; output_tokens: number; total_tokens?: number } | null = null;
+    let lastContextUsageEstimate: { usedTokens: number } | null = null;
     let eventCount = 0;
     const incrementalSaveQueue = new IncrementalSaveQueue(msg.sessionId);
     let lastIncrementalSave = Date.now();
@@ -1903,6 +1901,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     for await (const event of eventGen) {
       eventCount++;
+      if (rolloutLogger && rolloutTurn) {
+        if (event.type === 'text') {
+          rolloutLogger.recordText(rolloutTurn, event.data as string);
+        } else if (event.type === 'thinking') {
+          rolloutLogger.recordReasoning(rolloutTurn, event.data as string);
+        } else if (event.type === 'tool_use') {
+          rolloutLogger.recordToolUse(rolloutTurn, event.data as { id: string; name: string; input?: unknown });
+        } else if (event.type === 'tool_result') {
+          rolloutLogger.recordToolResult(rolloutTurn, event.data as { id: string; result: string; error?: boolean; duration_ms?: number });
+        } else if (event.type === 'result' && event.data && typeof event.data === 'object') {
+          rolloutLogger.recordUsage(rolloutTurn, event.data as Record<string, unknown>);
+        }
+      }
       if (eventCount <= 5) {
         log(`[Agent-Process] Event ${eventCount}:`, event.type, event.data ? String((event as {data?: unknown}).data).substring(0, 100) : '');
       }
@@ -1991,8 +2002,26 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
 
       if (event.type === 'result' && event.data) {
-        tokenUsage = event.data as { input_tokens: number; output_tokens: number; total_tokens?: number };
-        log(`[Agent-Process] Received result event, tokenUsage set: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}`);
+        const candidateUsage = event.data as { input_tokens: number; output_tokens: number; total_tokens?: number };
+        // Ignore all-zero usage: persisting it would make the context ring show
+        // hasData=true but used=0, which renders as an empty ring.
+        const meaningfulUsage =
+          (candidateUsage.input_tokens ?? 0) +
+          (candidateUsage.output_tokens ?? 0) +
+          (candidateUsage.total_tokens ?? 0) > 0;
+        if (meaningfulUsage) {
+          tokenUsage = candidateUsage;
+          log(`[Agent-Process] Received result event, tokenUsage set: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}`);
+        } else {
+          warn('[Agent-Process] Received all-zero usage, ignoring to avoid empty context ring');
+        }
+      }
+
+      // Keep the latest local context estimate as a fallback when the provider
+      // does not report usage. This prevents the context ring from showing
+      // "no data" for providers that omit usage entirely.
+      if (event.type === 'context_usage' && event.data) {
+        lastContextUsageEstimate = event.data as { usedTokens: number };
       }
       const agentMsg = convertSSEToAgentMessage(event);
       if (agentMsg) {
@@ -2037,6 +2066,17 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     if (canonicalMessages !== agentMessages) {
       agent.setMessages(canonicalMessages);
       agentMessages = canonicalMessages;
+    }
+
+    // If the provider never sent meaningful usage, fall back to the agent's
+    // local context estimate so the ring still shows a rough utilization.
+    if (!tokenUsage && lastContextUsageEstimate && lastContextUsageEstimate.usedTokens > 0) {
+      tokenUsage = {
+        input_tokens: lastContextUsageEstimate.usedTokens,
+        output_tokens: 0,
+        total_tokens: lastContextUsageEstimate.usedTokens,
+      };
+      log(`[Agent-Process] Falling back to estimated context usage: input=${tokenUsage.input_tokens}`);
     }
 
     log(`[Agent-Process] Stream ended, tokenUsage present=${!!tokenUsage}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
@@ -2126,6 +2166,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         finalContent: '',
         conversationText: '',
       });
+    }
+
+    if (rolloutLogger && rolloutTurn) {
+      rolloutLogger.completeTurn(rolloutTurn);
     }
 
     // Background title generation: generate if never generated before (no message limit)
@@ -2219,6 +2263,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   } catch (err) {
     log('[Agent-Process] Chat error:', err);
     const errMsg = err instanceof Error ? err.message : String(err);
+    if (rolloutLogger && rolloutTurn) {
+      rolloutLogger.completeTurn(rolloutTurn, errMsg);
+    }
     const errType = classifyError(err);
     let code: string | undefined;
     if (errType === APIErrorType.RATE_LIMIT) {
@@ -2507,7 +2554,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               hasApiKey: !!initMsg.providerConfig.apiKey,
             } : 'MISSING!',
           });
-          setSystemLocation(initMsg.systemLocation ?? null);
           let initError: string | null = null;
           try {
             await initAgent(
@@ -2594,6 +2640,18 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             sessionId,
             ...(initError ? { status: 'error', error: initError } : {}),
           });
+
+          // Plan 305 Phase B: fire-and-forget memory v2 wakeup. The
+          // main-process router intercepts the `memory:wakeup` worker
+          // event and triggers `MemoryWorker.forceSweep()` so Stage 1
+          // extraction runs immediately after init (no 60s wait).
+          // Gated by DUYA_MEMORY_V2_ENABLED; failures are swallowed.
+          if (!initError) {
+            sendMemoryWakeup(
+              (event) => sendToMain(event as unknown as Record<string, unknown>),
+              { sessionId: sessionId ?? undefined },
+            );
+          }
 
           // Initialize MCP servers asynchronously after sending ready so that slow or hung
           // MCP servers do not block the worker from becoming ready.

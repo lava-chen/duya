@@ -18,8 +18,7 @@ import type { MessageRow } from '../../session/db.js';
 import { SESSION_SEARCH_TOOL_NAME } from './constants.js';
 import { DESCRIPTION } from './prompt.js';
 import { getDb, getMessages } from '../../session/db.js';
-import { AnthropicClient } from '../../llm/anthropic-client.js';
-import { OpenAIClient } from '../../llm/openai-client.js';
+import { createLLMClient } from '../../llm/index.js';
 import type { LLMClient } from '../../llm/base.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
@@ -369,10 +368,23 @@ export class SessionSearchTool extends BaseTool {
           sameProjectLookbackMs: Number.POSITIVE_INFINITY,
           otherProjectLookbackMs: Number.POSITIVE_INFINITY,
         });
+        // Flatten the grouped directory into a single list of search
+        // results for the formatter. The formatter no longer takes a
+        // directory + scope; it takes a flat array so it can be tested
+        // in isolation without constructing directory fixtures.
+        const flatSessions = [
+          ...(scope !== 'other_projects' ? recent.sameProject : []),
+          ...(scope !== 'same_project' ? recent.otherProjects : []),
+        ].map(entry => ({
+          sessionId: entry.sessionId,
+          title: entry.title,
+          date: formatTimestamp(entry.updatedAt),
+          snippet: `${entry.childCount} child session(s)`,
+        }));
         return {
           id: crypto.randomUUID(),
           name: this.name,
-          result: this.formatRecentSessions(recent, scope),
+          result: this.formatRecentSessions(flatSessions),
         };
       }
 
@@ -478,9 +490,13 @@ export class SessionSearchTool extends BaseTool {
       if (currentSessionId && rawSid === currentSessionId) continue;
       if (!matchesSessionDirectoryScope(row.workingDirectory, workingDirectory, scope)) continue;
 
-      if (!seenSessions.has(resolvedSid)) {
-        seenSessions.set(resolvedSid, {
-          sessionId: resolvedSid,
+      // Use the actual session that contained the matching message when
+      // loading conversation data. Resolving to the parent session for
+      // deduplication/exclusion often points to a root session with no
+      // direct messages, which makes summarization fail.
+      if (!seenSessions.has(rawSid)) {
+        seenSessions.set(rawSid, {
+          sessionId: rawSid,
           title: sanitizeSessionMetadata(row.title, 'Untitled'),
           projectName: sanitizeSessionMetadata(row.projectName, 'Unknown project'),
           source: 'cli',
@@ -800,44 +816,62 @@ export class SessionSearchTool extends BaseTool {
   }
 
   /**
-   * Format recent sessions as readable output
+   * Format recent sessions as readable output.
+   *
+   * Accepts a flat list of search-style results (sessionId / title / date /
+   * snippet) rather than the grouped RecentSessionDirectory shape. The
+   * grouping by "Same Project" / "Other Projects" is now done by the
+   * caller (execute) before projection, so the formatter is a pure
+   * presentation function that can be unit-tested in isolation.
+   *
+   * Each session is rendered as:
+   *   Session ID: <sessionId>
+   *   - Title: ...
+   *   - Date: ...
+   *   ```json
+   *   { "sessionId": "...", "title": "...", "date": "..." }
+   *   ```
+   *
+   * Defensive: if sessionId is empty/undefined upstream (the classic
+   * `row.id` vs `row.sessionId` SQL alias bug), we emit an empty string
+   * rather than the literal text "undefined" so the error is visible
+   * without polluting downstream JSON parsing.
    */
   private formatRecentSessions(
-    directory: RecentSessionDirectory,
-    scope: SessionDirectoryScope,
+    sessions: Array<{
+      sessionId: string;
+      title: string;
+      date: string;
+      snippet?: string;
+    }>,
   ): string {
-    const groups: Array<{ title: string; sessions: RecentSessionDirectoryEntry[] }> = [];
-    if (scope !== 'other_projects') {
-      groups.push({ title: 'Same Project', sessions: directory.sameProject });
-    }
-    if (scope !== 'same_project') {
-      groups.push({ title: 'Other Projects', sessions: directory.otherProjects });
-    }
-
-    if (groups.every(group => group.sessions.length === 0)) {
+    if (sessions.length === 0) {
       return 'No recent sessions found.';
     }
 
     const lines = ['<session-directory>', '## Recent Sessions', ''];
-    for (const group of groups) {
-      lines.push(`### ${group.title}`);
-      if (group.sessions.length === 0) {
-        lines.push('No recent sessions in this scope.', '');
-        continue;
-      }
+    for (const session of sessions) {
+      // Coerce undefined/null to empty string so we never emit the
+      // literal text "undefined" — that would silently look like a
+      // valid session id and hide the upstream projection bug.
+      const sid = session.sessionId ?? '';
+      const title = session.title ?? 'Untitled';
+      const date = session.date ?? '';
+      const snippet = session.snippet ?? '';
 
-      for (const session of group.sessions) {
-        lines.push(`- "${session.title}" — ${session.projectName}`);
-        lines.push('```json');
-        lines.push(JSON.stringify({
-          sessionId: session.sessionId,
-          title: session.title,
-          project: session.projectName,
-          updatedAt: formatTimestamp(session.updatedAt),
-          childSessions: session.childCount,
-        }, null, 2));
-        lines.push('```', '');
+      lines.push(`Session ID: ${sid}`);
+      lines.push(`- Title: ${title}`);
+      lines.push(`- Date: ${date}`);
+      if (snippet) {
+        lines.push(`- Snippet: ${snippet}`);
       }
+      lines.push('```json');
+      lines.push(JSON.stringify({
+        sessionId: sid,
+        title,
+        date,
+      }, null, 2));
+      lines.push('```', '');
     }
 
     lines.push('</session-directory>');
@@ -1070,7 +1104,10 @@ export class SessionSearchTool extends BaseTool {
     lines.push(`Search query: "${query}"\n`);
 
     for (const s of summaries) {
-      lines.push(`### ${s.title}`);
+      // Heading uses sessionId (not title) so downstream agents can
+      // anchor the JSON envelope to the markdown section even if the
+      // aux summarizer rewrote the natural-language title.
+      lines.push(`### Session: ${s.sessionId}`);
       lines.push(`- **Session ID**: ${s.sessionId}`);
       lines.push(`- **Project**: ${s.projectName}`);
       lines.push(`- **When**: ${s.when}`);
@@ -1110,19 +1147,11 @@ export class SessionSearchTool extends BaseTool {
       throw new Error('Summary LLM not configured');
     }
 
-    if (this.summaryLLMConfig.provider === 'anthropic') {
-      return new AnthropicClient({
-        apiKey: this.summaryLLMConfig.apiKey,
-        model: this.summaryLLMConfig.model,
-        baseURL: this.summaryLLMConfig.baseURL || '',
-      });
-    } else {
-      return new OpenAIClient({
-        apiKey: this.summaryLLMConfig.apiKey,
-        model: this.summaryLLMConfig.model,
-        baseURL: this.summaryLLMConfig.baseURL || '',
-      });
-    }
+    return createLLMClient(this.summaryLLMConfig.provider, {
+      apiKey: this.summaryLLMConfig.apiKey,
+      model: this.summaryLLMConfig.model,
+      baseURL: this.summaryLLMConfig.baseURL || '',
+    });
   }
 }
 

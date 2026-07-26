@@ -114,11 +114,8 @@ describe('真实任务场景对话记录', () => {
     console.log('\n  ⏳ 等待工具执行完成...\n');
     const results: string[] = [];
     for await (const update of executor.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          results.push(String(content[0].content));
-        }
+      if (update.message && update.message.role === 'tool') {
+        results.push(String(update.message.content));
       }
     }
 
@@ -180,11 +177,8 @@ describe('真实任务场景对话记录', () => {
     console.log('\n  ⏳ 执行 read...\n');
     let results: string[] = [];
     for await (const update of executor1.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          results.push(String(content[0].content));
-        }
+      if (update.message && update.message.role === 'tool') {
+        results.push(String(update.message.content));
       }
     }
 
@@ -210,11 +204,8 @@ describe('真实任务场景对话记录', () => {
     console.log('\n  ⏳ 执行 edit...\n');
     results = [];
     for await (const update of executor2.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          results.push(String(content[0].content));
-        }
+      if (update.message && update.message.role === 'tool') {
+        results.push(String(update.message.content));
       }
     }
 
@@ -267,11 +258,8 @@ describe('真实任务场景对话记录', () => {
 
     let results: string[] = [];
     for await (const update of executor1.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          results.push(String(content[0].content));
-        }
+      if (update.message && update.message.role === 'tool') {
+        results.push(String(update.message.content));
       }
     }
 
@@ -289,11 +277,8 @@ describe('真实任务场景对话记录', () => {
     console.log('  ⏳ 并行执行多个 read...\n');
     results = [];
     for await (const update of executor2.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          results.push(String(content[0].content));
-        }
+      if (update.message && update.message.role === 'tool') {
+        results.push(String(update.message.content));
       }
     }
 
@@ -347,11 +332,8 @@ describe('真实任务场景对话记录', () => {
     console.log('\n  ⏳ 执行 read...\n');
     const results: string[] = [];
     for await (const update of executor.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          results.push(String(content[0].content));
-        }
+      if (update.message && update.message.role === 'tool') {
+        results.push(String(update.message.content));
       }
     }
 

@@ -26,10 +26,12 @@ import { useTaskList } from '@/hooks/useTaskList';
 import { useSessionArtifacts } from '@/hooks/useSessionArtifacts';
 import { useSessionSources } from '@/hooks/useSessionSources';
 import { useGitStatus } from '@/hooks/useGitStatus';
+import { useBashTasks } from '@/hooks/useBashTasks';
 import { setTaskDrawerOpen, useTaskDrawerOpen } from './task-drawer-store';
 import { EnvironmentInfoSection } from './EnvironmentInfoSection';
 import { AgentListSection } from './AgentListSection';
 import { TaskListSection } from './TaskListSection';
+import { BashTaskSection } from './BashTaskSection';
 import { SourcesSection } from './SourcesSection';
 import { ArtifactsSection } from './ArtifactsSection';
 
@@ -44,6 +46,7 @@ export function TaskDrawer() {
 
   const { tasks, setTasks, loading, fetchTasks } = useTaskList(open ? activeThreadId : null);
   const agents = useSubAgentProgress(activeThreadId ?? "");
+  const { tasks: bashTasks } = useBashTasks(open ? activeThreadId : null);
   const { artifacts } = useSessionArtifacts(open ? activeThreadId : null);
   const sources = useSessionSources(open ? activeThreadId : null);
   const gitStatus = useGitStatus(thread?.workingDirectory ?? null, open);
@@ -129,6 +132,8 @@ export function TaskDrawer() {
                     useConversationStore.getState().setActiveThread(sessionId)
                   }
                 />
+
+                <BashTaskSection tasks={bashTasks} />
 
                 <TaskListSection
                   tasks={tasks}

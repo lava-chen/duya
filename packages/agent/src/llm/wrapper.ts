@@ -11,9 +11,7 @@
 import type { LLMProvider, Message, SSEEvent } from '../types.js';
 import type { TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
-import { AnthropicClient } from './anthropic-client.js';
-import { OpenAIClient } from './openai-client.js';
-import { OllamaClient } from './ollama-client.js';
+import { LazyLLMClientProxy } from './base.js';
 
 const MINIMAX_DOMAINS = ['api.minimax.io', 'api.minimaxi.com'];
 
@@ -35,12 +33,20 @@ export class LLMClientWrapper implements LLMClient {
       baseURL: this.resolvedBaseURL,
     };
 
-    if (options.provider === 'anthropic') {
-      this.client = new AnthropicClient(clientOptions);
-    } else if (options.provider === 'ollama') {
-      this.client = new OllamaClient(clientOptions);
-    } else {
-      this.client = new OpenAIClient(clientOptions);
+    // Delegate to LazyLLMClientProxy so concrete client modules are only
+    // imported on first use, matching createLLMClient's lazy behaviour.
+    const loader = this.buildLoader(clientOptions);
+    this.client = new LazyLLMClientProxy(loader);
+  }
+
+  private buildLoader(clientOptions: LLMClientOptions): () => Promise<LLMClient> {
+    switch (this.provider) {
+      case 'anthropic':
+        return () => import('./anthropic-client.js').then(m => new m.AnthropicClient(clientOptions));
+      case 'ollama':
+        return () => import('./ollama-client.js').then(m => new m.OllamaClient(clientOptions));
+      default:
+        return () => import('./openai-client.js').then(m => new m.OpenAIClient(clientOptions));
     }
   }
 

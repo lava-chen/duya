@@ -90,7 +90,7 @@ export function addMessage(data: AddMessageInput): MessageRow {
   const now = Date.now();
   const content = serializeMessageContent(data.content, data.role);
   const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, data.role);
-  db().prepare(INSERT_MESSAGE_SQL).run({
+  const row = {
     id: data.id,
     session_id: data.session_id,
     role: data.role,
@@ -111,9 +111,14 @@ export function addMessage(data: AddMessageInput): MessageRow {
     sub_agent_id: data.sub_agent_id ?? null,
     attachments: data.attachments ? JSON.stringify(data.attachments) : null,
     created_at: now,
-  });
+  };
 
-  db().prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, data.session_id);
+  // Wrap INSERT + UPDATE in a single transaction to share one WAL flush
+  // instead of two implicit commits (halves fsync cost on each message).
+  db().transaction(() => {
+    db().prepare(INSERT_MESSAGE_SQL).run(row);
+    db().prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, data.session_id);
+  })();
 
   // Return constructed MessageRow directly instead of re-querying
   return {
@@ -291,17 +296,18 @@ export function deleteMessagesBySession(sessionId: string): number {
 
 export function truncateMessagesAfter(sessionId: string, messageId: string): number {
   const target = db().prepare(
-    'SELECT created_at FROM messages WHERE id = ? AND session_id = ?'
-  ).get(messageId, sessionId) as { created_at: number } | undefined;
+    'SELECT created_at, rowid FROM messages WHERE id = ? AND session_id = ?'
+  ).get(messageId, sessionId) as { created_at: number; rowid: number } | undefined;
 
   if (!target) return 0;
 
   // Soft-delete: mark superseded instead of hard DELETE so the append-only
   // contract is preserved (content remains recoverable). Read paths filter
-  // status != 'superseded'.
+  // status != 'superseded'. Use rowid to preserve the session ordering when
+  // multiple messages share a millisecond timestamp.
   const result = db().prepare(
-    "UPDATE messages SET status = 'superseded' WHERE session_id = ? AND created_at > ? AND status != 'superseded'"
-  ).run(sessionId, target.created_at);
+    "UPDATE messages SET status = 'superseded' WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND rowid > ?)) AND status != 'superseded'"
+  ).run(sessionId, target.created_at, target.created_at, target.rowid);
 
   db().prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
 

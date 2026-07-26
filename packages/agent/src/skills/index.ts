@@ -9,7 +9,6 @@ export * from './loader.js';
 export * from './bundled.js';
 export * from './mcp.js';
 export * from './skillsSync.js';
-export { SkillManager, skillManage, type SkillManageParams } from './SkillManager.js';
 export {
   activateConditionalSkills,
   getPendingConditionalSkills,

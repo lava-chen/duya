@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import type { ActionHandler, ActionContext } from './types.js';
+import { safetyNoteForUrl } from '../safety.js';
 
 // ─── click ────────────────────────────────────────────────
 
@@ -23,9 +24,11 @@ export const clickAction: ActionHandler<z.infer<typeof clickSchema>> = {
       }
       await ctx.cdp.click(data.ref);
       await new Promise(resolve => setTimeout(resolve, 300));
+      const url = await ctx.cdp.getUrl();
       return {
         clicked: data.ref,
-        url: await ctx.cdp.getUrl(),
+        url,
+        safetyNote: safetyNoteForUrl(url),
         mode: ctx.mode,
       };
     }
@@ -56,6 +59,7 @@ export const typeAction: ActionHandler<z.infer<typeof typeSchema>> = {
         typed: data.text,
         into: data.ref,
         submitted: data.submit,
+        safetyNote: data.submit ? safetyNoteForUrl(await ctx.cdp.getUrl().catch(() => '')) : undefined,
         mode: ctx.mode,
       };
     }

@@ -281,6 +281,93 @@ ${strategySection}
   - Any task requiring data from multiple URLs where serial navigation would be too slow
   Returns: results array with snapshot, interactiveElements, and timing for each URL.
 
+### Computer-Use Operations (coordinate-driven)
+
+Prefer ref-based \`click\`/\`type\` when the snapshot gives you a ref — it is more
+robust. Use the coordinate operations when an element has no ref (canvas,
+SVG, custom widgets, shadow DOM) or when you need richer input (double
+click, right click, drag, key combos).
+
+- **click_at** - Click at viewport coordinates
+  \`\`\`json
+  {"operation": "click_at", "x": 512, "y": 300}
+  \`\`\`
+  Optional: \`"button": "right"\` for context menus, \`"clickCount": 2\` for double click.
+  Coordinates are viewport CSS pixels — the same space as the marks table from
+  an annotated screenshot.
+
+- **mouse_move** - Move the cursor without clicking (reveals hover UI)
+  \`\`\`json
+  {"operation": "mouse_move", "x": 400, "y": 220}
+  \`\`\`
+
+- **drag** - Drag from one point to another (sliders, sortable lists, text selection)
+  \`\`\`json
+  {"operation": "drag", "fromX": 200, "fromY": 300, "toX": 480, "toY": 300}
+  \`\`\`
+
+- **key_combo** - Press a key with modifiers
+  \`\`\`json
+  {"operation": "key_combo", "key": "a", "modifiers": ["ctrl"]}
+  \`\`\`
+  Common combos: Ctrl+A select all, Ctrl+C copy, Ctrl+V paste, Ctrl+Z undo,
+  Shift+Tab backwards, Ctrl+Enter submit. Use "meta" for Cmd on macOS.
+
+- **scroll_to** - Scroll an element into view or to an absolute position
+  \`\`\`json
+  {"operation": "scroll_to", "ref": "@7"}
+  \`\`\`
+  \`\`\`json
+  {"operation": "scroll_to", "y": 0}
+  \`\`\`
+
+- **refresh** - Reload the page
+  \`\`\`json
+  {"operation": "refresh", "hard": false}
+  \`\`\`
+
+- **clipboard_read / clipboard_write** - Access the clipboard
+  \`\`\`json
+  {"operation": "clipboard_read"}
+  \`\`\`
+  \`\`\`json
+  {"operation": "clipboard_write", "text": "..."}
+  \`\`\`
+  Clipboard access may be denied by page permissions; prefer Ctrl+C/Ctrl+V
+  via key_combo on a focused element as fallback.
+
+- **handle_dialog** - Answer a native alert/confirm/prompt dialog
+  \`\`\`json
+  {"operation": "handle_dialog", "action": "accept", "promptText": "optional"}
+  \`\`\`
+  A native dialog blocks the page until answered. If actions stop having any
+  effect right after a click, a dialog is probably open — call this to proceed.
+
+### Visual Loop (see → act → verify)
+
+1. \`browser_snapshot\` first — refs are the primary, most reliable way to act.
+2. When the page is visual/canvas-heavy or refs are missing, take an annotated
+   screenshot: \`{"operation": "screenshot", "annotate": true}\`. It draws
+   numbered boxes on interactive elements and returns a **marks table** with
+   each element's center coordinates, plus the viewport size.
+3. Pass the screenshot filePath to \`vision_analyze\` to see what a human sees,
+   then act with \`click_at\`/\`drag\`/\`key_combo\` using mark coordinates.
+4. After acting, re-screenshot (or re-snapshot) to verify the result before
+   continuing. Never assume a click worked — check.
+
+### Safety Rules (non-negotiable)
+
+- Never complete an irreversible step unattended: final payment, order
+  placement, credential submission, account deletion, money transfer. When a
+  result carries a \`safetyNote\`, STOP, describe exactly what will happen, and
+  ask the user for explicit confirmation.
+- Never try to bypass CAPTCHAs or bot challenges — tell the user and ask them
+  to solve it manually in the visible browser window.
+- Never handle dialogs that ask for system-level or admin authorization.
+- The user can watch and take over at any time; if the page state diverges
+  from what you expect (unexpected dialog, login wall), pause and report
+  instead of pushing forward blindly.
+
 ### Tips
 
 1. After navigating, the tool returns a compact snapshot automatically — use \`browser_snapshot\` for full view

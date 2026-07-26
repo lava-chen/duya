@@ -106,6 +106,14 @@ type BuildProgressFn = (message: string) => void;
  * Subsequent calls detect existing image and return immediately.
  */
 export async function buildSandboxImage(onProgress?: BuildProgressFn): Promise<boolean> {
+  // Docker daemon not reachable (Docker Desktop not running / not installed).
+  // Silent skip — sandbox is optional, regex defense still works without it.
+  const dockerOk = await checkDockerAvailable();
+  if (!dockerOk) {
+    onProgress?.('[Sandbox] Docker daemon not available, skipping sandbox image build');
+    return false;
+  }
+
   // Fast path: image already exists
   if (await imageExists(SANDBOX_IMAGE)) {
     onProgress?.('[Sandbox] Docker image already exists, skipping build');

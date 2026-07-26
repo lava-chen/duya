@@ -23,7 +23,6 @@ import {
   ElementUtilityActions,
   type ElementUtilityActionsProps,
 } from "../toolbar/ElementUtilityActions";
-import { FloatingCapsuleToolbar } from "../toolbar/FloatingCapsuleToolbar";
 import { useElementLock } from "../toolbar/useElementLock";
 import { getNativeElementCapabilities, type NativeElementCapabilities } from "./native-element-capabilities";
 
@@ -152,7 +151,7 @@ function StickySelectionToolbar({
   };
 
   return (
-    <CapsuleToolbar positioned={false} zoomAware={false}>
+    <CapsuleToolbar>
       {SHAPES.map((s) => (
         <button
           key={s.value}
@@ -383,7 +382,7 @@ function ShapeSelectionToolbar({
   }, [colorOpen]);
 
   return (
-    <CapsuleToolbar positioned={false} zoomAware={false}>
+    <CapsuleToolbar>
       {(["filled", "outline", "dashed"] as ShapePreset[]).map((preset) => {
         const active = activePreset === preset;
         return (
@@ -625,9 +624,8 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
   } | null>(null);
   const [resizeDimensions, setResizeDimensions] = useState<{ w: number; h: number } | null>(null);
 
-  // Ref to the outer chrome wrapper. The FloatingCapsuleToolbar portal
-  // uses this to anchor its position above the element regardless of
-  // the host element's z-index or canvas stacking context.
+  // Ref to the outer chrome wrapper. The selection toolbar anchors
+  // itself above the element via CapsuleToolbar's absolute positioning.
   const hostRef = useRef<HTMLDivElement | null>(null);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
@@ -860,7 +858,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
       </div>
 
       {showSelectionToolbar && (
-        <FloatingCapsuleToolbar hostRef={hostRef}>
+        <>
           {capabilities.selectionToolbar === "shape" && (
             <ShapeSelectionToolbar
               element={element}
@@ -896,7 +894,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
           )}
 
           {capabilities.selectionToolbar === "utility" && (
-            <CapsuleToolbar positioned={false} zoomAware={false}>
+            <CapsuleToolbar>
               <ElementUtilityActions
                 {...utilityActions}
                 leadingDivider={false}
@@ -905,7 +903,7 @@ export const NativeChrome: React.FC<NativeChromeProps> = ({ element, capabilitie
               />
             </CapsuleToolbar>
           )}
-        </FloatingCapsuleToolbar>
+        </>
       )}
 
       {showSingleElementControls && !locked && capabilities.resizeHandles !== "none" && element.metadata?.resizeMode !== 'fixed' && (

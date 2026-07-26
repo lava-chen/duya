@@ -40,8 +40,6 @@ export interface AgentSSEClientOptions {
   onError?: (message: string, retryable?: boolean) => void;
   onStatus?: (message: string) => void;
   onRetry?: (data: { attempt: number; maxAttempts: number; delayMs: number; message: string }) => void;
-  onSkillReviewStarted?: () => void;
-  onSkillReviewCompleted?: (data: { passed: boolean; score: number; feedback: string; skillName?: string; error?: string; iterations?: number; maxIterations?: number; finalPath?: string }) => void;
 }
 
 type EventHandler = (data: unknown) => void;
@@ -188,7 +186,6 @@ export class AgentSSEClient {
    * - text, thinking, tool_use, tool_result, tool_progress, tool_output
    * - agent_progress, permission, context_usage, status
    * - done, error, retry, checkpoint, ready
-   * - skill_review_started, skill_review_completed
    */
   onEvent(eventType: string, handler: EventHandler): () => void {
     let handlers = this.handlers.get(eventType);
@@ -411,12 +408,6 @@ export class AgentSSEClient {
       case 'retry':
         this.dispatch('retry', eventObj);
         break;
-      case 'skill_review_started':
-        this.dispatch('skill_review_started', {});
-        break;
-      case 'skill_review_completed':
-        this.dispatch('skill_review_completed', eventObj);
-        break;
       default:
         this.dispatch(eventType, eventObj);
     }
@@ -521,21 +512,6 @@ export class AgentSSEClient {
           maxAttempts: number;
           delayMs: number;
           message: string;
-        });
-        break;
-      case 'skill_review_started':
-        this.options.onSkillReviewStarted?.();
-        break;
-      case 'skill_review_completed':
-        this.options.onSkillReviewCompleted?.(data as {
-          passed: boolean;
-          score: number;
-          feedback: string;
-          skillName?: string;
-          error?: string;
-          iterations?: number;
-          maxIterations?: number;
-          finalPath?: string;
         });
         break;
     }

@@ -14,6 +14,10 @@ import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import { getLogger, LogComponent } from '../logging/logger';
 import { createSession } from '../db/queries/sessions';
+import {
+  truncateMessagesAfter,
+  truncateMessagesFromInclusive,
+} from '../db/queries/messages';
 import { createCanvas as createConductorCanvas } from '../db/queries/conductors';
 import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
@@ -485,39 +489,13 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:message:truncateAfter', (_event, sessionId: string, messageId: string) => {
-    const database = getDb();
-    const result = database.prepare(
-      'SELECT created_at FROM messages WHERE id = ? AND session_id = ?'
-    ).get(messageId, sessionId) as { created_at: number } | undefined;
-
-    if (!result) return { deletedCount: 0 };
-
-    const deleteResult = database.prepare(
-      'DELETE FROM messages WHERE session_id = ? AND created_at > ?'
-    ).run(sessionId, result.created_at);
-
-    database.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
-
-    return { deletedCount: deleteResult.changes };
+    return { deletedCount: truncateMessagesAfter(sessionId, messageId) };
   });
 
-  // Edit-and-resend: delete the target message AND everything after it
+  // Edit-and-resend: supersede the target message and everything after it
   // (inclusive), so the edited version can be appended as a fresh message.
   ipcMain.handle('db:message:truncateFromInclusive', (_event, sessionId: string, messageId: string) => {
-    const database = getDb();
-    const target = database.prepare(
-      'SELECT created_at, rowid FROM messages WHERE id = ? AND session_id = ?'
-    ).get(messageId, sessionId) as { created_at: number; rowid: number } | undefined;
-
-    if (!target) return { deletedCount: 0 };
-
-    const deleteResult = database.prepare(
-      'DELETE FROM messages WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND rowid >= ?))'
-    ).run(sessionId, target.created_at, target.created_at, target.rowid);
-
-    database.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
-
-    return { deletedCount: deleteResult.changes };
+    return { deletedCount: truncateMessagesFromInclusive(sessionId, messageId) };
   });
 
   // ==================== Lock Handlers ====================

@@ -1028,7 +1028,7 @@ export class SnapshotEngine {
       return {
         url,
         title,
-        snapshot: `Unable to capture full DOM snapshot.\nURL: ${url}\nTitle: ${title}\n\nThe page is loaded but DOM access failed. Try a different action (e.g., screenshot or click).`,
+        snapshot: 'Failed to capture DOM - page may not be fully loaded.',
         interactiveElements: [],
         truncated: false,
       };

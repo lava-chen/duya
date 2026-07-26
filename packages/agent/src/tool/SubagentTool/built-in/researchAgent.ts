@@ -10,7 +10,6 @@ const GLOB_TOOL_NAME = 'Glob'
 const GREP_TOOL_NAME = 'Grep'
 const BROWSER_TOOL_NAME = 'browser'
 const SKILL_TOOL_NAME = 'Skill'
-const SKILL_MANAGE_TOOL_NAME = 'skill_manage'
 const SHOW_WIDGET_TOOL_NAME = 'show_widget'
 const DUYA_INFO_TOOL_NAME = 'duya_info'
 const DUYA_HEALTH_TOOL_NAME = 'duya_health'
@@ -109,7 +108,6 @@ export const RESEARCH_AGENT: BuiltInAgentDefinition = {
   whenToUse: RESEARCH_WHEN_TO_USE,
   disallowedTools: [
     SUBAGENT_TOOL_NAME,
-    SKILL_MANAGE_TOOL_NAME,
     DUYA_INFO_TOOL_NAME,
     DUYA_HEALTH_TOOL_NAME,
     ...CANVAS_TOOL_NAMES,

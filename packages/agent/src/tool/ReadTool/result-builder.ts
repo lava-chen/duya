@@ -28,7 +28,6 @@ const DEFAULT_MAX_TOKENS = 25_000;
  * system prompt already covers the concern. Keep this list short —
  * every model in the wild should be paranoid about untrusted code.
  */
-const MITIGATION_EXEMPT_MODELS = new Set(['claude-opus-4-6']);
 
 /**
  * Truncate a chunk at the nearest paragraph break within the budget.
@@ -69,7 +68,6 @@ export interface SerializeOptions {
   /** Token cap (default 25_000). */
   maxTokens?: number;
   /** Model name — used to skip the malware reminder for whitelisted models. */
-  model?: string;
   /** Absolute path of the file (already resolved). */
   resolvedPath: string;
 }
@@ -124,7 +122,7 @@ export function serializeParseResult(
   const reminders: string[] = [];
   if (omittedChunks > 0) {
     reminders.push(
-      `<system-reminder>Truncated ${omittedChunks} of ${textChunks.length} text chunks to stay within max_tokens=${maxTokens}. Use the pages parameter (PDF) or line_range (text files) for smaller portions.</system-reminder>`,
+      `[Read metadata: truncated ${omittedChunks} of ${textChunks.length} text chunks to stay within max_tokens=${maxTokens}. Use the pages parameter (PDF) or line_range (text files) for smaller portions.]`,
     );
   }
   if (imageChunks.length > 0) {
@@ -132,13 +130,9 @@ export function serializeParseResult(
       .map((c) => (c.page !== undefined ? `page ${c.page + 1}` : 'inline'))
       .join(', ');
     reminders.push(
-      `<system-reminder>File contains ${imageChunks.length} image(s) (${imgList}). The read tool surfaces text only. Call the vision tool on the same path to analyze images.</system-reminder>`,
+      `[Read metadata: file contains ${imageChunks.length} image(s) (${imgList}). The read tool surfaces text only. Call the vision tool on the same path to analyze images.]`,
     );
   }
-  if (!isMalwareExempt(options.model)) {
-    reminders.push(MALWARE_REMINDER);
-  }
-
   const result = reminders.length > 0
     ? `${headerParts.join('\n')}\n\n${body}\n\n${reminders.join('\n\n')}`
     : `${headerParts.join('\n')}\n\n${body}`;
@@ -177,14 +171,3 @@ export function serializeParseResult(
  * implementation's exact wording — kept verbatim because model
  * behavior is sensitive to phrasing.
  */
-export const MALWARE_REMINDER =
-  '\n\n<system-reminder>\nWhenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.\n</system-reminder>\n';
-
-export function isMalwareExempt(model: string | undefined): boolean {
-  if (!model) return false;
-  // Try the canonical (short) name first; fall back to the full id
-  // in case the caller passed a fully qualified model identifier.
-  if (MITIGATION_EXEMPT_MODELS.has(model)) return true;
-  const shortName = model.split('/').pop() ?? model;
-  return MITIGATION_EXEMPT_MODELS.has(shortName);
-}

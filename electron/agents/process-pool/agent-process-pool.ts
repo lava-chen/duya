@@ -346,7 +346,7 @@ export class AgentProcessPool {
    * Used when a setting (e.g. browserBackendMode) changes while agents
    * are alive — they pick it up without a full re-init.
    */
-  broadcastConfigUpdate(payload: { browserBackendMode?: 'auto' | 'extension' | 'built-in' }): void {
+  broadcastConfigUpdate(payload: { browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like' }): void {
     for (const [sessionId] of this.running) {
       this.send(sessionId, { type: 'config:update', sessionId, ...payload });
     }
@@ -523,7 +523,7 @@ export class AgentProcessPool {
     let browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
     try {
       const row = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
-      if (row?.value === 'extension' || row?.value === 'built-in') {
+      if (row?.value === 'extension' || row?.value === 'built-in' || row?.value === 'human-like') {
         browserBackendMode = row.value;
       }
     } catch {}

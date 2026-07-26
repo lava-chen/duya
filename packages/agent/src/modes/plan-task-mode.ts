@@ -104,7 +104,6 @@ export const planTaskMode: ModeModifier = {
       'powershell',
       'edit',
       'write',
-      'skill_manage',
       'module',
     ],
   },

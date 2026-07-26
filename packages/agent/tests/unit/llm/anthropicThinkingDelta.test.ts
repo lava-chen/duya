@@ -33,6 +33,11 @@ describe('getMiniMaxAnthropicMaxTokens', () => {
     expect(getMiniMaxAnthropicMaxTokens('MiniMax-M3', 123456)).toBe(123456);
   });
 
+  it('never returns a configured value above the provider ceiling', () => {
+    expect(getMiniMaxAnthropicMaxTokens('MiniMax-M3', 900000)).toBe(524288);
+    expect(getMiniMaxAnthropicMaxTokens('MiniMax-M2.7-highspeed', 200000)).toBe(196608);
+  });
+
   it('falls back to MiniMax published max_tokens ceilings', () => {
     // MiniMax-M3: total context = 1,000,000 but max_tokens (output) ceiling = 524,288.
     // The Anthropic-compatible endpoint rejects max_tokens > 524288.

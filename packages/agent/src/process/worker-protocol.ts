@@ -328,6 +328,21 @@ export interface CompactErrorEvent {
   message: string;
 }
 
+/**
+ * Memory v2 wakeup (Plan 305 Phase B). Sent by the agent subprocess
+ * fire-and-forget after `ready` to nudge the memory worker into an
+ * immediate sweep. Gated by `DUYA_MEMORY_V2_ENABLED` on the agent side.
+ *
+ * The Electron main-process router intercepts this event (it is NOT
+ * forwarded to the renderer as SSE) and calls
+ * `getMemoryWorkerHandle()?.forceSweep()`.
+ */
+export interface MemoryWakeupEvent {
+  type: 'memory:wakeup';
+  sessionId?: string;
+  project_id?: string;
+}
+
 export type WorkerEvent =
   | CheckpointEvent
   | AgentTextEvent
@@ -353,7 +368,8 @@ export type WorkerEvent =
   | PongEvent
   | SkillsStatusEvent
   | CompactDoneEvent
-  | CompactErrorEvent;
+  | CompactErrorEvent
+  | MemoryWakeupEvent;
 
 // Bounded write queue for backpressure handling (M10)
 const writeQueue: string[] = [];

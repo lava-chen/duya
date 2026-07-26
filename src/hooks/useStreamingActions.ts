@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { subscribeToStreamingEvents, type StreamingEvent } from '@/lib/stream-session-manager';
 import type { ActionItem } from '@/components/chat/ToolActionsGroup';
+import { buildToolAction } from '@/components/chat/tools/normalize';
 
 function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
   const actions: ActionItem[] = [];
@@ -39,19 +40,19 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
       case 'tool_use': {
         const toolUseId = event.toolUse.id;
         const resultInfo = toolResultById.get(toolUseId);
+        // Route through the shared `buildToolAction` helper so the
+        // streaming path and the persisted path (`messageToActionItems`)
+        // produce byte-identical `ToolAction` shapes. Any future field
+        // addition (e.g. a new metadata sub-key) only needs to land in
+        // `tools/normalize.ts` once.
         actions.push({
           kind: 'tool',
-          tool: {
-            id: event.toolUse.id,
-            name: event.toolUse.name,
-            input: event.toolUse.input,
-            result: resultInfo?.content,
-            isError: resultInfo?.is_error,
-            durationMs: resultInfo?.duration_ms,
-            // Forward tool result metadata so dedicated row components
-            // (ScreenshotToolRow, VisionToolRow) can render previews.
-            metadata: resultInfo?.metadata,
-          },
+          tool: buildToolAction(
+            toolUseId,
+            event.toolUse.name,
+            event.toolUse.input,
+            resultInfo,
+          ),
         });
         break;
       }

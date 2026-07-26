@@ -83,7 +83,7 @@ export const readInputSchema = z.object({
     .max(1_000_000)
     .optional()
     .describe(
-      'Optional token cap for the returned content (default 25000). Documents exceeding this limit are truncated with a system reminder.',
+      'Optional token cap for the returned content (default 25000). Documents exceeding this limit include read metadata explaining the truncation.',
     ),
 });
 

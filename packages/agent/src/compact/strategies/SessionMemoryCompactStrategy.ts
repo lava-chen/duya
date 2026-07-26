@@ -312,7 +312,6 @@ function extractKeyToolInputs(
     WebSearch: ['query'],
     WebFetch: ['url'],
     Task: ['query', 'description'],
-    skill_manage: ['name'],
   }
 
   const fields = keyFields[toolName] || []
@@ -513,6 +512,17 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
     // Extract messages based on cut point
     const recentMessages = conversationMessages.slice(cutPoint.firstKeptIndex)
     const olderMessages = conversationMessages.slice(0, cutPoint.firstKeptIndex)
+
+    // Nothing older to summarize — everything fits within the recent-token
+    // budget. Inserting a summary message here would *grow* the history.
+    if (olderMessages.length === 0) {
+      return {
+        messages,
+        tokensRemoved: 0,
+        tokensRetained: estimateMessagesTokens(messages),
+        strategy: this.name,
+      }
+    }
 
     // Handle split turn if necessary
     let turnPrefixSummary = ''
