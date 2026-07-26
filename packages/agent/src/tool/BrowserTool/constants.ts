@@ -10,8 +10,9 @@ This tool provides powerful web browsing capabilities:
 - Navigate to URLs and wait for page load (auto-returns compact snapshot)
 - Get DOM snapshots (structured text representation of the page)
 - Click elements, type text, scroll pages, hover, select dropdowns
+- Computer-use operations: click_at (coordinates, double/right click), drag, key_combo (Ctrl+A/C/V...), mouse_move, scroll_to, refresh, clipboard, handle_dialog
 - Execute JavaScript in page context
-- Take screenshots
+- Take screenshots (annotate mode overlays numbered marks with coordinates for vision-driven clicking)
 - Wait for elements, page loads, or time intervals
 - Manage multiple tabs and browser windows
 - **browser_parallel** - Investigate multiple URLs simultaneously (multi-window parallel research)

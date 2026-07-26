@@ -337,16 +337,31 @@ let BetterSqlite3Ctor: (new (filename: string) => BetterSqlite3.Database) | null
 function getBetterSqlite3Ctor(): new (filename: string) => BetterSqlite3.Database {
   if (BetterSqlite3Ctor) return BetterSqlite3Ctor;
   const require = createRequire(import.meta.url);
+
+  // Prefer the explicit path passed by the parent process. In monorepo /
+  // Electron setups the workspace-local copy (e.g. packages/agent/node_modules)
+  // may be unbuilt or compiled for a different Node ABI, so default module
+  // resolution can load the wrong native binary and fail at runtime.
+  const explicitPath = process.env.DUYA_BETTER_SQLITE3_PATH;
+  if (explicitPath) {
+    try {
+      BetterSqlite3Ctor = require(explicitPath) as new (filename: string) => BetterSqlite3.Database;
+      return BetterSqlite3Ctor;
+    } catch (err) {
+      logger.warn(
+        'DUYA_BETTER_SQLITE3_PATH failed, falling back to module resolution',
+        { explicitPath, error: err instanceof Error ? err.message : String(err) },
+        'DB',
+      );
+    }
+  }
+
   try {
     BetterSqlite3Ctor = require('better-sqlite3') as new (filename: string) => BetterSqlite3.Database;
     return BetterSqlite3Ctor;
-  } catch {
-    const explicitPath = process.env.DUYA_BETTER_SQLITE3_PATH;
-    if (explicitPath) {
-      BetterSqlite3Ctor = require(explicitPath) as new (filename: string) => BetterSqlite3.Database;
-      return BetterSqlite3Ctor;
-    }
-    throw new Error('better-sqlite3 not found: both module resolution and DUYA_BETTER_SQLITE3_PATH failed');
+  } catch (err) {
+    const fallbackMsg = explicitPath ? ` and DUYA_BETTER_SQLITE3_PATH (${explicitPath}) failed` : '';
+    throw new Error(`better-sqlite3 not found: module resolution failed${fallbackMsg}`);
   }
 }
 
@@ -1430,7 +1445,7 @@ export function addMessage(data: CreateMessageData): MessageRow {
     VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
   `);
 
-  stmt.run({
+  const row = {
     id: data.id,
     session_id: data.session_id,
     role: data.role,
@@ -1453,10 +1468,14 @@ export function addMessage(data: CreateMessageData): MessageRow {
       ? (typeof data.attachments === 'string' ? data.attachments : JSON.stringify(data.attachments))
       : null,
     created_at: now,
-  });
+  };
 
-  // Update session's updated_at timestamp
-  db.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, data.session_id);
+  // Wrap INSERT + UPDATE in a single transaction to share one WAL flush
+  // instead of two implicit commits (halves fsync cost on each message).
+  db.transaction(() => {
+    stmt.run(row);
+    db.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, data.session_id);
+  })();
 
   // Return constructed MessageRow directly instead of re-querying
   return {

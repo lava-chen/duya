@@ -291,6 +291,11 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.groupSummary.tools.one': '已使用 1 个工具',
   'streaming.toolAction.groupSummary.tools.other': '已使用 {count} 个工具',
   'streaming.toolAction.groupSummary.andMore': '其他 {count} 项',
+  'streaming.toolAction.groupSummary.fallback.one': '执行了 1 项操作',
+  'streaming.toolAction.groupSummary.fallback.other': '执行了 {count} 项操作',
+  'streaming.toolAction.thinking.placeholder': '思考中...',
+  'streaming.toolAction.thinking.empty': '思考',
+  'streaming.toolAction.thinking.title': '思考',
 
   'permission.allow': '允许',
   'permission.deny': '拒绝',
@@ -1795,12 +1800,6 @@ const zh: Record<TranslationKey, string> = {
   'automation.templateMarketTitle': '自动化模板',
   'automation.manualSetup': '手动配置',
   'automation.templatesEmpty': '暂无可用模板,你可以手动创建自动化。',
-
-  'skillReview.running': '自我提升中 — 正在检查本轮对话是否值得创建 skill…',
-  'skillReview.completed': '自我提升已保存一条新 skill。',
-  'skillReview.completedNamed': '自我提升已创建 skill “{name}”。',
-  'skillReview.failed': '自我提升跳过:{error}',
-  'skillReview.noImprovement': '自我提升未找到值得保存的 skill。',
 
   // Conductor 便签选中工具条
   'conductor.toolbar.shapeRect': '矩形',

@@ -1,27 +1,22 @@
 /**
  * LLM Client factory
  * Provides unified interface for different LLM providers
+ *
+ * Concrete client modules (anthropic-client, openai-client, ollama-client
+ * and their Retryable variants) are loaded lazily via dynamic import()
+ * inside LazyLLMClientProxy. This keeps the agent process startup fast
+ * and avoids loading unused provider SDKs (e.g. the OpenAI SDK when only
+ * Anthropic is configured).
  */
 
 import type { LLMProvider } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
-import { AnthropicClient } from './anthropic-client.js';
-import { OpenAIClient } from './openai-client.js';
-import { OllamaClient } from './ollama-client.js';
+import { LazyLLMClientProxy } from './base.js';
 import { LLMClientWrapper, createLLMClientWrapper } from './wrapper.js';
-import { RetryableAnthropicClient, createRetryableAnthropicClient } from './RetryableAnthropicClient.js';
-import { RetryableOpenAIClient, createRetryableOpenAIClient } from './RetryableOpenAIClient.js';
-import { RetryableOllamaClient, createRetryableOllamaClient } from './RetryableOllamaClient.js';
 import type { RetryConfig } from './withRetry.js';
 
-export { AnthropicClient } from './anthropic-client.js';
-export { OpenAIClient } from './openai-client.js';
-export { OllamaClient } from './ollama-client.js';
 export { LLMClientWrapper, createLLMClientWrapper } from './wrapper.js';
-export { RetryableAnthropicClient, createRetryableAnthropicClient } from './RetryableAnthropicClient.js';
-export { RetryableOpenAIClient, createRetryableOpenAIClient } from './RetryableOpenAIClient.js';
-export { RetryableOllamaClient, createRetryableOllamaClient } from './RetryableOllamaClient.js';
-export type { LLMClient, LLMClientOptions } from './base.js';
+export type { LLMClient, LLMClientOptions, LazyLLMClientProxy } from './base.js';
 export type { RetryConfig } from './withRetry.js';
 export { withRetry, wrapStreamWithRetry, retryOperation } from './withRetry.js';
 export {
@@ -73,7 +68,11 @@ export function isMiniMaxURL(baseURL: string): boolean {
 }
 
 /**
- * Create an LLM client based on the provider type
+ * Create an LLM client based on the provider type.
+ *
+ * Returns a LazyLLMClientProxy that defers the dynamic import() of the
+ * concrete client module until the first streamChat/chat call. This
+ * keeps unused provider SDKs out of memory at agent startup.
  */
 export function createLLMClient(
   provider: LLMProvider,
@@ -81,11 +80,17 @@ export function createLLMClient(
 ): LLMClient {
   switch (provider) {
     case 'anthropic':
-      return new AnthropicClient(options);
+      return new LazyLLMClientProxy(() =>
+        import('./anthropic-client.js').then(m => new m.AnthropicClient(options))
+      );
     case 'openai':
-      return new OpenAIClient(options);
+      return new LazyLLMClientProxy(() =>
+        import('./openai-client.js').then(m => new m.OpenAIClient(options))
+      );
     case 'ollama':
-      return new OllamaClient(options);
+      return new LazyLLMClientProxy(() =>
+        import('./ollama-client.js').then(m => new m.OllamaClient(options))
+      );
     default:
       throw new Error(`Unsupported LLM provider: ${provider}`);
   }
@@ -105,11 +110,17 @@ export function createRetryableLLMClient(
 
   switch (provider) {
     case 'anthropic':
-      return new RetryableAnthropicClient({ ...clientOptions, retryConfig });
+      return new LazyLLMClientProxy(() =>
+        import('./RetryableAnthropicClient.js').then(m => new m.RetryableAnthropicClient({ ...clientOptions, retryConfig }))
+      );
     case 'openai':
-      return new RetryableOpenAIClient({ ...clientOptions, retryConfig });
+      return new LazyLLMClientProxy(() =>
+        import('./RetryableOpenAIClient.js').then(m => new m.RetryableOpenAIClient({ ...clientOptions, retryConfig }))
+      );
     case 'ollama':
-      return new RetryableOllamaClient({ ...clientOptions, retryConfig });
+      return new LazyLLMClientProxy(() =>
+        import('./RetryableOllamaClient.js').then(m => new m.RetryableOllamaClient({ ...clientOptions, retryConfig }))
+      );
     default:
       throw new Error(`Unsupported LLM provider: ${provider}`);
   }

@@ -9,6 +9,17 @@ import { networkStartAction, networkReadAction } from './network.js';
 import { cookiesAction } from './cookies.js';
 import { parallelFetchAction } from './parallel.js';
 import { closeWindowAction } from './close.js';
+import {
+  clickAtAction,
+  mouseMoveAction,
+  dragAction,
+  keyComboAction,
+  scrollToAction,
+  refreshAction,
+  clipboardReadAction,
+  clipboardWriteAction,
+  handleDialogAction,
+} from './computer.js';
 import type { ActionHandler } from './types.js';
 
 export { type ActionContext, type ActionHandler, type ActionResult } from './types.js';
@@ -39,6 +50,15 @@ export {
   iframeEvaluateAction,
   cookiesAction,
   closeWindowAction,
+  clickAtAction,
+  mouseMoveAction,
+  dragAction,
+  keyComboAction,
+  scrollToAction,
+  refreshAction,
+  clipboardReadAction,
+  clipboardWriteAction,
+  handleDialogAction,
 };
 
 const ALL_ACTIONS: ActionHandler[] = [
@@ -65,6 +85,15 @@ const ALL_ACTIONS: ActionHandler[] = [
   iframeEvaluateAction,
   cookiesAction,
   closeWindowAction,
+  clickAtAction,
+  mouseMoveAction,
+  dragAction,
+  keyComboAction,
+  scrollToAction,
+  refreshAction,
+  clipboardReadAction,
+  clipboardWriteAction,
+  handleDialogAction,
 ];
 
 export function getAllActions(): ActionHandler[] {

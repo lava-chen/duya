@@ -293,6 +293,18 @@ const en = {
   'streaming.toolAction.groupSummary.tools.one': 'Used 1 tool',
   'streaming.toolAction.groupSummary.tools.other': 'Used {count} tools',
   'streaming.toolAction.groupSummary.andMore': '+{count} more',
+  // Fallback when no tool matched a known category (e.g. orphan
+  // tool_results synthesized from truncated history). Previously
+  // this was a direct `${count} actions` string literal — moved
+  // into i18n so the locale stays consistent.
+  'streaming.toolAction.groupSummary.fallback.one': 'Executed 1 action',
+  'streaming.toolAction.groupSummary.fallback.other': 'Executed {count} actions',
+  // ThinkingRow chrome strings. Previously hardcoded as 'Thinking...'
+  // / 'Thought' / '思考' literals — moved into i18n so the locale
+  // stays consistent with the rest of the chrome verbs.
+  'streaming.toolAction.thinking.placeholder': 'Thinking...',
+  'streaming.toolAction.thinking.empty': 'Thought',
+  'streaming.toolAction.thinking.title': 'Thought',
 
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',
@@ -1800,16 +1812,6 @@ const en = {
   'automation.templateMarketTitle': 'Automation Templates',
   'automation.manualSetup': 'Manual Setup',
   'automation.templatesEmpty': 'No templates available. You can create an automation manually.',
-
-  // Self-improver (background skill-creation review) — see
-  // packages/agent/src/self-improver/SelfImprover.ts for the source
-  // of the events. The keys here are consumed by
-  // SkillReviewIndicator in the chat UI.
-  'skillReview.running': 'Self-improving — reviewing the session for skill candidates…',
-  'skillReview.completed': 'Self-improver saved a new skill.',
-  'skillReview.completedNamed': 'Self-improver created skill "{name}".',
-  'skillReview.failed': 'Self-improver skipped: {error}',
-  'skillReview.noImprovement': 'Self-improver did not find a new skill worth saving.',
 
   // Conductor sticky selection toolbar
   'conductor.toolbar.shapeRect': 'Rectangle',

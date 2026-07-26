@@ -296,54 +296,6 @@ export interface ToolPromptContribution {
 }
 
 // ============================================================
-// Prompt Manager Options
-// ============================================================
-
-/**
- * Options for creating a PromptManager instance.
- */
-export interface PromptManagerOptions {
-  /** Current chat session ID */
-  sessionId?: string
-  /** Default working directory for the agent */
-  workingDirectory?: string
-  /** Additional working directories */
-  additionalWorkingDirectories?: string[]
-  /** Model ID being used (for system prompt context) */
-  modelId?: string
-  /** Feature flags to control prompt behavior */
-  features?: PromptFeatureFlags
-  /** Custom section registry for additional prompt sections */
-  customSections?: PromptSection[]
-  /** Output style configuration */
-  outputStyleConfig?: OutputStyleConfig | null
-  /** Language preference */
-  language?: string
-  /** User type (for conditional prompt sections) */
-  userType?: 'ant' | 'external'
-  /** Communication platform type */
-  communicationPlatform?: CommunicationPlatform
-  /** Prompt profile: base + overlays for progressive disclosure */
-  promptProfile?: import('./modes/types.js').PromptProfile
-  /** Whether this is a git worktree */
-  isWorktree?: boolean
-  /** Whether this is a non-interactive session */
-  isNonInteractiveSession?: boolean
-  /** Whether REPL mode is enabled */
-  isReplModeEnabled?: boolean
-  /** Whether embedded search tools (find/grep) are available */
-  hasEmbeddedSearchTools?: boolean
-  /** Whether fork subagent is enabled */
-  isForkSubagentEnabled?: boolean
-  /** Whether verification agent is enabled */
-  isVerificationAgentEnabled?: boolean
-  /** Whether skill search is enabled */
-  isSkillSearchEnabled?: boolean
-  /** Scratchpad directory path */
-  scratchpadDir?: string
-}
-
-// ============================================================
 // Prompt Build Context Options
 // ============================================================
 

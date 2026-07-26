@@ -73,9 +73,14 @@ export function buildGroupSummary(
   }
 
   if (parts.length === 0) {
-    return locale === 'zh'
-      ? `执行了 ${tools.length} 项操作`
-      : `${tools.length} actions`;
+    // No tool matched a known category (e.g. only orphan tool_results
+    // synthesized from truncated history). Previously this was a
+    // direct `${count} actions` string literal — route through i18n
+    // so the locale stays consistent with the rest of the summary.
+    const fallbackKey = tools.length === 1
+      ? 'streaming.toolAction.groupSummary.fallback.one'
+      : 'streaming.toolAction.groupSummary.fallback.other';
+    return t(fallbackKey as TranslationKey, { count: tools.length });
   }
 
   const renderedParts = parts.map((p) =>

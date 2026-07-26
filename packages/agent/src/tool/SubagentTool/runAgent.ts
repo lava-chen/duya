@@ -17,7 +17,8 @@ import { setMaxListeners } from 'node:events'
 import { resolveAgentTools } from './subagentToolUtils.js'
 import { ToolRegistry } from '../registry.js'
 import { getPromptProfileForSubagentType } from '../../prompts/modes/index.js'
-import { PromptManager } from '../../prompts/PromptManager.js'
+import { PromptsRegistry } from '../../prompts/registry.js'
+import type { PromptSystem } from '../../prompts/PromptSystem.js'
 import { appendMessages } from '../../session/db.js'
 import type { TokenUsage } from '../../types.js'
 import { logger } from '../../utils/logger.js'
@@ -199,13 +200,26 @@ export async function* runAgent({
   // Determine prompt profile based on subagent type
   const promptProfile = getPromptProfileForSubagentType(agentDefinition.agentType)
 
-  // Create a PromptManager with the appropriate profile for this subagent
-  const subAgentPromptManager = new PromptManager({
-    sessionId,
-    workingDirectory,
-    modelId: agentModel,
-    promptProfile,
-  })
+  // Resolve a PromptSystem for the 'general' config with this subagent's profile.
+  // Subagents always use the general prompt system; the profile gates which
+  // sections render (e.g. fork drops memory/skills/personality).
+  const promptSystem: PromptSystem | undefined = PromptsRegistry.getOrCreate('general', promptProfile)
+  if (!promptSystem) {
+    const errorMsg = `[Agent ${agentDefinition.agentType}] Error: 'general' prompt system not registered`
+    logger.error('[SubAgent] general prompt system missing', undefined, {
+      agentId,
+      agentType: agentDefinition.agentType,
+    }, 'SubAgent')
+    onProgress?.({ type: 'error', data: errorMsg, agentId })
+    yield {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: [{ type: 'text', text: errorMsg }],
+      timestamp: Date.now(),
+      metadata: { agentError: errorMsg },
+    }
+    return
+  }
 
   // Create real tool registry with actual tool executors
   const { createBuiltinRegistry } = await import('../builtin.js')
@@ -220,11 +234,15 @@ export async function* runAgent({
   // to avoid infinite recursion where a sub-agent spawns another sub-agent
   toolsToUse = toolsToUse.filter(t => t.name !== 'Agent')
 
-  const harnessPrompt = [
-    ...await subAgentPromptManager.buildSystemPrompt(
-      new Set(toolsToUse.map(tool => tool.name)),
-    ),
-  ].join('\n\n')
+  const context = promptSystem.buildContext({
+    sessionId,
+    workingDirectory,
+    modelId: agentModel,
+    modelName: agentModel,
+    enabledTools: new Set(toolsToUse.map(tool => tool.name)),
+  })
+  const systemPromptResult = await promptSystem.buildSystemPrompt(context)
+  const harnessPrompt = [...systemPromptResult].join('\n\n')
   const systemPrompt = composeSubagentSystemPrompt(roleSystemPrompt, harnessPrompt)
 
   // The explicit systemPrompt replaces DuyaAgent's normal prompt path, so it
@@ -238,7 +256,6 @@ export async function* runAgent({
     systemPrompt,
     workingDirectory,
     sessionId,
-    promptManager: subAgentPromptManager,
   })
 
   logger.info('[SubAgent] streamChat starting', {

@@ -1,7 +1,33 @@
 import { app } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
+import * as os from 'os'
 import { EventEmitter } from 'events'
+
+// `app` is undefined when this module is loaded outside of Electron
+// (e.g. in vitest, the CLI server, or the agent-server child process
+// spawned with ELECTRON_RUN_AS_NODE=1). Use safe accessors so the
+// module-level `getLogger()` calls in boot-config.ts / connection.ts
+// don't crash with "Cannot read properties of undefined (reading
+// 'isPackaged')" before the test gets a chance to inject its own db.
+function safeIsPackaged(): boolean {
+  try {
+    return Boolean((app as { isPackaged?: unknown } | undefined | null)?.isPackaged)
+  } catch {
+    return false
+  }
+}
+
+function safeUserDataPath(): string {
+  try {
+    if (app && typeof app.getPath === 'function') {
+      return app.getPath('userData')
+    }
+  } catch {
+    // fall through to default
+  }
+  return process.env.DUYA_CLI_USER_DATA_DIR ?? path.join(os.tmpdir(), 'duya')
+}
 
 /**
  * Professional Logger - Advanced Application Logging System
@@ -131,8 +157,8 @@ class Logger extends EventEmitter {
 
   constructor(config: Partial<LoggerConfig> = {}) {
     super()
-    this.isDev = !app.isPackaged
-    this.logDir = path.join(app.getPath('userData'), 'logs')
+    this.isDev = !safeIsPackaged()
+    this.logDir = path.join(safeUserDataPath(), 'logs')
     this.logPath = path.join(this.logDir, 'app.log')
 
     this.config = {

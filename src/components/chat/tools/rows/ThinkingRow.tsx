@@ -19,6 +19,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Shimmer } from '../../Shimmer';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { useAdaptiveTypewriter } from '@/hooks/useAdaptiveTypewriter';
+import { useTranslation } from '@/hooks/useTranslation';
 
 interface ThinkingRowProps {
   content: string;
@@ -38,21 +39,28 @@ function makePreview(text: string): string {
 }
 
 export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
 
   const streamedContent = useAdaptiveTypewriter(content, !!isStreaming);
   const previewSource = isStreaming ? streamedContent : content;
 
+  // Localized fallback strings — previously hardcoded as 'Thinking...'
+  // / 'Thought' / '思考' literals, which broke locale consistency
+  // whenever the rest of the chrome was translated.
+  const placeholder = t('streaming.toolAction.thinking.placeholder');
+  const emptyFallback = t('streaming.toolAction.thinking.empty');
+
   const summary = (() => {
     if (isStreaming) {
-      return makePreview(previewSource) || 'Thinking...';
+      return makePreview(previewSource) || placeholder;
     }
     const boldMatch = content.match(/\*\*(.+?)\*\*/);
     if (boldMatch) return boldMatch[1];
     const headingMatch = content.match(/^#{1,4}\s+(.+)$/m);
     if (headingMatch) return headingMatch[1];
-    return makePreview(content) || 'Thought';
+    return makePreview(content) || emptyFallback;
   })();
 
   const displayedContent = isStreaming ? streamedContent : content;
@@ -72,7 +80,7 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        {isStreaming && summary === 'Thinking...' ? (
+        {isStreaming && summary === placeholder ? (
           <Shimmer duration={1.5}>{summary}</Shimmer>
         ) : (
           summary
@@ -88,7 +96,9 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
             style={{ overflow: 'hidden' }}
           >
             <div className="mx-1 my-1 rounded-lg tool-card p-3 max-h-40 overflow-auto">
-              <div className="text-[11px] tool-card-muted font-medium mb-1.5">思考</div>
+              <div className="text-[11px] tool-card-muted font-medium mb-1.5">
+                {t('streaming.toolAction.thinking.title')}
+              </div>
               <div className="text-xs text-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
                 {displayedContent}
               </div>

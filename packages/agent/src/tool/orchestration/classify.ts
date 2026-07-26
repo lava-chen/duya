@@ -16,7 +16,6 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   // Skill tools — READ (查询/调用)
   skill: ToolBatch.READ,
   Skill: ToolBatch.READ,
-  skill_manage: ToolBatch.WRITE,
 
   // Brief — READ
   brief: ToolBatch.READ,

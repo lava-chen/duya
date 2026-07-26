@@ -21,6 +21,7 @@ interface MessageListProps {
   error?: string | null;
   sessionId: string;
   onEditSend?: (messageId: string, text: string) => void;
+  compactionStatus?: 'idle' | 'compacting' | 'done' | 'error';
 }
 
 interface GroupedMessage {
@@ -484,6 +485,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   error,
   sessionId,
   onEditSend,
+  compactionStatus = 'idle',
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -607,25 +609,28 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
         result.push({ message: msg, toolResults: [] });
       } else if (msg.role === 'assistant') {
         if (!currentAssistantGroup) {
-          // First assistant message in this round
-          currentAssistantGroup = {
-            message: msg,
-            toolResults: [],
-            mergedMessages: [],
-          };
-        } else if (
-          currentAssistantGroup.message.seqIndex != null
-          && msg.seqIndex != null
-          && currentAssistantGroup.message.seqIndex !== msg.seqIndex
-        ) {
-          result.push(currentAssistantGroup);
+          // First assistant message after a user message.
           currentAssistantGroup = {
             message: msg,
             toolResults: [],
             mergedMessages: [],
           };
         } else {
-          // Merge subsequent assistant messages into the same round
+          // Merge every consecutive assistant message into the same
+          // round. Previously we split on seqIndex changes, which
+          // produced one "N completed" summary per round when the
+          // agent ran multiple think→tool→think→tool cycles for a
+          // single user request. From the user's point of view that
+          // is still one continuous piece of work; they want a
+          // single collapsed row ("任务耗时 X") that expands to show
+          // all steps and the final answer.
+          //
+          // A new user message already breaks the group above, so
+          // unrelated user turns cannot be merged. If the persistence
+          // layer ever emits assistant messages with no user turn in
+          // between that should NOT be grouped, that should be fixed
+          // in persistence (e.g. by giving them distinct session
+          // boundaries), not here.
           currentAssistantGroup.mergedMessages!.push(msg);
         }
 
@@ -663,7 +668,14 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       result.push(currentAssistantGroup);
     }
 
-    // Handle orphan tool results
+    // Handle orphan tool results — tool_results whose matching tool_use
+    // isn't in the loaded message set (e.g. truncated history, legacy
+    // import). Synthesize a minimal tool_use-shaped message so the
+    // existing ToolActionsGroup → ToolActionRow pipeline can render
+    // the result. Use `tool_result` as the toolName (matches the
+    // convention in pairTools) so it routes to the registry catch-all
+    // (WrenchIcon) instead of masquerading as a nonexistent "Error" or
+    // "Tool" tool that would leak misleading verbs into group summaries.
     for (const [toolUseId, toolResult] of toolResultMap) {
       if (!matchedToolResultIds.has(toolUseId)) {
         result.push({
@@ -674,8 +686,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             timestamp: Date.now(),
             msgType: 'tool_use',
             tool_call_id: toolUseId,
-            name: toolResult.is_error ? 'Error' : 'Tool',
-          },
+            toolName: 'tool_result',
+          } as Message,
           toolResults: [toolResult],
         });
       }
@@ -912,6 +924,38 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             sessionId={sessionId}
             onForceStop={onForceStop}
           />
+        )}
+
+        {/* Compaction status divider */}
+        {compactionStatus !== 'idle' && (
+          <div className="compact-boundary" style={{ opacity: 1 }}>
+            <div className="compact-boundary-line" />
+            <span className="compact-boundary-text" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {compactionStatus === 'compacting' && (
+                <>
+                  <span
+                    className="inline-block"
+                    style={{
+                      width: '10px',
+                      height: '10px',
+                      border: '1.5px solid var(--muted)',
+                      borderTopColor: 'transparent',
+                      borderRadius: '50%',
+                      animation: 'spin 0.8s linear infinite',
+                    }}
+                  />
+                  <span>Compacting context…</span>
+                </>
+              )}
+              {compactionStatus === 'done' && (
+                <span style={{ color: 'var(--accent, #3b82f6)' }}>Context compacted</span>
+              )}
+              {compactionStatus === 'error' && (
+                <span style={{ color: 'var(--destructive, #ef4444)' }}>Compaction failed</span>
+              )}
+            </span>
+            <div className="compact-boundary-line" />
+          </div>
         )}
       </div>
     </div>

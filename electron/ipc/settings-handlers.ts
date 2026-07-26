@@ -202,7 +202,7 @@ export function registerSettingsHandlers(): void {
         const backendRow = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
         if (backendRow?.value) {
           const parsed = backendRow.value;
-          if (parsed === 'extension' || parsed === 'built-in') {
+          if (parsed === 'extension' || parsed === 'built-in' || parsed === 'human-like') {
             browserBackendMode = parsed;
           }
         }
@@ -244,7 +244,7 @@ export function registerSettingsHandlers(): void {
   });
 
   // Live-update browser backend mode on running agents without full re-init
-  ipcMain.handle('browser:update-backend-mode', async (_event, mode: 'auto' | 'extension' | 'built-in') => {
+  ipcMain.handle('browser:update-backend-mode', async (_event, mode: 'auto' | 'extension' | 'built-in' | 'human-like') => {
     try {
       const agentPool = getAgentProcessPool();
       agentPool.broadcastConfigUpdate({ browserBackendMode: mode });

@@ -107,6 +107,9 @@ interface MessageInputProps {
   // Conductor mode toggle state (independent of plan/research modes).
   conductorEnabled?: boolean;
   onConductorChange?: (enabled: boolean) => void;
+  // Manual context compaction trigger
+  onCompact?: () => void;
+  isCompacting?: boolean;
 }
 
 interface EffortOption {
@@ -204,6 +207,8 @@ export function MessageInput({
   messages = [],
   conductorEnabled,
   onConductorChange,
+  onCompact,
+  isCompacting,
 }: MessageInputProps) {
   const { t } = useTranslation();
   const [inputValue, setInputValue] = useState('');
@@ -1307,6 +1312,8 @@ export function MessageInput({
             );
           }}
           onAddFiles={() => fileInputRef.current?.click()}
+          onCompact={onCompact}
+          isCompacting={isCompacting}
           onRequestRecap={requestRecap}
           // Mode state (unified activeModes set, plan 224 Phase 5)
           activeModes={activeModes}

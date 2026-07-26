@@ -295,8 +295,11 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     labelKey: null,
     getSummary: (input, name?: string) => {
       const prefix = name || '';
-      if (!input || typeof input !== 'object') return prefix;
+      if (!input || typeof input !== 'object') return prefix || 'tool';
       const str = JSON.stringify(input);
+      // Empty object — common for orphan tool_results synthesized by
+      // MessageList. Show just the name instead of a noisy "{}".
+      if (str === '{}') return prefix || 'tool';
       const detail = str.length > 50 ? str.slice(0, 47) + '...' : str;
       return prefix ? `${prefix} ${detail}` : detail;
     },

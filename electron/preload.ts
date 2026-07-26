@@ -4,6 +4,7 @@ import type {
   ProjectDatabaseChangeEvent,
   ProjectDatabaseRequest,
 } from '../packages/conductor/src/database/types'
+import type { BashBackgroundTaskSnapshot } from '../src/types/bash-task'
 
 // webUtils.getPathForFile is exposed from Electron 30+. On older versions
 // (e.g. Electron 28 in this project) `File.path` still works for dragged
@@ -40,48 +41,6 @@ export interface ConfigPortAPI {
   subscribe: () => void
   onConfigUpdate: (callback: (config: unknown) => void) => () => void
   onConfigResponse: (callback: (data: { key: string; value: unknown }) => void) => () => void
-}
-
-// AgentControlPort API for chat communication via MessagePort
-export interface AgentControlPortAPI {
-  // Send messages to Agent
-  startChat: (sessionId: string, prompt: string, options?: Record<string, unknown>) => void
-  interruptChat: (sessionId: string) => void
-  resolvePermission: (id: string, decision: string, extra?: Record<string, unknown>) => void
-  compactContext: (sessionId: string) => void
-  // Event handlers for Agent → Renderer messages
-  onText: (callback: (content: string, sessionId?: string) => void) => () => void
-  onThinking: (callback: (content: string, sessionId?: string) => void) => () => void
-  onToolUse: (callback: (data: { id: string; name: string; input: unknown }, sessionId?: string) => void) => () => void
-  onToolResult: (callback: (data: { id: string; result: unknown; error?: string }, sessionId?: string) => void) => () => void
-  onToolProgress: (callback: (data: { toolUseId: string; percent: number; stage: string }, sessionId?: string) => void) => () => void
-  onToolOutput: (callback: (data: { toolUseId: string; stream: 'stdout' | 'stderr'; data: string }, sessionId?: string) => void) => () => void
-  onAgentProgress: (callback: (data: {
-      agentEventType: string;
-      data?: string;
-      toolName?: string;
-      toolInput?: Record<string, unknown>;
-      toolResult?: string;
-      duration?: number;
-      agentId?: string;
-      agentType?: string;
-      agentName?: string;
-      agentDescription?: string;
-      agentSessionId?: string;
-    }, sessionId?: string) => void) => () => void
-  onPermission: (callback: (request: { id: string; toolName: string; toolInput: Record<string, unknown> }, sessionId?: string) => void) => () => void
-  onContextUsage: (callback: (data: { usedTokens: number; contextWindow: number; percentFull: number }, sessionId?: string) => void) => () => void
-  onDone: (callback: (sessionId?: string) => void) => () => void
-  onError: (callback: (message: string, sessionId?: string) => void) => () => void
-  onStatus: (callback: (message: string, sessionId?: string) => void) => () => void
-  onDbPersisted: (callback: (data: { success: boolean; sessionId: string; messageCount: number; reason?: string }, sessionId?: string) => void) => () => void
-  onTokenUsage: (callback: (data: { inputTokens: number; outputTokens: number }, sessionId?: string) => void) => () => void
-  onRetry: (callback: (data: { attempt: number; maxAttempts: number; delayMs: number; message: string }, sessionId?: string) => void) => () => void
-  onSkillReviewStarted: (callback: (sessionId?: string) => void) => () => void
-  onSkillReviewCompleted: (callback: (data: { passed: boolean; score: number; feedback: string; skillName?: string; error?: string }, sessionId?: string) => void) => () => void
-  onTitleGenerated: (callback: (data: { title: string }, sessionId?: string) => void) => () => void
-  onCompactDone: (callback: (sessionId?: string) => void) => () => void
-  onCompactError: (callback: (message: string, sessionId?: string) => void) => () => void
 }
 
 export interface ConductorPortAPI {
@@ -160,12 +119,6 @@ export interface SkillsAPI {
   setEnabled: (skillName: string, enabled: boolean) => Promise<{ success: boolean; overrides?: Record<string, boolean>; error?: string }>
   getSecurityBypass: () => Promise<{ success: boolean; skills: string[]; error?: string }>
   setSecurityBypass: (skillName: string, bypass: boolean) => Promise<{ success: boolean; skills: string[]; error?: string }>
-  learning: {
-    list: (options?: { limit?: number; unreadOnly?: boolean }) => Promise<{ success: boolean; events: unknown[]; error?: string }>
-    unreadCount: () => Promise<{ success: boolean; count: number; error?: string }>
-    markRead: (ids?: string[]) => Promise<{ success: boolean; error?: string }>
-    onCreated: (callback: () => void) => () => void
-  }
 }
 
 export interface ProviderAPI {
@@ -533,9 +486,7 @@ export interface GitAPI {
 }
 
 export interface PortStatusAPI {
-  isAgentPortReady: () => boolean
   isConfigPortReady: () => boolean
-  waitForAgentPort: (timeout?: number) => Promise<boolean>
 }
 
 // SessionPort API for per-session MessagePort communication
@@ -600,7 +551,7 @@ export interface BrowserCookieAPI {
 }
 
 export interface BrowserBackendAPI {
-  updateMode: (mode: 'auto' | 'extension' | 'built-in') => Promise<{ success: boolean; reason?: string }>
+  updateMode: (mode: 'auto' | 'extension' | 'built-in' | 'human-like') => Promise<{ success: boolean; reason?: string }>
 }
 
 export interface DocumentParserAPI {
@@ -976,6 +927,7 @@ export interface ElectronAPI {
     reply?: string
   }) => void) => () => void
   onBackgroundTaskReady: (callback: (data: { sessionId: string }) => void) => () => void
+  onBashTaskUpdate: (callback: (data: { sessionId: string; tasks: BashBackgroundTaskSnapshot[] }) => void) => () => void
   app: {
     getVersion: () => Promise<string>
     quit: () => Promise<void>
@@ -1006,7 +958,6 @@ export interface ElectronAPI {
   }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
-  getAgentPort: () => AgentControlPortAPI | null
   getConductorPort: () => ConductorPortAPI | null
   // Agent Server port for SSE client (Phase 7.1 - plan 53)
   getAgentServerPort: () => Promise<number | null>
@@ -1030,6 +981,12 @@ export interface ElectronAPI {
     undo: (canvasId: string) => Promise<unknown>
     redo: (canvasId: string) => Promise<unknown>
     uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) => Promise<unknown>
+    captureLinkSnapshot: (payload: {
+      canvasId: string
+      elementId: string
+      url: string
+      mode: 'desktop-head' | 'desktop-full' | 'mobile-head' | 'mobile-full'
+    }) => Promise<unknown>
   }
   projectDatabase: ProjectDatabaseAPI
   thread: ThreadAPI
@@ -1139,18 +1096,11 @@ let configPortHandlers: {
 let conductorPort: any = null
 const conductorPortHandlers: Map<string, Set<(data: unknown) => void>> = new Map()
 
-// Agent control port handlers
-// Use a container object to ensure the reference is shared
-const agentPortState = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  agentPort: null as any,
-  isAgentPortReadyFlag: false,
-  isConfigPortReadyFlag: false,
-}
+// Port handlers shared by session-port communication
 const agentPortHandlers: Map<string, Set<(data: unknown) => void>> = new Map()
 
-// Port status tracking (exposed via contextBridge)
-const agentPortReadyCallbacks = new Set<() => void>()
+// Config port readiness flag (config-port is the only remaining MessagePort listener)
+let isConfigPortReadyFlag = false
 
 // Session port tracking (per-session MessagePorts)
 interface SessionPortInfo {
@@ -1205,28 +1155,12 @@ ipcRenderer.on('session-port', (event, sessionId: string) => {
   }
 })
 
-// Handle incoming agent port messages
-function handleAgentPortMessage(data: Record<string, unknown>): void {
-  const { type, ...payload } = data
-  const sessionId = payload.sessionId as string | undefined
-  debugLog('agent<-main', { type, sessionId })
-  const handlers = agentPortHandlers.get(type as string)
-  if (handlers) {
-    handlers.forEach(handler => {
-      try {
-        handler(payload)
-      } catch (error) {
-              }
-    })
-  }
-}
-
 // Listen for config port from main process
 ipcRenderer.on('config-port', (event) => {
   const [port] = event.ports
   if (port) {
     configPort = port
-    agentPortState.isConfigPortReadyFlag = true
+    isConfigPortReadyFlag = true
     port.onmessage = (e) => {
       const { type, ...data } = e.data
       if (type === 'config:update' && configPortHandlers.onConfigUpdate) {
@@ -1236,33 +1170,6 @@ ipcRenderer.on('config-port', (event) => {
       }
     }
     port.start()
-  }
-})
-
-// Listen for agent control port from main process
-ipcRenderer.on('agent-control-port', (event) => {
-  const [port] = event.ports
-  if (port) {
-    agentPortState.agentPort = port
-    // Set flag to indicate agentPort is ready
-    agentPortState.isAgentPortReadyFlag = true
-    port.onmessage = (e) => {
-      handleAgentPortMessage(e.data)
-    }
-    port.start()
-    // Notify all waiting callbacks
-    agentPortReadyCallbacks.forEach(callback => {
-      try {
-        callback()
-      } catch {
-        // ignore callback errors
-      }
-    });
-    agentPortReadyCallbacks.clear()
-    // Dispatch event to notify renderer that agentPort is ready
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('agent-port-ready'))
-    }, 0)
   }
 })
 
@@ -1402,117 +1309,6 @@ function getConductorPortAPI(): ConductorPortAPI | null {
   };
 }
 
-// Helper functions for agentPort API
-function getAgentPortAPI(): AgentControlPortAPI | null {
-  if (!agentPortState.agentPort) {
-    return null;
-  }
-  return {
-    startChat: (sessionId: string, prompt: string, options?: Record<string, unknown>) => {
-      debugLog('renderer->main chat:start', { sessionId, promptLength: prompt.length })
-      agentPortState.agentPort?.postMessage({ type: 'chat:start', sessionId, prompt, options })
-    },
-    interruptChat: (sessionId: string) => {
-      agentPortState.agentPort?.postMessage({ type: 'chat:interrupt', sessionId })
-    },
-    resolvePermission: (id: string, decision: string, extra?: Record<string, unknown>) => {
-      agentPortState.agentPort?.postMessage({ type: 'permission:resolve', id, decision, ...extra })
-    },
-    compactContext: (sessionId: string) => {
-      agentPortState.agentPort?.postMessage({ type: 'compact', sessionId })
-    },
-    onText: (callback: (content: string, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:text', (data) => callback((data as { content: string }).content, (data as { sessionId?: string }).sessionId))
-    },
-    onThinking: (callback: (content: string, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:thinking', (data) => callback((data as { content: string }).content, (data as { sessionId?: string }).sessionId))
-    },
-    onToolUse: (callback: (data: { id: string; name: string; input: unknown }, sessionId?: string) => void) => {
-      const cleanupStarted = registerAgentPortHandler('chat:tool_use_started', (data) => callback(data as { id: string; name: string; input: unknown }, (data as { sessionId?: string }).sessionId))
-      const cleanupUse = registerAgentPortHandler('chat:tool_use', (data) => callback(data as { id: string; name: string; input: unknown }, (data as { sessionId?: string }).sessionId))
-      return () => {
-        cleanupStarted()
-        cleanupUse()
-      }
-    },
-    onToolResult: (callback: (data: { id: string; result: unknown; error?: string; duration_ms?: number }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:tool_result', (data) => callback(data as { id: string; result: unknown; error?: string; duration_ms?: number }, (data as { sessionId?: string }).sessionId))
-    },
-    onToolProgress: (callback: (data: { toolUseId: string; percent: number; stage: string }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:tool_progress', (data) => callback(data as { toolUseId: string; percent: number; stage: string }, (data as { sessionId?: string }).sessionId))
-    },
-    onToolOutput: (callback: (data: { toolUseId: string; stream: 'stdout' | 'stderr'; data: string }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:tool_output', (data) => callback(data as { toolUseId: string; stream: 'stdout' | 'stderr'; data: string }, (data as { sessionId?: string }).sessionId))
-    },
-    onAgentProgress: (callback: (data: {
-      agentEventType: string;
-      data?: string;
-      toolName?: string;
-      toolInput?: Record<string, unknown>;
-      toolResult?: string;
-      duration?: number;
-      agentId?: string;
-      agentType?: string;
-      agentName?: string;
-      agentDescription?: string;
-      agentSessionId?: string;
-    }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:agent_progress', (data) => callback(data as {
-        agentEventType: string;
-        data?: string;
-        toolName?: string;
-        toolInput?: Record<string, unknown>;
-        toolResult?: string;
-        duration?: number;
-        agentId?: string;
-        agentType?: string;
-        agentName?: string;
-        agentDescription?: string;
-        agentSessionId?: string;
-      }, (data as { sessionId?: string }).sessionId))
-    },
-    onPermission: (callback: (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:permission', (data) => callback((data as { request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } }).request, (data as { sessionId?: string }).sessionId))
-    },
-    onContextUsage: (callback: (data: { usedTokens: number; contextWindow: number; percentFull: number }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:context_usage', (data) => callback(data as { usedTokens: number; contextWindow: number; percentFull: number }, (data as { sessionId?: string }).sessionId))
-    },
-    onDone: (callback: (sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:done', (data) => callback((data as { sessionId?: string }).sessionId))
-    },
-    onError: (callback: (message: string, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:error', (data) => callback((data as { message: string }).message, (data as { sessionId?: string }).sessionId))
-    },
-    onStatus: (callback: (message: string, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:status', (data) => callback((data as { message: string }).message, (data as { sessionId?: string }).sessionId))
-    },
-    onDbPersisted: (callback: (data: { success: boolean; sessionId: string; messageCount: number; reason?: string }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:db_persisted', (data) => callback(data as { success: boolean; sessionId: string; messageCount: number; reason?: string }, (data as { sessionId?: string }).sessionId))
-    },
-    onTokenUsage: (callback: (data: { inputTokens: number; outputTokens: number }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:token_usage', (data) => callback(data as { inputTokens: number; outputTokens: number }, (data as { sessionId?: string }).sessionId))
-    },
-    onRetry: (callback: (data: { attempt: number; maxAttempts: number; delayMs: number; message: string }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:retry', (data) => callback(data as { attempt: number; maxAttempts: number; delayMs: number; message: string }, (data as { sessionId?: string }).sessionId))
-    },
-    onSkillReviewStarted: (callback: (sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:skill_review_started', (data) => callback((data as { sessionId?: string }).sessionId))
-    },
-    onSkillReviewCompleted: (callback: (data: { passed: boolean; score: number; feedback: string; skillName?: string; error?: string }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:skill_review_completed', (data) => callback((data as { data?: { passed: boolean; score: number; feedback: string; skillName?: string; error?: string } }).data ?? data as { passed: boolean; score: number; feedback: string; skillName?: string; error?: string }, (data as { sessionId?: string }).sessionId))
-    },
-    onTitleGenerated: (callback: (data: { title: string }, sessionId?: string) => void) => {
-      return registerAgentPortHandler('chat:title_generated', (data) => callback(data as { title: string }, (data as { sessionId?: string }).sessionId))
-    },
-    onCompactDone: (callback: (sessionId?: string) => void) => {
-      return registerAgentPortHandler('compact:done', (data) => callback((data as { sessionId?: string }).sessionId))
-    },
-    onCompactError: (callback: (message: string, sessionId?: string) => void) => {
-      return registerAgentPortHandler('compact:error', (data) => callback((data as { message: string }).message, (data as { sessionId?: string }).sessionId))
-    },
-  };
-}
-
 const electronAPI: ElectronAPI = {
   versions: {
     electron: process.versions.electron,
@@ -1569,6 +1365,18 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on('chat:background_task_ready', handler);
     return () => {
       ipcRenderer.removeListener('chat:background_task_ready', handler);
+    };
+  },
+  onBashTaskUpdate: (
+    callback: (data: { sessionId: string; tasks: BashBackgroundTaskSnapshot[] }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { sessionId: string; tasks: BashBackgroundTaskSnapshot[] },
+    ) => callback(data);
+    ipcRenderer.on('bash_task:update', handler);
+    return () => {
+      ipcRenderer.removeListener('bash_task:update', handler);
     };
   },
   app: {
@@ -1635,7 +1443,6 @@ const electronAPI: ElectronAPI = {
   },
   // Functions to get port APIs (called dynamically)
   getConfigPort: getConfigPortAPI,
-  getAgentPort: getAgentPortAPI,
   getConductorPort: getConductorPortAPI,
   // Agent Server port for SSE client (Phase 7.1 - plan 53)
   getAgentServerPort: () => ipcRenderer.invoke('agent-server:get-port'),
@@ -1853,16 +1660,6 @@ const electronAPI: ElectronAPI = {
     setEnabled: (skillName: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', skillName, enabled),
     getSecurityBypass: () => ipcRenderer.invoke('skills:getSecurityBypass'),
     setSecurityBypass: (skillName: string, bypass: boolean) => ipcRenderer.invoke('skills:setSecurityBypass', skillName, bypass),
-    learning: {
-      list: (options?: { limit?: number; unreadOnly?: boolean }) => ipcRenderer.invoke('skills:learning:list', options),
-      unreadCount: () => ipcRenderer.invoke('skills:learning:unreadCount'),
-      markRead: (ids?: string[]) => ipcRenderer.invoke('skills:learning:markRead', ids),
-      onCreated: (callback: () => void) => {
-        const handler = () => callback();
-        ipcRenderer.on('skills:learning:created', handler);
-        return () => ipcRenderer.removeListener('skills:learning:created', handler);
-      },
-    },
   },
   files: {
     browse: (dirPath: string, maxDepth?: number) => ipcRenderer.invoke('files:browse', dirPath, maxDepth),
@@ -2019,24 +1816,7 @@ const electronAPI: ElectronAPI = {
   },
   // Logger API for checking if ports are ready
   portStatus: {
-    isAgentPortReady: () => agentPortState.isAgentPortReadyFlag,
-    isConfigPortReady: () => agentPortState.isConfigPortReadyFlag,
-    waitForAgentPort: (timeout = 5000) => {
-      return new Promise<boolean>((resolve) => {
-        if (agentPortState.isAgentPortReadyFlag) {
-          resolve(true)
-          return
-        }
-        const timeoutId = setTimeout(() => {
-          resolve(false)
-        }, timeout)
-        const callback = () => {
-          clearTimeout(timeoutId)
-          resolve(true)
-        }
-        agentPortReadyCallbacks.add(callback)
-      })
-    },
+    isConfigPortReady: () => isConfigPortReadyFlag,
   },
   // Logger API
   logger: {

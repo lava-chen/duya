@@ -104,8 +104,14 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     // denylist lets the tools appear when the user explicitly enables
     // conductor mode.
     promptProfile: {
-      enableSections: ['generalTaskGuidance'],
-      disableSections: ['rules'],
+      // General sessions need core operating guidance, but must not inherit
+      // every volatile capability, skill, and session-history section.
+      enableSections: [
+        'identity', 'communication', 'finalAnswer', 'system', 'tasks',
+        'destructiveActions', 'tools', 'project', 'duyaDesktopContext',
+        'language', 'platform', 'environment',
+      ],
+      disableSections: ['rules', 'memory', 'memoryContent'],
     },
     promptSystem: 'general',
     userVisible: true,
@@ -135,7 +141,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     // canvas_* removed: conductor canvas tools are gated by the session
     // conductorMode toggle. Research mode can still use canvas tools when
     // the user explicitly enables conductor mode.
-    disallowedTools: ['Agent', 'skill_manage', 'duya_*'],
+    disallowedTools: ['Agent', 'duya_*'],
     promptProfile: {
       disableSections: ['rules'],
     },
@@ -209,7 +215,6 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'Agent',
       // Self-management — gateway has no desktop settings UI to drive.
       'duya_cli',
-      'skill_manage',
       'memory',
       'read_module',
       'task',

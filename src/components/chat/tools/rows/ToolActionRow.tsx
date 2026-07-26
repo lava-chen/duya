@@ -33,7 +33,7 @@ import { getRenderer, getStatus, getFilePath, truncatePath } from '../registry';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { ToolStatusBadge } from '../statusBadge';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
-import type { ToolAction } from '../types';
+import type { ToolAction, ToolRendererDef } from '../types';
 import type { TranslationKey } from '@/i18n';
 import { BashToolRow } from './BashToolRow';
 import { DuyaCliToolRow } from './DuyaCliToolRow';
@@ -55,116 +55,132 @@ interface ToolActionRowProps {
   agentProgressEvents?: AgentProgressEventWithMeta[];
 }
 
-export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolActionRowProps) {
-  const { t } = useTranslation();
-  const renderer = getRenderer(tool.name);
-  const filePath = getFilePath(tool.input);
-  const status = getStatus(tool);
-  const summary = renderer.getSummary(tool.input, tool.name);
-  const isDuyaCli = ['duya_cli', 'duya-cli', 'duyacli'].includes(tool.name.toLowerCase());
-  const isBash = !isDuyaCli && renderer.icon === TerminalIcon;
-  const lowerName = tool.name.toLowerCase();
-  const isLegacySubAgent = isLegacySubAgentToolAction(tool);
-  // AgentStatus used to route here as a separate path, but the tool
-  // was removed in P0-γ. Subagent routing now solely relies on icon
-  // + legacy alias detection.
-  const isSubAgent = renderer.icon === RobotIcon || isLegacySubAgent;
-  const isFileEdit = FILE_EDIT_TOOLS.has(lowerName) || FILE_CREATE_TOOLS.has(lowerName);
-  const isRead = ['read', 'readfile', 'read_file'].includes(lowerName);
-  const isAskUserQuestion = isAskUserQuestionTool(tool.name);
-  const isMemory = lowerName === 'memory';
-  const isSkillTool = lowerName === 'skill';
-  const isReadModule = isModuleTool(tool.name);
-  // TaskTool uses the same tool name as the legacy subagent
-  // dispatcher; the predicate inspects `input.action` to disambiguate.
-  // Routing TaskTool here means TaskToolRow owns the chrome summary
-  // and the JSON envelope body.
-  const isTaskTool = isTaskToolAction(tool.input);
-  const isMessageSession = isMessageSessionTool(tool.name);
-  const isVisionAnalyze = tool.name.toLowerCase() === 'vision_analyze';
-  const isCanvasConductor = tool.name.toLowerCase().startsWith('canvas_') || tool.name.toLowerCase() === 'database_manage';
-  const [expanded, setExpanded] = useState(false);
-  // Keep all useState calls before any conditional return so React hook
-  // order stays stable when routing conditions change between renders.
-  const [hovered, setHovered] = useState(false);
+// Ordered route table for dedicated tool rows. Adding a new dedicated
+// row = add one entry here + create the row file. The order matters
+// because some predicates overlap (e.g. `task` name is shared by
+// TaskTool and legacy subagent dispatch — TaskTool must be checked
+// before SubAgent, and SubAgent's legacy detection explicitly excludes
+// `isTaskToolAction`).
+//
+// Each entry's `match` receives the full tool plus the precomputed
+// registry renderer so it can combine name + icon + input checks in
+// a single predicate (previously these were scattered across 16
+// inline if branches with duplicated lowerName / lowerName chains).
+interface RouteEntry {
+  match: (tool: ToolAction, renderer: ToolRendererDef) => boolean;
+  render: (tool: ToolAction, props: ToolActionRowProps) => React.ReactNode;
+}
 
-  if (isBash) {
-    return <BashToolRow tool={tool} streamingToolOutput={streamingToolOutput} />;
-  }
-
-  if (isDuyaCli) {
-    return <DuyaCliToolRow tool={tool} />;
-  }
-
-  if (isSubAgent) {
-    return <SubAgentToolRow tool={tool} agentProgressEvents={agentProgressEvents} />;
-  }
-
-  if (isFileEdit) {
-    return <FileEditToolRow tool={tool} />;
-  }
-
-  if (isRead) {
-    return <ReadToolRow tool={tool} />;
-  }
-
-  if (isAskUserQuestion) {
-    return <AskUserQuestionResultRow tool={tool} />;
-  }
-
-  if (isMemory) {
-    return <MemoryToolRow tool={tool} />;
-  }
-
-  if (isSkillTool) {
+const ROUTES: RouteEntry[] = [
+  {
+    // duya_cli must be checked BEFORE Bash because both use
+    // TerminalIcon. The Bash route below excludes duya_cli by name.
+    match: (t) => ['duya_cli', 'duya-cli', 'duyacli'].includes(t.name.toLowerCase()),
+    render: (tool) => <DuyaCliToolRow tool={tool} />,
+  },
+  {
+    // Bash / shell — TerminalIcon but NOT duya_cli (excluded above by
+    // the earlier route entry). The explicit name check here is a
+    // safety net in case the route order is ever shuffled.
+    match: (t, r) => r.icon === TerminalIcon
+      && !['duya_cli', 'duya-cli', 'duyacli'].includes(t.name.toLowerCase()),
+    render: (tool, p) => <BashToolRow tool={tool} streamingToolOutput={p.streamingToolOutput} />,
+  },
+  {
+    // SubAgent — RobotIcon, or legacy `task` tool without `input.action`
+    // (isLegacySubAgentToolAction internally excludes isTaskToolAction).
+    match: (t, r) => r.icon === RobotIcon || isLegacySubAgentToolAction(t),
+    render: (tool, p) => <SubAgentToolRow tool={tool} agentProgressEvents={p.agentProgressEvents} />,
+  },
+  {
+    match: (t) => FILE_EDIT_TOOLS.has(t.name.toLowerCase()) || FILE_CREATE_TOOLS.has(t.name.toLowerCase()),
+    render: (tool) => <FileEditToolRow tool={tool} />,
+  },
+  {
+    match: (t) => ['read', 'readfile', 'read_file'].includes(t.name.toLowerCase()),
+    render: (tool) => <ReadToolRow tool={tool} />,
+  },
+  {
+    match: (t) => isAskUserQuestionTool(t.name),
+    render: (tool) => <AskUserQuestionResultRow tool={tool} />,
+  },
+  {
+    match: (t) => t.name.toLowerCase() === 'memory',
+    render: (tool) => <MemoryToolRow tool={tool} />,
+  },
+  {
     // Skill row owns its own header (chrome), markdown rendering, and
     // base-directory path presentation. Routing here keeps the catch-all
     // path below from JSON-dumping the raw tool result envelope.
-    return <SkillToolRow tool={tool} />;
-  }
-
-  if (isReadModule) {
+    match: (t) => t.name.toLowerCase() === 'skill',
+    render: (tool) => <SkillToolRow tool={tool} />,
+  },
+  {
     // ModuleTool (read_module) returns inlined design-spec READMEs as
     // joined markdown. Route to ModuleToolRow so the chrome summary
     // shows the loaded module names (e.g. "diagram + chart") instead
     // of the raw JSON input dump, and the expanded body renders the
     // markdown via MarkdownRenderer instead of the catch-all mono dump.
-    return <ModuleToolRow tool={tool} />;
-  }
-
-  if (isTaskTool) {
+    match: (t) => isModuleTool(t.name),
+    render: (tool) => <ModuleToolRow tool={tool} />,
+  },
+  {
     // TaskTool returns a JSON envelope `{ task: { id, subject } }`
     // (or `{ taskId, status, ... }` for update/output/stop). Route to
     // TaskToolRow so the chrome summary renders natural language
-    // ("已创建 设计杂志风...") per-action.
-    return <TaskToolRow tool={tool} />;
-  }
-
-  if (isMessageSession) {
+    // ("已创建 设计杂志风...") per-action. Must be checked before the
+    // catch-all because the tool name `task` is shared with legacy
+    // subagent dispatch (handled above by SubAgent route).
+    match: (t) => isTaskToolAction(t.input),
+    render: (tool) => <TaskToolRow tool={tool} />,
+  },
+  {
     // MessageSession returns a plain-text response from the target
     // agent, optionally followed by a "[Target agent used tools: ...]"
     // trailer. Route to MessageSessionToolRow so the chrome summary
     // shows the short target id + message preview instead of the raw
     // JSON dump, and the expanded body renders the response text +
     // tool-call summary + status badge.
-    return <MessageSessionToolRow tool={tool} />;
-  }
-
-  if (isVisionAnalyze) {
+    match: (t) => isMessageSessionTool(t.name),
+    render: (tool) => <MessageSessionToolRow tool={tool} />,
+  },
+  {
     // vision_analyze returns a plain-text envelope ("Image analyzed:
     // <path>\nFormat: …\n[Question: …]\n\n<analysis>") plus an image
     // data URL in metadata. Route to VisionToolRow so the chrome
     // shows a status-aware verb ("已调用视觉能力" / "Used vision")
     // and a small preview card with the analyzed image; clicking
     // opens the full analysis in ToolImagePreviewModal.
-    return <VisionToolRow tool={tool} />;
-  }
-
-  if (isCanvasConductor) {
+    match: (t) => t.name.toLowerCase() === 'vision_analyze',
+    render: (tool) => <VisionToolRow tool={tool} />,
+  },
+  {
     // Canvas Conductor tools (canvas_*) are rendered by a dedicated
     // row that maps each tool to a per-action verb and summary so the
     // user sees "正在绘制画布元素" instead of the raw JSON payload.
-    return <CanvasConductorToolRow tool={tool} />;
+    match: (t) => t.name.toLowerCase().startsWith('canvas_') || t.name.toLowerCase() === 'database_manage',
+    render: (tool) => <CanvasConductorToolRow tool={tool} />,
+  },
+];
+
+export function ToolActionRow({ tool, streamingToolOutput, agentProgressEvents }: ToolActionRowProps) {
+  const { t } = useTranslation();
+  const renderer = getRenderer(tool.name);
+  const filePath = getFilePath(tool.input);
+  const status = getStatus(tool);
+  const summary = renderer.getSummary(tool.input, tool.name);
+  const [expanded, setExpanded] = useState(false);
+  // Keep all useState calls before any conditional return so React hook
+  // order stays stable when routing conditions change between renders.
+  const [hovered, setHovered] = useState(false);
+
+  // Try each dedicated route in order. The first match wins. Route
+  // predicates are self-contained (each handles its own exclusions)
+  // so the loop body is a plain first-match-wins lookup.
+  for (const route of ROUTES) {
+    if (route.match(tool, renderer)) {
+      return <>{route.render(tool, { tool, streamingToolOutput, agentProgressEvents })}</>;
+    }
   }
 
   const hasResult = tool.result !== undefined && tool.result !== '';

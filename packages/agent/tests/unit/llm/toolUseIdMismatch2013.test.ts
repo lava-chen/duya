@@ -28,7 +28,8 @@ function makeClient(): AnthropicClient {
  */
 async function captureRequestBody(
   client: AnthropicClient,
-  messages: Message[]
+  messages: Message[],
+  options: { maxTokens?: number; maxOutputTokens?: number } = {},
 ): Promise<any> {
   let captured: any = null;
   // Spy on the SDK's stream method directly. The Anthropic SDK exposes
@@ -64,6 +65,8 @@ async function captureRequestBody(
     const gen = client.streamChat(messages, {
       systemPrompt: 'You are a test assistant.',
       tools: [],
+      maxTokens: options.maxTokens,
+      maxOutputTokens: options.maxOutputTokens,
     });
     for await (const _evt of gen) {
       // drain
@@ -85,6 +88,16 @@ describe('Reproduction: Anthropic 2013 tool_use_id mismatch', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('uses the requested MiniMax output budget instead of the capability ceiling', async () => {
+    const body = await captureRequestBody(
+      client,
+      [{ id: 'u1', role: 'user', content: 'Generate a title', timestamp: 1 }],
+      { maxTokens: 500, maxOutputTokens: 524288 },
+    );
+
+    expect(body.max_tokens).toBe(500);
   });
 
   it('SCENARIO A — clean history: tool_use immediately followed by tool_result → passes', async () => {

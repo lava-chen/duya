@@ -128,7 +128,6 @@ export const researchMode: ModeModifier = {
       'bash',
       'edit',
       'write',
-      'skill_manage',
       'module',
 
       // Conductor canvas tools (13)

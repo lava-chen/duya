@@ -1,14 +1,14 @@
 /**
- * Tests for ToolFilter
+ * Tests for ToolFilter — single-pass tool visibility.
  */
 
 import { describe, it, expect } from 'vitest';
 import {
-  filterTools,
+  matchToolPattern,
+  isToolVisible,
   resolveAllowedTools,
   validateToolAccess,
-  matchToolPattern,
-  expandToolGroups,
+  type ToolVisibilityConstraints,
 } from '../../../src/agent-profile/ToolFilter.js';
 import type { AgentProfile } from '../../../src/agent-profile/types.js';
 import { PRESET_AGENT_PROFILES } from '../../../src/agent-profile/types.js';
@@ -42,6 +42,9 @@ function makeProfile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   };
 }
 
+const NO_CONSTRAINTS: ToolVisibilityConstraints = {};
+const EMPTY_DISCOVERED = new Set<string>();
+
 describe('matchToolPattern', () => {
   it('should match exact tool names', () => {
     expect(matchToolPattern('file:read', 'file:read')).toBe(true);
@@ -65,52 +68,71 @@ describe('matchToolPattern', () => {
   });
 });
 
-describe('expandToolGroups', () => {
-  it('should expand exact patterns', () => {
-    const result = expandToolGroups(['file:read', 'brief'], ALL_TOOLS);
-    expect(result).toContain('file:read');
-    expect(result).toContain('brief');
-    expect(result).not.toContain('file:write');
+describe('isToolVisible', () => {
+  it('always-exposed tool with no constraints is visible', () => {
+    expect(isToolVisible('read', 'always', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(true);
   });
 
-  it('should expand group:* patterns', () => {
-    const result = expandToolGroups(['file:*'], ALL_TOOLS);
-    expect(result).toContain('file:read');
-    expect(result).toContain('file:write');
-    expect(result).toContain('file:edit');
-    expect(result).not.toContain('search:grep');
+  it('internal tool is never visible', () => {
+    expect(isToolVisible('debug', 'internal', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(false);
   });
 
-  it('should expand * to all tools', () => {
-    const result = expandToolGroups(['*'], ALL_TOOLS);
-    expect(result).toHaveLength(ALL_TOOLS.length);
+  it('discoverable tool is hidden until discovered', () => {
+    expect(isToolVisible('browser', 'discoverable', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(false);
+    expect(isToolVisible('browser', 'discoverable', new Set(['browser']), NO_CONSTRAINTS)).toBe(true);
+  });
+
+  it('disabledTools (exact) hides the tool', () => {
+    expect(isToolVisible('read', 'always', EMPTY_DISCOVERED, { disabledTools: ['read'] })).toBe(false);
+    expect(isToolVisible('write', 'always', EMPTY_DISCOVERED, { disabledTools: ['read'] })).toBe(true);
+  });
+
+  it('profileDisallowedPatterns (wildcard) hides matching tools', () => {
+    const c: ToolVisibilityConstraints = { profileDisallowedPatterns: ['exec:*'] };
+    expect(isToolVisible('exec:bash', 'always', EMPTY_DISCOVERED, c)).toBe(false);
+    expect(isToolVisible('file:read', 'always', EMPTY_DISCOVERED, c)).toBe(true);
+  });
+
+  it('allowedTools (exact) restricts to listed tools', () => {
+    const c: ToolVisibilityConstraints = { allowedTools: ['read', 'glob'] };
+    expect(isToolVisible('read', 'always', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('write', 'always', EMPTY_DISCOVERED, c)).toBe(false);
+  });
+
+  it('profileAllowedPatterns (wildcard) restricts to matching tools', () => {
+    const c: ToolVisibilityConstraints = { profileAllowedPatterns: ['file:*', 'search:*'] };
+    expect(isToolVisible('file:read', 'always', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('search:grep', 'always', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('exec:bash', 'always', EMPTY_DISCOVERED, c)).toBe(false);
+  });
+
+  it('deny wins over allow', () => {
+    const c: ToolVisibilityConstraints = {
+      profileAllowedPatterns: ['file:*', 'exec:*'],
+      profileDisallowedPatterns: ['exec:bash'],
+    };
+    expect(isToolVisible('file:read', 'always', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('exec:python', 'always', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('exec:bash', 'always', EMPTY_DISCOVERED, c)).toBe(false);
+  });
+
+  it('discovered tool still respects denylist', () => {
+    const c: ToolVisibilityConstraints = { disabledTools: ['browser'] };
+    expect(isToolVisible('browser', 'discoverable', new Set(['browser']), c)).toBe(false);
   });
 });
 
-describe('filterTools', () => {
+describe('resolveAllowedTools (profile-only)', () => {
   it('should allow all tools by default', () => {
     const profile = makeProfile();
-    const result = filterTools({ agentProfile: profile, allTools: ALL_TOOLS });
+    const result = resolveAllowedTools(profile, ALL_TOOLS);
     expect(result.allowed).toHaveLength(ALL_TOOLS.length);
     expect(result.isValid).toBe(true);
   });
 
-  it('should deny globally disallowed tools', () => {
-    const profile = makeProfile();
-    const result = filterTools({
-      agentProfile: profile,
-      allTools: ALL_TOOLS,
-      globalDisallowedTools: ['exec:*'],
-    });
-    expect(result.allowed).not.toContain('exec:bash');
-    expect(result.allowed).not.toContain('exec:python');
-    expect(result.allowed).toContain('file:read');
-    expect(result.denialReasons.get('exec:bash')).toBe('globally_denied');
-  });
-
   it('should whitelist with allowedTools', () => {
     const profile = makeProfile({ allowedTools: ['file:*', 'search:*'] });
-    const result = filterTools({ agentProfile: profile, allTools: ALL_TOOLS });
+    const result = resolveAllowedTools(profile, ALL_TOOLS);
     expect(result.allowed).toContain('file:read');
     expect(result.allowed).toContain('search:grep');
     expect(result.allowed).not.toContain('exec:bash');
@@ -119,109 +141,21 @@ describe('filterTools', () => {
 
   it('should blacklist with disallowedTools', () => {
     const profile = makeProfile({ disallowedTools: ['exec:*', 'browser:*'] });
-    const result = filterTools({ agentProfile: profile, allTools: ALL_TOOLS });
+    const result = resolveAllowedTools(profile, ALL_TOOLS);
     expect(result.allowed).toContain('file:read');
     expect(result.allowed).not.toContain('exec:bash');
     expect(result.allowed).not.toContain('browser:navigate');
   });
 
-  it('should deny takes precedence over allow', () => {
+  it('deny takes precedence over allow', () => {
     const profile = makeProfile({
       allowedTools: ['file:*', 'exec:*'],
       disallowedTools: ['exec:bash'],
     });
-    const result = filterTools({ agentProfile: profile, allTools: ALL_TOOLS });
-    expect(result.allowed).toContain('file:read');
-    expect(result.allowed).toContain('exec:python');
-    expect(result.allowed).not.toContain('exec:bash');
-  });
-
-  it('should apply sandbox policy', () => {
-    const profile = makeProfile();
-    const result = filterTools({
-      agentProfile: profile,
-      allTools: ALL_TOOLS,
-      sandboxPolicy: { deny: ['file:write', 'file:edit'] },
-    });
-    expect(result.allowed).toContain('file:read');
-    expect(result.allowed).not.toContain('file:write');
-    expect(result.allowed).not.toContain('file:edit');
-  });
-
-  it('should apply subagent policy', () => {
-    const profile = makeProfile();
-    const result = filterTools({
-      agentProfile: profile,
-      allTools: ALL_TOOLS,
-      subagentPolicy: { allow: ['file:read', 'search:*'] },
-    });
-    expect(result.allowed).toContain('file:read');
-    expect(result.allowed).toContain('search:grep');
-    expect(result.allowed).not.toContain('exec:bash');
-  });
-
-  it('should handle layered filtering', () => {
-    const profile = makeProfile({
-      allowedTools: ['file:*', 'search:*', 'exec:*'],
-      disallowedTools: ['exec:bash'],
-    });
-    const result = filterTools({
-      agentProfile: profile,
-      allTools: ALL_TOOLS,
-      globalDisallowedTools: ['file:edit'],
-      sandboxPolicy: { deny: ['search:semantic'] },
-    });
-    expect(result.allowed).toContain('file:read');
-    expect(result.allowed).toContain('file:write');
-    expect(result.allowed).not.toContain('file:edit');
-    expect(result.allowed).toContain('search:grep');
-    expect(result.allowed).not.toContain('search:semantic');
-    expect(result.allowed).toContain('exec:python');
-    expect(result.allowed).not.toContain('exec:bash');
-    expect(result.allowed).not.toContain('browser:navigate');
-  });
-});
-
-describe('validateToolAccess', () => {
-  it('should not throw for valid results', () => {
-    const result = filterTools({
-      agentProfile: makeProfile(),
-      allTools: ALL_TOOLS,
-    });
-    expect(() => validateToolAccess(result)).not.toThrow();
-  });
-
-  it('should throw when no tools are available', () => {
-    const result = filterTools({
-      agentProfile: makeProfile({ disallowedTools: ['*'] }),
-      allTools: ALL_TOOLS,
-    });
-    expect(() => validateToolAccess(result)).toThrow('No tools available');
-  });
-});
-
-describe('resolveAllowedTools', () => {
-  it('should apply agent profile filtering', () => {
-    const profile = makeProfile({
-      allowedTools: ['file:read', 'search:*', 'brief'],
-    });
     const result = resolveAllowedTools(profile, ALL_TOOLS);
     expect(result.allowed).toContain('file:read');
-    expect(result.allowed).toContain('search:grep');
-    expect(result.allowed).toContain('brief');
-    expect(result.allowed).not.toContain('file:write');
+    expect(result.allowed).toContain('exec:python');
     expect(result.allowed).not.toContain('exec:bash');
-  });
-
-  it('should apply agent profile with global denials', () => {
-    const profile = makeProfile({
-      allowedTools: ['file:*', 'search:*', 'exec:*'],
-    });
-    const result = resolveAllowedTools(profile, ALL_TOOLS, ['browser:*', 'gateway:*']);
-    expect(result.allowed).toContain('file:read');
-    expect(result.allowed).toContain('file:write');
-    expect(result.allowed).not.toContain('browser:navigate');
-    expect(result.allowed).not.toContain('gateway:http');
   });
 
   it('gives Gateway shell access while blocking recursive and mode tools', () => {
@@ -261,60 +195,17 @@ describe('resolveAllowedTools', () => {
   });
 });
 
-describe('ToolFilter diagnostics', () => {
-  it('records matched patterns for allowed and disallowed tools', () => {
-    const profile = makeProfile({
-      allowedTools: ['*'],
-      disallowedTools: ['exec:*', 'duya:*'],
-    });
-    const tools = [...ALL_TOOLS, 'duya:config', 'duya:settings'];
-    const result = filterTools({ agentProfile: profile, allTools: tools });
+describe('validateToolAccess', () => {
+  it('should not throw for valid results', () => {
+    const result = resolveAllowedTools(makeProfile(), ALL_TOOLS);
+    expect(() => validateToolAccess(result)).not.toThrow();
+  });
 
-    const matchedByPattern = new Map(
-      result.diagnostics.matchedPatterns.map(mp => [mp.pattern, mp.matched] as const),
+  it('should throw when no tools are available', () => {
+    const result = resolveAllowedTools(
+      makeProfile({ disallowedTools: ['*'] }),
+      ALL_TOOLS,
     );
-    expect(matchedByPattern.get('*')).toEqual(expect.arrayContaining(tools));
-    expect(matchedByPattern.get('exec:*')).toEqual(['exec:bash', 'exec:python']);
-    expect(matchedByPattern.get('duya:*')).toEqual(['duya:config', 'duya:settings']);
-  });
-
-  it('records unmatched patterns when configured families are not loaded', () => {
-    const profile = makeProfile({
-      disallowedTools: ['canvas:*'],
-    });
-    // No canvas tool in ALL_TOOLS — pattern should be reported as unmatched.
-    const result = filterTools({ agentProfile: profile, allTools: ALL_TOOLS });
-    expect(result.diagnostics.unmatchedPatterns).toContain('canvas:*');
-  });
-
-  it('records layer breakdown for cascading filters', () => {
-    const profile = makeProfile({
-      allowedTools: ['*'],
-      disallowedTools: ['exec:bash'],
-    });
-    const result = filterTools({
-      agentProfile: profile,
-      allTools: ALL_TOOLS,
-      globalDisallowedTools: ['browser:*'],
-      sandboxPolicy: { deny: ['search:semantic'] },
-      subagentPolicy: { allow: ['file:*', 'search:*'] },
-    });
-
-    expect(result.diagnostics.layerBreakdown.layer2_agentDenied).toBe(1); // exec:bash
-    expect(result.diagnostics.layerBreakdown.layer3_globalDenied).toBeGreaterThanOrEqual(2); // browser:navigate, browser:click
-    expect(result.diagnostics.layerBreakdown.layer4_sandboxDenied).toBe(1); // search:semantic
-    // subagent policy: allow file:*, search:* — exec:python, brief, sessions:*, gateway:http fall out
-    expect(result.diagnostics.layerBreakdown.layer5_subagentNotInAllowlist).toBeGreaterThan(0);
-  });
-
-  it('deny precedence still holds with diagnostics populated', () => {
-    const profile = makeProfile({
-      allowedTools: ['*'],
-      disallowedTools: ['file:read'],
-    });
-    const result = filterTools({ agentProfile: profile, allTools: ALL_TOOLS });
-    expect(result.allowed).not.toContain('file:read');
-    expect(result.denialReasons.get('file:read')).toBe('agent_denied');
-    expect(result.diagnostics.layerBreakdown.layer2_agentDenied).toBe(1);
+    expect(() => validateToolAccess(result)).toThrow('No tools available');
   });
 });

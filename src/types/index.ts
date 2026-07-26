@@ -4,6 +4,7 @@ export * from './message';
 export * from './stream';
 export * from './slash-command';
 export * from './automation';
+export * from './bash-task';
 
 // Extended thread type with project support
 export interface Thread {
@@ -64,7 +65,6 @@ export interface AppSettings {
   provider: string;
   messageFont: "serif" | "sans-serif";
   skillAdditionalPaths: string[];
-  skillNudgeInterval: number;
   summaryLLMConfig: SummaryLLMConfig | null;
   summaryLLMEnabled: boolean;
   databasePath: string;

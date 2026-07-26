@@ -4,6 +4,10 @@
  */
 
 import { execa, ExecaError, type Options } from 'execa';
+import { spawn } from 'child_process';
+import { open } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import type { ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import type { ToolExecutor } from '../registry.js';
@@ -35,6 +39,9 @@ import {
   analyzeCommandComplexity,
 } from '../../utils/bash/commands.js';
 import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
+import { getBashTaskRegistry } from '../../session/bash-task-registry.js';
+import { enqueuePendingNotification } from '../../queue/index.js';
+import { buildTaskNotificationXml } from '../../lifecycle/buildTaskNotification.js';
 
 type Severity = 'low' | 'medium' | 'high' | 'critical';
 
@@ -921,6 +928,28 @@ export class BashTool extends BaseTool implements ToolExecutor {
         ? this.config.normalizeCommandForExecution(command)
         : normalizeShellCommandForExecution(executionPlan.providerKind, command));
 
+    // Background execution path: spawn a detached process, redirect output
+    // to a temp file, register in BashTaskRegistry, and return immediately.
+    // The process keeps running after execute() resolves; completion is
+    // reported later via enqueuePendingNotification so the LLM can resume.
+    const isBackground =
+      validation.data.run_in_background === true ||
+      validation.data.background === true;
+    if (isBackground) {
+      return this.executeBackground({
+        command: normalizedCommand,
+        originalCommand: command,
+        shellProvider,
+        shellInfo,
+        cwd,
+        timeout: resolvedTimeout,
+        toolUseId: context?.toolUseId ?? crypto.randomUUID(),
+        sessionId: context?.options.sessionId,
+        securityWarnings: securityResult.warnings,
+        executionPlanReason: executionPlan.reason,
+      });
+    }
+
     try {
       const provider = await getActiveProvider();
 
@@ -1111,6 +1140,150 @@ export class BashTool extends BaseTool implements ToolExecutor {
         id: crypto.randomUUID(),
         name: this.name,
         result: error instanceof Error ? error.message : 'Unknown error',
+        error: true,
+      };
+    }
+  }
+
+  /**
+   * Execute a command in the background.
+   *
+   * Spawns a detached child process whose stdout/stderr are redirected to a
+   * temp file, registers it in BashTaskRegistry so the UI can list/inspect
+   * it, and returns immediately. When the process exits, the close handler
+   * marks the task complete and enqueues a notification so the LLM can
+   * resume the conversation with the final exit code.
+   *
+   * This replaces the previous WorkerPool-backed background path. Unlike
+   * the worker pool, each background command spawns its own shell and
+   * releases it on exit — there is no long-running BashWorker process.
+   */
+  private async executeBackground(params: {
+    command: string;
+    originalCommand: string;
+    shellProvider: NonNullable<ReturnType<typeof resolveShellProvider>>;
+    shellInfo: import('../../utils/shellDetector.js').ShellInfo;
+    cwd: string;
+    timeout: number;
+    toolUseId: string;
+    sessionId?: string;
+    securityWarnings: SecurityWarning[];
+    executionPlanReason?: string;
+  }): Promise<ToolResult> {
+    const {
+      command,
+      originalCommand,
+      shellProvider,
+      shellInfo,
+      cwd,
+      toolUseId,
+      sessionId,
+      securityWarnings,
+      executionPlanReason,
+    } = params;
+
+    const outputFile = join(tmpdir(), `duya-bash-${toolUseId}.log`);
+
+    try {
+      const fd = await open(outputFile, 'w', 0o644);
+
+      // Sanitize environment: strip sensitive vars and force UTF-8 on Windows.
+      const sanitizedEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        ...getWindowsEncodingEnv(),
+      };
+      const sensitivePattern = /TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|PRIVATE|CREDENTIAL/i;
+      for (const key of Object.keys(sanitizedEnv)) {
+        if (sensitivePattern.test(key)) {
+          delete sanitizedEnv[key];
+        }
+      }
+
+      const shellArgs = shellProvider.buildArgs(command);
+      const proc = spawn(shellInfo.path, shellArgs, {
+        cwd,
+        env: sanitizedEnv,
+        stdio: ['ignore', fd.fd, fd.fd],
+        windowsHide: true,
+      });
+
+      // Detach so this process does not keep the agent alive.
+      proc.unref();
+
+      const startTime = Date.now();
+      const pid = proc.pid ?? -1;
+
+      // Register immediately so the UI shows the running task.
+      const registry = getBashTaskRegistry();
+      registry.register({
+        id: toolUseId,
+        pid,
+        outputFile,
+        command: originalCommand.slice(0, 200),
+        status: 'running',
+        startTime,
+      });
+
+      // close handler: mark complete and notify the parent conversation.
+      proc.on('close', (exitCode) => {
+        registry.markCompleted(toolUseId, exitCode ?? -1);
+        void fd.close().catch(() => { /* already closed */ });
+
+        if (!sessionId) return;
+
+        const completedTask = registry.getTask(toolUseId);
+        const status = exitCode === 0 ? 'completed' : 'failed';
+        const finalMessage = `Background command completed with exit code ${exitCode ?? -1}.`;
+        const xml = buildTaskNotificationXml({
+          taskId: toolUseId,
+          status,
+          agentType: 'bash',
+          agentName: originalCommand.slice(0, 200),
+          description: originalCommand.slice(0, 200),
+          outputFilePath: outputFile,
+          finalMessage,
+          totalDurationMs: completedTask?.endTime && completedTask?.startTime
+            ? completedTask.endTime - completedTask.startTime
+            : undefined,
+        });
+        enqueuePendingNotification(xml, { taskId: toolUseId, status }, sessionId);
+      });
+
+      proc.on('error', (err) => {
+        registry.markCompleted(toolUseId, -1, err.message);
+        void fd.close().catch(() => { /* already closed */ });
+      });
+
+      const nonCriticalWarnings = securityWarnings.filter(
+        w => w.severity !== 'critical' && w.severity !== 'high',
+      );
+
+      const lines: string[] = [];
+      if (executionPlanReason) lines.push(`[Shell] ${executionPlanReason}`);
+      if (nonCriticalWarnings.length > 0) {
+        lines.push(`[Warning] ${nonCriticalWarnings.map(w => w.message).join('; ')}`);
+      }
+      lines.push(`Background process started (PID: ${pid})`);
+      lines.push(`Output file: ${outputFile}`);
+      lines.push(`Use task_output("${toolUseId}") to check progress later.`);
+
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        result: lines.join('\n'),
+        metadata: {
+          backgrounded: true,
+          pid,
+          outputFile,
+          taskId: toolUseId,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        result: `Failed to start background command: ${message}`,
         error: true,
       };
     }

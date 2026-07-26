@@ -209,28 +209,10 @@ export type SSEEvent =
   | { type: 'turn_start'; data: { turnCount: number } }
   | { type: 'context_usage'; data: ContextUsageInfo }
   | { type: 'permission_request'; data: PermissionRequestEvent }
-  | { type: 'skill_review_started' }
-  | { type: 'skill_review_completed'; data: SkillReviewCompletedData }
   | { type: 'agent_progress'; data: AgentProgressEvent }
   | { type: 'system'; data: string; metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number } }
   | { type: 'text_delta'; data: string }
   | { type: 'thinking_delta'; data: string };
-
-/**
- * Data for skill_review_completed event
- */
-export interface SkillReviewCompletedData {
-  passed: boolean;
-  score: number;
-  feedback: string;
-  iterations: number;
-  maxIterations: number;
-  finalPath?: string;
-  skillName?: string;
-  error?: string;
-  /** Persistent activity record created after a background review finishes. */
-  activityId?: string;
-}
 
 // Permission request event
 export interface PermissionRequestEvent {
@@ -281,8 +263,6 @@ export interface AgentOptions {
   systemPrompt?: string;
   maxTokens?: number;
   temperature?: number;
-  /** Custom prompt manager instance */
-  promptManager?: import('./prompts/index.js').PromptManager;
   /** Authentication style: 'api_key' uses X-Api-Key, 'auth_token' uses Bearer token */
   authStyle?: 'api_key' | 'auth_token';
   /** LLM provider protocol: 'anthropic' or 'openai' (OpenAI-compatible) */
@@ -293,8 +273,6 @@ export interface AgentOptions {
   permissionMode?: PermissionMode;
   /** Communication platform type for prompt injection */
   communicationPlatform?: import('./prompts/types.js').CommunicationPlatform;
-  /** Skill self-improvement interval: after how many tool calls to trigger background skill review (0 to disable) */
-  skillNudgeInterval?: number;
   /** Enable automatic retry with exponential backoff for API failures */
   enableRetry?: boolean;
   /** Retry configuration (only used when enableRetry is true) */
@@ -366,6 +344,15 @@ export interface AgentOptions {
 // 对话选项
 export interface ChatOptions {
   systemPrompt?: string;
+  /**
+   * Observes the fully assembled prompt immediately before a provider request.
+   * Observers must not throw or affect the agent execution path.
+   */
+  onSystemPromptReady?: (snapshot: {
+    systemPrompt: string;
+    toolNames: string[];
+    turn: number;
+  }) => void;
   tools?: Tool[];
   toolRegistry?: import('./tool/registry.js').ToolRegistry;
   maxTokens?: number;

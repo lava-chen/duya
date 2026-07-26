@@ -465,7 +465,6 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   insertSetting.run('collapsedProjects', '[]', Date.now());
   insertSetting.run('remote_bridge_enabled', 'false', Date.now());
   insertSetting.run('bridge_auto_start', 'true', Date.now());
-  insertSetting.run('skillNudgeInterval', '10', Date.now());
   insertSetting.run('summaryLLMEnabled', 'false', Date.now());
   insertSetting.run('summaryLLMConfig', 'null', Date.now());
   // Permission mode defaults: 'auto' (YOLO) is the new-install default for
@@ -487,8 +486,64 @@ export function initializeSchema(db: BetterSqlite3Db): void {
 }
 
 /**
- * Initialize FTS5 virtual table for full-text search on messages.
- * Falls back gracefully if FTS5 is not available.
+ * Normalize content for FTS5 indexing.
+ *
+ * Splits camelCase / digit boundaries and appends the original lowercase
+ * form so both the split and unsplit variants are searchable. trigram
+ * tokenizer handles CJK + substring; this UDF expands identifier hits.
+ *
+ * MUST stay in sync with packages/agent/src/session/db.ts:normalizeForFts.
+ * Both processes share the same SQLite DB file and trigger definitions,
+ * so any divergence causes "no such function" or stale-index bugs.
+ */
+function normalizeForFts(s: string | null | undefined): string {
+  if (s === null || s === undefined) return '';
+  const collapse = (x: string) => x.replace(/\s+/g, ' ').trim();
+  const original = collapse(String(s).toLowerCase());
+  const split = collapse(
+    String(s)
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .replace(/([A-Za-z])([0-9])/g, '$1 $2')
+      .replace(/([0-9])([A-Za-z])/g, '$1 $2')
+      .toLowerCase(),
+  );
+  if (original === split) return original;
+  return `${split} ${original}`;
+}
+
+/**
+ * Register the SQL UDF used by FTS5 triggers to normalize content at insert
+ * time. MUST be called on every DB connection that owns the FTS5 triggers,
+ * before any trigger that references fts_normalize() is created or fired.
+ *
+ * Both the main process (electron/db/schema.ts) and the agent worker
+ * (packages/agent/src/session/db.ts) open the same SQLite DB file. SQLite
+ * UDFs are per-connection, so each process must register independently.
+ * If the main process skips this, any INSERT/UPDATE on `messages` fires
+ * the agent-installed trigger and fails with "no such function: fts_normalize".
+ */
+function registerFtsUdfs(db: BetterSqlite3Db): void {
+  db.function('fts_normalize', { deterministic: true }, (s: unknown) => {
+    return normalizeForFts(typeof s === 'string' ? s : null);
+  });
+}
+
+/**
+ * Initialize FTS5 virtual tables for session search.
+ *
+ * Schema:
+ *   - messages_fts: per-message content, trigram tokenizer, used for body hits.
+ *   - sessions_fts: per-session metadata (title / model / project_name /
+ *                   agent_name), used for metadata hits.
+ *
+ * MUST stay in sync with packages/agent/src/session/db.ts:initializeFts5.
+ * Both processes write to the same DB file; divergent trigger definitions
+ * silently overwrite each other and break search.
+ *
+ * Migration: existing installs may have messages_fts built with
+ * `porter unicode61`, which does not handle CJK or substring matching.
+ * We detect the old schema via sqlite_master and drop+rebuild it.
  */
 export function initializeFts5(db: BetterSqlite3Db): void {
   const logger = getLogger();
@@ -501,34 +556,146 @@ export function initializeFts5(db: BetterSqlite3Db): void {
       return;
     }
 
+    // Register UDFs before any trigger that references them.
+    registerFtsUdfs(db);
+
+    // Detect old (porter unicode61) messages_fts and drop it so we can rebuild with trigram.
+    const oldSchema = db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'messages_fts'")
+      .get() as { sql: string | null } | undefined;
+    if (oldSchema?.sql && /porter unicode61/i.test(oldSchema.sql)) {
+      logger.warn(
+        'Rebuilding messages_fts: porter unicode61 -> trigram (one-time migration)',
+        undefined,
+        LogComponent.DB,
+      );
+      db.exec(`
+        DROP TRIGGER IF EXISTS messages_ai;
+        DROP TRIGGER IF EXISTS messages_ad;
+        DROP TRIGGER IF EXISTS messages_au;
+        DROP TABLE IF EXISTS messages_fts;
+      `);
+    }
+
+    // Per-message content index. trigram tokenizer handles CJK + substring via fts_normalize().
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-        session_id,
+        session_id UNINDEXED,
         content,
-        tokenize='porter unicode61'
-      )
+        tokenize='trigram'
+      );
+    `);
+
+    // Force DROP + CREATE on every boot so the trigger definition stays in
+    // sync with the UDF. Historical migrations (id 8, 10) rebuilt these
+    // triggers without fts_normalize(); without this forced rebuild, a stale
+    // trigger from an old migration would fire fts_normalize() on the main
+    // connection and fail with "no such function" because CREATE TRIGGER IF
+    // NOT EXISTS does not update an existing trigger's body.
+    db.exec(`
+      DROP TRIGGER IF EXISTS messages_ai;
+      DROP TRIGGER IF EXISTS messages_ad;
+      DROP TRIGGER IF EXISTS messages_au;
     `);
 
     db.exec(`
-      CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages WHEN new.msg_type IN ('text', 'tool_result') BEGIN
+      CREATE TRIGGER messages_ai AFTER INSERT ON messages WHEN new.msg_type IN ('text', 'tool_result') BEGIN
         INSERT INTO messages_fts(rowid, session_id, content)
-        VALUES (new.rowid, new.session_id, new.content);
-      END
-    `);
+        VALUES (new.rowid, new.session_id, fts_normalize(new.content));
+      END;
 
-    db.exec(`
-      CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages WHEN old.msg_type IN ('text', 'tool_result') BEGIN
+      CREATE TRIGGER messages_ad AFTER DELETE ON messages WHEN old.msg_type IN ('text', 'tool_result') BEGIN
         DELETE FROM messages_fts WHERE rowid = old.rowid;
-      END
-    `);
+      END;
 
-    db.exec(`
-      CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages WHEN old.msg_type IN ('text', 'tool_result') OR new.msg_type IN ('text', 'tool_result') BEGIN
+      CREATE TRIGGER messages_au AFTER UPDATE ON messages WHEN old.msg_type IN ('text', 'tool_result') OR new.msg_type IN ('text', 'tool_result') BEGIN
         DELETE FROM messages_fts WHERE rowid = old.rowid;
         INSERT INTO messages_fts(rowid, session_id, content)
-        VALUES (new.rowid, new.session_id, new.content);
-      END
+        VALUES (new.rowid, new.session_id, fts_normalize(new.content));
+      END;
     `);
+
+    // Build the index if empty (covers fresh installs and post-migration rebuild).
+    const ftsCount = db.prepare('SELECT COUNT(*) as cnt FROM messages_fts').get() as { cnt: number };
+    if (ftsCount.cnt === 0) {
+      db.exec(`
+        INSERT INTO messages_fts(rowid, session_id, content)
+        SELECT rowid, session_id, fts_normalize(content)
+        FROM messages WHERE msg_type IN ('text', 'tool_result');
+      `);
+      logger.info('FTS5 messages_fts populated (trigram)', undefined, LogComponent.DB);
+    }
+
+    // Per-session metadata index. title heavily weighted in the search query.
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+        session_id UNINDEXED,
+        title,
+        model,
+        project_name,
+        agent_name,
+        tokenize='trigram'
+      );
+    `);
+
+    // Force rebuild sessions_fts triggers for the same reason as messages_fts.
+    db.exec(`
+      DROP TRIGGER IF EXISTS chat_sessions_ai_fts;
+      DROP TRIGGER IF EXISTS chat_sessions_ad_fts;
+      DROP TRIGGER IF EXISTS chat_sessions_au_fts;
+    `);
+
+    // Keep sessions_fts in sync with chat_sessions. Soft delete is handled at
+    // query time (s.is_deleted = 0) so the same trigger covers all update paths.
+    db.exec(`
+      CREATE TRIGGER chat_sessions_ai_fts AFTER INSERT ON chat_sessions BEGIN
+        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
+        VALUES (
+          new.rowid,
+          new.id,
+          fts_normalize(coalesce(new.title, '')),
+          fts_normalize(coalesce(new.model, '')),
+          fts_normalize(coalesce(new.project_name, '')),
+          fts_normalize(coalesce(new.agent_name, ''))
+        );
+      END;
+
+      CREATE TRIGGER chat_sessions_ad_fts AFTER DELETE ON chat_sessions BEGIN
+        DELETE FROM sessions_fts WHERE session_id = old.id;
+      END;
+
+      CREATE TRIGGER chat_sessions_au_fts AFTER UPDATE ON chat_sessions BEGIN
+        DELETE FROM sessions_fts WHERE session_id = old.id;
+        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
+        VALUES (
+          new.rowid,
+          new.id,
+          fts_normalize(coalesce(new.title, '')),
+          fts_normalize(coalesce(new.model, '')),
+          fts_normalize(coalesce(new.project_name, '')),
+          fts_normalize(coalesce(new.agent_name, ''))
+        );
+      END;
+    `);
+
+    const sessionsFtsCount = db
+      .prepare('SELECT COUNT(*) as cnt FROM sessions_fts')
+      .get() as { cnt: number };
+    if (sessionsFtsCount.cnt === 0) {
+      db.exec(`
+        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
+        SELECT rowid,
+               id,
+               fts_normalize(coalesce(title, '')),
+               fts_normalize(coalesce(model, '')),
+               fts_normalize(coalesce(project_name, '')),
+               fts_normalize(coalesce(agent_name, ''))
+        FROM chat_sessions;
+      `);
+      logger.info('FTS5 sessions_fts populated (trigram)', undefined, LogComponent.DB);
+    }
+
+    logger.info('FTS5 initialized successfully (trigram + sessions_fts)', undefined, LogComponent.DB);
   } catch (error) {
     logger.error('Failed to initialize FTS5', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DB);
   }
@@ -872,11 +1039,14 @@ const migrations: Migration[] = [
         db.exec(`DROP TRIGGER IF EXISTS messages_ad`);
         db.exec(`DROP TRIGGER IF EXISTS messages_au`);
 
+        // fts_normalize UDF is registered by initializeFts5() which runs before
+        // migrations in initializeSchema(). Triggers MUST use fts_normalize() to
+        // stay in sync with the agent worker's trigger definitions.
         db.exec(`
           CREATE TRIGGER messages_ai AFTER INSERT ON messages
           WHEN new.msg_type IN ('text', 'tool_result') BEGIN
             INSERT INTO messages_fts(rowid, session_id, content)
-            VALUES (new.rowid, new.session_id, new.content);
+            VALUES (new.rowid, new.session_id, fts_normalize(new.content));
           END
         `);
 
@@ -892,7 +1062,7 @@ const migrations: Migration[] = [
           WHEN old.msg_type IN ('text', 'tool_result') OR new.msg_type IN ('text', 'tool_result') BEGIN
             DELETE FROM messages_fts WHERE rowid = old.rowid;
             INSERT INTO messages_fts(rowid, session_id, content)
-            VALUES (new.rowid, new.session_id, new.content);
+            VALUES (new.rowid, new.session_id, fts_normalize(new.content));
           END
         `);
 
@@ -900,7 +1070,7 @@ const migrations: Migration[] = [
         if (ftsCount.cnt === 0) {
           db.exec(`
             INSERT INTO messages_fts(rowid, session_id, content)
-            SELECT rowid, session_id, content FROM messages WHERE msg_type IN ('text', 'tool_result')
+            SELECT rowid, session_id, fts_normalize(content) FROM messages WHERE msg_type IN ('text', 'tool_result')
           `);
         }
       } catch {
@@ -954,11 +1124,14 @@ const migrations: Migration[] = [
         db.exec(`DROP TRIGGER IF EXISTS messages_ad`);
         db.exec(`DROP TRIGGER IF EXISTS messages_au`);
 
+        // fts_normalize UDF is registered by initializeFts5() which runs before
+        // migrations. Triggers MUST use fts_normalize() to stay in sync with
+        // the agent worker's trigger definitions.
         db.exec(`
           CREATE TRIGGER messages_ai AFTER INSERT ON messages
           WHEN new.msg_type IN ('text', 'tool_result') BEGIN
             INSERT INTO messages_fts(rowid, session_id, content)
-            VALUES (new.rowid, new.session_id, new.content);
+            VALUES (new.rowid, new.session_id, fts_normalize(new.content));
           END
         `);
 
@@ -974,7 +1147,7 @@ const migrations: Migration[] = [
           WHEN old.msg_type IN ('text', 'tool_result') OR new.msg_type IN ('text', 'tool_result') BEGIN
             DELETE FROM messages_fts WHERE rowid = old.rowid;
             INSERT INTO messages_fts(rowid, session_id, content)
-            VALUES (new.rowid, new.session_id, new.content);
+            VALUES (new.rowid, new.session_id, fts_normalize(new.content));
           END
         `);
       } catch {
@@ -1936,39 +2109,6 @@ const migrations: Migration[] = [
       if (!tableInfo.some((column) => column.name === 'working_directory')) {
         db.exec(`ALTER TABLE automation_crons ADD COLUMN working_directory TEXT NOT NULL DEFAULT ''`);
       }
-    },
-  },
-  {
-    id: 40,
-    name: 'create_skill_learning_events',
-    migrate(db: BetterSqlite3Db): void {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS skill_learning_events (
-          id TEXT PRIMARY KEY,
-          session_id TEXT NOT NULL,
-          skill_name TEXT,
-          status TEXT NOT NULL CHECK(status IN ('published', 'skipped', 'failed')),
-          reason TEXT NOT NULL DEFAULT '',
-          score INTEGER,
-          feedback TEXT,
-          executed_task TEXT,
-          dimensions_json TEXT,
-          iteration_count INTEGER NOT NULL DEFAULT 0,
-          max_iterations INTEGER NOT NULL DEFAULT 3,
-          final_path TEXT,
-          error TEXT,
-          read_at INTEGER,
-          created_at INTEGER NOT NULL
-        )
-      `);
-      db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_skill_learning_events_created
-        ON skill_learning_events(created_at DESC)
-      `);
-      db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_skill_learning_events_unread
-        ON skill_learning_events(read_at, status, created_at DESC)
-      `);
     },
   },
   {

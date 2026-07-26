@@ -134,9 +134,7 @@ export const FiniteCanvasArea: React.FC<FiniteCanvasAreaProps> = ({
       const entry = entries[0];
       if (!entry) return;
       const borderBoxSize = entry.borderBoxSize;
-      const inlineSize = Array.isArray(borderBoxSize)
-        ? borderBoxSize[0]?.inlineSize
-        : borderBoxSize?.inlineSize;
+      const inlineSize = borderBoxSize?.[0]?.inlineSize;
       const measuredWidth = inlineSize ?? entry.target.getBoundingClientRect().width;
       if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
       pendingFrame = window.requestAnimationFrame(() => {

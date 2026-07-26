@@ -1,48 +1,32 @@
 /**
- * Prompts Registry - Register built-in prompt systems.
+ * Prompts Registry - Register built-in prompt system configs.
+ *
+ * Previous design: registered factories (PromptSystemFactory) that created
+ *                  subclass instances, with instance caching per profile.
+ * Current design:  register declarative PromptSystemConfig objects.
+ *                  PromptsRegistry.getOrCreate(name, profile) builds a
+ *                  PromptSystem instance on demand.
  */
 
-import { CodePromptSystem } from './code/CodePromptSystem.js'
-import { GeneralPromptSystem } from './general/GeneralPromptSystem.js'
-import { ResearchPromptSystem } from './research/ResearchPromptSystem.js'
-import { GatewayPromptSystem } from './gateway/GatewayPromptSystem.js'
-import { WikiAgentPromptSystem } from '../wiki-agent/prompts/WikiAgentPromptSystem.js'
 import { PromptsRegistry } from './PromptsRegistry.js'
-import type { PromptProfile } from './modes/types.js'
+import { generalConfig } from './configs/general.js'
+import { codeConfig } from './configs/code.js'
+import { researchConfig } from './configs/research.js'
+import { gatewayConfig } from './configs/gateway.js'
+import { wikiAgentConfig } from './configs/wiki-agent.js'
 
-// Factory interfaces - using simple create signatures
-const codeFactory = {
-  create: (profile?: PromptProfile) => new CodePromptSystem(profile),
-}
-
-const generalFactory = {
-  create: (profile?: PromptProfile) => new GeneralPromptSystem(profile),
-}
-
-const researchFactory = {
-  create: (profile?: PromptProfile) => new ResearchPromptSystem(profile),
-}
-
-const gatewayFactory = {
-  create: (profile?: PromptProfile) => new GatewayPromptSystem(profile),
-}
-
-const wikiAgentFactory = {
-  create: (profile?: PromptProfile) => new WikiAgentPromptSystem(profile),
-}
-
-PromptsRegistry.register('code', codeFactory)
-PromptsRegistry.register('general', generalFactory)
-PromptsRegistry.register('research', researchFactory)
-PromptsRegistry.register('gateway', gatewayFactory)
-PromptsRegistry.register('wiki-agent', wikiAgentFactory)
+PromptsRegistry.register('general', generalConfig)
+PromptsRegistry.register('code', codeConfig)
+PromptsRegistry.register('research', researchConfig)
+PromptsRegistry.register('gateway', gatewayConfig)
+PromptsRegistry.register('wiki-agent', wikiAgentConfig)
 
 /**
  * Resolve the prompt system name from an agent profile.
  * Defaults to 'general' if no promptSystem is specified.
  */
 export function resolvePromptSystemName(
-  promptSystem?: 'general' | 'code' | 'research' | string,
+  promptSystem?: 'general' | 'code' | 'research' | 'gateway' | string,
 ): string {
   return promptSystem ?? 'general'
 }

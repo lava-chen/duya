@@ -189,7 +189,7 @@ export class ReadTool extends BaseTool {
       },
       max_tokens: {
         type: 'number',
-        description: 'Optional token cap for the returned content (default 25000). Documents exceeding this limit are truncated with a system reminder.',
+        description: 'Optional token cap for the returned content (default 25000). Documents exceeding this limit include read metadata explaining the truncation.',
       },
     },
     required: ['file_path'],
@@ -270,7 +270,7 @@ export class ReadTool extends BaseTool {
       if (input.cell_range && rawExt !== '.ipynb') {
         return {
           ...result,
-          result: `<system-reminder>cell_range only applies to .ipynb files; ignored.</system-reminder>\n\n${result.result}`,
+          result: `[Read metadata: cell_range only applies to .ipynb files; ignored.]\n\n${result.result}`,
         };
       }
       return result;
@@ -301,6 +301,26 @@ export class ReadTool extends BaseTool {
       // refused by the magic-byte check before the parser could
       // legitimately process it.)
       const ext = (rawExt ?? resolved.toLowerCase().match(/\.[^./\\]+$/)?.[0]) || null;
+
+      // Spreadsheet extensions have a dedicated `xlsx` skill (Python
+      // pandas/openpyxl via the office skill family) that is more
+      // capable than the built-in XlsxParser. Route these extensions
+      // to the skill suggestion path instead of attempting to parse
+      // them inline. The registry still keeps `.xlsx` registered for
+      // direct XlsxParser consumers (e.g. tests), but ReadTool skips
+      // it here so the model is pointed at the skill.
+      const SKILL_ROUTED_EXTENSIONS = new Set(['.xlsx', '.xls', '.xlsm']);
+      if (ext && SKILL_ROUTED_EXTENSIONS.has(ext.toLowerCase())) {
+        const magicCheck = await sniffBinary(resolved);
+        const formatHint = magicCheck.binary
+          ? ` (${magicCheck.format ?? 'binary'})`
+          : '';
+        const suggestion = suggestHandlerForFormat(ext, magicCheck.format);
+        return {
+          id, name: 'read', error: true,
+          result: `Error: Cannot read '${input.file_path}' — unsupported binary format (${ext})${formatHint}. ${suggestion}`,
+        };
+      }
 
       if (!ext || !getParser(ext)) {
         // No parser for this extension. Magic-byte sniff is the
@@ -472,7 +492,7 @@ export async function readFileContent(
   input: ReadInput,
   id: string,
   workingDirectory?: string,
-  _context?: ToolUseContext,
+  context?: ToolUseContext,
 ): Promise<ToolResult> {
   const validation = validateReadInput(input);
   if (!validation.valid) {

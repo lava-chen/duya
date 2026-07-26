@@ -502,7 +502,12 @@ export class StreamingToolExecutor {
       enableRetry: config?.enableRetry ?? true,
       maxOutputSizeBytes: config?.maxOutputSizeBytes ?? 5 * 1024 * 1024, // 5MB default
       memoryWarningThresholdMB: config?.memoryWarningThresholdMB ?? 500,
-      workerTools: config?.workerTools ?? ['bash', 'powershell'],
+      // WorkerPool delegation disabled: bash/powershell now run via
+      // BashTool.execute() directly (temporary spawn per command, killed
+      // on completion). Background commands are handled inside
+      // BashTool.executeBackground() via spawn + unref + BashTaskRegistry.
+      // Pass workerTools explicitly to opt back into the worker pool.
+      workerTools: config?.workerTools ?? [],
       workerThresholdMs: config?.workerThresholdMs ?? 5000,
     }
 
@@ -863,6 +868,7 @@ export class StreamingToolExecutor {
       input: effectiveInput,
       workingDirectory: this.toolUseContext.options.workingDirectory,
       abortController: toolAbortController,
+      sessionId: this.toolUseContext.options.sessionId,
       onOutput: (stream, data) => {
         // Only buffer actual output streams; progress is metadata only
         if (stream === 'stdout' || stream === 'stderr') {

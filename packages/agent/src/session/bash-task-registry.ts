@@ -34,13 +34,17 @@ export interface BashBackgroundTask {
 }
 
 export type ProgressListener = (task: BashBackgroundTask) => void;
+/** Global listener receives a snapshot of all tasks on any change. */
+export type AnyChangeListener = (tasks: BashBackgroundTask[]) => void;
 
 export class BashTaskRegistry {
   private tasks = new Map<string, BashBackgroundTask>();
   private listeners = new Map<string, Set<ProgressListener>>();
+  private anyChangeListeners = new Set<AnyChangeListener>();
 
   register(task: BashBackgroundTask): void {
     this.tasks.set(task.id, { ...task });
+    this.notifyAnyChange();
   }
 
   updateProgress(taskId: string, progress: BashTaskProgress): void {
@@ -56,6 +60,7 @@ export class BashTaskRegistry {
 
     this.tasks.set(taskId, task);
     this.notifyListeners(taskId, task);
+    this.notifyAnyChange();
   }
 
   markCompleted(taskId: string, exitCode: number, error?: string): void {
@@ -69,6 +74,7 @@ export class BashTaskRegistry {
 
     this.tasks.set(taskId, task);
     this.notifyListeners(taskId, task);
+    this.notifyAnyChange();
     // Terminal tasks are kept briefly so the UI/agent can read the final
     // status, then evicted to bound memory growth of the tasks Map.
     this.scheduleCleanup(taskId);
@@ -84,6 +90,7 @@ export class BashTaskRegistry {
 
     this.tasks.set(taskId, task);
     this.notifyListeners(taskId, task);
+    this.notifyAnyChange();
     this.scheduleCleanup(taskId);
   }
 
@@ -115,6 +122,7 @@ export class BashTaskRegistry {
     const existed = this.tasks.delete(taskId);
     if (existed) {
       this.listeners.delete(taskId);
+      this.notifyAnyChange();
     }
     return existed;
   }
@@ -216,12 +224,33 @@ export class BashTaskRegistry {
     };
   }
 
+  /**
+   * Subscribe to any-change events. The listener receives a snapshot of
+   * all tasks on every register/update/complete/kill/remove. Used by the
+   * agent process to push the task list to the renderer via sendToMain.
+   * Returns an unsubscribe function.
+   */
+  onAnyChange(listener: AnyChangeListener): () => void {
+    this.anyChangeListeners.add(listener);
+    return () => {
+      this.anyChangeListeners.delete(listener);
+    };
+  }
+
   private notifyListeners(taskId: string, task: BashBackgroundTask): void {
     const taskListeners = this.listeners.get(taskId);
     if (taskListeners) {
       for (const listener of taskListeners) {
         try { listener(task); } catch { /* mute */ }
       }
+    }
+  }
+
+  private notifyAnyChange(): void {
+    if (this.anyChangeListeners.size === 0) return;
+    const snapshot = this.listTasks();
+    for (const listener of this.anyChangeListeners) {
+      try { listener(snapshot); } catch { /* mute */ }
     }
   }
 

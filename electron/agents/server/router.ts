@@ -625,6 +625,25 @@ function handlePostChatSSE(
           continue;
         }
 
+        // Plan 305 Phase B: intercept memory:wakeup worker event and
+        // trigger MemoryWorker.forceSweep(). NOT forwarded to SSE
+        // (internal control-plane event, like pong).
+        if (msgType === 'memory:wakeup') {
+          try {
+            const { getMemoryWorkerHandle } = require('../../memory/memory-worker');
+            const handle = getMemoryWorkerHandle();
+            if (handle) {
+              // fire-and-forget; forceSweep is async but the router must
+              // not block the stdout drain loop on extraction.
+              void handle.forceSweep();
+            }
+          } catch {
+            // Shadow mode: best-effort. Worker not started or require
+            // failed — silently drop the wakeup.
+          }
+          continue;
+        }
+
         if (msgType === 'chat:text' || msgType === 'chat:thinking') {
           sseEvent = {
             type: msgType.replace('chat:', ''), // 'text' or 'thinking'
@@ -671,14 +690,6 @@ function handlePostChatSSE(
           sseEvent = {
             type: msgType.replace('chat:', ''),
             data: event,
-          };
-        } else if (msgType === 'chat:skill_review_started' || msgType === 'chat:skill_review_completed') {
-          // Skill-review payloads are already the renderer contract. Keep the
-          // worker envelope out of `data`, otherwise the review indicator
-          // receives `{ data: { passed, score, ... } }` and cannot resolve.
-          sseEvent = {
-            type: msgType.replace('chat:', ''),
-            data: event.data,
           };
         } else if (msgType.startsWith('chat:research_')) {
           // Worker emits `chat:research_*` events where convertSSEToAgentMessage

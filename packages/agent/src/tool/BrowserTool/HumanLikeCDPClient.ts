@@ -91,17 +91,81 @@ export class HumanLikeCDPClient extends EventEmitter implements ICDPClient {
   async click(selector: string): Promise<void> {
     const point = await this.resolveSelectorPoint(selector);
     await this.smoothMoveTo(point);
+    await sleep(randomBetween(40, 110));
     await this.dispatchMousePress(point, 1);
+    await sleep(randomBetween(45, 130));
     await this.dispatchMouseRelease(point, 1);
   }
+
+  /**
+   * Public coordinate primitives used by the computer-use actions
+   * (click_at / mouse_move / drag). They reuse the smooth bezier cursor so
+   * coordinate-driven input keeps the same human motion profile.
+   */
+  async moveMouseTo(x: number, y: number): Promise<void> {
+    await this.smoothMoveTo({ x, y });
+  }
+
+  async clickAt(x: number, y: number, opts?: { button?: 'left' | 'right' | 'middle'; clickCount?: 1 | 2 }): Promise<void> {
+    const button = opts?.button ?? 'left';
+    const clickCount = opts?.clickCount ?? 1;
+    const point = { x, y };
+    await this.smoothMoveTo(point);
+    for (let count = 1; count <= clickCount; count++) {
+      await sleep(randomBetween(40, 110));
+      await this.base.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: point.x, y: point.y, button, clickCount: count,
+      });
+      await sleep(randomBetween(45, 130));
+      await this.base.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: point.x, y: point.y, button, clickCount: count,
+      });
+      if (count < clickCount) await sleep(randomBetween(70, 150));
+    }
+  }
+
+  /**
+   * QWERTY neighbor map for typo simulation. Humans mostly miss to an
+   * adjacent key, so corrections look authentic.
+   */
+  private static readonly KEY_NEIGHBORS: Record<string, string> = {
+    q: 'wa', w: 'qeas', e: 'wrsd', r: 'etdf', t: 'ryfg', y: 'tugh', u: 'yihj',
+    i: 'uojk', o: 'ipkl', p: 'ol', a: 'qwsz', s: 'awedxz', d: 'serfcx',
+    f: 'drtgvc', g: 'ftyhvb', h: 'gyujnb', j: 'huikmn', k: 'jiolm', l: 'kop',
+    z: 'asx', x: 'zsdc', c: 'xdfv', v: 'cfgb', b: 'vghn', n: 'bhjm', m: 'njk',
+  };
 
   async type(selector: string, text: string): Promise<void> {
     await this.click(selector);
     await sleep(randomBetween(80, 150));
+    let charsSinceTypo = 0;
     for (const char of text) {
+      // Occasional adjacent-key typo followed by a backspace correction.
+      const lower = char.toLowerCase();
+      const neighbors = HumanLikeCDPClient.KEY_NEIGHBORS[lower];
+      if (neighbors && charsSinceTypo >= 7 && Math.random() < 0.035) {
+        const wrong = neighbors[Math.floor(Math.random() * neighbors.length)];
+        await this.base.send('Input.dispatchKeyEvent', { type: 'char', text: wrong });
+        await sleep(randomBetween(150, 320));
+        await this.dispatchBackspaceKey();
+        await sleep(randomBetween(80, 180));
+        charsSinceTypo = 0;
+      }
       await this.base.send('Input.dispatchKeyEvent', { type: 'char', text: char });
-      await sleep(randomBetween(25, 90));
+      charsSinceTypo++;
+      // Longer "thinking" pause after word/sentence boundaries.
+      if ((char === ' ' || char === '.' || char === ',') && Math.random() < 0.08) {
+        await sleep(randomBetween(150, 420));
+      } else {
+        await sleep(randomBetween(25, 90));
+      }
     }
+  }
+
+  private async dispatchBackspaceKey(): Promise<void> {
+    const info = { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 };
+    await this.base.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...info });
+    await this.base.send('Input.dispatchKeyEvent', { type: 'keyUp', ...info });
   }
 
   async scroll(direction: 'up' | 'down' | 'left' | 'right', amount = 300): Promise<void> {
@@ -111,14 +175,23 @@ export class HumanLikeCDPClient extends EventEmitter implements ICDPClient {
       left: [-amount, 0],
       right: [amount, 0],
     };
-    const [deltaX, deltaY] = deltaMap[direction] || [0, amount];
-    await this.base.send('Input.dispatchMouseEvent', {
-      type: 'mouseWheel',
-      x: this.cursor.x,
-      y: this.cursor.y,
-      deltaX,
-      deltaY,
-    });
+    const [totalX, totalY] = deltaMap[direction] || [0, amount];
+    // Inertial wheel: several easing-out ticks instead of one jump.
+    const ticks = 3 + Math.floor(Math.random() * 3);
+    const weights = Array.from({ length: ticks }, (_, i) => 1 / (i + 1));
+    const weightSum = weights.reduce((a, b) => a + b, 0);
+    for (const weight of weights) {
+      const ratio = weight / weightSum;
+      const jitter = 0.85 + Math.random() * 0.3;
+      await this.base.send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        x: this.cursor.x,
+        y: this.cursor.y,
+        deltaX: Math.round(totalX * ratio * jitter),
+        deltaY: Math.round(totalY * ratio * jitter),
+      });
+      await sleep(randomBetween(35, 85));
+    }
   }
 
   async goBack(): Promise<void> {

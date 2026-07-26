@@ -143,27 +143,6 @@ export const sessionDb = {
     sendDbRequest('session:listByWorkingDirectory', { workingDirectory }),
 };
 
-export interface SkillLearningEventCreateInput {
-  sessionId: string;
-  skillName?: string;
-  status: 'published' | 'skipped' | 'failed';
-  reason: string;
-  score?: number;
-  feedback?: string;
-  executedTask?: string;
-  dimensions?: Record<string, { score: number; feedback: string }>;
-  iterationCount: number;
-  maxIterations: number;
-  finalPath?: string;
-  error?: string;
-}
-
-/** Persistent outcomes of autonomous Skill learning. */
-export const skillLearningDb = {
-  create: (data: SkillLearningEventCreateInput) =>
-    sendDbRequest('skillLearning:create', data),
-};
-
 // ==================== Message Operations ====================
 
 export const messageDb = {

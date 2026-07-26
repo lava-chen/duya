@@ -60,9 +60,32 @@ export function formatResult(operation: string, result: Record<string, unknown>)
       return formatParallelFetchResult(result);
     case 'close_window':
       return formatCloseWindowResult(result);
+    case 'click_at':
+      return formatClickAtResult(result);
+    case 'mouse_move':
+      return formatMouseMoveResult(result);
+    case 'drag':
+      return formatDragResult(result);
+    case 'key_combo':
+      return formatKeyComboResult(result);
+    case 'scroll_to':
+      return formatScrollToResult(result);
+    case 'refresh':
+      return formatRefreshResult(result);
+    case 'clipboard_read':
+      return formatClipboardReadResult(result);
+    case 'clipboard_write':
+      return formatClipboardWriteResult(result);
+    case 'handle_dialog':
+      return formatHandleDialogResult(result);
     default:
       return formatGenericResult(operation, result);
   }
+}
+
+/** Append the sensitive-context warning to an interaction result line. */
+function withSafetyNote(line: string, result: Record<string, unknown>): string {
+  return result.safetyNote ? `${line}\n\n⚠ ${String(result.safetyNote)}` : line;
 }
 
 // ─── Page / Navigation Formatters ──────────────────────────────────────────
@@ -145,14 +168,14 @@ function formatSnapshotResult(result: Record<string, unknown>): string {
 function formatClickResult(result: Record<string, unknown>): string {
   const ref = String(result.clicked || 'unknown');
   const url = result.url ? String(result.url) : '';
-  return url ? `Clicked [ref=${ref}] → ${url}` : `Clicked [ref=${ref}]`;
+  return withSafetyNote(url ? `Clicked [ref=${ref}] → ${url}` : `Clicked [ref=${ref}]`, result);
 }
 
 function formatTypeResult(result: Record<string, unknown>): string {
   const text = String(result.typed || '');
   const ref = String(result.into || 'unknown');
   const submitted = result.submitted ? ' + Enter' : '';
-  return `Typed "${text}" into [ref=${ref}]${submitted}`;
+  return withSafetyNote(`Typed "${text}" into [ref=${ref}]${submitted}`, result);
 }
 
 function formatScrollResult(result: Record<string, unknown>): string {
@@ -182,6 +205,66 @@ function formatWaitResult(result: Record<string, unknown>): string {
     return 'Page loaded';
   }
   return 'Wait completed';
+}
+
+// ─── Computer-Use Formatters ───────────────────────────────────────────────
+
+function formatClickAtResult(result: Record<string, unknown>): string {
+  const at = result.clickedAt as Record<string, unknown> | undefined;
+  const coord = at ? `(${at.x}, ${at.y})` : '(?, ?)';
+  const button = result.button && result.button !== 'left' ? ` ${result.button}` : '';
+  const dbl = result.clickCount === 2 ? 'double-' : '';
+  const url = result.url ? ` → ${result.url}` : '';
+  return withSafetyNote(`${dbl.charAt(0).toUpperCase() + dbl.slice(1)}clicked${button} at ${coord}${url}`, result);
+}
+
+function formatMouseMoveResult(result: Record<string, unknown>): string {
+  const at = result.movedTo as Record<string, unknown> | undefined;
+  return at ? `Moved mouse to (${at.x}, ${at.y})` : 'Mouse moved';
+}
+
+function formatDragResult(result: Record<string, unknown>): string {
+  const dragged = result.dragged as Record<string, unknown> | undefined;
+  const from = dragged?.from as Record<string, unknown> | undefined;
+  const to = dragged?.to as Record<string, unknown> | undefined;
+  return from && to
+    ? `Dragged (${from.x}, ${from.y}) → (${to.x}, ${to.y})`
+    : 'Drag completed';
+}
+
+function formatKeyComboResult(result: Record<string, unknown>): string {
+  return `Pressed ${String(result.pressed || 'key')}`;
+}
+
+function formatScrollToResult(result: Record<string, unknown>): string {
+  if (result.error) return `Scroll failed: ${String(result.error)}`;
+  if (typeof result.scrolledTo === 'string') return `Scrolled to [ref=${result.scrolledTo}]`;
+  const at = result.scrolledTo as Record<string, unknown> | undefined;
+  return at ? `Scrolled to position (x=${at.x}, y=${at.y})` : 'Scrolled';
+}
+
+function formatRefreshResult(result: Record<string, unknown>): string {
+  const hard = result.hard ? ' (hard, cache ignored)' : '';
+  const url = result.url ? ` → ${result.url}` : '';
+  const title = result.title ? ` "${String(result.title).slice(0, 60)}"` : '';
+  return `Refreshed page${hard}${url}${title}`;
+}
+
+function formatClipboardReadResult(result: Record<string, unknown>): string {
+  if (result.error) return `Clipboard read failed: ${String(result.error)}`;
+  const text = String(result.text ?? '');
+  const preview = text.length > 300 ? text.slice(0, 300) + '…' : text;
+  return `### Clipboard (${text.length} chars)\n${preview || '(empty)'}`;
+}
+
+function formatClipboardWriteResult(result: Record<string, unknown>): string {
+  if (result.error) return `Clipboard write failed: ${String(result.error)}`;
+  return `Copied ${result.copied ?? 0} chars to clipboard`;
+}
+
+function formatHandleDialogResult(result: Record<string, unknown>): string {
+  if (result.error) return String(result.error);
+  return withSafetyNote(`Dialog ${String(result.dialog || 'handled')}`, result);
 }
 
 function formatSelectResult(result: Record<string, unknown>): string {
@@ -244,16 +327,40 @@ function formatScreenshotResult(result: Record<string, unknown>): string {
   const selector = result.selector ? ` [${result.selector}]` : '';
   const filePath = typeof result.filePath === 'string' ? result.filePath : null;
 
+  const marks = Array.isArray(result.marks) ? result.marks as Array<Record<string, unknown>> : null;
+  const viewport = result.viewport as Record<string, unknown> | undefined;
+
+  const annotationLines: string[] = [];
+  if (result.annotated && marks) {
+    annotationLines.push('');
+    annotationLines.push(`### Marks (${marks.length} interactive elements, coordinates = viewport CSS pixels)`);
+    if (viewport) {
+      annotationLines.push(`Viewport: ${viewport.width}x${viewport.height} @${viewport.dpr}x, scroll (${viewport.scrollX}, ${viewport.scrollY})`);
+    }
+    for (const m of marks.slice(0, 40)) {
+      annotationLines.push(`- [${m.ref}] center=(${m.x}, ${m.y}) size=${m.w}x${m.h}`);
+    }
+    if (marks.length > 40) {
+      annotationLines.push(`- ...${marks.length - 40} more marks`);
+    }
+    annotationLines.push('');
+    annotationLines.push('Use click_at with a mark\'s center coordinates, or click with ref "@<n>".');
+  }
+
   if (filePath) {
     return [
       `Screenshot captured${fullPage}${selector}`,
       `filePath: ${filePath}`,
       'Pass this filePath to vision_analyze to inspect the image visually.',
+      ...annotationLines,
     ].join('\n');
   }
 
   if (result.screenshot) {
-    return `Screenshot captured${fullPage}${selector} (inline data URL — prefer filePath if available)`;
+    return [
+      `Screenshot captured${fullPage}${selector} (inline data URL — prefer filePath if available)`,
+      ...annotationLines,
+    ].join('\n');
   }
 
   if (result.error) {

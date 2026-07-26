@@ -32,7 +32,7 @@ import type {
   ToolResultContent,
   AgentProgressEvent,
 } from '../types.js';
-import { PromptManager, asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
+import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
 import { getMemoryManager } from '../memory/index.js'
 import { createMemoryReviewService } from '../memory/index.js';
@@ -59,7 +59,7 @@ import { logger } from '../utils/logger.js';
 import { createChildAbortController } from '../abort/index.js';
 import { getAgentProfileService } from '../agent-profile/AgentProfileService.js';
 import type { AgentProfile } from '../agent-profile/types.js';
-import { resolveAllowedTools } from '../agent-profile/ToolFilter.js';
+import { isToolVisible, type ToolVisibilityConstraints } from '../agent-profile/ToolFilter.js';
 import { ResearchMemory } from '../research-memory/index.js';
 import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
@@ -127,16 +127,6 @@ function collectRecentImageAttachments(messages: Message[]): Array<{
   return recent;
 }
 
-// Side-effect import so the class is in scope for the rest of this
-// module (e.g. `new SelfImprover(...)` in the constructor and
-// `getDefaultSelfImprover()` in the integration wiring below).
-import {
-  SelfImprover,
-  getDefaultSelfImprover,
-  type ImprovementResult,
-} from '../self-improver/SelfImprover.js';
-import { SkillCurator, getDefaultCurator } from '../self-improver/SkillCurator.js';
-
 // Mode System imports (the class is the only consumer in this file;
 // the public re-exports live in src/index.ts).
 import { modeModifierRegistry } from '../modes/index.js';
@@ -155,10 +145,8 @@ import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
 import type { CompactOptions } from '../compact/types.js';
 
-export function filterToolsByAllowedTools(tools: Tool[], allowedTools: readonly string[]): Tool[] {
-  const allowedSet = new Set(allowedTools);
-  return tools.filter((tool) => allowedSet.has(tool.name));
-}
+/** Empty set used by _resolveTools (no tools discovered yet at startup). */
+const EMPTY_DISCOVERED: ReadonlySet<string> = new Set();
 
 function drainBackgroundTaskNotifications(parentSessionId?: string): string[] {
   if (!parentSessionId) return []
@@ -221,7 +209,6 @@ export class duyaAgent {
   private messages: Message[] = [];
   private abortController: AbortController | null = null;
   private sessionInfo: SessionInfo;
-  private promptManager: PromptManager;
   private compactionManager: CompactionManager;
   private apiKey: string;
   private baseURL?: string;
@@ -231,16 +218,13 @@ export class duyaAgent {
   private workingDirectory?: string; // Working directory for tool execution
   private defaultWorkspaceDirectory?: string; // Default workspace directory for permission checking
   private communicationPlatform?: import('../prompts/types.js').CommunicationPlatform; // Communication platform for prompt injection
+  private language?: string; // Language preference for agent responses
   private permissionMode: PermissionMode = 'default'; // Permission mode for tool execution
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
   private alwaysAllowRules: ToolPermissionRulesBySource = {};
   private alwaysDenyRules: ToolPermissionRulesBySource = {};
   private alwaysAskRules: ToolPermissionRulesBySource = {};
   private additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory> = new Map();
-  private selfImprover: SelfImprover; // Self-improvement tracker for skill creation
-  /** Bridge for results that finish after the foreground SSE stream closes. */
-  onSkillReviewCompleted?: (result: ImprovementResult) => Promise<void> | void;
-  private curator: SkillCurator; // Periodic skill consolidation curator
   private visionClient?: LLMClient; // Optional vision model client
   private visionConfig?: import('../types.js').VisionConfig; // Vision model configuration
   private blockedDomains: string[] = [];
@@ -409,6 +393,7 @@ export class duyaAgent {
     this.model = options.model;
     this.runtimeConfig = options.runtimeConfig;
     this.communicationPlatform = options.communicationPlatform;
+    this.language = options.language;
 
     // Initialize vision model client if configured
     logger.info(`[duyaAgent] Vision config check: enabled=${options.visionConfig?.enabled}, provider=${options.visionConfig?.provider}, model=${options.visionConfig?.model}, baseURL=${options.visionConfig?.baseURL}`);
@@ -429,14 +414,6 @@ export class duyaAgent {
     } else {
       logger.info(`[duyaAgent] Vision model NOT initialized - disabled or not configured`);
     }
-
-    this.promptManager = options.promptManager || new PromptManager({
-      sessionId: options.sessionId,
-      workingDirectory: options.workingDirectory,
-      communicationPlatform: options.communicationPlatform,
-      modelId: options.model,
-      language: options.language,
-    });
 
     // Load memory for session (memory manager is a singleton).
     // Deferred to next tick so agent construction returns immediately.
@@ -577,26 +554,6 @@ export class duyaAgent {
       this.additionalWorkingDirectories.set(resolved, { path: resolved, source: ruleSource });
     }
 
-    // Initialize self-improvement system.
-    // Use the process-wide singleton when no explicit interval is
-    // given — this is what lets the counter persist across
-    // duyaAgent instances (each user query creates a fresh
-    // instance, so without the singleton the "every N turns"
-    // trigger would never see more than one query's worth of
-    // accumulation).
-    this.selfImprover = options.skillNudgeInterval !== undefined
-      ? new SelfImprover(options.skillNudgeInterval)
-      : getDefaultSelfImprover();
-    // Fire-and-forget: load any persisted counters from disk so
-    // the first turn of a new query sees the accumulated count
-    // from previous queries. Errors are absorbed inside `init`.
-    void this.selfImprover.init();
-
-    // Skill Curator — periodic umbrella consolidation.
-    // Uses a global singleton so the 7-day interval persists
-    // across DuyaAgent instances (each query creates a new agent).
-    this.curator = getDefaultCurator();
-
     // Store blocked domains for browser tool
     this.blockedDomains = options.blockedDomains ?? [];
     this.browserBackendMode = options.browserBackendMode ?? 'auto';
@@ -622,10 +579,8 @@ export class duyaAgent {
   }
   set model(value: string) {
     this._model = value;
-    // Sync model change to PromptManager so system prompt shows correct model info
-    if (this.promptManager) {
-      this.promptManager.updateOptions({ modelId: value });
-    }
+    // Model id is read by _buildSystemPrompt → promptSystem.buildContext({ modelId: this.model })
+    // on every turn, so no separate prompt-manager sync is needed here.
   }
 
   /**
@@ -758,7 +713,7 @@ export class duyaAgent {
     // `this.messages` together — a single bridge between helper output
     // and the main loop.
 
-    const { tools: baseTools, registry, agentDefinitions } = await this._resolveTools(options, appliedProfile);
+    const { tools: baseTools, registry, agentDefinitions, constraints } = await this._resolveTools(options, appliedProfile);
     let tools = baseTools;
 
     // Plan 241 Phase 1: wire tool_search to this registry so it can list
@@ -925,29 +880,21 @@ export class duyaAgent {
       turnCount++;
       const turnStartTime = Date.now();
 
-      // Plan 241 Phase 3: surface tools previously discovered via
-      // `tool_search` so the LLM can call them on this turn. The
-      // base tool list (built by `_resolveTools` + `applyModes`) does
-      // not include discoverable tools by default; this loop
-      // merges in the discovered ones once per turn.
-      //
-      // We mutate the local `tools` array (which `toolUseContext`,
-      // `_buildSystemPrompt`, and the LLM client all consume) so the
-      // schema is visible to the next LLM request. No provider-level
-      // change required.
+      // Surface tools discovered via tool_search in previous turns.
+      // Discoverable tools are excluded from the base list by
+      // _resolveTools; this loop merges them in once discovered,
+      // respecting the same deny/allow constraints.
       if (discoveredTools.size > 0) {
         const visible = new Set(tools.map((t) => t.name));
         let added = 0;
         for (const name of discoveredTools) {
           if (visible.has(name)) continue;
+          // Re-check visibility with current discovered set + constraints.
+          if (!isToolVisible(name, registry.getExposeMode(name), discoveredTools, constraints)) continue;
           const def = registry.getTool(name);
           if (!def) {
-            // Tool was discovered but is no longer registered (MCP
-            // server disconnected, plugin uninstalled, etc.). Skip
-            // silently rather than throwing — failing here would
-            // abort a streamChat that was working a moment ago.
             logger.warn(
-              `[Agent] Plan 241 Phase 3: discovered tool '${name}' no longer registered, skipping`,
+              `[Agent] discovered tool '${name}' no longer registered, skipping`,
             );
             continue;
           }
@@ -957,7 +904,7 @@ export class duyaAgent {
         }
         if (added > 0) {
           logger.info(
-            `[Agent] Turn ${turnCount}: Plan 241 Phase 3 added ${added} discovered tools to LLM request`,
+            `[Agent] Turn ${turnCount}: added ${added} discovered tools to LLM request`,
           );
         }
       }
@@ -1153,7 +1100,6 @@ export class duyaAgent {
       let needsFollowUp = false;
       let thinkingContent = '';  // Accumulate thinking content for this turn
       let hasThinkingContent = false;  // Track if we have any thinking content
-      let toolCallCountThisTurn = 0;  // Track tool calls for self-improvement trigger
 
       yield { type: 'turn_start', data: { turnCount } };
 
@@ -1243,6 +1189,15 @@ export class duyaAgent {
               ))
             : messages
         );
+        try {
+          options?.onSystemPromptReady?.({
+            systemPrompt: systemPromptContent,
+            toolNames: tools.map((tool) => tool.name),
+            turn: turnCount,
+          });
+        } catch (error) {
+          logger.warn('[Agent] System prompt observer failed; continuing without observer', { error });
+        }
         const streamGenerator = this.llmClient.streamChat(llmMessages, {
           systemPrompt: systemPromptContent,
           tools,
@@ -1265,18 +1220,6 @@ export class duyaAgent {
             yield event;
 
           } else if (event.type === 'tool_use') {
-            toolCallCountThisTurn++;
-
-            // Track skill_manage usage for self-improvement
-            if (event.data.name === 'skill_manage') {
-              this.selfImprover.onSkillManageUsed();
-              this.compactionManager.cacheSkillContext([{
-                name: (event.data.input as Record<string, unknown>)?.name as string || 'unknown',
-                description: (event.data.input as Record<string, unknown>)?.description as string || '',
-                invokedAt: Date.now(),
-              }]);
-            }
-
             // Add tool to executor for background execution
             executor.addTool(event.data);
             needsFollowUp = true;
@@ -1479,11 +1422,16 @@ export class duyaAgent {
             // Cache tokens are part of the active provider context even when
             // they are billed separately. Use the exact completed-turn usage
             // to replace the pre-request local estimate in the renderer.
-            const usedTokens =
-              event.data.input_tokens +
-              event.data.output_tokens +
-              (event.data.cache_hit_tokens ?? 0) +
-              (event.data.cache_creation_tokens ?? 0);
+            // Some providers only report total_tokens, so fall back to it
+            // when input/output are missing.
+            const inputTokens = event.data.input_tokens ?? 0;
+            const outputTokens = event.data.output_tokens ?? 0;
+            const cacheHitTokens = event.data.cache_hit_tokens ?? 0;
+            const cacheCreationTokens = event.data.cache_creation_tokens ?? 0;
+            let usedTokens = inputTokens + outputTokens + cacheHitTokens + cacheCreationTokens;
+            if (usedTokens === 0 && event.data.total_tokens) {
+              usedTokens = event.data.total_tokens;
+            }
             if (usedTokens > 0) {
               yield {
                 type: 'context_usage',
@@ -1502,30 +1450,12 @@ export class duyaAgent {
 
         logger.debug(`[Agent] Turn ${turnCount}: LLM stream ended, total events=${llmEventCount}`);
 
-        // Track iteration for skill self-improvement
-        const validToolNames = new Set(tools.map(t => t.name));
-        this.selfImprover.onIterationComplete(validToolNames, toolCallCountThisTurn);
-
-        // Trigger background skill review at the turn boundary
-        // (not just at conversation exit). The check inside is
-        // idempotent: if it doesn't fire, this is a no-op.
-        // We do this BEFORE the max-turns / done checks so the
-        // spawn can race the user-facing done event.
-        yield* this._triggerBackgroundReviewWithEvents(validToolNames);
-
-        // Check if the Curator should run (7-day interval).
-        // Fire-and-forget — never blocks the conversation.
-        void this._maybeRunCurator();
-
         // Check max turns limit
         if (turnCount >= maxTurns) {
           // Update this.messages BEFORE yielding done event
           this.messages = persistableMessages(messages);
           this.sessionInfo.messageCount = this.messages.length;
           this.sessionInfo.updatedAt = Date.now();
-
-          // Trigger background skill review if needed
-          yield* this._triggerBackgroundReviewWithEvents(validToolNames);
 
           // Trigger background memory review
           const assistantLength = assistantContent
@@ -1585,9 +1515,6 @@ export class duyaAgent {
           this.messages = persistableMessages(messages);
           this.sessionInfo.messageCount = this.messages.length;
           this.sessionInfo.updatedAt = Date.now();
-
-          // Trigger background skill review if needed
-          yield* this._triggerBackgroundReviewWithEvents(validToolNames);
 
           // Trigger background memory review
           const assistantLength = assistantContent
@@ -1846,6 +1773,7 @@ export class duyaAgent {
     tools: Tool[];
     registry: ToolRegistry;
     agentDefinitions: AgentDefinition[];
+    constraints: ToolVisibilityConstraints;
   }> {
     logger.info(`[Agent] streamChat: Loading tools...`);
     let registry = options?.toolRegistry;
@@ -1872,85 +1800,37 @@ export class duyaAgent {
         }
       );
     }
-    // Plan 241: filter by exposeMode BEFORE the Layer 0/1/2
-    // filter pipeline. The initial list is intentionally limited to
-    // file/search tools, task delegation, tool_search, and one native
-    // shell (PowerShell on Windows, Bash elsewhere). Browser, memory,
-    // session, mode, canvas, research, wiki, MCP, and UI tools remain
-    // registered and reachable through tool_search without adding their
-    // schemas to every LLM request.
+    // Single-pass tool visibility filter.
     //
-    // tool_search itself stays in the visible set — otherwise LLM
-    // has no entry point for discovery.
+    // One question per tool: is it visible to the LLM this turn?
+    //   1. Exposure: always-exposed, or already discovered via tool_search
+    //   2. Denylist: caller exact + profile wildcard (deny wins)
+    //   3. Allowlist: caller exact + profile wildcard
+    //
+    // discoverable tools are excluded here (empty discovered set) and
+    // merged in per-turn by the streaming loop after tool_search runs.
+    const constraints: ToolVisibilityConstraints = {
+      disabledTools: options?.disabledTools,
+      allowedTools: options?.allowedTools,
+      profileAllowedPatterns: appliedProfile?.allowedTools,
+      profileDisallowedPatterns: appliedProfile?.disallowedTools,
+    };
     const allTools = registry.getAllTools();
-    let tools: Tool[] = allTools.filter((t) => {
-      const mode = registry.getExposeMode(t.name);
-      return mode !== 'internal';
-    });
-    const beforeExposeFilterCount = allTools.length;
-    const afterExposeFilterCount = tools.length;
-    if (beforeExposeFilterCount !== afterExposeFilterCount) {
-      logger.info(
-        `[Agent] streamChat: Plan 241 Phase 2 exposeMode filter applied, ${afterExposeFilterCount}/${beforeExposeFilterCount} tools exposed`,
-      );
-    }
+    const tools: Tool[] = allTools.filter((t) =>
+      isToolVisible(t.name, registry.getExposeMode(t.name), EMPTY_DISCOVERED, constraints),
+    );
+    logger.info(
+      `[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`,
+    );
 
-    // Layer 0: caller-supplied allowlist (interagent minimal mode)
-    if (options?.allowedTools?.length) {
-      tools = filterToolsByAllowedTools(tools, options.allowedTools);
-      logger.info(
-        `[Agent] streamChat: Filtered tools by allowedTools allowlist, ${tools.length}/${allTools.length} enabled`
+    // Fail-fast: profile allowlist matched zero tools.
+    if (appliedProfile?.allowedTools?.length && tools.length === 0) {
+      throw new Error(
+        `Agent profile "${appliedProfile.id}" allowedTools matched zero tools ` +
+        `(all ${allTools.length} tools were denied). ` +
+        `Patterns: ${appliedProfile.allowedTools.join(', ')}. ` +
+        `Check packages/agent/src/agent-profile/types.ts and the tool name constants.`,
       );
-      if (tools.length === 0) {
-        logger.warn(
-          `[Agent] streamChat: allowedTools allowlist matched zero tools. ` +
-          `Configured names: ${options.allowedTools.join(', ')}`
-        );
-      }
-    }
-
-    // Layer 1: caller-supplied denylist
-    if (options?.disabledTools?.length) {
-      tools = tools.filter((t) => !options.disabledTools!.includes(t.name));
-      logger.info(
-        `[Agent] streamChat: Filtered tools by disabledTools, ${tools.length}/${allTools.length} enabled`
-      );
-    }
-
-    // Layer 2: agent profile policy
-    if (appliedProfile) {
-      const allToolNames = tools.map((t) => t.name);
-      const filterResult = resolveAllowedTools(appliedProfile, allToolNames);
-      if (filterResult.isValid) {
-        const allowedToolSet = new Set(filterResult.allowed);
-        tools = tools.filter((t) => allowedToolSet.has(t.name));
-        logger.info(`[Agent] streamChat: Tool filter applied`, {
-          profileId: appliedProfile.id,
-          totalTools: allToolNames.length,
-          allowedCount: filterResult.allowed.length,
-          deniedCount: filterResult.denied.length,
-          matchedPatternCount: filterResult.diagnostics.matchedPatterns.length,
-          unmatchedPatterns: filterResult.diagnostics.unmatchedPatterns,
-          layerBreakdown: filterResult.diagnostics.layerBreakdown,
-        });
-        if (filterResult.denied.length > 0) {
-          logger.info(`[Agent] streamChat: Denied tools: ${filterResult.denied.join(', ')}`);
-        }
-      } else {
-        // Fail-fast: the profile's allowedTools patterns matched zero
-        // tools. Previously this only logged a warning and silently let
-        // ALL tools through — a security hole where a misconfigured
-        // allowlist became an implicit wildcard. Throw so the caller knows
-        // the profile is broken instead of running with unintended access.
-        const unmatched = filterResult.diagnostics.unmatchedPatterns;
-        throw new Error(
-          `Agent profile "${appliedProfile.id}" allowedTools matched zero tools ` +
-          `(all ${filterResult.denied.length} tools were denied). ` +
-          `Unmatched patterns: ${unmatched.length > 0 ? unmatched.join(', ') : '(none)'}. ` +
-          `This usually means allowedTools patterns don't match actual registered tool names. ` +
-          `Check packages/agent/src/agent-profile/types.ts and the tool name constants.`
-        );
-      }
     }
 
     // Plan 224 Phase 3: conductor canvas tool injection + profile-filter
@@ -1972,7 +1852,7 @@ export class duyaAgent {
     const agentDefinitions = getAgentDefinitions();
     logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
 
-    return { tools, registry, agentDefinitions };
+    return { tools, registry, agentDefinitions, constraints };
   }
 
   /**
@@ -1996,12 +1876,6 @@ export class duyaAgent {
     options?: ChatOptions,
     appliedProfile?: AgentProfile,
   ): Promise<string> {
-    // Apply output style config if provided
-    if (options?.outputStyleConfig) {
-      logger.info(`[Agent] Applying output style: ${options.outputStyleConfig.name}`);
-      this.promptManager.updateOptions({ outputStyleConfig: options.outputStyleConfig });
-    }
-
     // Resolve prompt system + profile
     const sysName = resolvePromptSystemName(appliedProfile?.promptSystem);
     const promptProfile = appliedProfile
@@ -2014,7 +1888,7 @@ export class duyaAgent {
       `[Agent] Using prompt system '${sysName}'${appliedProfile ? ` for profile: ${appliedProfile.name}` : ' (default)'}`
     );
     logger.info(
-      `[Agent] Resolved prompt profile: base=${promptProfile.base}, overlays=${JSON.stringify(promptProfile.overlays ?? [])}, disabledSections=${JSON.stringify(promptProfile.overrides?.disableSections ?? [])}`
+      `[Agent] Resolved prompt profile: enableSections=${JSON.stringify(promptProfile.enableSections ?? [])}, disableSections=${JSON.stringify(promptProfile.disableSections ?? [])}`
     );
 
     // Render the base system prompt
@@ -2036,6 +1910,7 @@ export class duyaAgent {
         researchIntent: options?.researchIntent,
         researchProjectId: options?.researchProjectId,
         communicationPlatform: this.communicationPlatform,
+        language: this.language,
       });
       const systemPromptResult = await promptSystem.buildSystemPrompt(context);
       systemPromptContent = [...systemPromptResult].join('\n\n');
@@ -2308,74 +2183,6 @@ export class duyaAgent {
   // === end streamChat helpers ===========================================
 
   /**
-   * Trigger background skill review if the iteration threshold is reached.
-   * Fire-and-forget: yields start event immediately, runs review async,
-   * and does not block the main conversation's 'done' event.
-   *
-   * `availableToolNames` is forwarded to `shouldReview()` so the
-   * gate can verify `skill_manage` is actually exposed to the LLM
-   * (a hidden-disabled flag at the registry level must NOT spawn
-   * a sub-agent that depends on the tool).
-   */
-  private async *_triggerBackgroundReviewWithEvents(
-    availableToolNames?: Set<string>,
-  ): AsyncGenerator<SSEEvent, void, unknown> {
-    if (!this.selfImprover.shouldReview(availableToolNames)) {
-      return;
-    }
-
-    // Take a snapshot of messages for the review
-    const messagesSnapshot = [...this.messages];
-
-    // Reset the counter before spawning to avoid duplicate triggers
-    this.selfImprover.reset();
-
-    // Notify UI that review has started
-    yield { type: 'skill_review_started' };
-
-    // Fire-and-forget: run review in background without blocking the generator
-    this._runBackgroundReview(messagesSnapshot)
-      .then(async (result) => {
-        await this.onSkillReviewCompleted?.(result);
-      })
-      .catch((err) => {
-        logger.error('[SelfImprover] Background review failed', err);
-      });
-  }
-
-  private async _runBackgroundReview(messagesSnapshot: Message[]): Promise<import('../self-improver/SelfImprover.js').ImprovementResult> {
-    return this.selfImprover.initiateSkillCreation(
-      messagesSnapshot,
-      {
-        apiKey: this.apiKey,
-        baseURL: this.baseURL,
-        model: this._model,
-        provider: this.provider,
-      },
-      this.workingDirectory
-    );
-  }
-
-  /**
-   * Run the Skill Curator if enough time has passed (default 7 days).
-   * Fire-and-forget — never blocks the conversation.
-   *
-   * The Curator performs:
-   *   1. Automatic lifecycle transitions (active → stale → archived)
-   *   2. Cluster detection and auto-archival of unused duplicates
-   */
-  private async _maybeRunCurator(): Promise<void> {
-    try {
-      if (!await this.curator.shouldRun()) return;
-      logger.info('[Curator] Starting periodic skill consolidation');
-      const result = await this.curator.run();
-      logger.info(`[Curator] Completed in ${result.duration.toFixed(1)}s: ${result.summary}`);
-    } catch (err) {
-      logger.error('[Curator] Failed', err instanceof Error ? err : new Error(String(err)));
-    }
-  }
-
-  /**
    * Trigger background memory review when due.
    *
    * Extracts recent conversation text and fires off a lightweight LLM review
@@ -2525,7 +2332,7 @@ export class duyaAgent {
       'browser', 'skill', 'brief', 'session_search',
       'vision', 'cron', 'duya_info',
       'duya_health', 'memory', 'ask_user_question',
-      'module', 'skill_manage',
+      'module',
     ]);
     return builtin;
   }
@@ -2617,10 +2424,16 @@ export class duyaAgent {
    */
   setWorkingDirectory(directory: string): void {
     this.workingDirectory = directory;
-    // Also update the prompt manager's working directory
-    if (this.promptManager) {
-      this.promptManager.setWorkingDirectory(directory);
-    }
+    // PromptSystem reads workingDirectory fresh on every turn via
+    // _buildSystemPrompt → buildContext, so no separate sync needed.
+  }
+
+  /**
+   * Update the language preference. Read by _buildSystemPrompt on every turn
+   * via promptSystem.buildContext({ language: this.language }).
+   */
+  setLanguage(language: string): void {
+    this.language = language;
   }
 
   /**

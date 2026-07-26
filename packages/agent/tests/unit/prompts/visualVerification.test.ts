@@ -1,17 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { CodePromptSystem } from '../../../src/prompts/code/index.js';
-import { GeneralPromptSystem } from '../../../src/prompts/general/index.js';
-import { resolveEnabledSections } from '../../../src/prompts/modes/index.js';
+import { PromptsRegistry } from '../../../src/prompts/registry.js';
+import { isSectionEnabled, DEFAULT_PROMPT_PROFILE } from '../../../src/prompts/modes/index.js';
 import { TOOL_NAMES } from '../../../src/prompts/types.js';
 
 describe('visual verification prompt guidance', () => {
-  it('is enabled for full and minimal profiles', () => {
-    expect(resolveEnabledSections({ base: 'full' }).has('visualVerification')).toBe(true);
-    expect(resolveEnabledSections({ base: 'minimal' }).has('visualVerification')).toBe(true);
+  it('is enabled by default and respects explicit disableSections', () => {
+    expect(isSectionEnabled(DEFAULT_PROMPT_PROFILE, 'visualVerification')).toBe(true);
+    expect(
+      isSectionEnabled({ disableSections: ['visualVerification'] }, 'visualVerification'),
+    ).toBe(false);
+    // enableSections overrides disableSections
+    expect(
+      isSectionEnabled(
+        { enableSections: ['visualVerification'], disableSections: ['visualVerification'] },
+        'visualVerification',
+      ),
+    ).toBe(true);
   });
 
   it('loads visual verification into the code prompt system with vision guidance', async () => {
-    const promptSystem = new CodePromptSystem();
+    const promptSystem = PromptsRegistry.getOrCreate('code')!;
     const context = promptSystem.buildContext({
       workingDirectory: 'E:\\Projects\\duya',
       modelId: 'MiniMax-M3',
@@ -26,7 +34,7 @@ describe('visual verification prompt guidance', () => {
   });
 
   it('loads visual verification into the general prompt system without replacing vision guidelines', async () => {
-    const promptSystem = new GeneralPromptSystem();
+    const promptSystem = PromptsRegistry.getOrCreate('general')!;
     const context = promptSystem.buildContext({
       workingDirectory: 'E:\\Projects\\duya',
       modelId: 'MiniMax-M3',

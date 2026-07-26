@@ -1,220 +1,95 @@
 /**
- * Prompt Mode Registry
- * Default base section sets and overlay patches
+ * Prompt Mode Registry (simplified).
  *
- * Note: This is NOT a "every section can be toggled" generic configuration platform.
- * We only maintain a few default combinations and allow very limited overrides (internal use only).
+ * Previous: 3-layer base + overlays + overrides with DEFAULT_BASE_SECTION_SETS,
+ *           OVERLAY_SECTION_PATCHES, resolveOverlayPatch, applyProfileOverrides.
+ * Current:  flat enableSections / disableSections. Each PromptSystem config
+ *           declares its own section universe; profile just toggles them.
  */
 
-import type {
-  PromptBaseMode,
-  PromptOverlay,
-  SectionSetConfig,
-  OverlayPatchConfig,
-  PromptProfile,
-} from './types.js'
-import { PromptsRegistry } from '../PromptsRegistry.js'
+import type { PromptProfile } from './types.js'
+import { DEFAULT_PROMPT_PROFILE, SUBAGENT_TYPE_PROFILE_MAP, DEFAULT_SUBAGENT_PROFILE } from './types.js'
 
-/**
- * Default prompt profile used when no override is specified
- */
-export const DEFAULT_PROMPT_PROFILE: PromptProfile = { base: 'full' }
-
-/**
- * Default section sets for each base mode
- * Project instructions and grounding are execution invariants for every
- * workspace-capable base mode. Profiles that do not operate on a workspace
- * (for example gateway) disable them explicitly.
- */
-export const DEFAULT_BASE_SECTION_SETS: Record<PromptBaseMode, SectionSetConfig> = {
-  full: {
-    enable: [
-      'identity', 'system', 'multiAgentCollaboration', 'projectGrounding', 'projectContinuity', 'agentsMd',
-      'personality', 'workingWithTheUser', 'rules',
-      'visualVerification',
-      'memory', 'memoryContent', 'skills', 'mcp', 'sessionGuidance', 'sessionSearch', 'recentSessions',
-      'widgetGuidelines', 'visionGuidelines', 'platform', 'environment',
-      'language', 'outputStyle', 'scratchpad',
-    ],
-    disable: [],
-  },
-  minimal: {
-    enable: [
-      'identity', 'system', 'projectGrounding', 'agentsMd', 'rules',
-      'visualVerification', 'environment', 'language',
-    ],
-    disable: [
-      'projectContinuity', 'memory', 'memoryContent', 'skills',
-      'sessionGuidance', 'sessionSearch', 'recentSessions', 'widgetGuidelines',
-    ],
-  },
-  bare: {
-    // Bare is lean, but project constraints and environment remain safety rails.
-    enable: [
-      'identity', 'system', 'projectGrounding', 'agentsMd', 'rules',
-      'environment', 'language',
-    ],
-    disable: [
-      'projectContinuity', 'memory', 'memoryContent', 'skills',
-      'sessionGuidance', 'sessionSearch', 'recentSessions', 'personality',
-    ],
-  },
+// Re-export types and constants for callers that import from here.
+export {
+  DEFAULT_PROMPT_PROFILE,
+  SUBAGENT_TYPE_PROFILE_MAP,
+  DEFAULT_SUBAGENT_PROFILE,
 }
 
 /**
- * Overlay patches - small adjustments, not new top-level semantics.
+ * Check if a section is enabled for the given profile.
  *
- * Built-in overlays (`coding`, `chat`) are statically defined here.
- * Subsystem overlays (e.g. `conductor` from `@duya/conductor`) are
- * registered at runtime via `PromptsRegistry.registerOverlayPatch()`
- * and resolved dynamically by `resolveOverlayPatch()` below.
+ * Default: enabled (every section declared in the PromptSystem config is on).
+ * When `enableSections` is non-empty it is a whitelist. This lets a profile
+ * opt into a compact, task-appropriate prompt instead of inheriting every
+ * dynamic section declared by the system configuration.
+ * Without a whitelist, `disableSections` removes named sections.
  */
-export const OVERLAY_SECTION_PATCHES: Record<PromptOverlay, OverlayPatchConfig> = {
-  coding: {
-    enable: ['rules', 'personality'],
-  },
-  chat: {
-    enable: ['personality'],
-    // chat overlay != "no tool instructions", it just weakens verbose tool guidance
-    // Specific behavior controlled internally by the rules section based on profile
-  },
-};
-
-/**
- * Resolve an overlay patch from either the built-in map or the
- * runtime registry. The dynamic lookup is what lets subsystems
- * (conductor) contribute overlay patches without agent knowing
- * about them at compile time.
- */
-function resolveOverlayPatch(overlay: PromptOverlay | string): OverlayPatchConfig | undefined {
-  if (overlay in OVERLAY_SECTION_PATCHES) {
-    return OVERLAY_SECTION_PATCHES[overlay as PromptOverlay];
-  }
-  return PromptsRegistry.getOverlayPatch(overlay);
+export function isSectionEnabled(profile: PromptProfile, sectionName: string): boolean {
+  const disable = profile.disableSections
+  const enable = profile.enableSections
+  if (enable && enable.length > 0) return enable.includes(sectionName)
+  if (disable && disable.includes(sectionName)) return false
+  return true
 }
 
 /**
- * Resolve which sections are enabled for a given profile
- * Returns a Set of enabled section names
+ * Resolve the full enabled-section set for a profile.
+ * Mirrors `isSectionEnabled` but returns the Set for callers that need it.
  */
 export function resolveEnabledSections(profile: PromptProfile): Set<string> {
-  const baseConfig = DEFAULT_BASE_SECTION_SETS[profile.base]
-
-  // Start with base enabled sections
-  const enabled = new Set(baseConfig.enable)
-
-  // Apply overlay patches
-  if (profile.overlays) {
-    for (const overlay of profile.overlays) {
-      const patch = resolveOverlayPatch(overlay)
-      if (!patch) continue
-      if (patch.enable) {
-        for (const section of patch.enable) {
-          enabled.add(section)
-        }
-      }
-      if (patch.disable) {
-        for (const section of patch.disable) {
-          enabled.delete(section)
-        }
-      }
-    }
+  // Note: this can only resolve "explicitly enabled" — the implicit default
+  // (everything not disabled) is handled by PromptSystem.getStaticSections
+  // via isSectionEnabled(). This function is kept for backward-compat
+  // callers that just want the explicit enable list minus disable list.
+  const enabled = new Set<string>(profile.enableSections ?? [])
+  if (profile.disableSections) {
+    for (const s of profile.disableSections) enabled.delete(s)
   }
-
-  // Apply overrides (internal use only)
-  if (profile.overrides?.enableSections) {
-    for (const section of profile.overrides.enableSections) {
-      enabled.add(section)
-    }
-  }
-  if (profile.overrides?.disableSections) {
-    for (const section of profile.overrides.disableSections) {
-      enabled.delete(section)
-    }
-  }
-
   return enabled
 }
 
 /**
- * Check if a section is enabled for the given profile
- */
-export function isSectionEnabled(profile: PromptProfile, sectionName: string): boolean {
-  return resolveEnabledSections(profile).has(sectionName)
-}
-
-/**
- * Apply AgentProfile's promptProfile override to a base profile
- * All profiles default to 'full' base, then apply overrides
- */
-export function applyProfileOverrides(
-  override: import('../../agent-profile/types.js').PromptProfileOverride | undefined,
-  base: PromptProfile = DEFAULT_PROMPT_PROFILE
-): PromptProfile {
-  if (!override) {
-    return base
-  }
-
-  return {
-    ...base,
-    overrides: {
-      enableSections: override.enableSections ?? [],
-      disableSections: override.disableSections ?? [],
-    },
-  }
-}
-
-/**
- * Get prompt profile for an AgentProfile
- * Combines base profile with AgentProfile's promptProfile override
+ * Get prompt profile for an AgentProfile.
+ * AgentProfile.promptProfile is already a flat {enableSections?, disableSections?} —
+ * just pass it through (or default to empty).
  */
 export function getPromptProfileForAgentProfile(
   agentProfile: import('../../agent-profile/types.js').AgentProfile
 ): PromptProfile {
-  return applyProfileOverrides(agentProfile.promptProfile)
+  return agentProfile.promptProfile ?? DEFAULT_PROMPT_PROFILE
 }
 
 /**
- * Resolve enabled sections for an AgentProfile
+ * Get prompt profile for a subagent type.
+ * Falls back to DEFAULT_SUBAGENT_PROFILE for unknown types.
+ */
+export function getPromptProfileForSubagentType(subagentType?: string): PromptProfile {
+  if (!subagentType) return DEFAULT_SUBAGENT_PROFILE
+  return SUBAGENT_TYPE_PROFILE_MAP[subagentType] ?? DEFAULT_SUBAGENT_PROFILE
+}
+
+/**
+ * Backward-compat: previously returned a full PromptProfile from a base + override.
+ * Now the override IS the profile — just return it (or default).
+ */
+export function applyProfileOverrides(
+  override: import('../../agent-profile/types.js').PromptProfileOverride | undefined,
+  _base: PromptProfile = DEFAULT_PROMPT_PROFILE,
+): PromptProfile {
+  if (!override) return DEFAULT_PROMPT_PROFILE
+  return {
+    enableSections: override.enableSections,
+    disableSections: override.disableSections,
+  }
+}
+
+/**
+ * Backward-compat: previously resolved sections for an AgentProfile.
  */
 export function resolveEnabledSectionsForAgentProfile(
   agentProfile: import('../../agent-profile/types.js').AgentProfile
 ): Set<string> {
-  const profile = getPromptProfileForAgentProfile(agentProfile)
-  return resolveEnabledSections(profile)
-}
-
-/**
- * Subagent type to prompt profile mapping
- * This is the single source of truth for mapping agent roles to prompt profiles
- */
-export const SUBAGENT_TYPE_PROFILE_MAP: Record<string, PromptProfile> = {
-  // Research/exploration agents: minimal (execution focused)
-  Explore: { base: 'minimal' },
-  explore: { base: 'minimal' },
-  research: { base: 'minimal' },
-
-  // Verification/audit agents: full (needs governance constraints)
-  verification: { base: 'full' },
-
-  // Fork/background workers: bare (strong constraints, no conversation)
-  fork: { base: 'bare' },
-}
-
-/**
- * Get prompt profile for a subagent type
- * Falls back to minimal if not specified
- */
-export function getPromptProfileForSubagentType(subagentType?: string): PromptProfile {
-  if (!subagentType) {
-    return { base: 'minimal' }
-  }
-
-  const profile = SUBAGENT_TYPE_PROFILE_MAP[subagentType]
-  if (profile) {
-    return profile
-  }
-
-  // Default for unknown subagent types: minimal
-  return { base: 'minimal' }
+  return resolveEnabledSections(getPromptProfileForAgentProfile(agentProfile))
 }

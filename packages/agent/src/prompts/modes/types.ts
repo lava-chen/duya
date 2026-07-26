@@ -1,56 +1,61 @@
 /**
- * PromptMode type definitions
- * Base modes + overlays for progressive disclosure of prompt sections
- */
-
-/**
- * Base prompt modes - only 3 to avoid mode explosion
- * - full: Main agent (governance + execution). Includes governance prompts: skills/memory/session guidance
- * - minimal: Execution subagent/worker. Keeps only essential constraints and tool usage, removes governance
- * - bare: Ultra-lean mode (strong constraints, controlled use). Still retains minimal safety and tool boundaries
- */
-export type PromptBaseMode = 'full' | 'minimal' | 'bare'
-
-/**
- * Overlay: small adjustments that don't introduce new top-level semantics
- * - coding: Emphasizes code quality/constraints (e.g. keeps rules, personality)
- * - chat: Emphasizes conversation experience (e.g. weakens verbose tool instructions, strengthens personality)
+ * PromptMode type definitions (simplified).
  *
- * Subsystems (e.g. `@duya/conductor`) may register additional overlay
- * names at runtime via `PromptsRegistry.registerOverlayPatch()`. The
- * type below is intentionally open (string) so the agent typecheck
- * does not have to be updated every time a new overlay is added.
+ * Previous design: base ('full'|'minimal'|'bare') + overlays[] + overrides{enable,disable} — 3 layers.
+ * Current design: flat enableSections / disableSections — 1 layer.
+ *
+ * Each PromptSystem config declares its own section universe. A profile's
+ * enabled set = (config's all section names) ∪ enableSections − disableSections.
+ * Subagent types still map to a default profile via SUBAGENT_TYPE_PROFILE_MAP.
  */
-export type PromptOverlay = 'coding' | 'chat' | (string & {})
 
 /**
- * Prompt configuration: converges "top-level concepts" into base + overlays
+ * Flat prompt profile: just enable/disable lists.
+ *
+ * `enableSections` is rarely needed — by default every section declared in
+ * a PromptSystem config is enabled. Use it only to re-enable a section
+ * that a parent profile disabled.
  */
 export interface PromptProfile {
-  base: PromptBaseMode
-  overlays?: PromptOverlay[]
-  /**
-   * For internal "small overrides" only, not an external concept.
-   * Goal is to avoid turning the prompt system into a configuration table platform.
-   */
-  overrides?: Partial<{
-    enableSections: string[]
-    disableSections: string[]
-  }>
+  enableSections?: string[]
+  disableSections?: string[]
 }
 
 /**
- * Section set configuration for a base mode
+ * Default prompt profile used when no override is specified.
+ * Empty = enable everything declared in the PromptSystem config.
  */
-export interface SectionSetConfig {
-  enable: string[]
-  disable: string[]
+export const DEFAULT_PROMPT_PROFILE: PromptProfile = {}
+
+/**
+ * Subagent type to prompt profile mapping.
+ * Replaces the old base-mode system with explicit enable/disable lists.
+ *
+ * - Explore/research/plan: minimal — keep core context + tool guidance, drop governance
+ * - verification: full — needs governance constraints (same as default)
+ * - fork: bare — strong constraints, no conversation
+ */
+export const SUBAGENT_TYPE_PROFILE_MAP: Record<string, PromptProfile> = {
+  Explore: {
+    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'sessionSearch', 'recentSessions', 'widgetGuidelines', 'visionGuidelines'],
+  },
+  explore: {
+    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'sessionSearch', 'recentSessions', 'widgetGuidelines', 'visionGuidelines'],
+  },
+  research: {
+    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'sessionSearch', 'recentSessions', 'widgetGuidelines'],
+  },
+  // verification: full profile (no disable) — keeps governance constraints
+  verification: {},
+  // fork: bare — drop conversation/governance, keep safety + project + environment
+  fork: {
+    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'sessionSearch', 'recentSessions', 'personality', 'widgetGuidelines', 'visionGuidelines'],
+  },
 }
 
 /**
- * Overlay patch configuration
+ * Default profile for unknown subagent types.
  */
-export interface OverlayPatchConfig {
-  enable?: string[]
-  disable?: string[]
+export const DEFAULT_SUBAGENT_PROFILE: PromptProfile = {
+  disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'sessionSearch', 'recentSessions', 'widgetGuidelines'],
 }

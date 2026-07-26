@@ -16,6 +16,7 @@ import {
   Feather,
   Plug,
   SquareHalf,
+  ArrowsInLineVertical,
 } from '@phosphor-icons/react';
 import { TelescopeIcon } from '@/components/icons';
 
@@ -167,6 +168,14 @@ export function useSlashCommands(opts: {
         icon: Plug,
         kind: 'settings_submenu' as const,
         submenu: 'mcp' as const,
+        group: 'settings' as const,
+      },
+      {
+        label: isZh ? '压缩上下文' : 'Compact context',
+        value: '__compact',
+        description: isZh ? '摘要历史以节省 token' : 'Summarize history to save tokens',
+        icon: ArrowsInLineVertical,
+        kind: 'settings_action' as const,
         group: 'settings' as const,
       },
     ];

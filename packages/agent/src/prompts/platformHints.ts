@@ -88,23 +88,3 @@ export function getPlatformHint(platform?: CommunicationPlatform): string | unde
   }
   return PLATFORM_HINTS[platform]
 }
-
-/**
- * Check if a platform has a specific capability.
- * This can be extended to support more granular capability checks.
- */
-export function hasPlatformCapability(
-  platform: CommunicationPlatform,
-  capability: 'markdown' | 'media' | 'interactive' | 'long_messages'
-): boolean {
-  const capabilities: Partial<Record<CommunicationPlatform, Set<string>>> = {
-    'cli': new Set(['long_messages']),
-    'duya-app': new Set(['markdown', 'media', 'interactive', 'long_messages']),
-    'weixin': new Set(['markdown', 'media']),
-    'feishu': new Set(['markdown', 'media', 'interactive']),
-    'telegram': new Set(['markdown', 'media', 'long_messages']),
-    'qq': new Set(['markdown', 'media', 'long_messages']),
-  }
-
-  return capabilities[platform]?.has(capability) ?? false
-}

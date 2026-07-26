@@ -11,13 +11,6 @@ import type { PromptSkill, SkillCategory } from '../../../skills/types.js'
 import type { PromptContext } from '../../types.js'
 
 /**
- * SKILLS_GUIDANCE - instructs agent to save complex workflows as skills
- * Mirrors hermes-agent's SKILLS_GUIDANCE from agent/prompt_builder.py:164-171
- */
-export const SKILLS_GUIDANCE = `After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with skill_manage so you can reuse it next time.
-When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with skill_manage(action='patch') — don't wait to be asked. Skills that aren't maintained become liabilities.`;
-
-/**
  * Default category labels (fallback when no DESCRIPTION.md)
  */
 const CATEGORY_LABELS: Record<SkillCategory, string> = {
@@ -112,18 +105,8 @@ export function getSkillsMetadataSection(context: PromptContext): string | null 
 
   const lines: string[] = []
 
-  // Add SKILLS_GUIDANCE when skill_manage tool is available
-  if (context.enabledTools && context.enabledTools.has('skill_manage')) {
-    lines.push(SKILLS_GUIDANCE)
-    lines.push('')
-  }
-
   if (skills.length === 0) {
-    // Only return null if no skills AND no guidance
-    if (lines.length === 0) {
-      return null
-    }
-    return lines.join('\n')
+    return null
   }
 
   lines.push('## Available Skills', '')

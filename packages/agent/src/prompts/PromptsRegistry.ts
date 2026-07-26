@@ -1,166 +1,118 @@
 /**
- * PromptsRegistry - Registry for PromptSystem instances
- * Manages registration and retrieval of prompt systems by name.
+ * PromptsRegistry - Registry for PromptSystem configs.
  *
- * Instance caching is keyed by (name, profile) — different profiles get
- * different instances so that per-profile section filtering takes effect.
+ * Previous design: registered factories, cached instances per (name, profileKey).
+ * Current design:  register configs, create instances on demand (no cache).
  *
- * Use `get(name)` for the legacy/default profile path; use `getOrCreate(name, profile)`
- * when the caller has a specific profile to apply.
+ * Instance caching was removed because:
+ * 1. Only 4 promptSystems are used in the main flow — cache hit rate was low.
+ * 2. Profile changes now just create a new instance (cheap).
+ * 3. The profileKey serialization was a non-trivial source of complexity.
+ *
+ * Overlay patches (for @duya/conductor runtime registration) are kept —
+ * the modes/ layer is flat now, but subsystems may still want to register
+ * section-level patches. Currently no subsystem uses this; the API is
+ * retained for backward compat.
  */
 
 import type { PromptProfile } from './modes/types.js'
-import type { OverlayPatchConfig } from './modes/types.js'
-import type { PromptSystem } from './PromptSystem.js'
+import type { PromptSystemConfig } from './PromptSystem.js'
+import { PromptSystem } from './PromptSystem.js'
 import { DEFAULT_PROMPT_PROFILE } from './modes/index.js'
 
 /**
- * Factory interface for creating prompt system instances.
- */
-export interface PromptSystemFactory {
-  create(profile?: PromptProfile): PromptSystem
-}
-
-/**
- * Stable serialization of a PromptProfile for use as a cache key.
- * Order-independent: `{ a: [1] }` and `{ a: [1] }` produce the same key regardless of object key order.
- */
-export function profileKey(profile: PromptProfile): string {
-  const overlays = (profile.overlays ?? []).slice().sort().join(',')
-  const enable = (profile.overrides?.enableSections ?? []).slice().sort().join(',')
-  const disable = (profile.overrides?.disableSections ?? []).slice().sort().join(',')
-  return `${profile.base}|o:${overlays}|+:${enable}|-:${disable}`
-}
-
-/**
- * Registry for managing PromptSystem instances and factories.
+ * Registry for managing PromptSystem configs.
  */
 export class PromptsRegistry {
-  private static systems = new Map<string, PromptSystemFactory>()
-  private static instances = new Map<string, PromptSystem>()
-  /**
-   * Runtime-registered overlay patches contributed by subsystems
-   * (e.g. `@duya/conductor`). These are looked up by `resolveOverlayPatch`
-   * in `./modes/index.ts` for any overlay name that is not part of the
-   * built-in `OVERLAY_SECTION_PATCHES` map.
-   */
-  private static overlayPatches = new Map<string, OverlayPatchConfig>()
+  private static configs = new Map<string, PromptSystemConfig>()
 
   /**
-   * Register a prompt system factory.
+   * Register a prompt system config.
    */
-  static register(name: string, factory: PromptSystemFactory): void {
-    this.systems.set(name, factory)
-  }
-
-  /**
-   * Register a runtime overlay patch contributed by a subsystem
-   * (e.g. `@duya/conductor` registers its `'conductor'` overlay here).
-   * The agent itself never hard-codes subsystem overlays — the
-   * `PromptOverlay` union is intentionally open (`string & {}`) so
-   * subsystems can plug in without agent recompile.
-   */
-  static registerOverlayPatch(name: string, patch: OverlayPatchConfig): void {
-    this.overlayPatches.set(name, patch)
-  }
-
-  /**
-   * Get a previously registered overlay patch by name, or undefined.
-   */
-  static getOverlayPatch(name: string): OverlayPatchConfig | undefined {
-    return this.overlayPatches.get(name)
-  }
-
-  /**
-   * Get all runtime-registered overlay patch names.
-   */
-  static getRegisteredOverlayPatchNames(): string[] {
-    return Array.from(this.overlayPatches.keys())
+  static register(name: string, config: PromptSystemConfig): void {
+    this.configs.set(name, config)
   }
 
   /**
    * Check if a system is registered.
    */
   static has(name: string): boolean {
-    return this.systems.has(name)
+    return this.configs.has(name)
+  }
+
+  /**
+   * Get or create a system instance for the given name and profile.
+   * Always creates a fresh instance — no caching. Profile is applied
+   * via setProfile if provided.
+   */
+  static getOrCreate(name: string, profile?: PromptProfile): PromptSystem | undefined {
+    const config = this.configs.get(name)
+    if (!config) return undefined
+    return new PromptSystem(config, profile ?? DEFAULT_PROMPT_PROFILE)
   }
 
   /**
    * Get a system instance for the given name, using the default profile.
-   *
-   * Prefer `getOrCreate(name, profile)` when the caller has a specific profile.
-   * This overload exists for backward compatibility — its returned instance is
-   * cached under (name, DEFAULT_PROMPT_PROFILE).
    */
   static get(name: string): PromptSystem | undefined {
     return this.getOrCreate(name, DEFAULT_PROMPT_PROFILE)
   }
 
   /**
-   * Get or create a system instance for the given name and profile.
-   * Instances are cached per (name, profile) pair — different profiles yield
-   * different instances. Same (name, profile) returns the same instance.
-   */
-  static getOrCreate(name: string, profile: PromptProfile): PromptSystem | undefined {
-    const key = `${name}::${profileKey(profile)}`
-    const existing = this.instances.get(key)
-    if (existing) {
-      return existing
-    }
-    const factory = this.systems.get(name)
-    if (!factory) {
-      return undefined
-    }
-    const instance = factory.create(profile)
-    this.instances.set(key, instance)
-    return instance
-  }
-
-  /**
-   * Create a new system instance (non-singleton) for the given name and profile.
-   * Always returns a fresh instance — does not consult or update the cache.
+   * Create a new system instance (alias for getOrCreate — kept for backward compat).
    */
   static create(name: string, profile?: PromptProfile): PromptSystem | undefined {
-    const factory = this.systems.get(name)
-    return factory?.create(profile)
+    return this.getOrCreate(name, profile)
   }
 
   /**
-   * Reset cached instances.
-   * If `name` is provided, only instances for that name (across all profiles) are dropped.
-   * If omitted, all instances are dropped.
+   * Get the raw config for a system (useful for inspection/testing).
    */
-  static reset(name?: string): void {
-    if (!name) {
-      this.instances.clear()
-      return
-    }
-    const prefix = `${name}::`
-    for (const key of Array.from(this.instances.keys())) {
-      if (key.startsWith(prefix)) {
-        this.instances.delete(key)
-      }
-    }
+  static getConfig(name: string): PromptSystemConfig | undefined {
+    return this.configs.get(name)
+  }
+
+  /**
+   * Reset all registered configs.
+   */
+  static reset(): void {
+    this.configs.clear()
   }
 
   /**
    * Get all registered system names.
    */
   static getRegisteredNames(): string[] {
-    return Array.from(this.systems.keys())
+    return Array.from(this.configs.keys())
   }
 
   /**
    * Unregister a system.
    */
   static unregister(name: string): boolean {
-    const prefix = `${name}::`
-    for (const key of Array.from(this.instances.keys())) {
-      if (key.startsWith(prefix)) {
-        this.instances.delete(key)
-      }
-    }
-    this.overlayPatches.delete(name)
-    return this.systems.delete(name)
+    return this.configs.delete(name)
+  }
+
+  // ---------------------------------------------------------------
+  // Overlay patches — retained for backward compat.
+  // Currently unused (modes/ is flat now), but @duya/conductor may
+  // still reference the API. Safe to remove once confirmed unused.
+  // ---------------------------------------------------------------
+
+  private static overlayPatches = new Map<string, { enable?: string[]; disable?: string[] }>()
+
+  /** @deprecated modes/ is flat now; overlay patches are no longer used. */
+  static registerOverlayPatch(name: string, patch: { enable?: string[]; disable?: string[] }): void {
+    this.overlayPatches.set(name, patch)
+  }
+
+  /** @deprecated modes/ is flat now; overlay patches are no longer used. */
+  static getOverlayPatch(name: string): { enable?: string[]; disable?: string[] } | undefined {
+    return this.overlayPatches.get(name)
+  }
+
+  /** @deprecated */
+  static getRegisteredOverlayPatchNames(): string[] {
+    return Array.from(this.overlayPatches.keys())
   }
 }

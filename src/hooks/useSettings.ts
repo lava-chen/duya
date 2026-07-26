@@ -20,7 +20,6 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     provider: "",
     messageFont: "serif",
     skillAdditionalPaths: [],
-    skillNudgeInterval: 10,
     summaryLLMConfig: null,
     summaryLLMEnabled: false,
     databasePath: "",
@@ -95,7 +94,6 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       skillAdditionalPaths: raw.skillAdditionalPaths
         ? JSON.parse(raw.skillAdditionalPaths)
         : defaults.skillAdditionalPaths,
-      skillNudgeInterval: raw.skillNudgeInterval ? parseInt(raw.skillNudgeInterval, 10) : defaults.skillNudgeInterval,
       summaryLLMConfig: raw.summaryLLMConfig && raw.summaryLLMConfig !== "null"
         ? JSON.parse(raw.summaryLLMConfig)
         : defaults.summaryLLMConfig,
@@ -218,7 +216,6 @@ export function useSettings(): {
     provider: "",
     messageFont: "serif",
     skillAdditionalPaths: [],
-    skillNudgeInterval: 10,
     summaryLLMConfig: null,
     summaryLLMEnabled: false,
     databasePath: "",

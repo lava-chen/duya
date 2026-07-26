@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useConductorStore } from "../stores/conductor-store";
+import type { ConductorCanvas } from "../types/conductor";
 
 /**
  * Subscribe to `conductor:canvas:changed` events broadcast by the main
@@ -38,8 +39,8 @@ export function useCanvasManagement(): void {
     }
 
     const unsubscribe = port.onCanvasChanged((event) => {
-      const canvas = event.canvas as CanvasSummaryFromMain;
-      if (!canvas || typeof canvas.id !== "string") return;
+      const canvas = normalizeCanvas(event.canvas);
+      if (!canvas) return;
 
       switch (event.operation) {
         case "create":
@@ -83,4 +84,27 @@ interface CanvasSummaryFromMain {
   createdAt?: number;
   updatedAt?: number;
   projectPath?: string | null;
+}
+
+/**
+ * Normalize the loosely-typed IPC payload into a full `ConductorCanvas`.
+ * Optional fields from the main process get the same defaults the DB
+ * layer uses so store updates never carry `undefined` into fields the
+ * renderer types as `string | null`.
+ */
+function normalizeCanvas(raw: unknown): ConductorCanvas | null {
+  const summary = raw as Partial<CanvasSummaryFromMain> | null | undefined;
+  if (!summary || typeof summary.id !== "string" || typeof summary.name !== "string") {
+    return null;
+  }
+  return {
+    id: summary.id,
+    name: summary.name,
+    description: summary.description ?? null,
+    layoutConfig: summary.layoutConfig ?? {},
+    sortOrder: summary.sortOrder ?? 0,
+    createdAt: summary.createdAt ?? Date.now(),
+    updatedAt: summary.updatedAt ?? Date.now(),
+    projectPath: summary.projectPath ?? null,
+  };
 }

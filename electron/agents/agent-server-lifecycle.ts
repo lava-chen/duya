@@ -75,6 +75,9 @@ export function spawnAgentServer(): Promise<number> {
       DUYA_AGENT_SERVER: 'true',
       DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || resolveBetterSqlite3Path(),
       DUYA_CUSTOM_DB_PATH: process.env.DUYA_CUSTOM_DB_PATH || getDatabasePath(),
+      // Dev-only flag forwarded to the agent server and its workers. Packaged
+      // builds never set this, so dev-only diagnostics stay disabled in prod.
+      ...(app.isPackaged ? {} : { DUYA_DEV: '1' }),
     };
 
     let command: string;
@@ -97,6 +100,20 @@ export function spawnAgentServer(): Promise<number> {
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.isDestroyed()) {
             window.webContents.send('chat:background_task_ready', { sessionId: msg.sessionId });
+          }
+        }
+        return;
+      }
+
+      if (msg.type === 'bash_task:update' && typeof msg.sessionId === 'string') {
+        // Rebroadcast the bash background task snapshot to every renderer.
+        // The renderer's useBashTasks hook filters by activeThreadId.
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send('bash_task:update', {
+              sessionId: msg.sessionId,
+              tasks: Array.isArray(msg.tasks) ? msg.tasks : [],
+            });
           }
         }
         return;
