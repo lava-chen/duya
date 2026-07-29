@@ -45,6 +45,20 @@ export type {
   ParameterDiagnostic,
 } from './types.js';
 
+export { allProviderModels } from './providers/index.js';
+export {
+  minimaxAnthropicModels,
+  minimaxOpenAIModels,
+  deepseekModels,
+  qwenModels,
+  glmModels,
+  kimiModels,
+  openAIModels,
+  anthropicModels,
+  openrouterModels,
+  ollamaModels,
+} from './providers/index.js';
+
 import type { AIClient, AIClientOptions } from './types.js';
 
 /**
