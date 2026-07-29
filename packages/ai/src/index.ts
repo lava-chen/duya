@@ -4,6 +4,7 @@
  * Entry point. Public API will be expanded in subsequent tasks.
  */
 export { createAnthropicClient } from './api/anthropic-messages.js';
+export { createOpenAICompletionsClient } from './api/openai-completions.js';
 
 export type {
   ApiFormat,
