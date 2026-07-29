@@ -3,6 +3,7 @@
  */
 
 import type { AssistantMessage, Message, SSEEvent, TokenUsage } from '../types.js';
+import type { DuyaReasoningSettings } from '@duya/ai';
 
 export interface LLMClient {
   /**
@@ -39,6 +40,9 @@ export interface LLMClient {
        *  For OpenAI: maps to max_tokens (max_completion_tokens).
        *  When set, takes precedence over maxOutputTokens/maxTokens. */
       totalOutputBudget?: number;
+      /** Granular reasoning settings. When set, takes precedence
+       *  over the simple `effort` field. */
+      reasoningSettings?: DuyaReasoningSettings;
     }
   ): AsyncGenerator<SSEEvent, AssistantMessage | void, unknown>;
 
@@ -110,6 +114,7 @@ export class LazyLLMClientProxy implements LLMClient {
       maxOutputTokens?: number;
       reasoningBudget?: number;
       totalOutputBudget?: number;
+      reasoningSettings?: DuyaReasoningSettings;
     },
   ): AsyncGenerator<SSEEvent, AssistantMessage | void, unknown> {
     const client = await this.getClient();

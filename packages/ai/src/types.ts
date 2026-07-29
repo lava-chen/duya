@@ -304,6 +304,45 @@ export interface ParameterDiagnostic {
   message: string;
 }
 
+// ─── DuyaReasoningSettings (P1: effort superset) ───
+
+/**
+ * Superset of the simple `effort` string, providing granular control
+ * over reasoning behavior. When both `effort` and `reasoning` are set
+ * in streamChat options, `reasoning` takes precedence.
+ *
+ * Design: the existing `effort?: string` field stays in ChatOptions for
+ * backward compatibility. Callers who want fine-grained control pass
+ * `reasoningSettings` instead.
+ */
+export interface DuyaReasoningSettings {
+  /** Reasoning intensity. Maps to the existing effort levels.
+   *  When set, this is equivalent to setting `effort` in the options. */
+  intensity?: ThinkingLevel | 'off';
+
+  /** Reasoning mode.
+   *  - 'standard': normal reasoning (default)
+   *  - 'deep': extended thinking with higher budget
+   *  - 'fast': minimal reasoning for speed
+   *  Maps to provider-specific parameters when supported. */
+  mode?: 'standard' | 'deep' | 'fast';
+
+  /** Display preferences for the thinking content. */
+  display?: {
+    /** Whether to show thinking content to the user. Default true. */
+    showThinking?: boolean;
+    /** Whether to collapse thinking by default. Default true. */
+    collapseByDefault?: boolean;
+  };
+
+  /** Continuity control for reasoning state.
+   *  - 'always': always carry forward reasoning signatures
+   *  - 'never': never carry forward (start fresh each turn)
+   *  - 'auto': carry forward only when the previous turn had reasoning
+   *  Default: 'auto'. */
+  continuity?: 'always' | 'never' | 'auto';
+}
+
 // ─── AIClient interface (compatible with existing LLMClient) ───
 
 export interface AIClientOptions {
@@ -339,6 +378,9 @@ export interface AIClient {
        *  For OpenAI: maps to max_tokens (max_completion_tokens).
        *  When set, takes precedence over maxOutputTokens/maxTokens. */
       totalOutputBudget?: number;
+      /** Granular reasoning settings. When set, takes precedence
+       *  over the simple `effort` field. */
+      reasoningSettings?: DuyaReasoningSettings;
     },
   ): AsyncGenerator<SSEEvent, AssistantMessage, unknown>;
 
