@@ -578,10 +578,23 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       const anthropicMessages = toAnthropicMessages(transformed, model);
 
       // 4. Resolve thinking config from model + effort.
-      const thinking = resolveAnthropicThinking(model, chatOptions?.effort);
+      // totalOutputBudget takes precedence over maxOutputTokens/maxTokens.
+      // For Anthropic, max_tokens is the TOTAL output (thinking + text).
+      const maxTokens = chatOptions?.totalOutputBudget
+        ?? chatOptions?.maxOutputTokens
+        ?? chatOptions?.maxTokens
+        ?? 4096;
+
+      let thinking = resolveAnthropicThinking(model, chatOptions?.effort);
+
+      // Override budget_tokens if reasoningBudget is explicitly set.
+      // For Anthropic, thinking.budget_tokens must be < max_tokens.
+      if (thinking && chatOptions?.reasoningBudget && thinking.type === 'enabled') {
+        const clampedBudget = Math.min(chatOptions.reasoningBudget, maxTokens - 1);
+        thinking = { ...thinking, budget_tokens: clampedBudget };
+      }
 
       // 5. Build request params.
-      const maxTokens = chatOptions?.maxOutputTokens ?? chatOptions?.maxTokens ?? 4096;
       const params: Anthropic.MessageCreateParams = {
         model: options.model,
         max_tokens: maxTokens,

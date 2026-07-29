@@ -36,3 +36,36 @@ export function getTemperature(model: Model, userTemp?: number): number | undefi
   }
   return userTemp;
 }
+
+/**
+ * Validates and normalizes budget parameters.
+ *
+ * - `totalOutputBudget` takes precedence over `maxOutputTokens` / `maxTokens`
+ *   when resolving the effective total.
+ * - Throws if `reasoningBudget >= total` (Anthropic requires
+ *   `budget_tokens < max_tokens`).
+ * - Returns undefined if no budgets are set.
+ */
+export function validateBudgets(options: {
+  reasoningBudget?: number;
+  totalOutputBudget?: number;
+  maxOutputTokens?: number;
+  maxTokens?: number;
+}): { reasoningBudget?: number; totalOutputBudget?: number } | undefined {
+  const { reasoningBudget, totalOutputBudget, maxOutputTokens, maxTokens } = options;
+
+  // Normalize: if totalOutputBudget not set but maxOutputTokens/maxTokens is, use that.
+  const total = totalOutputBudget ?? maxOutputTokens ?? maxTokens;
+  if (!reasoningBudget && !total) return undefined;
+
+  if (reasoningBudget && total && reasoningBudget >= total) {
+    throw new Error(
+      `reasoningBudget (${reasoningBudget}) must be less than totalOutputBudget (${total})`,
+    );
+  }
+
+  return {
+    reasoningBudget: reasoningBudget && reasoningBudget > 0 ? reasoningBudget : undefined,
+    totalOutputBudget: total && total > 0 ? total : undefined,
+  };
+}

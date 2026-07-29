@@ -29,6 +29,16 @@ export interface LLMClient {
        * over the hardcoded fallbacks in `getMiniMaxAnthropicMaxTokens`.
        */
       maxOutputTokens?: number;
+      /** Tokens reserved specifically for reasoning/thinking.
+       *  For Anthropic: maps to thinking.budget_tokens.
+       *  For OpenAI: ignored (reasoning_effort controls budget).
+       *  When set, totalOutputBudget must be >= reasoningBudget + 1. */
+      reasoningBudget?: number;
+      /** Total output token budget (thinking + text combined).
+       *  For Anthropic: maps to max_tokens.
+       *  For OpenAI: maps to max_tokens (max_completion_tokens).
+       *  When set, takes precedence over maxOutputTokens/maxTokens. */
+      totalOutputBudget?: number;
     }
   ): AsyncGenerator<SSEEvent, AssistantMessage | void, unknown>;
 
@@ -98,6 +108,8 @@ export class LazyLLMClientProxy implements LLMClient {
       signal?: AbortSignal;
       effort?: string;
       maxOutputTokens?: number;
+      reasoningBudget?: number;
+      totalOutputBudget?: number;
     },
   ): AsyncGenerator<SSEEvent, AssistantMessage | void, unknown> {
     const client = await this.getClient();
