@@ -325,6 +325,13 @@ export function isRetryableError(error: unknown): boolean {
     return false;
   }
 
+  // Provider safety filters are never retryable — the same input will
+  // trigger the same filter again, so retrying just wastes time and
+  // confuses the user.
+  if (type === APIErrorType.PROVIDER_SAFETY_FILTER) {
+    return false;
+  }
+
   if (retryableTypes.has(type)) {
     return true;
   }
