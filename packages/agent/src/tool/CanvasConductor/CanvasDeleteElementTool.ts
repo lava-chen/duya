@@ -21,8 +21,18 @@ export const definition: Tool = {
   name: TOOL_NAME,
   description:
     'Delete an element from the bound canvas. ' +
-    'Use this to remove obsolete stickies, images, files, connectors, or widgets. ' +
-    'If the deleted element was a connector endpoint, delete the connector too.',
+    'The canvasId is injected automatically — never pass it.\n\n' +
+    '## PRE-FLIGHT (REQUIRED)\n' +
+    'Call canvas_list_elements (or canvas_get_context) first, OR operate on an element you created via ' +
+    'canvas_create_element in THIS session. Without one of these, the call is REJECTED with STALE_STATE.\n\n' +
+    '## Important side effects\n' +
+    '  - If you delete a node that was a connector endpoint, the connector becomes ORPHANED. ' +
+    'Always pair this call with a delete on any connector whose source/target referenced the deleted node. ' +
+    'Run canvas_list_elements afterward to confirm no orphaned connectors remain.\n' +
+    '  - This is irreversible from the agent side. Use canvas_capture before deletion if you may need to restore layout.\n\n' +
+    '## Common use cases\n' +
+    '  - Remove obsolete stickies, images, files, connectors, or widgets.\n' +
+    '  - Clean up duplicate or misplaced elements before reorganizing.',
   input_schema: {
     type: 'object',
     properties: {

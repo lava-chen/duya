@@ -161,6 +161,10 @@ export interface ProviderAPI {
   setDefaultLlm: (payload: { id: string | null }) => Promise<boolean>
   /** Get the current default provider (masked DTO). */
   getDefault: () => Promise<unknown | null>
+  /** Set the memory worker provider. When null, falls back to default. */
+  setMemory: (payload: { id: string | null }) => Promise<boolean>
+  /** Get the memory worker provider (masked DTO). */
+  getMemory: () => Promise<unknown | null>
   test: (payload: { providerId: string; presetKey?: string }) => Promise<{
     providerId: string
     ok: boolean
@@ -481,8 +485,63 @@ export interface GitStatusResult {
   totals?: GitStatusTotals;
 }
 
+export type GitReviewFileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
+
+export interface GitReviewFile extends GitStatusFileChange {
+  status: GitReviewFileStatus;
+  oldPath?: string;
+}
+
+export interface GitReviewResult {
+  isGitRepo: boolean;
+  branch?: string;
+  baseRef?: string;
+  files?: GitReviewFile[];
+  totals?: GitStatusTotals;
+}
+
+export interface GitReviewDiffResult {
+  isGitRepo: boolean;
+  path?: string;
+  patch?: string;
+  binary?: boolean;
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface GitReviewFullDiffResult {
+  isGitRepo: boolean;
+  patch?: string;
+  binary?: boolean;
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface GitTurnReview {
+  id: string;
+  sessionId: string;
+  turnId: string;
+  workingDirectory: string;
+  files: GitReviewFile[];
+  totals: GitStatusTotals;
+  patch: string;
+  binary: boolean;
+  truncated: boolean;
+  capturedAt: number;
+}
+
+export interface GitLatestTurnReviewResult {
+  isGitRepo: boolean;
+  review?: GitTurnReview;
+  error?: string;
+}
+
 export interface GitAPI {
   status: (cwd: string) => Promise<GitStatusResult>;
+  review: (cwd: string) => Promise<GitReviewResult>;
+  reviewDiff: (cwd: string, filePath: string) => Promise<GitReviewDiffResult>;
+  reviewFullDiff: (cwd: string) => Promise<GitReviewFullDiffResult>;
+  reviewLatestTurn: (sessionId: string, cwd: string) => Promise<GitLatestTurnReviewResult>;
 }
 
 export interface PortStatusAPI {
@@ -691,22 +750,6 @@ export interface MailboxAPI {
   list: (sessionId: string, opts?: { status?: string[]; limit?: number }) => Promise<unknown[]>;
   listForSession: (sessionId: string) => Promise<unknown[]>;
   onEvent: (handler: (event: unknown) => void) => () => void;
-}
-
-export interface WikiAPI {
-  listAllNodes: () => Promise<unknown[]>
-  getNode: (nodePath: string) => Promise<unknown | null>
-  updateNode: (node: unknown) => Promise<boolean>
-  deleteNode: (nodePath: string) => Promise<boolean>
-  searchNodes: (query: string) => Promise<unknown[]>
-  readIndex: () => Promise<unknown[]>
-  readLog: () => Promise<unknown[]>
-  listInboxFiles: () => Promise<string[]>
-  readInboxFile: (filename: string) => Promise<string | null>
-  deleteInboxFile: (filename: string) => Promise<boolean>
-  getRootPath: () => Promise<string>
-  getRuntimeStatus: () => Promise<unknown>
-  onActivity: (callback: (data: unknown) => void) => () => void
 }
 
 export interface RecapAPI {
@@ -1021,7 +1064,6 @@ export interface ElectronAPI {
   onTerminalOutput: (callback: (event: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (event: { id: string; code: number | null }) => void) => () => void
   recap: RecapAPI
-  wiki: WikiAPI
   mailbox: MailboxAPI
   // Agent Server API
   agentServer: {
@@ -1569,6 +1611,9 @@ const electronAPI: ElectronAPI = {
     setDefaultLlm: (payload: { id: string | null }) =>
       ipcRenderer.invoke('provider:setDefaultLlm', payload),
     getDefault: () => ipcRenderer.invoke('provider:getDefault'),
+    setMemory: (payload: { id: string | null }) =>
+      ipcRenderer.invoke('provider:setMemory', payload),
+    getMemory: () => ipcRenderer.invoke('provider:getMemory'),
     test: (payload: { providerId: string; presetKey?: string }) =>
       ipcRenderer.invoke('provider:test', payload),
     testModel: (payload: { providerId: string; modelId: string }) =>
@@ -1669,6 +1714,10 @@ const electronAPI: ElectronAPI = {
   },
   git: {
     status: (cwd: string) => ipcRenderer.invoke('git:status', cwd),
+    review: (cwd: string) => ipcRenderer.invoke('git:review', cwd),
+    reviewDiff: (cwd: string, filePath: string) => ipcRenderer.invoke('git:review-diff', cwd, filePath),
+    reviewFullDiff: (cwd: string) => ipcRenderer.invoke('git:review-full-diff', cwd),
+    reviewLatestTurn: (sessionId: string, cwd: string) => ipcRenderer.invoke('git:review-latest-turn', sessionId, cwd),
   },
   references: {
     list: (workingDirectory: string) => ipcRenderer.invoke('references:list', workingDirectory),
@@ -1762,30 +1811,6 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('recap:result', handler);
       return () => {
         ipcRenderer.removeListener('recap:result', handler);
-      };
-    },
-  },
-  // Wiki API
-  wiki: {
-    listAllNodes: () => ipcRenderer.invoke('wiki:listAllNodes'),
-    getNode: (nodePath: string) => ipcRenderer.invoke('wiki:getNode', nodePath),
-    updateNode: (node: unknown) => ipcRenderer.invoke('wiki:updateNode', node),
-    deleteNode: (nodePath: string) => ipcRenderer.invoke('wiki:deleteNode', nodePath),
-    searchNodes: (query: string) => ipcRenderer.invoke('wiki:searchNodes', query),
-    readIndex: () => ipcRenderer.invoke('wiki:readIndex'),
-    readLog: () => ipcRenderer.invoke('wiki:readLog'),
-    listInboxFiles: () => ipcRenderer.invoke('wiki:listInboxFiles'),
-    readInboxFile: (filename: string) => ipcRenderer.invoke('wiki:readInboxFile', filename),
-    deleteInboxFile: (filename: string) => ipcRenderer.invoke('wiki:deleteInboxFile', filename),
-    getRootPath: () => ipcRenderer.invoke('wiki:getRootPath'),
-    getRuntimeStatus: () => ipcRenderer.invoke('wiki:getRuntimeStatus'),
-    onActivity: (callback: (data: unknown) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => {
-        callback(payload);
-      };
-      ipcRenderer.on('wiki:activity', handler);
-      return () => {
-        ipcRenderer.removeListener('wiki:activity', handler);
       };
     },
   },

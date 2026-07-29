@@ -724,7 +724,7 @@ const subConfigProviderActivate: CliSubcommand = {
 
 const subConfigProviderSetDefault: CliSubcommand = {
   description:
-    'Set the soft default provider. The default is the implicit fallback when a thread has no explicit provider, and for vision, gateway, wiki-agent, title generation, embedding, and scheduled automation. Pass --clear to unset the default.',
+    'Set the soft default provider. The default is the implicit fallback when a thread has no explicit provider, and for vision, gateway, title generation, embedding, and scheduled automation. Pass --clear to unset the default.',
   write: true,
   args: [{ name: 'id', required: true, description: 'Provider id (ignored when --clear is set)' }],
   options: [

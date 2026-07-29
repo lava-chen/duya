@@ -72,15 +72,6 @@ export interface TokenUsage {
   cache_hit_tokens?: number;
 }
 
-/**
- * Context usage information showing current context window utilization
- */
-export interface ContextUsage {
-  usedTokens: number;
-  contextWindow: number;
-  percentFull: number;
-}
-
 export type StreamPhase =
   | 'idle'
   | 'starting'
@@ -104,8 +95,6 @@ export interface SessionStreamSnapshot {
   streamingToolOutput: string;
   statusText?: string;
   lastNotification?: { message: string };
-  tokenUsage: TokenUsage | null;
-  contextUsage: ContextUsage | null;
   startedAt: number;
   completedAt: number | null;
   error: string | null;

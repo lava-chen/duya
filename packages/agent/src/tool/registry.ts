@@ -163,6 +163,22 @@ export class ToolRegistry {
   }
 
   /**
+   * Refresh a registered tool's definition by calling `toTool()` on
+   * its executor. Used when a tool's description or schema changes
+   * after initial registration (e.g. browser tool mode switch).
+   */
+  refreshDefinition(name: string): boolean {
+    const entry = this.tools.get(name);
+    if (!entry) return false;
+    const executor = entry.executor as ToolExecutor & { toTool?: () => Tool };
+    if (typeof executor.toTool === 'function') {
+      entry.definition = executor.toTool();
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Phase 2A Batch A: remove all tools whose (key, definition) pair
    * matches the predicate. Returns the number of entries removed.
    * Used by `DuyaAgent.unregisterMCPTools()` (Batch C) and by

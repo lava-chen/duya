@@ -1,152 +1,41 @@
 /**
- * Skills Metadata Section - Progressive Disclosure Level 1
- * Injects skill names and descriptions into system prompt
- * Agent knows what skills are available but not their full content
+ * Skill catalog (progressive disclosure level one).
  *
- * Updated to support category descriptions from DESCRIPTION.md (Hermes-style)
+ * This is deliberately an index, not a second copy of every SKILL.md. The
+ * Skill tool is the source of truth for the selected skill's instructions.
  */
 
 import { getSkillRegistry } from '../../../skills/registry.js'
-import type { PromptSkill, SkillCategory } from '../../../skills/types.js'
+import type { PromptSkill } from '../../../skills/types.js'
+import { TOOL_NAMES } from '../../types.js'
 import type { PromptContext } from '../../types.js'
 
-/**
- * Default category labels (fallback when no DESCRIPTION.md)
- */
-const CATEGORY_LABELS: Record<SkillCategory, string> = {
-  'cognition': 'Cognition',
-  'agentic': 'Agentic',
-  'development': 'Development',
-  'research': 'Research',
-  'creative': 'Creative',
-  'productivity': 'Productivity',
-  'data-science': 'Data Science',
-  'automation': 'Automation',
-  'communication': 'Communication',
-  'media': 'Media',
-  'apple': 'Apple',
-  'mcp': 'MCP',
-  'system': 'System',
-  'other': 'Other',
-};
+const DESCRIPTION_LIMIT = 120
 
-/**
- * Default category descriptions (fallback when no DESCRIPTION.md)
- */
-const CATEGORY_DESCRIPTIONS: Record<SkillCategory, string> = {
-  'cognition': 'Cognitive methodologies, search philosophy, and mental models',
-  'agentic': 'Plan execution, task decomposition, and reflection loops',
-  'development': 'Coding, debugging, testing, and architecture',
-  'research': 'Academic research, paper discovery, and literature review',
-  'creative': 'Art generation, visual design, and creative ideation',
-  'productivity': 'Document creation, presentations, and note-taking',
-  'data-science': 'Data analysis, visualization, and Jupyter',
-  'automation': 'Scripting, CI/CD, and workflow automation',
-  'communication': 'Email, messaging, and social media',
-  'media': 'Media search and content creation',
-  'apple': 'Apple ecosystem integrations',
-  'mcp': 'MCP tool integrations',
-  'system': 'System utilities and file operations',
-  'other': 'Uncategorized skills',
-};
-
-/**
- * Group skills by category
- */
-function groupSkillsByCategory(skills: PromptSkill[]): Map<string, PromptSkill[]> {
-  const groups = new Map<string, PromptSkill[]>();
-
-  for (const skill of skills) {
-    const category = skill.category ?? 'other';
-    const existing = groups.get(category) ?? [];
-    existing.push(skill);
-    groups.set(category, existing);
-  }
-
-  return groups;
+function compactDescription(description: string): string {
+  const normalized = description.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= DESCRIPTION_LIMIT) return normalized
+  const boundary = normalized.lastIndexOf(' ', DESCRIPTION_LIMIT - 1)
+  return `${normalized.slice(0, boundary > 0 ? boundary : DESCRIPTION_LIMIT).trimEnd()}...`
 }
 
-/**
- * Get category display name
- */
-function getCategoryLabel(categoryId: string): string {
-  return CATEGORY_LABELS[categoryId as SkillCategory] ?? categoryId;
+export function formatSkillCatalog(skills: PromptSkill[]): string {
+  const entries = [...skills]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(skill => `- \`${skill.name}\` - ${compactDescription(skill.description)}`)
+
+  return `## Available skills
+
+<skills-catalog>
+Use \`Skill\` with a listed name to load its instructions. This index is not a substitute for the selected skill's \`SKILL.md\`.
+
+${entries.join('\n')}
+</skills-catalog>`
 }
 
-/**
- * Get category description
- * Priority: 1. From DESCRIPTION.md (registry), 2. Default descriptions
- */
-function getCategoryDescription(categoryId: string): string | undefined {
-  const registry = getSkillRegistry();
-
-  // First try to get from registry (loaded from DESCRIPTION.md)
-  const fromFile = registry.getCategoryDescription(categoryId);
-  if (fromFile) {
-    return fromFile.description;
-  }
-
-  // Fall back to default descriptions
-  return CATEGORY_DESCRIPTIONS[categoryId as SkillCategory];
-}
-
-/**
- * Generate skills metadata prompt section
- * Lists all available skills organized by category with descriptions
- *
- * Format mirrors hermes-agent:
- *   category: description
- *     - skill-name: skill description
- *     - skill-name: skill description
- */
 export function getSkillsMetadataSection(context: PromptContext): string | null {
-  const registry = getSkillRegistry()
-  const skills = registry.listUserInvocable()
+  if (!context.enabledTools.has(TOOL_NAMES.SKILL)) return null
 
-  const lines: string[] = []
-
-  if (skills.length === 0) {
-    return null
-  }
-
-  lines.push('## Available Skills', '')
-  lines.push('You have access to specialized skills that provide expert guidance for specific tasks.')
-  lines.push('When you need to use a skill, call the Skill tool with the skill name to load its full content.')
-  lines.push('')
-
-  // Group skills by category
-  const skillsByCategory = groupSkillsByCategory(skills);
-
-  // Sort categories alphabetically
-  const sortedCategories = Array.from(skillsByCategory.keys()).sort();
-
-  for (const categoryId of sortedCategories) {
-    const categorySkills = skillsByCategory.get(categoryId)!;
-    const categoryLabel = getCategoryLabel(categoryId);
-    const categoryDesc = getCategoryDescription(categoryId);
-
-    // Category header with description (Hermes-style)
-    if (categoryDesc) {
-      lines.push(`${categoryLabel}: ${categoryDesc}`);
-    } else {
-      lines.push(`${categoryLabel}:`);
-    }
-
-    // Sort skills within category alphabetically
-    const sortedSkills = categorySkills.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const skill of sortedSkills) {
-      const description = skill.description || 'No description available';
-      lines.push(`  - ${skill.name}: ${description}`);
-    }
-
-    lines.push('');
-  }
-
-  lines.push('To use a skill, invoke the Skill tool with:')
-  lines.push('- `skill`: "get" (to retrieve skill content)')
-  lines.push('- `name`: The skill name from the list above')
-  lines.push('')
-
-  return lines.join('\n')
+  const skills = getSkillRegistry().listModelInvocable()
+  return skills.length > 0 ? formatSkillCatalog(skills) : null
 }

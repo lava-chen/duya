@@ -1,21 +1,24 @@
 /**
  * PromptSystem - Single concrete class (config-driven, no subclasses).
  *
- * Previous design: abstract base class + 5 subclasses (General/Code/Research/
- *                  Gateway/WikiAgent), each ~150-370 lines of boilerplate.
+ * Previous design: abstract base class + 4 subclasses (General/Code/Research/
+ *                  Gateway), each ~150-370 lines of boilerplate.
  * Current design:  one PromptSystem class + declarative PromptSystemConfig.
  *
  * A PromptSystemConfig declares:
- *   - name: identifier ('general' / 'code' / 'research' / 'gateway' / 'wiki-agent')
- *   - staticSections: cached across turns
- *   - dynamicSections: recomputed every turn
+ *   - name: identifier ('general' / 'code' / 'research' / 'gateway')
+ *   - staticSections: cached across buildSystemPrompt calls
+ *   - dynamicSections: recomputed on every buildSystemPrompt call
+ *     (note: buildSystemPrompt is called once per streamChat, not per turn;
+ *     mid-stream skill load/unload will not refresh the catalog until the
+ *     next streamChat — see DuyaAgent.streamChat turn loop)
  *   - optional hooks:
  *     - contextExtender: inject extra fields into PromptContext (e.g. research fields)
  *     - preBuildHook: async side-effect before buildSystemPrompt (e.g. initializeAgentsMd)
- *     - extraPromptGenerators: parallel prompt methods (e.g. wiki-agent's 4 helpers)
+ *     - extraPromptGenerators: parallel prompt methods
  *
  * Sections support `bypassProfile: true` to skip isSectionEnabled filtering
- * (used by research/wiki-agent for sections that must always appear).
+ * (used by research for sections that must always appear).
  */
 
 import type {
@@ -45,8 +48,8 @@ export interface SectionDef {
   compute: (context: PromptContext) => string | null | Promise<string | null>
   /**
    * If true, skip isSectionEnabled filtering — this section always renders.
-   * Used by research/wiki-agent for sections that exist outside the generic
-   * profile gating (e.g. researchProfile, evidencePolicy, wiki-intro).
+   * Used by research for sections that exist outside the generic
+   * profile gating (e.g. researchProfile, evidencePolicy).
    */
   bypassProfile?: boolean
   /** Optional description for debugging. */
@@ -55,8 +58,7 @@ export interface SectionDef {
 
 /**
  * Hook: extend the base PromptContext with extra fields.
- * Used by research (researchIntent/researchProjectId) and wiki-agent
- * (wikiBasePath/existingNodes).
+ * Used by research (researchIntent/researchProjectId).
  */
 export type ContextExtender = (
   base: PromptContext,
@@ -74,7 +76,6 @@ export type PreBuildHook = (
 
 /**
  * Hook: parallel prompt generators that don't go through buildSystemPrompt.
- * Used by wiki-agent (cheapClassifier, candidateExtraction, mergeJudge, nodeRewrite).
  */
 export type ExtraPromptGenerators = Record<string, (...args: unknown[]) => string>
 
@@ -82,7 +83,7 @@ export type ExtraPromptGenerators = Record<string, (...args: unknown[]) => strin
  * Declarative configuration for a PromptSystem.
  */
 export interface PromptSystemConfig {
-  /** System name ('general' / 'code' / 'research' / 'gateway' / 'wiki-agent'). */
+  /** System name ('general' / 'code' / 'research' / 'gateway'). */
   name: string
   /** Static (cached) sections. */
   staticSections: SectionDef[]
@@ -138,7 +139,7 @@ export class PromptSystem {
     this.clearCache()
   }
 
-  /** Access extra prompt generators (e.g. wiki-agent's helper methods). */
+  /** Access extra prompt generators. */
   getExtraPromptGenerator(name: string): ((...args: unknown[]) => string) | undefined {
     return this.config.extraPromptGenerators?.[name]
   }

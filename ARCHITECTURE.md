@@ -407,7 +407,7 @@ DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `s
 
 #### 路由优先级
 
-会话、视觉、网关、Wiki Agent、标题生成、嵌入、定时任务等子系统，按以下优先级选择服务商：
+会话、视觉、网关、标题生成、嵌入、定时任务等子系统，按以下优先级选择服务商：
 
 1. **会话级 pin** — 主进程 `AgentProcessPool` 接收渲染层 `setSessionProvider(sessionId, providerId)`，将该会话钉到指定服务商。
 2. **任务级显式选择** — 视觉 / 网关 / 嵌入等子系统可以显式传入 `providerId`。
@@ -429,7 +429,7 @@ DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `s
 |:---|:---|
 | Agent Process Pool | 优先使用 `RunningProcess.providerId`，回退到 `defaultProviderId`；切换 provider 触发 `reinitProcess` |
 | 视觉 | `providerId` → `defaultProviderId` → 首个可用 |
-| 网关 / Wiki Agent / 标题生成 / 嵌入 | 同上 |
+| 网关 / 标题生成 / 嵌入 | 同上 |
 | 定时任务 | 同上 |
 | Provider UI 卡片 | 旧 "In use" / "Enable" 改为 "Default" / "Set as default"；不再隐藏非默认卡片的 delete 按钮 |
 | 设置面板 | 新增 **Default Provider** 区块，使用 `ProviderPickerView` |
@@ -1071,7 +1071,7 @@ Electron/`@duya/conductor` 路径负责。
 
 Phase 1 改动要点:`ToolMeta` 扩两个 optional 字段(`inputSchemaSummary`、`exposeMode`,均独立导出 `ExposeMode` 类型),`ToolSearchTool.execute` 返回带稳定 marker 和工具标题的 Markdown 结果,`DuyaAgent.streamChat` 通过 `toolSearchTool.setSearchFn(searchToolsFromRegistry)` 注入关键词搜索实现。
 
-Phase 2 改动要点:`ToolRegistry.register` 重载接受第三参数 `ToolMetaInput`(`{ inputSchemaSummary?, exposeMode? }`),新增 `getMeta(name)` / `getExposeMode(name)` accessor(后者在未持久化时默认 `'always'`,向后兼容 MCP / plugin 路径);`searchToolsFromRegistry` 从 registry meta 字段填充 result 的 `exposeMode` / `inputSchemaSummary`;`createBuiltinRegistry` 默认暴露平台原生 shell、read/write/edit/grep/glob、Agent、Task 与 ToolSearch,其余 mode/browser/memory/session/vision/widget/module/skill/CLI/research/wiki 工具按需发现。Plan 242 删除了未完成的 Team/Swarm、独立 MCP resource 和禁用 WebSearch/WebFetch 占位工具;MCP server 动态工具不受影响。`DuyaAgent._resolveTools` 在 Layer 0/1/2 过滤之前按 `exposeMode !== 'internal'` 裁剪 baseTools。
+Phase 2 改动要点:`ToolRegistry.register` 重载接受第三参数 `ToolMetaInput`(`{ inputSchemaSummary?, exposeMode? }`),新增 `getMeta(name)` / `getExposeMode(name)` accessor(后者在未持久化时默认 `'always'`,向后兼容 MCP / plugin 路径);`searchToolsFromRegistry` 从 registry meta 字段填充 result 的 `exposeMode` / `inputSchemaSummary`;`createBuiltinRegistry` 默认暴露平台原生 shell、read/write/edit/grep/glob、Agent、Task 与 ToolSearch,其余 mode/browser/memory/session/vision/widget/module/skill/CLI/research 工具按需发现。Plan 242 删除了未完成的 Team/Swarm、独立 MCP resource 和禁用 WebSearch/WebFetch 占位工具;MCP server 动态工具不受影响。`DuyaAgent._resolveTools` 在 Layer 0/1/2 过滤之前按 `exposeMode !== 'internal'` 裁剪 baseTools。
 
 Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredTools: Set<string>`,每轮 while 开头把 `registry.getTool(name)` 合并到局部 `tools` 数组,实现"LLM 调 `tool_search` 后下一轮 LLM 请求的工具列表自动包含搜到的工具";扫描由 [packages/agent/src/agent/tool-search-discovery.ts](./packages/agent/src/agent/tool-search-discovery.ts) 提供 (`extractToolNamesFromSearchResult` + `harvestDiscoveredTools`),在每次 `executor.getRemainingResults()` 完成后从 messages 末尾 batch 抽取带稳定 marker 的 `## Tool: \`name\`` 标题。边界:`Set` 自动去重;`registry.getTool(name)` 返回 undefined 时静默 skip(MCP server 断开 / plugin 卸载后)。
 
@@ -1121,6 +1121,30 @@ session.
   and XLSX continue through the Office workspace
 - Chat bridge: files and selected preview text reuse the existing
   `file-tree-add-to-input` and `browser-add-to-input` events
+
+## Code Review Workspace
+
+Code Review is a session-scoped, read-only panel that compares the current
+working tree with `HEAD`. `PanelZone` supplies the session working directory to
+`CodeReviewPanel`; the renderer calls typed `window.electronAPI.git.review` and
+`reviewDiff` wrappers through `src/lib/git-ipc.ts`. The main-process handlers
+in `electron/ipc/git-handlers.ts` use bounded, non-mutating Git commands to
+return porcelain status, numstat totals, and a selected patch.
+
+Each completed Agent turn also records its own working-tree delta. The Agent
+captures start and end trees through a disposable `GIT_INDEX_FILE`, so the
+user's real index and staging area are never changed. It persists the bounded
+patch and file summary in `chat_turn_reviews`; `CodeReviewPanel` reads the
+latest stored turn by default and can switch back to the live `HEAD`-to-working
+tree review.
+
+The diff request accepts only paths already reported as changed. It rejects
+absolute paths, traversal, `.git` metadata, and untracked symlinks that resolve
+outside the workspace. Diff content is capped at 1 MB; an `ENOBUFS` response
+may return a marked partial patch rather than discarding safe output. The
+renderer parses the patch for unified or expanded split presentation and hands
+the selected file to the existing chat attachment flow; it never stages,
+commits, pushes, or otherwise mutates Git state.
 
 ## Automation (CronJob) Phase 1
 

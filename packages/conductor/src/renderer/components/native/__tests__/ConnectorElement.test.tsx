@@ -36,7 +36,9 @@ vi.mock('../../../stores/conductor-store', () => ({
 
 import {
   ConnectorElement,
+  getConnectorLabelFontSize,
   getComputedConnectorData,
+  normalizeConnectorColor,
   resolveConnectorRoutingMode,
 } from '../ConnectorElement';
 
@@ -251,6 +253,18 @@ describe('ConnectorElement — strokeStyle / lineWidth / arrows', () => {
     ];
     const { getByText } = render(<ConnectorElement element={mocks.storeState.elements[2]} />);
     expect(getByText('Depends on')).toBeTruthy();
+  });
+
+  it('uses a readable default label size and bounds explicit label sizes', () => {
+    expect(getConnectorLabelFontSize('Time', undefined)).toBe(16);
+    expect(getConnectorLabelFontSize('A deliberately long connector label', undefined)).toBe(14);
+    expect(getConnectorLabelFontSize('Time', 100)).toBe(22);
+  });
+
+  it('falls back safely when persisted connector color is not a hex color', () => {
+    expect(normalizeConnectorColor('#3B82F6')).toBe('#3B82F6');
+    expect(normalizeConnectorColor('color(srgb 1 0 0)')).toBe('var(--text-secondary)');
+    expect(normalizeConnectorColor('color')).toBe('var(--text-secondary)');
   });
 
   it('keeps curve endpoints independently positioned along a shared edge', () => {

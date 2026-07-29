@@ -9,7 +9,6 @@ const zh: Record<TranslationKey, string> = {
   'nav.automation': '自动化',
   'nav.agents': 'Agents',
   'nav.conductor': '画布',
-  'nav.memory': '记忆',
 
   'sidebar.toggleThemeAria': '切换主题',
 
@@ -586,8 +585,6 @@ const zh: Record<TranslationKey, string> = {
   'settings.general.defaultWorkspace': '默认工作区',
   'settings.general.defaultWorkspaceDesc': '新项目和研究文件的创建位置',
   'settings.general.defaultWorkspacePlaceholder': '系统默认 (~/.duya/workspace)',
-  'settings.general.wikiAgent': 'Wiki Agent（实验性）',
-  'settings.general.wikiAgentDesc': '自动从对话中提取知识到研究维基中，用于长期记忆和状态追踪。实验性功能，默认关闭。',
   'settings.general.gatewayModel': '网关模型',
   'settings.general.gatewayModelDesc': '用于 Gateway/Bridge 聊天会话的模型',
   'settings.general.notifications': '通知',
@@ -681,8 +678,10 @@ const zh: Record<TranslationKey, string> = {
   'settings.providers.visionModelDesc': '用于图像分析和理解',
   'settings.providers.gatewayModel': '网关模型',
   'settings.providers.gatewayModelDesc': '用于桥接/频道聊天会话',
-  'settings.providers.wikiAgentModel': 'WikiAgent 模型',
-  'settings.providers.wikiAgentModelDesc': '用于后台记忆提取与合并',
+  'settings.providers.memoryProvider': '记忆系统服务商',
+  'settings.providers.memoryProviderDesc': '用于后台记忆抽取与合并，留空则跟随默认服务商',
+  'settings.providers.memoryProviderUseDefault': '使用默认服务商',
+  'settings.providers.memoryProviderHint': '更改后需重启应用生效',
   'settings.providers.titleModel': '标题模型',
   'settings.providers.titleModelDesc': '用于自动生成会话标题',
 
@@ -895,6 +894,7 @@ const zh: Record<TranslationKey, string> = {
 
   'panel.files': '文件',
   'panel.preview': '预览',
+  'panel.review': '代码审阅',
   'panel.conductor': '指挥台',
   'panel.terminal': '终端',
   'panel.browser': '浏览器',
@@ -1041,7 +1041,6 @@ const zh: Record<TranslationKey, string> = {
   'slashCommands.init': '初始化',
   'slashCommands.review': '审查',
   'slashCommands.terminal': '终端',
-  'slashCommands.memory': '记忆',
 
   // Onboarding - 4 Step Design
   'onboarding.stepWelcome': '欢迎',

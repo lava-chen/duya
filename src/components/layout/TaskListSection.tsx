@@ -42,11 +42,10 @@ export function TaskListSection({
   onToggleStatus,
   onDelete,
 }: TaskListSectionProps) {
+  if (tasks.length === 0 && !loading) return null;
+
   return (
     <DrawerSection label="Tasks">
-      {tasks.length === 0 && !loading && (
-        <div className="task-card-empty">No tasks yet.</div>
-      )}
       {tasks.map((task) => (
         <TaskRow
           key={task.id}

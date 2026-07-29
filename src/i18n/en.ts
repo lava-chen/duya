@@ -7,7 +7,6 @@ const en = {
   'nav.automation': 'Automation',
   'nav.agents': 'Agents',
   'nav.conductor': 'Conductor',
-  'nav.memory': 'Memory',
 
   'sidebar.toggleThemeAria': 'Toggle theme',
 
@@ -595,8 +594,6 @@ const en = {
   'settings.general.defaultWorkspace': 'Default workspace',
   'settings.general.defaultWorkspaceDesc': 'Where new projects and research files are created',
   'settings.general.defaultWorkspacePlaceholder': 'System default (~/.duya/workspace)',
-  'settings.general.wikiAgent': 'Wiki Agent (Experimental)',
-  'settings.general.wikiAgentDesc': 'Automatically extract knowledge from conversations into your research wiki for long-term memory and status tracking. Experimental, disabled by default.',
   'settings.general.gatewayModel': 'Gateway Model',
   'settings.general.gatewayModelDesc': 'Model used for Gateway/Bridge chat sessions',
   'settings.general.notifications': 'Notifications',
@@ -690,8 +687,10 @@ const en = {
   'settings.providers.visionModelDesc': 'For image analysis and understanding',
   'settings.providers.gatewayModel': 'Gateway Model',
   'settings.providers.gatewayModelDesc': 'For bridge/channel chat sessions',
-  'settings.providers.wikiAgentModel': 'WikiAgent Model',
-  'settings.providers.wikiAgentModelDesc': 'For background memory extraction and merge',
+  'settings.providers.memoryProvider': 'Memory Provider',
+  'settings.providers.memoryProviderDesc': 'Provider for background memory extraction and merge. Falls back to default when empty.',
+  'settings.providers.memoryProviderUseDefault': 'Use default provider',
+  'settings.providers.memoryProviderHint': 'Changes take effect after app restart',
   'settings.providers.titleModel': 'Title Model',
   'settings.providers.titleModelDesc': 'For auto-generating conversation titles',
 
@@ -907,6 +906,7 @@ const en = {
 
   'panel.files': 'Files',
   'panel.preview': 'Preview',
+  'panel.review': 'Code Review',
   'panel.conductor': 'Conductor',
   'panel.terminal': 'Terminal',
   'panel.browser': 'Browser',
@@ -1053,7 +1053,6 @@ const en = {
   'slashCommands.init': 'Init',
   'slashCommands.review': 'Review',
   'slashCommands.terminal': 'Terminal',
-  'slashCommands.memory': 'Memory',
 
   // Onboarding - 4 Step Design
   'onboarding.stepWelcome': 'Welcome',

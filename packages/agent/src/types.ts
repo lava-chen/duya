@@ -9,6 +9,15 @@ import type { PermissionMode } from './permissions/types.js';
 // 消息角色
 export type MessageRole = 'user' | 'assistant' | 'tool' | 'system';
 
+/**
+ * Runtime agent mode controlled by SwitchModeTool / EnterPlanModeTool /
+ * ExitPlanModeTool. Orthogonal to ModeModifierId (popover plan-task) and
+ * AgentProfile (main/code/plan sub-agent). Mirrors `AgentMode` in
+ * `tool/SwitchModeTool/constants.ts` — kept here as a top-level type so
+ * the SSEEvent union can reference it without a circular import.
+ */
+export type AgentRuntimeMode = 'general' | 'plan' | 'explore' | 'verify' | 'code-review';
+
 // 文本内容块
 export interface TextContent {
   type: 'text';
@@ -207,12 +216,12 @@ export type SSEEvent =
   | { type: 'error'; data: string; code?: string; metadata?: { errorType?: string; statusCode?: number; isRetryable?: boolean } }
   | { type: 'result'; data: TokenUsage }
   | { type: 'turn_start'; data: { turnCount: number } }
-  | { type: 'context_usage'; data: ContextUsageInfo }
   | { type: 'permission_request'; data: PermissionRequestEvent }
   | { type: 'agent_progress'; data: AgentProgressEvent }
   | { type: 'system'; data: string; metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number } }
   | { type: 'text_delta'; data: string }
-  | { type: 'thinking_delta'; data: string };
+  | { type: 'thinking_delta'; data: string }
+  | { type: 'mode_changed'; data: { mode: AgentRuntimeMode; source: 'agent' | 'user'; reason?: string } };
 
 // Permission request event
 export interface PermissionRequestEvent {
@@ -233,13 +242,6 @@ export interface TokenUsage {
   cache_hit_tokens?: number;
   /** Cache creation tokens (cache write) - Anthropic prompt caching */
   cache_creation_tokens?: number;
-}
-
-// Context usage information for UI indicator
-export interface ContextUsageInfo {
-  usedTokens: number;
-  contextWindow: number;
-  percentFull: number;
 }
 
 // LLM Provider 类型
@@ -350,7 +352,11 @@ export interface ChatOptions {
    */
   onSystemPromptReady?: (snapshot: {
     systemPrompt: string;
-    toolNames: string[];
+    /**
+     * Provider-facing tool definitions for this exact request. This can change
+     * between turns after `tool_search` discovers an on-demand tool.
+     */
+    tools: Array<Pick<Tool, 'name' | 'description' | 'input_schema'>>;
     turn: number;
   }) => void;
   tools?: Tool[];
@@ -408,8 +414,6 @@ export interface ChatOptions {
   researchIntent?: import('./prompts/research/types.js').ResearchTaskIntent;
   /** Optional research project ID for context selection */
   researchProjectId?: string;
-  /** Enable wiki tools (wiki_search, wiki_read). Only effective when wiki agent experimental mode is enabled */
-  wikiAgentEnabled?: boolean;
   /**
    * Anthropic thinking effort level (Low/Medium/High/Max).
    * undefined/Auto omits the `thinking` field in the request.

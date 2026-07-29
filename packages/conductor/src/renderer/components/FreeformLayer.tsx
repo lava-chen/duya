@@ -4,6 +4,7 @@ import React, { memo, useMemo } from "react";
 import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
 import { ElementRenderer } from "./ElementRenderer";
+import { ConnectorItem } from "./ConnectorItem";
 import { gridUnitsToPx } from "../domain/canvas/units";
 
 function isConnectorElement(element: CanvasElement): boolean {
@@ -106,8 +107,12 @@ export const FreeformLayer: React.FC<FreeformLayerProps> = ({
     // separate react-grid-layout layer with grid snapping and a mismatched red
     // placeholder; moving them here gives them the same free-form drag feel as
     // sticky notes, plus the same alignment-snapping behavior.
+    //
+    // Connectors are included here (each in its own SVG wrapper) so they
+    // participate in the same zIndex ordering as other elements. Later-created
+    // elements naturally stack above earlier ones.
     return elements
-      .filter((el) => !isConnectorElement(el) && !isGroupElement(el))
+      .filter((el) => !isGroupElement(el))
       .slice()
       .sort((a, b) => a.position.zIndex - b.position.zIndex);
   }, [elements]);
@@ -116,17 +121,21 @@ export const FreeformLayer: React.FC<FreeformLayerProps> = ({
 
   return (
     <div className="freeform-layer" style={{ position: "relative", width: "100%", height: "100%" }}>
-      {sorted.map((el) => (
-        <FreeformItem
-          key={el.id}
-          element={el}
-          readOnly={readOnly}
-          selected={selectedSet.has(el.id)}
-          editing={editingElementId === el.id}
-          onPositionChange={onPositionChange}
-          onDeleteElement={onDeleteElement}
-        />
-      ))}
+      {sorted.map((el) =>
+        isConnectorElement(el) ? (
+          <ConnectorItem key={el.id} connector={el} elements={elements} />
+        ) : (
+          <FreeformItem
+            key={el.id}
+            element={el}
+            readOnly={readOnly}
+            selected={selectedSet.has(el.id)}
+            editing={editingElementId === el.id}
+            onPositionChange={onPositionChange}
+            onDeleteElement={onDeleteElement}
+          />
+        ),
+      )}
     </div>
   );
 };

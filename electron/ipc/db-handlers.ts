@@ -18,7 +18,10 @@ import {
   truncateMessagesAfter,
   truncateMessagesFromInclusive,
 } from '../db/queries/messages';
-import { createCanvas as createConductorCanvas } from '../db/queries/conductors';
+import {
+  createCanvas as createConductorCanvas,
+  getMaxZIndex,
+} from '../db/queries/conductors';
 import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
@@ -92,6 +95,15 @@ function getDb(): NonNullable<ReturnType<typeof getDatabase>> {
     throw new Error('Database not initialized');
   }
   return database;
+}
+
+/**
+ * Allocate the next z-index for a newly created element. Later-created
+ * elements stack above earlier ones. Connectors start at 10 so relationship
+ * lines sit above the default node layer.
+ */
+function getNextZIndex(canvasId: string, minZ = 1): number {
+  return Math.max(getMaxZIndex(canvasId) + 1, minZ);
 }
 
 export function registerDbHandlers(): void {
@@ -1860,7 +1872,11 @@ export function registerConductorHandlers(): void {
         case 'element.create_native': {
           const elementId = randomUUID();
           const nodeType = request.nodeType as string;
-          const position = request.position as Record<string, unknown>;
+          const rawPosition = request.position as Record<string, unknown>;
+          const position =
+            typeof rawPosition.zIndex === 'number' && Number.isFinite(rawPosition.zIndex)
+              ? rawPosition
+              : { ...rawPosition, zIndex: getNextZIndex(canvasId) };
           const content = (request.content as Record<string, unknown>) || {};
           const style = (request.style as Record<string, unknown>) || {};
           const nativeKind = nodeType;
@@ -1916,7 +1932,7 @@ export function registerConductorHandlers(): void {
           const style = (request.style as Record<string, unknown>) || {};
           const nativeKind = 'connector';
           const elementKind = 'native/connector';
-          const position = { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 };
+          const position = { x: 0, y: 0, w: 0, h: 0, zIndex: getNextZIndex(canvasId, 10), rotation: 0 };
           const permissions = {
             agentCanRead: true,
             agentCanWrite: true,

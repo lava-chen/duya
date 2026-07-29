@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ContextUsage as StreamingContextUsage, Message } from '@/types/message';
+import { useEffect, useRef, useState } from 'react';
+import type { Message } from '@/types/message';
 import {
   useContextUsage,
   useContextBreakdown,
@@ -14,8 +14,6 @@ interface ContextUsageRingProps {
   messages: Message[];
   modelName?: string;
   contextWindow?: number;
-  /** Live usage arrives before the canonical assistant message is persisted. */
-  streamingContextUsage?: StreamingContextUsage | null;
   onCompress?: () => void;
   isCompacting?: boolean;
 }
@@ -36,32 +34,10 @@ export function ContextUsageRing({
   messages,
   modelName,
   contextWindow,
-  streamingContextUsage,
   onCompress,
   isCompacting = false,
 }: ContextUsageRingProps) {
-  const persistedUsage = useContextUsage(messages, modelName, contextWindow);
-  const usage = useMemo<ContextUsage>(() => {
-    if (!streamingContextUsage || streamingContextUsage.contextWindow <= 0) {
-      return persistedUsage;
-    }
-
-    const ratio = Math.min(
-      1,
-      Math.max(0, streamingContextUsage.percentFull / 100),
-    );
-    const state = ratio >= 0.95 ? 'critical' : ratio >= 0.8 ? 'warning' : 'normal';
-    return {
-      ...persistedUsage,
-      contextWindow: streamingContextUsage.contextWindow,
-      used: streamingContextUsage.usedTokens,
-      ratio,
-      estimatedNextTurn: streamingContextUsage.usedTokens,
-      estimatedNextRatio: ratio,
-      hasData: true,
-      state,
-    };
-  }, [persistedUsage, streamingContextUsage]);
+  const usage = useContextUsage(messages, modelName, contextWindow);
   const [hovered, setHovered] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const shouldBuildBreakdown = hovered || detailsOpen;

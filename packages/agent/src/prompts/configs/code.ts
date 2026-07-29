@@ -10,8 +10,6 @@
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
-import { getAgentsMdManager } from '../../agentsmd/index.js'
-import { getMemoryManager } from '../../memory/index.js'
 
 // Code-specific static sections
 import { getIdentitySection } from '../code/sections/identity.js'
@@ -25,6 +23,7 @@ import {
 } from '../sections/projectGrounding.js'
 import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
 import { getMemorySection } from '../sections/dynamic/memorySection.js'
+import { getProjectInstructionsSection } from '../general/sections/project.js'
 
 // Dynamic sections
 import { getPlatformSection } from '../sections/dynamic/platform.js'
@@ -60,9 +59,11 @@ export const codeConfig: PromptSystemConfig = {
     },
     { name: 'workingWithTheUser', compute: getWorkingWithTheUserSection },
     { name: 'rules', compute: getRulesSection },
-    { name: 'agentsMd', compute: () => getAgentsMdManager().buildAgentsMdPrompt() },
-    { name: 'memory', compute: getMemorySection },
-    { name: 'memoryContent', compute: () => getMemoryManager().buildCombinedMemoryPrompt() },
+    { name: 'projectInstructions', compute: getProjectInstructionsSection },
+    {
+      name: 'memory',
+      compute: (ctx) => ctx.enabledTools.has('Memory') ? getMemorySection(ctx) : null,
+    },
   ],
   dynamicSections: [
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
@@ -79,7 +80,7 @@ export const codeConfig: PromptSystemConfig = {
   ],
   preBuildHook: async (ctx) => {
     if (await initializeAgentsMd(ctx.workingDirectory)) {
-      return { invalidateCacheKeys: ['agentsMd'] }
+      return { invalidateCacheKeys: ['projectInstructions'] }
     }
   },
 }

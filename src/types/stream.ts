@@ -44,6 +44,20 @@ export interface SSEEvent {
 }
 
 /**
+ * Plan 224 follow-up: emitted by the agent after a mode-switch tool call
+ * (EnterPlanMode / ExitPlanMode / SwitchMode) completes. The renderer
+ * listens for this via `subscribeToModeChanged` and syncs the input-box
+ * chip + glow accordingly. `mode` mirrors `AgentRuntimeMode` from the
+ * agent package; `source` distinguishes agent-initiated switches from
+ * user-driven ones (forward-compat — currently always 'agent').
+ */
+export interface ModeChangedEvent {
+  mode: 'general' | 'plan' | 'explore' | 'verify' | 'code-review';
+  source: 'agent' | 'user';
+  reason?: string;
+}
+
+/**
  * Permission request event sent via SSE
  */
 export interface PermissionRequestEvent {

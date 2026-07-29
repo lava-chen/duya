@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { definition as createDefinition } from '../../src/tool/CanvasConductor/CanvasCreateElementTool.js';
 import { getCanvasConductorTools } from '../../src/tool/CanvasConductor/index.js';
-import { KNOWLEDGE_SECTIONS } from '../../src/tool/CanvasConductor/knowledge-sections.js';
+import { KNOWLEDGE_SECTIONS } from '../../src/tool/CanvasConductor/knowledge/index.js';
 import { buildConductorPrompt } from '../../src/tool/CanvasConductor/prompt.js';
 import { validateElementInput } from '../../src/tool/CanvasConductor/validate.js';
 

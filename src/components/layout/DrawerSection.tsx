@@ -9,13 +9,20 @@ import React from 'react';
 export function DrawerSection({
   label,
   children,
+  rightAction,
 }: {
   label: string;
   children: React.ReactNode;
+  rightAction?: React.ReactNode;
 }) {
   return (
     <section className="task-card-section">
-      <div className="task-card-section-label">{label}</div>
+      <div className="task-card-section-header">
+        <div className="task-card-section-label">{label}</div>
+        {rightAction && (
+          <div className="task-card-section-action">{rightAction}</div>
+        )}
+      </div>
       {children}
     </section>
   );

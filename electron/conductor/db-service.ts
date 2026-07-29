@@ -26,6 +26,7 @@ import {
   elementExists,
   findElementsByType,
   findAttachedConnectors,
+  getMaxZIndex,
 } from '../db/queries/conductors';
 import type { ConductorElement } from '../db/queries/conductors';
 import { getDatabase } from '../db/connection';
@@ -92,6 +93,26 @@ function applyDefaultDimensions(
     w: Number.isFinite(position.w as number) ? position.w : kindDefaults.w,
     h: Number.isFinite(position.h as number) ? position.h : kindDefaults.h,
   };
+}
+
+/**
+ * Assign a zIndex to newly created elements when the agent does not provide one.
+ * The default rule is "later created on top": each new element gets max + 1.
+ * Connectors start at 10 so relationship lines sit above the default node layer.
+ */
+function getNextZIndex(canvasId: string, minZ = 1): number {
+  return Math.max(getMaxZIndex(canvasId) + 1, minZ);
+}
+
+function withDefaultZIndex(
+  position: Record<string, unknown>,
+  canvasId: string,
+  minZ = 1,
+): Record<string, unknown> {
+  if (typeof position.zIndex === 'number' && Number.isFinite(position.zIndex)) {
+    return position;
+  }
+  return { ...position, zIndex: getNextZIndex(canvasId, minZ) };
 }
 
 /**
@@ -689,7 +710,8 @@ export class ConductorDbService {
     }
 
     const defaultedPosition = applyDefaultDimensions(elementKind, position);
-    const clampedPosition = clampPositionToCanvas(defaultedPosition, CANVAS_WIDTH_UNITS, CANVAS_HEIGHT_UNITS);
+    const zPosition = withDefaultZIndex(defaultedPosition, canvasId);
+    const clampedPosition = clampPositionToCanvas(zPosition, CANVAS_WIDTH_UNITS, CANVAS_HEIGHT_UNITS);
     const elementId = this.ensureUniqueElementId();
     const now = Date.now();
     const permissions = { agentCanRead: true, agentCanWrite: true, agentCanDelete: true };
@@ -779,6 +801,10 @@ export class ConductorDbService {
       };
     }
 
+    // Allocate ascending zIndices across the batch so later operations render
+    // on top of earlier ones, even when multiple elements are created atomically.
+    let nextZIndex = getMaxZIndex(canvasId) + 1;
+
     // Pass 2: execute all operations inside a single transaction.
     // If any insert throws, the whole batch rolls back.
     const runBatch = dbInstance.transaction(() => {
@@ -791,7 +817,16 @@ export class ConductorDbService {
           if (ref) refs.set(ref, elementId);
 
           const elementKind = op.kind as string;
-          const position = (op.position as Record<string, unknown>) ?? {};
+          const rawPosition = (op.position as Record<string, unknown>) ?? {};
+          const isConnector = elementKind === 'native/connector';
+          const minZ = isConnector ? 10 : 1;
+          const position =
+            typeof rawPosition.zIndex === 'number' && Number.isFinite(rawPosition.zIndex)
+              ? rawPosition
+              : { ...rawPosition, zIndex: Math.max(nextZIndex, minZ) };
+          if (typeof position.zIndex === 'number') {
+            nextZIndex = Math.max(nextZIndex, position.zIndex + 1);
+          }
           const config = (op.config as Record<string, unknown>) ?? {};
           const vizSpec = (op.vizSpec as Record<string, unknown> | undefined) ?? null;
           const sourceCode = (op.sourceCode as string | null | undefined) ?? null;
@@ -881,7 +916,8 @@ export class ConductorDbService {
             }
           }
 
-          const connectorPosition = { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 };
+          const connectorPosition = { x: 0, y: 0, w: 0, h: 0, zIndex: Math.max(nextZIndex, 10), rotation: 0 };
+          nextZIndex = connectorPosition.zIndex + 1;
           const curvature = (op.curvature as number) ?? 0.4;
           const style = (op.style as Record<string, unknown>) ?? {};
           const routingMode = op.routingMode === 'curve' ? 'curve' : 'elbow';
@@ -1446,7 +1482,8 @@ export class ConductorDbService {
     }
 
     const defaultedPosition = applyDefaultDimensions(elementKind, position);
-    const clampedPosition = clampPositionToCanvas(defaultedPosition, CANVAS_WIDTH_UNITS, CANVAS_HEIGHT_UNITS);
+    const zPosition = withDefaultZIndex(defaultedPosition, canvasId);
+    const clampedPosition = clampPositionToCanvas(zPosition, CANVAS_WIDTH_UNITS, CANVAS_HEIGHT_UNITS);
     const now = Date.now();
     const nativeKind = nodeType;
     const metadata = {
@@ -1534,7 +1571,7 @@ export class ConductorDbService {
     const now = Date.now();
     const nativeKind = 'connector';
     const elementKind = 'native/connector';
-    const position = { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 };
+    const position = { x: 0, y: 0, w: 0, h: 0, zIndex: getNextZIndex(canvasId, 10), rotation: 0 };
     const metadata = {
       label: 'Connector',
       tags: [],

@@ -31,11 +31,11 @@ import { sessionSearchTool } from './SessionSearchTool/index.js';
 import { messageSessionTool } from './MessageSessionTool/index.js';
 import { VisionTool } from './VisionTool/VisionTool.js';
 import { getMemoryTool } from '../memory/index.js';
+import { getMemoryRecallTool } from './MemoryRecallTool/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { runVisualSelfReview } from './WidgetRenderer/runVisualSelfReview.js';
-import { wikiSearchTool, wikiReadTool } from './wiki/index.js';
 import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
 import { ResearchMemory } from '../research-memory/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
@@ -64,7 +64,6 @@ export function createBuiltinRegistry(
   domainBlockerConfig?: DomainBlockerConfig,
   options?: {
     enabledPluginIds?: Set<string>;
-    wikiAgentEnabled?: boolean;
     // Browser backend mode: 'auto' (degradation chain) | 'extension' | 'built-in'
     browserBackendMode?: BrowserBackendMode;
     /**
@@ -90,15 +89,17 @@ export function createBuiltinRegistry(
     });
   }
 
-  // Expose one native shell initially. Keep the alternate shell
-  // discoverable when it is available on the current platform.
-  const isWindows = process.platform === 'win32';
+  // Bash is the default shell on every platform. PowerShell remains
+  // available via tool_search when present, but is not exposed on the
+  // initial tool surface — its quoting/escaping quirks caused too many
+  // execution bugs. On Windows without Git Bash, the bash tool still
+  // works because resolveShellExecutionPlan falls back to PowerShell.
   registry.register(bashTool.toTool(), bashTool, {
-    exposeMode: isWindows ? 'discoverable' : 'always',
+    exposeMode: 'always',
   });
   if (hasShellFamily('powershell')) {
     registry.register(powerShellTool.toTool(), powerShellTool, {
-      exposeMode: isWindows ? 'always' : 'discoverable',
+      exposeMode: 'discoverable',
     });
   }
 
@@ -131,11 +132,15 @@ export function createBuiltinRegistry(
   registry.register(exitPlanModeTool, exitPlanModeTool, { exposeMode: 'discoverable' });
   registry.register(switchModeTool, switchModeTool, { exposeMode: 'discoverable' });
 
-  // Browser is the supported web search and fetch surface.
-  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'discoverable' });
+  // Browser is the supported web search and fetch surface. Exposed on the
+  // initial tool surface so the model can reach web content without first
+  // having to discover the tool via `tool_search`.
+  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'always' });
 
   // Phase 5: Other tools
-  registry.register(skillTool, skillTool, { exposeMode: 'discoverable' });
+  // The Skills catalog instructs the model to call Skill. It must therefore
+  // be present on the initial tool surface, not merely discoverable.
+  registry.register(skillTool, skillTool, { exposeMode: 'always' });
   registry.register(briefTool, briefTool, { exposeMode: 'discoverable' });
   registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'discoverable' });
   // Inter-agent communication tool — message another session's agent
@@ -162,19 +167,18 @@ export function createBuiltinRegistry(
   const memoryTool = getMemoryTool();
   registry.register(memoryTool.toTool(), memoryTool, { exposeMode: 'discoverable' });
 
+  // Memory v2 recall tool (Plan 306 Phase D) — reads durable memories
+  // from the v2 memory store and records usage telemetry. Discoverable
+  // so the LLM loads it on demand via tool_search.
+  const memoryRecallTool = getMemoryRecallTool();
+  registry.register(memoryRecallTool.toTool(), memoryRecallTool, { exposeMode: 'discoverable' });
+
   // AskUserQuestion tool - prompt the user with multi-choice questions
   registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'discoverable' });
 
   // ModuleTool - load design specification modules on demand
   // Agent calls read_module BEFORE show_widget or canvas tools to get style guides
   registry.register(moduleTool.toTool(), moduleTool, { exposeMode: 'discoverable' });
-
-  // Wiki tools - for searching and reading wiki knowledge base
-  // Only register if wiki agent experimental mode is enabled
-  if (options?.wikiAgentEnabled) {
-    registry.register(wikiSearchTool.toTool(), wikiSearchTool, { exposeMode: 'discoverable' });
-    registry.register(wikiReadTool.toTool(), wikiReadTool, { exposeMode: 'discoverable' });
-  }
 
   // Bundled plugins - register plugin-owned tools via a single pluggable entrypoint
   registerBundledAgentPlugins(registry, options);
@@ -305,5 +309,4 @@ export { messageSessionTool, MessageSessionTool } from './MessageSessionTool/ind
 // duyaConfigTool removed in plan 102 — use `duya_cli` (argv: 'config …' / 'mcp …') instead.
 export { duyaCliTool } from './DuyaCliTool/index.js';
 
-// Wiki tools exports
-export { wikiSearchTool, wikiReadTool, WikiSearchTool, WikiReadTool } from './wiki/index.js';
+

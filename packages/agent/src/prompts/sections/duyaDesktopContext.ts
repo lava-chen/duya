@@ -1,7 +1,6 @@
 /**
  * Duya Desktop context.
  *
- * Injected only when communicationPlatform === 'duya-app'.
  * Describes the capabilities and rendering rules provided specifically by
  * Duya Desktop.
  *
@@ -11,32 +10,24 @@
  */
 
 import type {
-  CommunicationPlatform,
   PromptContext,
 } from '../types.js'
 
-const DUYA_APP: CommunicationPlatform = 'duya-app'
-
-export function getDuyaDesktopContextSection(ctx: PromptContext): string | null {
-  if (ctx.communicationPlatform !== DUYA_APP) {
-    return null
-  }
-
-  const hasShowWidget = ctx.enabledTools.has('show_widget');
-  const hasReadModule = ctx.enabledTools.has('read_module');
+export function getDuyaDesktopContextSection(ctx: PromptContext): string {
   const hasDuyaCli = ctx.enabledTools.has('duya_cli');
 
-  const widgetsSection = hasShowWidget
-    ? `
+  const widgetsSection = `
 ## Widgets
 
 Use \`show_widget\` when the user would benefit from an interactive
-diagram, mockup, chart, or control instead of plain text.${hasReadModule ? ` Before the
-first call, use \`read_module\` to load the relevant design
-specification (\`diagram\`, \`mockup\`, \`chart\`, or
-\`interactive\`; multiple at once when needed).` : ''}
-`
-    : '';
+diagram, mockup, chart, or control instead of plain text. In particular,
+when explaining architecture, workflows, data flows, or any concept that
+is better understood visually, always prefer rendering an interactive
+widget (flowchart, diagram, chart, or visualization) over dumping a
+static code block or plain-text outline. Before the first call, use
+\`read_module\` to load the relevant design specification (\`diagram\`,
+\`mockup\`, \`chart\`, or \`interactive\`; multiple at once when needed).
+`;
 
   const automationsSection = hasDuyaCli
     ? `

@@ -427,23 +427,23 @@ html[data-font="system"] .message-content li {
 /* Message content base styles for better readability */
 .message-content {
   font-size: 15px;
-  line-height: 1.65; /* 更紧凑、现代的行高 */
+  line-height: 1.5; /* 更紧凑、现代的行高 */
   letter-spacing: 0;
 }
 
 .message-content p {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.375rem;
 }
 
 .message-content ul,
 .message-content ol {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
   padding-left: 1.25rem;
 }
 
 .message-content li {
-  margin-bottom: 0.375rem;
-  line-height: 1.65;
+  margin-bottom: 0.125rem;
+  line-height: 1.5;
 }
 
 /* === 代码块深度优化 (匹配 Claude 风格) === */
@@ -8682,16 +8682,18 @@ html[data-theme="light"] .ask-question-option.selected {
    ============================================ */
 
 .markdown-image-button {
-  display: block;
+  display: inline-flex;
   margin: 0;
   padding: 0;
   border: 1px solid hsl(var(--border) / 0.6);
-  border-radius: 8px;
+  border-radius: 16px;
   background: transparent;
   cursor: zoom-in;
   overflow: hidden;
   transition: border-color 120ms ease, transform 120ms ease;
-  max-width: 520px;
+  width: 120px;
+  height: 120px;
+  vertical-align: middle;
 }
 
 .markdown-image-button:hover {
@@ -8705,9 +8707,8 @@ html[data-theme="light"] .ask-question-option.selected {
 .markdown-image {
   display: block;
   width: 100%;
-  height: auto;
-  max-height: 480px;
-  object-fit: contain;
+  height: 100%;
+  object-fit: cover;
   background: hsl(var(--muted) / 0.4);
 }
 
@@ -8717,16 +8718,6 @@ html[data-theme="light"] .ask-question-option.selected {
   max-height: 480px;
   margin: 0;
   background: hsl(var(--muted) / 0.4);
-}
-
-.markdown-image-caption {
-  display: block;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: hsl(var(--muted-foreground));
-  border-top: 1px solid hsl(var(--border) / 0.5);
-  text-align: left;
-  word-break: break-word;
 }
 
 /* ============================================
@@ -10668,14 +10659,25 @@ html[data-message-font-size="large"] .prose h3 {
   border-top: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
 }
 
+.task-card-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 4px 7px;
+}
+
 .task-card-section-label {
-  padding: 2px 7px 4px;
   color: color-mix(in srgb, var(--text-muted) 72%, transparent);
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.08em;
   line-height: 1;
   text-transform: uppercase;
+}
+
+.task-card-section-action {
+  display: flex;
+  align-items: center;
 }
 
 .task-card-empty {
@@ -13267,6 +13269,479 @@ html[data-message-font-size="large"] .prose h3 {
   background: linear-gradient(90deg, transparent, var(--main-bg) 24%, var(--main-bg));
 }
 
+/* ============================================
+   Code Review Workspace
+   ============================================ */
+
+.code-review-panel {
+  --review-muted: color-mix(in srgb, var(--text-muted) 84%, transparent);
+  --review-surface: color-mix(in srgb, var(--sidebar-bg) 76%, var(--main-bg));
+  --review-border: color-mix(in srgb, var(--border) 82%, transparent);
+  --review-add: #31c578;
+  --review-remove: #ef6262;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--main-bg);
+  color: var(--text);
+}
+
+.code-review-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--review-border);
+  background: var(--review-surface);
+}
+
+.code-review-scope,
+.code-review-totals,
+.code-review-toolbar-actions,
+.code-review-file-identity {
+  display: flex;
+  align-items: center;
+}
+
+.code-review-scope {
+  min-width: 0;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.code-review-scope-copy {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.code-review-scope-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--review-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+
+.code-review-scope-switch button {
+  border: 0;
+  border-radius: 5px;
+  padding: 3px 6px;
+  color: var(--review-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.code-review-scope-switch button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.code-review-scope-switch button.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.code-review-scope-label {
+  white-space: nowrap;
+}
+
+.code-review-scope-range {
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--review-muted);
+  background: var(--surface-hover);
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-review-totals {
+  gap: 7px;
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-review-file-count {
+  margin-left: 4px;
+  color: var(--review-muted);
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.code-review-toolbar-actions {
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  border: 1px solid var(--review-border);
+}
+
+.code-review-icon-button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--review-muted);
+  background: transparent;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.code-review-icon-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.code-review-icon-button.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.code-review-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.code-review-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.code-review-panel.has-file-tree .code-review-workspace {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 30%);
+}
+
+.code-review-main,
+.code-review-file-tree {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.code-review-file-tree {
+  border-left: 1px solid var(--review-border);
+  background: color-mix(in srgb, var(--sidebar-bg) 64%, var(--main-bg));
+}
+
+.code-review-file-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+.code-review-file-list-item {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.code-review-file-list-item:hover {
+  background: var(--surface-hover);
+}
+
+.code-review-file-list-item.is-selected {
+  background: var(--accent-soft);
+}
+
+.code-review-file-list-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--review-muted);
+}
+
+.code-review-file-list-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-review-file-list-stats {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-review-file-header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--review-border);
+  background: color-mix(in srgb, var(--sidebar-bg) 58%, var(--main-bg));
+}
+
+.code-review-file-identity {
+  min-width: 0;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.code-review-file-identity > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-review-file-identity > svg {
+  flex: none;
+  color: var(--review-muted);
+}
+
+.code-review-diff-scroll {
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
+  background: var(--main-bg);
+}
+
+.code-review-diff {
+  min-width: max-content;
+  padding-bottom: 20px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 12px;
+  line-height: 21px;
+}
+
+.code-review-hunk {
+  margin: 14px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.code-review-hunk-header {
+  min-height: 27px;
+  padding: 3px 14px;
+  overflow: hidden;
+  color: var(--review-muted);
+  background: color-mix(in srgb, var(--surface-hover) 56%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-review-line {
+  display: grid;
+  grid-template-columns: 46px 20px minmax(0, 1fr);
+  min-height: 21px;
+  color: color-mix(in srgb, var(--text) 92%, transparent);
+}
+
+.code-review-line-number,
+.code-review-line-prefix {
+  user-select: none;
+}
+
+.code-review-line-number {
+  padding-right: 10px;
+  color: color-mix(in srgb, var(--text-muted) 72%, transparent);
+  text-align: right;
+}
+
+.code-review-line-prefix {
+  color: var(--review-muted);
+  text-align: center;
+}
+
+.code-review-line-code {
+  min-width: 0;
+  padding-right: 18px;
+  overflow: hidden;
+  white-space: pre;
+}
+
+.code-review-line.is-wrapped .code-review-line-code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.code-review-line-add {
+  border-left: 3px solid var(--review-add);
+  background: color-mix(in srgb, var(--review-add) 14%, transparent);
+}
+
+.code-review-line-add .code-review-line-prefix,
+.is-add {
+  color: var(--review-add);
+}
+
+.code-review-line-remove {
+  border-left: 3px solid var(--review-remove);
+  background: color-mix(in srgb, var(--review-remove) 13%, transparent);
+}
+
+.code-review-line-remove .code-review-line-prefix,
+.is-remove {
+  color: var(--review-remove);
+}
+
+.code-review-collapsed-lines {
+  display: flex;
+  width: calc(100% - 16px);
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  margin: 2px 8px;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--review-muted);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.code-review-collapsed-lines:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.code-review-diff-split {
+  min-width: 720px;
+}
+
+.code-review-split-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.code-review-split-row > .code-review-line:first-child {
+  border-right: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+}
+
+.code-review-line-empty {
+  border-left: 3px solid transparent;
+  background: color-mix(in srgb, var(--surface-hover) 24%, transparent);
+}
+
+.code-review-file-status {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  border-radius: 5px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.code-review-file-status.status-modified {
+  color: #f39a49;
+  background: color-mix(in srgb, #f39a49 16%, transparent);
+}
+
+.code-review-file-status.status-added,
+.code-review-file-status.status-untracked {
+  color: var(--review-add);
+  background: color-mix(in srgb, var(--review-add) 15%, transparent);
+}
+
+.code-review-file-status.status-deleted {
+  color: var(--review-remove);
+  background: color-mix(in srgb, var(--review-remove) 14%, transparent);
+}
+
+.code-review-file-status.status-renamed {
+  color: #b68cff;
+  background: color-mix(in srgb, #b68cff 16%, transparent);
+}
+
+.code-review-state,
+.code-review-empty {
+  display: flex;
+  min-height: 160px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 24px;
+  color: var(--review-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.code-review-state-error {
+  color: var(--review-remove);
+}
+
+.code-review-diff-notice {
+  padding: 9px 16px;
+  border-bottom: 1px solid color-mix(in srgb, #e5a24a 45%, transparent);
+  color: #e5a24a;
+  background: color-mix(in srgb, #e5a24a 10%, transparent);
+  font-size: 12px;
+}
+
+@container (max-width: 720px) {
+  .code-review-toolbar {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .code-review-scope-range,
+  .code-review-file-count,
+  .code-review-totals {
+    display: none;
+  }
+
+  .code-review-panel.has-file-tree .code-review-workspace {
+    grid-template-columns: minmax(0, 1fr) 188px;
+  }
+
+  .code-review-file-header {
+    padding: 8px 10px;
+  }
+}
+
 .panel-file-split {
   position: relative;
   display: flex;
@@ -13518,6 +13993,162 @@ html[data-message-font-size="large"] .prose h3 {
   border: 1px solid color-mix(in srgb, var(--border) 78%, #963df2);
   border-radius: 4px;
   background: var(--bg-canvas);
+}
+
+/* Floating task panel above the composer (Figure 2 style). */
+.floating-task-panel {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 8px;
+  pointer-events: none;
+}
+
+.floating-task-panel > * {
+  pointer-events: auto;
+}
+
+.floating-task-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(520px, 80vw);
+  min-height: 30px;
+  padding: 4px 10px 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.25;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.floating-task-pill:hover {
+  background: color-mix(in srgb, var(--surface-hover) 90%, transparent);
+  border-color: color-mix(in srgb, var(--border) 80%, var(--accent));
+}
+
+.floating-task-pill-main,
+.floating-task-pill-git {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.floating-task-pill-main:hover,
+.floating-task-pill-git:hover {
+  color: inherit;
+}
+
+.floating-task-pill-text {
+  max-width: 260px;
+  font-weight: 500;
+}
+
+.floating-task-pill-divider {
+  width: 1px;
+  height: 14px;
+  background: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.floating-task-pill-progress {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.floating-task-pill-changes {
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.floating-task-pill-filecount {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.floating-task-pill-caret {
+  color: var(--text-muted);
+  transition: transform 160ms ease;
+}
+
+.floating-task-popover {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: min(420px, calc(100vw - 48px));
+  max-height: min(420px, 50vh);
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.floating-task-list {
+  padding: 10px 0;
+}
+
+.floating-task-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.floating-task-item:hover {
+  background: var(--surface-hover);
+}
+
+.floating-task-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.floating-task-status:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.floating-task-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.floating-task-title-done {
+  color: var(--text-muted);
+  text-decoration: line-through;
 }
 
 .canvas-table__add-column,

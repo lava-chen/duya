@@ -35,8 +35,8 @@ describe('generateMemoryId', () => {
 
 describe('stripEntryDecorations', () => {
   it('strips the ## [type] header prefix', () => {
-    expect(stripEntryDecorations('## [project] Wiki agent uses RAG')).toBe(
-      'Wiki agent uses RAG',
+    expect(stripEntryDecorations('## [project] Project knowledge uses RAG')).toBe(
+      'Project knowledge uses RAG',
     )
   })
 
@@ -45,15 +45,15 @@ describe('stripEntryDecorations', () => {
   })
 
   it('strips a trailing § YYYY-MM-DD timestamp', () => {
-    expect(stripEntryDecorations('Wiki agent uses RAG § 2026-06-04')).toBe(
-      'Wiki agent uses RAG',
+    expect(stripEntryDecorations('Project knowledge uses RAG § 2026-06-04')).toBe(
+      'Project knowledge uses RAG',
     )
   })
 
   it('strips combined header + timestamp + age hint', () => {
     expect(
-      stripEntryDecorations('## [project] Wiki agent uses RAG § 2026-06-04  *(3d ago)*'),
-    ).toBe('Wiki agent uses RAG')
+      stripEntryDecorations('## [project] Project knowledge uses RAG § 2026-06-04  *(3d ago)*'),
+    ).toBe('Project knowledge uses RAG')
   })
 
   it('strips a "(today)" age hint', () => {
@@ -69,8 +69,8 @@ describe('stripEntryDecorations', () => {
 
 describe('findEntryIndex — decoration-aware substring matching', () => {
   const entries: MemoryEntry[] = [
-    makeEntry({ summary: 'Wiki agent memory UI 优先做 graph + tree 双视图' }),
-    makeEntry({ summary: 'E:/wiki 是陈炫羽的核心个人知识库（Obsidian）' }),
+    makeEntry({ summary: 'Project memory UI 优先做 graph + tree 双视图' }),
+    makeEntry({ summary: 'E:/notes 是陈炫羽的核心个人知识库（Obsidian）' }),
     makeEntry({ summary: 'RAG retrieval pipeline', content: 'embedding model + vector db' }),
   ]
 
@@ -79,7 +79,7 @@ describe('findEntryIndex — decoration-aware substring matching', () => {
   })
 
   it('matches case-insensitively', () => {
-    expect(findEntryIndex(entries, 'WIKI AGENT')).toBe(0)
+    expect(findEntryIndex(entries, 'PROJECT MEMORY')).toBe(0)
   })
 
   it('matches against content', () => {
@@ -87,12 +87,12 @@ describe('findEntryIndex — decoration-aware substring matching', () => {
   })
 
   it('matches a full header line with ## [type] prefix and § date', () => {
-    const header = '## [project] Wiki agent memory UI 优先做 graph + tree 双视图 § 2026-06-04'
+    const header = '## [project] Project memory UI 优先做 graph + tree 双视图 § 2026-06-04'
     expect(findEntryIndex(entries, header)).toBe(0)
   })
 
-  it('matches a header line plus the *(Nd ago)* age hint the renderer appends', () => {
-    const headerWithAge = '## [project] Wiki agent memory UI 优先做 graph + tree 双视图 § 2026-06-04  *(3d ago)*'
+  it('matches a header line plus the *(Nd ago)* age hint the renderer appends', async () => {
+    const headerWithAge = '## [project] Project memory UI 优先做 graph + tree 双视图 § 2026-06-04  *(3d ago)*'
     expect(findEntryIndex(entries, headerWithAge)).toBe(0)
   })
 

@@ -570,6 +570,13 @@ export function findAttachedConnectors(canvasId: string, nodeId: string): Conduc
   }));
 }
 
+export function getMaxZIndex(canvasId: string): number {
+  const row = db().prepare(
+    `SELECT MAX(CAST(json_extract(position, '$.zIndex') AS INTEGER)) AS maxZ FROM conductor_elements WHERE canvas_id = ?`
+  ).get(canvasId) as { maxZ: number | null } | undefined;
+  return row?.maxZ ?? 0;
+}
+
 // ============================================================
 // Undo / Redo
 // ============================================================

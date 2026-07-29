@@ -26,12 +26,12 @@ import type { ModeModifier } from './types.js';
  * (clarify -> plan -> search -> evaluate -> iterate -> synthesize)
  * without hardcoding a state machine. The agent uses existing
  * read-only tools (web_search, web_fetch, read, glob, grep,
- * session_search, wiki_search, wiki_read, ask_user_question, vision)
+ * session_search, ask_user_question, vision)
  * and produces a structured markdown report.
  */
 const RESEARCH_MODE_PROMPT = `# Deep Research Mode Active
 
-You are now in **Deep Research Mode**. Your goal is to conduct a rigorous research investigation using the available tools (web_search, web_fetch, read, glob, grep, session_search, wiki_search, wiki_read, ask_user_question, vision) and produce a comprehensive research report.
+You are now in **Deep Research Mode**. Your goal is to conduct a rigorous research investigation using the available tools (web_search, web_fetch, read, glob, grep, session_search, ask_user_question, vision) and produce a comprehensive research report.
 
 ## Research Workflow
 

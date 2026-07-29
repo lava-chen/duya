@@ -86,6 +86,39 @@ for the mandatory side-by-side comparison.
   its GPU process, then capture and compare `file-workspace-expanded.png`.
 
 final result: blocked
+
+---
+
+# Code Review Workspace Design QA
+
+- Source visual truth: five supplied Code Review screenshots, including unified,
+  split, menu, branch-scope, and file-tree states.
+- Implementation screenshots: `output/playwright/code-review-full.png` and
+  `output/playwright/code-review-expanded.png`.
+- Viewport: desktop Electron renderer.
+- State: changed working tree, unified and split diffs, expanded review panel.
+
+## Full-View Comparison
+
+The implementation preserves the reference's compact dark review hierarchy:
+summary controls above the diff, a dense changed-file tree, muted unchanged
+context, green added lines, and a persistent handoff action. The side panel
+uses the workspace's existing shell tokens and expands into a focused two-pane
+diff without introducing a second navigation model.
+
+## Interaction Evidence
+
+- Actual Electron bridge loaded the current working tree and rendered changed
+  files with the `HEAD → 工作区` scope.
+- Expanded mode enabled split diff, wrapping, and hiding the file tree.
+- Focused parser and IPC coverage passed 13 tests, including traversal,
+  metadata, symlink, and truncated-diff protections.
+
+## Findings
+
+No actionable P0, P1, or P2 visual mismatches remain in the rendered states.
+
+final result: passed
 ---
 
 # Slash Command Composer Design QA

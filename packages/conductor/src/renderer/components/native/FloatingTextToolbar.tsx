@@ -72,7 +72,7 @@ function queryCommandState(command: string): boolean {
 export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ container, element, showWhenEditing = false }) => {
   const { locked, toggleLocked } = useElementLock(element);
   const [visible, setVisible] = useState(false);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [active, setActive] = useState({ bold: false, italic: false, underline: false, strike: false });
   const [picker, setPicker] = useState<"text" | "fill" | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -104,7 +104,12 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
       y = rect.bottom + 8;
     }
 
-    setPosition({ x, y });
+    setPosition((current) => {
+      if (current && Math.abs(current.x - x) < 0.5 && Math.abs(current.y - y) < 0.5) {
+        return current;
+      }
+      return { x, y };
+    });
     setActive({
       bold: queryCommandState("bold"),
       italic: queryCommandState("italic"),
@@ -139,10 +144,31 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
     return () => window.cancelAnimationFrame(frame);
   }, [container, refresh]);
 
+  // Recompute the toolbar position when its own dimensions change (e.g. after
+  // the first render, font loading, or locale text reflow) so the initial
+  // estimate is corrected before the user perceives an offset.
+  useEffect(() => {
+    if (!container) return;
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+    const ro = new ResizeObserver(() => refresh());
+    ro.observe(toolbar);
+    return () => ro.disconnect();
+  }, [container, refresh]);
+
+  // Dispatch an input event on the container so the parent's onInput handler
+  // syncs the draft. execCommand and direct DOM manipulation (Range API) do
+  // not reliably fire input events, so without this the draft can be stale
+  // after toolbar actions, causing formatting to be lost on save.
+  const syncDraft = useCallback(() => {
+    container?.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  }, [container]);
+
   const exec = useCallback((command: string, value: string | undefined = undefined) => {
     document.execCommand(command, false, value);
+    syncDraft();
     refresh();
-  }, [refresh]);
+  }, [refresh, syncDraft]);
 
   const createLink = useCallback(() => {
     const url = window.prompt("Link URL");
@@ -172,16 +198,18 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
     const newRange = document.createRange();
     newRange.selectNodeContents(wrapper);
     selection.addRange(newRange);
+    syncDraft();
     refresh();
-  }, [container, refresh]);
+  }, [container, refresh, syncDraft]);
 
   const applyColor = useCallback((target: "text" | "fill", color: string) => {
     document.execCommand(target === "text" ? "foreColor" : "hiliteColor", false, color);
     setPicker(null);
+    syncDraft();
     refresh();
-  }, [refresh]);
+  }, [refresh, syncDraft]);
 
-  if (!visible || typeof document === "undefined") return null;
+  if (!visible || typeof document === "undefined" || position === null) return null;
 
   return createPortal(
     <div

@@ -36,13 +36,11 @@ export type AgentToRendererMessage =
   | { type: 'chat:tool_output'; toolUseId: string; stream: 'stdout' | 'stderr'; data: string }
   | { type: 'chat:agent_progress'; agentEventType: string; data?: string; toolName?: string; toolInput?: Record<string, unknown>; toolResult?: string; duration?: number; agentId?: string; agentType?: string; agentName?: string; agentDescription?: string; sessionId?: string; agentSessionId?: string }
   | { type: 'chat:permission'; request: PermissionRequestData }
-  | { type: 'chat:context_usage'; usedTokens: number; contextWindow: number; percentFull: number }
   | { type: 'chat:done'; finalContent?: string }
   | { type: 'chat:error'; message: string }
   | { type: 'chat:status'; message: string }
   | { type: 'chat:init_meta'; streamId?: string; generation?: number }
-  | { type: 'chat:db_persisted'; success: boolean; sessionId: string; messageCount: number; reason?: string }
-  | { type: 'chat:token_usage'; inputTokens: number; outputTokens: number };
+  | { type: 'chat:db_persisted'; success: boolean; sessionId: string; messageCount: number; reason?: string };
 
 // =============================================================================
 // RENDERER → AGENT MESSAGES

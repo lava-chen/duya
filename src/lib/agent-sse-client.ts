@@ -673,6 +673,8 @@ export async function compactContext(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let eventType = '';
+  let eventData = '';
 
   try {
     while (true) {
@@ -683,31 +685,38 @@ export async function compactContext(
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('event:')) continue;
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd();
 
-        const eventMatch = trimmed.match(/^event: (\S+)\ndata: (.+)$/);
-        if (!eventMatch) continue;
-
-        const eventType = eventMatch[1];
-        const eventData = JSON.parse(eventMatch[2]);
-
-        if (eventType === 'compact:done') {
-          callbacks?.onDone?.({
-            success: true,
-            removedCount: (eventData as { removedCount?: number }).removedCount,
-            remainingCount: (eventData as { remainingCount?: number }).remainingCount,
-            tokenReduction: (eventData as { tokenReduction?: number }).tokenReduction,
-          });
-          return;
+        // Empty line = SSE event boundary, dispatch accumulated fields
+        if (line === '') {
+          if (eventType && eventData) {
+            if (eventType === 'compact:done') {
+              const parsed = JSON.parse(eventData) as {
+                result?: { tokensRemoved?: number; tokensRetained?: number };
+              };
+              callbacks?.onDone?.({
+                success: true,
+                tokenReduction: parsed.result?.tokensRemoved,
+              });
+              return;
+            }
+            if (eventType === 'compact:error') {
+              const parsed = JSON.parse(eventData) as { message?: string };
+              callbacks?.onError?.(parsed.message || 'Unknown error');
+              return;
+            }
+          }
+          eventType = '';
+          eventData = '';
+          continue;
         }
 
-        if (eventType === 'compact:error') {
-          const errorMsg = (eventData as { message?: string }).message || 'Unknown error';
-          callbacks?.onError?.(errorMsg);
-          return;
-        }
+        const match = line.match(SSE_LINE_REGEX);
+        if (!match) continue;
+        const [, field, val] = match;
+        if (field === 'event') eventType = val;
+        else if (field === 'data') eventData += (eventData ? '\n' : '') + val;
       }
     }
   } finally {

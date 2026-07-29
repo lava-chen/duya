@@ -25,6 +25,18 @@ export interface RolloutTurn {
   startedAt: number;
   assistantText: string[];
   reasoning: string[];
+  providerRequestCount: number;
+}
+
+export interface ProviderToolSnapshot {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+export interface AgentsMdSnapshot {
+  directory: string;
+  text: string;
 }
 
 export interface StartTurnInput {
@@ -36,7 +48,10 @@ export interface StartTurnInput {
   permissionMode?: string;
   mode?: string;
   language?: string;
-  toolNames?: string[];
+  tools?: ProviderToolSnapshot[];
+  // Codex-compatible: AGENTS.md content is surfaced as a user message and in
+  // world_state, not duplicated inside base_instructions.
+  agentsMd?: AgentsMdSnapshot;
 }
 
 function toIsoDateFolder(now: Date): [string, string, string] {
@@ -95,27 +110,24 @@ export class RolloutLogger {
       startedAt: Date.now(),
       assistantText: [],
       reasoning: [],
+      providerRequestCount: 0,
     };
     const timestamp = new Date().toISOString();
     const currentDate = timestamp.slice(0, 10);
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-    this.write('session_meta', {
-      session_id: this.sessionId,
-      id: this.sessionId,
-      timestamp,
-      cwd: input.cwd,
-      originator: 'DUYA Desktop',
-      cli_version: 'duya',
-      source: 'duya',
-      thread_source: 'user',
-      model_provider: input.provider,
-      base_instructions: { text: input.systemPrompt ?? '' },
-      dynamic_tools: (input.toolNames ?? []).map((name) => ({ type: 'function', name })),
-    });
+    // Codex-compatible: AGENTS.md is surfaced as a user message and in
+    // world_state. It is no longer duplicated inside base_instructions because
+    // the agent now injects it as the first user message.
+    const agentsMdText = input.agentsMd?.text;
+
+    this.recordProviderRequest(turn, input);
     this.write('world_state', {
-      full: false,
+      full: true,
       state: {
+        agents_md: input.agentsMd
+          ? { directory: input.agentsMd.directory, text: input.agentsMd.text }
+          : undefined,
         environments: {
           environments: { local: { cwd: input.cwd, status: 'available', shell: process.platform } },
           current_date: currentDate,
@@ -142,12 +154,21 @@ export class RolloutLogger {
       started_at: Math.floor(turn.startedAt / 1000),
     });
 
+    // Codex-compatible: emit AGENTS.md as a user message before the actual user
+    // request. The LLM still receives it via system prompt; this is an audit
+    // representation that matches Codex's ledger structure.
+    const userMessageBlocks: Array<{ type: 'input_text'; text: string }> = [];
+    if (agentsMdText) {
+      userMessageBlocks.push({ type: 'input_text', text: agentsMdText });
+    }
     const userText = textFromContent(input.userContent);
+    userMessageBlocks.push({ type: 'input_text', text: userText });
+
     this.write('response_item', {
       type: 'message',
       id: itemId('msg'),
       role: 'user',
-      content: [{ type: 'input_text', text: userText }],
+      content: userMessageBlocks,
       internal_chat_message_metadata_passthrough: { turn_id: turn.id },
     });
     this.write('event_msg', {
@@ -157,6 +178,65 @@ export class RolloutLogger {
       turn_id: turn.id,
     });
     return turn;
+  }
+
+  /**
+   * Record the exact prompt and provider-visible tool surface for one actual
+   * model request. `streamChat` calls this immediately before every provider
+   * request, including follow-up turns after `tool_search` changes the set of
+   * discoverable tools. This is an event-level audit snapshot, never an HTTP
+   * request capture.
+   *
+   * The first request in a turn writes a full `session_meta` entry (with
+   * `base_instructions` + `dynamic_tools`) so the complete system prompt is
+   * captured once. Subsequent requests in the same turn write only a lightweight
+   * `provider_request` event referencing the turn, avoiding multi-MB rollout
+   * files when a single turn performs many round trips.
+   */
+  recordProviderRequest(turn: RolloutTurn, input: StartTurnInput): void {
+    turn.providerRequestCount += 1;
+    const timestamp = new Date().toISOString();
+    if (turn.providerRequestCount === 1) {
+      this.write('session_meta', {
+        session_id: this.sessionId,
+        id: this.sessionId,
+        timestamp,
+        cwd: input.cwd,
+        originator: 'DUYA Desktop',
+        cli_version: 'duya',
+        source: 'duya',
+        thread_source: 'user',
+        model_provider: input.provider,
+        base_instructions: { text: input.systemPrompt ?? '' },
+        // Keep Codex's `dynamic_tools` field while preserving the complete
+        // provider contract needed to compare tool exposure across requests.
+        dynamic_tools: (input.tools ?? []).map((tool) => ({
+          type: 'function',
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.input_schema,
+        })),
+        duya_request_snapshot: {
+          turn_id: turn.id,
+          provider_request_index: turn.providerRequestCount,
+          tool_count: input.tools?.length ?? 0,
+        },
+      });
+    } else {
+      // Lightweight snapshot for subsequent round trips in the same turn.
+      // The full base_instructions and dynamic_tools are in the first
+      // session_meta; repeating them per round trip bloats the file without
+      // adding information (they only change when tool_search discovers new
+      // tools, which is captured by tool_count here).
+      this.write('event_msg', {
+        type: 'provider_request',
+        turn_id: turn.id,
+        timestamp,
+        provider_request_index: turn.providerRequestCount,
+        tool_count: input.tools?.length ?? 0,
+        model_provider: input.provider,
+      });
+    }
   }
 
   recordText(turn: RolloutTurn, text: string): void {
@@ -184,7 +264,10 @@ export class RolloutLogger {
       type: 'function_call_output',
       id: itemId('fco'),
       call_id: result.id,
-      output: result.result,
+      // Codex-compatible format: output is an array of content blocks,
+      // not a raw string. Consumers parsing `output[0].text` would break
+      // on a bare string.
+      output: [{ type: 'input_text', text: result.result }],
       internal_chat_message_metadata_passthrough: { turn_id: turn.id, error: result.error === true, duration_ms: result.duration_ms },
     });
   }
@@ -214,9 +297,14 @@ export class RolloutLogger {
         id: itemId('msg'),
         role: 'assistant',
         content: [{ type: 'output_text', text: assistantText }],
+        // Codex-compatible: phase distinguishes final answer from commentary.
+        // duya currently only emits the final assembled text at turn end, so
+        // all assistant messages are 'final'. If mid-turn commentary emission
+        // is added later, those should use phase: 'commentary'.
+        phase: 'final',
         internal_chat_message_metadata_passthrough: { turn_id: turn.id },
       });
-      this.write('event_msg', { type: 'agent_message', turn_id: turn.id, text: assistantText, phase: 'final' });
+      this.write('event_msg', { type: 'agent_message', turn_id: turn.id, message: assistantText, phase: 'final', memory_citation: null });
     }
     const completedAt = Date.now();
     this.write('event_msg', {
@@ -238,3 +326,5 @@ export class RolloutLogger {
     }
   }
 }
+
+

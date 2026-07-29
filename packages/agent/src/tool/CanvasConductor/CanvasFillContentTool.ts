@@ -26,18 +26,45 @@ export const TOOL_NAME = 'canvas_fill_content';
 export const definition: Tool = {
   name: TOOL_NAME,
   description:
-    'Fill or update the content of an existing canvas element. ' +
-    'Content fields depend on element kind:\n' +
-    '  - native/shape: { text, shape?, shapePreset? }\n' +
-    '  - native/document: { markdown, title? }; this updates the project Markdown file too\n' +
-    '  - native/sticky: legacy only; do not create new notes\n' +
-    '  - native/image: { url, fileName? }\n' +
-    '  - native/file: { fileName, mimeType?, url? }\n' +
-    '  - native/connector: { source, target, routingMode?, label?, waypoints?, curveMidpointOffset?, curveControlOffsets? }; endpoints are bound {kind:"bound",nodeId,bindingPoint:{u,v}} or free {kind:"free",point:{x,y}}; curveMidpointOffset is relative to the endpoint midpoint; keep routingMode="elbow" unless explicitly asked for a curve\n' +
-    '  - native/link: { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description?, expanded?, expandedSize? }\n' +
-    '  - widget/dynamic: pass sourceCode (top-level) to revise the HTML/SVG\n\n' +
-    'Only the supplied fields are overwritten; other config fields are preserved. ' +
-    'Use canvas_style_element for visual style changes (color, fontSize, stroke).',
+    'Fill or update the CONTENT of an existing canvas element (NOT its position or visual style). ' +
+    'This is a merge-patch: only the fields you supply are overwritten; other config fields are preserved. ' +
+    'The canvasId is injected automatically — never pass it.\n\n' +
+    '## PRE-FLIGHT CHECKLIST\n' +
+    '1. Call canvas_list_elements (or canvas_get_context) first, OR operate on an element you created via ' +
+    'canvas_create_element in THIS session. Without one of these, the call is REJECTED with STALE_STATE. ' +
+    '2. Have the elementId ready — from canvas_list_elements or from a recent canvas_create_element result.\n' +
+    '3. Confirm which `content` fields apply to the element kind (see table below).\n\n' +
+    '## Parameter shape (do NOT confuse with canvas_create_element)\n' +
+    '  - elementId: TOP-LEVEL field.\n' +
+    '  - content:   NESTED object containing the kind-specific fields (NOT top-level like `config` in canvas_create_element). ' +
+    'Example: { elementId: "abc", content: { text: "hello" } } — do NOT pass { elementId: "abc", text: "hello" }.\n' +
+    '  - sourceCode: TOP-LEVEL field, ONLY for widget/dynamic. Updates the widget HTML/SVG. Ignored for other kinds.\n' +
+    'Do NOT pass `position` here — use canvas_move_element / canvas_resize_element for that.\n' +
+    'Do NOT pass visual style here — use canvas_style_element for color/fontSize/stroke.\n\n' +
+    '## Content fields per element kind (placed inside `content`)\n' +
+    '  - native/shape:     { text?, shape?, color? } — color ∈ yellow|blue|green|pink|purple|gray (enum keys, NOT hex)\n' +
+    '  - native/text:       { text }\n' +
+    '  - native/document:  { markdown?, title? } — also updates the linked project Markdown file\n' +
+    '  - native/sticky:     LEGACY; same fields as native/shape\n' +
+    '  - native/image:      { url, fileName? }\n' +
+    '  - native/file:       { fileName, mimeType?, url?, pdfPage?, pdfZoom? }\n' +
+    '  - native/connector: { source, target, routingMode?, label?, waypoints?, curveMidpointOffset?, curveControlOffsets? } ' +
+    '    — endpoints use the SAME shape as canvas_create_element: {kind:"bound", nodeId, bindingPoint:{u,v}} or {kind:"free", point:{x,y}}. ' +
+    '    bindingPoint must land on a node edge (u or v is 0 or 1). ' +
+    '    curveMidpointOffset is RELATIVE to the endpoint midpoint, in canvas pixels. ' +
+    '    Keep routingMode="elbow" unless explicitly asked for a curve. ' +
+    '    Before retrying a failed connector, call canvas_get_knowledge("connector-style").\n' +
+    '  - native/link:      { linkType?: "url"|"session"|"canvas", url?, targetId?, title?, description?, expanded?, expandedSize?: {w, h} }\n' +
+    '  - native/table:     { title?, headers?, rows?, headerFill?, headerTextColor?, borderColor? } — same constraints as create\n' +
+    '  - widget/dynamic:   pass sourceCode at the top level of the tool input (NOT inside content) to revise the HTML/SVG\n\n' +
+    '## Common pitfalls\n' +
+    '  - Putting text/color/source/target at the top level of the tool input — wrap them inside `content`.\n' +
+    '  - Treating `content` as a full replacement — it is a MERGE-PATCH; omitted fields keep their existing values.\n' +
+    '  - Forgetting STALE_STATE — call canvas_list_elements (or canvas_get_context) first when in doubt.\n' +
+    '  - Using hex colors for native/shape color — use enum keys (yellow/blue/green/pink/purple/gray).\n\n' +
+    '## Worked example (revising a connector and a sticky)\n' +
+    '{"elementId":"<id>","content":{"text":"新文本","color":"pink"}}\n' +
+    '{"elementId":"<connector-id>","content":{"source":{"kind":"bound","nodeId":"<node-a>","bindingPoint":{"u":1,"v":0.5}},"target":{"kind":"bound","nodeId":"<node-b>","bindingPoint":{"u":0,"v":0.5}},"label":"new label"}}',
   input_schema: {
     type: 'object',
     properties: {
@@ -48,18 +75,21 @@ export const definition: Tool = {
       content: {
         type: 'object',
         description:
-          'Content fields to write into the element config. ' +
-          'Only supplied fields are overwritten; other config fields are preserved. ' +
-          'For native/document, put { markdown } HERE. For native/shape, put { text } HERE.',
+          'NESTED object — kind-specific content fields placed INSIDE this object (NOT at the top level of the tool input). ' +
+          'This is a merge-patch: only supplied fields are overwritten; other config fields are preserved. ' +
+          'For native/document: put { markdown } HERE. For native/shape: put { text, color? } HERE. ' +
+          'For native/connector: put { source, target, ... } HERE — same endpoint shape as canvas_create_element.',
         properties: {
           text: {
             type: 'string',
-            description: 'native/sticky: the text content of the note.',
+            description: 'native/shape, native/sticky, native/text: the text content.',
           },
           color: {
             type: 'string',
             description:
-              'native/sticky: note color. One of: yellow, blue, green, pink, purple, gray. See packages/agent/skills/agentic/conductor-canvas-control/SKILL.md for hex mapping (pink renders as light red, .s-err).',
+              'native/shape, native/sticky: color enum key. One of: yellow, blue, green, pink, purple, gray. ' +
+              'NOT a hex string — hex is rejected. pink renders as light red (.s-err, error/warning semantic). ' +
+              'See canvas_get_knowledge("sticky-style") for full color → semantic mapping.',
             enum: ['yellow', 'blue', 'green', 'pink', 'purple', 'gray'],
           },
           url: {
@@ -76,12 +106,16 @@ export const definition: Tool = {
           },
           source: {
             type: 'object',
-            description: 'native/connector: bound or free source endpoint reference.',
+            description:
+              'native/connector: source endpoint. Same shape as canvas_create_element: ' +
+              '{kind:"bound", nodeId, bindingPoint:{u, v}} (bindingPoint MUST be on a node edge: u or v is 0 or 1) ' +
+              'or {kind:"free", point:{x, y}} (canvas pixels).',
             additionalProperties: true,
           },
           target: {
             type: 'object',
-            description: 'native/connector: bound or free target endpoint reference.',
+            description:
+              'native/connector: target endpoint. Same shape as `source` above.',
             additionalProperties: true,
           },
         },
@@ -90,8 +124,9 @@ export const definition: Tool = {
       sourceCode: {
         type: 'string',
         description:
-          'New HTML/SVG source for widget/dynamic elements. Use this to revise a widget after creation ' +
-          '(e.g. fix layout, change data display, add sections). Ignored for non-widget kinds.',
+          'TOP-LEVEL field (NOT inside content). New HTML/SVG source for widget/dynamic elements. ' +
+          'Use this to revise a widget after creation (e.g. fix layout, change data display, add sections). ' +
+          'Ignored for non-widget kinds.',
       },
     },
     required: [],

@@ -111,6 +111,20 @@ export class SkillRegistry {
   }
 
   /**
+   * List skills the model can load through the Skill tool.
+   *
+   * Hidden skills, disabled integrations, and skills which opt out of model
+   * invocation must not be advertised in the model's prompt.
+   */
+  listModelInvocable(): PromptSkill[] {
+    return this.list().filter((skill) =>
+      !skill.isHidden
+      && !skill.disableModelInvocation
+      && (skill.isEnabled?.() ?? true),
+    );
+  }
+
+  /**
    * Get skill metadata (without getPromptForCommand)
    */
   getMetadata(name: string): SkillMetadata | undefined {

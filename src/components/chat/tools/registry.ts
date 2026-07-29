@@ -63,7 +63,7 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    match: (n) => ['bash', 'execute', 'run', 'execute_command', 'run_command'].includes(n.toLowerCase()),
+    match: (n) => ['bash', 'execute', 'run', 'execute_command', 'run_command', 'powershell'].includes(n.toLowerCase()),
     icon: TerminalIcon,
     labelKey: null,
     getSummary: (input) => {

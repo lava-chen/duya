@@ -34,7 +34,6 @@ import { registerReferencesHandlers } from './ipc/references-handlers';
 import { registerLoggerHandlers } from './ipc/logger-handlers';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
-import { registerWikiAgentHandlers } from './ipc/wiki-agent-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
 import { registerCapabilityManagementHandlers } from './ipc/capability-management-handlers';
 import { registerMCPInventoryHandlers } from './ipc/mcp-inventory-handlers';
@@ -47,7 +46,6 @@ import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers
 import { registerGitHandlers } from './ipc/git-handlers';
 import { getMarketplaceSyncManager } from './plugins/marketplace';
 import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
-import { initWikiAgentRuntime } from './wiki-agent/WikiAgentRuntime';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import { getJsonSetting } from './db/queries/settings';
 
@@ -177,7 +175,6 @@ if (gotTheLock) {
     // One-shot boot migrations. Each migration is idempotent (guarded by
     // a marker in `AppConfig.migrations`), so it's safe to call on every boot.
     migrateMultiProviderV1(configManager);
-    initWikiAgentRuntime();
 
     // Migrate provider data from database to ConfigManager (one-time migration)
     try {
@@ -291,7 +288,15 @@ if (gotTheLock) {
     //
     // Shadow mode: writes only to memory-state.db and ~/.duya/memory
     // projection files. Never touches packages/agent/src/memory/.
-    if (process.env.DUYA_MEMORY_V2_ENABLED === '1' || process.env.DUYA_MEMORY_V2_ENABLED === 'true') {
+    //
+    // Dev default-on: in development, the worker starts automatically
+    // to accumulate shadow data for the 4-week validation window
+    // required by Plan 305 before promoting to default-on in prod.
+    // Explicit opt-out via DUYA_MEMORY_V2_ENABLED=0 still honored.
+    const memoryV2ExplicitOff = process.env.DUYA_MEMORY_V2_ENABLED === '0' || process.env.DUYA_MEMORY_V2_ENABLED === 'false';
+    const memoryV2ExplicitOn = process.env.DUYA_MEMORY_V2_ENABLED === '1' || process.env.DUYA_MEMORY_V2_ENABLED === 'true';
+    const memoryV2Enabled = memoryV2ExplicitOn || (isDev && !memoryV2ExplicitOff);
+    if (memoryV2Enabled) {
       try {
         const { bootstrap } = await import('./memory-state');
         const { startMemoryWorker } = await import('./memory/memory-worker');
@@ -306,17 +311,28 @@ if (gotTheLock) {
 
         const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
 
-        // Construct LLM client from the active provider. Falls back
-        // gracefully if no provider is configured — the worker will
-        // still run reconcile + outbox, just no extraction.
+        // Construct LLM client from the memory worker provider. When
+        // memoryProviderId is unset, getMemoryProvider() falls back to
+        // the default provider. Falls back gracefully if no provider is
+        // configured — the worker will still run reconcile + outbox,
+        // just no extraction.
         let llmClient = null;
         try {
           const cm = getConfigManager();
-          const provider = cm.getActiveProvider();
+          const provider = cm.getMemoryProvider();
           if (provider) {
+            const llmProvider = toLLMProvider(provider.providerType, provider.baseUrl);
+            // Pick a sensible default model per provider type when the
+            // provider config doesn't specify one. Using an OpenAI model
+            // name against an Anthropic endpoint (or vice versa) would
+            // 404 immediately.
+            const defaultModel =
+              llmProvider === 'anthropic' ? 'claude-3-5-sonnet-20241022'
+              : llmProvider === 'openai' ? 'gpt-4o-mini'
+              : 'llama3.2'; // ollama
             llmClient = createRetryableLLMClient(
-              toLLMProvider(provider.providerType, provider.baseUrl),
-              { apiKey: provider.apiKey, baseURL: provider.baseUrl, model: provider.model || 'gpt-4o-mini' },
+              llmProvider,
+              { apiKey: provider.apiKey, baseURL: provider.baseUrl, model: provider.model || defaultModel },
             );
           }
         } catch (llmErr) {
@@ -604,7 +620,6 @@ registerReferencesHandlers();
 registerLoggerHandlers();
 registerUpdaterHandlers();
 registerAgentServerHandlers();
-registerWikiAgentHandlers();
 registerPluginHandlers();
 registerCapabilityManagementHandlers();
 registerMCPInventoryHandlers();

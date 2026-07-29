@@ -54,8 +54,11 @@ export function isMutationFresh(
  */
 export function staleStateResult(toolName: string, elementId?: string) {
   const hint = elementId
-    ? `Call canvas_list_elements first, or operate on an element you just created in this session.`
-    : `Call canvas_list_elements first (within the last 5 minutes).`;
+    ? `Canvas state is stale for elementId="${elementId}". ` +
+      `Call canvas_list_elements (or canvas_get_context) now, then retry this ${toolName} call within 5 minutes. ` +
+      `Elements created in THIS session via canvas_create_element bypass this check — pass the ID returned by create.`
+    : `Canvas state is stale. Call canvas_list_elements (or canvas_get_context) now, then retry this ${toolName} call within 5 minutes. ` +
+      `Elements created in THIS session via canvas_create_element bypass this check.`;
   return {
     id: crypto.randomUUID(),
     name: toolName,
@@ -63,7 +66,7 @@ export function staleStateResult(toolName: string, elementId?: string) {
       success: false,
       error: {
         code: 'STALE_STATE',
-        message: `Canvas state is stale. ${hint}`,
+        message: hint,
       },
     }),
     error: true,

@@ -68,7 +68,8 @@ export const CapsuleToolbar: React.FC<CapsuleToolbarProps> = ({
   };
 
   if (!positioned) {
-    style.transform = undefined;
+    style.transform = zoomAware ? `scale(${invZoom})` : undefined;
+    style.transformOrigin = "top left";
   } else if (left !== undefined && top !== undefined) {
     // Free positioning (used by selection-following toolbars).
     style.left = left * invZoom;

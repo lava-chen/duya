@@ -85,7 +85,7 @@ export const TextSelectionToolbar: React.FC<{
   });
 
   return (
-    <CapsuleToolbar positioned={false} zoomAware={false}>
+    <CapsuleToolbar positioned={false} zoomAware>
       {FONT_OPTIONS.map((f) => (
         <button
           key={f.value}

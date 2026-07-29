@@ -1,17 +1,10 @@
 // src/components/layout/SourcesSection.tsx
-// Three-column "Sources" aggregation in the TaskDrawer:
-//   1. User attachments  (file / image)
-//   2. Browser URLs      (browser-ref attachments → web pages the
-//                          user or agent visited during this session)
-//   3. Other references  (pasted text, terminal excerpts, file-tree
-//                          picks — read-only text snippets)
+// Card-style "Sources" list in the TaskDrawer. Each source is rendered as
+// a compact card with an icon and a label, matching the clipboard-style
+// source UI in Figure 2.
 //
-// Each column caps at MAX_VISIBLE rows; the rest roll up into a
-// single "+N more" line that the user can expand. Click targets:
-//   - user attachment → dispatch `duya:open-attachment` (handled in
-//     a follow-up by AttachmentPreviewModal)
-//   - browser URL    → dispatch `duya:open-browser-panel` (the
-//     existing side-panel listener opens BrowserPanel)
+// Sources are flattened into a single list (no category sub-sections) and
+// capped at MAX_VISIBLE cards; the rest are revealed by "查看全部".
 
 'use client';
 
@@ -21,12 +14,12 @@ import {
   ImageIcon,
   GlobeIcon,
   TerminalIcon,
-  CaretDownIcon,
+  PlusIcon,
 } from '@/components/icons';
 import { DrawerSection } from './DrawerSection';
 import type { FileAttachment } from '@/types/message';
 
-const MAX_VISIBLE = 3;
+const MAX_VISIBLE = 4;
 
 export interface SourcesSectionProps {
   userAttachments: FileAttachment[];
@@ -55,140 +48,93 @@ function labelForAttachment(att: FileAttachment): string {
   return att.name;
 }
 
+function iconForAttachment(att: FileAttachment) {
+  if (att.kind === 'image') {
+    return <ImageIcon size={16} className="shrink-0 text-muted-foreground" />;
+  }
+  if (att.kind === 'browser-ref') {
+    return <GlobeIcon size={16} className="shrink-0 text-muted-foreground" />;
+  }
+  if (att.kind === 'terminal-ref') {
+    return <TerminalIcon size={16} className="shrink-0 text-muted-foreground" />;
+  }
+  return <FileIcon size={16} className="shrink-0 text-muted-foreground" />;
+}
+
 export function SourcesSection({
   userAttachments,
   browserUrls,
   others,
 }: SourcesSectionProps) {
-  const [expanded, setExpanded] = useState<{
-    user: boolean;
-    browser: boolean;
-    other: boolean;
-  }>({ user: false, browser: false, other: false });
+  const [expanded, setExpanded] = useState(false);
 
-  const totalEmpty =
-    userAttachments.length === 0 &&
-    browserUrls.length === 0 &&
-    others.length === 0;
+  const allSources: FileAttachment[] = [
+    ...userAttachments,
+    ...browserUrls,
+    ...others,
+  ];
 
-  return (
-    <DrawerSection label="来源">
-      {totalEmpty && (
-        <div className="task-card-empty">No sources yet.</div>
-      )}
+  if (allSources.length === 0) return null;
 
-      {userAttachments.length > 0 && (
-        <SourceColumn
-          title="附件"
-          icon={<FileIcon size={12} className="text-muted-foreground" />}
-          items={userAttachments}
-          expanded={expanded.user}
-          onToggle={() =>
-            setExpanded((prev) => ({ ...prev, user: !prev.user }))
-          }
-          onItemClick={openAttachmentPreview}
-        />
-      )}
-
-      {browserUrls.length > 0 && (
-        <SourceColumn
-          title="网页"
-          icon={<GlobeIcon size={12} className="text-muted-foreground" />}
-          items={browserUrls}
-          expanded={expanded.browser}
-          onToggle={() =>
-            setExpanded((prev) => ({ ...prev, browser: !prev.browser }))
-          }
-          onItemClick={(att) => {
-            const meta = att.metadata as { url?: string } | undefined;
-            if (meta?.url) openBrowserUrl(meta.url);
-          }}
-        />
-      )}
-
-      {others.length > 0 && (
-        <SourceColumn
-          title="其他"
-          icon={<FileIcon size={12} className="text-muted-foreground" />}
-          items={others}
-          expanded={expanded.other}
-          onToggle={() =>
-            setExpanded((prev) => ({ ...prev, other: !prev.other }))
-          }
-          onItemClick={openAttachmentPreview}
-        />
-      )}
-    </DrawerSection>
-  );
-}
-
-function SourceColumn({
-  title,
-  icon,
-  items,
-  expanded,
-  onToggle,
-  onItemClick,
-}: {
-  title: string;
-  icon: React.ReactNode;
-  items: FileAttachment[];
-  expanded: boolean;
-  onToggle: () => void;
-  onItemClick: (att: FileAttachment) => void;
-}) {
-  const visible = expanded ? items : items.slice(0, MAX_VISIBLE);
-  const overflow = items.length - visible.length;
+  const visible = expanded ? allSources : allSources.slice(0, MAX_VISIBLE);
+  const overflow = allSources.length - visible.length;
 
   return (
-    <div className="mt-1 first:mt-0">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center gap-1 px-1 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-      >
-        {icon}
-        <span className="font-medium">{title}</span>
-        <span className="ml-1 rounded bg-surface px-1 text-[10px]">
-          {items.length}
-        </span>
-        <CaretDownIcon
-          size={10}
-          className={`ml-auto shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`}
-        />
-      </button>
-      <ul className="space-y-0.5">
-        {visible.map((att) => {
-          const label = labelForAttachment(att);
-          const ItemIcon = att.kind === 'image'
-            ? <ImageIcon size={11} className="shrink-0 text-muted-foreground" />
-            : att.kind === 'terminal-ref'
-              ? <TerminalIcon size={11} className="shrink-0 text-muted-foreground" />
-              : <FileIcon size={11} className="shrink-0 text-muted-foreground" />;
-          return (
-            <li key={att.id}>
-              <button
-                type="button"
-                onClick={() => onItemClick(att)}
-                title={label}
-                className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] text-foreground transition-colors hover:bg-surface-hover"
-              >
-                {ItemIcon}
-                <span className="min-w-0 flex-1 truncate">{label}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-      {!expanded && overflow > 0 && (
+    <DrawerSection
+      label="来源"
+      rightAction={
         <button
           type="button"
-          onClick={onToggle}
-          className="flex w-full items-center gap-1 px-1 py-0.5 text-left text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+          className="p-1 rounded text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
+          title="Add source"
+          aria-label="Add source"
+          onClick={() => {
+            // Reserved for future "add source" flow (e.g. attach file / paste).
+          }}
         >
-          +{overflow} more
+          <PlusIcon size={14} />
+        </button>
+      }
+    >
+      <div className="grid grid-cols-1 gap-2 mt-1">
+        {visible.map((att) => {
+          const label = labelForAttachment(att);
+          return (
+            <button
+              key={att.id}
+              type="button"
+              onClick={() => {
+                if (att.kind === 'browser-ref') {
+                  const meta = att.metadata as { url?: string } | undefined;
+                  if (meta?.url) openBrowserUrl(meta.url);
+                } else {
+                  openAttachmentPreview(att);
+                }
+              }}
+              title={label}
+              className="flex items-center gap-2.5 w-full rounded-lg border px-3 py-2 text-left transition-colors hover:bg-surface-hover"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+              }}
+            >
+              <div className="shrink-0">{iconForAttachment(att)}</div>
+              <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                {label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {overflow > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="mt-2 flex w-full items-center justify-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
+        >
+          查看全部 ({allSources.length})
         </button>
       )}
-    </div>
+    </DrawerSection>
   );
 }

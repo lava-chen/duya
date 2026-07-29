@@ -17,8 +17,8 @@ beforeEach(async () => {
   store = new FileMemoryStore(tmpFile, { charLimit: 10_000 })
   store.load()
   // Seed with a few entries
-  await store.add('Wiki agent 不用 RAG，直接用 wiki-llm 文件夹维护记忆', undefined, 'project')
-  await store.add('E:/wiki 是核心个人知识库（Obsidian）', undefined, 'project')
+  await store.add('Project knowledge 用纯文件维护，不依赖 RAG', undefined, 'project')
+  await store.add('E:/notes 是核心个人知识库（Obsidian）', undefined, 'project')
   await store.add('RAG retrieval pipeline', 'embedding model + vector db', 'reference')
 })
 
@@ -34,7 +34,7 @@ describe('FileMemoryStore.replace', () => {
   it('matches by exact entry id', async () => {
     const entries = store.list()
     const target = entries[1]
-    const result = await store.replace(target.id, 'E:/wiki 是陈炫羽的核心个人知识库（Obsidian，双视图）')
+    const result = await store.replace(target.id, 'E:/notes 是陈炫羽的核心个人知识库（Obsidian，双视图）')
 
     expect(result.success).toBe(true)
     const after = store.list()
@@ -47,21 +47,21 @@ describe('FileMemoryStore.replace', () => {
   })
 
   it('matches a full header line including ## [type] prefix and § date', async () => {
-    const header = '## [project] Wiki agent 不用 RAG，直接用 wiki-llm 文件夹维护记忆 § 2026-06-04'
-    const result = await store.replace(header, 'Wiki agent 记忆方案：纯文件维护')
+    const header = '## [project] Project knowledge 用纯文件维护，不依赖 RAG § 2026-06-04'
+    const result = await store.replace(header, '项目记忆方案：纯文件维护')
 
     expect(result.success).toBe(true)
-    const updated = store.list().find(e => e.summary.startsWith('Wiki agent 记忆方案'))
+    const updated = store.list().find(e => e.summary.startsWith('项目记忆方案'))
     expect(updated).toBeDefined()
   })
 
   it('matches a header line plus the *(Nd ago)* age hint the renderer appends', async () => {
     const headerWithAge =
-      '## [project] Wiki agent 不用 RAG，直接用 wiki-llm 文件夹维护记忆 § 2026-06-04  *(8d ago)*'
-    const result = await store.replace(headerWithAge, 'Wiki agent — refreshed')
+      '## [project] Project knowledge 用纯文件维护，不依赖 RAG § 2026-06-04  *(8d ago)*'
+    const result = await store.replace(headerWithAge, '项目记忆 — refreshed')
 
     expect(result.success).toBe(true)
-    expect(store.list().some(e => e.summary === 'Wiki agent — refreshed')).toBe(true)
+    expect(store.list().some(e => e.summary === '项目记忆 — refreshed')).toBe(true)
   })
 
   it('matches a bare substring of the summary', async () => {
@@ -122,13 +122,13 @@ describe('FileMemoryStore.add — id assignment and duplicate detection', () => 
   })
 
   it('detects duplicates even when surrounding whitespace differs', async () => {
-    const result = await store.add('  Wiki agent 不用 RAG，直接用 wiki-llm 文件夹维护记忆  ')
+    const result = await store.add('  Project knowledge 用纯文件维护，不依赖 RAG  ')
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/similar entry already exists/i)
   })
 
   it('detects duplicates case-insensitively', async () => {
-    const result = await store.add('wiki AGENT 不用 rag，直接用 wiki-llm 文件夹维护记忆')
+    const result = await store.add('project knowledge 用纯文件维护，不依赖 rag')
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/similar entry already exists/i)
   })

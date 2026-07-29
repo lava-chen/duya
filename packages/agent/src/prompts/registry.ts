@@ -13,13 +13,11 @@ import { generalConfig } from './configs/general.js'
 import { codeConfig } from './configs/code.js'
 import { researchConfig } from './configs/research.js'
 import { gatewayConfig } from './configs/gateway.js'
-import { wikiAgentConfig } from './configs/wiki-agent.js'
 
 PromptsRegistry.register('general', generalConfig)
 PromptsRegistry.register('code', codeConfig)
 PromptsRegistry.register('research', researchConfig)
 PromptsRegistry.register('gateway', gatewayConfig)
-PromptsRegistry.register('wiki-agent', wikiAgentConfig)
 
 /**
  * Resolve the prompt system name from an agent profile.

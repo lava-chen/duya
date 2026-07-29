@@ -10,6 +10,50 @@ import { looksLikeHtml, textToHtml, htmlToText } from "./text-html";
 import { useElementEditSession } from "./editing/useElementEditSession";
 import { useElementPersistence } from "./editing/useElementPersistence";
 
+const GRID_PX = 80;
+
+function visualTextUnits(text: string): number {
+  return Array.from(text).reduce((units, char) => units + (/[^\x00-\x7f]/.test(char) ? 1 : 0.56), 0);
+}
+
+/**
+ * Choose a readable logical font size from the actual node geometry. This is
+ * a renderer invariant, not a judgement delegated to the Agent: a supplied
+ * font size is a preference, while the node's available lines set its ceiling.
+ */
+export function getReadableStickyFontSize({
+  text,
+  gridWidth,
+  gridHeight,
+  compact,
+  shortShape,
+  configured,
+}: {
+  text: string;
+  gridWidth: number;
+  gridHeight: number;
+  compact: boolean;
+  shortShape: boolean;
+  configured: unknown;
+}): number {
+  const floor = compact ? 20 : shortShape ? 16 : 18;
+  const fallback = compact ? 22 : Math.min(26, 20 + Math.max(0, gridHeight - 2) * 2);
+  const preferred = typeof configured === "number" && Number.isFinite(configured)
+    ? Math.max(floor, configured)
+    : fallback;
+  const usableWidth = Math.max(32, gridWidth * GRID_PX - (shortShape ? 36 : 48));
+  const usableHeight = Math.max(28, gridHeight * GRID_PX - 36);
+  const lines = text.split("\n").map((line) => Math.max(1, visualTextUnits(line)));
+
+  for (let size = preferred; size >= floor; size -= 0.5) {
+    const charsPerLine = Math.max(1, usableWidth / (size * 0.8));
+    const requiredLines = lines.reduce((sum, length) => sum + Math.ceil(length / charsPerLine), 0);
+    if (requiredLines * size * 1.3 <= usableHeight) return Math.round(size * 2) / 2;
+  }
+
+  return floor;
+}
+
 const STICKY_MARKDOWN_COMPONENTS = {
   h1: ({ children, ...props }: any) => (
     <h1 style={{ fontSize: "1.1em", fontWeight: 700, margin: "0.2em 0", lineHeight: 1.3 }} {...props}>{children}</h1>
@@ -138,21 +182,16 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
     && text.trim().length <= 12
     && !text.includes("\n");
 
-  // Compact labels are the common building block for mind maps and flows.
-  // Give them stronger typography than paragraph notes. Explicit legacy
-  // values below 18px are clamped so old agent-created canvases become
-  // readable without requiring a migration.
-  const defaultFontSize = isCompactLabel
-    ? 22
-    : Math.min(26, 20 + Math.max(0, hGrid - 2) * 2);
   const configuredFontSize = element.config.fontSize as number | undefined;
-  const fontSize = typeof configuredFontSize === "number" && configuredFontSize > 0
-    ? Math.max(isCompactLabel ? 20 : 18, configuredFontSize)
-    : defaultFontSize;
-
-  // Short shapes (diamond/ellipse) downgrade font size for long text to avoid overflow.
   const isShortShape = shape === "diamond" || shape === "ellipse" || shape === "triangle" || shape === "hexagon";
-  const effectiveFontSize = isShortShape && text.length > 20 ? Math.max(16, fontSize - 4) : fontSize;
+  const effectiveFontSize = getReadableStickyFontSize({
+    text,
+    gridWidth: element.position?.w ?? 3,
+    gridHeight: hGrid,
+    compact: isCompactLabel,
+    shortShape: isShortShape,
+    configured: configuredFontSize,
+  });
 
   const contentEditableRef = useRef<HTMLDivElement>(null);
   const [editorContainer, setEditorContainer] = useState<HTMLDivElement | null>(null);
@@ -174,7 +213,11 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
   }, []);
 
   const commitDraft = useCallback((nextHtml: string) => {
-    const normalized = htmlToText(nextHtml);
+    // Read actual DOM content instead of relying solely on the draft, which
+    // may be stale if toolbar actions (execCommand, DOM manipulation) did not
+    // sync the draft before save.
+    const actualHtml = contentEditableRef.current?.innerHTML ?? nextHtml;
+    const normalized = htmlToText(actualHtml);
     if (normalized !== text.trim()) {
       persist({ config: { text: normalized } }, "Save sticky failed");
     }
@@ -251,9 +294,9 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
       onMouseDown={(e) => {
         if (isEditing) {
           // Keep focus in the textarea — only a click OUTSIDE the sticky
-          // should blur (and thus auto-save).
+          // should blur (and thus auto-save). Do not call preventDefault()
+          // so text selection inside the editor still works.
           e.stopPropagation();
-          e.preventDefault();
         }
       }}
     >
@@ -356,6 +399,7 @@ export const StickyElement: React.FC<{ element: CanvasElement }> = ({ element })
               flex: 1,
               overflowY: "auto",
               overflowX: "hidden",
+              whiteSpace: "pre-wrap",
             }}
             className="sticky-markdown-content"
           >

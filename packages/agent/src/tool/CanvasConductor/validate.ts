@@ -33,6 +33,7 @@ const CONNECTOR_END_MARKERS = new Set(['arrow', 'none']);
 const CONNECTOR_MARKERS = new Set(['none', 'arrow', 'open-arrow', 'circle', 'diamond', 'bar']);
 const CONNECTOR_ROUTING_MODES = new Set(['elbow', 'curve', 'bezier', 'straight']);
 const CONNECTOR_STROKE_STYLES = new Set(['solid', 'dashed', 'bold', 'dotted']);
+const CONNECTOR_HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
 // Canvas bounds in grid units (1 unit = 80 px). Matches the renderer
 // constant so clamping and DB clamping agree.
@@ -268,7 +269,12 @@ export function validateConnectorShape(config: Record<string, unknown>): Validat
       if (typeof value.nodeId !== 'string' || !value.nodeId || !isRecord(bindingPoint) ||
           typeof u !== 'number' || !Number.isFinite(u) || typeof v !== 'number' || !Number.isFinite(v) ||
           u < 0 || u > 1 || v < 0 || v > 1) {
-        checks.push(fail(`connector config.${field} bound endpoint requires nodeId and bindingPoint u/v in 0..1`));
+        checks.push(fail(
+          `connector config.${field} bound endpoint requires nodeId AND bindingPoint {u, v} in 0..1. ` +
+          `CRITICAL: bindingPoint must land on the node's EDGE — at least one of u/v must be exactly 0 or 1 ` +
+          `(0 = left/top edge, 1 = right/bottom edge). Example: {kind:"bound", nodeId:"abc", bindingPoint:{u:1, v:0.5}} ` +
+          `binds to the right edge's vertical midpoint. Read canvas_get_knowledge("connector-style") before retrying.`,
+        ));
       }
       return;
     }
@@ -330,6 +336,18 @@ export function validateConnectorShape(config: Record<string, unknown>): Validat
   const label = config.label;
   if (label !== undefined && typeof label !== 'string') {
     checks.push(fail('connector label must be a string'));
+  }
+
+  const color = config.color;
+  if (color !== undefined && (typeof color !== 'string' || !CONNECTOR_HEX_COLOR.test(color))) {
+    checks.push(fail('connector color must be a six-digit hex color such as #3B82F6'));
+  }
+
+  const labelFontSize = config.labelFontSize;
+  if (labelFontSize !== undefined && (
+    !isFiniteNumber(labelFontSize) || (labelFontSize as number) < 14 || (labelFontSize as number) > 22
+  )) {
+    checks.push(fail('connector labelFontSize must be a finite number between 14 and 22'));
   }
 
   const waypoints = config.waypoints;

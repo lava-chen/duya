@@ -55,10 +55,16 @@ function parseCodexJsonlLine(line: string): ParsedMessage | null {
     }
 
     if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
+      // Rollout output may be a string (legacy) or an array of content blocks
+      // (codex-compatible: [{type:'input_text', text:'...'}]). Normalize to text.
+      const rawOutput = payload.output;
+      const outputText = Array.isArray(rawOutput)
+        ? rawOutput.map((block: { text?: string } | string) => typeof block === 'string' ? block : (block.text ?? '')).join('')
+        : (typeof rawOutput === 'string' ? rawOutput : '');
       return {
         id: payload.id || randomUUID(),
         role: 'tool',
-        content: payload.output || '',
+        content: outputText || '',
         msg_type: 'tool_result',
         parent_tool_call_id: payload.call_id || '',
         seq_index: 0,

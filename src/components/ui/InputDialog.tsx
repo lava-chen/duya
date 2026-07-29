@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { XIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 
 interface InputDialogProps {
   isOpen: boolean;
@@ -105,32 +107,12 @@ export function InputDialog({
         />
 
         <div className="flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 rounded-lg text-sm transition-colors"
-            style={{ color: "var(--muted)" }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = "var(--surface-hover)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.backgroundColor = "transparent")
-            }
-          >
+          <Button onClick={onCancel} variant="ghost" size="md">
             Cancel
-          </button>
-          <button
-            onClick={() => onConfirm(value)}
-            className="px-4 py-2 rounded-lg text-sm text-white transition-colors"
-            style={{ backgroundColor: "var(--accent)" }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.opacity = "0.9")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.opacity = "1")
-            }
-          >
+          </Button>
+          <Button onClick={() => onConfirm(value)} variant="primary" size="md">
             Confirm
-          </button>
+          </Button>
         </div>
       </div>
     </div>

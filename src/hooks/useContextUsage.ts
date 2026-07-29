@@ -10,6 +10,7 @@ import type { Message } from '@/types/message';
 import {
   extractSources,
   normalizeAndBuildGrid,
+  estimateTokens,
   type ContextBreakdown,
 } from '@/lib/context-usage-utils';
 
@@ -143,6 +144,45 @@ export function useContextUsage(
       } catch {
         continue;
       }
+    }
+
+    // No assistant message with tokenUsage yet — fall back to a local
+    // estimate so the ring isn't stuck at 0 for new sessions or turns
+    // that only have user attachments.
+    const estimatedUsed = messages.reduce((sum, msg) => {
+      if (msg.role === 'user') {
+        const text = typeof msg.content === 'string'
+          ? msg.content
+          : msg.content.map((b) => (typeof b === 'string' ? b : (b as { text?: string }).text || '')).join('');
+        let tokens = estimateTokens(text);
+        for (const att of msg.attachments || []) {
+          const isImage = (att.type ?? '').startsWith('image/');
+          tokens += isImage
+            ? Math.max(700, estimateTokens(att.text ?? ''))
+            : estimateTokens(att.text ?? '');
+        }
+        return sum + tokens;
+      }
+      return sum;
+    }, 0);
+
+    if (estimatedUsed > 0) {
+      const ratio = resolvedContextWindow ? estimatedUsed / resolvedContextWindow : 0;
+      const estimatedNextTurn = estimatedUsed;
+      const estimatedNextRatio = ratio;
+      const effectiveRatio = Math.max(ratio, estimatedNextRatio);
+      let state: ContextState = 'normal';
+      if (effectiveRatio >= 0.95) state = 'critical';
+      else if (effectiveRatio >= 0.8) state = 'warning';
+      return {
+        ...noData,
+        used: estimatedUsed,
+        ratio,
+        estimatedNextTurn,
+        estimatedNextRatio,
+        hasData: true,
+        state,
+      };
     }
 
     return noData;

@@ -37,7 +37,7 @@ You are now in **Plan Mode** — a read-only analysis mode. Your goal is to inve
 - **Do NOT modify, create, or delete any files.** Write/edit/bash tools are blocked.
 - **Do NOT execute commands with side effects.** Bash is blocked.
 - Use read-only exploration tools to inspect the codebase and gather evidence.
-- Use only read-only tools: \`read\`, \`glob\`, \`grep\`, \`task\` (for structuring the plan), \`session_search\`, \`ask_user_question\`, \`web_search\`, \`web_fetch\`, \`wiki_search\`, \`wiki_read\`.
+- Use only read-only tools: \`read\`, \`glob\`, \`grep\`, \`task\` (for structuring the plan), \`session_search\`, \`ask_user_question\`, \`web_search\`, \`web_fetch\`.
 
 ## Workflow
 

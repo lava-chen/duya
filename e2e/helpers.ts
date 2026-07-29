@@ -19,7 +19,7 @@ export interface LaunchOptions {
   namespace: string;
   /**
    * Comma-separated list of external subsystems to mock (e.g.
-   * "updater,wiki-agent"). Handlers check DUYA_MOCK_EXTERNAL env var.
+   * "updater,browser"). Handlers check DUYA_MOCK_EXTERNAL env var.
    * Currently informational; add handler-side short-circuits as needed.
    */
   mockExternal?: string[];
@@ -104,6 +104,21 @@ export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
       () => typeof (window as unknown as { electronAPI?: unknown }).electronAPI !== 'undefined',
       { timeout: 30_000 },
     );
+
+    // In test mode the app may show the onboarding flow because the isolated
+    // userData has no configured provider. Mark onboarding completed and reload
+    // so canvas UI specs see the main shell instead of the welcome screen.
+    if (process.env.DUYA_TEST === '1') {
+      await page.evaluate(() => {
+        localStorage.setItem('duya-onboarding-completed', 'true');
+      });
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(
+        () => typeof (window as unknown as { electronAPI?: unknown }).electronAPI !== 'undefined',
+        { timeout: 30_000 },
+      );
+    }
+
     return { app, page };
   } catch (err) {
     // If the renderer never exposes electronAPI, capture diagnostics before

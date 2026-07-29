@@ -6,7 +6,7 @@ export type PopoverItemKind =
   | 'agent_skill'
   | 'sdk_command'
   | 'cli_tool'
-  | 'settings_action'   // execute immediately (add files, /compact, /memory, /export, /recap)
+  | 'settings_action'   // execute immediately (add files, /compact, /export, /recap)
   | 'settings_submenu'  // open a sub-view (thinking, style, mcp)
   | 'mode'              // toggle a popover mode (plan-task | research | conductor)
   /**

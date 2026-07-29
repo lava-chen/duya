@@ -115,14 +115,18 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
   }, [activeCanvasId, element.id, removeElement]);
 
   const commitDraft = useCallback((nextHtml: string) => {
-    const normalized = htmlToText(nextHtml);
+    // Read actual DOM content instead of relying solely on the draft, which
+    // may be stale if toolbar actions (execCommand, DOM manipulation) did not
+    // sync the draft before save.
+    const actualHtml = contentEditableRef.current?.innerHTML ?? nextHtml;
+    const normalized = htmlToText(actualHtml);
 
     if (normalized === "" && isNewAndEmptyRef.current) {
       deleteFreshEmpty();
       return;
     }
 
-    const nextPosition = fitContent(nextHtml);
+    const nextPosition = fitContent(actualHtml);
     const contentChanged = normalized !== content.trim();
     if (contentChanged || nextPosition) {
       persist({
@@ -205,9 +209,9 @@ export const TextElement: React.FC<{ element: CanvasElement }> = ({ element }) =
       onMouseDown={(e) => {
         if (isEditing) {
           // Keep focus in the editor — only a click OUTSIDE should blur
-          // (and thus auto-save).
+          // (and thus auto-save). Do not call preventDefault() so text
+          // selection inside the editor still works.
           e.stopPropagation();
-          e.preventDefault();
         }
       }}
     >

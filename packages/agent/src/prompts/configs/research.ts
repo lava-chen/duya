@@ -13,13 +13,13 @@
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
-import { getAgentsMdManager } from '../../agentsmd/index.js'
 import {
   getProjectContinuitySection,
   getProjectGroundingSection,
 } from '../sections/projectGrounding.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
+import { getProjectInstructionsSection } from '../general/sections/project.js'
 
 // Research-specific sections
 import { resolveResearchIntent } from '../research/intentRouter.js'
@@ -37,7 +37,7 @@ export const researchConfig: PromptSystemConfig = {
   staticSections: [
     { name: 'projectGrounding', compute: getProjectGroundingSection },
     { name: 'projectContinuity', compute: getProjectContinuitySection },
-    { name: 'agentsMd', compute: () => getAgentsMdManager().buildAgentsMdPrompt() },
+    { name: 'projectInstructions', compute: getProjectInstructionsSection },
     // Research-specific sections — bypass profile gating (always render).
     { name: 'researchProfile', compute: getResearchProfileSection, bypassProfile: true },
     { name: 'taskIntent', compute: getTaskIntentPromptSection, bypassProfile: true },
@@ -72,7 +72,7 @@ export const researchConfig: PromptSystemConfig = {
   ],
   preBuildHook: async (ctx) => {
     if (await initializeAgentsMd(ctx.workingDirectory)) {
-      return { invalidateCacheKeys: ['agentsMd'] }
+      return { invalidateCacheKeys: ['projectInstructions'] }
     }
   },
 }

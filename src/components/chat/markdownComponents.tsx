@@ -4,6 +4,7 @@ import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fi
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { FileIcon } from '../icons';
+import { fileExtensionFromName, getFileTypeIcon } from '../file-tree/file-type-icon';
 
 // Inline media: renders <img> thumbnails that open the lightbox on click,
 // or <video controls> elements for common video extensions so the same
@@ -74,9 +75,6 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
         aria-label={`Enlarge image: ${altText}`}
       >
         <img src={resolvedSrc} alt={altText} className="markdown-image" loading="lazy" />
-        {altText && (
-          <span className="markdown-image-caption">{altText}</span>
-        )}
       </button>
       {open && (
         <ImagePreviewModal
@@ -141,6 +139,7 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
   // in the rest of the DUYA UI).
   if (isLocalFile && resolvedHref) {
     const displayName = fileNameFromPath(resolvedHref);
+    const TypeIcon = getFileTypeIcon(fileExtensionFromName(displayName));
     return (
       <button
         type="button"
@@ -148,7 +147,11 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
         onClick={() => openLocalArtifactTarget(resolvedHref, cwd)}
         title={resolvedHref}
       >
-        <FileIcon size={16} weight="regular" aria-hidden="true" />
+        {TypeIcon ? (
+          <TypeIcon size={16} weight="regular" aria-hidden="true" />
+        ) : (
+          <FileIcon size={16} weight="regular" aria-hidden="true" />
+        )}
         <span className="markdown-file-link__name">{displayName}</span>
       </button>
     );
@@ -168,25 +171,25 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
 
 export const markdownComponents = {
   h1: ({ children }: { children?: React.ReactNode }) => (
-    <h1 className="text-2xl font-bold text-foreground mt-8 mb-4 pb-2 border-b border-border/50">{children}</h1>
+    <h1 className="text-lg font-bold text-foreground mt-3 mb-1.5">{children}</h1>
   ),
   h2: ({ children }: { children?: React.ReactNode }) => (
-    <h2 className="text-xl font-bold text-foreground mt-6 mb-3">{children}</h2>
+    <h2 className="text-base font-semibold text-foreground mt-2.5 mb-1.5">{children}</h2>
   ),
   h3: ({ children }: { children?: React.ReactNode }) => (
-    <h3 className="text-lg font-semibold text-foreground mt-5 mb-2">{children}</h3>
+    <h3 className="text-[15px] font-semibold text-foreground mt-2 mb-1">{children}</h3>
   ),
   p: ({ children }: { children?: React.ReactNode }) => (
-    <p className="text-[15px] text-foreground leading-[1.65] mb-2">{children}</p>
+    <p className="text-[15px] text-foreground leading-[1.5] mb-1.5">{children}</p>
   ),
   ul: ({ children }: { children?: React.ReactNode }) => (
-    <ul className="list-disc list-outside text-[15px] text-foreground mb-4 pl-5 space-y-1">{children}</ul>
+    <ul className="list-disc list-outside text-[15px] text-foreground mb-2 pl-5 space-y-0.5">{children}</ul>
   ),
   ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol className="list-decimal list-outside text-[15px] text-foreground mb-4 pl-5 space-y-1">{children}</ol>
+    <ol className="list-decimal list-outside text-[15px] text-foreground mb-2 pl-5 space-y-0.5">{children}</ol>
   ),
   li: ({ children }: { children?: React.ReactNode }) => (
-    <li className="text-[15px] text-foreground leading-[1.65] pl-1">{children}</li>
+    <li className="text-[15px] text-foreground leading-[1.5] pl-1">{children}</li>
   ),
   a: MarkdownAnchor,
   img: MarkdownImage,

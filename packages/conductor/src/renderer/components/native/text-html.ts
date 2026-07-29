@@ -53,12 +53,23 @@ export function textToHtml(value: string): string {
  * Otherwise keep the rich HTML as-is.
  */
 export function htmlToText(html: string): string {
-  const trimmed = html.replace(/<p><br><\/p>/gi, "").trim();
-  const hasRichTags = /<(?:b|i|u|s|strong|em|span|font|strike|del)[\s>]>/i.test(trimmed);
-  if (!hasRichTags) {
+  const trimmed = html
+    .replace(/<p><br><\/p>/gi, "")
+    .replace(/<div><br><\/div>/gi, "")
+    .trim();
+  // Preserve HTML when there are inline formatting tags (b/i/span/etc.) or
+  // styled/aligned block elements. Alignment and other toolbar-applied
+  // styles live as attributes on <p>/<div>, so without this check they would
+  // be silently stripped when no inline tag is present.
+  const hasInlineTags = /<(?!\/?(?:p|div|br)\b)[a-z]/i.test(trimmed);
+  const hasStyledBlocks = /<(?:p|div)\b[^>]*\b(?:style|align)\s*=/i.test(trimmed);
+  if (!hasInlineTags && !hasStyledBlocks) {
     return trimmed
-      .replace(/<\/p>\s*<p>/gi, "\n")
-      .replace(/<\/?p>/gi, "")
+      .replace(/<\/p>\s*<p[^>]*>/gi, "\n")
+      .replace(/<\/?p[^>]*>/gi, "")
+      .replace(/<\/div>\s*<div[^>]*>/gi, "\n")
+      .replace(/<div[^>]*>/gi, "")
+      .replace(/<\/div>/gi, "")
       .replace(/<br\s*\/?>/gi, "\n")
       .trim();
   }

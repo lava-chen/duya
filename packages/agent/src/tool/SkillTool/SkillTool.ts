@@ -24,14 +24,14 @@ export type SkillInput = z.infer<typeof inputSchema>;
  */
 export class SkillTool implements Tool, ToolExecutor {
   readonly name = SKILL_TOOL_NAME;
-  readonly description = 'Execute a skill';
+  readonly description = 'Load the instructions for an available skill.';
 
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
       skill: {
         type: 'string',
-        description: 'The skill name. E.g., "commit", "review-pr", or "pdf"',
+        description: 'An exact name from the current Skills catalog.',
       },
       args: {
         type: 'string',
@@ -81,7 +81,7 @@ export class SkillTool implements Tool, ToolExecutor {
         name: this.name,
         result: JSON.stringify({
           error: `Unknown skill: ${normalizedName}`,
-          availableSkills: registry.listMetadata(),
+          availableSkills: registry.listModelInvocable().map((available) => available.name),
         }),
         error: true,
       };
@@ -199,7 +199,8 @@ export class SkillTool implements Tool, ToolExecutor {
    * List available skills
    */
   static listAvailableSkills(): SkillMetadata[] {
-    return getSkillRegistry().listMetadata();
+    const registry = getSkillRegistry();
+    return registry.listModelInvocable().map((skill) => registry.getMetadata(skill.name)!);
   }
 
   /**

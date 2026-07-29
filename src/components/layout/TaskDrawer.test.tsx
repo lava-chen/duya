@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -100,9 +100,11 @@ vi.mock('@/components/icons', () => ({
   ExternalLinkIcon: () => <span />,
   GitBranchIcon: () => <span />,
   SpinnerIcon: () => <span data-testid="agent-spinner" />,
+  StopIcon: () => <span />,
   TrashIcon: () => <span />,
   ArrowCounterClockwiseIcon: () => <span />,
   RobotIcon: () => <span data-testid="agent-icon" />,
+  WarningIcon: () => <span />,
   XIcon: () => <span />,
 }));
 
@@ -141,20 +143,12 @@ describe('TaskDrawer session-detail panel', () => {
     };
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
-      value: {
-        thread: {
-          getTasks: vi.fn().mockResolvedValue([]),
-        },
-      },
+      value: {},
     });
   });
 
-  it('renders running sub-agents and lets the user jump into their session', async () => {
+  it('renders running sub-agents and lets the user jump into their session', () => {
     render(<TaskDrawer />);
-
-    await waitFor(() => {
-      expect(window.electronAPI?.thread?.getTasks).toHaveBeenCalledWith('parent-session');
-    });
 
     expect(screen.getByText('Sub-agents')).toBeInTheDocument();
     expect(screen.getByText('Researcher')).toBeInTheDocument();
@@ -164,16 +158,16 @@ describe('TaskDrawer session-detail panel', () => {
     expect(mocks.setActiveThread).toHaveBeenCalledWith('sub-session-1');
   });
 
-  it('hides EnvironmentInfoSection entirely when not a git repo', () => {
+  it('hides empty sections entirely when not a git repo', () => {
     render(<TaskDrawer />);
 
     // Not a git repo → the section is gone (label and row are both gone).
     expect(screen.queryByText('环境信息')).not.toBeInTheDocument();
     expect(screen.queryByText('变更')).not.toBeInTheDocument();
 
-    // Other sections still render.
-    expect(screen.getByText('来源')).toBeInTheDocument();
-    expect(screen.getByText('产物')).toBeInTheDocument();
+    // Empty sections are also hidden so only Sub-agents remains.
+    expect(screen.queryByText('来源')).not.toBeInTheDocument();
+    expect(screen.queryByText('产物')).not.toBeInTheDocument();
   });
 
   it('renders EnvironmentInfoSection when the cwd is a git repo with changes', () => {

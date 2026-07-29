@@ -18,6 +18,7 @@ import {
 } from '../types.js';
 import type {
   AgentOptions,
+  AgentRuntimeMode,
   ChatOptions,
   ImageContent,
   Message,
@@ -34,11 +35,12 @@ import type {
 } from '../types.js';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
-import { getMemoryManager } from '../memory/index.js'
+import { getMemoryManager } from '../memory/index.js';
+import { getAgentsMdManager } from '../agentsmd/index.js';
 import { createMemoryReviewService } from '../memory/index.js';
 import { compactHistory } from '../compact/compact.js';
 import type { CompactResult, TokenEstimation } from '../compact/compact.js';
-import { estimateContextTokens, needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD } from '../compact/compact.js';
+import { needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD } from '../compact/compact.js';
 import { microCleanupMessages } from '../compact/microCompactCleanup.js';
 import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
 import { createLLMClient, createRetryableLLMClient, inferProvider, isMiniMaxURL, LLMClientWrapper } from '../llm/index.js';
@@ -415,11 +417,10 @@ export class duyaAgent {
       logger.info(`[duyaAgent] Vision model NOT initialized - disabled or not configured`);
     }
 
-    // Load memory for session (memory manager is a singleton).
+    // Load memory snapshot for the session (singleton).
     // Deferred to next tick so agent construction returns immediately.
-    // Memory snapshot defaults to empty; populated before first streamChat.
-    const memoryManager = getMemoryManager();
     const projectPath = options.workingDirectory || process.cwd();
+    const memoryManager = getMemoryManager();
     if (!memoryManager.isLoadedForPath(projectPath)) {
       setImmediate(() => {
         try {
@@ -429,6 +430,9 @@ export class duyaAgent {
         }
       });
     }
+    // AGENTS.md is loaded eagerly in streamChat via refreshForTask so it is
+    // always available before the first provider request and before any prompt
+    // section is resolved.
 
     // Wire the model-level `contextWindow` (e.g. 1M for Sonnet 4.6 1M) into
     // the compaction budget. Falls back to the 200K default if the renderer
@@ -731,6 +735,12 @@ export class duyaAgent {
     console.error(`[Agent-Process] streamChat tools (${tools.length}): conductorMode=${options?.conductorMode}, agentProfileId=${options?.agentProfileId}, mode=${options?.mode}, hasCanvasCreate=${tools.some(t => t.name === 'canvas_create_element')}`);
     // eslint-disable-next-line no-console
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
+    // Ensure AGENTS.md snapshot is loaded before building prompts or injecting
+    // it as a user message. The manager is a singleton; refreshForTask is a
+    // no-op when already loaded for this path.
+    const projectPath = this.workingDirectory || process.cwd();
+    await getAgentsMdManager().refreshForTask(projectPath);
+
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext();
     let messages = this._resolveInitialMessages(prompt, options);
@@ -746,27 +756,13 @@ export class duyaAgent {
     // they must go through the separate `system` parameter. If left in the
     // messages array, toAnthropicMessages skips them silently, dropping all
     // compaction context and causing the agent to "forget" earlier turns.
-    {
-      const systemContentParts: string[] = [];
-      const nonSystemMessages: Message[] = [];
-      for (const msg of messages) {
-        if (msg.role === 'system') {
-          systemContentParts.push(typeof msg.content === 'string' ? msg.content : extractTextFromContent(msg.content));
-        } else {
-          nonSystemMessages.push(msg);
-        }
-      }
-      if (systemContentParts.length > 0) {
-        if (systemPromptContent) {
-          systemPromptContent += '\n\n---\n\n## Conversation Context\n\n' + systemContentParts.join('\n\n---\n\n');
-        } else {
-          systemPromptContent = systemContentParts.join('\n\n---\n\n');
-        }
-        messages = nonSystemMessages;
-        this.messages = nonSystemMessages;
-        logger.info(`[Agent] Extracted ${systemContentParts.length} system messages into system prompt`);
-      }
-    }
+    //
+    // This extraction must also run after reactive compaction mid-stream,
+    // because compaction produces new system-role summary messages that would
+    // otherwise be silently dropped on the next provider request.
+    const extracted = this._extractSystemMessagesIntoPrompt(messages, systemPromptContent);
+    systemPromptContent = extracted.systemPromptContent;
+    messages = extracted.messages;
 
     // === Plan 224 Phase 3+4: apply declarative mode modifiers ===
     // Modifier-paradigm modes (conductor, plan-task) inject tools,
@@ -991,7 +987,7 @@ export class duyaAgent {
           (normalizedLastMessageContent === normalizedCompareContent ||
             lastMessageContent.trim() === compareContent.trim());
 
-        const displayContent = options?.displayContent && options.displayContent.length > 0
+        const displayContent = options?.displayContent !== undefined
           ? options.displayContent
           : undefined;
         const persistedPromptContent = prompt as string | MessageContent[];
@@ -1100,6 +1096,10 @@ export class duyaAgent {
       let needsFollowUp = false;
       let thinkingContent = '';  // Accumulate thinking content for this turn
       let hasThinkingContent = false;  // Track if we have any thinking content
+      // Plan 224 follow-up: track mode-switch tool_use ids so we can emit
+      // a `mode_changed` SSE event right after their tool_result lands.
+      // Keyed by tool_use_id, value is the tool name.
+      const modeSwitchToolIds = new Map<string, string>();
 
       yield { type: 'turn_start', data: { turnCount } };
 
@@ -1117,6 +1117,12 @@ export class duyaAgent {
           // Notify external listener so it can persist the compacted
           // message list and update its baseline count.
           this.onMessagesCompacted?.(this.messages.length);
+          // Re-extract system-role messages produced by compaction. Compaction
+          // summaries are role='system'; without this they would be silently
+          // dropped by toAnthropicMessages on the next provider request.
+          const reExtracted = this._extractSystemMessagesIntoPrompt(messages, systemPromptContent);
+          systemPromptContent = reExtracted.systemPromptContent;
+          messages = reExtracted.messages;
         } catch (compactError) {
           const compactErrorMsg = compactError instanceof Error ? compactError.message : String(compactError);
           logger.error(`[Agent] Turn ${turnCount}: Proactive compaction failed: ${compactErrorMsg}`);
@@ -1159,19 +1165,6 @@ export class duyaAgent {
         });
       }
 
-      // Publish an estimate before each provider request so the renderer can
-      // update the context ring while the Agent is still working. Provider
-      // usage later in this turn replaces this estimate with exact counts.
-      const estimatedContext = estimateContextTokens(messages);
-      yield {
-        type: 'context_usage',
-        data: {
-          usedTokens: estimatedContext.totalTokens,
-          contextWindow,
-          percentFull: (estimatedContext.totalTokens / contextWindow) * 100,
-        },
-      };
-
       try {
         // Stream from LLM with FULL message history
         logger.info(`[Agent] Turn ${turnCount}: Starting LLM stream, messages=${messages.length}, provider=${this.provider}`);
@@ -1189,10 +1182,34 @@ export class duyaAgent {
               ))
             : messages
         );
+
+        // Codex-compatible: AGENTS.md contents are injected as the first user
+        // message on the first turn, not duplicated in the system prompt. This
+        // message is ephemeral: it is sent to the LLM but never persisted to the
+        // message history, preserving the rule that persisted user messages are
+        // written by the frontend.
+        if (turnCount === 1 && !options?.backgroundTaskResume) {
+          const agentsMdText = getAgentsMdManager().buildAgentsMdPrompt();
+          if (agentsMdText) {
+            llmMessages.unshift({
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: agentsMdText,
+              timestamp: Date.now(),
+              metadata: { isAgentsMdContext: true },
+            });
+          }
+        }
         try {
           options?.onSystemPromptReady?.({
             systemPrompt: systemPromptContent,
-            toolNames: tools.map((tool) => tool.name),
+            // Copy only the provider contract. Tool executors and internal
+            // registry metadata are deliberately not exposed to observers.
+            tools: tools.map(({ name, description, input_schema }) => ({
+              name,
+              description,
+              input_schema,
+            })),
             turn: turnCount,
           });
         } catch (error) {
@@ -1231,6 +1248,16 @@ export class duyaAgent {
               name: event.data.name,
               input: event.data.input,
             });
+
+            // Plan 224 follow-up: remember mode-switch tool_use ids so we
+            // can emit a `mode_changed` event right after their result lands.
+            if (
+              event.data.name === 'EnterPlanMode' ||
+              event.data.name === 'ExitPlanMode' ||
+              event.data.name === 'SwitchMode'
+            ) {
+              modeSwitchToolIds.set(event.data.id, event.data.name);
+            }
 
             // Yield the tool_use event to caller
             yield event;
@@ -1343,6 +1370,44 @@ export class duyaAgent {
                       metadata: result.message.metadata,
                     },
                   };
+
+                  // Plan 224 follow-up: if this tool_result belongs to a
+                  // mode-switch tool (EnterPlanMode / ExitPlanMode /
+                  // SwitchMode), parse the new runtime mode out of the
+                  // JSON result and emit a `mode_changed` SSE event so
+                  // the renderer can sync the input-box chip + glow.
+                  // Skip on error — failed switches leave the mode unchanged.
+                  const modeSwitchToolName = modeSwitchToolIds.get(toolResultId);
+                  if (modeSwitchToolName && !toolResultError) {
+                    let nextMode: AgentRuntimeMode | undefined;
+                    let reason: string | undefined;
+                    try {
+                      const parsed = JSON.parse(toolResultContent) as Record<string, unknown>;
+                      if (modeSwitchToolName === 'SwitchMode') {
+                        nextMode = parsed.currentMode as AgentRuntimeMode | undefined;
+                        reason = parsed.reason as string | undefined;
+                      } else if (modeSwitchToolName === 'EnterPlanMode') {
+                        const planMode = parsed.planMode;
+                        nextMode = planMode ? 'plan' : 'general';
+                      } else if (modeSwitchToolName === 'ExitPlanMode') {
+                        const planMode = parsed.planMode;
+                        nextMode = planMode ? 'plan' : 'general';
+                      }
+                    } catch {
+                      // Malformed JSON result — leave nextMode undefined.
+                    }
+                    if (nextMode) {
+                      yield {
+                        type: 'mode_changed',
+                        data: {
+                          mode: nextMode,
+                          source: 'agent',
+                          reason,
+                        },
+                      };
+                    }
+                    modeSwitchToolIds.delete(toolResultId);
+                  }
                 }
               }
             }
@@ -1419,31 +1484,8 @@ export class duyaAgent {
             yield event;
 
           } else if (event.type === 'result') {
-            // Cache tokens are part of the active provider context even when
-            // they are billed separately. Use the exact completed-turn usage
-            // to replace the pre-request local estimate in the renderer.
-            // Some providers only report total_tokens, so fall back to it
-            // when input/output are missing.
-            const inputTokens = event.data.input_tokens ?? 0;
-            const outputTokens = event.data.output_tokens ?? 0;
-            const cacheHitTokens = event.data.cache_hit_tokens ?? 0;
-            const cacheCreationTokens = event.data.cache_creation_tokens ?? 0;
-            let usedTokens = inputTokens + outputTokens + cacheHitTokens + cacheCreationTokens;
-            if (usedTokens === 0 && event.data.total_tokens) {
-              usedTokens = event.data.total_tokens;
-            }
-            if (usedTokens > 0) {
-              yield {
-                type: 'context_usage',
-                data: {
-                  usedTokens,
-                  contextWindow,
-                  percentFull: (usedTokens / contextWindow) * 100,
-                },
-              };
-            }
-
-            // Preserve the token-usage event for cost accounting.
+            // Preserve the token-usage event for cost accounting and
+            // context-ring display (persisted to DB by the agent process).
             yield event;
           }
         }
@@ -1795,7 +1837,6 @@ export class duyaAgent {
         this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
         {
           enabledPluginIds,
-          wikiAgentEnabled: options?.wikiAgentEnabled,
           browserBackendMode: this.browserBackendMode,
         }
       );
@@ -2096,7 +2137,6 @@ export class duyaAgent {
       this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
       {
         enabledPluginIds,
-        wikiAgentEnabled: options?.wikiAgentEnabled,
         browserBackendMode: this.browserBackendMode,
       }
     );
@@ -2424,13 +2464,13 @@ export class duyaAgent {
    */
   setWorkingDirectory(directory: string): void {
     this.workingDirectory = directory;
-    // PromptSystem reads workingDirectory fresh on every turn via
+    // PromptSystem reads workingDirectory fresh on every streamChat via
     // _buildSystemPrompt → buildContext, so no separate sync needed.
   }
 
   /**
-   * Update the language preference. Read by _buildSystemPrompt on every turn
-   * via promptSystem.buildContext({ language: this.language }).
+   * Update the language preference. Read by _buildSystemPrompt on every
+   * streamChat via promptSystem.buildContext({ language: this.language }).
    */
   setLanguage(language: string): void {
     this.language = language;
@@ -2468,6 +2508,46 @@ export class duyaAgent {
   shouldCompact(): boolean {
     this.compactionManager.updateContextTokens(this.messages);
     return this.compactionManager.shouldCompact();
+  }
+
+  /**
+   * Extract system-role messages from the message history and merge them into
+   * the system prompt. Anthropic API does not allow system-role messages in
+   * the `messages` array; they must go through the separate `system` parameter.
+   *
+   * Called twice per streamChat:
+   *   1. At the streamChat entry (before the turn loop).
+   *   2. After any compaction (proactive or reactive) inside the turn loop,
+   *      because compaction produces new system-role summary messages that
+   *      would otherwise be silently dropped by toAnthropicMessages.
+   *
+   * Returns the updated systemPromptContent and the filtered message list.
+   * Also mutates `this.messages` so the caller's `this.messages` stays in sync.
+   */
+  _extractSystemMessagesIntoPrompt(
+    messages: Message[],
+    systemPromptContent: string,
+  ): { systemPromptContent: string; messages: Message[] } {
+    const systemContentParts: string[] = [];
+    const nonSystemMessages: Message[] = [];
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        systemContentParts.push(
+          typeof msg.content === 'string' ? msg.content : extractTextFromContent(msg.content),
+        );
+      } else {
+        nonSystemMessages.push(msg);
+      }
+    }
+    if (systemContentParts.length === 0) {
+      return { systemPromptContent, messages };
+    }
+    const merged = systemPromptContent
+      ? systemPromptContent + '\n\n---\n\n## Conversation Context\n\n' + systemContentParts.join('\n\n---\n\n')
+      : systemContentParts.join('\n\n---\n\n');
+    this.messages = nonSystemMessages;
+    logger.info(`[Agent] Extracted ${systemContentParts.length} system messages into system prompt`);
+    return { systemPromptContent: merged, messages: nonSystemMessages };
   }
 
   /**

@@ -272,7 +272,6 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
   const removeElement = useConductorStore((state) => state.removeElement);
   const activeCanvasId = useConductorStore((state) => state.activeCanvasId);
   const canvasZoom = useConductorStore((state) => state.canvasZoom);
-  const [hoveredConnectorId, setHoveredConnectorId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [dragPoint, setDragPoint] = useState<Point | null>(null);
   const [labelDraft, setLabelDraft] = useState("");
@@ -311,10 +310,6 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
     const minY = Math.min(...controlPoints.map((point) => point.y));
     return { x: (minX + maxX) / 2, y: minY };
   }, [selectedData]);
-
-  const handleConnectorClick = useCallback((connectorId: string) => {
-    setSelectedElementId(selectedElementId === connectorId ? null : connectorId);
-  }, [selectedElementId, setSelectedElementId]);
 
   const persistConfig = useCallback(async (element: CanvasElement, nextConfig: Record<string, unknown>) => {
     if (!activeCanvasId) return;
@@ -591,21 +586,6 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
 
   return (
     <>
-      <svg className="native-connector-overlay" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 0, overflow: "visible" }}>
-        {connectors.map((connector) => (
-          <ConnectorPath
-            key={connector.id}
-            connector={connector}
-            elements={elements}
-            isSelected={selectedElementId === connector.id}
-            isHovered={hoveredConnectorId === connector.id}
-            layer="visual"
-            onHover={setHoveredConnectorId}
-            onClick={handleConnectorClick}
-          />
-        ))}
-      </svg>
-
       <svg className="native-connector-controls" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 6, overflow: "visible" }}>
         {selectedConnector && (
           <ConnectorPath
@@ -621,8 +601,8 @@ export const NativeConnectorOverlay: React.FC<NativeConnectorOverlayProps> = ({ 
 
         {dragPreview && (
           <g style={{ pointerEvents: "none" }}>
-            <path d={dragPreview.path} fill="none" stroke="var(--conductor-accent)" strokeWidth={2} strokeDasharray="6 4" strokeLinecap="round" opacity={0.85} />
-            <circle cx={dragState?.kind === "endpoint" && dragState.endpoint === "source" ? dragPreview.sourceReference.x : dragPreview.targetReference.x} cy={dragState?.kind === "endpoint" && dragState.endpoint === "source" ? dragPreview.sourceReference.y : dragPreview.targetReference.y} r={6} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2} />
+            <path d={dragPreview.path} fill="none" stroke="var(--conductor-accent)" strokeWidth={2 * inverseZoom} strokeDasharray={`${6 * inverseZoom} ${4 * inverseZoom}`} strokeLinecap="round" opacity={0.85} />
+            <circle cx={dragState?.kind === "endpoint" && dragState.endpoint === "source" ? dragPreview.sourceReference.x : dragPreview.targetReference.x} cy={dragState?.kind === "endpoint" && dragState.endpoint === "source" ? dragPreview.sourceReference.y : dragPreview.targetReference.y} r={6 * inverseZoom} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2 * inverseZoom} />
           </g>
         )}
 

@@ -15,6 +15,76 @@ export interface CapturedScreenshot {
   pixelRatio: number;
 }
 
+/**
+ * html2canvas currently cannot parse CSS Color 4's `color()` syntax, even
+ * though Chromium can render it. Chromium may expose theme tokens in that
+ * form through getComputedStyle(), so normalize numeric color-space channels
+ * to the broadly supported rgb()/rgba() syntax before html2canvas reads the
+ * clone.
+ *
+ * This intentionally leaves unknown color spaces alone. Replacing an unknown
+ * color with a guessed value is worse than retaining the browser's original
+ * declaration, and current DUYA themes emit numeric channels handled here.
+ */
+export function normalizeHtml2CanvasColor(value: string): string | null {
+  const match = value.trim().match(/^color\(\s*[a-z0-9-]+\s+(.+?)\s*\)$/i);
+  if (!match) return null;
+
+  const [rawChannels, rawAlpha] = match[1].split("/").map((part) => part.trim());
+  const channels = rawChannels.split(/\s+/).map(parseColorChannel);
+  const alpha = rawAlpha === undefined ? 1 : parseColorChannel(rawAlpha);
+  if (channels.length !== 3 || channels.some((channel) => channel === null) || alpha === null) {
+    return null;
+  }
+
+  const [red, green, blue] = channels as number[];
+  const opacity = alpha as number;
+  const rgb = [red, green, blue].map((channel) => Math.round(channel * 255));
+  return opacity >= 1
+    ? `rgb(${rgb.join(", ")})`
+    : `rgba(${rgb.join(", ")}, ${roundOpacity(opacity)})`;
+}
+
+/** Replace every supported CSS Color 4 function inside a CSS declaration. */
+export function normalizeHtml2CanvasColors(value: string): string {
+  return value.replace(/color\(\s*[a-z0-9-]+\s+[^()]+?\s*\)/gi, (color) =>
+    normalizeHtml2CanvasColor(color) ?? color,
+  );
+}
+
+function parseColorChannel(value: string): number | null {
+  const parsed = value.endsWith("%")
+    ? Number.parseFloat(value) / 100
+    : Number.parseFloat(value);
+  return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : null;
+}
+
+function roundOpacity(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * html2canvas renders a cloned document. Copy only computed declarations that
+ * contain `color()` to inline, normalized values in that clone; the live
+ * canvas and its theme variables are never mutated.
+ */
+export function normalizeHtml2CanvasClone(clonedDocument: Document): void {
+  const view = clonedDocument.defaultView;
+  if (!view) return;
+
+  for (const element of clonedDocument.querySelectorAll<HTMLElement>("*")) {
+    const computed = view.getComputedStyle(element);
+    for (const property of computed) {
+      const value = computed.getPropertyValue(property);
+      if (!value.includes("color(")) continue;
+      const normalized = normalizeHtml2CanvasColors(value);
+      if (normalized !== value) {
+        element.style.setProperty(property, normalized, "important");
+      }
+    }
+  }
+}
+
 export async function captureWidgetEl(
   el: HTMLElement,
 ): Promise<CapturedScreenshot> {
@@ -31,6 +101,7 @@ export async function captureWidgetEl(
     height: rect.height,
     windowWidth: rect.width,
     windowHeight: rect.height,
+    onclone: normalizeHtml2CanvasClone,
   });
 
   const pngBase64 = canvas.toDataURL("image/png").replace(
@@ -210,6 +281,7 @@ export async function captureCanvasView(
     // These elements are marked with `data-capture-ignore` in CanvasArea.
     ignoreElements: (el: Element) =>
       el instanceof HTMLElement && el.dataset.captureIgnore === "",
+    onclone: normalizeHtml2CanvasClone,
   });
 
   const dataUrl = canvas.toDataURL("image/png");
