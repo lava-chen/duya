@@ -24,6 +24,8 @@ import {
   SettingsCardFooter,
   SettingsSelectRow,
 } from "@/components/settings/ui";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import {
   listAgentProfiles,
   type AgentProfile,
@@ -263,13 +265,15 @@ export function AgentsSection() {
                     <span className="text-foreground font-medium">
                       {profile.name}
                     </span>
-                    <button
-                      type="button"
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Remove"
                       onClick={() => toggleSelection(profile.id)}
-                      className="ml-1 p-0.5 hover:bg-accent/20 rounded transition-colors"
+                      className="ml-1"
                     >
                       <XIcon size={12} className="text-muted-foreground" />
-                    </button>
+                    </IconButton>
                   </div>
                   );
                 })}
@@ -293,9 +297,9 @@ export function AgentsSection() {
                 const Icon = AGENT_ICON_MAP[profile.id] || FALLBACK_AGENT_ICON;
 
                 return (
-                  <button
+                  <Button
                     key={profile.id}
-                    type="button"
+                    variant="ghost"
                     onClick={() => toggleSelection(profile.id)}
                     className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-all duration-200 hover:scale-[1.01] ${
                       isSelected
@@ -337,7 +341,7 @@ export function AgentsSection() {
                         {t("settings.agents.maxReached")}
                       </span>
                     )}
-                  </button>
+                  </Button>
                 );
               })}
             </div>
@@ -354,18 +358,16 @@ export function AgentsSection() {
 
           {hasChanges && (
             <SettingsCardFooter>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
                 onClick={handleReset}
-                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
                 {t("common.cancel")}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleSave}
                 disabled={saving || selectedIds.length === 0}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? (
                   <SpinnerGapIcon size={14} className="animate-spin" />
@@ -373,7 +375,7 @@ export function AgentsSection() {
                   <CheckCircleIcon size={14} />
                 )}
                 {saving ? t("common.loading") : t("common.save")}
-              </button>
+              </Button>
             </SettingsCardFooter>
           )}
         </SettingsCard>
@@ -464,19 +466,17 @@ export function AgentsSection() {
                 <p className="text-sm text-red-400">{styleError}</p>
               )}
               <div className="flex items-center gap-2 pt-1">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   onClick={cancelStyleForm}
-                  className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
                   disabled={styleSaving}
                 >
                   {t("common.cancel")}
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="primary"
                   onClick={saveStyle}
                   disabled={styleSaving}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {styleSaving ? (
                     <SpinnerGapIcon size={14} className="animate-spin" />
@@ -484,7 +484,7 @@ export function AgentsSection() {
                     <CheckIcon size={14} />
                   )}
                   {styleSaving ? t("common.loading") : t("common.save")}
-                </button>
+                </Button>
               </div>
             </div>
           ) : (
@@ -520,23 +520,23 @@ export function AgentsSection() {
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => startEditStyle(style)}
-                          className="p-1.5 hover:bg-accent/20 rounded transition-colors"
+                        <IconButton
+                          variant="ghost"
+                          size="sm"
                           aria-label="Edit style"
+                          onClick={() => startEditStyle(style)}
                         >
                           <NotePencilIcon size={14} className="text-muted-foreground" />
-                        </button>
+                        </IconButton>
                         {!style.isBuiltin && (
-                          <button
-                            type="button"
-                            onClick={() => deleteStyle(style.id)}
-                            className="p-1.5 hover:bg-red-500/20 rounded transition-colors"
+                          <IconButton
+                            variant="danger"
+                            size="sm"
                             aria-label="Delete style"
+                            onClick={() => deleteStyle(style.id)}
                           >
                             <TrashIcon size={14} className="text-muted-foreground" />
-                          </button>
+                          </IconButton>
                         )}
                       </div>
                     </div>
@@ -544,14 +544,14 @@ export function AgentsSection() {
                 </div>
               )}
               <div className="border-t border-border/30 p-2">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   onClick={startCreateStyle}
-                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-accent/5 transition-colors"
+                  className="w-full"
                 >
                   <PlusIcon size={14} />
                   {t("outputStyles.create") || "Create output style"}
-                </button>
+                </Button>
               </div>
             </>
           )}

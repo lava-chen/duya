@@ -5,16 +5,16 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ArrowsOut,
-  Copy,
-  DownloadSimple,
-  LinkSimple,
-  PencilSimple,
-  TextAa,
-  TextB,
-  TextItalic,
-  X,
-} from "@phosphor-icons/react";
+  ArrowsOutIcon,
+  CopyIcon,
+  DownloadSimpleIcon,
+  LinkSimpleIcon,
+  PencilSimpleIcon,
+  TextAaIcon,
+  TextBIcon,
+  TextItalicIcon,
+  XIcon,
+} from "@/components/icons";
 import type { CanvasElement } from "../..//types/conductor";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { useElementEditSession } from "./editing/useElementEditSession";
@@ -127,9 +127,9 @@ function EditorSurface({
           <CapsuleToolbar positioned={false} zoomAware={false} onMouseDown={(event) => event.preventDefault()}>
             <button type="button" onClick={onRequestChange} style={{ ...CAPSULE_BTN_BASE, width: "auto", padding: "0 10px", gap: 6 }}>Request change <kbd>Ctrl K</kbd></button>
             <div style={CAPSULE_DIVIDER} />
-            <button type="button" aria-label="Add link" title="Add link" onClick={onCreateLink} style={CAPSULE_BTN_BASE}><LinkSimple size={16} weight="bold" /></button>
-            <button type="button" aria-label="Bold" title="Bold" onClick={onToggleBold} style={CAPSULE_BTN_BASE}><TextB size={17} weight="bold" /></button>
-            <button type="button" aria-label="Italic" title="Italic" onClick={onToggleItalic} style={CAPSULE_BTN_BASE}><TextItalic size={17} weight="bold" /></button>
+            <button type="button" aria-label="Add link" title="Add link" onClick={onCreateLink} style={CAPSULE_BTN_BASE}><LinkSimpleIcon size={16} /></button>
+            <button type="button" aria-label="Bold" title="Bold" onClick={onToggleBold} style={CAPSULE_BTN_BASE}><TextBIcon size={17} /></button>
+            <button type="button" aria-label="Italic" title="Italic" onClick={onToggleItalic} style={CAPSULE_BTN_BASE}><TextItalicIcon size={17} /></button>
             <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
               <button
                 type="button"
@@ -137,7 +137,7 @@ function EditorSurface({
                 aria-expanded={blockMenuOpen}
                 onClick={onToggleBlockMenu}
                 style={{ ...CAPSULE_BTN_BASE, width: "auto", padding: "0 8px", gap: 4 }}
-              ><TextAa size={16} weight="bold" /> Text <span aria-hidden="true">⌄</span></button>
+              ><TextAaIcon size={16} /> Text <span aria-hidden="true">⌄</span></button>
               {blockMenuOpen && (
                 <div className="canvas-document__block-menu" role="menu" aria-label="Text type options">
                   {BLOCK_OPTIONS.map((option) => (
@@ -378,11 +378,11 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
       <div className="canvas-document-focus__scrim" onMouseDown={save} />
       <section className="canvas-document-focus__panel">
         <header className="canvas-document-focus__header">
-          <div><PencilSimple size={18} weight="bold" /><strong>{title}</strong></div>
+          <div><PencilSimpleIcon size={18} /><strong>{title}</strong></div>
           <div className="canvas-document__header-actions">
-            <button type="button" onClick={() => void copyDocument()} aria-label="Copy Markdown" title="Copy Markdown"><Copy size={18} /></button>
-            <button type="button" onClick={downloadDocument} aria-label="Download Markdown" title="Download Markdown"><DownloadSimple size={18} /></button>
-            <button type="button" onClick={save} aria-label="Close focused editor" title="Save and close"><X size={18} /></button>
+            <button type="button" onClick={() => void copyDocument()} aria-label="Copy Markdown" title="Copy Markdown"><CopyIcon size={18} /></button>
+            <button type="button" onClick={downloadDocument} aria-label="Download Markdown" title="Download Markdown"><DownloadSimpleIcon size={18} /></button>
+            <button type="button" onClick={save} aria-label="Close focused editor" title="Save and close"><XIcon size={18} /></button>
           </div>
         </header>
         <EditorSurface {...surfaceProps} editorRef={focusEditorRef} focused />
@@ -395,13 +395,13 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
     <article ref={articleRef} className="canvas-document" onMouseDown={(event) => { if (isEditing) event.stopPropagation(); }}>
       <header className="canvas-document__header">
         <button type="button" className="canvas-document__title" onClick={() => setEditingElementId(element.id)} title="Edit Markdown document">
-          <PencilSimple size={14} weight="bold" />
+          <PencilSimpleIcon size={14} />
           <strong>{title}</strong>
         </button>
         <div className="canvas-document__header-actions">
-          <button type="button" onClick={() => void copyDocument()} aria-label="Copy Markdown" title="Copy Markdown"><Copy size={16} /></button>
-          <button type="button" onClick={downloadDocument} aria-label="Download Markdown" title="Download Markdown"><DownloadSimple size={16} /></button>
-          <button type="button" onClick={openFocus} aria-label="Focus Markdown editor" title="Focus Markdown editor"><ArrowsOut size={16} /></button>
+          <button type="button" onClick={() => void copyDocument()} aria-label="Copy Markdown" title="Copy Markdown"><CopyIcon size={16} /></button>
+          <button type="button" onClick={downloadDocument} aria-label="Download Markdown" title="Download Markdown"><DownloadSimpleIcon size={16} /></button>
+          <button type="button" onClick={openFocus} aria-label="Focus Markdown editor" title="Focus Markdown editor"><ArrowsOutIcon size={16} /></button>
         </div>
       </header>
       {isEditing ? <EditorSurface {...surfaceProps} /> : (

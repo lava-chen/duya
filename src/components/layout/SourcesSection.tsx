@@ -18,6 +18,8 @@ import {
 } from '@/components/icons';
 import { DrawerSection } from './DrawerSection';
 import type { FileAttachment } from '@/types/message';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 
 const MAX_VISIBLE = 4;
 
@@ -83,8 +85,11 @@ export function SourcesSection({
     <DrawerSection
       label="来源"
       rightAction={
-        <button
+        <IconButton
           type="button"
+          variant="default"
+          shape="square"
+          size="sm"
           className="p-1 rounded text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
           title="Add source"
           aria-label="Add source"
@@ -93,16 +98,18 @@ export function SourcesSection({
           }}
         >
           <PlusIcon size={14} />
-        </button>
+        </IconButton>
       }
     >
       <div className="grid grid-cols-1 gap-2 mt-1">
         {visible.map((att) => {
           const label = labelForAttachment(att);
           return (
-            <button
+            <Button
               key={att.id}
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 if (att.kind === 'browser-ref') {
                   const meta = att.metadata as { url?: string } | undefined;
@@ -122,18 +129,20 @@ export function SourcesSection({
               <span className="min-w-0 flex-1 truncate text-xs text-foreground">
                 {label}
               </span>
-            </button>
+            </Button>
           );
         })}
       </div>
       {overflow > 0 && (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={() => setExpanded(true)}
           className="mt-2 flex w-full items-center justify-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
         >
           查看全部 ({allSources.length})
-        </button>
+        </Button>
       )}
     </DrawerSection>
   );

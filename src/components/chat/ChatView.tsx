@@ -11,7 +11,7 @@ import { MessageInput } from './MessageInput';
 import { PermissionPrompt } from './PermissionPrompt';
 import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged } from '@/lib/stream-session-manager';
-import { Info, CaretDown } from '@phosphor-icons/react';
+import { InfoIcon, CaretDownIcon } from '@/components/icons';
 import type { PermissionMode } from './PermissionModeSelector';
 import { ChatHeader } from './ChatHeader';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
@@ -34,6 +34,8 @@ import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
 import { FloatingTaskPanel } from '@/components/layout/FloatingTaskPanel';
@@ -105,7 +107,7 @@ function ContextCompressionToast({ message }: { message: string }) {
   return (
     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
       <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/90 text-white text-sm rounded-lg shadow-lg backdrop-blur-sm">
-        <Info size={16} weight="fill" />
+        <InfoIcon size={16} />
         <span>{message}</span>
       </div>
     </div>
@@ -1018,15 +1020,17 @@ export function ChatView({
         if (parentSessionId) {
           const parentThread = threads.find(t => t.id === parentSessionId);
           return (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               className="sub-agent-back-btn"
               onClick={() => goToParentSession()}
               title={`Back to ${parentThread?.title || 'parent'}`}
             >
               <ArrowLeftIcon size={14} />
               <span>Back to {parentThread?.title || 'parent session'}</span>
-            </button>
+            </Button>
           );
         }
         return null;
@@ -1069,13 +1073,15 @@ export function ChatView({
             <p className="text-white/90 text-xs leading-relaxed">
               {bannerMessage}
             </p>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={handleRetry}
               className="self-start px-3 py-1 mt-1 bg-white/20 hover:bg-white/30 text-white text-xs font-medium rounded transition-colors cursor-pointer"
             >
               {t('error.tryAgain')}
-            </button>
+            </Button>
           </div>
         </div>
         );
@@ -1182,16 +1188,20 @@ export function ChatView({
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
               <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-44px' }}>
-                <button
+                <IconButton
+                  variant="default"
+                  size="md"
+                  shape="round"
                   onClick={handleScrollToBottom}
                   className="flex items-center justify-center w-8 h-8 rounded-full bg-[var(--main-bg)] border border-[var(--border)] shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105"
                   style={{
                     boxShadow: '0 2px 8px rgba(0,0,0,0.12), 0 0 0 1px var(--border)',
                   }}
                   title="Scroll to bottom"
+                  aria-label="Scroll to bottom"
                 >
-                  <CaretDown size={18} style={{ color: 'var(--muted)' }} />
-                </button>
+                  <CaretDownIcon size={18} style={{ color: 'var(--muted)' }} />
+                </IconButton>
               </div>
             )}
 

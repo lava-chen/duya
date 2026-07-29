@@ -64,6 +64,8 @@ import {
   CheckIcon,
   InfoIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import { PresetIcon } from '@/components/settings/PresetIcon';
 import {
@@ -551,30 +553,32 @@ export function ProviderEditView() {
       {/* ── HEADER (back + page title) ─────────── */}
       <div className="flex items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-3 min-w-0">
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={handleBack}
             data-testid="provider-edit-back"
-            className="shrink-0 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="shrink-0"
           >
             <ArrowLeftIcon size={16} />
             <span className="hidden sm:inline">{t('common.back')}</span>
-          </button>
+          </Button>
           <h1 className="text-lg font-semibold truncate">
             {isEdit ? t('provider.edit') : t('provider.connect')}{' '}
             {preset.name}
           </h1>
         </div>
         {isEdit && (
-          <button
-            type="button"
+          <Button
+            variant="danger"
+            size="sm"
             onClick={handleDelete}
             data-testid="provider-edit-delete"
-            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 text-sm transition-colors"
+            className="shrink-0"
           >
             <TrashIcon size={14} />
             <span className="hidden sm:inline">{t('provider.delete')}</span>
-          </button>
+          </Button>
         )}
       </div>
 
@@ -698,10 +702,10 @@ export function ProviderEditView() {
                 sit in the row's right-hand area. */}
             {preset.fields.includes('api_key') && (
               <div className="px-4 py-2 flex justify-end border-t border-border/30">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setApiKeyRevealed((v) => !v)}
-                  className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
                 >
                   {apiKeyRevealed ? (
                     <EyeSlashIcon size={12} />
@@ -709,7 +713,7 @@ export function ProviderEditView() {
                     <EyeIcon size={12} />
                   )}
                   {apiKeyRevealed ? t('provider.hideKey') : t('provider.showKey')}
-                </button>
+                </Button>
               </div>
             )}
 
@@ -737,21 +741,21 @@ export function ProviderEditView() {
           action={
             <div className="flex items-center gap-1.5">
               {models.enabled.length > 0 && (
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={handleClearAll}
-                  className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 px-2 py-1 rounded"
                 >
                   <XIcon size={12} />
                   {t('provider.clearAll')}
-                </button>
+                </Button>
               )}
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => models.fetch()}
                 disabled={models.isFetching}
                 data-testid="provider-edit-fetch-models"
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-border/40 bg-surface/60 text-xs hover:text-foreground hover:border-accent/50 disabled:opacity-50"
               >
                 {models.isFetching ? (
                   <SpinnerGapIcon size={12} className="animate-spin" />
@@ -759,7 +763,7 @@ export function ProviderEditView() {
                   <ArrowUpRightIcon size={12} />
                 )}
                 {t('provider.modelInput.fetch')}
-              </button>
+              </Button>
             </div>
           }
         >
@@ -784,11 +788,12 @@ export function ProviderEditView() {
                 <p className="text-sm text-muted-foreground">
                   {t('provider.modelInput.noEnabledHint')}
                 </p>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => models.fetch()}
                   disabled={models.isFetching}
-                  className="text-xs text-accent hover:underline inline-flex items-center gap-1 disabled:opacity-50"
+                  className="hover:underline"
                 >
                   {models.isFetching ? (
                     <SpinnerGapIcon size={12} className="animate-spin" />
@@ -796,7 +801,7 @@ export function ProviderEditView() {
                     <ArrowUpRightIcon size={12} />
                   )}
                   {t('provider.modelInput.fetch')}
-                </button>
+                </Button>
               </div>
             ) : (
               <ul
@@ -852,15 +857,16 @@ export function ProviderEditView() {
                           );
                         })}
                       </div>
-                      <button
-                        type="button"
+                      <IconButton
+                        variant="danger"
+                        size="sm"
+                        aria-label={t('provider.remove')}
                         onClick={() => handleRemoveModel(modelId)}
                         data-testid={`provider-edit-remove-${modelId}`}
-                        className="shrink-0 p-1 rounded text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10"
-                        aria-label={t('provider.remove')}
+                        className="shrink-0"
                       >
                         <XIcon size={12} />
-                      </button>
+                      </IconButton>
                     </li>
                   );
                 })}
@@ -901,11 +907,12 @@ export function ProviderEditView() {
                   options={modelSelectOptions}
                 />
               ) : (
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => models.fetch()}
                   disabled={models.isFetching}
-                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md border border-dashed border-border/40 text-xs text-muted-foreground hover:text-foreground hover:border-accent/50 disabled:opacity-50"
+                  className="w-full border-dashed"
                 >
                   {models.isFetching ? (
                     <SpinnerGapIcon size={12} className="animate-spin" />
@@ -913,7 +920,7 @@ export function ProviderEditView() {
                     <PlusIcon size={12} />
                   )}
                   {t('provider.fetchFirstHint')}
-                </button>
+                </Button>
               )}
 
               {/* Custom model id — direct inline input */}
@@ -925,15 +932,15 @@ export function ProviderEditView() {
                   data-testid="provider-edit-add-custom"
                   className="flex-1 px-3 py-1.5 rounded-md text-sm bg-surface/40 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/50 font-mono"
                 />
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={handleAddCustomSubmit}
                   data-testid="provider-edit-add-custom-submit"
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 disabled:opacity-50"
                 >
                   <PlusIcon size={12} />
                   {t('provider.add')}
-                </button>
+                </Button>
               </div>
             </div>
           </SettingsCard>
@@ -981,15 +988,16 @@ export function ProviderEditView() {
           className="sticky bottom-0 -mx-4 px-4 py-3 border-t border-border/30 bg-[var(--bg-canvas)]/85 backdrop-blur-sm flex items-center justify-end gap-2"
           style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
         >
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={handleBack}
-            className="px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted/40"
           >
             {t('provider.cancel')}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={handleTestConnection}
             disabled={
               testing ||
@@ -1005,7 +1013,6 @@ export function ProviderEditView() {
                 preset.fields.includes('api_key'))
             }
             data-testid="provider-edit-test-connection"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-border/40 bg-surface/60 text-foreground hover:bg-muted/40 disabled:opacity-50"
           >
             {testing ? (
               <SpinnerGapIcon size={12} className="animate-spin" />
@@ -1015,16 +1022,17 @@ export function ProviderEditView() {
             {testing
               ? t('settings.providers.testing')
               : t('bridge.testConnection')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="submit"
+            variant="primary"
+            size="sm"
             disabled={saving}
             data-testid="provider-edit-save"
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-accent text-white text-sm font-medium hover:bg-accent/90 disabled:opacity-50"
           >
             {saving && <SpinnerGapIcon size={12} className="animate-spin" />}
             {isEdit ? t('provider.update') : t('provider.connect')}
-          </button>
+          </Button>
         </div>
       </form>
     </div>
@@ -1042,14 +1050,14 @@ function BackFallback({
 }) {
   return (
     <div className="space-y-4">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onBack}
-        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeftIcon size={16} />
         {t('common.back')}
-      </button>
+      </Button>
       <p className="text-sm text-muted-foreground">
         {loading ? t('provider.loading') : t('provider.noProviders')}
       </p>

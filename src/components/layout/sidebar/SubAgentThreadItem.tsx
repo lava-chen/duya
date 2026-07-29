@@ -68,15 +68,15 @@ export function SubAgentThreadItem({ thread, isActive }: SubAgentThreadItemProps
       <div className="sub-agent-thread-meta">
         {isRunning ? (
           <span className="sub-agent-thread-indicator" title="Agent is running...">
-            <CircleNotchIcon size={14} weight="bold" className="animate-spin" />
+            <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
           </span>
         ) : runningAgents.length > 0 ? (
           <span className="sub-agent-thread-indicator" title="Sub-agent running...">
-            <CircleNotchIcon size={14} weight="bold" className="animate-spin" />
+            <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
           </span>
         ) : completedAgents.length > 0 && subAgents.every(a => a.status === 'completed' || a.status === 'error') ? (
           <span className="sub-agent-thread-indicator completed" title="Completed">
-            <CheckIcon size={14} weight="bold" />
+            <CheckIcon size={14} stroke={2.5} />
           </span>
         ) : null}
       </div>

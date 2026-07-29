@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ArrowRightIcon, ArrowLeftIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import type { ImportItem, ScanResult, SessionImportItem } from "@/types/import";
 
 interface PreviewStepProps {
@@ -88,12 +89,13 @@ export function PreviewStep({ scanResult, selectedItems, selectedSessions, onCon
 
       {advancedItems.length > 0 && (
         <div>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="text-sm text-[var(--accent)] hover:underline"
           >
-            {showAdvanced ? t("importFlow.hideAdvanced", { count: advancedItems.length }) : t("importFlow.showAdvanced", { count: advancedItems.length })} 
-          </button>
+            {showAdvanced ? t("importFlow.hideAdvanced", { count: advancedItems.length }) : t("importFlow.showAdvanced", { count: advancedItems.length })}
+          </Button>
           {showAdvanced && (
             <div className="space-y-3 mt-3 max-h-[30vh] overflow-y-auto pr-1">
               {advancedItems.map((item) => (
@@ -110,20 +112,19 @@ export function PreviewStep({ scanResult, selectedItems, selectedSessions, onCon
       )}
 
       <div className="flex justify-between pt-2">
-        <button
-          onClick={onBack}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <Button variant="ghost" size="md" onClick={onBack}>
           <ArrowLeftIcon size={16} />
           {t("importFlow.back")}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
           onClick={() => onConfirm(selectedItems, selectedSessions)}
-          className="inline-flex items-center gap-2 px-6 py-2 bg-[var(--accent)] text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity"
+          className="rounded-xl"
         >
           {t("importFlow.confirmSelection")}
           <ArrowRightIcon size={16} />
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -169,12 +170,14 @@ function ItemCard({
               {item.contentPreview}
             </pre>
           )}
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-[var(--accent)] hover:underline mt-1"
+            className="mt-1"
           >
             {expanded ? t("importFlow.hide") : t("importFlow.viewFullContent")}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

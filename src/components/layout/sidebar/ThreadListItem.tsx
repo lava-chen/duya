@@ -8,6 +8,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import type { StreamPhase } from "@/types/message";
 import { useSubAgentProgress, type SubAgentRowInfo } from "@/hooks/useSubAgentProgress";
 import type { TranslationKey } from "@/i18n";
+import { Button } from "@/components/ui/Button";
 
 type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
@@ -228,6 +229,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
               setUserToggled(true);
               toggleThreadExpanded(thread.id);
             }}
+            aria-label={isExpanded ? t('common.collapse') : t('project.expandAll')}
           >
             {isExpanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
           </button>
@@ -264,7 +266,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
           <SubAgentBadges agents={subAgents} isRunning={isRunning} />
         ) : isRunning ? (
           <span className="thread-item-running-indicator" title={t('thread.running')}>
-            <CircleNotchIcon size={14} weight="bold" className="animate-spin" />
+            <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
           </span>
         ) : isHovered || showMenu ? (
           <button
@@ -274,7 +276,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
             onClick={handleMenuClick}
             aria-label={t('thread.options')}
           >
-            <DotsThreeIcon size={16} weight="bold" />
+            <DotsThreeIcon size={16} stroke={2.5} />
           </button>
         ) : (
           <span className="thread-item-time">
@@ -302,31 +304,37 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
           className="thread-dropdown-menu"
           style={{ top: menuPos.y, left: menuPos.x }}
         >
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             className="thread-dropdown-item"
             onClick={handleRename}
           >
             <NotePencilIcon size={14} />
             <span>{t("thread.renameThread")}</span>
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             className="thread-dropdown-item"
             onClick={handleCopyId}
           >
             <CopyIcon size={14} />
             <span>{t("thread.copyThreadId")}</span>
-          </button>
+          </Button>
           <div className="thread-dropdown-divider" />
-          <button
+          <Button
             type="button"
+            variant="danger"
+            size="sm"
             className="thread-dropdown-item danger"
             onClick={handleDelete}
           >
             <ArchiveIcon size={14} />
             <span>{t("thread.deleteThread")}</span>
-          </button>
+          </Button>
         </div>
       )}
     </>
@@ -365,9 +373,9 @@ function SubAgentBadges({ agents, isRunning }: SubAgentBadgesProps) {
         {displayAgent.name}
       </span>
       {isRunning || runningAgents.length > 0 ? (
-        <CircleNotchIcon size={12} weight="bold" className="animate-spin text-muted-foreground" />
+        <CircleNotchIcon size={12} stroke={2.5} className="animate-spin text-muted-foreground" />
       ) : hasCompleted ? (
-        <CheckIcon size={12} weight="bold" className="text-green-500" />
+        <CheckIcon size={12} stroke={2.5} className="text-green-500" />
       ) : null}
     </div>
   );

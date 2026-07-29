@@ -2,14 +2,14 @@
 
 import { useState, useCallback, useDeferredValue, useEffect, useRef, useMemo } from "react";
 import {
-  ArrowsClockwise,
-  MagnifyingGlass,
-  PencilSimple,
-  Trash,
-  Copy,
-  Path,
-  Plus,
-} from "@phosphor-icons/react";
+  ArrowsClockwiseIcon,
+  MagnifyingGlassIcon,
+  PencilSimpleIcon,
+  TrashIcon,
+  CopyIcon,
+  PathIcon,
+  PlusIcon,
+} from "@/components/icons";
 import {
   FileTree,
   RenderTreeNodes,
@@ -19,6 +19,8 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { PageId, PageTab } from "./registry";
 import { useOptionalPanel } from "@/hooks/usePanel";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 
 function resolveTreePath(workingDirectory: string | null | undefined, treePath: string): string {
   if (!workingDirectory || /^(?:[A-Za-z]:[\\/]|[/\\]{2}|\/)/.test(treePath)) return treePath;
@@ -134,7 +136,7 @@ function ContextMenu({
   const menuItems = [
     {
       label: "Add to input",
-      icon: <Plus size={14} />,
+      icon: <PlusIcon size={14} />,
       action: () => {
         onAddToInput(state.path);
         onClose();
@@ -142,7 +144,7 @@ function ContextMenu({
     },
     {
       label: "Copy absolute path",
-      icon: <Copy size={14} />,
+      icon: <CopyIcon size={14} />,
       action: () => {
         onCopyAbsolutePath(state.path);
         onClose();
@@ -150,7 +152,7 @@ function ContextMenu({
     },
     {
       label: "Copy relative path",
-      icon: <Path size={14} />,
+      icon: <PathIcon size={14} />,
       action: () => {
         onCopyRelativePath(state.path);
         onClose();
@@ -161,7 +163,7 @@ function ContextMenu({
     },
     {
       label: "Rename",
-      icon: <PencilSimple size={14} />,
+      icon: <PencilSimpleIcon size={14} />,
       action: () => {
         onRename(state.path);
         onClose();
@@ -172,7 +174,7 @@ function ContextMenu({
     },
     {
       label: "Delete",
-      icon: <Trash size={14} />,
+      icon: <TrashIcon size={14} />,
       action: () => {
         onDelete(state.path);
         onClose();
@@ -196,14 +198,17 @@ function ContextMenu({
         item.type === "divider" ? (
           <div key={index} className="file-tree-context-menu-divider" />
         ) : (
-          <button
+          <Button
             key={index}
+            type="button"
+            variant={item.danger ? "danger" : "ghost"}
+            size="sm"
             className={`file-tree-context-menu-item${item.danger ? " danger" : ""}`}
             onClick={item.action}
           >
             <span className="file-tree-context-menu-icon">{item.icon}</span>
             <span className="file-tree-context-menu-label">{item.label}</span>
-          </button>
+          </Button>
         )
       )}
     </div>
@@ -414,7 +419,7 @@ export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: Page
       {!embedded && (
         <div className="file-tree-search-row">
           <div className="file-tree-search">
-            <MagnifyingGlass size={12} className="file-tree-search-icon" />
+            <MagnifyingGlassIcon size={12} className="file-tree-search-icon" />
             <input
               type="text"
               placeholder={t("fileTree.filterFiles")}
@@ -423,21 +428,24 @@ export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: Page
               className="file-tree-search-input"
             />
           </div>
-          <button
+          <IconButton
             type="button"
+            variant="default"
+            shape="square"
+            size="sm"
             className="file-tree-refresh-btn"
             onClick={fetchTree}
             aria-label={t("fileTree.refresh")}
             disabled={loading}
           >
-            <ArrowsClockwise size={12} className={loading ? "animate-spin" : ""} />
-          </button>
+            <ArrowsClockwiseIcon size={12} className={loading ? "animate-spin" : ""} />
+          </IconButton>
         </div>
       )}
       <div className="file-tree-panel-body">
         {loading && tree.length === 0 ? (
           <div className="file-tree-loading">
-            <ArrowsClockwise
+            <ArrowsClockwiseIcon
               size={16}
               className="animate-spin text-muted-foreground"
             />

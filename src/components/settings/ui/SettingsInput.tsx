@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { EyeIcon, EyeSlashIcon } from "@/components/icons";
+import { IconButton } from "@/components/ui/IconButton";
 
 export interface SettingsInputProps {
   label?: string;
@@ -69,14 +70,16 @@ export function SettingsInput({
             )}
           />
           {isPassword && (
-            <button
-              type="button"
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label={showPassword ? "Hide password" : "Show password"}
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2"
               tabIndex={-1}
             >
               {showPassword ? <EyeSlashIcon size={16} /> : <EyeIcon size={16} />}
-            </button>
+            </IconButton>
           )}
         </div>
         {action}

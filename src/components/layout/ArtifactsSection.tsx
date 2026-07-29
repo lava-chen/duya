@@ -11,6 +11,7 @@ import { ExternalLinkIcon, FileTextIcon } from '@/components/icons';
 import { DrawerSection } from './DrawerSection';
 import { openLocalArtifactTarget } from '@/lib/chat-file-links';
 import type { ArtifactSummary } from '@/lib/tool-file-changes';
+import { Button } from '@/components/ui/Button';
 
 export interface ArtifactsSectionProps {
   artifacts: ArtifactSummary[];
@@ -41,8 +42,10 @@ function ArtifactCard({
   cwd?: string | null;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
       className="group flex w-full items-center gap-3 rounded-md border border-border/60 px-3 py-2 text-left transition-colors hover:border-accent/40 hover:bg-surface-hover"
       onClick={() => openLocalArtifactTarget(artifact.path, cwd)}
       title={artifact.path}
@@ -62,6 +65,6 @@ function ArtifactCard({
         size={12}
         className="shrink-0 text-muted-foreground/50 transition-colors group-hover:text-accent"
       />
-    </button>
+    </Button>
   );
 }

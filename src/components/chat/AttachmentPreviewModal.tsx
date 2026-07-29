@@ -6,6 +6,8 @@
 import React, { useEffect, useMemo } from 'react';
 import { XIcon, FileTextIcon, DownloadSimpleIcon as DownloadIcon } from '@/components/icons';
 import type { FileAttachment } from '@/types/message';
+import { IconButton } from '@/components/ui/IconButton';
+import { Button } from '@/components/ui/Button';
 
 export type PreviewType = 'image' | 'pdf' | 'code' | 'doc' | 'text' | 'unknown';
 
@@ -71,15 +73,17 @@ function PdfPreview({ attachment }: { attachment: FileAttachment }) {
   return (
     <div className="attachment-preview-pdf-wrapper">
       <div className="attachment-preview-pdf-header">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={handleOpenInBrowser}
           className="attachment-preview-pdf-open-btn"
           title="Open in browser"
         >
           <DownloadIcon size={14} />
           <span>Open</span>
-        </button>
+        </Button>
       </div>
       <div className="attachment-preview-pdf-content">
         {attachment.thumbnail ? (
@@ -117,10 +121,10 @@ function DocPreview({ attachment, onClose }: { attachment: FileAttachment; onClo
       </div>
       <div className="attachment-preview-doc-content">
         {canOpenInOffice && (
-          <button type="button" className="attachment-preview-pdf-open-btn" onClick={openInOffice}>
+          <Button type="button" variant="ghost" size="sm" className="attachment-preview-pdf-open-btn" onClick={openInOffice}>
             <DownloadIcon size={14} />
             <span>Open in DUYA Office</span>
-          </button>
+          </Button>
         )}
         {attachment.text ? (
           <pre className="attachment-preview-doc-text">{attachment.text}</pre>
@@ -206,13 +210,16 @@ export function AttachmentPreviewModal({ attachment, pastedContent, onClose }: A
       aria-label={`Preview: ${title}`}
     >
       {/* Close button */}
-      <button
+      <IconButton
+        variant="ghost"
+        size="md"
+        shape="square"
+        aria-label="Close preview"
         onClick={onClose}
         className="attachment-preview-close"
-        aria-label="Close preview"
       >
         <XIcon size={20} />
-      </button>
+      </IconButton>
 
       {/* Modal container */}
       <div

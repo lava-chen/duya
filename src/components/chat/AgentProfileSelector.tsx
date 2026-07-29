@@ -4,7 +4,8 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronDown, Bot } from 'lucide-react';
+import { ChevronDownIcon, RobotIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import {
   listAgentProfiles,
   setSessionAgentProfile,
@@ -85,7 +86,9 @@ export function AgentProfileSelector({
 
   return (
     <div className="relative" ref={dropdownRef}>
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={() => setIsOpen(!isOpen)}
         disabled={isLoading || !sessionId}
         className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium
@@ -93,12 +96,12 @@ export function AgentProfileSelector({
           hover:bg-[var(--bg-hover)] transition-colors disabled:opacity-50"
         title={currentProfile?.description || 'Select agent profile'}
       >
-        <Bot className="w-3.5 h-3.5" />
+        <RobotIcon size={14} />
         <span className="max-w-[120px] truncate">
           {currentProfile?.name || 'Default Agent'}
         </span>
-        <ChevronDown className="w-3 h-3" />
-      </button>
+        <ChevronDownIcon size={12} />
+      </Button>
 
       {isOpen && (
         <div
@@ -107,22 +110,26 @@ export function AgentProfileSelector({
         >
           <div className="p-1.5">
             {/* Default option */}
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => handleSelect(null)}
               className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs
                 ${!currentProfileId ? 'bg-[var(--accent)]/10 text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
             >
-              <Bot className="w-3.5 h-3.5" />
+              <RobotIcon size={14} />
               <span className="flex-1 text-left">Default Agent</span>
               {!currentProfileId && <span className="text-[10px]">Active</span>}
-            </button>
+            </Button>
 
             <div className="my-1 border-t border-[var(--border-color)]" />
 
             {/* Profile list */}
             {enabledProfiles.map((profile) => (
-              <button
+              <Button
                 key={profile.id}
+                variant="ghost"
+                size="sm"
                 onClick={() => handleSelect(profile.id)}
                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs
                   ${currentProfileId === profile.id ? 'bg-[var(--accent)]/10 text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}
@@ -133,7 +140,7 @@ export function AgentProfileSelector({
                 {currentProfileId === profile.id && (
                   <span className="text-[10px]">Active</span>
                 )}
-              </button>
+              </Button>
             ))}
 
             {enabledProfiles.length === 0 && (

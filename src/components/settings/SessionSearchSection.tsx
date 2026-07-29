@@ -6,6 +6,7 @@ import { useState, useCallback } from "react";
 import { useSettings } from "@/hooks/useSettings";
 import { useTranslation } from "@/hooks/useTranslation";
 import { SpinnerGapIcon, KeyIcon, GlobeIcon, CpuIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 
 export function SessionSearchSection() {
   const { t } = useTranslation();
@@ -203,16 +204,16 @@ export function SessionSearchSection() {
 
           {/* Save Button */}
           <div className="flex justify-end gap-2 mt-4">
-            <button
+            <Button
+              variant="secondary"
               onClick={handleTestConnection}
-              className="btn btn-secondary"
               disabled={!apiKey || isSaving}
             >
               Test Connection
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="primary"
               onClick={handleSave}
-              className="btn btn-primary"
               disabled={isSaving}
             >
               {isSaving ? (
@@ -223,7 +224,7 @@ export function SessionSearchSection() {
               ) : (
                 'Save Configuration'
               )}
-            </button>
+            </Button>
           </div>
         </>
       )}

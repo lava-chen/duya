@@ -1,8 +1,8 @@
 import {
-  Code,
-  FileArchiveIcon,
+  CodeIcon,
+  FileZipIcon,
   FileCIcon,
-  FileCode,
+  FileCodeIcon,
   FileCppIcon,
   FileCssIcon,
   FileDocIcon,
@@ -22,7 +22,7 @@ import {
   FileTextIcon,
   FileTsIcon,
   FileVueIcon,
-} from '@phosphor-icons/react';
+} from '@/components/icons';
 
 /** Returns the same extension-specific icon used by the project file tree. */
 export function getFileTypeIcon(extension?: string) {
@@ -85,7 +85,7 @@ export function getFileTypeIcon(extension?: string) {
     case 'yaml':
     case 'yml':
     case 'toml':
-      return Code;
+      return CodeIcon;
     case 'ini':
     case 'cfg':
     case 'conf':
@@ -96,7 +96,7 @@ export function getFileTypeIcon(extension?: string) {
     case 'tar':
     case 'gz':
     case 'bz2':
-      return FileArchiveIcon;
+      return FileZipIcon;
     case 'txt':
     case 'log':
       return FileTextIcon;
@@ -115,7 +115,7 @@ export function getFileTypeIcon(extension?: string) {
     case 'bash':
     case 'zsh':
     case 'fish':
-      return FileCode;
+      return FileCodeIcon;
     default:
       return undefined;
   }

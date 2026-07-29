@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { CaretLeftIcon, CaretRightIcon, ArrowRightIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 
 interface FeatureCarouselProps {
   onComplete: () => void;
@@ -76,13 +78,14 @@ export function FeatureCarousel({ onComplete }: FeatureCarouselProps) {
       {/* Navigation */}
       <div className="flex items-center justify-between pt-6">
         {/* Left arrow */}
-        <button
-          onClick={handlePrev}
-          className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-[var(--chip)] transition-colors"
+        <IconButton
+          variant="default"
+          size="md"
           aria-label="Previous"
+          onClick={handlePrev}
         >
           <CaretLeftIcon size={24} />
-        </button>
+        </IconButton>
 
         {/* Feature indicators */}
         <div className="flex items-center gap-2">
@@ -102,21 +105,19 @@ export function FeatureCarousel({ onComplete }: FeatureCarouselProps) {
 
         {/* Right arrow or Next button */}
         {currentIndex < FEATURES.length - 1 ? (
-          <button
-            onClick={handleNext}
-            className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-[var(--chip)] transition-colors"
+          <IconButton
+            variant="default"
+            size="md"
             aria-label="Next"
+            onClick={handleNext}
           >
             <CaretRightIcon size={24} />
-          </button>
+          </IconButton>
         ) : (
-          <button
-            onClick={handleNext}
-            className="flex items-center gap-1 px-4 py-2 bg-[var(--accent)] text-white rounded-lg text-sm font-medium hover:opacity-90 transition-all"
-          >
+          <Button variant="primary" size="md" onClick={handleNext}>
             {t("onboarding.next")}
             <ArrowRightIcon size={16} />
-          </button>
+          </Button>
         )}
       </div>
     </div>

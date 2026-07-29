@@ -10,6 +10,7 @@ import {
   SettingsSection,
   SettingsCard,
 } from "@/components/settings/ui";
+import { Button } from "@/components/ui/Button";
 
 function tKey(key: string): import('@/i18n').TranslationKey {
   return key as import('@/i18n').TranslationKey;
@@ -313,7 +314,7 @@ export function ModelSelectionSection() {
       {/* Header */}
       <div className="settings-header mb-6">
         <h2 className="settings-title-copernicus text-xl flex items-center gap-2">
-          <CpuIcon size={20} weight="duotone" />
+          <CpuIcon size={20} />
           {t(tKey('settings.modelSelection')) || 'Model Selection'}
         </h2>
         <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
@@ -382,20 +383,17 @@ export function ModelSelectionSection() {
 
           {/* Save Button */}
           <div className="flex items-center justify-end mt-6 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={handleSave}
               disabled={!hasChanges || saving}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium text-white transition-all duration-200 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                backgroundColor: 'var(--accent)',
-              }}
             >
               {saving ? (
                 <span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
               ) : null}
               {saving ? (t(tKey('settings.saving')) || 'Saving...') : (t(tKey('settings.save')) || 'Save')}
-            </button>
+            </Button>
           </div>
         </SettingsCard>
       </SettingsSection>

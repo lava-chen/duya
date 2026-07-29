@@ -1,20 +1,22 @@
 "use client";
 
 import {
-  ArrowSquareOut,
-  Camera,
-  CaretDown,
-  Copy,
-  FileText,
-  Files,
-  FolderOpen,
-  Sparkle,
-  WarningCircle,
-} from "@phosphor-icons/react";
+  ArrowSquareOutIcon,
+  CameraIcon,
+  CaretDownIcon,
+  CopyIcon,
+  FileTextIcon,
+  FilesIcon,
+  FolderOpenIcon,
+  SparkleIcon,
+  WarningCircleIcon,
+} from "@/components/icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vs, vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useTheme } from "@/hooks/useTheme";
@@ -596,7 +598,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     return (
       <PanelFileTreeSplit workingDirectory={workingDirectory}>
       <div className="file-preview-empty">
-        <FolderOpen size={32} weight="duotone" />
+        <FolderOpenIcon size={32} />
         <strong>{t('filePreview.openFile')}</strong>
         <span>{t('filePreview.selectFileHint')}</span>
       </div>
@@ -630,8 +632,11 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         </div>
         <div className="file-preview-actions">
           {panel && workingDirectory && (
-            <button
+            <IconButton
             type="button"
+            variant="default"
+            shape="square"
+            size="md"
             className={workspaceTreeOpen ? "active" : undefined}
             onClick={() => panel.setWorkspaceTreeOpen(!workspaceTreeOpen)}
             title={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
@@ -639,19 +644,22 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
             aria-pressed={workspaceTreeOpen}
             data-testid="file-tree-toggle"
           >
-              <Files size={16} />
-            </button>
+              <FilesIcon size={16} />
+            </IconButton>
           )}
-          <button
+          <IconButton
             type="button"
+            variant="default"
+            shape="square"
+            size="md"
             className="file-preview-screenshot-btn"
             onClick={() => void handleScreenshot()}
             disabled={!canScreenshot || loading}
             title={t('filePreview.screenshot')}
             aria-label={t('filePreview.screenshot')}
           >
-            <Camera size={16} />
-          </button>
+            <CameraIcon size={16} />
+          </IconButton>
           <div className="file-preview-open-dropdown">
             <button
               ref={openButtonRef}
@@ -667,9 +675,9 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               aria-haspopup="menu"
               aria-expanded={openMenuOpen}
             >
-              <ArrowSquareOut size={14} />
+              <ArrowSquareOutIcon size={14} />
               <span>{t('filePreview.open')}</span>
-              <CaretDown size={12} className={openMenuOpen ? "rotate-180" : ""} />
+              <CaretDownIcon size={12} className={openMenuOpen ? "rotate-180" : ""} />
             </button>
             {openMenuOpen && openMenuStyle && (
               <div
@@ -682,18 +690,18 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                   left: openMenuStyle.left,
                 }}
               >
-                <button type="button" role="menuitem" onClick={handleOpenWithDefault}>
-                  <ArrowSquareOut size={14} />
+                <Button type="button" variant="ghost" size="sm" role="menuitem" onClick={handleOpenWithDefault}>
+                  <ArrowSquareOutIcon size={14} />
                   {t('filePreview.openWithDefault')}
-                </button>
-                <button type="button" role="menuitem" onClick={handleRevealInFolder}>
-                  <FolderOpen size={14} />
+                </Button>
+                <Button type="button" variant="ghost" size="sm" role="menuitem" onClick={handleRevealInFolder}>
+                  <FolderOpenIcon size={14} />
                   {t('filePreview.revealInFolder')}
-                </button>
-                <button type="button" role="menuitem" onClick={handleCopyPath}>
-                  <Copy size={14} />
+                </Button>
+                <Button type="button" variant="ghost" size="sm" role="menuitem" onClick={handleCopyPath}>
+                  <CopyIcon size={14} />
                   {t('filePreview.copyPath')}
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -705,11 +713,11 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           <div className="file-preview-state"><span className="animate-pulse">{t('filePreview.loading')}</span></div>
         )}
         {!loading && preview && !preview.success && (
-          <div className="file-preview-state file-preview-error"><WarningCircle size={20} /> {preview.error || t('filePreview.error')}</div>
+          <div className="file-preview-state file-preview-error"><WarningCircleIcon size={20} /> {preview.error || t('filePreview.error')}</div>
         )}
         {!loading && preview?.success && (preview.kind === "unsupported" || preview.tooLarge) && (
           <div className="file-preview-state">
-            <FileText size={36} weight="duotone" />
+            <FileTextIcon size={36} />
             <strong>{preview.tooLarge ? t('filePreview.fileTooLarge') : t('filePreview.unsupportedFileType')}</strong>
             <span>{t('filePreview.unsupportedHint')}</span>
           </div>
@@ -731,15 +739,17 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           />
         )}
         {selection && (
-          <button
+          <Button
             type="button"
+            variant="primary"
+            size="sm"
             className="file-preview-ask-duya"
             style={{ left: selection.x, top: selection.y }}
             onMouseDown={(event) => event.preventDefault()}
             onClick={askDuya}
           >
-            <Sparkle size={14} weight="fill" /> {t('filePreview.askDuya')}
-          </button>
+            <SparkleIcon size={14} fill="currentColor" /> {t('filePreview.askDuya')}
+          </Button>
         )}
       </div>
     </div>

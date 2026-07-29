@@ -4,6 +4,7 @@
 
 import React, { useEffect } from 'react';
 import { XIcon } from '@/components/icons';
+import { IconButton } from '@/components/ui/IconButton';
 
 interface ImagePreviewModalProps {
   src: string;
@@ -32,13 +33,16 @@ export function ImagePreviewModal({ src, alt, onClose }: ImagePreviewModalProps)
       aria-label={`Preview: ${alt}`}
     >
       {/* Close button */}
-      <button
+      <IconButton
+        variant="ghost"
+        size="md"
+        shape="square"
+        aria-label="Close preview"
         onClick={onClose}
         className="image-preview-close"
-        aria-label="Close preview"
       >
         <XIcon size={20} />
-      </button>
+      </IconButton>
 
       {/* Image container */}
       <div

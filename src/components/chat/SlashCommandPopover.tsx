@@ -9,6 +9,7 @@ import {
   CaretLeftIcon,
   CheckIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import type { ModeModifierId } from '@/types/mode-id';
 import { isModeExcludedByActive } from '@/types/mode-id';
 
@@ -703,14 +704,16 @@ export function SlashCommandPopover({
               </div>
             )}
             {recapState.status !== 'loading' && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => void requestRecap()}
                 className="command-menu-row mt-2 rounded-md px-2 py-1 text-[11px]"
                 style={{ color: 'var(--accent)' }}
               >
                 {recapState.status === 'ready' ? '重新生成回顾' : '生成回顾'}
-              </button>
+              </Button>
             )}
           </section>
         )}

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ArrowRightIcon, ArrowLeftIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import type { ConflictResolution } from "@/types/import";
 
 interface ConflictStepProps {
@@ -78,20 +79,19 @@ export function ConflictStep({ resolutions, onConfirm, onBack }: ConflictStepPro
       ))}
 
       <div className="flex justify-between">
-        <button
-          onClick={onBack}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <Button variant="ghost" size="md" onClick={onBack}>
           <ArrowLeftIcon size={16} />
           {t("importFlow.back")}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
           onClick={() => onConfirm(current)}
-          className="inline-flex items-center gap-2 px-6 py-2 bg-[var(--accent)] text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity"
+          className="rounded-xl"
         >
           {t("importFlow.applyImport")}
           <ArrowRightIcon size={16} />
-        </button>
+        </Button>
       </div>
     </div>
   );

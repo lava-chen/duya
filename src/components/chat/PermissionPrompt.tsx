@@ -18,6 +18,7 @@ import {
   XIcon,
   InfoIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 
 interface PermissionPromptProps {
   /** Current pending permission request */
@@ -124,7 +125,7 @@ function PanelHeader({ toolName, title, summary, detailCount, expanded, onToggle
         <span className="permission-prompt-summary" title={summary}>{summary}</span>
         {detailCount !== undefined && detailCount > 0 && (
           <span className="permission-prompt-status-spinner" aria-hidden>
-            <CircleNotchIcon size={12} weight="bold" className="animate-spin" />
+            <CircleNotchIcon size={12} className="animate-spin" />
           </span>
         )}
       </button>
@@ -221,27 +222,27 @@ function GenericPermissionPrompt({
         <ToolInputBlock input={pendingPermission.toolInput} t={t} />
       </CollapsibleDetails>
       <div className="permission-prompt-actions">
-        <button
-          type="button"
-          onClick={() => onPermissionResponse('deny')}
+        <Button
+          variant="danger"
           className="permission-prompt-btn permission-prompt-btn-danger"
+          onClick={() => onPermissionResponse('deny')}
         >
           {t('permission.deny')}
-        </button>
-        <button
-          type="button"
-          onClick={() => onPermissionResponse('allow')}
+        </Button>
+        <Button
+          variant="secondary"
           className="permission-prompt-btn"
+          onClick={() => onPermissionResponse('allow')}
         >
           {t('permission.allowOnce')}
-        </button>
-        <button
-          type="button"
-          onClick={() => onPermissionResponse('allow_session')}
+        </Button>
+        <Button
+          variant="primary"
           className="permission-prompt-btn permission-prompt-btn-primary"
+          onClick={() => onPermissionResponse('allow_session')}
         >
           {t('permission.allowForSession')}
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -484,7 +485,7 @@ function AskUserQuestionUI({
                     className={`ask-question-check ${isSelected ? 'selected' : ''}`}
                     aria-hidden
                   >
-                    {isSelected && <CheckIcon size={10} weight="bold" />}
+                    {isSelected && <CheckIcon size={10} />}
                   </span>
                 ) : (
                   <span
@@ -504,7 +505,7 @@ function AskUserQuestionUI({
                     className="ask-question-info"
                     aria-label="Show description"
                   >
-                    <InfoIcon size={12} weight="regular" />
+                    <InfoIcon size={12} />
                   </button>
                 )}
               </div>
@@ -633,20 +634,20 @@ function ExitPlanModeUI({
           </div>
         )}
         <div className="permission-prompt-actions" style={{ padding: 0 }}>
-          <button
-            type="button"
-            onClick={onDeny}
+          <Button
+            variant="danger"
             className="permission-prompt-btn permission-prompt-btn-danger"
+            onClick={onDeny}
           >
             {t('permission.reject')}
-          </button>
-          <button
-            type="button"
-            onClick={onApprove}
+          </Button>
+          <Button
+            variant="primary"
             className="permission-prompt-btn permission-prompt-btn-primary"
+            onClick={onApprove}
           >
             {t('permission.approveExecute')}
-          </button>
+          </Button>
         </div>
         <div className="permission-prompt-feedback-row">
           <input
@@ -661,16 +662,16 @@ function ExitPlanModeUI({
             }}
             className="permission-prompt-feedback-input"
           />
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            className="permission-prompt-btn"
             onClick={() => {
               if (feedback.trim()) onDenyWithMessage(feedback.trim());
             }}
             disabled={!feedback.trim()}
-            className="permission-prompt-btn"
           >
             {t('permission.doThisInstead')}
-          </button>
+          </Button>
         </div>
       </div>
     </>
@@ -700,7 +701,7 @@ function ResolvedStatus({
   }
   return (
     <p className={`permission-prompt-resolved ${permissionResolved === 'allow' ? 'allowed' : 'denied'}`}>
-      <span>{permissionResolved === 'allow' ? <CheckIcon size={12} weight="bold" /> : <XIcon size={12} weight="bold" />}</span>
+      <span>{permissionResolved === 'allow' ? <CheckIcon size={12} /> : <XIcon size={12} />}</span>
       <span>{permissionResolved === 'allow' ? t('permission.allowed') : t('permission.denied')}</span>
     </p>
   );

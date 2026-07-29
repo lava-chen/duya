@@ -15,6 +15,7 @@ import { useState } from 'react';
 import { GitBranchIcon, CaretDownIcon } from '@/components/icons';
 import { DrawerSection } from './DrawerSection';
 import type { UseGitStatusResult } from '@/hooks/useGitStatus';
+import { Button } from '@/components/ui/Button';
 
 const MAX_VISIBLE = 4;
 
@@ -35,8 +36,10 @@ export function EnvironmentInfoSection({ gitStatus }: EnvironmentInfoSectionProp
 
   return (
     <DrawerSection label="环境信息">
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-xs text-foreground transition-colors hover:bg-surface-hover"
         aria-expanded={expanded}
@@ -52,7 +55,7 @@ export function EnvironmentInfoSection({ gitStatus }: EnvironmentInfoSectionProp
           size={11}
           className={`shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`}
         />
-      </button>
+      </Button>
 
       {expanded && (
         <ul className="border-t border-border/40">
@@ -77,14 +80,16 @@ export function EnvironmentInfoSection({ gitStatus }: EnvironmentInfoSectionProp
       )}
 
       {!expanded && overflow > 0 && (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={() => setExpanded(true)}
           className="flex w-full items-center gap-1 px-1 py-0.5 text-left text-[10px] text-muted-foreground transition-colors hover:text-foreground"
         >
           再显示 {overflow} 个文件
           <CaretDownIcon size={10} />
-        </button>
+        </Button>
       )}
     </DrawerSection>
   );

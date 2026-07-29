@@ -33,6 +33,8 @@ import {
   SettingsCardFooter,
 } from "@/components/settings/ui";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 
 interface MCPServerFormData {
   name: string;
@@ -313,7 +315,8 @@ export function MCPSection() {
     >
       {/* Preset MCP Marketplace */}
       <SettingsCard className="mb-4">
-        <button
+        <Button
+          variant="ghost"
           className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/50 transition-colors rounded-lg"
           onClick={() => setPresetExpanded(!presetExpanded)}
         >
@@ -322,36 +325,30 @@ export function MCPSection() {
             {PRESET_MCP_SERVERS.length} available
             <span className="ml-2">{presetExpanded ? '▴' : '▾'}</span>
           </span>
-        </button>
+        </Button>
         {presetExpanded && (
           <div className="px-4 pb-4">
             <div className="flex gap-2 mb-3 flex-wrap">
-              <button
-                className={cn(
-                  "px-3 py-1 text-xs rounded-full transition-colors",
-                  !presetCategory
-                    ? "bg-accent text-accent-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-muted/70"
-                )}
+              <Button
+                variant={!presetCategory ? "primary" : "secondary"}
+                size="sm"
+                className="rounded-full"
                 onClick={() => setPresetCategory(null)}
               >
                 All
-              </button>
+              </Button>
               {MCP_CATEGORIES.map((cat) => (
-                <button
+                <Button
                   key={cat.key}
-                  className={cn(
-                    "px-3 py-1 text-xs rounded-full transition-colors",
-                    presetCategory === cat.key
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/70"
-                  )}
+                  variant={presetCategory === cat.key ? "primary" : "secondary"}
+                  size="sm"
+                  className="rounded-full"
                   onClick={() =>
                     setPresetCategory(presetCategory === cat.key ? null : cat.key)
                   }
                 >
                   {cat.label}
-                </button>
+                </Button>
               ))}
             </div>
             <div className="mb-3">
@@ -385,18 +382,15 @@ export function MCPSection() {
                           {preset.command} {preset.args.join(' ')}
                         </div>
                       </div>
-                      <button
-                        className={cn(
-                          "ml-3 px-3 py-1 text-xs rounded-lg transition-colors shrink-0",
-                          isAdded
-                            ? "bg-muted text-muted-foreground cursor-not-allowed"
-                            : "bg-accent text-accent-foreground hover:bg-accent/90"
-                        )}
+                      <Button
+                        variant={isAdded ? "secondary" : "primary"}
+                        size="sm"
+                        className="ml-3 shrink-0"
                         disabled={isAdded}
                         onClick={() => handleAddPreset(preset.id)}
                       >
                         {isAdded ? 'Added' : 'Add'}
-                      </button>
+                      </Button>
                     </div>
                   );
                 })
@@ -422,20 +416,20 @@ export function MCPSection() {
               ) : null}
             </p>
             <div className="flex gap-2 mt-4">
-              <button
-                className="px-4 py-2 bg-accent text-accent-foreground rounded-lg flex items-center gap-2 hover:bg-accent/90 transition-colors"
+              <Button
+                variant="primary"
                 onClick={handleAdd}
               >
                 <PlusIcon size={16} />
                 Add Your First Server
-              </button>
-              <button
-                className="px-4 py-2 border border-border/50 rounded-lg flex items-center gap-2 hover:bg-muted transition-colors"
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={handleImportOpen}
               >
                 <DownloadSimpleIcon size={16} />
                 Import from text
-              </button>
+              </Button>
             </div>
           </div>
         </SettingsCard>
@@ -485,52 +479,54 @@ export function MCPSection() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <button
-                      className={cn(
-                        "p-2 rounded-lg transition-colors",
-                        server.enabled
-                          ? "text-green-600 hover:bg-green-500/10"
-                          : "text-muted-foreground hover:bg-muted"
-                      )}
-                      onClick={() => handleToggleEnabled(server)}
+                    <IconButton
+                      variant="default"
+                      size="sm"
+                      aria-label={server.enabled ? "Disable" : "Enable"}
                       title={server.enabled ? "Disable" : "Enable"}
+                      className={server.enabled ? "text-green-600 hover:bg-green-500/10" : ""}
+                      onClick={() => handleToggleEnabled(server)}
                     >
                       {server.enabled ? <PowerIcon size={18} /> : <PowerOffIcon size={18} />}
-                    </button>
-                    <button
-                      className="p-2 rounded-lg hover:bg-muted transition-colors text-foreground"
-                      onClick={() => handleEdit(server)}
+                    </IconButton>
+                    <IconButton
+                      variant="default"
+                      size="sm"
+                      aria-label="Edit"
                       title="Edit"
+                      onClick={() => handleEdit(server)}
                     >
                       <NotePencilIcon size={18} />
-                    </button>
-                    <button
-                      className="p-2 rounded-lg hover:bg-destructive/10 transition-colors text-destructive"
-                      onClick={() => handleDelete(server.name)}
+                    </IconButton>
+                    <IconButton
+                      variant="danger"
+                      size="sm"
+                      aria-label="Delete"
                       title="Delete"
+                      onClick={() => handleDelete(server.name)}
                     >
                       <TrashIcon size={18} />
-                    </button>
+                    </IconButton>
                   </div>
                 </div>
               </div>
             </SettingsCard>
           ))}
           <div className="flex justify-end gap-2">
-            <button
-              className="px-4 py-2 bg-accent text-accent-foreground rounded-lg flex items-center gap-2 hover:bg-accent/90 transition-colors"
+            <Button
+              variant="primary"
               onClick={handleAdd}
             >
               <PlusIcon size={16} />
               Add Server
-            </button>
-            <button
-              className="px-4 py-2 border border-border/50 rounded-lg flex items-center gap-2 hover:bg-muted transition-colors"
+            </Button>
+            <Button
+              variant="secondary"
               onClick={handleImportOpen}
             >
               <DownloadSimpleIcon size={16} />
               Import from text
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -593,12 +589,14 @@ export function MCPSection() {
             <div className="px-6 py-4 border-b border-border">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Import MCP Server</h2>
-                <button
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Close"
                   onClick={handleImportClose}
-                  className="p-1 rounded-lg hover:bg-muted transition-colors"
                 >
                   <XIcon size={20} />
-                </button>
+                </IconButton>
               </div>
               <p className="text-sm text-muted-foreground mt-1">
                 Paste a JSON config or CLI command from documentation to auto-fill the form.
@@ -630,8 +628,9 @@ export function MCPSection() {
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Multiple servers found. Select one:</p>
                   {importConfigs.map((cfg, idx) => (
-                    <button
+                    <Button
                       key={idx}
+                      variant="ghost"
                       className="w-full px-4 py-3 rounded-lg border border-border/50 hover:bg-muted transition-colors text-left"
                       onClick={() => selectImportResult(cfg)}
                     >
@@ -644,27 +643,27 @@ export function MCPSection() {
                           Env: {Object.keys(cfg.env).join(', ')}
                         </div>
                       )}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               )}
             </div>
 
             <div className="px-6 py-4 border-t border-border flex justify-end gap-2">
-              <button
+              <Button
+                variant="secondary"
                 onClick={handleImportClose}
-                className="px-4 py-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleParse}
                 disabled={!importText.trim()}
-                className="px-4 py-2 bg-accent text-accent-foreground rounded-lg hover:bg-accent/90 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 <CheckIcon size={16} />
                 Parse
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -679,12 +678,14 @@ export function MCPSection() {
                 <h2 className="text-lg font-semibold">
                   {editingServer ? "Edit MCP Server" : "Add MCP Server"}
                 </h2>
-                <button
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Close"
                   onClick={handleDialogClose}
-                  className="p-1 rounded-lg hover:bg-muted transition-colors"
                 >
                   <XIcon size={20} />
-                </button>
+                </IconButton>
               </div>
               <p className="text-sm text-muted-foreground mt-1">
                 Configure a new MCP server to extend agent capabilities with external tools.
@@ -832,20 +833,20 @@ export function MCPSection() {
             </div>
 
             <div className="px-6 py-4 border-t border-border flex justify-end gap-2">
-              <button
+              <Button
+                variant="secondary"
                 onClick={handleDialogClose}
-                className="px-4 py-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleSave}
                 disabled={loading}
-                className="px-4 py-2 bg-accent text-accent-foreground rounded-lg hover:bg-accent/90 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 <CheckIcon size={16} />
                 {editingServer ? "Save Changes" : "Add Server"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

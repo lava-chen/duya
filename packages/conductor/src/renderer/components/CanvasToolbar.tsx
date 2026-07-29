@@ -14,16 +14,16 @@ import type { LinkContent } from "..//types/canvas-node";
 import type { TranslationKey } from "@/i18n";
 import { useTranslation } from "@/hooks/useTranslation";
 import {
-  ArrowElbowDownRight,
-  ArrowUpRight,
-  Circle,
-  Diamond,
-  Hexagon,
-  Parallelogram,
-  Rectangle,
-  Triangle,
-  X,
-} from "@phosphor-icons/react";
+  ArrowElbowDownRightIcon,
+  ArrowUpRightIcon,
+  CircleIcon,
+  DiamondIcon,
+  HexagonIcon,
+  ParallelogramIcon,
+  RectangleIcon,
+  TriangleIcon,
+  XIcon,
+} from "@/components/icons";
 
 type ToolId =
   | "select" | "hand" | "document" | "shape"
@@ -54,13 +54,13 @@ const TOOLS: Tool[] = [
 type DiagramShape = "rect" | "rounded" | "ellipse" | "diamond" | "parallelogram" | "triangle" | "hexagon";
 
 const DIAGRAM_SHAPES: { shape: DiagramShape; label: TranslationKey; icon: React.ReactNode }[] = [
-  { shape: "rect", label: "conductor.toolbar.shapeRect", icon: <Rectangle size={21} weight="regular" /> },
-  { shape: "rounded", label: "conductor.toolbar.shapeRounded", icon: <Rectangle size={21} weight="regular" /> },
-  { shape: "ellipse", label: "conductor.toolbar.shapeEllipse", icon: <Circle size={21} weight="regular" /> },
-  { shape: "diamond", label: "conductor.toolbar.shapeDiamond", icon: <Diamond size={21} weight="regular" /> },
-  { shape: "parallelogram", label: "conductor.toolbar.shapeParallelogram", icon: <Parallelogram size={21} weight="regular" /> },
-  { shape: "triangle", label: "conductor.toolbar.shapeTriangle", icon: <Triangle size={21} weight="regular" /> },
-  { shape: "hexagon", label: "conductor.toolbar.shapeHexagon", icon: <Hexagon size={21} weight="regular" /> },
+  { shape: "rect", label: "conductor.toolbar.shapeRect", icon: <RectangleIcon size={21} /> },
+  { shape: "rounded", label: "conductor.toolbar.shapeRounded", icon: <RectangleIcon size={21} /> },
+  { shape: "ellipse", label: "conductor.toolbar.shapeEllipse", icon: <CircleIcon size={21} /> },
+  { shape: "diamond", label: "conductor.toolbar.shapeDiamond", icon: <DiamondIcon size={21} /> },
+  { shape: "parallelogram", label: "conductor.toolbar.shapeParallelogram", icon: <ParallelogramIcon size={21} /> },
+  { shape: "triangle", label: "conductor.toolbar.shapeTriangle", icon: <TriangleIcon size={21} /> },
+  { shape: "hexagon", label: "conductor.toolbar.shapeHexagon", icon: <HexagonIcon size={21} /> },
 ];
 
 function diagramShapeConfig(shape: DiagramShape): Record<string, unknown> {
@@ -114,7 +114,7 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
           onClick={onClose}
           className="conductor-tool-button flex h-8 w-8 items-center justify-center rounded-[9px] text-[var(--text)]"
         >
-          <X size={18} weight="regular" />
+          <XIcon size={18} />
         </button>
         <div className="canvas-toolbar__divider w-full" />
         {DIAGRAM_SHAPES.map((item) => (
@@ -141,7 +141,7 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
           onClick={() => onSelect("connector", { routingMode: "elbow" })}
           className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text)] hover:bg-[var(--surface-hover)]"
         >
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--conductor-accent-soft)] text-[var(--conductor-accent)]"><ArrowElbowDownRight size={17} weight="bold" /></span>
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--conductor-accent-soft)] text-[var(--conductor-accent)]"><ArrowElbowDownRightIcon size={17} /></span>
           <span><strong className="block font-semibold">{t("conductor.toolbar.connectorElbow")}</strong><span className="text-[10px] text-[var(--muted)]">{t("conductor.toolbar.connectorElbowDesc")}</span></span>
         </button>
         <button
@@ -149,7 +149,7 @@ function Submenu({ toolId, anchorY, onSelect, onClose }: SubmenuProps) {
           onClick={() => onSelect("connector", { routingMode: "curve" })}
           className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs text-[var(--text)] hover:bg-[var(--surface-hover)]"
         >
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--conductor-accent-soft)] text-[var(--conductor-accent)]"><ArrowUpRight size={17} weight="bold" /></span>
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--conductor-accent-soft)] text-[var(--conductor-accent)]"><ArrowUpRightIcon size={17} /></span>
           <span><strong className="block font-semibold">{t("conductor.toolbar.connectorCurve")}</strong><span className="text-[10px] text-[var(--muted)]">{t("conductor.toolbar.connectorCurveDesc")}</span></span>
         </button>
       </div>

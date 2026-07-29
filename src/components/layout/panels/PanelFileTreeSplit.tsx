@@ -1,6 +1,6 @@
 "use client";
 
-import { Files } from "@phosphor-icons/react";
+import { FilesIcon } from "@/components/icons";
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useOptionalPanel } from "@/hooks/usePanel";
@@ -57,7 +57,7 @@ export function PanelFileTreeToggle() {
       aria-pressed={workspaceTreeOpen}
       data-testid="file-tree-toggle"
     >
-      <Files size={15} weight="regular" />
+      <FilesIcon size={15} />
     </button>
   );
 }

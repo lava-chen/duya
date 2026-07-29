@@ -20,26 +20,28 @@ import { CronChatModal } from './CronChatModal';
 import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector';
 import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-client';
 import {
-  Plus,
-  Play,
-  PencilSimple,
-  Trash,
-  Clock,
-  SlidersHorizontal,
-  WarningCircle,
-  XCircle,
-  SpinnerGap,
-  Robot,
-  SquaresFour,
-  ArrowRight,
-  DotsThree,
-} from '@phosphor-icons/react';
+  PlusIcon,
+  PlayIcon,
+  PencilSimpleIcon,
+  TrashIcon,
+  ClockIcon,
+  SlidersHorizontalIcon,
+  WarningCircleIcon,
+  XCircleIcon,
+  SpinnerGapIcon,
+  RobotIcon,
+  SquaresFourIcon,
+  ArrowRightIcon,
+  DotsThreeIcon,
+} from '@/components/icons';
 import { AutomationEmptyState } from './AutomationEmptyState';
 import { QuickCronChatModal } from './QuickCronChatModal';
 import { TemplateMarketModal } from './TemplateMarketModal';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useTranslation } from '@/hooks/useTranslation';
 import { CronScheduleCard } from './CronScheduleCard';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import {
   createDefaultScheduleDraft,
   describeScheduleDraft,
@@ -164,10 +166,10 @@ function getStatusIcon(status: string) {
     case 'enabled':
       return <span className="h-4 w-4 rounded-full border-2 border-[var(--muted)]" aria-label="已启用" />;
     case 'error':
-      return <WarningCircle size={14} weight="fill" className="text-[var(--error)]" />;
+      return <WarningCircleIcon size={14} className="text-[var(--error)]" />;
     case 'disabled':
     default:
-      return <XCircle size={14} weight="fill" className="text-[var(--muted)]" />;
+      return <XCircleIcon size={14} className="text-[var(--muted)]" />;
   }
 }
 
@@ -552,7 +554,7 @@ export function AutomationView() {
         </div>
         {!showEmptyState && (
         <div className="flex items-center gap-2">
-          <button
+          <Button
             className="flex items-center gap-2 px-4 py-2 rounded-full font-medium text-sm whitespace-nowrap transition-all duration-200"
             style={{
               background: 'var(--surface)',
@@ -563,10 +565,12 @@ export function AutomationView() {
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
             type="button"
+            variant="secondary"
+            size="md"
           >
-            <SquaresFour size={16} />
+            <SquaresFourIcon size={16} />
             {t('automation.templates')}
-          </button>
+          </Button>
         </div>
         )}
       </div>
@@ -574,7 +578,7 @@ export function AutomationView() {
       {/* Error Banner */}
       {error && (
         <div className="mx-6 mb-4 px-4 py-3 rounded-lg flex items-center gap-2" style={{ background: 'var(--error-soft)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-          <WarningCircle size={16} className="text-[var(--error)]" />
+          <WarningCircleIcon size={16} className="text-[var(--error)]" />
           <span className="text-sm" style={{ color: 'var(--error)' }}>{error}</span>
         </div>
       )}
@@ -593,24 +597,26 @@ export function AutomationView() {
           <div className="h-full min-h-0 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,0.75fr)_minmax(440px,1.25fr)]">
           {/* Cron Jobs List - Left Side */}
           <section className="flex flex-col h-full min-h-0">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="md"
               onClick={handleCreateNew}
               className="mb-7 flex items-center gap-3 rounded-full px-5 py-4 text-left transition-colors"
               style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
             >
-              <Plus size={20} weight="bold" style={{ color: 'var(--text)' }} />
+              <PlusIcon size={20} style={{ color: 'var(--text)' }} />
               <span className="text-base">安排任务</span>
-            </button>
+            </Button>
             <div className="flex-1 overflow-y-auto scrollbar-thin">
               {loading ? (
                 <div className="flex items-center justify-center h-32" style={{ color: 'var(--muted)' }}>
-                  <SpinnerGap size={20} className="animate-spin mr-2" />
+                  <SpinnerGapIcon size={20} className="animate-spin mr-2" />
                   {t('automation.loading')}
                 </div>
               ) : crons.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-center p-4">
-                  <Clock size={32} className="mb-2 opacity-30" style={{ color: 'var(--muted)' }} />
+                  <ClockIcon size={32} className="mb-2 opacity-30" style={{ color: 'var(--muted)' }} />
                   <p className="text-sm" style={{ color: 'var(--muted)' }}>{t('automation.noAutomations')}</p>
                 </div>
               ) : (
@@ -818,15 +824,19 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
         <h3 className="font-medium text-sm" style={{ color: 'var(--text)' }}>
           {initialData?.id ? t('automation.editAutomation') : t('automation.newAutomation')}
         </h3>
-        <button
+        <IconButton
           className="p-1.5 rounded-md transition-all duration-150"
           style={{ color: 'var(--muted)' }}
           onClick={onCancel}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--muted)'; }}
+          variant="default"
+          shape="square"
+          size="sm"
+          aria-label="Close"
         >
-          <XCircle size={18} />
-        </button>
+          <XCircleIcon size={18} />
+        </IconButton>
       </div>
       <div className="flex-1 overflow-y-auto p-5 pb-24 scrollbar-thin">
         <div className="space-y-4">
@@ -879,7 +889,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           {/* Model Selection */}
           <div className="rounded-xl px-4 py-3.5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
             <div className="flex items-center gap-2 mb-3">
-              <Robot size={14} style={{ color: 'var(--accent)' }} />
+              <RobotIcon size={14} style={{ color: 'var(--accent)' }} />
               <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.model')}</span>
               <span className="text-xs" style={{ color: 'var(--error)' }}>*</span>
             </div>
@@ -913,14 +923,16 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           {/* Legacy schedule controls are kept out of the render path while old editor fields remain wire-compatible. */}
           <div className="hidden overflow-hidden rounded-xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
             <div className="flex items-center gap-2 px-4 pt-3.5 pb-3 border-b border-[var(--border)]">
-              <Clock size={14} style={{ color: 'var(--accent)' }} />
+              <ClockIcon size={14} style={{ color: 'var(--accent)' }} />
               <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.schedule')}</span>
             </div>
             <div className="flex gap-2 px-4 py-3.5 border-b border-[var(--border)]">
               {(['every', 'at', 'cron'] as CronScheduleKind[]).map((kind) => (
-                <button
+                <Button
                   key={kind}
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   className="flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 capitalize"
                   style={{
                     background: editor.scheduleKind === kind ? 'var(--accent-soft)' : 'var(--surface)',
@@ -940,7 +952,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                   }}
                 >
                   {kind === 'every' ? '重复' : kind === 'at' ? '一次' : '自定义'}
-                </button>
+                </Button>
               ))}
             </div>
 
@@ -1051,7 +1063,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
           {/* Advanced Settings */}
           <div className="overflow-hidden rounded-xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
             <div className="flex items-center gap-2 px-4 py-3.5 border-b border-[var(--border)]">
-              <SlidersHorizontal size={14} style={{ color: 'var(--accent)' }} />
+              <SlidersHorizontalIcon size={14} style={{ color: 'var(--accent)' }} />
               <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.advancedSettings')}</span>
             </div>
             <div className="grid grid-cols-2 gap-3 px-4 py-3.5">
@@ -1133,7 +1145,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
             className="-mx-5 flex gap-3 border-t px-5 pb-5 pt-4"
             style={{ background: 'var(--command-menu-bg)', borderColor: 'var(--command-menu-border)' }}
           >
-            <button
+            <Button
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm transition-all duration-200"
               style={{
                 background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
@@ -1141,6 +1153,8 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                 opacity: saving ? 0.6 : 1,
               }}
               type="button"
+              variant="primary"
+              size="md"
               disabled={saving}
               onClick={() => { void handleSubmit(); }}
               onMouseEnter={(e) => {
@@ -1158,14 +1172,14 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
             >
               {saving ? (
                 <>
-                  <SpinnerGap size={16} className="animate-spin" />
+                  <SpinnerGapIcon size={16} className="animate-spin" />
                   {t('automation.saving')}
                 </>
               ) : (
                 <>{initialData?.id ? t('automation.saveChanges') : t('automation.createAutomation')}</>
               )}
-            </button>
-            <button
+            </Button>
+            <Button
               className="px-4 py-2.5 rounded-lg font-medium text-sm transition-all duration-200"
               style={{
                 background: 'var(--surface)',
@@ -1173,12 +1187,14 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
                 border: '1px solid var(--border)',
               }}
               type="button"
+              variant="secondary"
+              size="md"
               onClick={onCancel}
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
             >
               {t('automation.cancel')}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -1284,7 +1300,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
           <h3 className="font-medium text-lg truncate" style={{ color: 'var(--text)' }}>{cron.name}</h3>
         </div>
         <div className="relative">
-          <button
+          <IconButton
             type="button"
             aria-label="更多操作"
             aria-expanded={showMoreMenu}
@@ -1293,16 +1309,21 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             onClick={() => setShowMoreMenu((visible) => !visible)}
             onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--surface-hover)'; }}
             onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
+            variant="default"
+            shape="round"
+            size="md"
           >
-            <DotsThree size={22} weight="bold" />
-          </button>
+            <DotsThreeIcon size={22} />
+          </IconButton>
           {showMoreMenu && (
             <div
               className="absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-xl py-1 shadow-lg"
               style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
             >
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 className="w-full px-3 py-2 text-left text-sm transition-colors"
                 style={{ color: 'var(--text)' }}
                 onClick={() => { setShowMoreMenu(false); beginEditing(); }}
@@ -1310,9 +1331,11 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                 onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
               >
                 编辑计划
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 className="w-full px-3 py-2 text-left text-sm transition-colors"
                 style={{ color: 'var(--success)' }}
                 onClick={() => { setShowMoreMenu(false); onRun(); }}
@@ -1320,9 +1343,11 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                 onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
               >
                 立即运行
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="danger"
+                size="sm"
                 className="w-full px-3 py-2 text-left text-sm transition-colors"
                 style={{ color: 'var(--error)' }}
                 onClick={() => { setShowMoreMenu(false); onDelete(); }}
@@ -1330,7 +1355,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                 onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
               >
                 删除计划
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -1342,7 +1367,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
             onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
           >
-            <Play size={12} weight="fill" />
+            <PlayIcon size={12} />
             {t('automation.runNow')}
           </button>
           <button
@@ -1352,7 +1377,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
           >
-            <PencilSimple size={12} />
+            <PencilSimpleIcon size={12} />
             编辑
           </button>
           {lastRun?.session_id && onViewSession && (
@@ -1371,7 +1396,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
             onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
             onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
           >
-            <Trash size={12} />
+            <TrashIcon size={12} />
           </button>
         </div>
       </div>
@@ -1621,7 +1646,7 @@ function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelet
                   {t(node.key)}
                 </div>
                 {i < executionGraph.length - 1 && (
-                  <ArrowRight size={12} style={{ color: 'var(--muted)' }} />
+                  <ArrowRightIcon size={12} style={{ color: 'var(--muted)' }} />
                 )}
               </div>
             ))}

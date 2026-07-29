@@ -1,5 +1,6 @@
 import React from 'react';
 import type { PermissionRequest } from '../../../lib/plugin-security-types';
+import { Button } from '@/components/ui/Button';
 
 interface PermissionReviewDialogProps {
   pluginName: string;
@@ -156,36 +157,12 @@ export function PermissionReviewDialog({
         </div>
 
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-          <button
-            onClick={onCancel}
-            style={{
-              background: 'var(--bg-subtle, #f3f4f6)',
-              color: 'var(--text, #374151)',
-              border: '1px solid var(--border, #d1d5db)',
-              borderRadius: '8px',
-              padding: '8px 16px',
-              fontSize: '13px',
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
+          <Button variant="secondary" onClick={onCancel}>
             Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            style={{
-              background: 'var(--accent, #6366f1)',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '8px',
-              padding: '8px 16px',
-              fontSize: '13px',
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
+          </Button>
+          <Button variant="primary" onClick={onConfirm}>
             Allow & Install
-          </button>
+          </Button>
         </div>
       </div>
     </div>

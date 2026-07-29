@@ -4,7 +4,7 @@
 // imports the same shapes instead of redefining them inline. No runtime
 // code lives here — pure type declarations only.
 
-import type { Icon } from '@phosphor-icons/react';
+import type { Icon } from '@/components/icons';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import type { TranslationKey } from '@/i18n';
 

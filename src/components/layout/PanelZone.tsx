@@ -6,13 +6,12 @@ import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_CHAT_WIDTH, MIN_PANEL_WIDTH, useP
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
 import { ResizeHandle } from "./ResizeHandle";
-import { SidebarRightIcon } from "@/components/icons";
+import { SidebarRightIcon, ArrowsInSimpleIcon, ArrowsOutSimpleIcon } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
 import {
   setTaskDrawerOpen,
   useTaskDrawerOpen,
 } from "./task-drawer-store";
-import { ArrowsInSimple, ArrowsOutSimple } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
 
 // `office` is a passive surface — opened by events
@@ -142,8 +141,8 @@ export function PanelZone() {
               data-testid="workspace-expand"
             >
               {workspaceExpanded
-                ? <ArrowsInSimple size={16} weight="regular" />
-                : <ArrowsOutSimple size={16} weight="regular" />}
+                ? <ArrowsInSimpleIcon size={16} />
+                : <ArrowsOutSimpleIcon size={16} />}
             </button>
           )}
         </>
@@ -241,7 +240,7 @@ function EmptyPanelLauncherRow({
     >
       <span className="panel-empty-launcher-main">
         <span className="panel-empty-launcher-icon">
-          <Icon size={16} weight="regular" />
+          <Icon size={16} />
         </span>
         <span className="panel-empty-launcher-name">{label}</span>
       </span>

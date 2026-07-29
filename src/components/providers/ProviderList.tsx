@@ -51,6 +51,7 @@ import { isQuotaSupported } from '@/lib/providers/canCheckQuota';
 import type { AppId } from '@/lib/providers/hooks/queryKeys';
 import type { RendererLlmProviderDTO } from '@/lib/providers/ipc-types';
 import { SpinnerGapIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { PresetIcon } from '@/components/settings/PresetIcon';
 import { useTranslation } from '@/hooks/useTranslation';
 
@@ -223,14 +224,15 @@ function ProviderRow(props: {
             </p>
           )}
           {website && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={handleOpenWebsite}
-              className="inline-flex items-center text-xs max-w-[280px] text-blue-500 transition-colors hover:underline dark:text-blue-400 cursor-pointer"
+              className="max-w-[280px] hover:underline"
               title={website}
             >
               <span className="truncate">{website}</span>
-            </button>
+            </Button>
           )}
         </div>
         <ProviderActions

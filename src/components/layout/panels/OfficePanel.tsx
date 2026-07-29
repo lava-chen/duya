@@ -1,22 +1,24 @@
 "use client";
 
 import {
-  ArrowSquareOut,
-  ArrowsClockwise,
-  FileDoc,
-  FolderOpen,
-  MagnifyingGlassMinus,
-  MagnifyingGlassPlus,
-  MicrosoftExcelLogo,
-  MicrosoftPowerpointLogo,
-  MicrosoftWordLogo,
-  Sparkle,
-} from "@phosphor-icons/react";
+  ArrowSquareOutIcon,
+  ArrowsClockwiseIcon,
+  FileDocIcon,
+  FolderOpenIcon,
+  MagnifyingGlassMinusIcon,
+  MagnifyingGlassPlusIcon,
+  MicrosoftExcelLogoIcon,
+  MicrosoftPowerpointLogoIcon,
+  MicrosoftWordLogoIcon,
+  SparkleIcon,
+} from "@/components/icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { usePanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
 import type { PageTab } from "./registry";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 
 type OfficeKind = "docx" | "pptx" | "xlsx";
 
@@ -83,9 +85,9 @@ function parseSheets(text: string): SpreadsheetSheet[] {
 }
 
 function iconFor(kind: OfficeKind) {
-  if (kind === "docx") return MicrosoftWordLogo;
-  if (kind === "pptx") return MicrosoftPowerpointLogo;
-  return MicrosoftExcelLogo;
+  if (kind === "docx") return MicrosoftWordLogoIcon;
+  if (kind === "pptx") return MicrosoftPowerpointLogoIcon;
+  return MicrosoftExcelLogoIcon;
 }
 
 function paragraphRole(paragraph: string, index: number): "title" | "meta" | "heading" | "body" {
@@ -208,12 +210,12 @@ export function OfficePanel({ tab }: { tab: PageTab; embedded: boolean }) {
       <PanelFileTreeSplit workingDirectory={workingDirectory}>
       <div className="office-panel office-panel-empty">
         <div className="office-empty-card">
-          <span className="office-empty-icon"><FileDoc size={30} weight="duotone" /></span>
+          <span className="office-empty-icon"><FileDocIcon size={30} /></span>
           <strong>Open an Office file</strong>
           <span>Review Word, PowerPoint, and Excel beside your DUYA conversation.</span>
-          <button type="button" onClick={() => void openFiles()}>
-            <FolderOpen size={16} weight="bold" /> Open file
-          </button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => void openFiles()}>
+            <FolderOpenIcon size={16} stroke={2.5} /> Open file
+          </Button>
         </div>
       </div>
       </PanelFileTreeSplit>
@@ -228,21 +230,21 @@ export function OfficePanel({ tab }: { tab: PageTab; embedded: boolean }) {
     <div className={`office-panel office-panel-${kind}`}>
       <div className="office-toolbar">
         <div className="office-toolbar-title">
-          <KindIcon size={17} weight="fill" />
+          <KindIcon size={17} fill="currentColor" />
           <span>{fileName(filePath)}</span>
           <small>{kind.toUpperCase()}</small>
         </div>
         <div className="office-toolbar-actions">
-          <button type="button" onClick={() => setZoom((value) => Math.max(70, value - 10))} aria-label="Zoom out"><MagnifyingGlassMinus size={15} /></button>
+          <IconButton type="button" variant="default" shape="square" size="sm" onClick={() => setZoom((value) => Math.max(70, value - 10))} aria-label="Zoom out"><MagnifyingGlassMinusIcon size={15} /></IconButton>
           <span>{zoom}%</span>
-          <button type="button" onClick={() => setZoom((value) => Math.min(150, value + 10))} aria-label="Zoom in"><MagnifyingGlassPlus size={15} /></button>
-          <button type="button" onClick={() => void loadDocument()} aria-label="Reload document"><ArrowsClockwise size={15} className={loading ? "animate-spin" : ""} /></button>
-          <button type="button" onClick={() => void window.electronAPI?.shell?.openPath(filePath)} aria-label="Open in default app"><ArrowSquareOut size={15} /></button>
+          <IconButton type="button" variant="default" shape="square" size="sm" onClick={() => setZoom((value) => Math.min(150, value + 10))} aria-label="Zoom in"><MagnifyingGlassPlusIcon size={15} /></IconButton>
+          <IconButton type="button" variant="default" shape="square" size="sm" onClick={() => void loadDocument()} aria-label="Reload document"><ArrowsClockwiseIcon size={15} className={loading ? "animate-spin" : ""} /></IconButton>
+          <IconButton type="button" variant="default" shape="square" size="sm" onClick={() => void window.electronAPI?.shell?.openPath(filePath)} aria-label="Open in default app"><ArrowSquareOutIcon size={15} /></IconButton>
         </div>
       </div>
 
       <div className="office-canvas" ref={canvasRef} onMouseUp={kind === "xlsx" ? undefined : captureSelection}>
-        {loading && <div className="office-panel-state"><ArrowsClockwise size={18} className="animate-spin" /> Parsing document...</div>}
+        {loading && <div className="office-panel-state"><ArrowsClockwiseIcon size={18} className="animate-spin" /> Parsing document...</div>}
         {!loading && error && <div className="office-panel-state office-panel-error">{error}</div>}
         {!loading && !error && kind === "docx" && (
           <article className="office-word-page" style={{ transform: `scale(${zoom / 100})` }}>
@@ -293,13 +295,15 @@ export function OfficePanel({ tab }: { tab: PageTab; embedded: boolean }) {
           </div>
         )}
         {selection && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             className="office-ask-duya"
             style={{ left: selection.x, top: selection.y }}
             onMouseDown={(event) => event.preventDefault()}
             onClick={askDuya}
-          ><Sparkle size={14} weight="fill" /> {t('office.askDuya')}</button>
+          ><SparkleIcon size={14} fill="currentColor" /> {t('office.askDuya')}</Button>
         )}
       </div>
     </div>

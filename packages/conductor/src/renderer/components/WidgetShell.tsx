@@ -7,7 +7,7 @@ import { executeAction } from "..//ipc/conductor-ipc";
 import { widgetRegistry, type DynamicWidgetDefinition } from "..//widgets/registry";
 import { useRefineCaptureTarget } from "..//refine/useRefineCaptureTarget";
 import { RefineToolbarButton } from "..//refine/RefineToolbarButton";
-import { X, Warning, SpinnerGap, Robot } from "@phosphor-icons/react";
+import { XIcon, WarningIcon, SpinnerGapIcon, RobotIcon } from "@/components/icons";
 import { GRID_PX } from "../domain/canvas/units";
 
 interface WidgetShellProps {
@@ -121,7 +121,7 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
         <div className="flex items-center gap-2 min-w-0">
           {isAgentEditing && widget.state === "agent-editing" ? (
             <span className="flex items-center gap-1 text-[10px] text-[var(--accent)] animate-pulse">
-              <Robot size={11} />
+              <RobotIcon size={11} />
               <span className="hidden sm:inline">Agent</span>
             </span>
           ) : null}
@@ -129,10 +129,10 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
             {widget.config?.title as string || widget.type}
           </span>
           {widget.state === "loading" && (
-            <SpinnerGap size={12} className="animate-spin text-[var(--muted)]" />
+            <SpinnerGapIcon size={12} className="animate-spin text-[var(--muted)]" />
           )}
           {widget.state === "error" && (
-            <Warning size={12} className="text-[var(--error)]" />
+            <WarningIcon size={12} className="text-[var(--error)]" />
           )}
         </div>
         {editMode && (
@@ -146,7 +146,7 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
               onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
               onMouseLeave={(e) => (e.currentTarget.style.opacity = "0")}
             >
-              <X size={12} />
+              <XIcon size={12} />
             </button>
           </div>
         )}

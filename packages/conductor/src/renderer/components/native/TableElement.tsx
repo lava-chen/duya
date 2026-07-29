@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { GridFour, Minus, PaintBucket, Plus, TextAlignCenter, TextAlignLeft, TextAlignRight, TextB, TextItalic, TextT, Trash } from "@phosphor-icons/react";
+import { GridFourIcon, MinusIcon, PaintBucketIcon, PlusIcon, TextAlignCenterIcon, TextAlignLeftIcon, TextAlignRightIcon, TextBIcon, TextItalicIcon, TextTIcon, TrashIcon } from "@/components/icons";
 import type { CanvasElement } from "../..//types/conductor";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { CapsuleMoreMenu, CapsuleToolbar, CAPSULE_BTN_ACTIVE, CAPSULE_BTN_BASE, CAPSULE_DIVIDER } from "../toolbar/CapsuleToolbar";
@@ -266,23 +266,23 @@ function TableToolbar({ selected, style, headerFill, headerTextColor, borderColo
   const [picker, setPicker] = useState<"text" | "fill" | "border" | null>(null);
   const isHeader = selected?.row === -1;
   const valueFor = (target: "text" | "fill" | "border") => target === "border" ? borderColor : target === "text" ? (isHeader ? headerTextColor : style.color ?? "#27313f") : (isHeader ? headerFill : style.background ?? "#ffffff");
-  const colorButton = (target: "text" | "fill" | "border", Icon: typeof TextT, label: string) => <button type="button" title={label} disabled={target !== "border" && !selected} onClick={() => setPicker((current) => current === target ? null : target)} style={{ ...CAPSULE_BTN_BASE, ...(picker === target ? CAPSULE_BTN_ACTIVE : {}), opacity: target === "border" || selected ? 1 : 0.45 }}><Icon size={17} weight="bold" /><span aria-hidden style={{ position: "absolute", width: 12, height: 3, borderRadius: 3, background: valueFor(target), transform: "translateY(10px)" }} /></button>;
+  const colorButton = (target: "text" | "fill" | "border", Icon: typeof TextTIcon, label: string) => <button type="button" title={label} disabled={target !== "border" && !selected} onClick={() => setPicker((current) => current === target ? null : target)} style={{ ...CAPSULE_BTN_BASE, ...(picker === target ? CAPSULE_BTN_ACTIVE : {}), opacity: target === "border" || selected ? 1 : 0.45 }}><Icon size={17} /><span aria-hidden style={{ position: "absolute", width: 12, height: 3, borderRadius: 3, background: valueFor(target), transform: "translateY(10px)" }} /></button>;
   return <>
     <CapsuleToolbar top={-54} onMouseDown={(event) => event.preventDefault()}>
-      <button type="button" title="Bold" disabled={!selected} onClick={() => onStyle("bold")} style={{ ...CAPSULE_BTN_BASE, ...(style.bold ? CAPSULE_BTN_ACTIVE : {}), opacity: selected ? 1 : 0.45 }}><TextB size={17} weight="bold" /></button>
-      <button type="button" title="Italic" disabled={!selected} onClick={() => onStyle("italic")} style={{ ...CAPSULE_BTN_BASE, ...(style.italic ? CAPSULE_BTN_ACTIVE : {}), opacity: selected ? 1 : 0.45 }}><TextItalic size={17} weight="bold" /></button>
+      <button type="button" title="Bold" disabled={!selected} onClick={() => onStyle("bold")} style={{ ...CAPSULE_BTN_BASE, ...(style.bold ? CAPSULE_BTN_ACTIVE : {}), opacity: selected ? 1 : 0.45 }}><TextBIcon size={17} /></button>
+      <button type="button" title="Italic" disabled={!selected} onClick={() => onStyle("italic")} style={{ ...CAPSULE_BTN_BASE, ...(style.italic ? CAPSULE_BTN_ACTIVE : {}), opacity: selected ? 1 : 0.45 }}><TextItalicIcon size={17} /></button>
       <div style={CAPSULE_DIVIDER} />
-      <button type="button" title="Decrease font size" disabled={!selected} onClick={() => onFontSize(-1)} style={{ ...CAPSULE_BTN_BASE, opacity: selected ? 1 : 0.45 }}><Minus size={15} weight="bold" /></button>
+      <button type="button" title="Decrease font size" disabled={!selected} onClick={() => onFontSize(-1)} style={{ ...CAPSULE_BTN_BASE, opacity: selected ? 1 : 0.45 }}><MinusIcon size={15} /></button>
       <button type="button" title="Font size" disabled={!selected} style={{ ...CAPSULE_BTN_BASE, width: 24, fontSize: 13, fontWeight: 700, opacity: selected ? 1 : 0.45 }}>M</button>
-      <button type="button" title="Increase font size" disabled={!selected} onClick={() => onFontSize(1)} style={{ ...CAPSULE_BTN_BASE, opacity: selected ? 1 : 0.45 }}><Plus size={15} weight="bold" /></button>
+      <button type="button" title="Increase font size" disabled={!selected} onClick={() => onFontSize(1)} style={{ ...CAPSULE_BTN_BASE, opacity: selected ? 1 : 0.45 }}><PlusIcon size={15} /></button>
       <div style={CAPSULE_DIVIDER} />
-      {colorButton("text", TextT, isHeader ? "Header text color" : "Text color")}
-      {colorButton("fill", PaintBucket, isHeader ? "Header color" : "Cell fill color")}
-      {colorButton("border", GridFour, "Table border color")}
+      {colorButton("text", TextTIcon, isHeader ? "Header text color" : "Text color")}
+      {colorButton("fill", PaintBucketIcon, isHeader ? "Header color" : "Cell fill color")}
+      {colorButton("border", GridFourIcon, "Table border color")}
       <div style={CAPSULE_DIVIDER} />
-      {([ ["left", TextAlignLeft], ["center", TextAlignCenter], ["right", TextAlignRight] ] as const).map(([align, Icon]) => <button key={align} type="button" title={`Align ${align}`} disabled={!selected} onClick={() => onStyle("align", align)} style={{ ...CAPSULE_BTN_BASE, ...(style.align === align ? CAPSULE_BTN_ACTIVE : {}), opacity: selected ? 1 : 0.45 }}><Icon size={17} weight="bold" /></button>)}
+      {([ ["left", TextAlignLeftIcon], ["center", TextAlignCenterIcon], ["right", TextAlignRightIcon] ] as const).map(([align, Icon]) => <button key={align} type="button" title={`Align ${align}`} disabled={!selected} onClick={() => onStyle("align", align)} style={{ ...CAPSULE_BTN_BASE, ...(style.align === align ? CAPSULE_BTN_ACTIVE : {}), opacity: selected ? 1 : 0.45 }}><Icon size={17} /></button>)}
       <div style={CAPSULE_DIVIDER} />
-      <button type="button" title="Delete selected row or column" disabled={!selected} onClick={onDelete} style={{ ...CAPSULE_BTN_BASE, color: "#ff9d9d", opacity: selected ? 1 : 0.45 }}><Trash size={16} weight="bold" /></button>
+      <button type="button" title="Delete selected row or column" disabled={!selected} onClick={onDelete} style={{ ...CAPSULE_BTN_BASE, color: "#ff9d9d", opacity: selected ? 1 : 0.45 }}><TrashIcon size={16} /></button>
       <CapsuleMoreMenu
         items={[
           { label: locked ? "Unlock position" : "Lock position", onSelect: onToggleLock },

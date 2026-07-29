@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { FilePlus, FileText, FolderOpen, MagnifyingGlass, X } from "@phosphor-icons/react";
+import { FilePlusIcon, FileTextIcon, FolderOpenIcon, MagnifyingGlassIcon, XIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useConversationStore } from "@/stores/conversation-store";
 
@@ -135,7 +135,7 @@ export const DocumentCreateDialog: React.FC<DocumentCreateDialogProps> = ({ open
       <section className="canvas-document-picker" role="dialog" aria-modal="true" aria-label={t("conductor.document.title")} onMouseDown={(event) => event.stopPropagation()}>
         <header className="canvas-document-picker__header">
           <strong>{t("conductor.document.addTitle")}</strong>
-          <button type="button" onClick={onClose} aria-label={t("conductor.document.close")}><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label={t("conductor.document.close")}><XIcon size={18} /></button>
         </header>
 
         <section className="canvas-document-picker__agent">
@@ -150,22 +150,22 @@ export const DocumentCreateDialog: React.FC<DocumentCreateDialogProps> = ({ open
         <section className="canvas-document-picker__section">
           <h2>{t("conductor.document.manual")}</h2>
           <button type="button" className="canvas-document-picker__action" onClick={() => onConfirm()}>
-            <span className="canvas-document-picker__glyph"><FilePlus size={18} weight="bold" /></span>
+            <span className="canvas-document-picker__glyph"><FilePlusIcon size={18} /></span>
             <span><strong>{t("conductor.document.createBlank")}</strong><small>{t("conductor.document.createBlankDesc")}</small></span>
           </button>
           <button type="button" className="canvas-document-picker__action" disabled={!projectPath} onClick={() => { void chooseFromFolder(); }}>
-            <span className="canvas-document-picker__glyph"><FolderOpen size={18} weight="bold" /></span>
+            <span className="canvas-document-picker__glyph"><FolderOpenIcon size={18} /></span>
             <span><strong>{t("conductor.document.chooseFromFolder")}</strong><small>{t("conductor.document.chooseFromFolderDesc")}</small></span>
           </button>
         </section>
 
         <section className="canvas-document-picker__workspace">
           <div className="canvas-document-picker__workspace-heading"><h2>{t("conductor.document.workspaceMarkdown")}</h2><span>{loading ? t("conductor.document.loading") : t("conductor.document.fileCount", { count: files.length })}</span></div>
-          <label className="canvas-document-picker__search"><MagnifyingGlass size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("conductor.document.filterPlaceholder")} /></label>
+          <label className="canvas-document-picker__search"><MagnifyingGlassIcon size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("conductor.document.filterPlaceholder")} /></label>
           <div className="canvas-document-picker__file-list">
             {!projectPath ? <p>{t("conductor.document.selectProjectFirst")}</p> : loading ? <p>{t("conductor.document.scanning")}</p> : visibleFiles.length === 0 ? <p>{files.length ? t("conductor.document.noMatches") : t("conductor.document.noMarkdownFound")}</p> : visibleFiles.map((file) => (
               <button key={file.path} type="button" className="canvas-document-picker__file" onClick={() => onConfirm({ importPath: file.path })}>
-                <FileText size={17} weight="regular" /><span><strong>{file.name}</strong><small>{file.relativePath}</small></span>
+                <FileTextIcon size={17} /><span><strong>{file.name}</strong><small>{file.relativePath}</small></span>
               </button>
             ))}
           </div>

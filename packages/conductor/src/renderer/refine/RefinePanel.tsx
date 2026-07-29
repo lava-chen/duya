@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { X, SpinnerGap, ArrowsClockwise } from "@phosphor-icons/react";
+import { XIcon, SpinnerGapIcon, ArrowsClockwiseIcon } from "@/components/icons";
 import { useConductorStore } from "..//stores/conductor-store";
 import { useRefineStore } from "..//stores/refine-store";
 import { executeAction } from "..//ipc/conductor-ipc";
@@ -185,7 +185,7 @@ export function RefinePanel() {
           onClick={handleClose}
           className="flex items-center justify-center w-6 h-6 rounded-md text-[var(--muted)] hover:bg-[var(--surface-hover)] transition-colors"
         >
-          <X size={12} />
+          <XIcon size={12} />
         </button>
       </div>
 
@@ -219,7 +219,7 @@ export function RefinePanel() {
               disabled={initBusy}
               className="flex items-center gap-1 text-[10px] text-[var(--muted)] hover:text-[var(--accent)] disabled:opacity-50"
             >
-              <ArrowsClockwise size={10} />
+              <ArrowsClockwiseIcon size={10} />
               Recapture
             </button>
           </div>
@@ -230,7 +230,7 @@ export function RefinePanel() {
           >
             {initBusy && !initialShot && (
               <div className="flex items-center gap-2 text-[10px] text-[var(--muted)]">
-                <SpinnerGap size={11} className="animate-spin" />
+                <SpinnerGapIcon size={11} className="animate-spin" />
                 Capturing…
               </div>
             )}
@@ -314,7 +314,7 @@ export function RefinePanel() {
           className="flex items-center gap-1 text-[var(--muted)] hover:text-[var(--accent)] disabled:opacity-30"
           title="Revert last refine iteration"
         >
-          <ArrowsClockwise size={10} />
+          <ArrowsClockwiseIcon size={10} />
           Undo last iter
         </button>
       </div>

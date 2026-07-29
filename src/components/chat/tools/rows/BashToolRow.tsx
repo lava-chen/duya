@@ -15,6 +15,7 @@ import {
   SpinnerGapIcon,
   XCircleIcon,
 } from '@/components/icons';
+import { IconButton } from '@/components/ui/IconButton';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus } from '../registry';
 import type { ToolAction, ToolStatus } from '../types';
@@ -127,14 +128,18 @@ export function BashToolRow({ tool, streamingToolOutput }: BashToolRowProps) {
               <div className="group relative font-mono text-[13px] tool-card-subtle leading-relaxed pr-7">
                 <span className="tool-card-muted mr-1.5 select-none">$</span>
                 <span className="break-all">{cmd}</span>
-                <button
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  shape="square"
+                  size="sm"
+                  aria-label="Copy command"
                   onClick={(e) => { e.stopPropagation(); handleCopy(); }}
                   className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded tool-card-faint hover:tool-card-subtle hover:bg-black/5 dark:hover:bg-white/5"
                   title="Copy command"
                 >
                   {copied ? <CheckCircleIcon size={14} className="text-green-500" /> : <CopyIcon size={14} />}
-                </button>
+                </IconButton>
               </div>
 
               {/* Output */}

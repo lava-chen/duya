@@ -26,6 +26,8 @@ import {
   SettingsSelectRow,
 } from '@/components/settings/ui';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 
 interface PendingPairing {
   platform: string;
@@ -390,8 +392,9 @@ export default function BridgeSection() {
                 const enabledKey = `bridge_${channel.id}_enabled` as keyof BridgeSettings;
                 const isEnabled = settings?.[enabledKey] === 'true';
                 return (
-                  <button
+                  <Button
                     key={channel.id}
+                    variant="ghost"
                     onClick={() => setActiveChannel(channel.id)}
                     className={cn(
                       "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-200",
@@ -429,7 +432,7 @@ export default function BridgeSection() {
                         )}
                       />
                     </div>
-                  </button>
+                  </Button>
                 );
               })}
             </div>
@@ -563,7 +566,9 @@ export default function BridgeSection() {
                   <span className={`w-1.5 h-1.5 rounded-full ${status?.running ? "bg-green-500" : "bg-muted-foreground"}`} />
                   {status?.running ? t("bridge.running") : t("bridge.stopped")}
                 </span>
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => controlBridge(status?.running ? 'stop' : 'start')}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                     status?.running
@@ -573,7 +578,7 @@ export default function BridgeSection() {
                 >
                   {status?.running ? <StopIcon size={14} /> : <PlayCircleIcon size={14} />}
                   {status?.running ? t("bridge.stop") : t("bridge.start")}
-                </button>
+                </Button>
               </div>
             }
           />
@@ -590,13 +595,16 @@ export default function BridgeSection() {
             onChange={(v) => updateSetting('bridge_proxy_url', v)}
             placeholder="http://127.0.0.1:7890"
             action={
-              <button
-                onClick={fetchProxyStatus}
-                className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors shrink-0"
+              <IconButton
+                variant="default"
+                size="sm"
+                aria-label="Refresh proxy detection"
                 title="Refresh proxy detection"
+                onClick={fetchProxyStatus}
+                className="shrink-0"
               >
                 <ArrowsClockwiseIcon size={14} />
-              </button>
+              </IconButton>
             }
           />
           {proxyStatus && (
@@ -651,12 +659,14 @@ export default function BridgeSection() {
                         {p.platformUserId}
                       </span>
                     </div>
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="sm"
                       onClick={() => { setPairingCode(p.code); setPairingPlatform(p.platform); handlePairingApprove(); }}
-                      className="text-xs px-2 py-1 rounded bg-warning/20 text-warning hover:bg-warning/30 transition-colors shrink-0"
+                      className="shrink-0 bg-warning/20 text-warning hover:bg-warning/30"
                     >
                       Approve
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
@@ -690,13 +700,15 @@ export default function BridgeSection() {
                 maxLength={8}
                 className="flex-1 h-9 rounded-lg border border-border/50 bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-accent"
               />
-              <button
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={handlePairingApprove}
                 disabled={pairingLoading || !pairingCode.trim()}
-                className="h-9 px-4 rounded-lg text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/90 transition-all disabled:opacity-50 shrink-0"
+                className="h-9 shrink-0"
               >
                 {pairingLoading ? <SpinnerGapIcon size={14} className="animate-spin" /> : 'Approve'}
-              </button>
+              </Button>
             </div>
             {pairingError && (
               <p className="text-xs text-destructive mt-1.5">{pairingError}</p>
@@ -720,12 +732,14 @@ export default function BridgeSection() {
                         {a.platformUserId}
                       </span>
                     </div>
-                    <button
+                    <Button
+                      variant="danger"
+                      size="sm"
                       onClick={() => handlePairingRevoke(a.platform, a.platformUserId)}
-                      className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
+                      className="shrink-0"
                     >
                       Revoke
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
@@ -915,10 +929,11 @@ function WeChatSettingsPanel({
             </span>
           )}
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={onTest}
           disabled={testing || !enabled}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
         >
           {testing ? (
             <SpinnerGapIcon size={14} className="animate-spin" />
@@ -932,7 +947,7 @@ function WeChatSettingsPanel({
             <CircleNotchIcon size={14} />
           )}
           {t('bridge.test')}
-        </button>
+        </Button>
       </div>
 
       {/* Test Result */}
@@ -987,26 +1002,30 @@ function WeChatSettingsPanel({
                     />
                     {deleteConfirm === account.account_id ? (
                       <div className="flex items-center gap-1">
-                        <button
-                          className="text-xs px-2 py-1 rounded bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
+                        <Button
+                          variant="danger"
+                          size="sm"
                           onClick={() => handleDeleteAccount(account.account_id)}
                         >
                           Delete
-                        </button>
-                        <button
-                          className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => setDeleteConfirm(null)}
                         >
                           Cancel
-                        </button>
+                        </Button>
                       </div>
                     ) : (
-                      <button
-                        className="text-muted-foreground hover:text-destructive text-xs transition-colors"
+                      <IconButton
+                        variant="danger"
+                        size="sm"
+                        aria-label="Delete"
                         onClick={() => setDeleteConfirm(account.account_id)}
                       >
                         <TrashIcon size={14} />
-                      </button>
+                      </IconButton>
                     )}
                   </div>
                 </div>
@@ -1018,14 +1037,14 @@ function WeChatSettingsPanel({
 
           {/* QR Login */}
           {!qrImage ? (
-            <button
+            <Button
+              variant="primary"
               onClick={startQrLogin}
               disabled={qrLoading}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-accent text-accent-foreground hover:bg-accent/90 transition-all shadow-sm"
             >
               {qrLoading ? <SpinnerGapIcon size={16} className="animate-spin" /> : <GlobeIcon size={16} />}
               {t('bridge.addAccountQr')}
-            </button>
+            </Button>
           ) : (
             <div className="mt-3 rounded-lg border border-border/50 p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -1033,12 +1052,13 @@ function WeChatSettingsPanel({
                   <GlobeIcon size={16} />
                   {t('bridge.wechatQrLogin')}
                 </h3>
-                <button
-                  className="text-xs px-2 py-1 rounded bg-muted hover:bg-muted/80 transition-colors"
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={cancelQrLogin}
                 >
                   {t('bridge.cancel')}
-                </button>
+                </Button>
               </div>
 
               <div className="flex justify-center">
@@ -1158,10 +1178,11 @@ function ChannelSettingsPanel({
             </span>
           )}
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={onTest}
           disabled={testing || !enabled}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
         >
           {testing ? (
             <SpinnerGapIcon size={14} className="animate-spin" />
@@ -1175,7 +1196,7 @@ function ChannelSettingsPanel({
             <CircleNotchIcon size={14} />
           )}
           {t('bridge.test')}
-        </button>
+        </Button>
       </div>
 
       {/* Test Result */}
@@ -1258,10 +1279,11 @@ function WhatsAppSettingsPanel({
             </span>
           )}
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={onTest}
           disabled={testing || !enabled}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
         >
           {testing ? (
             <SpinnerGapIcon size={14} className="animate-spin" />
@@ -1275,7 +1297,7 @@ function WhatsAppSettingsPanel({
             <CircleNotchIcon size={14} />
           )}
           {t('bridge.test')}
-        </button>
+        </Button>
       </div>
 
       {/* Test Result */}
@@ -1529,10 +1551,11 @@ function FeishuSettingsPanel({
             </span>
           )}
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={onTest}
           disabled={testing || !enabled}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
         >
           {testing ? (
             <SpinnerGapIcon size={14} className="animate-spin" />
@@ -1546,7 +1569,7 @@ function FeishuSettingsPanel({
             <CircleNotchIcon size={14} />
           )}
           {t('bridge.test')}
-        </button>
+        </Button>
       </div>
 
       {/* Test Result */}
@@ -1578,14 +1601,14 @@ function FeishuSettingsPanel({
       {!hasValidAppId && !qrImage ? (
         <div className="mb-6">
           <p className="text-sm text-muted-foreground mb-3">Scan QR code to create a Feishu app automatically:</p>
-          <button
+          <Button
+            variant="primary"
             onClick={startQrLogin}
             disabled={qrLoading}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-accent text-accent-foreground hover:bg-accent/90 transition-all shadow-sm"
           >
             {qrLoading ? <SpinnerGapIcon size={16} className="animate-spin" /> : <GlobeIcon size={16} />}
             {t('bridge.feishuQrRegister')}
-          </button>
+          </Button>
           {qrError && (
             <p className="text-xs text-destructive mt-2">{qrError}</p>
           )}
@@ -1597,12 +1620,13 @@ function FeishuSettingsPanel({
               <GlobeIcon size={16} />
               {t('bridge.feishuQrScanning')}
             </h3>
-            <button
-              className="text-xs px-2 py-1 rounded bg-muted hover:bg-muted/80 transition-colors"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={cancelQrLogin}
             >
               {t('bridge.cancel')}
-            </button>
+            </Button>
           </div>
 
           <div className="flex justify-center">
@@ -1709,7 +1733,8 @@ function FeishuSettingsPanel({
         {hasValidAppId && !qrImage && (
           <div className="pt-4 border-t border-border/30">
             <p className="text-sm text-muted-foreground mb-3">Want to switch to a different Feishu account?</p>
-            <button
+            <Button
+              variant="danger"
               onClick={async () => {
                 // Clear current credentials
                 await updateSetting('bridge_feishu_enabled', 'false', true);
@@ -1717,11 +1742,10 @@ function FeishuSettingsPanel({
                 await updateSetting('bridge_feishu_app_secret', '', true);
                 onSettingsChange?.();
               }}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500/20 transition-all"
             >
               <ArrowsClockwiseIcon size={16} />
               Reconfigure Feishu Account
-            </button>
+            </Button>
           </div>
         )}
       </div>

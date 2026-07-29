@@ -1,6 +1,7 @@
 "use client";
 
 import { PlusIcon, CheckIcon, WarningIcon, ProhibitIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import type { PluginCatalogEntry } from "@/lib/plugin-types";
 
@@ -69,8 +70,8 @@ export function PluginCard({
   };
 
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       className={cn(
         "group w-full rounded-xl border px-4 py-4 text-left transition-all duration-150",
         "border-border/40 bg-surface/40",
@@ -112,6 +113,6 @@ export function PluginCard({
           {renderActionButton()}
         </div>
       </div>
-    </button>
+    </Button>
   );
 }

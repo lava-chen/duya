@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { DotsThree } from "@phosphor-icons/react";
+import { DotsThreeIcon } from "@/components/icons";
 import { useConductorStore } from "../../stores/conductor-store";
 
 /**
@@ -189,7 +189,7 @@ export function CapsuleMoreMenu({
           ...(open ? CAPSULE_BTN_ACTIVE : {}),
         }}
       >
-        <DotsThree size={18} weight="bold" />
+        <DotsThreeIcon size={18} />
       </button>
       {open && (
         <div

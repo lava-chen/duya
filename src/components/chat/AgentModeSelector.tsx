@@ -8,6 +8,7 @@ import {
   BrainIcon,
   RobotIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import {
   listAgentProfiles,
   type AgentProfile,
@@ -157,9 +158,11 @@ export function AgentModeSelector({ value, onChange, disabled = false }: AgentMo
         const Icon = mode.icon;
 
         return (
-          <button
+          <Button
             key={mode.profileId}
             type="button"
+            variant="ghost"
+            size="sm"
             disabled={disabled}
             onClick={() => handleClick(mode.id, mode.profileId)}
             className="relative flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -182,7 +185,7 @@ export function AgentModeSelector({ value, onChange, disabled = false }: AgentMo
               <Icon size={12} stroke={isActive ? 2.5 : 1.5} />
               <span>{mode.label}</span>
             </span>
-          </button>
+          </Button>
         );
       })}
     </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowArcLeft, ArrowArcRight, GearSix } from "@phosphor-icons/react";
+import { ArrowArcLeftIcon, ArrowArcRightIcon, GearSixIcon } from "@/components/icons";
 import { useConductorStore } from "../stores/conductor-store";
 import { ConductorSettings } from "./ConductorSettings";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -33,7 +33,7 @@ export function CanvasStatusBar() {
           title={t("conductor.status.undo")}
           className="flex items-center justify-center w-7 h-7 rounded-full text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
         >
-          <ArrowArcLeft size={14} weight="regular" />
+          <ArrowArcLeftIcon size={14} />
         </button>
         <button
           type="button"
@@ -42,7 +42,7 @@ export function CanvasStatusBar() {
           title={t("conductor.status.redo")}
           className="flex items-center justify-center w-7 h-7 rounded-full text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
         >
-          <ArrowArcRight size={14} weight="regular" />
+          <ArrowArcRightIcon size={14} />
         </button>
       </div>
 
@@ -59,7 +59,7 @@ export function CanvasStatusBar() {
         title={t("conductor.status.settings")}
         className="flex items-center justify-center w-7 h-7 rounded-full text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors"
       >
-        <GearSix size={14} weight="regular" />
+        <GearSixIcon size={14} />
       </button>
 
       <ConductorSettings />

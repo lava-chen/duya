@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { GearSix, X, Eye, Lightning, ShieldWarning, Check } from "@phosphor-icons/react";
+import { GearSixIcon, XIcon, EyeIcon, LightningIcon, ShieldWarningIcon, CheckIcon } from "@/components/icons";
 import { useConductorStore } from "../stores/conductor-store";
 import type { ModelOption } from "../host";
 
@@ -147,7 +147,7 @@ function SettingsPopover({ onClose, loading, children }: SettingsPopoverProps) {
         style={{ borderColor: "var(--conductor-border)" }}
       >
         <div className="flex items-center gap-2">
-          <GearSix size={14} style={{ color: "var(--text-secondary)" }} />
+          <GearSixIcon size={14} style={{ color: "var(--text-secondary)" }} />
           <span
             style={{
               color: "var(--text-primary)",
@@ -173,7 +173,7 @@ function SettingsPopover({ onClose, loading, children }: SettingsPopoverProps) {
           }}
           aria-label="Close settings"
         >
-          <X size={12} weight="bold" />
+          <XIcon size={12} />
         </button>
       </div>
 
@@ -319,7 +319,7 @@ function ModelDropdown({
               <span className="flex-1 truncate" style={{ color: "var(--text-tertiary)" }}>
                 {placeholder}
               </span>
-              {!value && <Check size={12} style={{ color: "var(--conductor-accent)" }} />}
+              {!value && <CheckIcon size={12} style={{ color: "var(--conductor-accent)" }} />}
             </button>
 
             {models.length === 0 ? (
@@ -360,7 +360,7 @@ function ModelDropdown({
                     </span>
                   </span>
                   {m.id === value && (
-                    <Check size={12} style={{ color: "var(--conductor-accent)" }} />
+                    <CheckIcon size={12} style={{ color: "var(--conductor-accent)" }} />
                   )}
                 </button>
               ))
@@ -381,25 +381,25 @@ type PermissionMode = "default" | "auto" | "bypass";
 const PERMISSION_MODES: Array<{
   id: PermissionMode;
   label: string;
-  icon: typeof Eye;
+  icon: typeof EyeIcon;
   description: string;
 }> = [
   {
     id: "default",
     label: "Ask",
-    icon: Eye,
+    icon: EyeIcon,
     description: "Confirm before destructive actions (delete, arrange, clear)",
   },
   {
     id: "auto",
     label: "Auto",
-    icon: Lightning,
+    icon: LightningIcon,
     description: "Execute non-destructive actions automatically; ask for destructive ones",
   },
   {
     id: "bypass",
     label: "Bypass",
-    icon: ShieldWarning,
+    icon: ShieldWarningIcon,
     description: "Execute everything without asking. Fast but risky.",
   },
 ];
@@ -440,7 +440,6 @@ function PermissionModeSelector({ value, onChange }: PermissionModeSelectorProps
           >
             <Icon
               size={12}
-              weight={isActive ? "fill" : "regular"}
               style={{
                 color: isActive ? "var(--conductor-accent)" : "var(--text-secondary)",
                 marginTop: 1,

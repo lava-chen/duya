@@ -2,6 +2,8 @@
 
 import { useRef, useEffect, useState, useMemo } from "react";
 import { XIcon, CubeIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import { cn } from "@/lib/utils";
 import type { PluginCatalogEntry, PluginCapabilityDisplay, PluginPermissionDisplay } from "@/lib/plugin-types";
 import {
@@ -171,9 +173,14 @@ export function PluginInstallModal({
               <span className="text-sm text-foreground">{plugin.name}</span>
             </div>
           </div>
-          <button onClick={onCancel} className="p-2 rounded-lg hover:bg-muted transition-colors">
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label="Close"
+            onClick={onCancel}
+          >
             <XIcon size={18} />
-          </button>
+          </IconButton>
         </div>
 
         {/* Content */}
@@ -297,22 +304,20 @@ export function PluginInstallModal({
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 p-5 border-t border-border/50 shrink-0">
-          <button
-            type="button"
-            className="rounded-lg border border-border/60 px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          <Button
+            variant="secondary"
             onClick={onCancel}
             disabled={busy}
           >
             Cancel
-          </button>
-          <button
-            type="button"
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          </Button>
+          <Button
+            variant="primary"
             onClick={onInstall}
             disabled={busy}
           >
             {busy ? "Installing..." : "Install Plugin"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

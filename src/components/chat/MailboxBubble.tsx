@@ -18,7 +18,9 @@
 'use client';
 
 import React, { useState, useCallback } from 'react';
-import { Pencil, Trash, DotsThree, ArrowBendDownRight, X } from '@phosphor-icons/react';
+import { PencilIcon, TrashIcon, DotsThreeIcon, ArrowBendDownRightIcon, XIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import type { MailboxRow, MailboxKind } from '@/stores/mailbox-store';
 import { useTranslation } from '@/hooks/useTranslation';
 
@@ -114,22 +116,27 @@ export function MailboxBubble({
           className="mailbox-bubble-input"
           autoFocus
         />
-        <button
+        <Button
           type="button"
+          variant="primary"
+          size="sm"
           onClick={handleSaveEdit}
           className="mailbox-bubble-save"
         >
           {t('mailbox.bubble.save')}
-        </button>
-        <button
+        </Button>
+        <IconButton
           type="button"
+          variant="ghost"
+          shape="square"
+          size="sm"
           onClick={() => setIsEditing(false)}
           className="mailbox-bubble-action"
           title={t('mailbox.bubble.cancelEdit')}
           aria-label={t('mailbox.bubble.cancelEdit')}
         >
-          <X size={13} />
-        </button>
+          <XIcon size={13} />
+        </IconButton>
       </div>
     );
   }
@@ -154,48 +161,59 @@ export function MailboxBubble({
       {/* Per-row actions: guide / delete / more — always visible */}
       <div className="mailbox-bubble-actions">
         {isPending && !isGuided && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={handleGuide}
             className="mailbox-bubble-action mailbox-bubble-action--guide"
             title={t('mailbox.bubble.guideHint')}
             aria-label={t('mailbox.guide')}
           >
-            <ArrowBendDownRight size={13} />
+            <ArrowBendDownRightIcon size={13} />
             <span>{t('mailbox.guide')}</span>
-          </button>
+          </Button>
         )}
         {isPending && isGuided && (
           <span className="mailbox-bubble-guided">{t('mailbox.bubble.guiding')}</span>
         )}
         {isPending && (
-          <button
+          <IconButton
             type="button"
+            variant="danger"
+            shape="square"
+            size="sm"
             onClick={handleCancel}
             className="mailbox-bubble-action mailbox-bubble-action--danger"
             title={t('mailbox.bubble.delete')}
             aria-label={t('mailbox.bubble.delete')}
           >
-            <Trash size={13} />
-          </button>
+            <TrashIcon size={13} />
+          </IconButton>
         )}
-        <button
+        <IconButton
           type="button"
+          variant="ghost"
+          shape="square"
+          size="sm"
           onClick={handleMore}
           className="mailbox-bubble-action"
           title={t('mailbox.more')}
           aria-label={t('mailbox.more')}
         >
-          <DotsThree size={13} weight="bold" />
-        </button>
+          <DotsThreeIcon size={13} />
+        </IconButton>
       </div>
 
       {/* Hover actions — edit (separate so it doesn't clash with the
           always-visible guide/delete/more) */}
       {isPending && (
         <div className="mailbox-bubble-hover-actions">
-          <button
+          <IconButton
             type="button"
+            variant="ghost"
+            shape="square"
+            size="sm"
             onClick={() => {
               setEditContent(row.content);
               setIsEditing(true);
@@ -204,8 +222,8 @@ export function MailboxBubble({
             title={t('mailbox.bubble.edit')}
             aria-label={t('mailbox.bubble.edit')}
           >
-            <Pencil size={13} />
-          </button>
+            <PencilIcon size={13} />
+          </IconButton>
         </div>
       )}
     </div>

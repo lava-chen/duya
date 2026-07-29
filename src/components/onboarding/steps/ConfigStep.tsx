@@ -7,6 +7,7 @@ import {
   ArrowUpRightIcon,
   ArrowLeftIcon,
 } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import { QUICK_PRESETS } from "@/lib/provider-presets";
 import type { OnboardingState } from "../OnboardingFlow";
 import type { QuickPreset } from "@/lib/provider-presets";
@@ -190,19 +191,17 @@ export function ConfigStep({ state, onUpdateState, error, isLoading, onConnect, 
 
       {/* Footer actions */}
       <div className="flex items-center justify-between pt-4 border-t border-[var(--border)] mt-4">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-[var(--chip)] rounded-lg transition-all"
-        >
+        <Button variant="ghost" size="md" onClick={onBack}>
           <ArrowLeftIcon size={16} />
           {t("common.back")}
-        </button>
+        </Button>
 
         {state.selectedPreset ? (
-          <button
+          <Button
+            variant="primary"
+            size="md"
             onClick={() => setDialogOpen(true)}
             disabled={isLoading}
-            className="flex items-center gap-2 px-6 py-2.5 bg-[var(--accent)] text-white rounded-lg text-sm font-medium hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? (
               <>
@@ -212,7 +211,7 @@ export function ConfigStep({ state, onUpdateState, error, isLoading, onConnect, 
             ) : (
               t("onboarding.connect")
             )}
-          </button>
+          </Button>
         ) : (
           <span className="text-sm text-muted-foreground">{t("onboarding.configDesc")}</span>
         )}

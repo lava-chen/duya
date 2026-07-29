@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { LightningIcon, SearchIcon, ChevronDownIcon, ChevronUpIcon } from "@/components/icons";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
+import { Button } from "@/components/ui/Button";
 import { useTranslation } from "@/hooks/useTranslation";
 
 interface SkillMetadata {
@@ -370,12 +371,13 @@ export function SkillsView() {
       ) : error ? (
         <div className="empty-state py-12">
           <p className="text-[var(--error)] text-[0.9rem] mb-2">{error}</p>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => void loadSkills()}
-            className="text-[var(--accent)] text-[0.85rem] hover:underline"
           >
             {t('skills.retry')}
-          </button>
+          </Button>
         </div>
       ) : filteredSkills.length === 0 ? (
         <div className="empty-state py-12">

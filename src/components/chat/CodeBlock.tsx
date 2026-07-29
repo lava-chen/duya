@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CopyIcon, CheckIcon, CheckCircleIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { useTheme } from '@/hooks/useTheme';
 
 interface CodeBlockProps {
@@ -36,7 +37,9 @@ export function CodeBlock({ children, className, copyLabel = 'Copy', copiedLabel
     <div className={`relative group rounded-lg overflow-hidden border ${borderColor} ${bgColor}`}>
       <div className={`flex items-center justify-between px-4 py-2 text-xs ${bgColor} ${isDark ? 'text-[#8b949e]' : 'text-muted-foreground/70'}`}>
         <span className="font-medium" style={{ fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}>{language || 'text'}</span>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={copyCode}
           className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${isDark ? 'hover:bg-[#333333]' : 'hover:bg-muted/50'}`}
         >
@@ -51,7 +54,7 @@ export function CodeBlock({ children, className, copyLabel = 'Copy', copiedLabel
               <span>{copyLabel}</span>
             </>
           )}
-        </button>
+        </Button>
       </div>
       <div className={`p-4 overflow-x-auto ${bgColor}`}>
         <SyntaxHighlighter

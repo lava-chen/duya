@@ -4,13 +4,13 @@
 import type { ComponentType } from "react";
 import {
   FolderIcon,
-  FileText,
-  GitDiff,
+  FileTextIcon,
+  GitDiffIcon,
   GlobeIcon,
   SquaresFourIcon,
   TerminalIcon,
   type IconProps,
-} from "@phosphor-icons/react";
+} from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
 import { FileTreePanel } from "./FileTreePanel";
 import { SidebarConductorView } from "./SidebarConductorView";
@@ -73,7 +73,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   preview: {
     id: "preview",
     labelKey: "panel.preview",
-    icon: FileText,
+    icon: FileTextIcon,
     multiInstance: true,
     available: true,
     minWidth: 640,
@@ -84,7 +84,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   review: {
     id: "review",
     labelKey: "panel.review",
-    icon: GitDiff,
+    icon: GitDiffIcon,
     multiInstance: false,
     available: true,
     minWidth: 460,
@@ -131,7 +131,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   office: {
     id: "office",
     labelKey: "panel.office",
-    icon: FileText,
+    icon: FileTextIcon,
     multiInstance: true,
     available: true,
     minWidth: 520,

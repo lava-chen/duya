@@ -29,6 +29,8 @@ import {
 import { ImportFlow } from "@/components/import/ImportFlow";
 import { historyImportIPC, detectImportIPC } from "@/lib/import-ipc";
 import type { ImportSource } from "@/types/import";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 
 interface MigrationInfo {
   needed: boolean;
@@ -345,9 +347,15 @@ export function GeneralSection() {
                 <p className="text-sm text-muted-foreground">{t("settings.general.restartRequired")}</p>
               </div>
             </div>
-            <button onClick={() => setShowRestartPrompt(false)} className="p-1 hover:bg-muted rounded shrink-0">
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label={t("common.close")}
+              onClick={() => setShowRestartPrompt(false)}
+              className="shrink-0"
+            >
               <XIcon size={16} />
-            </button>
+            </IconButton>
           </div>
         </div>
       )}
@@ -382,28 +390,28 @@ export function GeneralSection() {
               </div>
             )}
             <div className="flex items-center justify-end gap-2">
-              <button
+              <Button
+                variant="ghost"
                 onClick={closeMigrationDialog}
-                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
                 disabled={isMigrating}
               >
                 {t("settings.general.cancel")}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={handleMigrateCancel}
-                className="px-4 py-2 rounded-lg text-sm border border-border/50 hover:bg-muted transition-colors"
                 disabled={isMigrating}
               >
                 {t("settings.general.useNewLocation")}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleMigrateConfirm}
-                className="px-4 py-2 rounded-lg text-sm bg-accent text-white hover:bg-accent/90 transition-colors flex items-center gap-2"
                 disabled={isMigrating}
               >
                 {isMigrating && <SpinnerGapIcon size={14} className="animate-spin" />}
                 {isMigrating ? t("settings.general.migrating") : t("settings.general.migrateData")}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -450,21 +458,25 @@ export function GeneralSection() {
                 <span className="text-sm text-muted-foreground max-w-[200px] truncate">
                   {settings?.databasePath || t("settings.general.defaultLocation")}
                 </span>
-                <button
-                  onClick={selectDatabaseFolder}
-                  className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
+                <IconButton
+                  variant="default"
+                  size="sm"
+                  aria-label={t("common.open")}
                   title={t("common.open")}
+                  onClick={selectDatabaseFolder}
                 >
                   <FolderIcon size={16} />
-                </button>
+                </IconButton>
                 {settings?.databasePath && (
-                  <button
-                    onClick={resetDatabasePath}
-                    className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
+                  <IconButton
+                    variant="default"
+                    size="sm"
+                    aria-label={t("common.reset")}
                     title={t("common.reset")}
+                    onClick={resetDatabasePath}
                   >
                     <XIcon size={16} />
-                  </button>
+                  </IconButton>
                 )}
               </div>
             }
@@ -477,21 +489,25 @@ export function GeneralSection() {
                 <span className="text-sm text-muted-foreground max-w-[200px] truncate">
                   {settings?.workspaceDir || t("settings.general.defaultWorkspacePlaceholder")}
                 </span>
-                <button
-                  onClick={selectWorkspaceFolder}
-                  className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
+                <IconButton
+                  variant="default"
+                  size="sm"
+                  aria-label={t("common.change")}
                   title={t("common.change")}
+                  onClick={selectWorkspaceFolder}
                 >
                   <FolderIcon size={16} />
-                </button>
+                </IconButton>
                 {settings?.workspaceDir && (
-                  <button
-                    onClick={() => save({ workspaceDir: undefined })}
-                    className="p-2 rounded-lg border border-border/50 hover:bg-muted transition-colors"
+                  <IconButton
+                    variant="default"
+                    size="sm"
+                    aria-label={t("common.reset")}
                     title={t("common.reset")}
+                    onClick={() => save({ workspaceDir: undefined })}
                   >
                     <XIcon size={16} />
-                  </button>
+                  </IconButton>
                 )}
               </div>
             }
@@ -515,11 +531,10 @@ export function GeneralSection() {
             onCheckedChange={(checked) => save({ soundEffectsEnabled: checked })}
           />
           <SettingsCardFooter>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
               onClick={handleTestNotification}
               disabled={notificationTestStatus === "testing" || !settings?.notificationsEnabled}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-border/50 hover:bg-muted transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {notificationTestStatus === "testing" ? (
                 <SpinnerGapIcon size={14} className="animate-spin" />
@@ -537,7 +552,7 @@ export function GeneralSection() {
                 : notificationTestStatus === "error"
                 ? t("settings.general.failed")
                 : t("settings.general.testNotification")}
-            </button>
+            </Button>
           </SettingsCardFooter>
         </SettingsCard>
       </SettingsSection>
@@ -555,12 +570,12 @@ export function GeneralSection() {
                 : t("settings.general.noImportHistory")
             }
             action={
-              <button
+              <Button
+                variant="secondary"
                 onClick={handleReimport}
-                className="px-4 py-2 rounded-lg text-sm font-medium border border-border/50 hover:bg-muted transition-colors"
               >
                 {t("settings.general.reimport")}
-              </button>
+              </Button>
             }
           />
         </SettingsCard>
@@ -573,12 +588,14 @@ export function GeneralSection() {
           <div className="relative z-10 w-full max-w-md mx-4 bg-[var(--bg-surface)] border border-border/50 rounded-xl shadow-xl p-6">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-semibold">{t("settings.general.importFromAIApps")}</h3>
-              <button
+              <IconButton
+                variant="ghost"
+                size="sm"
+                aria-label="Close"
                 onClick={() => setShowImportModal(false)}
-                className="p-1 hover:bg-muted rounded transition-colors"
               >
                 <XIcon size={18} />
-              </button>
+              </IconButton>
             </div>
 
             <div className="mb-4">
@@ -631,25 +648,25 @@ export function GeneralSection() {
             </p>
 
             <div className="flex items-center justify-end gap-2">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setShowImportModal(false)}
-                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
                 {t("common.cancel")}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={handleImportCustom}
-                className="px-4 py-2 rounded-lg text-sm border border-border/50 hover:bg-muted transition-colors"
               >
                 {t("settings.general.customize")}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleImportContinue}
-                className="px-4 py-2 rounded-lg text-sm bg-accent text-white hover:bg-accent/90 transition-colors"
                 disabled={!Object.values(selectedSources).some(Boolean)}
               >
                 {t("common.continue")}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
