@@ -191,7 +191,7 @@ function stripOrphanToolResults(messages: MessageParam[]): MessageParam[] {
  * - model.compat?.forceAdaptiveThinking → { type: 'adaptive' } (MiniMax shape).
  * - Otherwise → { type: 'enabled', budget_tokens } capped at 80% of maxTokens.
  */
-function resolveAnthropicThinking(
+export function resolveAnthropicThinking(
   model: Model<'anthropic'>,
   effort?: string,
 ): { type: 'enabled'; budget_tokens: number } | { type: 'adaptive' } | undefined {

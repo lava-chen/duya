@@ -93,4 +93,128 @@ export const OPENAI_PRESETS: ProviderPreset[] = [
     },
     legacyProtocol: 'openai-compatible',
   },
+
+  // ── MiniMax OpenAI-compatible (dual-protocol, spec §9) ──
+  // MiniMax offers both Anthropic-compatible (/anthropic) and
+  // OpenAI-compatible (/v1) endpoints. These presets use the
+  // OpenAI path. @duya/ai resolves compat: { openAIThinkingFormat:
+  // 'reasoning-content' } for MiniMax-M3 via findModelCompat.
+  {
+    key: 'minimax-openai-cn',
+    name: 'MiniMax (OpenAI, CN)',
+    description: 'MiniMax via OpenAI-compatible API — China region',
+    descriptionZh: 'MiniMax OpenAI 兼容接口 — 中国区',
+    category: 'aggregator',
+    apiFormat: 'openai-chat',
+    authFields: BEARER_AUTH_FIELDS,
+    defaultEndpoint: 'https://api.minimaxi.com/v1',
+    modelsSource: { type: 'static' },
+    defaultModels: ['MiniMax-M3'],
+    ui: {
+      icon: 'minimax',
+      iconColor: '#FF6B6B',
+      websiteUrl: 'https://platform.minimaxi.com',
+      apiKeyUrl: 'https://platform.minimaxi.com/user-center/payment/token-plan',
+    },
+    legacyProtocol: 'openai-compatible',
+  },
+  {
+    key: 'minimax-openai-global',
+    name: 'MiniMax (OpenAI, Global)',
+    description: 'MiniMax via OpenAI-compatible API — Global region',
+    descriptionZh: 'MiniMax OpenAI 兼容接口 — 国际区',
+    category: 'aggregator',
+    apiFormat: 'openai-chat',
+    authFields: BEARER_AUTH_FIELDS,
+    defaultEndpoint: 'https://api.minimax.io/v1',
+    modelsSource: { type: 'static' },
+    defaultModels: ['MiniMax-M3'],
+    ui: {
+      icon: 'minimax',
+      iconColor: '#FF6B6B',
+      websiteUrl: 'https://platform.minimax.io',
+      apiKeyUrl: 'https://www.minimax.io/platform-center/api-keys',
+    },
+    legacyProtocol: 'openai-compatible',
+  },
+
+  // ── Domestic OpenAI-compatible providers (compat via @duya/ai) ──
+  // findModelCompat('openai-chat', modelId) resolves the correct
+  // openAIThinkingFormat for each provider's reasoning output format.
+  {
+    key: 'deepseek-openai',
+    name: 'DeepSeek',
+    description: 'DeepSeek API (OpenAI-compatible)',
+    descriptionZh: 'DeepSeek API (OpenAI 兼容)',
+    category: 'official',
+    apiFormat: 'openai-chat',
+    authFields: BEARER_AUTH_FIELDS,
+    defaultEndpoint: 'https://api.deepseek.com/v1',
+    modelsSource: { type: 'static' },
+    defaultModels: ['deepseek-reasoner', 'deepseek-chat'],
+    defaultModelLabels: {
+      'deepseek-reasoner': 'DeepSeek R1 (Reasoning)',
+      'deepseek-chat': 'DeepSeek V3 (Chat)',
+    },
+    ui: {
+      icon: 'deepseek',
+      websiteUrl: 'https://platform.deepseek.com',
+      apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+    },
+    legacyProtocol: 'openai-compatible',
+  },
+  {
+    key: 'qwen-openai',
+    name: 'Qwen (DashScope)',
+    description: 'Alibaba Qwen via DashScope OpenAI-compatible API',
+    descriptionZh: '阿里通义千问 DashScope OpenAI 兼容接口',
+    category: 'official',
+    apiFormat: 'openai-chat',
+    authFields: BEARER_AUTH_FIELDS,
+    defaultEndpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    modelsSource: { type: 'static' },
+    defaultModels: ['qwq-32b-preview'],
+    ui: {
+      icon: 'qwen',
+      websiteUrl: 'https://dashscope.console.aliyun.com',
+      apiKeyUrl: 'https://dashscope.console.aliyun.com/apiKey',
+    },
+    legacyProtocol: 'openai-compatible',
+  },
+  {
+    key: 'glm-openai',
+    name: 'GLM (Zhipu)',
+    description: 'Zhipu GLM via OpenAI-compatible API',
+    descriptionZh: '智谱 GLM OpenAI 兼容接口',
+    category: 'official',
+    apiFormat: 'openai-chat',
+    authFields: BEARER_AUTH_FIELDS,
+    defaultEndpoint: 'https://open.bigmodel.cn/api/paas/v4',
+    modelsSource: { type: 'static' },
+    defaultModels: ['glm-4-plus'],
+    ui: {
+      icon: 'zhipu',
+      websiteUrl: 'https://open.bigmodel.cn',
+      apiKeyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+    },
+    legacyProtocol: 'openai-compatible',
+  },
+  {
+    key: 'kimi-openai',
+    name: 'Kimi (Moonshot)',
+    description: 'Moonshot Kimi via OpenAI-compatible API',
+    descriptionZh: '月之暗面 Kimi OpenAI 兼容接口',
+    category: 'official',
+    apiFormat: 'openai-chat',
+    authFields: BEARER_AUTH_FIELDS,
+    defaultEndpoint: 'https://api.moonshot.cn/v1',
+    modelsSource: { type: 'static' },
+    defaultModels: ['moonshot-v1-auto'],
+    ui: {
+      icon: 'kimi',
+      websiteUrl: 'https://platform.moonshot.cn',
+      apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys',
+    },
+    legacyProtocol: 'openai-compatible',
+  },
 ];

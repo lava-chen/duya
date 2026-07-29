@@ -91,6 +91,34 @@ export interface ChatSession {
   updated_at: number;
 }
 
+/**
+ * Extract signature fields from a message's content blocks.
+ * These are persisted in dedicated columns so they survive
+ * context compression and session reload without modification.
+ */
+function extractSignatures(content: string | MessageContent[]): {
+  thinkingSignature?: string;
+  toolSignature?: string;
+  textSignature?: string;
+} {
+  let thinkingSignature: string | undefined;
+  let toolSignature: string | undefined;
+  let textSignature: string | undefined;
+
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block.type === 'thinking' && 'thinkingSignature' in block && block.thinkingSignature) {
+        thinkingSignature = block.thinkingSignature;
+      } else if (block.type === 'tool_use' && 'thoughtSignature' in block && block.thoughtSignature) {
+        toolSignature = block.thoughtSignature;
+      } else if (block.type === 'text' && 'textSignature' in block && block.textSignature) {
+        textSignature = block.textSignature;
+      }
+    }
+  }
+  return { thinkingSignature, toolSignature, textSignature };
+}
+
 /** Message row in the database */
 export interface MessageRow {
   id: string;
@@ -2111,6 +2139,42 @@ export function messageRowToMessage(row: MessageRow, attachmentMap?: Map<string,
     }
   }
 
+  // Restore signatures from dedicated columns back into content blocks.
+  // This preserves opaque provider state across context compression and
+  // session reload. Signatures are stored separately from content JSON so
+  // that compression/summarization can safely modify content without
+  // corrupting the signature chain.
+  if (Array.isArray(content)) {
+    if (row.thinking_signature) {
+      const thinkingBlock = content.find(b => b.type === 'thinking');
+      if (thinkingBlock && thinkingBlock.type === 'thinking') {
+        thinkingBlock.thinkingSignature = row.thinking_signature;
+      }
+    }
+    if (row.tool_signature) {
+      const toolBlock = content.find(b => b.type === 'tool_use');
+      if (toolBlock && toolBlock.type === 'tool_use') {
+        toolBlock.thoughtSignature = row.tool_signature;
+      }
+    }
+    if (row.text_signature) {
+      const textBlock = content.find(b => b.type === 'text');
+      if (textBlock && textBlock.type === 'text') {
+        textBlock.textSignature = row.text_signature;
+      }
+    }
+  }
+
+  // Restore provider state (api, providerId, model) from dedicated column.
+  let providerState: { api?: string; providerId?: string; model?: string } | undefined;
+  if (row.provider_state) {
+    try {
+      providerState = JSON.parse(row.provider_state);
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+
   return {
     id: row.id,
     role: row.role,
@@ -2131,6 +2195,10 @@ export function messageRowToMessage(row: MessageRow, attachmentMap?: Map<string,
     sub_agent_id: row.sub_agent_id || undefined,
     attachments: parsedAttachments,
     tokenUsage,
+    // ─── NEW: restore multi-model adapter fields ───
+    api: providerState?.api as Message['api'],
+    providerId: providerState?.providerId,
+    model: providerState?.model,
   };
 }
 
@@ -2241,8 +2309,8 @@ export async function replaceMessages(
       db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
 
       const stmt = db.prepare(`
-        INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-        VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
+        INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at, provider_state, thinking_signature, tool_signature, text_signature)
+        VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at, @provider_state, @thinking_signature, @tool_signature, @text_signature)
       `);
 
       for (const [index, msg] of messages.entries()) {
@@ -2312,6 +2380,14 @@ export async function replaceMessages(
           messageStatus = 'error';
         }
 
+        // Extract signatures from content blocks for dedicated-column persistence.
+        // This preserves opaque provider state (Anthropic signatures, OpenAI reasoning
+        // items) across context compression and session reload.
+        const { thinkingSignature, toolSignature, textSignature } = extractSignatures(msg.content);
+        const providerState = msg.providerId || msg.model || msg.api
+          ? JSON.stringify({ api: msg.api, providerId: msg.providerId, model: msg.model })
+          : null;
+
         stmt.run({
           id: msg.id || crypto.randomUUID(),
           session_id: sessionId,
@@ -2335,6 +2411,10 @@ export async function replaceMessages(
             ? (typeof msg.attachments === 'string' ? msg.attachments : JSON.stringify(msg.attachments))
             : null,
           created_at: msg.timestamp || now,
+          provider_state: providerState,
+          thinking_signature: thinkingSignature ?? null,
+          tool_signature: toolSignature ?? null,
+          text_signature: textSignature ?? null,
         });
       }
 
@@ -2402,13 +2482,15 @@ export async function appendMessages(
         display_content,
         token_usage, msg_type, thinking, tool_name, tool_input,
         parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id,
-        attachments, created_at
+        attachments, created_at,
+        provider_state, thinking_signature, tool_signature, text_signature
       ) VALUES (
         @id, @session_id, @role, @content, @name, @tool_call_id,
         @display_content,
         @token_usage, @msg_type, @thinking, @tool_name, @tool_input,
         @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id,
-        @attachments, @created_at
+        @attachments, @created_at,
+        @provider_state, @thinking_signature, @tool_signature, @text_signature
       )
     `);
 
@@ -2483,6 +2565,18 @@ export async function appendMessages(
         }
 
         try {
+          // Extract signatures from content blocks for dedicated-column persistence.
+          // This preserves opaque provider state (Anthropic signatures, OpenAI reasoning
+          // items) across context compression and session reload.
+          const { thinkingSignature, toolSignature, textSignature } = extractSignatures(msg.content);
+          const providerState = msg.providerId || msg.model || msg.api
+            ? JSON.stringify({
+                api: msg.api,
+                providerId: msg.providerId,
+                model: msg.model,
+              })
+            : null;
+
           const insertResult = insertStmt.run({
             id: msg.id,
             session_id: sessionId,
@@ -2508,6 +2602,10 @@ export async function appendMessages(
               ? JSON.stringify(msg.attachments)
               : null,
             created_at: msg.timestamp || now,
+            provider_state: providerState,
+            thinking_signature: thinkingSignature ?? null,
+            tool_signature: toolSignature ?? null,
+            text_signature: textSignature ?? null,
           });
           // Append-only: never UPDATE an existing message. Duplicate-id
           // inserts (INSERT OR IGNORE no-op) are silently skipped.

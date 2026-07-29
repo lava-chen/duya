@@ -20,6 +20,8 @@
  * NewProvider, ModernProvider, or NextProvider. The new entity is `LlmProvider`.
  */
 
+import type { ModelCompat } from '@duya/ai';
+
 export type ProviderCategory =
   | 'official'
   | 'aggregator'
@@ -171,6 +173,10 @@ export interface ProviderRuntimeConfig {
   headers: Record<string, string>;
   model: string;
   modelCapabilities?: ModelCapability;
+  /** Provider-specific compat flags from @duya/ai preset models.
+   *  Drives thinking format selection, forceAdaptiveThinking, etc.
+   *  Resolved by findModelCompat(apiFormat, model) in toRuntimeConfig. */
+  modelCompat?: ModelCompat;
   requestOptions: Record<string, unknown>;
 }
 

@@ -10,7 +10,8 @@
  * - string value → maps to provider-native level name
  */
 
-import type { Model, ThinkingLevel, ModelThinkingLevel } from './types.js';
+import type { ApiFormat, Model, ModelCompat, ThinkingLevel, ModelThinkingLevel } from './types.js';
+import { allProviderModels } from './providers/index.js';
 
 const DEFAULT_LEVELS: ModelThinkingLevel[] = [
   'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
@@ -111,4 +112,26 @@ export function getNativeLevel(
   if (!model.thinkingLevelMap) return level;
   const mapped = model.thinkingLevelMap[level];
   return mapped === null ? undefined : mapped;
+}
+
+/**
+ * Find the ModelCompat for a given apiFormat + modelId by looking up
+ * the built-in provider preset models. Returns undefined if no match
+ * is found (callers should fall back to protocol defaults).
+ *
+ * Matching strategy:
+ * 1. Match by `model.api === apiFormat && model.id === modelId`
+ * 2. If multiple matches, prefer the one with `compat` defined
+ * 3. If no match, return undefined
+ */
+export function findModelCompat(
+  apiFormat: ApiFormat,
+  modelId: string,
+): ModelCompat | undefined {
+  const matches = allProviderModels.filter(
+    m => m.api === apiFormat && m.id === modelId,
+  );
+  // Prefer a match that has compat flags defined
+  const withCompat = matches.find(m => m.compat !== undefined);
+  return withCompat?.compat ?? matches[0]?.compat;
 }
