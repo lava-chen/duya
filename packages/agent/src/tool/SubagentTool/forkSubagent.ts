@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import type {
   AssistantMessage,
   Message as MessageType,
-  ToolUseContentBlock,
+  ToolUseContent,
   MessageContent,
 } from '../../types.js'
 import { createUserMessage } from '../../utils/messages.js'
@@ -71,7 +71,7 @@ export function buildForkedMessages(
 
   // Collect all tool_use blocks from the assistant message
   const toolUseBlocks = assistantMessage.content.filter(
-    (block): block is ToolUseContentBlock => block.type === 'tool_use',
+    (block): block is ToolUseContent => block.type === 'tool_use',
   )
 
   if (toolUseBlocks.length === 0) {
@@ -85,7 +85,7 @@ export function buildForkedMessages(
   }
 
   // Build tool_result blocks for every tool_use, all with identical placeholder text
-  const toolResultBlocks = toolUseBlocks.map((block: ToolUseContentBlock) => ({
+  const toolResultBlocks = toolUseBlocks.map((block: ToolUseContent) => ({
     type: 'tool_result' as const,
     tool_use_id: block.id,
     content: [
