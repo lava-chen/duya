@@ -2145,7 +2145,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
               continue;
             }
             const userMsgId = msgItem.id;
-            for (const att of msgItem.attachments) {
+            for (const att of msgItem.attachments as FileAttachment[]) {
               if (att.text && (att.path || att.url)) {
                 try {
                   storeParsedDocumentAttachment(userMsgId, msg.sessionId, {

@@ -20,6 +20,7 @@ import type {
   AgentOptions,
   AgentRuntimeMode,
   ChatOptions,
+  FileAttachment,
   ImageContent,
   Message,
   MessageContent,
@@ -105,7 +106,7 @@ function collectRecentImageAttachments(messages: Message[]): Array<{
   const seen = new Set<string>();
 
   for (let i = messages.length - 1; i >= 0; i--) {
-    const attachments = messages[i]?.attachments;
+    const attachments = messages[i]?.attachments as FileAttachment[] | undefined;
     if (!attachments || attachments.length === 0) continue;
 
     for (const attachment of [...attachments].reverse()) {
