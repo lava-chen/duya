@@ -14,9 +14,23 @@ import type { LLMClient, LLMClientOptions } from './base.js';
 import { LazyLLMClientProxy } from './base.js';
 import { LLMClientWrapper, createLLMClientWrapper } from './wrapper.js';
 import type { RetryConfig } from './withRetry.js';
+import { createAIClient } from '@duya/ai';
+import type { ApiFormat, ModelCompat } from '@duya/ai';
 
 export { LLMClientWrapper, createLLMClientWrapper } from './wrapper.js';
 export type { LLMClient, LLMClientOptions, LazyLLMClientProxy } from './base.js';
+
+/**
+ * Extended LLMClientOptions including @duya/ai fields needed to delegate
+ * anthropic/openai providers to createAIClient. The base LLMClientOptions
+ * is a subset, so existing callers passing LLMClientOptions remain valid.
+ */
+export interface LLMClientOptionsExtended extends LLMClientOptions {
+  apiFormat?: ApiFormat;
+  providerId?: string;
+  modelCapabilities?: ModelCompat;
+}
+
 export type { RetryConfig } from './withRetry.js';
 export { withRetry, wrapStreamWithRetry, retryOperation } from './withRetry.js';
 export {
@@ -70,30 +84,38 @@ export function isMiniMaxURL(baseURL: string): boolean {
 /**
  * Create an LLM client based on the provider type.
  *
- * Returns a LazyLLMClientProxy that defers the dynamic import() of the
- * concrete client module until the first streamChat/chat call. This
- * keeps unused provider SDKs out of memory at agent startup.
+ * - `ollama` keeps its native client (not migrated to @duya/ai).
+ * - `anthropic` / `openai` delegate to @duya/ai's createAIClient, which
+ *   owns the protocol modules (anthropic-messages / openai-completions).
+ *
+ * Returns a lazy proxy that defers the dynamic import() of the concrete
+ * client module until the first streamChat/chat call. This keeps unused
+ * provider SDKs out of memory at agent startup.
  */
 export function createLLMClient(
   provider: LLMProvider,
-  options: LLMClientOptions
+  options: LLMClientOptionsExtended
 ): LLMClient {
-  switch (provider) {
-    case 'anthropic':
-      return new LazyLLMClientProxy(() =>
-        import('./anthropic-client.js').then(m => new m.AnthropicClient(options))
-      );
-    case 'openai':
-      return new LazyLLMClientProxy(() =>
-        import('./openai-client.js').then(m => new m.OpenAIClient(options))
-      );
-    case 'ollama':
-      return new LazyLLMClientProxy(() =>
-        import('./ollama-client.js').then(m => new m.OllamaClient(options))
-      );
-    default:
-      throw new Error(`Unsupported LLM provider: ${provider}`);
+  // Ollama stays as-is (not migrated to @duya/ai)
+  if (provider === 'ollama') {
+    return new LazyLLMClientProxy(() =>
+      import('./ollama-client.js').then(m => new m.OllamaClient(options))
+    );
   }
+
+  // anthropic / openai → delegate to @duya/ai
+  const apiFormat: ApiFormat = options.apiFormat
+    ?? (provider === 'anthropic' ? 'anthropic' : 'openai-chat');
+
+  return createAIClient({
+    apiKey: options.apiKey,
+    baseURL: options.baseURL,
+    model: options.model,
+    authStyle: options.authStyle,
+    apiFormat,
+    providerId: options.providerId ?? provider,
+    modelCapabilities: options.modelCapabilities,
+  }) as unknown as LLMClient;
 }
 
 /**

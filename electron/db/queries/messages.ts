@@ -59,6 +59,10 @@ export interface MessageRow {
   duration_ms: number | null;
   sub_agent_id: string | null;
   attachments: string | null;
+  provider_state?: string | null;
+  thinking_signature?: string | null;
+  tool_signature?: string | null;
+  text_signature?: string | null;
   created_at: number;
 }
 
