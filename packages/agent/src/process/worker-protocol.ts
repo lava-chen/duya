@@ -204,12 +204,6 @@ export interface AgentPermissionEvent {
   };
 }
 
-export interface AgentContextUsageEvent {
-  type: 'chat:context_usage';
-  sessionId: string;
-  [key: string]: unknown;
-}
-
 export interface AgentDoneEvent {
   type: 'chat:done';
   sessionId: string;
@@ -222,16 +216,25 @@ export interface AgentErrorEvent {
   code?: string;
 }
 
-export interface AgentTokenUsageEvent {
-  type: 'chat:token_usage';
-  sessionId: string;
-  [key: string]: unknown;
-}
-
 export interface AgentStatusEvent {
   type: 'chat:status';
   sessionId: string;
   message: string;
+}
+
+/**
+ * Plan 224 follow-up: emitted by DuyaAgent.streamChat right after a
+ * mode-switch tool (EnterPlanMode / ExitPlanMode / SwitchMode) result
+ * lands. Carries the new runtime mode + source so the renderer can
+ * sync the input-box chip/glow. Forwarded by router.ts as the SSE
+ * `mode_changed` event.
+ */
+export interface AgentModeChangedEvent {
+  type: 'chat:mode_changed';
+  sessionId: string;
+  mode: 'general' | 'plan' | 'explore' | 'verify' | 'code-review';
+  source: 'agent' | 'user';
+  reason?: string;
 }
 
 export interface AgentRetryEvent {
@@ -352,11 +355,10 @@ export type WorkerEvent =
   | SubagentToolResultEvent
   | SubagentToolProgressEvent
   | AgentPermissionEvent
-  | AgentContextUsageEvent
   | AgentDoneEvent
   | AgentErrorEvent
-  | AgentTokenUsageEvent
   | AgentStatusEvent
+  | AgentModeChangedEvent
   | AgentRetryEvent
   | AgentDbPersistedEvent
   | AgentTitleGeneratedEvent

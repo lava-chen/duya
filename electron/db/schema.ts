@@ -2139,6 +2139,30 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: 43,
+    name: 'add_chat_turn_reviews',
+    migrate(db: BetterSqlite3Db): void {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_turn_reviews (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          turn_id TEXT NOT NULL,
+          working_directory TEXT NOT NULL,
+          files_json TEXT NOT NULL,
+          patch TEXT NOT NULL,
+          additions INTEGER NOT NULL DEFAULT 0,
+          removals INTEGER NOT NULL DEFAULT 0,
+          truncated INTEGER NOT NULL DEFAULT 0,
+          binary INTEGER NOT NULL DEFAULT 0,
+          captured_at INTEGER NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+          UNIQUE(session_id, turn_id)
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_turn_reviews_latest ON chat_turn_reviews(session_id, captured_at DESC)`);
+    },
+  },
 ];
 
 /**

@@ -185,6 +185,24 @@ export const messageDb = {
     sendDbRequest('session:loadMessages', { sessionId }),
 };
 
+// ==================== Turn Review Operations ====================
+
+export const turnReviewDb = {
+  save: (data: {
+    id: string;
+    sessionId: string;
+    turnId: string;
+    workingDirectory: string;
+    files: unknown[];
+    patch: string;
+    additions: number;
+    removals: number;
+    truncated: boolean;
+    binary: boolean;
+    capturedAt: number;
+  }) => sendDbRequest('turn-review:save', data),
+};
+
 // ==================== Lock Operations ====================
 
 export const lockDb = {

@@ -58,7 +58,7 @@ function serializeMessageContent(value: unknown, role?: unknown): string {
 }
 
 function serializeDisplayContent(value: unknown, role?: unknown): string | null {
-  if (value === null || value === undefined || value === '') return null;
+  if (value === null || value === undefined) return null;
   return serializeMessageContent(value, role);
 }
 
@@ -2111,6 +2111,7 @@ export function messageRowToMessage(row: MessageRow, attachmentMap?: Map<string,
     id: row.id,
     role: row.role,
     content,
+    displayContent: row.display_content ?? undefined,
     name: row.name || undefined,
     tool_call_id: toolCallId,
     timestamp: row.created_at,

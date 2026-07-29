@@ -1,17 +1,14 @@
 // src/components/layout/TaskDrawer.tsx
 // Right-edge session-detail rail. Owns:
-//   - visibility / keyboard (Escape) / 1s polling
-//   - task list state via useTaskList + mutation handlers (optimistic
-//     update + rollback)
+//   - visibility / keyboard (Escape)
 //   - sub-agent data (live SSE via useSubAgentProgress)
 //   - session-derived data: git status / artifacts / sources
-//   - assembly of 5 section components (no header — the panel starts
+//   - assembly of 4 section components (no header — the panel starts
 //     straight at EnvironmentInfoSection)
 //
 // Sub-panels live in their own files:
 //   ./EnvironmentInfoSection.tsx — git-changes row (returns null when not git)
 //   ./AgentListSection.tsx       — sub-agent rows + session jump
-//   ./TaskListSection.tsx        — task rows + status icons
 //   ./SourcesSection.tsx         — attachments / browser URLs / other refs
 //   ./ArtifactsSection.tsx       — files created by the agent
 //   ./DrawerSection.tsx          — generic labelled section wrapper
@@ -22,7 +19,6 @@ import { useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useSubAgentProgress } from '@/hooks/useSubAgentProgress';
-import { useTaskList } from '@/hooks/useTaskList';
 import { useSessionArtifacts } from '@/hooks/useSessionArtifacts';
 import { useSessionSources } from '@/hooks/useSessionSources';
 import { useGitStatus } from '@/hooks/useGitStatus';
@@ -30,12 +26,9 @@ import { useBashTasks } from '@/hooks/useBashTasks';
 import { setTaskDrawerOpen, useTaskDrawerOpen } from './task-drawer-store';
 import { EnvironmentInfoSection } from './EnvironmentInfoSection';
 import { AgentListSection } from './AgentListSection';
-import { TaskListSection } from './TaskListSection';
 import { BashTaskSection } from './BashTaskSection';
 import { SourcesSection } from './SourcesSection';
 import { ArtifactsSection } from './ArtifactsSection';
-
-const POLL_INTERVAL_MS = 1000;
 
 export function TaskDrawer() {
   const open = useTaskDrawerOpen();
@@ -44,20 +37,11 @@ export function TaskDrawer() {
   const threads = useConversationStore((state) => state.threads);
   const thread = threads.find((t) => t.id === activeThreadId) ?? null;
 
-  const { tasks, setTasks, loading, fetchTasks } = useTaskList(open ? activeThreadId : null);
   const agents = useSubAgentProgress(activeThreadId ?? "");
   const { tasks: bashTasks } = useBashTasks(open ? activeThreadId : null);
   const { artifacts } = useSessionArtifacts(open ? activeThreadId : null);
   const sources = useSessionSources(open ? activeThreadId : null);
   const gitStatus = useGitStatus(thread?.workingDirectory ?? null, open);
-
-  useEffect(() => {
-    if (!open) return;
-    const id = setInterval(() => {
-      void fetchTasks();
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [open, fetchTasks]);
 
   useEffect(() => {
     if (!open) return;
@@ -67,39 +51,6 @@ export function TaskDrawer() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
-
-  const handleToggleStatus = useCallback(
-    async (task: typeof tasks[number]) => {
-      const next = task.status === "completed" ? "pending" : "completed";
-      setTasks((prev) =>
-        prev.map((item) => (item.id === task.id ? { ...item, status: next } : item))
-      );
-
-      try {
-        await window.electronAPI?.thread?.updateTask?.(task.id, { status: next });
-        void fetchTasks();
-      } catch (err) {
-        console.error("[TaskDrawer] updateTask failed:", err);
-        setTasks((prev) =>
-          prev.map((item) => (item.id === task.id ? { ...item, status: task.status } : item))
-        );
-      }
-    },
-    [fetchTasks, setTasks]
-  );
-
-  const handleDelete = useCallback(
-    async (task: typeof tasks[number]) => {
-      setTasks((prev) => prev.filter((item) => item.id !== task.id));
-      try {
-        await window.electronAPI?.thread?.deleteTask?.(task.id);
-      } catch (err) {
-        console.error("[TaskDrawer] deleteTask failed:", err);
-        void fetchTasks();
-      }
-    },
-    [fetchTasks, setTasks]
-  );
 
   return (
     <AnimatePresence>
@@ -134,13 +85,6 @@ export function TaskDrawer() {
                 />
 
                 <BashTaskSection tasks={bashTasks} />
-
-                <TaskListSection
-                  tasks={tasks}
-                  loading={loading}
-                  onToggleStatus={handleToggleStatus}
-                  onDelete={handleDelete}
-                />
 
                 <SourcesSection
                   userAttachments={sources.userAttachments}

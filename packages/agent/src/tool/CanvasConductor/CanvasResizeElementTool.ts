@@ -19,7 +19,17 @@ export const definition: Tool = {
   description:
     'Resize an existing canvas element to a new width and height. ' +
     'Position (x, y), z-index, and rotation are unchanged. ' +
-    'Use this to make elements larger or smaller without moving them.',
+    'The canvasId is injected automatically — never pass it.\n\n' +
+    '## PRE-FLIGHT (REQUIRED)\n' +
+    'Call canvas_list_elements (or canvas_get_context) first, OR operate on an element you created via ' +
+    'canvas_create_element in THIS session. Without one of these, the call is REJECTED with STALE_STATE.\n\n' +
+    '## Coordinate system\n' +
+    'w and h are in canvas GRID units (1 unit = 80px; canvas is 40 x 30 units). NOT pixels. ' +
+    'Example: w=4, h=2 makes the element 320px wide x 160px tall. ' +
+    'Size to content — do NOT oversize. See canvas_create_element for the sizing guide ' +
+    '(compact label 2.5x1, standard note 4x2, etc.).\n' +
+    'For position (x/y) changes, use canvas_move_element instead.\n' +
+    'For content/style changes, use canvas_fill_content / canvas_style_element.',
   input_schema: {
     type: 'object',
     properties: {
@@ -29,11 +39,11 @@ export const definition: Tool = {
       },
       w: {
         type: 'number',
-        description: 'New width in canvas pixel coordinates.',
+        description: 'New width in canvas GRID units (1 unit = 80px). NOT pixels. See sizing guide in canvas_create_element.',
       },
       h: {
         type: 'number',
-        description: 'New height in canvas pixel coordinates.',
+        description: 'New height in canvas GRID units (1 unit = 80px). NOT pixels. See sizing guide in canvas_create_element.',
       },
     },
     required: ['w', 'h'],

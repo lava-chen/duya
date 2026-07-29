@@ -4,7 +4,7 @@
  * Platform-specific capabilities are discovered via Skills
  */
 
-import type { NetworkEnvironment } from './types.js';
+import type { NetworkEnvironment, BrowserBackendMode } from './types.js';
 
 export const DESCRIPTION = `Navigate and interact with web pages using a real browser.
 
@@ -116,14 +116,56 @@ Decision order:
   }
 }
 
-export function getPrompt(networkEnv?: NetworkEnvironment): string {
+function buildHumanLikeGuide(): string {
+  return `### Interaction Paradigm: Visual Loop (HUMAN-LIKE MODE)
+
+You are in **human-like computer-use mode**. The browser is driven with
+realistic mouse movements (bezier curves), typing patterns (random delays,
+occasional typos with corrections), and inertial scrolling.
+
+**PREFERRED workflow — see → act → verify:**
+
+1. \`{"operation": "snapshot"}\` or navigate to get initial page structure.
+2. \`{"operation": "screenshot", "annotate": true}\` — draws numbered boxes
+   on every interactive element and returns a **marks table** with center
+   coordinates + viewport size. The screenshot is saved to a temp file;
+   pass the returned \`filePath\` to the \`vision_analyze\` tool to see it.
+3. Use \`click_at\` / \`drag\` / \`key_combo\` with coordinates from the marks
+   table. These trigger human-like mouse movement to the target.
+4. Re-screenshot to verify the result. Never assume a click worked — check.
+
+**When to use coordinate actions vs ref actions:**
+- **PREFER \`click_at\`** for all clicks — it moves the mouse like a human,
+  which is the whole point of this mode.
+- **PREFER \`key_combo\`** for keyboard shortcuts (Ctrl+A/C/V, Enter, Tab).
+- Use \`type\` (ref-based) for text input — it types with human-like per-char
+  delays and occasional typo+correction.
+- Use \`drag\` for sliders, sortable lists, and text selection.
+- Use ref-based \`click\`/\`type\` only as fallback when coordinates fail.`;
+}
+
+function buildRefBasedGuide(): string {
+  return `### Interaction Paradigm: Ref-Based
+
+The tool returns a DOM snapshot with interactive elements marked with
+[ref] IDs. Use these refs for click and type operations — it is the most
+reliable approach. Coordinate-based actions (\`click_at\`, \`drag\`,
+\`key_combo\`) are available for canvas, SVG, shadow DOM, and other
+elements that lack refs.`;
+}
+
+export function getPrompt(networkEnv?: NetworkEnvironment, mode?: BrowserBackendMode): string {
   const strategySection = buildStrategySection(networkEnv);
+  const isHumanLike = mode === 'human-like';
+  const interactionGuide = isHumanLike ? buildHumanLikeGuide() : buildRefBasedGuide();
 
   return `## Browser Tool
 
 The browser tool allows you to navigate and interact with web pages using a real Chrome browser.
 
 ${strategySection}
+
+${interactionGuide}
 
 ### Operations
 
@@ -283,10 +325,10 @@ ${strategySection}
 
 ### Computer-Use Operations (coordinate-driven)
 
-Prefer ref-based \`click\`/\`type\` when the snapshot gives you a ref — it is more
-robust. Use the coordinate operations when an element has no ref (canvas,
-SVG, custom widgets, shadow DOM) or when you need richer input (double
-click, right click, drag, key combos).
+${isHumanLike
+  ? 'These are the **PREFERRED** operations in human-like mode. Use `click_at` for all clicks — the mouse moves to the target with a bezier curve, just like a real user.'
+  : 'Prefer ref-based `click`/`type` when the snapshot gives you a ref — it is more robust. Use the coordinate operations when an element has no ref (canvas, SVG, custom widgets, shadow DOM) or when you need richer input (double click, right click, drag, key combos).'
+}
 
 - **click_at** - Click at viewport coordinates
   \`\`\`json

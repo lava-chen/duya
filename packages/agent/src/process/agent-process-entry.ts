@@ -30,10 +30,13 @@ import {
   pluginDb,
   settingDb,
   sessionDb,
+  turnReviewDb,
 } from '../ipc/db-client.js';
+import { captureTurnReviewBaseline, completeTurnReview, type TurnReviewBaseline } from '../session/turn-review.js';
 import { IncrementalSaveQueue } from './incremental-save-queue.js';
 import { sendMemoryWakeup } from '../memory-rollout/wakeup.js';
-import { getRolloutLogger, type RolloutTurn } from '../session/rollout-logger.js';
+import { getRolloutLogger, type ProviderToolSnapshot, type RolloutTurn } from '../session/rollout-logger.js';
+import { getAgentsMdManager } from '../agentsmd/manager.js';
 import {
   enqueue,
   enqueuePendingNotification,
@@ -856,7 +859,7 @@ function extractFinalAssistantText(messages: Message[]): string {
     .trim();
 }
 
-function summarizeConversationForWiki(messages: Message[], maxMessages = 12): string {
+function summarizeConversation(messages: Message[], maxMessages = 12): string {
   return messages
     .slice(-maxMessages)
     .map((message) => {
@@ -1094,6 +1097,33 @@ function findLastToolResultIndex(messages: Message[]): number {
   return lastIdx;
 }
 
+async function persistTurnReview(
+  currentSessionId: string,
+  turnId: string,
+  baseline: TurnReviewBaseline | null,
+): Promise<void> {
+  if (!baseline) return;
+  const review = completeTurnReview(baseline);
+  if (!review) return;
+  try {
+    await turnReviewDb.save({
+      id: randomUUID(),
+      sessionId: currentSessionId,
+      turnId,
+      workingDirectory: review.workingDirectory,
+      files: review.files,
+      patch: review.patch,
+      additions: review.additions,
+      removals: review.removals,
+      truncated: review.truncated,
+      binary: review.binary,
+      capturedAt: Date.now(),
+    });
+  } catch (error) {
+    warn('[Agent-Process] Failed to persist turn review:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Record<string, unknown> | null {
   switch (event.type) {
     case 'text':
@@ -1145,16 +1175,17 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     }
     case 'permission_request':
       return { type: 'chat:permission', request: event.data };
-    case 'context_usage':
-      return { type: 'chat:context_usage', ...(event.data as object) };
     case 'done':
       return { type: 'chat:done' };
     case 'error':
       return { type: 'chat:error', message: event.data as string, code: (event as { code?: string }).code };
-    case 'result':
-      return { type: 'chat:token_usage', ...(event.data as object) };
     case 'turn_start':
       return { type: 'chat:status', message: `Turn ${(event.data as { turnCount?: number })?.turnCount ?? ''}` };
+    case 'mode_changed':
+      // Plan 224 follow-up: agent runtime mode switched via
+      // EnterPlanMode / ExitPlanMode / SwitchMode tool. Forward the
+      // new mode + source so the renderer can sync input-box chip/glow.
+      return { type: 'chat:mode_changed', ...(event.data as object) };
     case 'system': {
       const metadata = (event as { metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number } }).metadata;
       if (metadata?.retryAttempt !== undefined) {
@@ -1295,6 +1326,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
   let rolloutLogger: ReturnType<typeof getRolloutLogger> = null;
   let rolloutTurn: RolloutTurn | null = null;
+  const workingDirectory = typeof agent.workingDirectory === 'string' ? agent.workingDirectory : '';
+  const turnReviewBaseline = captureTurnReviewBaseline(workingDirectory);
 
   // Update title generation model config from chat options
   const titleModelOption = msg.options?.titleGenerationModel;
@@ -1807,19 +1840,35 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     }
 
     rolloutLogger = getRolloutLogger(msg.sessionId);
-    const startRolloutTurn = (systemPrompt: string, toolNames: string[]): void => {
-      if (!rolloutLogger || rolloutTurn) return;
-      rolloutTurn = rolloutLogger.startTurn({
-        cwd: agent.workingDirectory || process.cwd(),
+    const recordRolloutProviderRequest = (snapshot: {
+      systemPrompt: string;
+      tools: ProviderToolSnapshot[];
+      turn: number;
+    }): void => {
+      if (!rolloutLogger) return;
+      const cwd = agent.workingDirectory || process.cwd();
+      const agentsMdManager = getAgentsMdManager();
+      const agentsMdText = agentsMdManager.buildAgentsMdPrompt();
+      const agentsMd = agentsMdText
+        ? { directory: cwd, text: agentsMdText }
+        : undefined;
+      const input = {
+        cwd,
         provider: agent.provider || 'unknown',
         model: agent.model || 'unknown',
-        systemPrompt,
+        systemPrompt: snapshot.systemPrompt,
         userContent: messageContent,
         permissionMode: resolved.agentMode,
         mode: msg.options?.mode,
         language: msg.options?.language,
-        toolNames,
-      });
+        tools: snapshot.tools,
+        agentsMd,
+      };
+      if (!rolloutTurn) {
+        rolloutTurn = rolloutLogger.startTurn(input);
+      } else {
+        rolloutLogger.recordProviderRequest(rolloutTurn, input);
+      }
     };
 
     // Defensive sync: ensure agent's in-memory messages match the DB state.
@@ -1880,8 +1929,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       displayContent: msg.options?.displayContent,
       effort: msg.options?.effort,
       allowedTools: msg.options?.allowedTools,
-      onSystemPromptReady: (snapshot: { systemPrompt: string; toolNames: string[]; turn: number }) => {
-        startRolloutTurn(snapshot.systemPrompt, snapshot.toolNames);
+      onSystemPromptReady: (snapshot: {
+        systemPrompt: string;
+        tools: ProviderToolSnapshot[];
+        turn: number;
+      }) => {
+        recordRolloutProviderRequest(snapshot);
       },
       conductorMode: msg.options?.conductorMode ? true : undefined,
       conductorCanvasId: msg.options?.conductorCanvasId,
@@ -1893,7 +1946,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
     let tokenUsage: { input_tokens: number; output_tokens: number; total_tokens?: number } | null = null;
-    let lastContextUsageEstimate: { usedTokens: number } | null = null;
     let eventCount = 0;
     const incrementalSaveQueue = new IncrementalSaveQueue(msg.sessionId);
     let lastIncrementalSave = Date.now();
@@ -2017,12 +2069,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         }
       }
 
-      // Keep the latest local context estimate as a fallback when the provider
-      // does not report usage. This prevents the context ring from showing
-      // "no data" for providers that omit usage entirely.
-      if (event.type === 'context_usage' && event.data) {
-        lastContextUsageEstimate = event.data as { usedTokens: number };
-      }
       const agentMsg = convertSSEToAgentMessage(event);
       if (agentMsg) {
         if (agentMsg.type === 'chat:done') {
@@ -2066,17 +2112,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     if (canonicalMessages !== agentMessages) {
       agent.setMessages(canonicalMessages);
       agentMessages = canonicalMessages;
-    }
-
-    // If the provider never sent meaningful usage, fall back to the agent's
-    // local context estimate so the ring still shows a rough utilization.
-    if (!tokenUsage && lastContextUsageEstimate && lastContextUsageEstimate.usedTokens > 0) {
-      tokenUsage = {
-        input_tokens: lastContextUsageEstimate.usedTokens,
-        output_tokens: 0,
-        total_tokens: lastContextUsageEstimate.usedTokens,
-      };
-      log(`[Agent-Process] Falling back to estimated context usage: input=${tokenUsage.input_tokens}`);
     }
 
     log(`[Agent-Process] Stream ended, tokenUsage present=${!!tokenUsage}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
@@ -2136,6 +2171,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         existingMessageCount = agentMessages.length;
         log(`[Agent-Process] Updated existingMessageCount to ${existingMessageCount}`);
 
+        await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
+
         // Send chat:done AFTER persistence completes to ensure messages are saved
         // before the SSE stream closes (router.ts starts 2s timeout on done event)
         sendToMain({
@@ -2143,22 +2180,24 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           sessionId: msg.sessionId,
           turnId: msg.id,
           finalContent: extractFinalAssistantText(agentMessages),
-          conversationText: summarizeConversationForWiki(agentMessages),
+          conversationText: summarizeConversation(agentMessages),
         });
       } catch (err) {
         log('[Agent-Process] appendMessages error:', err);
+        await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
         sendToMain({
           type: 'chat:done',
           sessionId: msg.sessionId,
           turnId: msg.id,
           finalContent: extractFinalAssistantText(agentMessages),
-          conversationText: summarizeConversationForWiki(agentMessages),
+          conversationText: summarizeConversation(agentMessages),
           error: err instanceof Error ? err.message : String(err),
         });
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: false, reason: err instanceof Error ? err.message : String(err) });
       }
     } else {
       warn(`[Agent-Process] No messages to save for session ${msg.sessionId}`);
+      await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
       sendToMain({
         type: 'chat:done',
         sessionId: msg.sessionId,
@@ -2282,6 +2321,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       code,
     });
     // Ensure the SSE stream closes even on error
+    await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
     sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
   } finally {
     stopChatHeartbeat();

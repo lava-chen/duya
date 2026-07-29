@@ -134,6 +134,10 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [303-memory-v2-phase-1a3-projection-outbox](./completed/303-memory-v2-phase-1a3-projection-outbox.md) | **Migration 0003** (create `projection_outbox` + `ALTER stage1_outputs ADD content_hash_at_write`) + `outbox.ts` (DB ↔ file atomicity sweeper, allowlisted paths, symlink-safe) + `reconcile.ts` (startup rebuild from DB; covers `rollout_summaries/*` and `raw_memories.md`). | P0 | ✅ Complete 2026-07-25 |
 | [304-memory-v2-phase-1b-extractor](./completed/304-memory-v2-phase-1b-extractor.md) | Stage 1 extractor: `compactMessages` (chronological budgeted, preserves corrections/acceptances/exit codes/final artifacts per D9) + `prompt.ts` (per-candidate provenance, blocks external→preference per D8, Codex body structure) + `writer.ts` (Codex-shape filename `<YYYY-MM-DD>T<HH-MM-SS>-<shortid>-<slug>.md`, Codex-superset frontmatter, credential redaction) + `rawMemoriesProjection` (full-rebuild `raw_memories.md`) + `extractor.ts` (lease → compact → LLM → parse → complete; heartbeat TTL/6). | P0 | ✅ Complete 2026-07-26 |
 | [305-memory-v2-phase-1c-worker-main-process-e2e](./completed/305-memory-v2-phase-1c-worker-main-process-e2e.md) | Long-lived `memory-worker.ts` in Electron main process; `DuyaAgent.startup()` fire-and-forget wakeup IPC; reconcile + outbox sweeper wiring; shadow-mode e2e suite (MockLLM, 11 tests; DB path resolved via `boot.json`); env-gated by `DUYA_MEMORY_V2_ENABLED` (default **off** until promotion plan). Phase E manual 30-min validation deferred. | P0 | ✅ Complete 2026-07-26 |
+| [306-memory-v2-phase-2-consolidator-and-recall](./active/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory v2 Phase 2 — migration 0005 (`memory_entries` / `memory_evidence` / `memory_usage_events` / `phase2_runs`) + consolidator (global lock + dedupe by canonical_key + ad-hoc digestion) + `phase2_workspace_diff.md` + `memory_recall` tool + read-path promotion (`code.ts:65` swap from MemoryManager to v2). Closes shadow mode; deprecates legacy `MemoryManager` after 2-week migration window. | P0 | Planning |
+| [307-code-review-workspace](./completed/307-code-review-workspace.md) | Read-only sidebar Code Review workspace: working tree vs `HEAD`, change navigator, unified/split diff, context folding, and DUYA review handoff. | P1 | ✅ Complete 2026-07-27 |
+| [308-turn-review-history](./active/308-turn-review-history.md) | Persisted per-chat-turn Git deltas, with the latest completed turn as the Code Review default. | P1 | In progress |
+| [309-button-unification](./active/309-button-unification.md) | Button Unification — shared `Button` + `IconButton` components with variant/size hierarchy; migrate 372 fragmented `<button>` call sites in phases, starting with inline-style anti-patterns | P1 | Phase 1 in progress |
 
 ### Canvas V2 Whimsical 风格重设计
 
@@ -167,20 +171,6 @@ Source: [problems-analysis.md](./problems-analysis.md) — 10 个首次测试问
 | [42-document-parser-service](./active/42-document-parser-service.md) | 文档解析服务 | P1 | Phase 1 待开始 |
 | [43-startup-landing](./active/43-startup-landing.md) | 首次启动品牌化 landing 页 — 覆盖 window 打开 → React mount → DB hydrate → session 渲染整个空白期，200ms 淡出，仅首次启动 | P1 | Phase 1 ✅ |
 | [44-skills-sync-fix](./active/44-skills-sync-fix.md) | Skills 同步修复 | P0 | In Progress |
-
-### Wiki Agent — Persistent Knowledge Network
-
-| Plan | Description | Priority | Status |
-|------|-------------|----------|--------|
-| [56-wiki-agent-overview](./active/56-wiki-agent-overview.md) | Wiki Agent 架构总览与实施路线 | P1 | 待开始 |
-| [57-wiki-agent-core](./active/57-wiki-agent-core.md) | Phase 1: 核心实现（类型、NodeStore、GraphManager、Profile） | P1 | 待开始 |
-| [58-wiki-agent-listener](./active/58-wiki-agent-listener.md) | Phase 2: Listener 被动提取（会话结束→提取→建链） | P1 | 待开始 |
-| [59-wiki-agent-gardener](./active/59-wiki-agent-gardener.md) | Phase 3: Gardener 主动巡检（六项检查，Scheduler 注册） | P2 | 待开始 |
-| [61-wiki-agent-deep-research](./active/61-wiki-agent-deep-research.md) | Phase 4: Deep Research 双向集成（增量规划） | P2 | 待开始 |
-| [77-wiki-agent-v0.5-overview](./active/77-wiki-agent-v0.5-overview.md) | WikiAgent v0.5 总览（全局监听 + 独立 prompts + 保守 merge + app UI） | P1 | 待开始 |
-| [78-wiki-agent-global-observer-core](./active/78-wiki-agent-global-observer-core.md) | Phase 1: 全局监听、统一 queue、node store、读工具 | P1 | 待开始 |
-| [79-wiki-agent-prompt-merge](./active/79-wiki-agent-prompt-merge.md) | Phase 2: 独立 prompt system、候选提取、保守自动合并 | P1 | 待开始 |
-| [80-wiki-agent-app-ui](./active/80-wiki-agent-app-ui.md) | Phase 3: Memory 页面、Inbox、Activity、Merge 预览 | P1 | 待开始 |
 
 ## Completed Plans
 

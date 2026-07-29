@@ -461,8 +461,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     window.requestAnimationFrame(animate);
   }, [applyTransform, clampZoomHard, syncCanvasStateToStore]);
 
-  const freeformElements = elements.filter((el) => !isConnectorKind(el) && !isGroupKind(el));
-  const hasFreeformElements = freeformElements.length > 0;
+  // All non-group elements render through FreeformLayer so connectors
+  // participate in zIndex ordering alongside nodes. Box selection and
+  // select-all keep the previous behavior of skipping connector elements.
+  const layerElements = elements.filter((el) => !isGroupKind(el));
+  const boxSelectableElements = elements.filter((el) => !isConnectorKind(el) && !isGroupKind(el));
+  const hasLayerElements = layerElements.length > 0;
 
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
     const host = viewportRef.current;
@@ -976,7 +980,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
   const handleMouseUp = useCallback(() => {
     if (isBoxSelecting && boxRect && boxRect.w > 4 && boxRect.h > 4) {
-      const selected = freeformElements.filter((el) => {
+      const selected = boxSelectableElements.filter((el) => {
         // boxRect is in canvas-pixel space (from clientToCanvas), so the
         // element bbox must be in pixels too.
         const left = el.position.x * GRID_PX;
@@ -999,7 +1003,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     }
 
     setCreatePreview(null);
-  }, [isBoxSelecting, boxRect, freeformElements, setSelectedElementIds, isDragging]);
+  }, [isBoxSelecting, boxRect, boxSelectableElements, setSelectedElementIds, isDragging]);
 
   const handleWheel = useCallback((e: WheelEvent) => {
     const host = viewportRef.current;
@@ -1125,7 +1129,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     if (e.ctrlKey || e.metaKey) {
       if (e.key === "a") {
         e.preventDefault();
-        setSelectedElementIds(freeformElements.map((el) => el.id));
+        setSelectedElementIds(boxSelectableElements.map((el) => el.id));
         return;
       }
       if (e.key === "z" && !e.shiftKey) {
@@ -1168,7 +1172,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         setActiveTool(tool);
       }
     }
-  }, [clearSelection, setActiveTool, freeformElements, setSelectedElementIds, onDeleteElement, undo, redo, applyTransform, syncCanvasStateToStore, clampZoomHard, setHostCursor]);
+  }, [clearSelection, setActiveTool, boxSelectableElements, setSelectedElementIds, onDeleteElement, undo, redo, applyTransform, syncCanvasStateToStore, clampZoomHard, setHostCursor]);
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent) => {
     if (e.code === "Space") {
@@ -1381,6 +1385,29 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
   }, [setCanvasViewportSize, runZoomToFit]);
 
+  // Agent-created scenes arrive as a burst of individual element actions.
+  // Re-run the existing readable auto-fit once that burst settles; otherwise
+  // the viewport only fits on a window resize and newly-created diagrams can
+  // remain at an arbitrary, unreadable scale. Tracking the count avoids
+  // fighting a user's drag or a text/style edit. The zoom-lock remains the
+  // explicit opt-out for deliberate manual framing.
+  useEffect(() => {
+    if (elements.length === 0 || userZoomLockRef.current) return;
+    if (zoomFitDebounceRef.current !== null) {
+      clearTimeout(zoomFitDebounceRef.current);
+    }
+    zoomFitDebounceRef.current = setTimeout(() => {
+      runZoomToFit();
+      zoomFitDebounceRef.current = null;
+    }, 260);
+    return () => {
+      if (zoomFitDebounceRef.current !== null) {
+        clearTimeout(zoomFitDebounceRef.current);
+        zoomFitDebounceRef.current = null;
+      }
+    };
+  }, [elements.length, runZoomToFit]);
+
   // Recover from any corrupted transform state (e.g. NaN zoom from a
   // previous bug or anomalous wheel event). This also ensures the initial
   // render reflects the store rather than stale transform defaults.
@@ -1529,12 +1556,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           </div>
         )}
 
-        {hasFreeformElements ? (
+        {hasLayerElements ? (
           <>
             <GroupLayer elements={elements} />
             <div style={{ zIndex: 1, position: "absolute", inset: 0, pointerEvents: "none" }}>
               <FreeformLayer
-                elements={freeformElements}
+                elements={layerElements}
                 readOnly={readOnly}
                 onPositionChange={onPositionChange}
                 onDeleteElement={onDeleteElement}
@@ -1546,7 +1573,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         ) : (
           <div style={{ zIndex: 1, position: "absolute", inset: 0, pointerEvents: "none" }}>
             <FreeformLayer
-              elements={freeformElements}
+              elements={layerElements}
               readOnly={readOnly}
               onPositionChange={onPositionChange}
               onDeleteElement={onDeleteElement}

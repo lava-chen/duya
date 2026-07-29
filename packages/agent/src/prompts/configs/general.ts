@@ -14,6 +14,7 @@
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
+import { TOOL_NAMES } from '../types.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 
 // Static sections
@@ -52,7 +53,10 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'tasks', compute: getTasksSection },
     { name: 'destructiveActions', compute: getDestructiveActionsSection },
     { name: 'tools', compute: (ctx) => getToolsSection(ctx, []) },
-    { name: 'skillUsage', compute: getSkillUsageSection },
+    {
+      name: 'skillUsage',
+      compute: (ctx) => ctx.enabledTools.has(TOOL_NAMES.SKILL) ? getSkillUsageSection(ctx) : null,
+    },
     { name: 'project', compute: getProjectSection },
     { name: 'duyaDesktopContext', compute: getDuyaDesktopContextSection },
   ],

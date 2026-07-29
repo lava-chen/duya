@@ -23,13 +23,36 @@ export const TOOL_NAME = 'canvas_style_element';
 export const definition: Tool = {
   name: TOOL_NAME,
   description:
-    'Change the visual style of an existing canvas element. ' +
-    'Style fields are element-kind specific:\n' +
-    '  - native/sticky: { color, fontSize? } — color ∈ yellow|blue|green|pink|purple|gray; use 20-24px (compact labels render at 20px minimum, longer notes at 18px minimum)\n' +
-    '  - native/connector: { color?, strokeStyle?, startMarker?, endMarker? } — strokeStyle = solid|dashed|bold; markers = none|arrow|open-arrow|circle|diamond|bar\n' +
-    '  - native/image: { borderRadius?, opacity? }\n\n' +
-    'Only the supplied fields are overwritten; other config fields (text, url, etc.) are preserved. ' +
-    'Use canvas_fill_content for content changes (sticky text, image url, file name).',
+    'Change the VISUAL STYLE of an existing canvas element (NOT its content or position). ' +
+    'This is a merge-patch: only the fields you supply are overwritten; other config fields are preserved. ' +
+    'The canvasId is injected automatically — never pass it.\n\n' +
+    '## PRE-FLIGHT CHECKLIST\n' +
+    '1. Call canvas_list_elements (or canvas_get_context) first, OR operate on an element you created via ' +
+    'canvas_create_element in THIS session. Without one of these, the call is REJECTED with STALE_STATE. ' +
+    '2. Have the elementId ready — from canvas_list_elements or from a recent canvas_create_element result.\n\n' +
+    '## Parameter shape\n' +
+    '  - elementId: TOP-LEVEL field.\n' +
+    '  - style:     NESTED object containing the visual style fields. Example: { elementId: "abc", style: { color: "pink" } }.\n' +
+    'Do NOT pass `position` here — use canvas_move_element / canvas_resize_element for that.\n' +
+    'Do NOT pass content fields here — use canvas_fill_content for text/markdown/url/source/target/etc.\n\n' +
+    '## Style fields per element kind (placed inside `style`)\n' +
+    '  - native/shape, native/sticky: { color?, fontSize? } ' +
+    '— color MUST be an enum key (yellow|blue|green|pink|purple|gray); hex strings are REJECTED. ' +
+    'pink renders as light red (error/warning semantic). ' +
+    'fontSize: use 20-24 (compact labels render at 20px min, longer notes at 18px min; values <18 are clamped to 18).\n' +
+    '  - native/connector: { color?, labelFontSize?:14..22, strokeStyle?, startMarker?, endMarker? } ' +
+    '— color is a hex string here (e.g. "#3B82F6") — DIFFERENT from native/shape which uses enum keys. ' +
+    'strokeStyle = solid|dashed|bold|dotted. ' +
+    'markers = none|arrow|open-arrow|circle|diamond|bar. ' +
+    'Call canvas_get_knowledge("connector-style") for the color → meaning table (e.g. #EF4444 = error branch).\n' +
+    '  - native/image: { borderRadius?, opacity? } — opacity ∈ 0..1, borderRadius is a non-negative number.\n\n' +
+    '## Common pitfalls\n' +
+    '  - Putting color/fontSize at the top level of the tool input — wrap them inside `style`.\n' +
+    '  - Using hex colors for native/shape color — use enum keys (yellow/blue/green/pink/purple/gray). ' +
+    '  Note: native/connector color IS a hex string — different rule from native/shape.\n' +
+    '  - Forgetting STALE_STATE — call canvas_list_elements (or canvas_get_context) first when in doubt.\n\n' +
+    '## Worked example\n' +
+    '{"elementId":"<id>","style":{"color":"pink","fontSize":22}}',
   input_schema: {
     type: 'object',
     properties: {
@@ -40,8 +63,10 @@ export const definition: Tool = {
       style: {
         type: 'object',
         description:
-          'Visual style fields to write into the element config. ' +
-          'Only supplied fields are overwritten; other config fields are preserved.',
+          'NESTED object — visual style fields placed INSIDE this object (NOT at the top level of the tool input). ' +
+          'Merge-patch: only supplied fields are overwritten; content/position fields are preserved. ' +
+          'For native/shape color use enum keys (yellow/blue/green/pink/purple/gray). ' +
+          'For native/connector color use hex strings ("#RRGGBB").',
         additionalProperties: true,
       },
     },

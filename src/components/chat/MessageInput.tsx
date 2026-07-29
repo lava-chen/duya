@@ -39,7 +39,6 @@ import { listProvidersIPC, listOutputStylesIPC, type Provider } from '@/lib/ipc-
 import { saveDraftIPC, getDraftIPC } from '@/lib/ipc-client';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
-import { ContextUsageRing } from './ContextUsageRing';
 import { RichTextInput } from './RichTextInput';
 import type { Message } from '@/types/message';
 
@@ -107,6 +106,14 @@ interface MessageInputProps {
   // Conductor mode toggle state (independent of plan/research modes).
   conductorEnabled?: boolean;
   onConductorChange?: (enabled: boolean) => void;
+  /**
+   * Plan 224 follow-up: agent-initiated runtime plan mode (set by the
+   * agent calling EnterPlanMode / SwitchMode tool). Visually merged
+   * with the popover plan-task chip — both drive the same blue glow
+   * on the input surface. Session-scoped: stays on until the agent
+   * exits plan mode (or session switches).
+   */
+  agentPlanMode?: boolean;
   // Manual context compaction trigger
   onCompact?: () => void;
   isCompacting?: boolean;
@@ -207,6 +214,7 @@ export function MessageInput({
   messages = [],
   conductorEnabled,
   onConductorChange,
+  agentPlanMode = false,
   onCompact,
   isCompacting,
 }: MessageInputProps) {
@@ -274,6 +282,13 @@ export function MessageInput({
   // while rendering a different component".
   const activeModesRef = useRef<Set<ModeModifierId>>(activeModes);
   activeModesRef.current = activeModes;
+
+  // Plan 224 follow-up: unified plan-mode indicator. Active when the
+  // user manually toggled Plan Mode in the popover (message-level
+  // plan-task) OR when the agent self-entered plan mode via the
+  // EnterPlanMode / SwitchMode tool (session-level, surfaced via the
+  // agentPlanMode prop). Both paths drive the same blue glow + chip.
+  const planModeActive = activeModes.has('plan-task') || agentPlanMode;
 
   // Sync conductor slot from the prop (DB is the source of truth for
   // session-level conductor). When the parent passes a new
@@ -1327,8 +1342,10 @@ export function MessageInput({
         />
 
         <div
-          className={`message-input-surface relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''}`}
-          style={{ backgroundColor: 'var(--surface)', boxShadow: 'inset 0 0 0 1px var(--border-color)' }}
+          className={`message-input-surface relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''} ${planModeActive ? 'message-input-plan-mode-active' : ''}`}
+          style={{ backgroundColor: 'var(--surface)', boxShadow: planModeActive
+            ? 'inset 0 0 0 1px var(--accent), 0 0 0 1px rgba(125, 180, 255, 0.35), 0 0 14px rgba(125, 180, 255, 0.45)'
+            : 'inset 0 0 0 1px var(--border-color)' }}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -1441,7 +1458,12 @@ export function MessageInput({
                 disabled={isStreaming}
               />
 
-              {/* Mode Badges — one chip per active mode (plan-task / research / conductor) */}
+              {/* Mode Badges — one chip per active mode (plan-task / research / conductor).
+                  Plan 224 follow-up: if the agent self-entered plan mode via a
+                  tool call (agentPlanMode) and the user hasn't ALSO toggled
+                  plan-task in the popover, render a read-only "Agent Plan Mode"
+                  chip so the user sees the agent's state. Clicking it is a no-op
+                  — only the agent can exit this state (via ExitPlanMode tool). */}
               {activeModes.size > 0 && Array.from(activeModes).map((mode) => {
                 const label = mode === 'research'
                   ? 'Deep Research'
@@ -1465,6 +1487,14 @@ export function MessageInput({
                   </button>
                 );
               })}
+              {agentPlanMode && !activeModes.has('plan-task') && (
+                <span
+                  className="flex min-w-0 max-w-32 shrink items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[#7db4ff] border border-[#7db4ff]/40 bg-[rgba(37,99,235,0.12)] cursor-default"
+                  title="Agent entered plan mode — it will exit automatically when done planning"
+                >
+                  <span className="truncate">Agent Plan Mode</span>
+                </span>
+              )}
             </div>
 
             {/* Right: Send/Stop Button */}

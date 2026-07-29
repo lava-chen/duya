@@ -624,7 +624,17 @@ function normalizeToolResultOrdering(
     for (let cursor = firstNonAssistantIndex; cursor < messages.length && unresolvedIds.size > 0; cursor++) {
       const candidate = messages[cursor];
       if (candidate.role === 'assistant') {
-        break;
+        // A text-only or thinking-only assistant message (no tool_use)
+        // does not start a new tool round. Treat it as deferred content so
+        // we can keep scanning for tool_results whose IDs match the
+        // pending tool_use blocks. Only an assistant message that itself
+        // contains tool_use blocks starts a new round.
+        if (toolUseIds(candidate).length > 0) {
+          break;
+        }
+        roundEndIndex = cursor;
+        deferred.push(candidate);
+        continue;
       }
       roundEndIndex = cursor;
 

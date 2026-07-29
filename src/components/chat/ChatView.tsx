@@ -10,7 +10,7 @@ import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { PermissionPrompt } from './PermissionPrompt';
 import { usePermissions } from '@/hooks/usePermissions';
-import { subscribeToPermissions, subscribeToPhase } from '@/lib/stream-session-manager';
+import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged } from '@/lib/stream-session-manager';
 import { Info, CaretDown } from '@phosphor-icons/react';
 import type { PermissionMode } from './PermissionModeSelector';
 import { ChatHeader } from './ChatHeader';
@@ -18,7 +18,6 @@ import { DB_DEFAULT_MODEL } from '@/lib/constants';
 import { getThreadIPC, updateThreadIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
 import { useSettings } from '@/hooks/useSettings';
 import { useStreamPhase } from '@/hooks/useStreamPhase';
-import { useStreamingContextUsage } from '@/hooks/useStreamingContextUsage';
 import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
@@ -35,9 +34,13 @@ import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
-import { subscribeWikiActivityIPC } from '@/lib/memory-ipc';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
+import { FloatingTaskPanel } from '@/components/layout/FloatingTaskPanel';
+import { useTaskList } from '@/hooks/useTaskList';
+import { useGitStatus } from '@/hooks/useGitStatus';
+import { getGitStatus } from '@/lib/git-ipc';
+import type { UseGitStatusResult } from '@/hooks/useGitStatus';
 import { useOptionalPanel } from '@/hooks/usePanel';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
 import type { ConductorCanvas } from '@duya/conductor/renderer/types/conductor';
@@ -109,37 +112,6 @@ function ContextCompressionToast({ message }: { message: string }) {
   );
 }
 
-function WikiAgentToast({
-  message,
-  error = false,
-}: {
-  message: string;
-  error?: boolean;
-}) {
-  const [visible, setVisible] = useState(true);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setVisible(false);
-    }, 4500);
-    return () => clearTimeout(timer);
-  }, [message]);
-
-  if (!visible) return null;
-
-  return (
-    <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
-      <div
-        className="flex items-center gap-2 px-4 py-2 text-white text-sm rounded-lg shadow-lg backdrop-blur-sm"
-        style={{ background: error ? 'rgba(220, 38, 38, 0.9)' : 'rgba(31, 41, 55, 0.92)' }}
-      >
-        <span className="font-medium">WikiAgent</span>
-        <span>{message}</span>
-      </div>
-    </div>
-  );
-}
-
 export function ChatView({
   sessionId,
   messages,
@@ -168,11 +140,41 @@ export function ChatView({
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactionStatus, setCompactionStatus] = useState<'idle' | 'compacting' | 'done' | 'error'>('idle');
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
-  const [wikiActivityMessage, setWikiActivityMessage] = useState<{ text: string; error: boolean; nonce: number } | null>(null);
+  const [gitBaseline, setGitBaseline] = useState<UseGitStatusResult | null>(null);
   const messageListRef = useRef<MessageListRef>(null);
   const taskDrawerOpen = useTaskDrawerOpen();
+  const { tasks: floatingTasks, setTasks: setFloatingTasks, fetchTasks: fetchFloatingTasks } = useTaskList(sessionId);
   const panel = useOptionalPanel();
   const workspaceExpanded = panel?.workspaceExpanded ?? false;
+
+  // Poll tasks for the floating task panel above the composer.
+  useEffect(() => {
+    if (!sessionId) return;
+    const id = setInterval(() => {
+      void fetchFloatingTasks();
+    }, 1500);
+    return () => clearInterval(id);
+  }, [sessionId, fetchFloatingTasks]);
+
+  const handleToggleFloatingTask = useCallback(
+    async (task: typeof floatingTasks[number]) => {
+      const next = task.status === 'completed' ? 'pending' : 'completed';
+      setFloatingTasks((prev) =>
+        prev.map((item) => (item.id === task.id ? { ...item, status: next } : item))
+      );
+      try {
+        await window.electronAPI?.thread?.updateTask?.(task.id, { status: next });
+        void fetchFloatingTasks();
+      } catch (err) {
+        console.error('[ChatView] updateTask failed:', err);
+        setFloatingTasks((prev) =>
+          prev.map((item) => (item.id === task.id ? { ...item, status: task.status } : item))
+        );
+      }
+    },
+    [fetchFloatingTasks, setFloatingTasks]
+  );
+
   const openOrActivatePage = panel?.openOrActivatePage ?? NOOP_OPEN_PANEL;
   const panelTabs = panel?.tabs ?? [];
   const closePanel = panel?.closePanel ?? NOOP_CLOSE_PANEL;
@@ -212,6 +214,16 @@ export function ChatView({
     conductorCanvasIdRef.current = next;
     setConductorCanvasIdState(next);
   }, []);
+
+  // Plan 224 follow-up: agent-initiated runtime mode (e.g. via
+  // EnterPlanMode / ExitPlanMode / SwitchMode tool). When the agent
+  // switches to 'plan' we surface it as a virtual plan-task mode on
+  // the input box so the user sees the same chip + glow they'd get
+  // from manually toggling Plan Mode in the popover. Switching back
+  // to 'general' (or any non-plan mode) clears it. Other runtime
+  // modes (explore / verify / code-review) currently do not have
+  // a popover equivalent, so they only clear the plan chip.
+  const [agentPlanMode, setAgentPlanMode] = useState(false);
 
   // Agent-side canvas_manage operations are durable in SQLite, but the
   // renderer also needs to follow them immediately. Listen on the conductor
@@ -321,6 +333,41 @@ export function ChatView({
     () => storeThreads.find((t) => t.id === sessionId) || null,
     [storeThreads, sessionId]
   );
+  const gitStatus = useGitStatus(activeThread?.workingDirectory ?? null, true);
+
+  // Capture a git baseline when the agent starts working so the floating
+  // file-change pill only shows changes produced by the current turn.
+  // The baseline is cleared when streaming ends, keeping the indicator
+  // hidden during normal idle state.
+  useEffect(() => {
+    if (!isStreaming || !activeThread?.workingDirectory) {
+      setGitBaseline(null);
+      return;
+    }
+    let cancelled = false;
+    void getGitStatus(activeThread.workingDirectory).then((status) => {
+      if (cancelled) return;
+      setGitBaseline({
+        isGitRepo: status.isGitRepo,
+        fileChanges: status.fileChanges ?? [],
+        totals: status.totals ?? { additions: 0, removals: 0, fileCount: 0 },
+      });
+    }).catch(() => {
+      if (!cancelled) setGitBaseline(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isStreaming, activeThread?.workingDirectory]);
+
+  const showFileChanges = useMemo(() => {
+    if (!isStreaming || !gitBaseline?.isGitRepo || !gitStatus.isGitRepo) return false;
+    return (
+      gitStatus.totals.fileCount !== gitBaseline.totals.fileCount ||
+      gitStatus.totals.additions !== gitBaseline.totals.additions ||
+      gitStatus.totals.removals !== gitBaseline.totals.removals
+    );
+  }, [isStreaming, gitBaseline, gitStatus]);
 
   const handleSelectProject = useCallback((project: { workingDirectory: string; projectName: string }) => {
     setThreadWorkingDirectory(sessionId, project.workingDirectory, project.projectName);
@@ -368,7 +415,6 @@ export function ChatView({
 
   // Use fine-grained hooks for streaming state
   const phase = useStreamPhase(sessionId);
-  const contextUsage = useStreamingContextUsage(sessionId);
   const streamingError = useStreamingError(sessionId);
   const lastUserContentRef = useRef<string>('');
   const lastFilesRef = useRef<FileAttachment[] | undefined>(undefined);
@@ -577,6 +623,23 @@ export function ChatView({
       unsubscribe();
     };
   }, [sessionId, handlePermissionRequest]);
+
+  // Plan 224 follow-up: subscribe to agent-initiated runtime mode
+  // switches (EnterPlanMode / ExitPlanMode / SwitchMode). When the
+  // agent moves into 'plan', mirror it as agentPlanMode so MessageInput
+  // shows the same chip + glow as a user-toggled popover plan-task.
+  // Switching to any non-plan mode clears it. Also reset on session
+  // change so a stale chip from the previous session doesn't bleed in.
+  useEffect(() => {
+    setAgentPlanMode(false);
+    if (!sessionId) return;
+    const unsubscribe = subscribeToModeChanged(sessionId, (event) => {
+      setAgentPlanMode(event.mode === 'plan');
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [sessionId]);
 
   // When viewing a sub-agent session, periodically reload messages from DB
   // while the parent session is still streaming
@@ -935,22 +998,6 @@ export function ChatView({
     };
   }, [handleSend]);
 
-  useEffect(() => {
-    const unsubscribe = subscribeWikiActivityIPC((activity) => {
-      if (activity.sessionId !== sessionId || !activity.summary) {
-        return;
-      }
-
-      setWikiActivityMessage({
-        text: activity.summary,
-        error: activity.state === 'error' || activity.phase === 'error',
-        nonce: Date.now(),
-      });
-    });
-
-    return unsubscribe;
-  }, [sessionId]);
-
   const handleScrollToBottom = useCallback(() => {
     if (messageListRef.current) {
       messageListRef.current.scrollToBottom();
@@ -988,14 +1035,6 @@ export function ChatView({
       {/* Context compression notification */}
       {compressionNotification && (
         <ContextCompressionToast message={compressionNotification} />
-      )}
-
-      {wikiActivityMessage && (
-        <WikiAgentToast
-          key={wikiActivityMessage.nonce}
-          message={wikiActivityMessage.text}
-          error={wikiActivityMessage.error}
-        />
       )}
 
       {/* Agent error banner with retry */}
@@ -1059,7 +1098,15 @@ export function ChatView({
                 {/* Input between selector and recent threads */}
                 <WorkspaceComposerLayer expanded={workspaceExpanded}>
                 <div className={`w-full welcome-message-input workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
-                  <MessageInput
+                  <FloatingTaskPanel
+                  tasks={floatingTasks}
+                  gitStatus={gitStatus}
+                  onToggleStatus={handleToggleFloatingTask}
+                  workingDirectory={activeThread?.workingDirectory ?? null}
+                  showFileChanges={showFileChanges}
+                />
+
+                <MessageInput
                     onSend={handleSend}
                     onRecapRequest={requestRecap}
                     onStop={handleStop}
@@ -1078,6 +1125,7 @@ export function ChatView({
                     messages={messages}
                     conductorEnabled={conductorEnabled}
                     onConductorChange={handleConductorChange}
+                    agentPlanMode={agentPlanMode}
                     onCompact={handleCompact}
                     isCompacting={isCompacting}
                     // Welcome page: input sits in the middle, popup must open
@@ -1160,6 +1208,15 @@ export function ChatView({
               <MailboxPanel sessionId={sessionId} />
             )}
 
+            {/* Floating task progress above the composer */}
+            <FloatingTaskPanel
+              tasks={floatingTasks}
+              gitStatus={gitStatus}
+              onToggleStatus={handleToggleFloatingTask}
+              workingDirectory={activeThread?.workingDirectory ?? null}
+              showFileChanges={showFileChanges}
+            />
+
             {isAskUserQuestionPending ? (
               <PermissionPrompt
                 pendingPermission={pendingPermission}
@@ -1214,12 +1271,11 @@ export function ChatView({
               />
 
               {/* Right: Context Usage Ring */}
-              {(messages.length > 0 || contextUsage) && (
+              {messages.length > 0 && (
                 <ContextUsageRing
                   messages={messages}
                   modelName={sessionModel}
                   contextWindow={capabilityContextWindow}
-                  streamingContextUsage={contextUsage}
                   onCompress={handleCompact}
                   isCompacting={isCompacting}
                 />

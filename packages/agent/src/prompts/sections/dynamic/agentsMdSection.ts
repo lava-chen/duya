@@ -1,9 +1,9 @@
 /**
  * AGENTS.md Section - Dynamic prompt section for AGENTS.md instructions
  *
- * Refresh helper for AGENTS.md snapshots. The actual prompt rendering is
- * done by `getAgentsMdManager().buildAgentsMdPrompt()` inlined in the
- * configs (e.g. configs/code.ts, configs/research.ts).
+ * Refresh helper for AGENTS.md snapshots. The contents are rendered by
+ * `getAgentsMdManager().buildAgentsMdPrompt()` and injected as the first user
+ * message (Codex-compatible), not inside the system prompt.
  */
 
 import { getAgentsMdManager } from '../../../agentsmd/index.js'

@@ -2622,6 +2622,48 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return row;
     }
 
+    case 'turn-review:save': {
+      const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
+      const turnId = typeof p.turnId === 'string' ? p.turnId : '';
+      const workingDirectory = typeof p.workingDirectory === 'string' ? p.workingDirectory : '';
+      const patch = typeof p.patch === 'string' ? p.patch : '';
+      const files = Array.isArray(p.files) ? p.files : [];
+      if (!sessionId || !turnId || !workingDirectory) {
+        throw new Error('Invalid turn review payload');
+      }
+
+      db.prepare(`
+        INSERT INTO chat_turn_reviews (
+          id, session_id, turn_id, working_directory, files_json, patch,
+          additions, removals, truncated, binary, captured_at
+        ) VALUES (
+          @id, @session_id, @turn_id, @working_directory, @files_json, @patch,
+          @additions, @removals, @truncated, @binary, @captured_at
+        )
+        ON CONFLICT(session_id, turn_id) DO UPDATE SET
+          files_json = excluded.files_json,
+          patch = excluded.patch,
+          additions = excluded.additions,
+          removals = excluded.removals,
+          truncated = excluded.truncated,
+          binary = excluded.binary,
+          captured_at = excluded.captured_at
+      `).run({
+        id: typeof p.id === 'string' ? p.id : randomUUID(),
+        session_id: sessionId,
+        turn_id: turnId,
+        working_directory: workingDirectory,
+        files_json: JSON.stringify(files),
+        patch,
+        additions: typeof p.additions === 'number' ? p.additions : 0,
+        removals: typeof p.removals === 'number' ? p.removals : 0,
+        truncated: p.truncated === true ? 1 : 0,
+        binary: p.binary === true ? 1 : 0,
+        captured_at: typeof p.capturedAt === 'number' ? p.capturedAt : now,
+      });
+      return true;
+    }
+
     default:
       throw new Error(`Unknown DB action: ${action}`);
   }

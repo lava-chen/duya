@@ -86,27 +86,63 @@ export const definition: Tool = {
   name: TOOL_NAME,
   description:
     'Create a new element on the bound canvas. Call this tool directly when the user asks for any canvas element. ' +
-    'Element kind determines which config fields are expected:\n' +
-    '  - native/shape:     { text, shape?, shapePreset? } — a diagram node; use for flowcharts and frameworks\n' +
-    '  - native/document:  { title?, markdown?, filePath? } — a durable Markdown draft linked to the project\n' +
-    '  - native/table:     { title?, headers?: string[], rows?: string[][], headerFill?, headerTextColor?, borderColor? } — an editable grid for comparisons, schedules, and research data\n' +
-    '  - native/database:  { sourceId, viewId, sourceTitle?, displayMode:"embedded", showTitle?:boolean, previewLimit?:number, interactionMode?:"canvas"|"database" } — a saved view of durable project records; create/discover IDs with database_manage first\n' +
-    '  - native/sticky:    legacy colored note; do not create new ones\n' +
-    '  - native/image:     { url, fileName? } — image from a URL\n' +
-    '  - native/file:      { fileName, mimeType?, url? } — file attachment\n' +
-    '  - native/connector: { source, target, routingMode?: "elbow"|"curve", label?, curveMidpointOffset?, curveControlOffsets?, color?, strokeStyle?, startMarker?, endMarker? } — endpoints are {kind:"bound",nodeId,bindingPoint:{u,v}} with u/v in 0..1, or {kind:"free",point:{x,y}} in canvas pixels. Curve midpoint offsets are relative to the endpoint midpoint. routingMode defaults to "elbow"; use curve only when explicitly requested.\n' +
-    '  - native/link:      { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description? } — reference card\n' +
-    '  - widget/dynamic:   last-resort HTML/SVG for one small secondary mini component; never use it for a whole guide, plan, diagram, or dashboard\n\n' +
-    'Position is required and uses canvas grid units (1 unit = 80px). ' +
-    'ALWAYS provide w and h; do not omit them. Choose size based on content — do NOT oversize: ' +
-    'compact label 2.5x1, short Chinese line 3x1, two short lines 3.5x1.5, standard note 4x2. ' +
-    'Fractional grid sizes are valid. Compact labels are centered automatically and render at 22px by default. ' +
-    'Legacy fontSize values are clamped to 20px for compact labels and 18px for longer notes; for explicit control use 20-24px. ' +
-    'Auto-fit preserves a readable zoom floor, but excess whitespace still makes the board harder to scan. ' +
-    'config and vizSpec are optional and can be set later. ' +
-    'Returns the new elementId in the result — use it with canvas_fill_content / ' +
-    'canvas_style_element / canvas_move_element to complete the element. ' +
-    'Example: { "kind": "native/sticky", "position": {"x":1,"y":1,"w":2.5,"h":1}, "config": {"text":"开始","fontSize":22,"color":"yellow"} }',
+    'The canvasId is injected automatically — never pass it.\n\n' +
+    '## Coordinate system (READ THIS FIRST)\n' +
+    'position uses canvas GRID units, NOT pixels. 1 grid unit = 80px. Canvas is 40 x 30 grid units. ' +
+    'Example: a 4x2 element occupies 320x160px; placing it near canvas center means x≈18, y≈14. ' +
+    'ALWAYS provide x, y, w, h. Fractional sizes (e.g. 2.5) are valid. Size to content — do NOT oversize.\n\n' +
+    '## Element kinds and their `config` fields (passed at TOP LEVEL of `config`, not in `position`)\n' +
+    '  - native/shape:     { text, shape?: "rect"|"rounded"|"ellipse"|"diamond"|"parallelogram"|"triangle"|"hexagon", color?, fontSize? } — preferred diagram node\n' +
+    '  - native/text:       { text } — free text, label, caption\n' +
+    '  - native/document:   { title?, markdown?, filePath? } — durable Markdown draft linked to the project\n' +
+    '  - native/table:      { title?, headers?: string[1..12], rows?: string[][<=50], headerFill?: "#RRGGBB", headerTextColor?, borderColor? } — editable grid\n' +
+    '  - native/database:   { sourceId, viewId, sourceTitle?, displayMode:"embedded", showTitle?, previewLimit?:1..200, interactionMode?:"canvas"|"database" } — call database_manage first to get sourceId/viewId\n' +
+    '  - native/image:      { url, fileName? }\n' +
+    '  - native/file:       { fileName, mimeType?, url?, pdfPage?, pdfZoom? }\n' +
+    '  - native/link:       { linkType: "url"|"session"|"canvas", url?, targetId?, title?, description? }\n' +
+    '  - native/connector:  { source, target, routingMode?: "elbow"|"curve", label?, labelFontSize?:14..22, color?, strokeStyle?, startMarker?, endMarker? } — see CONNECTOR PREREQUISITES below\n' +
+    '  - native/sticky:     LEGACY — do not create; use native/shape instead\n' +
+    '  - widget/dynamic:    LAST RESORT only — one compact secondary mini component; never for a whole guide/plan/diagram/dashboard. Requires top-level `sourceCode` field (NOT in config).\n\n' +
+    '## COLOR CONSTRAINTS (apply to native/shape and native/sticky)\n' +
+    'config.color MUST be one of these 6 enum keys (NOT hex): ' +
+    'yellow, blue, green, pink, purple, gray. ' +
+    'pink renders as light red (error/warning semantic). ' +
+    'For full color → semantic mapping see canvas_get_knowledge("sticky-style").\n\n' +
+    '## CONNECTOR PREREQUISITES (read before creating native/connector)\n' +
+    '1. Create source and target nodes FIRST via canvas_create_element — connectors require existing nodeIds. ' +
+    '2. Call canvas_get_knowledge("connector-style") once before your first connector in a session — it covers routing, colors, markers, and shared-trunk patterns.\n' +
+    '3. Each endpoint is one of:\n' +
+    '     { kind: "bound", nodeId: "<id>", bindingPoint: { u: 0|1, v: 0..1 } }  // u=0 left edge, u=1 right edge\n' +
+    '     { kind: "bound", nodeId: "<id>", bindingPoint: { u: 0..1, v: 0|1 } }  // v=0 top edge, v=1 bottom edge\n' +
+    '     { kind: "free",  point: { x, y } }                                    // canvas pixels (NOT grid units)\n' +
+    '   CRITICAL: a bound bindingPoint MUST land on the node edge — at least one of u/v must be exactly 0 or 1. ' +
+    'Interior points like {u:0.5, v:0.5} are REJECTED even though they satisfy 0..1.\n' +
+    '4. routingMode defaults to "elbow" — use "curve" only when the user explicitly asks for an organic curved relation.\n' +
+    '5. curveMidpointOffset and curveControlOffsets are RELATIVE to the endpoint midpoint, in canvas pixels.\n\n' +
+    '## Parameter shape recap (do NOT mix these up)\n' +
+    '  - position: { x, y, w, h } at top level of the tool input.\n' +
+    '  - config:   kind-specific content fields, at top level of the tool input (separate from position).\n' +
+    '  - sourceCode: top-level field ONLY for widget/dynamic; not used by any other kind.\n\n' +
+    '## Common pitfalls\n' +
+    '  - Do NOT put text/color/url/source/target at the top level of the tool input — wrap them inside `config`.\n' +
+    '  - Do NOT pass `position` inside `config`.\n' +
+    '  - Do NOT use hex colors (e.g. "#3B82F6") for native/shape color — use enum keys (yellow/blue/green/pink/purple/gray).\n' +
+    '  - Do NOT skip w and h — omission forces the renderer to guess and produces oversized boxes.\n' +
+    '  - For native/connector, source and target live INSIDE config (config.source, config.target), not at the tool input top level.\n\n' +
+    '## Sizing guide (grid units, w x h)\n' +
+    '  compact label 2.5x1     (1-2 Chinese chars, fontSize 22-24, auto-centered)\n' +
+    '  short Chinese line 3x1   (3-6 chars, fontSize 20-22)\n' +
+    '  two short lines 3.5x1.5  (fontSize 20)\n' +
+    '  standard note 4x2        (1-2 sentences, fontSize 20)\n' +
+    '  detailed note 5x2.5      (fontSize 20)\n' +
+    '  section title 3.5x1.25   (root, fontSize 24)\n' +
+    'Compact labels render at 22px by default; legacy fontSize <18 is clamped to 18. Use 20-24px for explicit control.\n\n' +
+    'Returns the new elementId — use it with canvas_fill_content / canvas_style_element / canvas_move_element to complete the element. ' +
+    'Elements created in THIS session bypass the STALE_STATE check for subsequent mutations.\n\n' +
+    '## Worked example (a small flowchart)\n' +
+    '{"kind":"native/shape","position":{"x":1,"y":1,"w":2.5,"h":1},"config":{"text":"开始","color":"green","fontSize":22}}\n' +
+    '{"kind":"native/shape","position":{"x":5,"y":1,"w":2.5,"h":1},"config":{"text":"处理","color":"blue"}}\n' +
+    '{"kind":"native/connector","position":{"x":0,"y":0,"w":1,"h":1},"config":{"source":{"kind":"bound","nodeId":"<id-of-开始>","bindingPoint":{"u":1,"v":0.5}},"target":{"kind":"bound","nodeId":"<id-of-处理>","bindingPoint":{"u":0,"v":0.5}},"routingMode":"elbow","endMarker":"arrow"}}',
   input_schema: {
     type: 'object',
     properties: {
@@ -114,15 +150,15 @@ export const definition: Tool = {
         type: 'string',
         description:
           'Element kind. Prefer native/shape, native/document, native/text, native/table, native/database, native/image, native/file, native/connector, or native/link. ' +
+          'native/sticky is LEGACY — use native/shape. ' +
           'widget/dynamic is only for one compact secondary mini component, never the primary canvas content.',
       },
       position: {
         type: 'object',
         description:
-          'Element position in canvas grid units (1 unit = 80px). ' +
-          'Required fields: x, y (top-left corner). ' +
-          'Required: w, h (width/height in grid units). ' +
-          'Choose w/h based on content length; use 2.5x1 for a compact label and 4x2 for a standard note. ' +
+          'Element position in canvas GRID units (1 unit = 80px; canvas is 40 x 30 units). ' +
+          'Required: x, y (top-left corner), w, h (width/height). ' +
+          'Choose w/h based on content length — see sizing guide in tool description. ' +
           'Optional: zIndex, rotation.',
         properties: {
           x: { type: 'number' },
@@ -137,7 +173,9 @@ export const definition: Tool = {
       config: {
         type: 'object',
         description:
-          'Initial content config for the element (kind-specific). ' +
+          'Initial content config for the element (kind-specific fields at top level of this object). ' +
+          'For native/shape: { text, color?: "yellow"|"blue"|"green"|"pink"|"purple"|"gray", fontSize?, shape? }. ' +
+          'For native/connector: { source, target, routingMode?, ... } where source/target are endpoint objects. ' +
           'Optional — can be set later via canvas_fill_content.',
         additionalProperties: true,
       },
@@ -151,7 +189,8 @@ export const definition: Tool = {
       sourceCode: {
         type: 'string',
         description:
-          'Required only when kind="widget/dynamic". Use only for a compact secondary mini component, never a guide, itinerary, diagram, or dashboard. ' +
+          'Required ONLY when kind="widget/dynamic". TOP-LEVEL field (NOT inside config). ' +
+          'Use only for a compact secondary mini component, never a guide, itinerary, diagram, or dashboard. ' +
           'HTML or SVG renders in a sandboxed iframe and is not node-by-node editable. Must be self-contained (no external resources, no <script>). Inline CSS only. ' +
           'SVG must have explicit width/height.',
       },

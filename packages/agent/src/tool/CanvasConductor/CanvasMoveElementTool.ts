@@ -20,7 +20,16 @@ export const definition: Tool = {
   description:
     'Move an existing canvas element to a new (x, y) position. ' +
     'Size (w, h), z-index, and rotation are unchanged. ' +
-    'Use this to reposition elements after layout changes or to align items.',
+    'The canvasId is injected automatically — never pass it.\n\n' +
+    '## PRE-FLIGHT (REQUIRED)\n' +
+    'Call canvas_list_elements (or canvas_get_context) first, OR operate on an element you created via ' +
+    'canvas_create_element in THIS session. Without one of these, the call is REJECTED with STALE_STATE.\n\n' +
+    '## Coordinate system\n' +
+    'x and y are in canvas GRID units (1 unit = 80px; canvas is 40 x 30 units). NOT pixels. ' +
+    'Example: x=10, y=5 places the element top-left at 800px from left, 400px from top.\n' +
+    'Canvas bounds: x ∈ [0, 40], y ∈ [0, 30]; values outside [-100, 200] are rejected.\n' +
+    'For resize (w/h changes), use canvas_resize_element instead.\n' +
+    'For content/style changes, use canvas_fill_content / canvas_style_element.',
   input_schema: {
     type: 'object',
     properties: {
@@ -30,11 +39,11 @@ export const definition: Tool = {
       },
       x: {
         type: 'number',
-        description: 'New x position in canvas pixel coordinates.',
+        description: 'New x position (top-left corner) in canvas GRID units (1 unit = 80px). NOT pixels.',
       },
       y: {
         type: 'number',
-        description: 'New y position in canvas pixel coordinates.',
+        description: 'New y position (top-left corner) in canvas GRID units (1 unit = 80px). NOT pixels.',
       },
     },
     required: ['x', 'y'],

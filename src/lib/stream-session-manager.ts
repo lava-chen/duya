@@ -2,7 +2,7 @@
 //
 // Connects to Agent Server via HTTP+SSE for chat streaming.
 
-import type { SessionStreamSnapshot, ToolUseInfo, ToolResultInfo, TokenUsage, ContextUsage, StreamPhase } from '@/types/message';
+import type { SessionStreamSnapshot, ToolUseInfo, ToolResultInfo, StreamPhase } from '@/types/message';
 import type {
   ResearchActivityItem,
   ResearchPanelFinding,
@@ -15,7 +15,7 @@ import type {
   ResearchPersistedSource,
   ResearchReportArtifact,
 } from '@/types/research';
-import type { PermissionRequestEvent } from '@/types/stream';
+import type { PermissionRequestEvent, ModeChangedEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions } from './agent-http-client';
@@ -285,7 +285,6 @@ interface StartStreamParams {
   titleGenerationModel?: string;
   titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
   mode?: string;
-  wikiAgentEnabled?: boolean;
   defaultWorkspaceDirectory?: string;
   securityScanEnabled?: boolean;
   /**
@@ -332,8 +331,6 @@ type FieldListeners = {
   tools: Set<(tools: { uses: ToolUseInfo[]; results: ToolResultInfo[] }) => void>;
   phase: Set<(phase: StreamPhase) => void>;
   statusText: Set<(statusText: string | undefined) => void>;
-  contextUsage: Set<(usage: ContextUsage | null) => void>;
-  tokenUsage: Set<(usage: TokenUsage | null) => void>;
   toolOutput: Set<(output: string) => void>;
   toolProgress: Set<(info: { toolName: string; elapsedSeconds: number } | null) => void>;
   toolTimeout: Set<(info: { toolName: string; elapsedSeconds: number } | null) => void>;
@@ -382,8 +379,6 @@ interface SessionState {
   toolResults: ToolResultInfo[];
   streamingToolOutput: string;
   statusText: string | undefined;
-  tokenUsage: TokenUsage | null;
-  contextUsage: ContextUsage | null;
   startedAt: number;
   completedAt: number | null;
   error: string | null;
@@ -405,6 +400,8 @@ interface SessionState {
   fieldListeners: FieldListeners;
   streamingEventsListeners: Set<(events: StreamingEvent[]) => void>;
   permissionListeners: Set<(request: PermissionRequestEvent) => void>;
+  /** Plan 224 follow-up: listeners for agent-initiated runtime mode switches. */
+  modeChangedListeners: Set<(event: ModeChangedEvent) => void>;
   dbPersistedListeners: Set<(event: PersistEvent) => void>;
   idleTimeout: ReturnType<typeof setTimeout> | null;
   textEmitTimeout: ReturnType<typeof setTimeout> | number | null;
@@ -484,7 +481,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'modeChangedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -498,8 +495,6 @@ function createInitialState(sessionId: string): Omit<SessionState, 'listeners' |
     toolResults: [],
     streamingToolOutput: '',
     statusText: undefined,
-    tokenUsage: null,
-    contextUsage: null,
     startedAt: Date.now(),
     completedAt: null,
     error: null,
@@ -528,8 +523,6 @@ function buildSnapshot(state: SessionState): SessionStreamSnapshot {
     toolResults: state.toolResults,
     streamingToolOutput: state.streamingToolOutput,
     statusText: state.statusText,
-    tokenUsage: state.tokenUsage,
-    contextUsage: state.contextUsage,
     startedAt: state.startedAt,
     completedAt: state.completedAt,
     error: state.error,
@@ -755,8 +748,6 @@ class StreamSessionManager {
       tools: new Set(),
       phase: new Set(),
       statusText: new Set(),
-      contextUsage: new Set(),
-      tokenUsage: new Set(),
       toolOutput: new Set(),
       toolProgress: new Set(),
       toolTimeout: new Set(),
@@ -780,6 +771,7 @@ class StreamSessionManager {
         fieldListeners: this.createFieldListeners(),
         streamingEventsListeners: new Set(),
         permissionListeners: new Set(),
+        modeChangedListeners: new Set(),
         dbPersistedListeners: new Set(),
         idleTimeout: null,
         textEmitTimeout: null,
@@ -971,7 +963,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume } = params;
+    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume } = params;
 
     if (!backgroundTaskResume) {
       this.backgroundResumeTemplates.set(sessionId, {
@@ -1031,8 +1023,6 @@ class StreamSessionManager {
     state.toolResults = [];
     state.streamingToolOutput = '';
     state.statusText = undefined;
-    state.tokenUsage = null;
-    state.contextUsage = null;
     state.startedAt = Date.now();
     state.completedAt = null;
     state.error = null;
@@ -1054,8 +1044,6 @@ class StreamSessionManager {
     this.notifyThinkingListeners(sessionId, state.streamingThinking);
     this.notifyToolListeners(sessionId);
     this.notifyStatusTextListeners(sessionId, state.statusText);
-    this.notifyContextUsageListeners(sessionId, state.contextUsage);
-    this.notifyTokenUsageListeners(sessionId, state.tokenUsage);
     this.notifyToolOutputListeners(sessionId, state.streamingToolOutput);
     this.notifyToolProgressListeners(sessionId, state.toolProgressInfo);
     this.notifyToolTimeoutListeners(sessionId, state.toolTimeoutInfo);
@@ -1139,7 +1127,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, displayContent, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, wikiAgentEnabled, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId, backgroundTaskResume },
+      { content, displayContent, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId, backgroundTaskResume },
       nextGeneration
     );
 
@@ -1165,7 +1153,6 @@ class StreamSessionManager {
       providerConfig?: ProviderConfig | null;
       workingDirectory?: string;
       mode?: string;
-      wikiAgentEnabled?: boolean;
       defaultWorkspaceDirectory?: string;
       securityScanEnabled?: boolean;
       effort?: string;
@@ -1276,6 +1263,13 @@ class StreamSessionManager {
           this.handlePermissionEvent(sessionId, streamId, event.data as { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } | undefined);
           break;
 
+        case 'mode_changed':
+          // Plan 224 follow-up: agent runtime mode switched via
+          // EnterPlanMode / ExitPlanMode / SwitchMode tool. Notify
+          // listeners (ChatView) so they can sync input-box chip/glow.
+          this.handleModeChangedEvent(sessionId, streamId, event.data as ModeChangedEvent | undefined);
+          break;
+
         case 'db:request':
           // Forward DB requests to agent server via IPC - don't handle here
           // The agent-server will route them to the database and forward responses
@@ -1287,14 +1281,6 @@ class StreamSessionManager {
         case 'title_generated':
         case 'chat:title_generated':
           this.handleAgentServerEvent(s, streamId, event);
-          break;
-
-        case 'token_usage':
-          this.handleTokenUsageEvent(sessionId, streamId, event.data as { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number } | undefined);
-          break;
-
-        case 'context_usage':
-          this.handleContextUsageEvent(sessionId, streamId, event.data as { usedTokens?: number; contextWindow?: number; percentFull?: number } | undefined);
           break;
 
         case 'agent_progress':
@@ -1349,7 +1335,6 @@ class StreamSessionManager {
         titleGenerationModelConfig: params.titleGenerationModelConfig,
         providerConfig: params.providerConfig as unknown as Record<string, unknown> | undefined,
         workingDirectory: params.workingDirectory,
-        wikiAgentEnabled: params.wikiAgentEnabled,
         defaultWorkspaceDirectory: params.defaultWorkspaceDirectory,
         securityScanEnabled: params.securityScanEnabled,
         effort: params.effort,
@@ -1407,10 +1392,6 @@ class StreamSessionManager {
         this.handleDbPersistedEvent(state.sessionId, streamId, data as { success?: boolean; messageCount?: number; reason?: string });
       } else if (normalizedType === 'title_generated') {
         this.handleTitleGeneratedEvent(state.sessionId, streamId, data as { title?: string });
-      } else if (normalizedType === 'token_usage') {
-        this.handleTokenUsageEvent(state.sessionId, streamId, data as { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number });
-      } else if (normalizedType === 'context_usage') {
-        this.handleContextUsageEvent(state.sessionId, streamId, data as { usedTokens?: number; contextWindow?: number; percentFull?: number });
       } else if (normalizedType === 'status') {
         this.handleStatusEvent(state.sessionId, streamId, data as { message?: string; status?: string });
       }
@@ -1655,56 +1636,34 @@ class StreamSessionManager {
     this.resetIdleTimeout(sessionId);
   }
 
-  private handleTokenUsageEvent(
+  /**
+   * Plan 224 follow-up: handle `mode_changed` SSE event emitted by the
+   * agent after a mode-switch tool call (EnterPlanMode / ExitPlanMode /
+   * SwitchMode) completes. Notifies registered listeners so ChatView
+   * can sync the input-box chip/glow with the new runtime mode. Does
+   * NOT mutate `phase` — mode changes are orthogonal to the streaming
+   * phase machine.
+   */
+  private handleModeChangedEvent(
     sessionId: string,
     streamId: string,
-    data: { inputTokens?: number; outputTokens?: number; cacheHitTokens?: number; cacheCreationTokens?: number; input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number; total_tokens?: number } | undefined
+    data: ModeChangedEvent | undefined
   ): void {
+    if (!data) return;
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
-    if (!data) return;
-
-    const inputTokens = data.inputTokens ?? data.input_tokens ?? 0;
-    const outputTokens = data.outputTokens ?? data.output_tokens ?? 0;
-    const hitTokens = data.cacheHitTokens ?? data.cache_hit_tokens ?? 0;
-    const createTokens = data.cacheCreationTokens ?? data.cache_creation_tokens ?? 0;
-
-    s.tokenUsage = {
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-      total_tokens: data.total_tokens ?? (inputTokens + outputTokens),
-      cache_hit_tokens: hitTokens,
-      cache_creation_tokens: createTokens,
+    const event: ModeChangedEvent = {
+      mode: data.mode,
+      source: data.source ?? 'agent',
+      reason: data.reason,
     };
-    this.notifyTokenUsageListeners(sessionId, s.tokenUsage);
-    this.notifyListeners(sessionId);
-
-    // Do NOT write tokenUsage into the frontend message store here.
-    // During streaming the message array does not yet contain the current
-    // assistant message, so this would attach usage to the *previous*
-    // assistant. The authoritative token_usage is written by the agent
-    // process when it persists the canonical assistant message.
-  }
-
-  private handleContextUsageEvent(
-    sessionId: string,
-    streamId: string,
-    data: { usedTokens?: number; contextWindow?: number; percentFull?: number } | undefined,
-  ): void {
-    const state = this.sessions.get(sessionId);
-    if (!state || !this.isCurrentStream(sessionId, streamId) || !data) return;
-
-    const contextWindow = data.contextWindow ?? 0;
-    const usedTokens = data.usedTokens ?? 0;
-    if (contextWindow <= 0 || usedTokens < 0) return;
-
-    state.contextUsage = {
-      usedTokens,
-      contextWindow,
-      percentFull: data.percentFull ?? (usedTokens / contextWindow) * 100,
-    };
-    this.notifyContextUsageListeners(sessionId, state.contextUsage);
-    this.notifyListeners(sessionId);
+    s.modeChangedListeners.forEach((listener) => {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error(`[stream-session-manager] Mode changed listener error for ${sessionId}:`, error);
+      }
+    });
   }
 
   private handleDoneEvent(sessionId: string, streamId: string): void {
@@ -1751,7 +1710,7 @@ class StreamSessionManager {
   private handleDbPersistedEvent(
     sessionId: string,
     streamId: string,
-    event: { success?: boolean; messageCount?: number; reason?: string; tokenUsage?: { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number } }
+    event: { success?: boolean; messageCount?: number; reason?: string }
   ): void {
     const startTime = performance.now();
     console.log(`[stream-session-manager] handleDbPersistedEvent START: ${sessionId.slice(0, 8)}, success=${event.success}`);
@@ -1759,17 +1718,6 @@ class StreamSessionManager {
     if (!s || !this.isCurrentStream(sessionId, streamId)) {
       console.log(`[stream-session-manager] handleDbPersistedEvent SKIP: session or stream mismatch`);
       return;
-    }
-
-    // Update tokenUsage from persist event if available
-    if (event.tokenUsage) {
-      s.tokenUsage = {
-        input_tokens: event.tokenUsage.inputTokens,
-        output_tokens: event.tokenUsage.outputTokens,
-        total_tokens: event.tokenUsage.inputTokens + event.tokenUsage.outputTokens,
-        cache_hit_tokens: event.tokenUsage.cacheHitTokens,
-        cache_creation_tokens: event.tokenUsage.cacheCreationTokens,
-      };
     }
 
     s.dbPersisted = {
@@ -1795,12 +1743,6 @@ class StreamSessionManager {
         // ignore listener errors
       }
     }
-
-    // Do NOT write tokenUsage into the frontend message store here.
-    // The optimistic assistant message has a different id than the
-    // canonical DB row, and the message array does not yet contain the
-    // current assistant message. The authoritative token_usage is written
-    // by the agent process; App.tsx reloads canonical messages from DB.
 
     console.log(`[stream-session-manager] handleDbPersistedEvent DONE: ${sessionId.slice(0, 8)}, elapsed=${(performance.now() - startTime).toFixed(1)}ms`);
   }
@@ -1923,20 +1865,6 @@ class StreamSessionManager {
     return () => { state.fieldListeners.statusText.delete(listener); };
   }
 
-  subscribeToContextUsage(sessionId: string, listener: (usage: ContextUsage | null) => void): () => void {
-    const state = this.getOrCreateState(sessionId);
-    state.fieldListeners.contextUsage.add(listener);
-    listener(state.contextUsage);
-    return () => { state.fieldListeners.contextUsage.delete(listener); };
-  }
-
-  subscribeToTokenUsage(sessionId: string, listener: (usage: TokenUsage | null) => void): () => void {
-    const state = this.getOrCreateState(sessionId);
-    state.fieldListeners.tokenUsage.add(listener);
-    listener(state.tokenUsage);
-    return () => { state.fieldListeners.tokenUsage.delete(listener); };
-  }
-
   subscribeToToolOutput(sessionId: string, listener: (output: string) => void): () => void {
     const state = this.getOrCreateState(sessionId);
     state.fieldListeners.toolOutput.add(listener);
@@ -2025,6 +1953,25 @@ class StreamSessionManager {
     };
   }
 
+  /**
+   * Plan 224 follow-up: subscribe to agent-initiated runtime mode
+   * switches (EnterPlanMode / ExitPlanMode / SwitchMode tool calls).
+   * Returns an unsubscribe function. The listener is fire-and-forget —
+   * there is no pending state to replay because mode_changed events
+   * are transient; if the renderer re-mounts mid-stream it simply
+   * waits for the next event.
+   */
+  subscribeToModeChanged(
+    sessionId: string,
+    listener: (event: ModeChangedEvent) => void
+  ): () => void {
+    const state = this.getOrCreateState(sessionId);
+    state.modeChangedListeners.add(listener);
+    return () => {
+      state.modeChangedListeners.delete(listener);
+    };
+  }
+
   subscribeToDbPersisted(
     sessionId: string,
     listener: (event: PersistEvent) => void
@@ -2073,6 +2020,7 @@ class StreamSessionManager {
       fieldListeners: this.createFieldListeners(),
       streamingEventsListeners: new Set(),
       permissionListeners: new Set(),
+      modeChangedListeners: new Set(),
       dbPersistedListeners: new Set(),
       idleTimeout: null,
       textEmitTimeout: null,
@@ -2137,22 +2085,6 @@ class StreamSessionManager {
     if (!state) return;
     state.fieldListeners.statusText.forEach((listener) => {
       try { listener(statusText); } catch (e) { console.error(e); }
-    });
-  }
-
-  private notifyContextUsageListeners(sessionId: string, usage: ContextUsage | null): void {
-    const state = this.sessions.get(sessionId);
-    if (!state) return;
-    state.fieldListeners.contextUsage.forEach((listener) => {
-      try { listener(usage); } catch (e) { console.error(e); }
-    });
-  }
-
-  private notifyTokenUsageListeners(sessionId: string, usage: TokenUsage | null): void {
-    const state = this.sessions.get(sessionId);
-    if (!state) return;
-    state.fieldListeners.tokenUsage.forEach((listener) => {
-      try { listener(usage); } catch (e) { console.error(e); }
     });
   }
 
@@ -3127,6 +3059,8 @@ export const subscribeSession = (sessionId: string, listener: (snapshot: Session
   streamSessionManager.subscribeSession(sessionId, listener);
 export const subscribeToPermissions = (sessionId: string, listener: (request: PermissionRequestEvent) => void) =>
   streamSessionManager.subscribeToPermissions(sessionId, listener);
+export const subscribeToModeChanged = (sessionId: string, listener: (event: ModeChangedEvent) => void) =>
+  streamSessionManager.subscribeToModeChanged(sessionId, listener);
 export const subscribeToDbPersisted = (sessionId: string, listener: (event: PersistEvent) => void) =>
   streamSessionManager.subscribeToDbPersisted(sessionId, listener);
 export const getSnapshot = (sessionId: string) => streamSessionManager.getSnapshot(sessionId);
@@ -3144,10 +3078,6 @@ export const subscribeToPhase = (sessionId: string, listener: (phase: StreamPhas
   streamSessionManager.subscribeToPhase(sessionId, listener);
 export const subscribeToStatusText = (sessionId: string, listener: (statusText: string | undefined) => void) =>
   streamSessionManager.subscribeToStatusText(sessionId, listener);
-export const subscribeToContextUsage = (sessionId: string, listener: (usage: ContextUsage | null) => void) =>
-  streamSessionManager.subscribeToContextUsage(sessionId, listener);
-export const subscribeToTokenUsage = (sessionId: string, listener: (usage: TokenUsage | null) => void) =>
-  streamSessionManager.subscribeToTokenUsage(sessionId, listener);
 export const subscribeToToolOutput = (sessionId: string, listener: (output: string) => void) =>
   streamSessionManager.subscribeToToolOutput(sessionId, listener);
 export const subscribeToToolProgress = (sessionId: string, listener: (info: { toolName: string; elapsedSeconds: number } | null) => void) =>

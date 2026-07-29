@@ -100,10 +100,9 @@ function mapEventType(eventType: string): string {
   if (eventType === 'chat:tool_result') return 'tool_result';
   if (eventType === 'chat:tool_progress') return 'tool_progress';
   if (eventType === 'chat:permission') return 'permission';
-  if (eventType === 'chat:context_usage') return 'context_usage';
   if (eventType === 'chat:status') return 'status';
+  if (eventType === 'chat:mode_changed') return 'mode_changed';
   if (eventType === 'chat:retry') return 'retry';
-  if (eventType === 'chat:token_usage') return 'token_usage';
   if (eventType === 'checkpoint') return 'checkpoint';
   if (eventType === 'ready') return 'ready';
   if (eventType === 'memory_warning') return 'memory_warning';
@@ -139,23 +138,6 @@ function readRequestBody(req: import('http').IncomingMessage): Promise<string | 
     req.on('end', () => finish(body || null));
     req.on('error', () => finish(null));
   });
-}
-
-function emitWikiChatDone(event: Record<string, unknown>): void {
-  if (event.type !== 'chat:done' || typeof process.send !== 'function') {
-    return;
-  }
-
-  try {
-    process.send({
-      type: 'wiki:chat_done',
-      payload: event,
-    });
-  } catch {
-    // H2: process.send can throw if the IPC channel is closed.
-    // Swallow — the wiki:chat_done notification is best-effort and must not
-    // block the SSE done event from being sent to the client.
-  }
 }
 
 async function handlePostChat(
@@ -499,15 +481,12 @@ async function handlePostChat(
           handlePostChatNonSSE(sessionId, req, res, child, deps);
         }
 
-        // Pass wikiAgentEnabled from options to worker (passed from frontend)
-        const wikiAgentEnabled = parsed.options?.wikiAgentEnabled === true;
-
         workerManager.sendCommand(sessionId, {
           type: 'chat:start',
           sessionId,
           id: randomUUID(),
           prompt,
-          options: { ...(parsed.options || {}), wikiAgentEnabled },
+          options: parsed.options || {},
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -684,6 +663,18 @@ function handlePostChatSSE(
             type: 'status',
             data: { message: event.status || event.message },
           };
+        } else if (msgType === 'chat:mode_changed') {
+          // Plan 224 follow-up: agent runtime mode switched via
+          // EnterPlanMode / ExitPlanMode / SwitchMode tool. Forward the
+          // mode + source so the renderer can sync input-box chip/glow.
+          sseEvent = {
+            type: 'mode_changed',
+            data: {
+              mode: event.mode,
+              source: event.source,
+              reason: event.reason,
+            },
+          };
         } else if (msgType === 'ready') {
           // 'ready' type is already correct format
         } else if (msgType === 'chat:agent_progress') {
@@ -746,7 +737,6 @@ function handlePostChatSSE(
         const eventType = sseEvent.type || 'unknown';
 
         if (eventType === 'done') {
-          emitWikiChatDone(event);
           // Flush pending messages to DB before sending done event
           if (pendingMessages.length > 0 && process.send) {
             const flushMsg = {
@@ -962,7 +952,6 @@ function handlePostChatNonSSE(
         allEvents.push(event);
 
         if (event.type === 'chat:done' || event.type === 'chat:error') {
-          emitWikiChatDone(event);
           doneReceived = true;
           sendJson(res, 200, { events: allEvents });
           return;

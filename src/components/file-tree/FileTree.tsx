@@ -15,30 +15,8 @@ import {
   FolderOpen,
   File,
   CaretRight,
-  FileCode,
-  Code,
-  FileTsIcon,
-  FileJsIcon,
-  FileJsxIcon,
-  FilePyIcon,
-  FileCIcon,
-  FileCppIcon,
-  FileCssIcon,
-  FileHtmlIcon,
-  FileImageIcon,
-  FilePngIcon,
-  FileJpgIcon,
-  FilePdfIcon,
-  FileDocIcon,
-  FileArchiveIcon,
-  FileTextIcon,
-  FileMdIcon,
-  FileSqlIcon,
-  FileSvgIcon,
-  FileVueIcon,
-  FileRsIcon,
-  FileIniIcon,
 } from "@phosphor-icons/react";
+import { getFileTypeIcon } from './file-type-icon';
 
 // =============================================================================
 // Types
@@ -431,115 +409,8 @@ export function FileTreeFile({ path, name, icon }: FileTreeFileProps) {
 
 function getFileIcon(extension?: string) {
   const iconClass = "text-muted-foreground";
-  switch (extension?.toLowerCase()) {
-    // TypeScript
-    case "ts":
-    case "tsx":
-      return <FileTsIcon size={16} className={iconClass} />;
-    // JavaScript
-    case "js":
-      return <FileJsIcon size={16} className={iconClass} />;
-    case "jsx":
-      return <FileJsxIcon size={16} className={iconClass} />;
-    // Python
-    case "py":
-    case "pyc":
-    case "pyo":
-    case "pyd":
-      return <FilePyIcon size={16} className={iconClass} />;
-    // Rust
-    case "rs":
-      return <FileRsIcon size={16} className={iconClass} />;
-    // C/C++
-    case "c":
-      return <FileCIcon size={16} className={iconClass} />;
-    case "cpp":
-    case "cc":
-    case "cxx":
-    case "h":
-    case "hpp":
-      return <FileCppIcon size={16} className={iconClass} />;
-    // CSS
-    case "css":
-    case "scss":
-    case "sass":
-    case "less":
-      return <FileCssIcon size={16} className={iconClass} />;
-    // HTML
-    case "html":
-    case "htm":
-      return <FileHtmlIcon size={16} className={iconClass} />;
-    // Vue
-    case "vue":
-      return <FileVueIcon size={16} className={iconClass} />;
-    // Images
-    case "png":
-      return <FilePngIcon size={16} className={iconClass} />;
-    case "jpg":
-    case "jpeg":
-      return <FileJpgIcon size={16} className={iconClass} />;
-    case "gif":
-    case "bmp":
-    case "webp":
-    case "ico":
-      return <FileImageIcon size={16} className={iconClass} />;
-    case "svg":
-      return <FileSvgIcon size={16} className={iconClass} />;
-    // Documents
-    case "pdf":
-      return <FilePdfIcon size={16} className={iconClass} />;
-    case "doc":
-    case "docx":
-      return <FileDocIcon size={16} className={iconClass} />;
-    // Markdown
-    case "md":
-    case "mdx":
-      return <FileMdIcon size={16} className={iconClass} />;
-    // SQL
-    case "sql":
-      return <FileSqlIcon size={16} className={iconClass} />;
-    // Config files
-    case "json":
-    case "yaml":
-    case "yml":
-    case "toml":
-      return <Code size={16} className={iconClass} />;
-    case "ini":
-    case "cfg":
-    case "conf":
-      return <FileIniIcon size={16} className={iconClass} />;
-    // Archives
-    case "zip":
-    case "rar":
-    case "7z":
-    case "tar":
-    case "gz":
-    case "bz2":
-      return <FileArchiveIcon size={16} className={iconClass} />;
-    // Text files
-    case "txt":
-    case "log":
-      return <FileTextIcon size={16} className={iconClass} />;
-    // Other code files (fallback)
-    case "rb":
-    case "go":
-    case "java":
-    case "swift":
-    case "kt":
-    case "dart":
-    case "lua":
-    case "php":
-    case "zig":
-    case "r":
-    case "pl":
-    case "sh":
-    case "bash":
-    case "zsh":
-    case "fish":
-      return <FileCode size={16} className={iconClass} />;
-    default:
-      return null;
-  }
+  const Icon = getFileTypeIcon(extension);
+  return Icon ? <Icon size={16} className={iconClass} /> : null;
 }
 
 // =============================================================================

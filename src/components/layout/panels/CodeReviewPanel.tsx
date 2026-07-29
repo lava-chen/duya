@@ -21,7 +21,7 @@ import {
   IconRoute,
   IconSearch,
   IconTextWrap,
-} from "@tabler/icons-react";
+} from "@/components/icons";
 import { dispatchAddAttachment } from "@/lib/add-attachment-event";
 import {
   getGitReview,

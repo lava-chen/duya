@@ -10,27 +10,46 @@ class ConductorBridgeClass {
   private portUnsubscribe: (() => void) | null = null;
   private canvasId: string | null = null;
 
+  private subscribePort(): void {
+    const port = window.electronAPI?.getConductorPort?.();
+    if (!port) return;
+
+    this.portUnsubscribe = port.onStatePatch((data) => {
+      // Drop patches for other canvases. The main process broadcasts
+      // every canvas's patches to every subscriber; without this guard,
+      // patches from canvas A get applied to the store while canvas B
+      // is being displayed, producing "phantom" elements that vanish
+      // after a refresh (which reloads only the bound canvas).
+      const patchCanvasId = (data as { canvasId?: unknown }).canvasId;
+      if (patchCanvasId && this.canvasId && patchCanvasId !== this.canvasId) {
+        return;
+      }
+      for (const handler of this.handlers) {
+        try {
+          handler(data);
+        } catch {}
+      }
+    });
+  }
+
   connect(canvasId: string): () => void {
+    this.disconnect();
     this.canvasId = canvasId;
 
     const port = window.electronAPI?.getConductorPort?.();
     if (port) {
-      this.portUnsubscribe = port.onStatePatch((data) => {
-        // Drop patches for other canvases. The main process broadcasts
-        // every canvas's patches to every subscriber; without this guard,
-        // patches from canvas A get applied to the store while canvas B
-        // is being displayed, producing "phantom" elements that vanish
-        // after a refresh (which reloads only the bound canvas).
-        const patchCanvasId = (data as { canvasId?: unknown }).canvasId;
-        if (patchCanvasId && this.canvasId && patchCanvasId !== this.canvasId) {
-          return;
-        }
-        for (const handler of this.handlers) {
-          try {
-            handler(data);
-          } catch {}
-        }
-      });
+      this.subscribePort();
+    } else {
+      // The main process sends the MessagePort asynchronously; if we connect
+      // before it arrives, wait for the ready signal the preload dispatches
+      // once the port has been assigned, then subscribe.
+      const handleReady = () => {
+        this.subscribePort();
+      };
+      window.addEventListener("conductor-port-ready", handleReady, { once: true });
+      this.portUnsubscribe = () => {
+        window.removeEventListener("conductor-port-ready", handleReady);
+      };
     }
 
     return () => {

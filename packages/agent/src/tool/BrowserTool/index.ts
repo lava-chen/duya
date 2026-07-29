@@ -8,7 +8,7 @@ export type { ICDPClient } from './CDPClient.js';
 export { BrowserPool } from './BrowserPool.js';
 export type { InvestigationTask, InvestigationResult } from './BrowserPool.js';
 export { SnapshotEngine } from './SnapshotEngine.js';
-export { BROWSER_TOOL_NAME, BROWSER_TOOL_DESCRIPTION } from './constants.js';
+export { BROWSER_TOOL_NAME, BROWSER_TOOL_DESCRIPTION, BROWSER_TOOL_DESCRIPTION_HUMAN_LIKE } from './constants.js';
 export type { BrowserInput } from './BrowserTool.js';
 export type { SnapshotResult, SnapshotOptions, InteractiveElement } from './SnapshotEngine.js';
 export { isUrlBlocked, getEffectiveBlockedDomains, normalizeDomain, isValidDomain } from './DomainBlocker.js';

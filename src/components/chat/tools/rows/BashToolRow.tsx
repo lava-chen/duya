@@ -33,8 +33,9 @@ export function BashToolRow({ tool, streamingToolOutput }: BashToolRowProps) {
   const isRunning = tool.result === undefined;
   const outputText = isRunning ? streamingToolOutput : tool.result;
   const status = getStatus(tool);
-  // Distinguish shell tool vs bash tool: shellTool -> "Shell", bashTool -> "Bash".
-  const shellLabel = tool.name.toLowerCase() === 'shell' ? 'Shell' : 'Bash';
+  // Distinguish shell tool families: shell -> "Shell", powershell -> "PowerShell", else "Bash".
+  const lowerName = tool.name.toLowerCase();
+  const shellLabel = lowerName === 'shell' ? 'Shell' : lowerName === 'powershell' ? 'PowerShell' : 'Bash';
 
   // Wall-clock moment we first saw this tool_use block in the stream.
   // The ref is set once on mount and never reset, so the live tick

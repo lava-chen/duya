@@ -29,7 +29,6 @@
     "./memory/**/*.ts",
     "./project-database/**/*.ts",
     "./services/**/*.ts",
-    "./wiki-agent/**/*.ts",
     "./automation/**/*.ts",
     "./main.ts",
     "./preload.ts"

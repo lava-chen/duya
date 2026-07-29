@@ -18,6 +18,7 @@ import "@duya/conductor/renderer/widgets";
 import type { CanvasPosition } from "@duya/conductor/renderer/types/conductor";
 import type { PageTab } from "./registry";
 import { useOptionalPanel } from "@/hooks/usePanel";
+import { useConversationStore } from "@/stores/conversation-store";
 
 export function SidebarConductorView({
   tab,
@@ -51,6 +52,7 @@ export function SidebarConductorView({
 
   const panel = useOptionalPanel();
   const updateTabTitle = panel?.updateTabTitle;
+  const currentView = useConversationStore((s) => s.currentView);
   const targetCanvasName = useConductorStore((s) => {
     const targetId = tabCanvasId ?? s.activeCanvasId;
     if (!targetId) return undefined;

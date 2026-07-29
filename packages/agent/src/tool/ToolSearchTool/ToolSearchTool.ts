@@ -7,13 +7,9 @@ export const TOOL_SEARCH_RESULT_MARKER = '<!-- duya-tool-search-result -->';
 export const DESCRIPTION = `Search available tools by name, description, keyword, or category.
 Use when you need a tool for a specific operation but don't see it listed in this turn.
 
-Each returned result includes a 'description' (what the tool does) and 'inputSchemaSummary' (a
-concise description of the required/optional parameters). You can call the tool directly using
-those parameters — no further setup required. Only the core file, search, task delegation,
-and platform-native shell tools are listed directly. Browser, memory, session, mode, canvas,
-research, wiki, inter-agent, CLI, generative UI, vision, module, skill-management, and MCP tools
-can be discovered on-demand via this tool. Plan 241 Phase 1: inputSchemaSummary
-may be null when the registry has not yet persisted schema metadata (will be filled in Phase 2).`;
+Each result states what the tool does and may include a concise input summary. A discovered tool
+is added to the next model turn with its complete schema and any usage guide. This searches tools,
+not skills: use the Skills catalog and the Skill tool to load a skill.`;
 
 export class ToolSearchTool implements Tool, ToolExecutor {
   readonly name = TOOL_SEARCH_NAME;
@@ -73,7 +69,6 @@ export class ToolSearchTool implements Tool, ToolExecutor {
       const results = this.searchFn(query, Math.min(limit, 20));
       const sections = results.map((result) => {
         const metadata = [
-          `- **Category:** ${result.category}`,
           `- **Exposure:** ${result.exposeMode ?? 'always'}`,
           result.inputSchemaSummary
             ? `- **Input summary:** ${result.inputSchemaSummary}`

@@ -8,7 +8,7 @@
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { BaseTool } from '../BaseTool.js';
-import { BROWSER_TOOL_NAME, BROWSER_TOOL_DESCRIPTION } from './constants.js';
+import { BROWSER_TOOL_NAME, BROWSER_TOOL_DESCRIPTION, BROWSER_TOOL_DESCRIPTION_HUMAN_LIKE } from './constants.js';
 import { ExtensionCDPClient, type ICDPClient } from './CDPClient.js';
 import { WebviewCDPClient } from './WebviewCDPClient.js';
 import { HumanLikeCDPClient } from './HumanLikeCDPClient.js';
@@ -26,7 +26,14 @@ import type { BrowserMode, NetworkEnvironment } from './types.js';
 
 export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   readonly name = BROWSER_TOOL_NAME;
-  readonly description = BROWSER_TOOL_DESCRIPTION;
+  get description(): string {
+    // When human-like mode is active, surface the computer-use capability
+    // prominently so the LLM knows coordinate-driven actions are preferred.
+    if (this.config?.mode === 'human-like') {
+      return BROWSER_TOOL_DESCRIPTION_HUMAN_LIKE;
+    }
+    return BROWSER_TOOL_DESCRIPTION;
+  }
 
   private readonly actionRegistry = new ActionRegistry();
   readonly input_schema: Record<string, unknown>;
@@ -248,7 +255,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   }
 
   getPrompt(): string {
-    return getPrompt(this.networkEnvironment);
+    return getPrompt(this.networkEnvironment, this.config?.mode);
   }
 }
 

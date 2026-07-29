@@ -42,6 +42,24 @@ const ELBOW_STUB_LENGTH = 40;
 const ELBOW_CLEARANCE = 28;
 const ENDPOINT_CLEARANCE_PX = 6;
 
+const HEX_CONNECTOR_COLOR = /^#[0-9a-f]{6}$/i;
+
+/** Keep persisted/LLM-supplied colors from becoming invalid SVG/CSS values. */
+export function normalizeConnectorColor(value: unknown): string {
+  return typeof value === "string" && HEX_CONNECTOR_COLOR.test(value)
+    ? value
+    : DEFAULT_CONNECTOR_COLOR;
+}
+
+export function getConnectorLabelFontSize(label: string, configured: unknown): number {
+  if (typeof configured === "number" && Number.isFinite(configured)) {
+    return Math.max(14, Math.min(22, configured));
+  }
+  if (label.length <= 12) return 16;
+  if (label.length <= 24) return 15;
+  return 14;
+}
+
 interface ObstacleBounds {
   left: number;
   top: number;
@@ -488,7 +506,7 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   const sourceEndpoint = connector.config.source as ConnectorEndpoint | undefined;
   const targetEndpoint = connector.config.target as ConnectorEndpoint | undefined;
   const legacyStyle = connector.config.style as Record<string, unknown> | undefined;
-  const stroke = (connector.config.color as string) || (legacyStyle?.stroke as string) || DEFAULT_CONNECTOR_COLOR;
+  const stroke = normalizeConnectorColor(connector.config.color ?? legacyStyle?.stroke);
   const strokeStyle = (connector.config.strokeStyle as "solid" | "dashed" | "dotted" | "bold" | undefined) || "solid";
   const isBold = strokeStyle === "bold";
   const strokeWidth = isBold ? BOLD_CONNECTOR_WIDTH : DEFAULT_CONNECTOR_WIDTH;
@@ -499,8 +517,16 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
   const { startMarker, endMarker } = resolveConnectorMarkers(connector.config);
   const markerPrefix = `connector-marker-${connector.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const label = typeof connector.config.label === "string" ? connector.config.label.trim() : "";
+  const labelFontSize = getConnectorLabelFontSize(label, connector.config.labelFontSize);
+  const labelHeight = labelFontSize + 14;
+  const labelWidth = Math.max(56, Math.min(260, label.length * labelFontSize * 0.72 + 24));
   const renderVisuals = layer === "all" || layer === "visual";
   const renderControls = layer === "all" || layer === "controls";
+  // Use the store's canvasZoom to avoid a circular dependency on CanvasArea.
+  // The store updates synchronously on zoom changes, so control points
+  // re-render at the correct screen-pixel size.
+  const canvasZoom = useConductorStore((state) => state.canvasZoom);
+  const invZoom = 1 / (canvasZoom > 0 ? canvasZoom : 1);
 
   const sourceNodeId = getConnectorEndpointNodeId(sourceEndpoint);
   const targetNodeId = getConnectorEndpointNodeId(targetEndpoint);
@@ -543,7 +569,6 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
     Number(connector.config.cornerRadius ?? 12),
     arrowLength,
   );
-  const labelWidth = Math.max(48, Math.min(220, label.length * 7.4 + 20));
   const elbowHandles = computedData.elbowPoints?.slice(0, -1).flatMap((point, segmentIndex) => {
     const next = computedData.elbowPoints?.[segmentIndex + 1];
     if (!next) return [];
@@ -590,8 +615,8 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
 
       {renderVisuals && label && (
         <g transform={`translate(${computedData.midPoint.x}, ${computedData.midPoint.y})`} style={{ pointerEvents: "none" }}>
-          <rect x={-labelWidth / 2} y={-13} width={labelWidth} height={26} rx={6} fill="var(--canvas-bg)" stroke={isSelected ? "var(--conductor-accent)" : "var(--conductor-border)"} strokeWidth={1} />
-          <text x={0} y={0.5} textAnchor="middle" dominantBaseline="middle" fill="var(--text-primary)" fontSize={12.5} fontWeight={500}>{label}</text>
+          <rect x={-labelWidth / 2} y={-labelHeight / 2} width={labelWidth} height={labelHeight} rx={6} fill="var(--canvas-bg)" stroke={isSelected ? "var(--conductor-accent)" : "var(--conductor-border)"} strokeWidth={1} />
+          <text x={0} y={0.5} textAnchor="middle" dominantBaseline="middle" fill="var(--text-primary)" fontSize={labelFontSize} fontWeight={550}>{label}</text>
         </g>
       )}
 
@@ -610,10 +635,10 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
             data-testid="connector-curve-midpoint-control"
             cx={computedData.midPoint.x}
             cy={computedData.midPoint.y}
-            r={computedData.curveActivated ? 6 : 5}
+            r={(computedData.curveActivated ? 6 : 5) * invZoom}
             fill={computedData.curveActivated ? "var(--canvas-bg)" : "var(--conductor-accent)"}
             stroke="var(--conductor-accent)"
-            strokeWidth={computedData.curveActivated ? 2 : 1.5}
+            strokeWidth={(computedData.curveActivated ? 2 : 1.5) * invZoom}
             style={{ cursor: "move", pointerEvents: "auto" }}
             onPointerDown={(event) => onCurveControlPointerDown?.(connector.id, "midpoint", computedData.midPoint, event)}
           />
@@ -625,23 +650,23 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
           <rect
             data-testid="connector-elbow-handle"
             data-segment-index={handle.segmentIndex}
-            x={handle.point.x - 11}
-            y={handle.point.y - 11}
-            width={22}
-            height={22}
+            x={handle.point.x - 11 * invZoom}
+            y={handle.point.y - 11 * invZoom}
+            width={22 * invZoom}
+            height={22 * invZoom}
             fill="transparent"
             style={{ cursor: handle.orientation === "horizontal" ? "ns-resize" : "ew-resize", pointerEvents: "auto" }}
             onPointerDown={(event) => onElbowSegmentPointerDown?.(connector.id, handle.segmentIndex, handle.orientation, event)}
           />
           <rect
-            x={handle.point.x - (handle.orientation === "horizontal" ? 7 : 3.5)}
-            y={handle.point.y - (handle.orientation === "horizontal" ? 3.5 : 7)}
-            width={handle.orientation === "horizontal" ? 14 : 7}
-            height={handle.orientation === "horizontal" ? 7 : 14}
-            rx={2.5}
+            x={handle.point.x - (handle.orientation === "horizontal" ? 7 : 3.5) * invZoom}
+            y={handle.point.y - (handle.orientation === "horizontal" ? 3.5 : 7) * invZoom}
+            width={(handle.orientation === "horizontal" ? 14 : 7) * invZoom}
+            height={(handle.orientation === "horizontal" ? 7 : 14) * invZoom}
+            rx={2.5 * invZoom}
             fill="var(--canvas-bg)"
             stroke="var(--conductor-accent)"
-            strokeWidth={1.8}
+            strokeWidth={1.8 * invZoom}
             style={{ pointerEvents: "none" }}
           />
         </g>
@@ -658,9 +683,9 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
           : `M ${referencePoint.x} ${referencePoint.y} L ${edgePoint.x} ${edgePoint.y}`;
         return (
           <g key={endpoint}>
-            <path d={guidePath} stroke="var(--conductor-accent)" fill="none" strokeWidth={1.4} strokeDasharray="5 5" opacity={0.65} style={{ pointerEvents: "none" }} />
-            <circle data-testid={`connector-${endpoint}-reference-handle`} cx={referencePoint.x} cy={referencePoint.y} r={12} fill="transparent" style={{ cursor: "grab", pointerEvents: "auto" }} onPointerDown={(event) => onEndpointPointerDown?.(connector.id, endpoint, referencePoint, event)} />
-            <circle cx={referencePoint.x} cy={referencePoint.y} r={6} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2} style={{ pointerEvents: "none" }} />
+            <path d={guidePath} stroke="var(--conductor-accent)" fill="none" strokeWidth={1.4 * invZoom} strokeDasharray={`${5 * invZoom} ${5 * invZoom}`} opacity={0.65} style={{ pointerEvents: "none" }} />
+            <circle data-testid={`connector-${endpoint}-reference-handle`} cx={referencePoint.x} cy={referencePoint.y} r={12 * invZoom} fill="transparent" style={{ cursor: "grab", pointerEvents: "auto" }} onPointerDown={(event) => onEndpointPointerDown?.(connector.id, endpoint, referencePoint, event)} />
+            <circle cx={referencePoint.x} cy={referencePoint.y} r={6 * invZoom} fill="var(--canvas-bg)" stroke="var(--conductor-accent)" strokeWidth={2 * invZoom} style={{ pointerEvents: "none" }} />
           </g>
         );
       })}

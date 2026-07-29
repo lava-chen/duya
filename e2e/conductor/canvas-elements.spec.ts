@@ -663,15 +663,28 @@ test.describe.serial('Style + Group lifecycle', () => {
 
     await app.page.waitForTimeout(300);
 
-    // DOM assertion: the visible path (second child of the connector g)
-    // should carry stroke-dasharray="8 4". The first path is a transparent
-    // hit target; the second is the visible stroke.
-    const visiblePath = app.page
-      .locator('.native-connector-overlay g > path')
-      .nth(1);
+    // DOM assertion: the visible path inside the connector's element item
+    // should carry stroke-dasharray="10 7". Connectors now render through
+    // FreeformLayer/ConnectorItem so the overlay only holds controls.
+    const elementsBeforeDom = await getElements(app.page, canvasId);
+    // eslint-disable-next-line no-console
+    console.log(`[debug] IPC elements: ${JSON.stringify(elementsBeforeDom.map((e) => ({ id: e.id, kind: e.elementKind, zIndex: e.position.zIndex })))}`);
+    const allNativeEls = await app.page.locator('[data-native-element-id]').count();
+    // eslint-disable-next-line no-console
+    console.log(`[debug] total data-native-element-id count: ${allNativeEls}`);
+    const connectorEl = app.page.locator(`[data-native-element-id="${conn.elementId}"]`);
+    const connectorCount = await connectorEl.count();
+    // eslint-disable-next-line no-console
+    console.log(`[debug] connector element count: ${connectorCount}`);
+    if (connectorCount > 0) {
+      const html = await connectorEl.first().evaluate((el) => el.outerHTML);
+      // eslint-disable-next-line no-console
+      console.log(`[debug] connector outerHTML: ${html}`);
+    }
+    const visiblePath = app.page.locator(`[data-native-element-id="${conn.elementId}"] path[stroke-dasharray]`);
     await expect(visiblePath).toBeVisible({ timeout: 3_000 });
     const dashArray = await visiblePath.getAttribute('stroke-dasharray');
-    expect(dashArray).toBe('8 4');
+    expect(dashArray).toBe('10 7');
 
     // IPC assertion.
     const after = await getElements(app.page, canvasId);

@@ -10,7 +10,6 @@ import { SkillsView } from "@/components/skills/SkillsView";
 import { ChannelsView } from "@/components/bridge/ChannelsView";
 import { AutomationView } from "@/components/automation/AutomationView";
 import { ConductorView } from "@duya/conductor/renderer/components/ConductorView";
-import { MemoryView } from "@/components/memory/MemoryView";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
@@ -183,7 +182,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     updateThreadTitle,
   } = useConversationStore();
   const { settings } = useSettings();
-  const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingSnapshot, setStreamingSnapshot] = useState<SessionStreamSnapshot | null>(null);
@@ -258,12 +256,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     }, FALLBACK_MS);
     return () => window.clearTimeout(t);
   }, [bootPhase, isHydrated, activeSessionLoaded]);
-
-  useEffect(() => {
-    if (!wikiAgentEnabled && currentView === 'memory') {
-      setCurrentView('home');
-    }
-  }, [wikiAgentEnabled, currentView, setCurrentView]);
 
   // Subscribe to stream snapshot updates with optimistic message injection
   useEffect(() => {
@@ -436,7 +428,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           outputStyleConfig: outputStyleConfig ?? undefined,
           mode,
           titleGenerationModel: settings.titleGenerationModel,
-          wikiAgentEnabled,
           providerId: sessionProviderId,
           effort,
           conductorMode,
@@ -482,7 +473,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         outputStyleConfig: outputStyleConfig ?? undefined,
         mode,
         titleGenerationModel: settings.titleGenerationModel,
-        wikiAgentEnabled,
         defaultWorkspaceDirectory: settings.workspaceDir,
         providerId: sessionProviderId,
         effort,
@@ -511,12 +501,11 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           model,
           agentProfileId,
           titleGenerationModel: settings.titleGenerationModel,
-          wikiAgentEnabled,
           defaultWorkspaceDirectory: settings.workspaceDir,
         });
       });
     },
-    [activeThreadId, addMessage, settings.titleGenerationModel, updateThreadTitle, wikiAgentEnabled],
+    [activeThreadId, addMessage, settings.titleGenerationModel, updateThreadTitle],
   );
 
   const handleInterrupt = useCallback(() => {
@@ -586,7 +575,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           {currentView === 'automation' && <AutomationView />}
           {currentView === 'conductor' && <ConductorView />}
           {currentView === 'settings' && <SettingsView />}
-          {currentView === 'memory' && wikiAgentEnabled && <MemoryView />}
         </>
       );
     }
@@ -605,10 +593,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         return <ConductorView />;
       case 'settings':
         return <SettingsView />;
-      case 'memory':
-        return wikiAgentEnabled
-          ? <MemoryView />
-          : <WelcomeView onSelectThread={setActiveThread} onSendMessage={handleSendMessage} />;
       default:
         return <WelcomeView onSelectThread={setActiveThread} onSendMessage={handleSendMessage} />;
     }

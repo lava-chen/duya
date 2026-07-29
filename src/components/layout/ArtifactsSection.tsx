@@ -18,11 +18,10 @@ export interface ArtifactsSectionProps {
 }
 
 export function ArtifactsSection({ artifacts, cwd }: ArtifactsSectionProps) {
+  if (artifacts.length === 0) return null;
+
   return (
     <DrawerSection label="产物">
-      {artifacts.length === 0 && (
-        <div className="task-card-empty">No artifacts yet.</div>
-      )}
       {artifacts.map((artifact) => (
         <ArtifactCard
           key={artifact.path}

@@ -722,20 +722,37 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
     );
     expect(toolCallIndex).toBeGreaterThanOrEqual(0);
 
+    // After the fix, normalizeToolResultOrdering skips the text-only
+    // assistant message and pairs the real tool_result with the tool_use
+    // by ID — even in recovery mode. The real result ("late output") is
+    // preserved instead of being replaced by a synthetic error.
     const immediateResult = recoveredMessages[toolCallIndex + 1];
     expect(immediateResult).toMatchObject({ role: 'user' });
     expect(immediateResult.content).toContainEqual(expect.objectContaining({
       type: 'tool_result',
       tool_use_id: 'late-result',
-      is_error: true,
+      content: 'late output',
     }));
 
+    // No synthetic error result — the real result was correctly paired.
     const lateResults = recoveredMessages.flatMap((message: any) =>
       Array.isArray(message.content)
         ? message.content.filter((block: any) => block.type === 'tool_result' && block.tool_use_id === 'late-result')
         : [],
     );
     expect(lateResults).toHaveLength(1);
+    expect(lateResults[0]).not.toHaveProperty('is_error', true);
+
+    // The text-only assistant message must appear after the tool_result.
+    // Its content may be a string (not an array) after conversion.
+    const textIdx = recoveredMessages.findIndex((message: any) =>
+      message.role === 'assistant' &&
+      (typeof message.content === 'string'
+        ? message.content === 'This was incorrectly persisted first.'
+        : Array.isArray(message.content) &&
+          message.content.some((block: any) => block.type === 'text' && block.text === 'This was incorrectly persisted first.')),
+    );
+    expect(textIdx).toBeGreaterThan(toolCallIndex + 1);
   });
 
   it('groups consecutive canvas tool calls and orders their results (case 16)', async () => {
@@ -780,5 +797,162 @@ describe('Tool use / tool result round-trip — Plan 220 fixes', () => {
     expect(immediateResults.content
       .filter((block: any) => block.type === 'tool_result')
       .map((block: any) => block.tool_use_id)).toEqual([firstToolId, correctedToolId]);
+  });
+
+  // ===========================================================================
+  // 17. Assistant text message between tool_use and tool_result
+  //
+  // When the model emits a final text answer AFTER a round of tool_use
+  // calls but BEFORE the tool_results are persisted (a streaming save
+  // ordering issue), normalizeToolResultOrdering must still pair the
+  // results with their tool_use by ID — skipping over the text-only
+  // assistant message and deferring it to after the tool round.
+  //
+  // This is the exact sequence that triggered the DeepSeek 400 error:
+  // the text-only assistant message caused the scan to stop, leaving
+  // tool_use blocks without their matching tool_result blocks.
+  // ===========================================================================
+
+  it('pairs tool_results across a text-only assistant message (case 17)', async () => {
+    const client = makeClient();
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Explain the architecture', timestamp: 1 },
+      {
+        id: 'a1', role: 'assistant', timestamp: 2,
+        content: [
+          { type: 'tool_use', id: 'call_A', name: 'read', input: { file_path: 'a.ts' } },
+          { type: 'tool_use', id: 'call_B', name: 'read', input: { file_path: 'b.ts' } },
+        ],
+      },
+      // Final text answer persisted BEFORE the tool results — the model
+      // finished streaming while tool execution was still in flight.
+      {
+        id: 'a2', role: 'assistant', timestamp: 3,
+        content: [{ type: 'text', text: 'Here is the architecture explanation.' }],
+      },
+      { id: 't1', role: 'tool', content: 'content of a.ts', tool_call_id: 'call_A', timestamp: 4 },
+      { id: 't2', role: 'tool', content: 'content of b.ts', tool_call_id: 'call_B', timestamp: 5 },
+    ];
+
+    const body = await captureRequestBody(client, messages);
+    const events = flattenEvents(body.messages);
+
+    // Both tool_use blocks must survive.
+    const useIds = events.filter((e) => e.kind === 'use').map((e) => e.id);
+    expect(useIds).toContain('call_A');
+    expect(useIds).toContain('call_B');
+
+    // Both tool_result blocks must survive and match.
+    const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
+    expect(resultIds).toContain('call_A');
+    expect(resultIds).toContain('call_B');
+
+    // The tool_result must come immediately after the tool_use — not
+    // after the text. Find the assistant message containing tool_use.
+    const toolUseIdx = body.messages.findIndex((m: any) =>
+      m.role === 'assistant' &&
+      Array.isArray(m.content) &&
+      m.content.some((b: any) => b.type === 'tool_use' && b.id === 'call_A'),
+    );
+    expect(toolUseIdx).toBeGreaterThanOrEqual(0);
+
+    const followingMsg = body.messages[toolUseIdx + 1];
+    expect(followingMsg.role).toBe('user');
+    expect(followingMsg.content.some((b: any) =>
+      b.type === 'tool_result' && b.tool_use_id === 'call_A',
+    )).toBe(true);
+    expect(followingMsg.content.some((b: any) =>
+      b.type === 'tool_result' && b.tool_use_id === 'call_B',
+    )).toBe(true);
+
+    // The text-only assistant message must come AFTER the tool results,
+    // not before them (otherwise Anthropic rejects tool_use placement).
+    const textIdx = body.messages.findIndex((m: any) =>
+      m.role === 'assistant' &&
+      Array.isArray(m.content) &&
+      m.content.some((b: any) => b.type === 'text' && b.text === 'Here is the architecture explanation.'),
+    );
+    expect(textIdx).toBeGreaterThan(toolUseIdx + 1);
+
+    // The text must survive — it must not be dropped during reordering.
+    const allText = events
+      .filter((e) => e.kind === 'text')
+      .map((e) => e.text)
+      .join('|');
+    expect(allText).toContain('Here is the architecture explanation.');
+  });
+
+  // ===========================================================================
+  // 18. Multiple tool_use rounds each followed by text-only assistant
+  //
+  // Stress test: two separate tool rounds, each with a text-only assistant
+  // message before its results. Both rounds must be independently paired.
+  // ===========================================================================
+
+  it('pairs two tool rounds across text-only assistant messages (case 18)', async () => {
+    const client = makeClient();
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'Investigate two files', timestamp: 1 },
+      {
+        id: 'a1', role: 'assistant', timestamp: 2,
+        content: [{ type: 'tool_use', id: 'r1_a', name: 'read', input: {} }],
+      },
+      {
+        id: 'a2', role: 'assistant', timestamp: 3,
+        content: [{ type: 'text', text: 'First file done.' }],
+      },
+      { id: 't1', role: 'tool', content: 'file1', tool_call_id: 'r1_a', timestamp: 4 },
+      {
+        id: 'a3', role: 'assistant', timestamp: 5,
+        content: [{ type: 'tool_use', id: 'r2_a', name: 'read', input: {} }],
+      },
+      {
+        id: 'a4', role: 'assistant', timestamp: 6,
+        content: [{ type: 'text', text: 'Second file done.' }],
+      },
+      { id: 't2', role: 'tool', content: 'file2', tool_call_id: 'r2_a', timestamp: 7 },
+    ];
+
+    const body = await captureRequestBody(client, messages);
+    const events = flattenEvents(body.messages);
+
+    // Both rounds must have their tool_use and tool_result paired.
+    const useIds = events.filter((e) => e.kind === 'use').map((e) => e.id);
+    const resultIds = events.filter((e) => e.kind === 'result').map((e) => e.id);
+    expect(useIds).toContain('r1_a');
+    expect(useIds).toContain('r2_a');
+    expect(resultIds).toContain('r1_a');
+    expect(resultIds).toContain('r2_a');
+
+    // Each result must immediately follow its tool_use round.
+    const r1UseIdx = body.messages.findIndex((m: any) =>
+      m.role === 'assistant' &&
+      Array.isArray(m.content) &&
+      m.content.some((b: any) => b.type === 'tool_use' && b.id === 'r1_a'),
+    );
+    const r1Result = body.messages[r1UseIdx + 1];
+    expect(r1Result.role).toBe('user');
+    expect(r1Result.content.some((b: any) =>
+      b.type === 'tool_result' && b.tool_use_id === 'r1_a',
+    )).toBe(true);
+
+    const r2UseIdx = body.messages.findIndex((m: any) =>
+      m.role === 'assistant' &&
+      Array.isArray(m.content) &&
+      m.content.some((b: any) => b.type === 'tool_use' && b.id === 'r2_a'),
+    );
+    const r2Result = body.messages[r2UseIdx + 1];
+    expect(r2Result.role).toBe('user');
+    expect(r2Result.content.some((b: any) =>
+      b.type === 'tool_result' && b.tool_use_id === 'r2_a',
+    )).toBe(true);
+
+    // Both texts must survive.
+    const allText = events
+      .filter((e) => e.kind === 'text')
+      .map((e) => e.text)
+      .join('|');
+    expect(allText).toContain('First file done.');
+    expect(allText).toContain('Second file done.');
   });
 });

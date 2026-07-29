@@ -143,7 +143,7 @@ export interface OrchestratorDeps {
    */
   toolRegistry: ToolRegistry;
   /** Original ChatOptions, for orchestrators that need to read
-   * `conductorMode`, `wikiAgentEnabled`, etc. */
+   * `conductorMode`, etc. */
   chatOptions?: Record<string, unknown>;
   /** Blocked domains for web tools. */
   blockedDomains?: string[];
