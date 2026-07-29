@@ -5,7 +5,7 @@
  * Keeps model compat logic in one place so protocol files stay thin.
  */
 
-import type { Model } from '../types.js';
+import type { Model, ParameterDiagnostic } from '../types.js';
 
 /**
  * Returns true if thinking should be disabled for this model.
@@ -68,4 +68,92 @@ export function validateBudgets(options: {
     reasoningBudget: reasoningBudget && reasoningBudget > 0 ? reasoningBudget : undefined,
     totalOutputBudget: total && total > 0 ? total : undefined,
   };
+}
+
+/**
+ * Collect diagnostics for parameters that were silently adjusted or ignored.
+ * Call this after resolving all options to report what was changed.
+ */
+export function collectDiagnostics(
+  model: Model,
+  userInput: {
+    effort?: string;
+    temperature?: number;
+    maxOutputTokens?: number;
+    reasoningBudget?: number;
+    totalOutputBudget?: number;
+  },
+): ParameterDiagnostic[] {
+  const diagnostics: ParameterDiagnostic[] = [];
+  const routeId = `${model.providerId}/${model.id}`;
+
+  // PARAMETER_UNSUPPORTED: effort on non-reasoning model
+  if (userInput.effort && shouldDisableThinking(model)) {
+    diagnostics.push({
+      code: 'PARAMETER_UNSUPPORTED',
+      parameter: 'effort',
+      routeId,
+      message: `Model ${model.id} does not support reasoning; effort parameter ignored.`,
+    });
+  }
+
+  // PARAMETER_IGNORED: temperature overridden by fixedTemperature
+  if (userInput.temperature !== undefined && model.compat?.fixedTemperature !== undefined) {
+    diagnostics.push({
+      code: 'PARAMETER_IGNORED',
+      parameter: 'temperature',
+      routeId,
+      message: `Model ${model.id} requires fixed temperature ${model.compat.fixedTemperature}; user-specified temperature ignored.`,
+    });
+  }
+
+  // PARAMETER_IGNORED: maxOutputTokens capped
+  if (userInput.maxOutputTokens && userInput.maxOutputTokens > model.maxTokens) {
+    diagnostics.push({
+      code: 'PARAMETER_IGNORED',
+      parameter: 'maxOutputTokens',
+      routeId,
+      message: `maxOutputTokens (${userInput.maxOutputTokens}) exceeds model limit (${model.maxTokens}); capped to ${model.maxTokens}.`,
+    });
+  }
+
+  // PARAMETER_IGNORED: reasoningBudget on OpenAI (reasoning_effort controls it)
+  if (userInput.reasoningBudget && model.api === 'openai-chat') {
+    diagnostics.push({
+      code: 'PARAMETER_IGNORED',
+      parameter: 'reasoningBudget',
+      routeId,
+      message: `reasoningBudget is not used by OpenAI-compatible APIs; reasoning_effort controls the budget implicitly.`,
+    });
+  }
+
+  // PARAMETER_REJECTED: parameters in rejectedParameters list
+  if (model.compat?.rejectedParameters) {
+    for (const param of model.compat.rejectedParameters) {
+      if (param in userInput && userInput[param as keyof typeof userInput] !== undefined) {
+        diagnostics.push({
+          code: 'PARAMETER_REJECTED',
+          parameter: param,
+          routeId,
+          message: `Model ${model.id} rejects parameter '${param}'.`,
+        });
+      }
+    }
+  }
+
+  // PARAMETER_IGNORED: parameters in ignoredParameters list
+  if (model.compat?.ignoredParameters) {
+    for (const param of model.compat.ignoredParameters) {
+      if (param in userInput && userInput[param as keyof typeof userInput] !== undefined) {
+        diagnostics.push({
+          code: 'PARAMETER_IGNORED',
+          parameter: param,
+          routeId,
+          message: `Model ${model.id} ignores parameter '${param}'.`,
+        });
+      }
+    }
+  }
+
+  return diagnostics;
 }
