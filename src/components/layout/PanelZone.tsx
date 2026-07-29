@@ -18,12 +18,13 @@ import type { CSSProperties } from "react";
 // `office` is a passive surface — opened by events
 // (`duya:open-office-panel`), so it is intentionally absent from both
 // this launcher and the add-page menu.
-const EMPTY_LAUNCHER_ORDER: PageId[] = ["terminal", "browser", "files", "conductor"];
+const EMPTY_LAUNCHER_ORDER: PageId[] = ["review", "terminal", "browser", "files", "conductor"];
 
 function shortcutFor(id: PageId): string | null {
   switch (id) {
     case "terminal": return "Ctrl+`";
     case "browser": return "Ctrl+T";
+    case "review": return "Ctrl+Shift+G";
     case "files": return "Ctrl+P";
     case "conductor": return "Ctrl+Alt+S";
     default: return null;
@@ -78,6 +79,7 @@ export function PanelZone() {
       if (!cwd) return undefined;
       if (pageId === "terminal") return { cwd };
       if (pageId === "files") return { workingDirectory: cwd };
+      if (pageId === "review") return { workingDirectory: cwd, sessionId: activeThreadId };
       if (pageId === "office") return { workingDirectory: cwd };
       return undefined;
     },

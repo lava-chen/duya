@@ -5,6 +5,7 @@ import type { ComponentType } from "react";
 import {
   FolderIcon,
   FileText,
+  GitDiff,
   GlobeIcon,
   SquaresFourIcon,
   TerminalIcon,
@@ -17,8 +18,9 @@ import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { OfficePanel } from "./OfficePanel";
 import { FilePreviewPanel } from "./FilePreviewPanel";
+import { CodeReviewPanel } from "./CodeReviewPanel";
 
-export type PageId = "files" | "preview" | "conductor" | "terminal" | "browser" | "office";
+export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "office";
 
 export interface PageTab {
   id: string;
@@ -78,6 +80,19 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     preferredWidth: 820,
     defaultExpanded: false,
     component: FilePreviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  review: {
+    id: "review",
+    labelKey: "panel.review",
+    icon: GitDiff,
+    multiInstance: false,
+    available: true,
+    minWidth: 460,
+    widthRatio: 2 / 3,
+    maxWidthRatio: 2 / 3,
+    maxWidth: null,
+    defaultExpanded: false,
+    component: CodeReviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   conductor: {
     id: "conductor",
