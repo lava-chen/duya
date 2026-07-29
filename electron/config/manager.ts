@@ -171,6 +171,15 @@ export interface ConductorFeatureFlags {
 export interface AppConfig {
   version: number;
   apiProviders: Record<string, ApiProvider>;
+  /** Soft pointer to the default provider used for chat. */
+  defaultProviderId: string | null;
+  /**
+   * Soft pointer to the provider used by the memory worker (Stage 1
+   * extraction + Phase 2 consolidator). When null, the memory worker
+   * falls back to `defaultProviderId`. Lets users pick a cheaper model
+   * for background memory extraction without affecting chat.
+   */
+  memoryProviderId?: string | null;
   agentSettings: AgentSettings;
   uiPreferences: UiPreferences;
   visionSettings: VisionSettings;
@@ -342,6 +351,7 @@ const DEFAULT_CONFIG: AppConfig = {
   version: 1,
   apiProviders: {},
   defaultProviderId: null,
+  memoryProviderId: null,
   agentSettings: {
     defaultModel: '',
     temperature: 0.7,
@@ -548,6 +558,7 @@ export class ConfigManager {
       version: config.version ?? DEFAULT_CONFIG.version,
       apiProviders: { ...DEFAULT_CONFIG.apiProviders, ...config.apiProviders },
       defaultProviderId: config.defaultProviderId ?? null,
+      memoryProviderId: config.memoryProviderId ?? null,
       agentSettings: { ...DEFAULT_CONFIG.agentSettings, ...config.agentSettings },
       uiPreferences: { ...DEFAULT_CONFIG.uiPreferences, ...config.uiPreferences },
       visionSettings: mergedVisionSettings,
@@ -768,6 +779,34 @@ export class ConfigManager {
       return false;
     }
     return this.setConfig('defaultProviderId', id);
+  }
+
+  /**
+   * Returns the provider dedicated to the memory worker (Stage 1
+   * extraction + Phase 2 consolidator). Falls back to the default
+   * provider when `memoryProviderId` is unset or points to a
+   * missing provider, so the memory worker always has a usable
+   * provider as long as a default is configured.
+   */
+  getMemoryProvider(): ApiProvider | undefined {
+    const id = this.config.memoryProviderId;
+    if (id && this.config.apiProviders[id]) {
+      return this.config.apiProviders[id];
+    }
+    return this.getDefaultProvider();
+  }
+
+  setMemoryProvider(id: string | null): boolean {
+    if (id !== null && !this.config.apiProviders[id]) {
+      this.logger.error(
+        `setMemoryProvider: provider not found: ${id}`,
+        undefined,
+        undefined,
+        LogComponent.ConfigManager,
+      );
+      return false;
+    }
+    return this.setConfig('memoryProviderId', id);
   }
 
   upsertProvider(provider: ApiProvider): boolean {

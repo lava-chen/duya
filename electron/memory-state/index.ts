@@ -1,14 +1,11 @@
 /**
  * Memory v2 state control-plane — public API.
  *
- * Shadow mode: no production caller imports from here until Plan 305
- * wires the memory-worker. Until then these modules exist for unit
- * and integration testing only.
- *
- * Plan 305 will import `bootstrap` / `getDb` / `closeDb` from here
- * when starting the long-lived memory-worker in the Electron main
- * process. Plans 302-304 will import the schema types and migration
- * registry as they add their own migrations.
+ * Plan 305 wires the memory-worker in the Electron main process,
+ * which imports `bootstrap` / `getDb` / `closeDb` from here along
+ * with `syncAllFromMainDb` for catalog sync. Plans 302-304 import
+ * the schema types and migration registry as they add their own
+ * migrations.
  */
 export { resolveMemoryDbPath } from './path';
 export {

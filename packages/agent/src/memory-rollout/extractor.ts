@@ -290,9 +290,13 @@ interface CatalogMappingRow {
  * Stage 1 extractor. Holds injected DB handles + LLM client so the extract
  * method stays focused on orchestration. Plan 305 wires a concrete
  * Stage1Extractor instance in the Electron main process worker.
+ *
+ * Uses streamChat() instead of chat() to avoid Anthropic's "Streaming is
+ * required for operations that may take longer than 10 minutes" error on
+ * large payloads (long conversation histories).
  */
 export class Stage1Extractor {
-  private readonly chat: NonNullable<LLMClient['chat']>;
+  private readonly streamChat: LLMClient['streamChat'];
 
   constructor(
     private readonly memoryDb: Database,
@@ -300,10 +304,13 @@ export class Stage1Extractor {
     private readonly llmClient: LLMClient,
     private readonly opts?: { rootDir?: string },
   ) {
-    if (typeof llmClient.chat !== 'function') {
-      throw new Error('LLMClient.chat is required for Stage1Extractor');
+    if (typeof llmClient.streamChat !== 'function') {
+      throw new Error('LLMClient.streamChat is required for Stage1Extractor');
     }
-    this.chat = llmClient.chat;
+    // Bind streamChat to the LLMClient instance. LazyLLMClientProxy.streamChat
+    // calls `this.getClient()` internally — without binding, `this` would be
+    // undefined when invoked via `this.streamChat(...)`.
+    this.streamChat = llmClient.streamChat.bind(llmClient);
   }
 
   async extract(input: ExtractInput): Promise<ExtractResult> {
@@ -333,6 +340,10 @@ export class Stage1Extractor {
       .prepare('SELECT source_updated_at, source_content_hash, attempt_count, last_error FROM rollout_leases WHERE rollout_id = ?')
       .get(rolloutId) as LeaseSnapshotRow | undefined;
     if (!leaseRow) {
+      // acquireLease succeeded but the row vanished before we could read
+      // it (e.g. a concurrent retire). Release the lease via fail() so it
+      // doesn't dangle as 'running' until TTL expiry.
+      fail(this.memoryDb, { rolloutId, token, error: 'lease-snapshot-miss-after-acquire' });
       return { status: 'noop_skipped', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed() };
     }
 
@@ -380,7 +391,7 @@ export class Stage1Extractor {
       sourceContentHash: source_content_hash,
     });
 
-    // 5. LLM call.
+    // 5. LLM call (streaming — avoids Anthropic's 10-min non-streaming limit).
     const userContent = STAGE1_USER_PROMPT_TEMPLATE.replace(
       '{{compacted}}',
       compacted.lines.join('\n'),
@@ -392,12 +403,21 @@ export class Stage1Extractor {
 
     let llmResponse: string;
     try {
-      const response = await this.chat([userMessage], {
+      const generator = this.streamChat([userMessage], {
         systemPrompt: STAGE1_SYSTEM_PROMPT,
         maxTokens: LLM_MAX_TOKENS,
         signal: abortController.signal,
       });
-      llmResponse = response.content;
+      const chunks: string[] = [];
+      for await (const event of generator) {
+        if (event.type === 'text' || event.type === 'text_delta') {
+          chunks.push(event.data);
+        } else if (event.type === 'error') {
+          throw new Error(event.data);
+        }
+        // 'done' event marks completion; loop exits naturally.
+      }
+      llmResponse = chunks.join('');
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       const failReason = abortController.signal.aborted || /abort|timeout/i.test(errorMsg)

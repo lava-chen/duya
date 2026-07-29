@@ -13,8 +13,9 @@ import type { AgentType, ScopeKind } from './schema';
  *
  * One-way read from `chat_sessions` + `messages` in `duya-main.db`,
  * materializing one `rollout_catalog` row per session in
- * `memory-state.db`. Plan 305 will wire this into the memory-worker;
- * until then there are no production callers (shadow mode).
+ * `memory-state.db`. Wired into the memory-worker runTick (Plan 305):
+ * throttled to `catalogSyncIntervalMs` on regular ticks, always runs
+ * on forceSweep.
  *
  * Sync performs NO eligibility filtering (Plan 302 owns that) and NO
  * agent_type / mode derivation — values are copied verbatim from
@@ -320,8 +321,8 @@ export function syncSessionFromMainDb(opts: {
 
 /**
  * Full sync — iterate every chat_sessions row and materialize a
- * rollout_catalog row for each. Called at worker startup (Plan 305
- * wires this in; shadow mode = no production caller yet).
+ * rollout_catalog row for each. Called from the memory-worker runTick
+ * (throttled by catalogSyncIntervalMs, always on forceSweep).
  *
  * Each session is synced in its own transaction so a single failure
  * does not roll back the entire sync. The error counter tracks how

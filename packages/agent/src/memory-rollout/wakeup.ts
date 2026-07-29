@@ -81,8 +81,15 @@ export function sendMemoryWakeup(
 /**
  * Read the `DUYA_MEMORY_V2_ENABLED` env var. Exported for test
  * overrides via `vi.mock`.
+ *
+ * Dev default-on: when `DUYA_DEV=1` is set (agent subprocess spawned
+ * from a dev Electron), the wakeup is sent automatically to accumulate
+ * shadow data for the 4-week validation window required by Plan 305.
+ * Explicit opt-out via `DUYA_MEMORY_V2_ENABLED=0` is still honored.
  */
 export function isMemoryV2Enabled(): boolean {
-  return process.env.DUYA_MEMORY_V2_ENABLED === '1' ||
-    process.env.DUYA_MEMORY_V2_ENABLED === 'true';
+  const v = process.env.DUYA_MEMORY_V2_ENABLED;
+  if (v === '0' || v === 'false') return false;
+  if (v === '1' || v === 'true') return true;
+  return process.env.DUYA_DEV === '1';
 }

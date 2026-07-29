@@ -66,6 +66,14 @@ export interface ProviderStoreReader {
   readActive(): ApiProvider | undefined;
   /** Soft default — the implicit fallback for chat/vision/etc. */
   readDefault(): ApiProvider | undefined;
+  /**
+   * Soft pointer to the provider used by the memory worker.
+   * Optional: readers that don't implement this fall back to
+   * `readDefault` in the store.
+   */
+  readMemory?(): ApiProvider | undefined;
+  /** Persist the memory provider id. Optional for the same reason. */
+  writeMemory?(id: string | null): boolean;
   writeAll(map: Record<string, ApiProvider>): boolean;
   onChange(cb: () => void): () => void;
 }
@@ -112,12 +120,19 @@ export class ProviderStore {
   private activeId: string | undefined;
   /**
    * Soft default provider id. The chat, agent process, vision, gateway,
-   * wiki-agent, title generation, embedding, and automation subsystems
+   * title generation, embedding, and automation subsystems
    * fall back to this id when no explicit per-thread or per-task
    * provider is set. Multiple providers can be configured and used;
    * this is only the implicit fallback. May be undefined.
    */
   private defaultId: string | undefined;
+  /**
+   * Soft pointer to the provider used by the memory worker (Stage 1
+   * extraction + Phase 2 consolidator). When undefined, the store
+   * falls back to `defaultId` so the memory worker always has a
+   * usable provider as long as a default is configured.
+   */
+  private memoryId: string | undefined;
   private initialized = false;
 
   /**
@@ -169,6 +184,7 @@ export class ProviderStore {
     this.cache.clear();
     this.activeId = undefined;
     this.defaultId = this.reader.readDefault()?.id;
+    this.memoryId = this.reader.readMemory?.()?.id;
     for (const legacyProvider of Object.values(legacy)) {
       const llm = migrateLegacyApiProvider(legacyProvider);
       this.cache.set(llm.id, llm);
@@ -328,6 +344,35 @@ export class ProviderStore {
     return true;
   }
 
+  /**
+   * Returns the provider dedicated to the memory worker. Falls back to
+   * the default provider when `memoryId` is unset or points to a
+   * missing provider, so the memory worker always has a usable
+   * provider as long as a default is configured.
+   */
+  getMemoryLlmProvider(): LlmProvider | undefined {
+    this.ensureInitialized();
+    if (this.memoryId && this.cache.has(this.memoryId)) {
+      return this.cache.get(this.memoryId);
+    }
+    return this.getDefaultLlmProvider();
+  }
+
+  /**
+   * Set (or clear) the memory worker provider. Pass `null` to clear
+   * and fall back to the default provider.
+   */
+  setMemoryLlmProvider(id: string | null): boolean {
+    this.ensureInitialized();
+    if (id !== null && !this.cache.has(id)) return false;
+    this.memoryId = id ?? undefined;
+    // Persist via the reader when it supports memory writes.
+    if (this.reader.writeMemory) {
+      this.reader.writeMemory(this.memoryId ?? null);
+    }
+    return true;
+  }
+
   // ===========================================================================
   // Runtime config (used by agent runtime)
   // ===========================================================================
@@ -368,7 +413,7 @@ export class ProviderStore {
 
   /**
    * Get a runtime config for a specific (providerId, modelId) pair.
-   * Used for title-generation / gateway / wiki-agent sub-models.
+   * Used for title-generation / gateway sub-models.
    */
   getProviderRuntimeConfig(
     providerId: string,
