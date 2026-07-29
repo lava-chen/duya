@@ -1,0 +1,344 @@
+/**
+ * packages/ai/src/types.ts
+ *
+ * Core types for the multi-model AI adapter layer.
+ *
+ * Design principles (from spec §4.2):
+ * - Reuse existing ApiFormat from src/lib/providers/types.ts (no new KnownApi).
+ * - Single AssistantMessage storage (no VisibleMessageRecord + ProviderTurnRecord split).
+ * - thinkingLevelMap + null semantics replaces verbose union types.
+ * - compat flags (forceAdaptiveThinking, openAIThinkingFormat, etc.) are flat, not nested.
+ * - SSEEvent is migrated here from packages/agent/src/types.ts to break circular deps.
+ *
+ * SHARED TYPES (TextContent, Message, SSEEvent, etc.) are supersets of the
+ * original packages/agent definitions — all existing fields preserved, new
+ * signature fields added. This ensures the re-export in Task 0.3 does not
+ * break any consumer.
+ */
+
+// ─── ApiFormat (re-exported from src/lib/providers/types.ts conceptually) ───
+export type ApiFormat =
+  | 'openai-chat'
+  | 'openai-responses'
+  | 'anthropic'
+  | 'gemini'
+  | 'ollama'
+  | 'bedrock'
+  | 'vertex';
+
+// ─── Message role ───
+export type MessageRole = 'user' | 'assistant' | 'tool' | 'system';
+
+// ─── Content block types (superset of packages/agent definitions) ───
+
+export interface TextContent {
+  type: 'text';
+  text: string;
+  /** Provider signature for text content (Anthropic text signature). */
+  textSignature?: string;
+}
+
+export interface ImageContent {
+  type: 'image';
+  source: {
+    type: 'base64' | 'url';
+    media_type: string;
+    data: string;
+  };
+}
+
+export interface ToolUseContent {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+  /** Provider signature for tool call (Anthropic thought signature). */
+  thoughtSignature?: string;
+}
+
+export interface ToolResultContent {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: string | MessageContent[];
+  is_error?: boolean;
+}
+
+export interface ThinkingContent {
+  type: 'thinking';
+  thinking: string;
+  /** Provider signature for thinking (Anthropic thinking signature). */
+  thinkingSignature?: string;
+  /** True if the thinking block was redacted by the provider. */
+  redacted?: boolean;
+}
+
+export type MessageContent =
+  | TextContent
+  | ImageContent
+  | ToolUseContent
+  | ToolResultContent
+  | ThinkingContent;
+
+// ─── Tool types ───
+
+export interface ToolUse {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface ToolResultMetadata {
+  durationMs?: number;
+  filePath?: string;
+  lineCount?: number;
+  charCount?: number;
+  exitCode?: number;
+  matchCount?: number;
+  truncated?: boolean;
+  engine?: string;
+  [key: string]: unknown;
+}
+
+export interface ToolResult {
+  id: string;
+  name: string;
+  result: string;
+  error?: boolean;
+  duration_ms?: number;
+  metadata?: ToolResultMetadata;
+  /**
+   * Optional deferred second result. When present, StreamingToolExecutor
+   * keeps a reference and, after the main result has been delivered, awaits
+   * this promise and yields a synthetic second tool_result.
+   */
+  pendingExtraResult?: Promise<{ result: string; is_error?: boolean }>;
+}
+
+// ─── Token usage ───
+
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens?: number;
+  /** Cache hit tokens (cache read) - Anthropic prompt caching */
+  cache_hit_tokens?: number;
+  /** Cache creation tokens (cache write) - Anthropic prompt caching */
+  cache_creation_tokens?: number;
+}
+
+// ─── Stop reason ───
+
+export type StopReason =
+  | 'completed'
+  | 'aborted'
+  | 'max_turns'
+  | 'error'
+  | 'tool_use'
+  | 'end_turn';
+
+// ─── SSE Event types (migrated from packages/agent) ───
+// mode_changed.mode uses `string` instead of AgentRuntimeMode to avoid
+// a dependency on agent-specific types. packages/agent can narrow it.
+
+export interface PermissionRequestEvent {
+  id: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  mode: 'generic' | 'ask_user_question' | 'exit_plan_mode';
+  expiresAt: number;
+  decisionReason?: string;
+}
+
+export interface AgentProgressEvent {
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error';
+  data?: string;
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  toolResult?: string;
+  duration?: number;
+  agentId?: string;
+  agentType?: string;
+  agentName?: string;
+  agentDescription?: string;
+  sessionId?: string;
+}
+
+export type SSEEvent =
+  | { type: 'text'; data: string }
+  | { type: 'tool_use_started'; data: ToolUse }
+  | { type: 'tool_use'; data: ToolUse }
+  | { type: 'tool_result'; data: ToolResult }
+  | { type: 'tool_progress'; data: { toolName: string; elapsedSeconds: number } }
+  | { type: 'tool_timeout'; data: { toolName: string; elapsedSeconds: number } }
+  | { type: 'thinking'; data: string }
+  | { type: 'done'; reason?: StopReason }
+  | { type: 'error'; data: string; code?: string; metadata?: { errorType?: string; statusCode?: number; isRetryable?: boolean } }
+  | { type: 'result'; data: TokenUsage }
+  | { type: 'turn_start'; data: { turnCount: number } }
+  | { type: 'permission_request'; data: PermissionRequestEvent }
+  | { type: 'agent_progress'; data: AgentProgressEvent }
+  | { type: 'system'; data: string; metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number; diagnostic?: ParameterDiagnostic } }
+  | { type: 'text_delta'; data: string }
+  | { type: 'thinking_delta'; data: string }
+  | { type: 'mode_changed'; data: { mode: string; source: 'agent' | 'user'; reason?: string } };
+
+// ─── Message types (superset of packages/agent definitions) ───
+
+export interface Message {
+  role: MessageRole;
+  content: string | MessageContent[];
+  id?: string;
+  name?: string;
+  tool_call_id?: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
+  msg_type?: string;
+  thinking?: string;
+  tool_name?: string;
+  tool_input?: string;
+  parent_tool_call_id?: string;
+  viz_spec?: string;
+  status?: string;
+  seq_index?: number;
+  duration_ms?: number;
+  sub_agent_id?: string;
+  /** File attachments (name, type, url, size, text, imageChunks, etc.) */
+  attachments?: unknown[];
+  /** User-facing rendering content. */
+  displayContent?: string | MessageContent[];
+  /** True if this message is a compact boundary marker */
+  isCompactBoundary?: boolean;
+  /** True if this message is a compact summary */
+  isCompactSummary?: boolean;
+  /** Number of messages compacted into this summary */
+  compactedMessageCount?: number;
+  /** IDs of the original messages compacted into this summary */
+  compactedMessageIds?: string[];
+  /** Unique ID of the compact boundary this summary belongs to */
+  compactBoundaryId?: string;
+  /** Token usage for this message */
+  tokenUsage?: TokenUsage;
+  // ─── NEW: multi-model adapter fields ───
+  /** Provider ID that produced this message (for isSameModel guard) */
+  providerId?: string;
+  /** Model name that produced this message */
+  model?: string;
+  /** API format used to produce this message */
+  api?: ApiFormat;
+}
+
+// ─── AssistantMessage (superset of packages/agent definition) ───
+
+export interface AssistantMessage {
+  role: 'assistant';
+  content: MessageContent[];
+  id?: string;
+  timestamp?: number;
+  // ─── NEW: multi-model adapter fields ───
+  api?: ApiFormat;
+  providerId?: string;
+  model?: string;
+  responseId?: string;
+  usage?: TokenUsage;
+  stopReason?: StopReason;
+}
+
+// ─── Reasoning capability types (NEW) ───
+
+export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ModelThinkingLevel = 'off' | ThinkingLevel;
+export type ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>;
+
+export type OpenAIThinkingFormat =
+  | 'openai-standard'
+  | 'reasoning-content'
+  | 'qwen-style'
+  | 'glm-style'
+  | 'think-tag-fallback';
+
+export interface ModelCompat {
+  openAIThinkingFormat?: OpenAIThinkingFormat;
+  forceAdaptiveThinking?: boolean;
+  fixedTemperature?: number;
+  ignoredParameters?: string[];
+  rejectedParameters?: string[];
+  streamOnly?: boolean;
+}
+
+export interface Model<TApi extends ApiFormat = ApiFormat> {
+  id: string;
+  name: string;
+  api: TApi;
+  providerId: string;
+  baseUrl: string;
+  reasoning: boolean;
+  thinkingLevelMap?: ThinkingLevelMap;
+  input: ('text' | 'image')[];
+  contextWindow: number;
+  maxTokens: number;
+  compat?: ModelCompat;
+}
+
+// ─── Internal events (not exposed to consumers) ───
+
+export type AssistantMessageEvent =
+  | { type: 'start'; partial: AssistantMessage }
+  | { type: 'text_start'; contentIndex: number; partial: AssistantMessage }
+  | { type: 'text_delta'; contentIndex: number; delta: string; partial: AssistantMessage }
+  | { type: 'text_end'; contentIndex: number; content: string; partial: AssistantMessage }
+  | { type: 'thinking_start'; contentIndex: number; partial: AssistantMessage }
+  | { type: 'thinking_delta'; contentIndex: number; delta: string; partial: AssistantMessage }
+  | { type: 'thinking_end'; contentIndex: number; content: string; partial: AssistantMessage }
+  | { type: 'toolcall_start'; contentIndex: number; partial: AssistantMessage }
+  | { type: 'toolcall_delta'; contentIndex: number; delta: string; partial: AssistantMessage }
+  | { type: 'toolcall_end'; contentIndex: number; toolCall: ToolUseContent; partial: AssistantMessage }
+  | { type: 'done'; reason: StopReason; message: AssistantMessage }
+  | { type: 'error'; reason: string; error: AssistantMessage };
+
+// ─── Parameter diagnostic (P1, but type defined here) ───
+
+export interface ParameterDiagnostic {
+  code: 'PARAMETER_IGNORED' | 'PARAMETER_UNSUPPORTED' | 'PARAMETER_REJECTED';
+  parameter: string;
+  routeId: string;
+  message: string;
+}
+
+// ─── AIClient interface (compatible with existing LLMClient) ───
+
+export interface AIClientOptions {
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  authStyle?: 'api_key' | 'auth_token';
+  apiFormat: ApiFormat;
+  headers?: Record<string, string>;
+  providerId: string;
+  modelCapabilities?: ModelCompat;
+}
+
+export interface AIClient {
+  streamChat(
+    messages: Message[],
+    options?: {
+      systemPrompt?: string;
+      tools?: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
+      maxTokens?: number;
+      temperature?: number;
+      disableThinking?: boolean;
+      signal?: AbortSignal;
+      effort?: string;
+      maxOutputTokens?: number;
+    },
+  ): AsyncGenerator<SSEEvent, AssistantMessage, unknown>;
+
+  chat?(
+    messages: Message[],
+    options?: {
+      systemPrompt?: string;
+      maxTokens?: number;
+      temperature?: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<{ content: string; usage?: TokenUsage }>;
+}
