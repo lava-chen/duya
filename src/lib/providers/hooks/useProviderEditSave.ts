@@ -25,6 +25,7 @@ import { useUpsertProviderMutation } from './useUpsertProviderMutation';
 import { findPresetByKey } from '@/lib/providers';
 import { QUICK_PRESETS, type QuickPreset } from '@/lib/provider-presets';
 import type { LlmProvider } from '@/lib/providers';
+import type { ModelCompat } from '@duya/ai';
 import { extractErrorMessage } from '@/lib/errors/extractErrorMessage';
 
 export interface ProviderEditFormData {
@@ -54,6 +55,14 @@ export interface ProviderEditFormData {
    */
   options?: Record<string, unknown>;
   options_json?: string;
+  /**
+   * Plan 7.3: user-defined overrides for model compat flags
+   * (openAIThinkingFormat, forceAdaptiveThinking, fixedTemperature).
+   * Merged with built-in preset compat via findModelCompat().
+   * Also serialized into `options.compatOverrides` by the form so
+   * the legacy `options_json` storage layer round-trips it.
+   */
+  compatOverrides?: ModelCompat;
   notes?: string;
   /**
    * Plan 209 / Fix-up: the caller's stable preset id
@@ -172,6 +181,12 @@ export function useProviderEditSave(): UseProviderEditSaveResult {
         extraEnv: existingDto ? safeParse(existingDto.extraEnv) : {},
         ...(data.options && Object.keys(data.options).length > 0
           ? { options: data.options }
+          : {}),
+        // Plan 7.3: thread user-defined compat overrides onto the
+        // LlmProvider so toRuntimeConfig can merge them with the
+        // built-in preset compat via findModelCompat().
+        ...(data.compatOverrides
+          ? { compatOverrides: data.compatOverrides }
           : {}),
       };
 

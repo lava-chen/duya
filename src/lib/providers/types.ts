@@ -99,6 +99,12 @@ export interface LlmProvider {
   options?: Record<string, unknown>;
   /** Free-form env overrides (formerly `extraEnv`). */
   extraEnv?: Record<string, string>;
+  /** User-defined overrides for model compat flags.
+   *  Merged with built-in preset compat via findModelCompat().
+   *  User values take precedence on a per-field basis.
+   *  Also persisted inside `options.compatOverrides` for round-trip
+   *  through the legacy `options_json` storage layer. */
+  compatOverrides?: ModelCompat;
 }
 
 /**

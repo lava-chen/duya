@@ -36,6 +36,16 @@ interface OpenAIToolCallDelta {
   function?: { name?: string; arguments?: string };
 }
 
+/**
+ * OpenRouter (and similar aggregators) attach a top-level `provider` object
+ * to the chunk / response body naming the upstream route that served the
+ * request. The OpenAI SDK types don't include it, so we narrow via this
+ * structural cast instead of reaching for `any`.
+ */
+interface OpenRouterProviderMeta {
+  provider?: { name?: string };
+}
+
 /** Internal accumulator type for streaming JSON arguments. */
 type ToolUseWithRaw = ToolUseContent & { _rawInput?: string };
 
@@ -465,8 +475,18 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
         chatOptions?.signal ? { signal: chatOptions.signal } : undefined,
       ) as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
 
+      // Aggregators (e.g. OpenRouter) include a top-level `provider.name` on
+      // chunks; captured across the whole stream and folded into usage below.
+      let upstreamProvider: string | undefined;
+
       // 9. Drain chunks.
       for await (const chunk of stream) {
+        // 9.0. Capture upstream provider metadata (OpenRouter et al.).
+        const chunkProvider = (chunk as unknown as OpenRouterProviderMeta).provider?.name;
+        if (chunkProvider) {
+          upstreamProvider = chunkProvider;
+        }
+
         const choice = chunk.choices?.[0];
 
         // Some chunks only carry usage (no choices) — capture and continue.
@@ -566,6 +586,9 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
 
       // 12. Yield final result event with token usage (if captured).
       if (assistantMsg.usage) {
+        if (upstreamProvider) {
+          assistantMsg.usage.upstreamProvider = upstreamProvider;
+        }
         yield { type: 'result', data: assistantMsg.usage };
       }
 
@@ -583,11 +606,13 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
         max_tokens: chatOptions?.maxTokens ?? 1024,
         temperature: chatOptions?.temperature ?? 1,
       });
+      const providerName = (response as unknown as OpenRouterProviderMeta).provider?.name;
       return {
         content: response.choices[0]?.message?.content ?? '',
         usage: response.usage ? {
           input_tokens: response.usage.prompt_tokens,
           output_tokens: response.usage.completion_tokens,
+          ...(providerName ? { upstreamProvider: providerName } : {}),
         } : undefined,
       };
     },

@@ -70,6 +70,9 @@ export interface TokenUsage {
   total_tokens: number;
   cache_creation_tokens?: number;
   cache_hit_tokens?: number;
+  /** Upstream provider name when using an aggregator like OpenRouter.
+   *  Undefined for direct API calls. Surfaced from the `result` SSE event. */
+  upstreamProvider?: string;
 }
 
 export type StreamPhase =
