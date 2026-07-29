@@ -52,16 +52,6 @@ const BUILT_IN_COMMANDS: CommandDef[] = [
     requiresSession: true,
   },
   {
-    name: 'memory',
-    label: 'Session memory',
-    labelZh: '会话记忆',
-    description: 'View or manage session memory',
-    descriptionZh: '查看或管理会话记忆',
-    category: 'session',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-  {
     name: 'export',
     label: 'Export conversation',
     labelZh: '导出对话',

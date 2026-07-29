@@ -82,7 +82,6 @@ export const DEFAULT_EXECUTORS: Record<string, (ctx: CommandContext) => CommandR
     return { type: 'dismiss' };
   },
   compact: (ctx) => ({ type: 'forward', prompt: '/compact' }),
-  memory: (ctx) => ({ type: 'forward', prompt: '/memory' }),
   export: (ctx) => ({ type: 'forward', prompt: '/export' }),
   model: (ctx) => ({ type: 'forward', prompt: ctx.args.length ? `/model ${ctx.args.join(' ')}` : '/model' }),
   review: (ctx) => ({ type: 'forward', prompt: 'Use the /review skill.' }),

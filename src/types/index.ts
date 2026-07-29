@@ -79,10 +79,6 @@ export interface AppSettings {
   visionLLMEnabled: boolean;
   // Gateway model settings
   gatewayModel: string;
-  // Wiki Agent model settings
-  wikiAgentModel?: string;
-  // Wiki Agent feature toggle (experimental)
-  wikiAgentEnabled?: boolean;
   // Title generation model
   titleGenerationModel?: string;
   // Appearance settings
