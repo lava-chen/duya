@@ -4,6 +4,7 @@ import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fi
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { FileIcon } from '../icons';
+import { Button } from '@/components/ui/Button';
 import { fileExtensionFromName, getFileTypeIcon } from '../file-tree/file-type-icon';
 
 // Inline media: renders <img> thumbnails that open the lightbox on click,
@@ -68,14 +69,16 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
 
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         className="markdown-image-button"
         onClick={() => setOpen(true)}
         aria-label={`Enlarge image: ${altText}`}
       >
         <img src={resolvedSrc} alt={altText} className="markdown-image" loading="lazy" />
-      </button>
+      </Button>
       {open && (
         <ImagePreviewModal
           src={resolvedSrc}
@@ -118,8 +121,10 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
 
   if (isLocalServer && href) {
     return (
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors font-mono text-[13.5px] bg-blue-500/5 hover:bg-blue-500/10 px-1 py-0.5 rounded border border-blue-500/20 cursor-pointer"
         onClick={() => {
           window.dispatchEvent(new CustomEvent('duya:open-browser-panel', {
@@ -129,7 +134,7 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
         title={`Open in DUYA browser: ${href}`}
       >
         {children}
-      </button>
+      </Button>
     );
   }
 
@@ -141,19 +146,21 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
     const displayName = fileNameFromPath(resolvedHref);
     const TypeIcon = getFileTypeIcon(fileExtensionFromName(displayName));
     return (
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         className="markdown-file-link"
         onClick={() => openLocalArtifactTarget(resolvedHref, cwd)}
         title={resolvedHref}
       >
         {TypeIcon ? (
-          <TypeIcon size={16} weight="regular" aria-hidden="true" />
+          <TypeIcon size={16} aria-hidden="true" />
         ) : (
-          <FileIcon size={16} weight="regular" aria-hidden="true" />
+          <FileIcon size={16} aria-hidden="true" />
         )}
         <span className="markdown-file-link__name">{displayName}</span>
-      </button>
+      </Button>
     );
   }
 

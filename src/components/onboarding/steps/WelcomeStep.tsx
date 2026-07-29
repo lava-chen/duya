@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ArrowRightIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import { ImportFlow } from "@/components/import/ImportFlow";
 import type { Locale } from "@/i18n";
 
@@ -91,21 +92,25 @@ export function WelcomeStep({ onStart, locale, onSetLocale }: WelcomeStepProps) 
 
       <div className="space-y-3 w-full max-w-xs">
         {/* Start from scratch button */}
-        <button
+        <Button
+          variant="primary"
+          size="lg"
           onClick={onStart}
-          className="w-full inline-flex items-center justify-center gap-2 px-8 py-3 bg-[var(--accent)] text-white rounded-xl text-base font-medium hover:opacity-90 transition-all shadow-lg shadow-[var(--accent)]/20"
+          className="w-full rounded-xl shadow-lg shadow-[var(--accent)]/20"
         >
           {t("onboarding.getStarted")}
           <ArrowRightIcon size={18} />
-        </button>
+        </Button>
 
         {/* Import from external AI */}
-        <button
+        <Button
+          variant="secondary"
+          size="lg"
           onClick={() => setShowImport(true)}
-          className="w-full inline-flex items-center justify-center gap-2 px-8 py-3 border border-[var(--border)] text-[var(--text)] rounded-xl text-sm font-medium hover:bg-[var(--bg-canvas)] transition-all"
+          className="w-full rounded-xl"
         >
           {t("onboarding.importFromClaudeCode")}
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle, WarningCircle } from "@phosphor-icons/react";
+import { CheckCircleIcon, WarningCircleIcon } from "@/components/icons";
 import type { RefineIteration } from "./types";
 
 interface RefineIterationCardProps {
@@ -18,9 +18,9 @@ export function RefineIterationCard({ iteration }: RefineIterationCardProps) {
       <div className="flex items-center justify-between px-2 py-1 border-b border-[var(--border)] bg-[var(--main-bg)]">
         <div className="flex items-center gap-1.5">
           {hasError ? (
-            <WarningCircle size={10} className="text-[var(--error)]" weight="fill" />
+            <WarningCircleIcon size={10} className="text-[var(--error)]" />
           ) : (
-            <CheckCircle size={10} className="text-[var(--success)]" weight="fill" />
+            <CheckCircleIcon size={10} className="text-[var(--success)]" />
           )}
           <span className="text-[10px] font-medium text-[var(--text)]">
             Iter {iteration.index}

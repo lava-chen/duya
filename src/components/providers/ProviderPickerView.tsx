@@ -19,6 +19,7 @@
  */
 
 import { ArrowLeftIcon, PlusIcon, CheckCircleIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { PresetIcon } from '@/components/settings/PresetIcon';
 import { QUICK_PRESETS, type QuickPreset } from '@/lib/provider-presets';
 import { useProvidersQuery } from '@/lib/providers/hooks/useProvidersQuery';
@@ -58,15 +59,16 @@ export function ProviderPickerView() {
       {/* Header — matches the edit page's header for visual
           consistency. */}
       <div className="flex items-center gap-3">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={handleBack}
           data-testid="provider-picker-back"
-          className="shrink-0 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          className="shrink-0"
         >
           <ArrowLeftIcon size={16} />
           <span className="hidden sm:inline">{t('common.back')}</span>
-        </button>
+        </Button>
         <h1 className="text-lg font-semibold text-foreground">
           {t('provider.addProvider')}
         </h1>
@@ -104,7 +106,7 @@ export function ProviderPickerView() {
                       data-testid={`provider-picker-configured-${preset.key}`}
                       className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-green-500/15 text-green-700 dark:text-green-300"
                     >
-                      <CheckCircleIcon size={10} weight="fill" />
+                      <CheckCircleIcon size={10} fill="currentColor" />
                       {t('provider.configured')}
                     </span>
                   )}

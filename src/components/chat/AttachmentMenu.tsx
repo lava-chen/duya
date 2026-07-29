@@ -16,6 +16,7 @@ import {
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/Button';
 
 interface Skill {
   name: string;
@@ -231,8 +232,10 @@ export function AttachmentMenu({
             }}
           >
             {/* Add files */}
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={handleAddFiles}
               className="w-full flex items-center gap-2.5 px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
             >
@@ -242,7 +245,7 @@ export function AttachmentMenu({
               <span style={{ color: 'var(--foreground)' }}>
                 {t('attachmentMenu.addFilesOrPhotos') || 'Add files or photos'}
               </span>
-            </button>
+            </Button>
 
             {/* Skills with hover submenu trigger */}
             <div
@@ -250,8 +253,10 @@ export function AttachmentMenu({
               onMouseEnter={() => handleSubmenuEnter('skills')}
               onMouseLeave={handleSubmenuLeave}
             >
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 className="w-full flex items-center justify-between px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-2.5">
@@ -263,7 +268,7 @@ export function AttachmentMenu({
                   </span>
                 </div>
                 <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
-              </button>
+              </Button>
             </div>
 
             {/* MCP with hover submenu trigger */}
@@ -272,8 +277,10 @@ export function AttachmentMenu({
               onMouseEnter={() => handleSubmenuEnter('mcp')}
               onMouseLeave={handleSubmenuLeave}
             >
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 className="w-full flex items-center justify-between px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-2.5">
@@ -285,7 +292,7 @@ export function AttachmentMenu({
                   </span>
                 </div>
                 <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
-              </button>
+              </Button>
             </div>
 
             {/* Thinking Effort with hover submenu trigger */}
@@ -295,8 +302,10 @@ export function AttachmentMenu({
                 onMouseEnter={() => handleSubmenuEnter('thinking')}
                 onMouseLeave={handleSubmenuLeave}
               >
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   className="w-full flex items-center justify-between px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
                 >
                   <div className="flex items-center gap-2.5">
@@ -313,7 +322,7 @@ export function AttachmentMenu({
                     </span>
                     <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
                   </div>
-                </button>
+                </Button>
               </div>
             )}
 
@@ -323,8 +332,10 @@ export function AttachmentMenu({
               onMouseEnter={() => handleSubmenuEnter('styles')}
               onMouseLeave={handleSubmenuLeave}
             >
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 className="w-full flex items-center justify-between px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-2.5">
@@ -336,13 +347,15 @@ export function AttachmentMenu({
                   </span>
                 </div>
                 <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
-              </button>
+              </Button>
             </div>
 
             {/* Research Mode entry (explicit mode, not profile switch) */}
             {onRunResearchMode && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   onRunResearchMode();
                   setIsOpen(false);
@@ -356,7 +369,7 @@ export function AttachmentMenu({
                 <span style={{ color: 'var(--foreground)' }}>
                   Research Mode
                 </span>
-              </button>
+              </Button>
             )}
           </div>
 
@@ -382,9 +395,11 @@ export function AttachmentMenu({
                   </div>
                 ) : (
                   skills.map((skill) => (
-                    <button
+                    <Button
                       key={skill.name}
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => handleSelectSkill(skill.name)}
                       className="w-full px-2.5 py-1.5 text-left transition-colors rounded-md hover:bg-[var(--surface-hover)]"
                     >
@@ -396,7 +411,7 @@ export function AttachmentMenu({
                           {skill.description}
                         </div>
                       )}
-                    </button>
+                    </Button>
                   ))
                 )}
               </div>
@@ -404,8 +419,10 @@ export function AttachmentMenu({
               {/* Footer Actions */}
               <div className="border-t mt-1 pt-1" style={{ borderColor: 'var(--border)' }}>
                 {onManageSkills && (
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       onManageSkills();
                       setIsOpen(false);
@@ -417,11 +434,13 @@ export function AttachmentMenu({
                     <span style={{ color: 'var(--foreground)' }}>
                       {t('attachmentMenu.manageSkills') || 'Manage skills'}
                     </span>
-                  </button>
+                  </Button>
                 )}
                 {onAddSkill && (
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       onAddSkill();
                       setIsOpen(false);
@@ -433,7 +452,7 @@ export function AttachmentMenu({
                     <span style={{ color: 'var(--foreground)' }}>
                       {t('attachmentMenu.addSkill') || 'Add skill'}
                     </span>
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -514,9 +533,11 @@ export function AttachmentMenu({
             >
               <div className="max-h-48 overflow-y-auto">
                 {THINKING_EFFORT_OPTIONS.map((option) => (
-                  <button
+                  <Button
                     key={option.value || 'auto'}
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => handleSelectThinkingEffort(option.value)}
                     className="w-full flex items-center gap-2.5 px-2.5 py-1.5 transition-colors rounded-md hover:bg-[var(--surface-hover)]"
                   >
@@ -539,7 +560,7 @@ export function AttachmentMenu({
                     {thinkingEffort === option.value && (
                       <CheckIcon size={12} style={{ color: 'var(--accent)' }} />
                     )}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
@@ -567,9 +588,11 @@ export function AttachmentMenu({
                   </div>
                 ) : (
                   responseStyles.map((style) => (
-                    <button
+                    <Button
                       key={style.id}
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => handleSelectStyle(style.id)}
                       className="w-full flex items-center gap-2.5 px-2.5 py-1.5 transition-colors rounded-md hover:bg-[var(--surface-hover)]"
                     >
@@ -597,7 +620,7 @@ export function AttachmentMenu({
                       {selectedStyle === style.id && (
                         <CheckIcon size={12} style={{ color: 'var(--accent)' }} />
                       )}
-                    </button>
+                    </Button>
                   ))
                 )}
               </div>
@@ -605,8 +628,10 @@ export function AttachmentMenu({
               {/* Footer Actions */}
               {onCreateStyle && (
                 <div className="border-t mt-1 pt-1" style={{ borderColor: 'var(--border)' }}>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       onCreateStyle();
                       setIsOpen(false);
@@ -618,7 +643,7 @@ export function AttachmentMenu({
                     <span style={{ color: 'var(--foreground)' }}>
                       {t('attachmentMenu.createStyle') || 'Create & edit styles'}
                     </span>
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>

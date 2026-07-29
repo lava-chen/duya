@@ -9,6 +9,7 @@
  */
 
 import { PlusIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useTranslation } from '@/hooks/useTranslation';
 
@@ -29,14 +30,14 @@ export function ProviderAddButton({ onAdd }: ProviderAddButtonProps) {
   };
 
   return (
-    <button
-      type="button"
+    <Button
+      variant="primary"
+      size="sm"
       onClick={handleClick}
       data-testid="provider-add-button"
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors"
     >
       <PlusIcon size={14} />
       {t('provider.addProvider')}
-    </button>
+    </Button>
   );
 }

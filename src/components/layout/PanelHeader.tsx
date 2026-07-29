@@ -2,7 +2,7 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
-import { PlusIcon, XIcon } from "@phosphor-icons/react";
+import { PlusIcon, XIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
 import { getPageDescriptor, PAGE_REGISTRY, type PageDescriptor, type PageId } from "./panels/registry";
@@ -180,7 +180,7 @@ export function PanelHeader() {
                   onError={(event) => { event.currentTarget.style.display = "none"; }}
                 />
               ) : (
-                <Icon size={12} weight={active ? "fill" : "regular"} />
+                <Icon size={12} fill={active ? "currentColor" : "none"} />
               )}
               <span className="panel-header-tab-title">{tab.title}</span>
               <CloseTabButton tabId={tab.id} onClose={() => closePanel(tab.id)} />
@@ -226,7 +226,7 @@ const AddPageButton = forwardRef<
       aria-expanded={open}
       aria-haspopup="menu"
     >
-      <PlusIcon size={16} weight="bold" />
+      <PlusIcon size={16} stroke={2.5} />
     </button>
   );
 });
@@ -283,7 +283,7 @@ function AddPageMenuRow({
     >
       <span className="panel-add-menu-main">
         <span className="panel-add-menu-icon">
-          <Icon size={16} weight="regular" />
+          <Icon size={16} />
         </span>
         <span className="panel-add-menu-name">{label}</span>
       </span>
@@ -307,7 +307,7 @@ function CloseTabButton({ tabId, onClose }: { tabId: string; onClose: () => void
         onClose();
       }}
     >
-      <XIcon size={10} weight="bold" />
+      <XIcon size={10} stroke={2.5} />
     </span>
   );
 }

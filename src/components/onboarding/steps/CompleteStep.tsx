@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@/hooks/useTranslation";
 import { CheckCircleIcon, SparkleIcon, ArrowRightIcon, CommandIcon, AtSignIcon, FileTextIcon, EraserIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 
 interface CompleteStepProps {
   onEnter: () => void;
@@ -72,14 +73,16 @@ export function CompleteStep({ onEnter }: CompleteStepProps) {
       </div>
 
       {/* CTA Button */}
-      <button
+      <Button
+        variant="primary"
+        size="lg"
         onClick={onEnter}
-        className="inline-flex items-center gap-2 px-8 py-3 bg-[var(--accent)] text-white rounded-xl text-base font-medium hover:opacity-90 transition-all shadow-lg shadow-[var(--accent)]/20"
+        className="rounded-xl shadow-lg shadow-[var(--accent)]/20"
       >
         <SparkleIcon size={20} />
         {t("onboarding.enterDuya")}
         <ArrowRightIcon size={18} />
-      </button>
+      </Button>
     </div>
   );
 }

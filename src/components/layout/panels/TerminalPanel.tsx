@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowClockwise, ChatCircleText, Quotes, XCircle } from "@phosphor-icons/react";
+import { ArrowClockwiseIcon, ChatCircleTextIcon, QuotesIcon, XCircleIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -356,36 +358,42 @@ export function TerminalPanel({ tab }: Props) {
             <span>Starting...</span>
           ) : status === "exited" ? (
             <>
-              <XCircle size={11} weight="bold" />
+              <XCircleIcon size={11} stroke={2.5} />
               <span>Process exited</span>
             </>
           ) : (
             <>
-              <XCircle size={11} weight="bold" />
+              <XCircleIcon size={11} stroke={2.5} />
               <span>{error ?? "Failed to start"}</span>
             </>
           )}
         </span>
         {selection && (
-          <button
+          <IconButton
             type="button"
+            variant="default"
+            shape="square"
+            size="sm"
             className="terminal-panel-restart"
             onClick={handleQuoteSelection}
             title="Add selection to chat"
             aria-label="Add terminal selection to chat"
           >
-            <Quotes size={12} weight="bold" />
-          </button>
+            <QuotesIcon size={12} stroke={2.5} />
+          </IconButton>
         )}
-        <button
+        <IconButton
           type="button"
+          variant="default"
+          shape="square"
+          size="sm"
           className="terminal-panel-restart"
           onClick={handleRestart}
           title="Restart terminal"
           aria-label="Restart terminal"
         >
-          <ArrowClockwise size={12} weight="bold" />
-        </button>
+          <ArrowClockwiseIcon size={12} stroke={2.5} />
+        </IconButton>
       </div>
 
       <div
@@ -401,10 +409,10 @@ export function TerminalPanel({ tab }: Props) {
           className="terminal-selection-menu"
           style={{ left: selectionMenu.left, top: selectionMenu.top }}
         >
-          <button type="button" onClick={handleQuoteSelection}>
-            <ChatCircleText size={14} weight="regular" />
+          <Button type="button" variant="ghost" size="sm" onClick={handleQuoteSelection}>
+            <ChatCircleTextIcon size={14} />
             <span>{t('terminal.addToChat')}</span>
-          </button>
+          </Button>
         </div>
       )}
 

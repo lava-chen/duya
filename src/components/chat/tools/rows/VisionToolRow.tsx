@@ -16,6 +16,7 @@
 
 import React, { useState } from 'react';
 import { EyeIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { ToolStatusBadge } from '../statusBadge';
 import { getStatus } from '../registry';
@@ -102,8 +103,10 @@ export function VisionToolRow({ tool }: VisionToolRowProps) {
       {hasPreview ? (
         <div className="mx-1 my-1 flex flex-col items-start gap-0">
           <div className="flex flex-wrap items-start gap-2">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               className="tool-image-preview"
               onClick={() => setPreviewOpen(true)}
               aria-label={`Open analyzed image preview${parsed?.question ? ` for: ${parsed.question}` : ''}`}
@@ -124,7 +127,7 @@ export function VisionToolRow({ tool }: VisionToolRowProps) {
                   <span className="tool-image-preview-label-text">VISION</span>
                 </span>
               </div>
-            </button>
+            </Button>
             <ToolStatusBadge status={status} />
           </div>
           {analysisSnippet && (

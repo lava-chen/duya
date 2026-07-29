@@ -2,6 +2,8 @@
 
 import React, { useEffect } from "react";
 import { XIcon, PlugIcon, ShieldIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 
 interface ExtensionConfirmDialogProps {
   isOpen: boolean;
@@ -60,19 +62,14 @@ export function ExtensionConfirmDialog({
               Extension Connection
             </h3>
           </div>
-          <button
+          <IconButton
             onClick={onDeny}
-            className="p-1 rounded-lg transition-colors"
-            style={{ color: "var(--muted)" }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = "var(--surface-hover)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.backgroundColor = "transparent")
-            }
+            variant="default"
+            size="sm"
+            aria-label="Close"
           >
             <XIcon size={18} />
-          </button>
+          </IconButton>
         </div>
 
         {/* Content */}
@@ -114,36 +111,22 @@ export function ExtensionConfirmDialog({
 
         {/* Actions */}
         <div className="flex items-center gap-3">
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            className="flex-1"
             onClick={onDeny}
-            className="flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-            style={{
-              color: "var(--muted)",
-              backgroundColor: "var(--surface)",
-              border: "1px solid var(--border)",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = "var(--surface-hover)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.backgroundColor = "var(--surface)")
-            }
           >
             Deny
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
+            size="md"
+            className="flex-1"
             onClick={onApprove}
-            className="flex-1 px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors"
-            style={{ backgroundColor: "var(--accent)" }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.opacity = "0.9")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.opacity = "1")
-            }
           >
             Allow
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -9,6 +9,7 @@
 
 import React, { useEffect } from 'react';
 import { XIcon } from '@/components/icons';
+import { IconButton } from '@/components/ui/IconButton';
 
 export interface ToolImagePreviewModalProps {
   open: boolean;
@@ -58,13 +59,16 @@ export function ToolImagePreviewModal({
       aria-modal="true"
       aria-label={`Preview: ${title}`}
     >
-      <button
+      <IconButton
+        variant="ghost"
+        size="md"
+        shape="square"
+        aria-label="Close preview"
         onClick={onClose}
         className="attachment-preview-close"
-        aria-label="Close preview"
       >
         <XIcon size={20} />
-      </button>
+      </IconButton>
       <div
         className="attachment-preview-sidebar-modal"
         onClick={(e) => e.stopPropagation()}

@@ -1,14 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  ArrowLeftIcon,
-  CopyIcon,
-  CheckIcon,
-  WarningIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-} from "@/components/icons";
+import { ArrowLeftIcon, CopyIcon, CheckIcon, WarningIcon, ChevronDownIcon, ChevronUpIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import { cn } from "@/lib/utils";
 import type { PluginCatalogEntry, PluginRegistryEntry, PluginCapabilityDisplay, PluginPermissionDisplay } from "@/lib/plugin-types";
 import { RuntimeStatusBadge } from "./RuntimeStatusBadge";
@@ -193,14 +188,10 @@ export function PluginDetailView({
     <div className="space-y-6">
       {/* Back button + breadcrumb */}
       <div className="flex items-center gap-3">
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          onClick={onBack}
-        >
+        <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeftIcon size={16} />
           Plugins
-        </button>
+        </Button>
         <span className="text-muted-foreground text-sm">/</span>
         <span className="text-sm text-foreground font-medium">{entry.name}</span>
       </div>
@@ -245,27 +236,20 @@ export function PluginDetailView({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              className={cn(
-                "rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50",
-                installed.enabled
-                  ? "border border-border/60 text-muted-foreground hover:text-foreground"
-                  : "bg-accent text-white hover:opacity-90"
-              )}
+            <Button
+              variant={installed.enabled ? "secondary" : "primary"}
               disabled={busy}
               onClick={installed.enabled ? onDisable : onEnable}
             >
               {installed.enabled ? "Disable" : "Enable"}
-            </button>
-            <button
-              type="button"
-              className="rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10"
+            </Button>
+            <Button
+              variant="danger"
               disabled={busy}
               onClick={onRemove}
             >
               Remove
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -564,8 +548,8 @@ export function PluginDetailView({
 
       {/* Technical details (collapsible) */}
       <div>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           className="flex w-full items-center justify-between rounded-lg border border-border/40 bg-surface/40 px-4 py-3 text-left transition-colors hover:bg-surface/60"
           onClick={() => setTechExpanded(!techExpanded)}
         >
@@ -577,7 +561,7 @@ export function PluginDetailView({
           ) : (
             <ChevronDownIcon size={16} className="text-muted-foreground" />
           )}
-        </button>
+        </Button>
 
         {techExpanded && (
           <div className="mt-2 space-y-3 rounded-lg border border-border/40 bg-surface/40 px-4 py-4">
@@ -629,9 +613,11 @@ export function PluginDetailView({
                     <code className="block truncate rounded bg-muted/30 px-2 py-0.5 text-[11px] text-muted-foreground font-mono">
                       {installed.installPath}
                     </code>
-                    <button
-                      type="button"
-                      className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Copy path"
+                      className="shrink-0"
                       onClick={async () => {
                         try {
                           await navigator.clipboard.writeText(installed.installPath);
@@ -647,7 +633,7 @@ export function PluginDetailView({
                       ) : (
                         <CopyIcon size={14} />
                       )}
-                    </button>
+                    </IconButton>
                   </div>
                 </div>
               </div>

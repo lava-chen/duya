@@ -30,6 +30,8 @@ import {
 } from '@/components/icons';
 import type { FetchedModel } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 
 export interface ModelInputWithFetchProps {
   id: string;
@@ -155,9 +157,10 @@ export function ModelInputWithFetch({
                       {vendor}
                     </div>
                     {grouped[vendor].map((m) => (
-                      <button
+                      <Button
                         key={m.id}
-                        type="button"
+                        variant="ghost"
+                        size="sm"
                         role="option"
                         aria-selected={m.id === value}
                         onClick={() => handleSelect(m.id)}
@@ -171,7 +174,7 @@ export function ModelInputWithFetch({
                           {m.id === value && <CheckIcon size={10} />}
                         </span>
                         <span className="truncate">{m.id}</span>
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 ))
@@ -182,27 +185,31 @@ export function ModelInputWithFetch({
 
         {/* Loading state: Input + spinner */}
         {!hasFetched && isLoading && (
-          <button
-            type="button"
+          <IconButton
+            variant="default"
+            size="sm"
+            aria-label="Loading"
             disabled
             data-testid={`model-input-loading-${id}`}
-            className="inline-flex items-center px-2.5 rounded-lg border border-border/50 bg-chip text-muted-foreground"
+            className="px-2.5 rounded-lg border border-border/50 bg-chip text-muted-foreground"
           >
             <SpinnerGapIcon size={14} className="animate-spin" />
-          </button>
+          </IconButton>
         )}
 
         {/* Empty + onFetch: Input + download button */}
         {!hasFetched && !isLoading && onFetch && (
-          <button
-            type="button"
+          <IconButton
+            variant="default"
+            size="sm"
+            aria-label={t('provider.modelInput.fetch')}
             onClick={onFetch}
             data-testid={`model-input-fetch-${id}`}
-            className="inline-flex items-center gap-1 px-2.5 rounded-lg border border-border/50 bg-chip text-muted-foreground hover:text-foreground hover:border-accent/50"
+            className="px-2.5 border border-border/50 bg-chip hover:border-accent/50"
             title={t('provider.modelInput.fetch')}
           >
             <DownloadSimpleIcon size={14} />
-          </button>
+          </IconButton>
         )}
       </div>
 

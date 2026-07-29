@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { TrashIcon, FolderOpenIcon, DownloadSimpleIcon, ExternalLinkIcon, ArrowCounterClockwiseIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import {
   SettingsSection,
   SettingsCard,
@@ -116,14 +117,14 @@ export function SupportSection() {
             label={t("settings.support.logs.filePath")}
             description={logInfo?.logPath || t("common.loading")}
             action={
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={handleOpenLogFolder}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent)]/10 rounded-md transition-colors cursor-pointer"
               >
                 <FolderOpenIcon size={14} />
                 {t("settings.support.logs.openFolder")}
-              </button>
+              </Button>
             }
           />
           <SettingsRow
@@ -133,24 +134,22 @@ export function SupportSection() {
         </SettingsCard>
 
         <div className="flex gap-3 mt-4">
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={handleExport}
             disabled={exporting}
-            className="flex items-center gap-2 px-4 py-2 bg-[var(--accent)] text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer"
           >
             <DownloadSimpleIcon size={16} />
             {exporting ? t("settings.support.logs.exporting") : t("settings.support.logs.export")}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="danger"
             onClick={handleClear}
             disabled={clearing}
-            className="flex items-center gap-2 px-4 py-2 bg-red-500/10 text-red-500 text-sm font-medium rounded-lg hover:bg-red-500/20 transition-colors disabled:opacity-50 cursor-pointer border border-red-500/20"
           >
             <TrashIcon size={16} />
             {clearing ? t("settings.support.logs.clearing") : t("settings.support.logs.clear")}
-          </button>
+          </Button>
         </div>
 
         {statusMessage && (
@@ -186,14 +185,14 @@ export function SupportSection() {
             label={t("settings.support.about.resetOnboarding")}
             description={t("settings.support.about.resetOnboardingDesc")}
             action={
-              <button
-                type="button"
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={resetOnboarding}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent)]/10 rounded-md transition-colors cursor-pointer"
               >
                 <ArrowCounterClockwiseIcon size={14} />
                 {t("settings.support.about.resetOnboarding")}
-              </button>
+              </Button>
             }
           />
         </SettingsCard>

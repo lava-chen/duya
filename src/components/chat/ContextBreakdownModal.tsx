@@ -25,6 +25,8 @@ import type {
   GridSquare,
 } from '@/lib/context-usage-utils';
 import { getCategoryLabel } from '@/lib/context-usage-utils';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 
 interface ContextBreakdownModalProps {
   open: boolean;
@@ -170,14 +172,17 @@ export function ContextBreakdownModal({
           <h2 id="ctx-modal-title" className="ctx-modal__title">
             {t('context.usage')}
           </h2>
-          <button
+          <IconButton
             type="button"
+            variant="default"
+            shape="square"
+            size="sm"
             className="ctx-modal__close"
             aria-label={t('common.close')}
             onClick={onClose}
           >
             ×
-          </button>
+          </IconButton>
         </header>
 
         <div className="ctx-modal__sub">
@@ -236,8 +241,10 @@ export function ContextBreakdownModal({
                 const isOpen = expanded.has(category);
                 return (
                   <li key={category} className="ctx-modal__cat">
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       className="ctx-modal__cat-row"
                       onClick={() => toggleCategory(category)}
                       aria-expanded={isOpen}
@@ -263,7 +270,7 @@ export function ContextBreakdownModal({
                       <span className="ctx-modal__cat-chevron">
                         {isOpen ? '▾' : '▸'}
                       </span>
-                    </button>
+                    </Button>
                     {isOpen && sources.length > 0 && (
                       <ul className="ctx-modal__src-list">
                         {sources.map((src) => (
@@ -335,8 +342,10 @@ export function ContextBreakdownModal({
 
         {onCompress && usage.state !== 'normal' && (
           <footer className="ctx-modal__foot">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               className="ctx-modal__compress"
               onClick={onCompress}
               disabled={isCompacting}
@@ -345,7 +354,7 @@ export function ContextBreakdownModal({
               {isCompacting
                 ? t('context.compressing')
                 : t('context.compress')}
-            </button>
+            </Button>
           </footer>
         )}
       </div>

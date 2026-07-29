@@ -11,11 +11,11 @@ import {
   useEffect,
 } from "react";
 import {
-  Folder,
-  FolderOpen,
-  File,
-  CaretRight,
-} from "@phosphor-icons/react";
+  FolderIcon,
+  FolderOpenIcon,
+  FileIcon,
+  CaretRightIcon,
+} from "@/components/icons";
 import { getFileTypeIcon } from './file-type-icon';
 
 // =============================================================================
@@ -239,16 +239,16 @@ export function FileTreeFolder({ path, name, children }: FileTreeFolderProps) {
       <div className="file-tree-folder" role="treeitem">
         <div className="file-tree-folder-header file-tree-folder-renaming">
           <span className="file-tree-caret">
-            <CaretRight
+            <CaretRightIcon
               size={14}
               className={isExpanded ? "file-tree-caret-expanded" : ""}
             />
           </span>
           <span className="file-tree-folder-icon">
             {isExpanded ? (
-              <FolderOpen size={16} />
+              <FolderOpenIcon size={16} />
             ) : (
-              <Folder size={16} />
+              <FolderIcon size={16} />
             )}
           </span>
           <input
@@ -284,16 +284,16 @@ export function FileTreeFolder({ path, name, children }: FileTreeFolderProps) {
         tabIndex={0}
       >
         <span className="file-tree-caret">
-          <CaretRight
+          <CaretRightIcon
             size={14}
             className={isExpanded ? "file-tree-caret-expanded" : ""}
           />
         </span>
         <span className="file-tree-folder-icon">
           {isExpanded ? (
-            <FolderOpen size={16} />
+            <FolderOpenIcon size={16} />
           ) : (
-            <Folder size={16} />
+            <FolderIcon size={16} />
           )}
         </span>
         <span className="file-tree-name">{name}</span>
@@ -366,7 +366,7 @@ export function FileTreeFile({ path, name, icon }: FileTreeFileProps) {
     return (
       <div className="file-tree-file file-tree-file-renaming" role="treeitem">
         <span className="file-tree-file-icon">
-          {icon ?? <File size={16} />}
+          {icon ?? <FileIcon size={16} />}
         </span>
         <input
           ref={inputRef}
@@ -396,7 +396,7 @@ export function FileTreeFile({ path, name, icon }: FileTreeFileProps) {
       tabIndex={0}
     >
       <span className="file-tree-file-icon">
-        {icon ?? <File size={16} />}
+        {icon ?? <FileIcon size={16} />}
       </span>
       <span className="file-tree-name">{name}</span>
     </div>

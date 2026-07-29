@@ -19,6 +19,7 @@ import type { CanvasPosition } from "@duya/conductor/renderer/types/conductor";
 import type { PageTab } from "./registry";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useConversationStore } from "@/stores/conversation-store";
+import { IconButton } from "@/components/ui/IconButton";
 
 export function SidebarConductorView({
   tab,
@@ -200,14 +201,17 @@ export function SidebarConductorView({
           className="mx-2 mt-2 rounded-md border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-xs text-[var(--error)] flex items-center justify-between gap-2"
         >
           <span className="truncate">{uiError}</span>
-          <button
+          <IconButton
             type="button"
+            variant="ghost"
+            shape="square"
+            size="sm"
             onClick={() => setUiError(null)}
             className="text-[var(--error)]/80 hover:text-[var(--error)]"
             aria-label="Dismiss error"
           >
             ×
-          </button>
+          </IconButton>
         </div>
       )}
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CaretDown, Check } from '@phosphor-icons/react';
+import { CaretDownIcon, CheckIcon } from '@/components/icons';
 import {
   CUSTOM_FREQUENCY_LABELS,
   PRESET_LABELS,
@@ -55,7 +55,7 @@ function ValueMenu<T extends string | number>({
         onClick={() => setOpen((current) => !current)}
       >
         <span>{selected?.label}</span>
-        <CaretDown size={14} />
+        <CaretDownIcon size={14} />
       </button>
       {open && (
         <div
@@ -84,7 +84,7 @@ function ValueMenu<T extends string | number>({
                 }}
               >
                 <span>{option.label}</span>
-                {active && <Check size={14} weight="bold" />}
+                {active && <CheckIcon size={14} />}
               </button>
             );
           })}

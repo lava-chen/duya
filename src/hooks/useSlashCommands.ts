@@ -6,34 +6,34 @@ import { detectPopoverTrigger, resolveItemSelection } from '@/lib/message-input-
 import { getCommandsForPlatform } from '@/lib/commands';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
-  Terminal,
-  Question,
-  Brain,
-  GlobeSimple,
-  ClockCounterClockwise,
-  ListChecks,
-  Paperclip,
-  Feather,
-  Plug,
-  SquareHalf,
-  ArrowsInLineVertical,
-} from '@phosphor-icons/react';
-import { TelescopeIcon } from '@/components/icons';
+  TerminalIcon,
+  QuestionIcon,
+  BrainIcon,
+  GlobeSimpleIcon,
+  ClockCounterClockwiseIcon,
+  ListChecksIcon,
+  PaperclipIcon,
+  FeatherIcon,
+  PlugIcon,
+  SquareHalfIcon,
+  ArrowsInLineVerticalIcon,
+  TelescopeIcon,
+} from '@/components/icons';
 
 // Commands removed from the popover (handled elsewhere or deleted).
 const HIDDEN_COMMANDS = new Set(['/help', '/status', '/cost', '/new', '/clear', '/model']);
 
 // Per-command icons for built-in slash commands that remain in the popover.
 const COMMAND_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
-  '/recap': ClockCounterClockwise,
+  '/recap': ClockCounterClockwiseIcon,
 };
 
 // Category fallback icons.
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
-  info: Question,
-  session: Terminal,
-  tools: Brain,
-  config: GlobeSimple,
+  info: QuestionIcon,
+  session: TerminalIcon,
+  tools: BrainIcon,
+  config: GlobeSimpleIcon,
 };
 
 export interface UseSlashCommandsReturn {
@@ -133,7 +133,7 @@ export function useSlashCommands(opts: {
       label: isZh ? '添加附件' : 'Add files',
       value: '__add_files',
       description: isZh ? '文件、图片' : 'Files or photos',
-      icon: Paperclip,
+      icon: PaperclipIcon,
       kind: 'settings_action' as const,
       group: 'attachments' as const,
     };
@@ -147,7 +147,7 @@ export function useSlashCommands(opts: {
         label: isZh ? '思考程度' : 'Thinking',
         value: '__thinking',
         description: isZh ? '推理深度' : 'Reasoning depth',
-        icon: Brain,
+        icon: BrainIcon,
         kind: 'settings_submenu' as const,
         submenu: 'thinking' as const,
         group: 'settings' as const,
@@ -156,7 +156,7 @@ export function useSlashCommands(opts: {
         label: isZh ? '输出风格' : 'Output style',
         value: '__style',
         description: isZh ? '回复风格' : 'Response style',
-        icon: Feather,
+        icon: FeatherIcon,
         kind: 'settings_submenu' as const,
         submenu: 'style' as const,
         group: 'settings' as const,
@@ -165,7 +165,7 @@ export function useSlashCommands(opts: {
         label: isZh ? 'MCP 服务器' : 'MCP servers',
         value: '__mcp',
         description: isZh ? '工具开关' : 'Tool toggles',
-        icon: Plug,
+        icon: PlugIcon,
         kind: 'settings_submenu' as const,
         submenu: 'mcp' as const,
         group: 'settings' as const,
@@ -174,7 +174,7 @@ export function useSlashCommands(opts: {
         label: isZh ? '压缩上下文' : 'Compact context',
         value: '__compact',
         description: isZh ? '摘要历史以节省 token' : 'Summarize history to save tokens',
-        icon: ArrowsInLineVertical,
+        icon: ArrowsInLineVerticalIcon,
         kind: 'settings_action' as const,
         group: 'settings' as const,
       },
@@ -189,7 +189,7 @@ export function useSlashCommands(opts: {
         label: isZh ? 'Plan Mode' : 'Plan Mode',
         value: '__mode_plan',
         description: isZh ? '只读规划，先设计再实施' : 'Read-only planning before implementation',
-        icon: ListChecks,
+        icon: ListChecksIcon,
         kind: 'mode' as const,
         modeValue: 'plan-task',
         group: 'mode' as const,
@@ -207,7 +207,7 @@ export function useSlashCommands(opts: {
         label: isZh ? 'Conductor 画布' : 'Conductor Canvas',
         value: '__mode_conductor',
         description: isZh ? '注入画布操作工具，agent 可控制 conductor 画布' : 'Inject canvas tools, agent can control conductor canvas',
-        icon: SquareHalf,
+        icon: SquareHalfIcon,
         kind: 'mode' as const,
         modeValue: 'conductor',
         group: 'mode' as const,
@@ -233,7 +233,7 @@ export function useSlashCommands(opts: {
           : cmd.description;
         const icon = COMMAND_ICONS[slashName]
           ?? CATEGORY_ICONS[cmd.category]
-          ?? Terminal;
+          ?? TerminalIcon;
 
         return {
           label: title,

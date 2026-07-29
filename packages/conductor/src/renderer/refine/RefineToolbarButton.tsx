@@ -1,6 +1,6 @@
 "use client";
 
-import { MagicWand } from "@phosphor-icons/react";
+import { MagicWandIcon } from "@/components/icons";
 import { useRefineStore } from "..//stores/refine-store";
 import { useConductorStore } from "..//stores/conductor-store";
 
@@ -25,7 +25,7 @@ export function RefineToolbarButton({ widgetId }: RefineToolbarButtonProps) {
       className="flex items-center justify-center w-5 h-5 rounded-md text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] transition-colors"
       title="Refine widget with agent"
     >
-      <MagicWand size={12} />
+      <MagicWandIcon size={12} />
     </button>
   );
 }

@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Database, Plus, X } from "@phosphor-icons/react";
+import { DatabaseIcon, PlusIcon, XIcon } from "@/components/icons";
 import type { NativeDatabaseElementConfig } from "../../database/types";
 import type { DatabaseSource } from "../../database/types";
 import { createDatabaseSource, getDatabaseSource, listDatabaseSources } from "../database/project-database-ipc";
@@ -108,13 +108,13 @@ export const DatabaseCreateDialog: React.FC<DatabaseCreateDialogProps> = ({
       <section className="canvas-document-picker" role="dialog" aria-modal="true" aria-label="Add database" onMouseDown={(event) => event.stopPropagation()}>
         <header className="canvas-document-picker__header">
           <strong>Add database</strong>
-          <button type="button" onClick={onClose} aria-label="Close"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close"><XIcon size={18} /></button>
         </header>
 
         <section className="canvas-document-picker__section">
           <h2>New project database</h2>
           <label className="canvas-document-picker__search">
-            <Database size={16} />
+            <DatabaseIcon size={16} />
             <input
               ref={nameRef}
               value={name}
@@ -125,7 +125,7 @@ export const DatabaseCreateDialog: React.FC<DatabaseCreateDialogProps> = ({
             />
           </label>
           <button type="button" className="canvas-document-picker__action" disabled={!projectPath || !name.trim() || submitting} onClick={() => { void createNew(); }}>
-            <span className="canvas-document-picker__glyph"><Plus size={18} weight="bold" /></span>
+            <span className="canvas-document-picker__glyph"><PlusIcon size={18} /></span>
             <span><strong>{submitting ? "Creating…" : "Create database"}</strong><small>Stored in this project's .duya/database.sqlite</small></span>
           </button>
         </section>
@@ -135,7 +135,7 @@ export const DatabaseCreateDialog: React.FC<DatabaseCreateDialogProps> = ({
           <div className="canvas-document-picker__file-list">
             {!projectPath ? <p>Bind this canvas to a project folder first.</p> : !loading && sources.length === 0 ? <p>No project databases yet.</p> : sources.map((source) => (
               <button key={source.id} type="button" className="canvas-document-picker__file" disabled={submitting} onClick={() => { void linkExisting(source); }}>
-                <Database size={17} /><span><strong>{source.name}</strong><small>Project database</small></span>
+                <DatabaseIcon size={17} /><span><strong>{source.name}</strong><small>Project database</small></span>
               </button>
             ))}
           </div>

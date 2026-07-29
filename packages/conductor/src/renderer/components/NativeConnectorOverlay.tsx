@@ -1,8 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowElbowDownRight, BezierCurve, TextT } from "@phosphor-icons/react";
-import { TrashIcon } from "@/components/icons";
+import { ArrowElbowDownRightIcon, BezierCurveIcon, TextTIcon, TrashIcon } from "@/components/icons";
 import type { CanvasElement } from "..//types/conductor";
 import type {
   ConnectorEndpoint,
@@ -198,7 +197,7 @@ export function ConnectorToolbar({
           />
         </div>
       ) : undefined}>
-        <button type="button" aria-label="Add or edit connector text" title="Add text" style={{ ...CAPSULE_BTN_BASE, ...(openPanel === "text" ? CAPSULE_BTN_ACTIVE : {}) }} onClick={() => togglePanel("text")}><TextT size={20} weight="regular" /></button>
+        <button type="button" aria-label="Add or edit connector text" title="Add text" style={{ ...CAPSULE_BTN_BASE, ...(openPanel === "text" ? CAPSULE_BTN_ACTIVE : {}) }} onClick={() => togglePanel("text")}><TextTIcon size={20} /></button>
       </ToolbarPanelHost>
 
       <ToolbarPanelHost panel={openPanel === "color" ? (
@@ -243,7 +242,7 @@ export function ConnectorToolbar({
 
       <span style={CAPSULE_DIVIDER} />
       <button type="button" aria-label="Toggle connector routing" title={routingMode === "elbow" ? "Switch to curved connector" : "Switch to elbow connector"} style={{ ...CAPSULE_BTN_BASE, ...CAPSULE_BTN_ACTIVE }} onClick={toggleRoutingMode}>
-        {routingMode === "elbow" ? <ArrowElbowDownRight size={18} weight="bold" /> : <BezierCurve size={18} weight="bold" />}
+        {routingMode === "elbow" ? <ArrowElbowDownRightIcon size={18} /> : <BezierCurveIcon size={18} />}
       </button>
       <span style={CAPSULE_DIVIDER} />
       <CapsuleMoreMenu

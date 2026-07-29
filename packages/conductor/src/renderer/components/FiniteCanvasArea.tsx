@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DotsSixVertical } from "@phosphor-icons/react";
+import { DotsSixVerticalIcon } from "@/components/icons";
 import { GridLayout, noCompactor, verticalCompactor } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
@@ -218,7 +218,7 @@ export const FiniteCanvasArea: React.FC<FiniteCanvasAreaProps> = ({
                 title={t("conductor.presentation.moveWidgetHandle")}
                 onClick={() => setSelectedElementId(element.id)}
               >
-                <DotsSixVertical size={16} weight="bold" />
+                <DotsSixVerticalIcon size={16} />
               </button>
               <ElementRenderer
                 element={element}
@@ -251,7 +251,7 @@ export const FiniteCanvasArea: React.FC<FiniteCanvasAreaProps> = ({
                 title={t("conductor.presentation.moveElementHandle")}
                 onClick={() => setSelectedElementId(element.id)}
               >
-                <DotsSixVertical size={15} weight="bold" />
+                <DotsSixVerticalIcon size={15} />
               </button>
               <ElementRenderer
                 element={element}

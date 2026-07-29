@@ -33,6 +33,8 @@ import type { QuickPreset } from "@/lib/provider-presets";
 import { ProviderModelEditor } from "@/components/chat/ProviderModelEditor";
 import { testProviderIPC, getOllamaModelsIPC, type OllamaModel } from "@/lib/ipc-client";
 import { PresetIcon } from "./PresetIcon";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import { useApiKeyState } from "./forms/hooks/useApiKeyState";
 import { useBaseUrlState } from "./forms/hooks/useBaseUrlState";
 import { useModelSelection } from "./forms/hooks/useModelSelection";
@@ -454,12 +456,14 @@ export function ProviderConnectDialog({
               <p className="text-xs text-muted-foreground mt-0.5">{preset.descriptionZh}</p>
             </div>
           </div>
-          <button
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label="Close"
             onClick={() => onOpenChange(false)}
-            className="p-1.5 rounded-lg hover:bg-chip text-muted-foreground hover:text-foreground"
           >
             <XIcon size={16} />
-          </button>
+          </IconButton>
         </div>
 
         {/* Meta info */}
@@ -566,13 +570,14 @@ export function ProviderConnectDialog({
                   className="flex-1 px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
                   autoFocus
                 />
-                <button
-                  type="button"
+                <IconButton
+                  variant="default"
+                  size="sm"
+                  aria-label={apiKeyState.revealApiKey ? "Hide API key" : "Show API key"}
                   onClick={apiKeyState.toggleReveal}
-                  className="px-3 py-2 rounded-lg border border-border/50 bg-chip text-muted-foreground hover:text-foreground"
                 >
                   {apiKeyState.revealApiKey ? <EyeSlashIcon size={14} /> : <EyeIcon size={14} />}
-                </button>
+                </IconButton>
               </div>
               <p className="text-[10px] text-muted-foreground">
                 {t("provider.authMethod")}:{" "}
@@ -591,11 +596,12 @@ export function ProviderConnectDialog({
                   {t("provider.modelName")}
                 </label>
                 {isOllamaPreset && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={handleFetchOllamaModels}
                     disabled={fetchingModels}
-                    className="text-[11px] px-2 py-1 rounded bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="bg-accent/10 text-accent hover:bg-accent/20"
                   >
                     {fetchingModels ? (
                       <span className="flex items-center gap-1">
@@ -605,7 +611,7 @@ export function ProviderConnectDialog({
                     ) : (
                       t("provider.localModels")
                     )}
-                  </button>
+                  </Button>
                 )}
               </div>
 
@@ -639,11 +645,12 @@ export function ProviderConnectDialog({
                           : `Select local model (${ollamaModels.length})`}
                       </div>
                       {ollamaModels.map((model) => (
-                        <button
+                        <Button
                           key={model.id}
-                          type="button"
-                          onClick={() => handleSelectOllamaModel(model.id)}
+                          variant="ghost"
+                          size="sm"
                           className="w-full text-left px-2 py-1.5 text-sm hover:bg-chip rounded flex items-center justify-between group"
+                          onClick={() => handleSelectOllamaModel(model.id)}
                         >
                           <span className="font-mono">{model.name}</span>
                           {model.size && (
@@ -651,7 +658,7 @@ export function ProviderConnectDialog({
                               {(model.size / 1024 / 1024 / 1024).toFixed(1)} GB
                             </span>
                           )}
-                        </button>
+                        </Button>
                       ))}
                     </div>
                   </div>
@@ -718,14 +725,14 @@ export function ProviderConnectDialog({
           {/* Advanced options */}
           {!preset.fields.includes("extra_env") && (
             <>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setShowAdvanced(!showAdvanced)}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
               >
                 {showAdvanced ? <CaretUpIcon size={12} /> : <CaretDownIcon size={12} />}
                 {t("provider.advanced")}
-              </button>
+              </Button>
 
               {showAdvanced && (
                 <div className="space-y-4 border-t border-border/50 pt-3">
@@ -820,23 +827,22 @@ export function ProviderConnectDialog({
 
           {/* Footer */}
           <div className="flex items-center justify-between pt-2 border-t border-border/30">
-            <button
-              type="button"
+            <Button
+              variant="ghost"
               onClick={() => onOpenChange(false)}
-              className="px-3 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground"
             >
               {t("provider.cancel")}
-            </button>
+            </Button>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={handleTestConnection}
                 disabled={
                   testing ||
                   (preset.fields.includes("api_key") &&
                     apiKeyState.keyState !== "replaced")
                 }
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border/50 bg-chip text-xs font-medium hover:bg-accent/10 disabled:opacity-50"
               >
                 {testing ? (
                   <SpinnerGapIcon size={12} className="animate-spin" />
@@ -844,15 +850,15 @@ export function ProviderConnectDialog({
                   <CircleNotchIcon size={12} />
                 )}
                 {testing ? t("settings.providers.testing") : t("bridge.testConnection")}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="submit"
+                variant="primary"
                 disabled={saving}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent/90 disabled:opacity-50"
               >
                 {saving && <SpinnerGapIcon size={12} className="animate-spin" />}
                 {isEdit ? t("provider.update") : t("provider.connect")}
-              </button>
+              </Button>
             </div>
           </div>
         </form>

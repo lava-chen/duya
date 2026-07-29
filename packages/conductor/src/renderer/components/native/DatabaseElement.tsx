@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowsOutSimple, Database, Plus, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { ArrowsOutSimpleIcon, DatabaseIcon, PlusIcon, SpinnerGapIcon, WarningCircleIcon } from "@/components/icons";
 import type {
   DatabaseProperty,
   DatabaseQueryResult,
@@ -175,12 +175,12 @@ export const DatabaseElement: React.FC<{ element: CanvasElement }> = ({ element 
       aria-label={`${result?.source.name ?? config?.sourceTitle ?? "Database"} database`}
     >
       <header className="canvas-database__header">
-        <span className="canvas-database__icon"><Database size={17} weight="fill" /></span>
+        <span className="canvas-database__icon"><DatabaseIcon size={17} /></span>
         <div className="canvas-database__title">
           <strong>{result?.source.name ?? config?.sourceTitle ?? "Database"}</strong>
           <small>{result?.view?.name ?? "Table"}</small>
         </div>
-        {loading && <SpinnerGap className="canvas-database__spinner" size={16} />}
+        {loading && <SpinnerGapIcon className="canvas-database__spinner" size={16} />}
         <button
           type="button"
           className="canvas-database__mode"
@@ -190,13 +190,13 @@ export const DatabaseElement: React.FC<{ element: CanvasElement }> = ({ element 
           }}
           title={isDatabaseMode ? "Return to canvas mode" : "Open database mode"}
         >
-          <ArrowsOutSimple size={15} />
+          <ArrowsOutSimpleIcon size={15} />
           <span>{isDatabaseMode ? "Done" : "Open"}</span>
         </button>
       </header>
 
       {error && (
-        <div className="canvas-database__error"><WarningCircle size={16} /><span>{error}</span></div>
+        <div className="canvas-database__error"><WarningCircleIcon size={16} /><span>{error}</span></div>
       )}
 
       {!error && result && (
@@ -205,7 +205,7 @@ export const DatabaseElement: React.FC<{ element: CanvasElement }> = ({ element 
             <thead>
               <tr>
                 {columns.map((property) => <th key={property.id}>{property.name}</th>)}
-                {isDatabaseMode && <th className="canvas-database__add-column"><button type="button" onClick={() => { void addProperty(); }} title="Add text property"><Plus size={14} /></button></th>}
+                {isDatabaseMode && <th className="canvas-database__add-column"><button type="button" onClick={() => { void addProperty(); }} title="Add text property"><PlusIcon size={14} /></button></th>}
               </tr>
             </thead>
             <tbody>
@@ -231,7 +231,7 @@ export const DatabaseElement: React.FC<{ element: CanvasElement }> = ({ element 
       )}
 
       {isDatabaseMode && result && (
-        <button type="button" className="canvas-database__new-row" onClick={() => { void addRecord(); }}><Plus size={14} /> New</button>
+        <button type="button" className="canvas-database__new-row" onClick={() => { void addRecord(); }}><PlusIcon size={14} /> New</button>
       )}
     </section>
   );

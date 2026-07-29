@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { applyImportIPC, rollbackImportIPC } from "@/lib/import-ipc";
+import { Button } from "@/components/ui/Button";
 import type { ImportSource, ImportItem, ImportManifest, ConflictResolution, SessionImportItem } from "@/types/import";
 
 interface CompleteStepProps {
@@ -79,12 +80,9 @@ export function CompleteStep({
     return (
       <div className="text-center py-8 space-y-4">
         <p className="text-red-500">{t("importFlow.importFailed", { error })}</p>
-        <button
-          onClick={onFinish}
-          className="text-sm text-[var(--accent)] hover:underline"
-        >
+        <Button variant="ghost" size="sm" onClick={onFinish}>
           {t("importFlow.close")}
-        </button>
+        </Button>
       </div>
     );
   }
@@ -97,12 +95,14 @@ export function CompleteStep({
         <p className="text-sm text-muted-foreground">
           {t("importFlow.allContentRemoved")}
         </p>
-        <button
+        <Button
+          variant="primary"
+          size="md"
           onClick={onFinish}
-          className="inline-flex items-center gap-2 px-6 py-2 bg-[var(--accent)] text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity"
+          className="rounded-xl"
         >
           {t("importFlow.close")}
-        </button>
+        </Button>
       </div>
     );
   }
@@ -148,18 +148,22 @@ export function CompleteStep({
       </div>
 
       <div className="flex justify-center gap-3">
-        <button
+        <Button
+          variant="danger"
+          size="md"
           onClick={handleRollback}
-          className="px-4 py-2 text-sm text-red-500 border border-red-500/30 rounded-xl hover:bg-red-500/10 transition-colors"
+          className="rounded-xl"
         >
           {t("importFlow.undoImport")}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
           onClick={onFinish}
-          className="px-6 py-2 bg-[var(--accent)] text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity"
+          className="rounded-xl"
         >
           {t("importFlow.startUsingDUYA")}
-        </button>
+        </Button>
       </div>
     </div>
   );

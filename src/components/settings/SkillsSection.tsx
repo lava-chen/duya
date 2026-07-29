@@ -12,6 +12,8 @@ import {
   ProhibitIcon,
   SpinnerGapIcon,
 } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import {
   SettingsSection,
@@ -267,24 +269,30 @@ function SkillDetailModal({
             <h2 className="text-lg font-semibold text-foreground mt-1">{skill.name}</h2>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={(event) => {
                 event.stopPropagation();
                 onToggleEnabled(skill);
               }}
               disabled={isToggling}
-              className={`px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+              className={`${
                 isEnabled
                   ? "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
                   : "border-amber-500/30 text-amber-500 hover:bg-amber-500/10"
-              } disabled:opacity-60 disabled:cursor-not-allowed`}
+              }`}
             >
               {isToggling ? "Updating..." : isEnabled ? "Disable Skill" : "Enable Skill"}
-            </button>
-            <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted transition-colors">
+            </Button>
+            <IconButton
+              variant="default"
+              size="md"
+              aria-label="Close"
+              onClick={onClose}
+            >
               <XIcon size={20} />
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -394,17 +402,19 @@ function SkillDetailModal({
                       <li>{t('skills.reviewFindings')}</li>
                       <li>{t('skills.orBypass')}</li>
                     </ol>
-                    <button
+                    <Button
+                      variant="danger"
+                      size="sm"
                       onClick={handleToggleBypass}
                       disabled={isLoadingBypass}
-                      className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors ${
+                      className={`${
                         isBypassed
-                          ? "bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500/20 border border-yellow-500/30"
-                          : "bg-red-500/10 text-red-500 hover:bg-red-500/20 border border-red-500/30"
-                      } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          ? "bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500/20 border-yellow-500/30"
+                          : ""
+                      }`}
                     >
                       {isLoadingBypass ? t('skills.updating') : isBypassed ? t('skills.removeBypass') : t('skills.bypassSecurity')}
-                    </button>
+                    </Button>
                     {isBypassed && (
                       <p className="text-xs text-yellow-500 mt-2">{t('skills.bypassedWarning')}</p>
                     )}
@@ -565,13 +575,14 @@ export function SkillsSection() {
             label={skillPath || t('skills.noCustomPathSet')}
             description={t('skills.browseHint')}
             action={
-              <button
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={handleSelectSkillPath}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors"
               >
                 <FolderIcon size={14} />
                 {t('skills.browse')}
-              </button>
+              </Button>
             }
           />
         </SettingsCard>
@@ -587,9 +598,9 @@ export function SkillsSection() {
         ) : error ? (
           <div className="text-center py-8">
             <p className="text-sm text-destructive mb-2">{error}</p>
-            <button onClick={() => void loadSkills()} className="text-sm text-accent hover:underline">
+            <Button variant="ghost" size="sm" onClick={() => void loadSkills()}>
               {t('skills.retry')}
-            </button>
+            </Button>
           </div>
         ) : filteredSkills.length === 0 ? (
           <div className="text-center py-8">

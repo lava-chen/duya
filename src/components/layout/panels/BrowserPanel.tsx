@@ -2,18 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
-  ArrowsClockwise,
-  Camera,
-  CursorClick,
-  Globe,
-  WarningCircle,
-} from "@phosphor-icons/react";
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ArrowsClockwiseIcon,
+  CameraIcon,
+  CursorClickIcon,
+  GlobeIcon,
+  WarningCircleIcon,
+} from "@/components/icons";
 import { usePanel } from "@/hooks/usePanel";
 import { useSettings } from "@/hooks/useSettings";
 import type { PageTab } from "./registry";
 import { AgentBrowserTab } from "./AgentBrowserTab";
+import { IconButton } from "@/components/ui/IconButton";
 
 type WebviewElement = HTMLElement & {
   canGoBack(): boolean;
@@ -453,17 +454,17 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           navigate(addressValue);
         }}
       >
-        <button type="button" className="browser-panel-icon-btn" onClick={() => webviewRef.current?.goBack()} disabled={!canGoBack} title="Back">
-          <ArrowLeft size={14} />
-        </button>
-        <button type="button" className="browser-panel-icon-btn" onClick={() => webviewRef.current?.goForward()} disabled={!canGoForward} title="Forward">
-          <ArrowRight size={14} />
-        </button>
-        <button type="button" className="browser-panel-icon-btn" onClick={() => webviewRef.current?.reload()} title="Reload">
-          <ArrowsClockwise size={14} className={loading ? "animate-spin" : ""} />
-        </button>
+        <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Back" onClick={() => webviewRef.current?.goBack()} disabled={!canGoBack} title="Back">
+          <ArrowLeftIcon size={14} />
+        </IconButton>
+        <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Forward" onClick={() => webviewRef.current?.goForward()} disabled={!canGoForward} title="Forward">
+          <ArrowRightIcon size={14} />
+        </IconButton>
+        <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Reload" onClick={() => webviewRef.current?.reload()} title="Reload">
+          <ArrowsClockwiseIcon size={14} className={loading ? "animate-spin" : ""} />
+        </IconButton>
         <label className="browser-panel-address">
-          <Globe size={13} />
+          <GlobeIcon size={13} />
           <input
             value={addressValue}
             onChange={(event) => setAddressValue(event.target.value)}
@@ -471,29 +472,35 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
             spellCheck={false}
           />
         </label>
-        <button
+        <IconButton
           type="button"
+          variant="default"
+          shape="square"
           className={`browser-panel-icon-btn${picking ? " active" : ""}`}
+          aria-label="Pick element"
           onClick={handlePickElement}
           disabled={loading || picking}
           title="Pick element"
         >
-          <CursorClick size={14} />
-        </button>
-        <button
+          <CursorClickIcon size={14} />
+        </IconButton>
+        <IconButton
           type="button"
+          variant="default"
+          shape="square"
           className="browser-panel-icon-btn"
+          aria-label="Screenshot to input"
           onClick={handleScreenshot}
           disabled={loading}
           title="Screenshot to input"
         >
-          <Camera size={14} />
-        </button>
+          <CameraIcon size={14} />
+        </IconButton>
       </form>
 
       {(status || error) && (
         <div className={`browser-panel-status${error ? " error" : ""}`}>
-          {error ? <WarningCircle size={13} /> : <span className="browser-panel-status-dot" />}
+          {error ? <WarningCircleIcon size={13} /> : <span className="browser-panel-status-dot" />}
           <span>{error || status}</span>
         </div>
       )}

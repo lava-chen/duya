@@ -8,6 +8,7 @@ import {
   SpinnerGapIcon,
   GearSixIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useConversationStore } from '@/stores/conversation-store';
 import {
@@ -106,15 +107,17 @@ export function ModelSelector({
       searchPlaceholder={t('messageInput.searchModels')}
       emptyMessage={models.length === 0 ? t('messageInput.noModelsAvailable') : t('messageInput.noModelMatches')}
       footer={
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={handleGoToSettings}
           className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors hover:bg-[var(--surface-hover)]"
           style={{ color: 'var(--muted)' }}
         >
           <GearSixIcon size={13} className="shrink-0" />
           <span>{t('messageInput.manageProviders')}</span>
-        </button>
+        </Button>
       }
     />
   );
@@ -123,8 +126,10 @@ export function ModelSelector({
     return (
       <div ref={containerRef} className="relative" onKeyDown={handleKeyDown}>
         {/* Trigger button */}
-        <button
+        <Button
           type="button"
+          variant="secondary"
+          size="md"
           onClick={handleToggle}
           disabled={disabled || loading}
           className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground hover:border-accent/50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -133,7 +138,7 @@ export function ModelSelector({
             {loading ? t('messageInput.loadingModels') : displayLabel}
           </span>
           <CaretDownIcon size={14} className="shrink-0 ml-2 text-muted-foreground" />
-        </button>
+        </Button>
 
         {open && renderOptionPanel(`absolute left-0 z-50 w-full ${placement === 'below' ? 'top-full mt-1' : 'bottom-full mb-1'}`)}
       </div>
@@ -144,8 +149,10 @@ export function ModelSelector({
   return (
     <div ref={containerRef} className="relative min-w-0 shrink" onKeyDown={handleKeyDown}>
       {/* Trigger button */}
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={handleToggle}
         disabled={disabled || loading}
         className="flex min-w-0 max-w-full items-center gap-1 px-2 py-1 rounded-lg transition-colors text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
@@ -169,7 +176,7 @@ export function ModelSelector({
           )}
         </span>
         <CaretDownIcon size={12} className="shrink-0" style={{ color: 'var(--muted)' }} />
-      </button>
+      </Button>
 
       {open && renderOptionPanel(`absolute left-0 w-72 z-50 ${placement === 'below' ? 'top-full mt-1' : 'bottom-full mb-1'}`)}
     </div>

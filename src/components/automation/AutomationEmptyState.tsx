@@ -1,8 +1,8 @@
 import {
-  Clock,
-  Plus,
-  SquaresFour,
-} from '@phosphor-icons/react';
+  ClockIcon,
+  PlusIcon,
+  SquaresFourIcon,
+} from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 
 interface AutomationEmptyStateProps {
@@ -19,7 +19,7 @@ export function AutomationEmptyState({
   const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center h-full text-center p-8">
-      <Clock size={48} className="mb-4 opacity-20" style={{ color: 'var(--muted)' }} />
+      <ClockIcon size={48} className="mb-4 opacity-20" style={{ color: 'var(--muted)' }} />
 
       <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text)' }}>
         {t('automation.emptyTitle')}
@@ -48,7 +48,7 @@ export function AutomationEmptyState({
             e.currentTarget.style.boxShadow = 'none';
           }}
         >
-          <Plus size={16} weight="bold" />
+          <PlusIcon size={16} />
           {t('automation.newAutomation')}
         </button>
 
@@ -73,7 +73,7 @@ export function AutomationEmptyState({
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
         >
-          <SquaresFour size={16} />
+          <SquaresFourIcon size={16} />
           {t('automation.templates')}
         </button>
       </div>

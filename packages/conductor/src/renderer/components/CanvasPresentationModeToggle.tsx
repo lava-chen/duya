@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { FileText, SelectionAll } from "@phosphor-icons/react";
+import { FileTextIcon, SelectionAllIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 
 export type CanvasPresentationMode = "finite" | "infinite";
@@ -26,7 +26,7 @@ export function CanvasPresentationModeToggle({
         title={t("conductor.presentation.widgetsHint")}
         onClick={() => onChange("finite")}
       >
-        <FileText size={14} weight="regular" />
+        <FileTextIcon size={14} />
         <span>{t("conductor.presentation.widgets")}</span>
       </button>
       <button
@@ -36,7 +36,7 @@ export function CanvasPresentationModeToggle({
         title={t("conductor.presentation.canvasHint")}
         onClick={() => onChange("infinite")}
       >
-        <SelectionAll size={14} weight="regular" />
+        <SelectionAllIcon size={14} />
         <span>{t("conductor.presentation.canvas")}</span>
       </button>
     </div>

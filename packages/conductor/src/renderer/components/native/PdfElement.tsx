@@ -2,12 +2,12 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowSquareOut,
-  CaretLeft,
-  CaretRight,
-  MagnifyingGlassMinus,
-  MagnifyingGlassPlus,
-} from "@phosphor-icons/react";
+  ArrowSquareOutIcon,
+  CaretLeftIcon,
+  CaretRightIcon,
+  MagnifyingGlassMinusIcon,
+  MagnifyingGlassPlusIcon,
+} from "@/components/icons";
 import type { CanvasElement } from "../../types/conductor";
 import { executeAction } from "../../ipc/conductor-ipc";
 import { useConductorStore } from "../../stores/conductor-store";
@@ -74,17 +74,17 @@ export const PdfElement: React.FC<{ element: CanvasElement }> = ({ element }) =>
           {formatBytes(element.config.size) && <span className="canvas-pdf__size">{formatBytes(element.config.size)}</span>}
         </div>
         <div className="canvas-pdf__controls" aria-label="PDF controls">
-          <button type="button" aria-label="Previous page" title="Previous page" onClick={(event) => { stopCanvasEvent(event); setPage(page - 1); }}><CaretLeft size={15} weight="bold" /></button>
+          <button type="button" aria-label="Previous page" title="Previous page" onClick={(event) => { stopCanvasEvent(event); setPage(page - 1); }}><CaretLeftIcon size={15} /></button>
           <label className="canvas-pdf__page-label">
             <span className="sr-only">Page</span>
             <input value={pageDraft} inputMode="numeric" aria-label="Page number" onClick={stopCanvasEvent} onChange={(event) => setPageDraft(event.target.value.replace(/[^0-9]/g, ""))} onBlur={() => setPage(Number(pageDraft))} onKeyDown={(event) => { stopCanvasEvent(event); if (event.key === "Enter") (event.currentTarget as HTMLInputElement).blur(); }} />
           </label>
-          <button type="button" aria-label="Next page" title="Next page" onClick={(event) => { stopCanvasEvent(event); setPage(page + 1); }}><CaretRight size={15} weight="bold" /></button>
+          <button type="button" aria-label="Next page" title="Next page" onClick={(event) => { stopCanvasEvent(event); setPage(page + 1); }}><CaretRightIcon size={15} /></button>
           <span className="canvas-pdf__divider" />
-          <button type="button" aria-label="Zoom out" title="Zoom out" onClick={(event) => { stopCanvasEvent(event); setZoom(zoom - ZOOM_STEP); }}><MagnifyingGlassMinus size={15} /></button>
+          <button type="button" aria-label="Zoom out" title="Zoom out" onClick={(event) => { stopCanvasEvent(event); setZoom(zoom - ZOOM_STEP); }}><MagnifyingGlassMinusIcon size={15} /></button>
           <span className="canvas-pdf__zoom">{zoom}%</span>
-          <button type="button" aria-label="Zoom in" title="Zoom in" onClick={(event) => { stopCanvasEvent(event); setZoom(zoom + ZOOM_STEP); }}><MagnifyingGlassPlus size={15} /></button>
-          <button type="button" aria-label="Open PDF in a separate window" title="Open PDF" onClick={(event) => { stopCanvasEvent(event); if (url) window.open(`${url}#page=${page}&zoom=${zoom}`, "_blank", "noopener,noreferrer"); }}><ArrowSquareOut size={15} /></button>
+          <button type="button" aria-label="Zoom in" title="Zoom in" onClick={(event) => { stopCanvasEvent(event); setZoom(zoom + ZOOM_STEP); }}><MagnifyingGlassPlusIcon size={15} /></button>
+          <button type="button" aria-label="Open PDF in a separate window" title="Open PDF" onClick={(event) => { stopCanvasEvent(event); if (url) window.open(`${url}#page=${page}&zoom=${zoom}`, "_blank", "noopener,noreferrer"); }}><ArrowSquareOutIcon size={15} /></button>
         </div>
       </header>
       <div className="canvas-pdf__viewport" onMouseDown={stopCanvasEvent}>

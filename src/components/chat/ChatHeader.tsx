@@ -11,7 +11,8 @@ import { createPortal } from "react-dom";
 import {
   DotsThreeIcon,
   CaretRightIcon,
-} from "@phosphor-icons/react";
+} from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useOptionalPanel } from "@/hooks/usePanel";
@@ -277,8 +278,10 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
               spellCheck={false}
             />
           ) : (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               className="chat-header-title"
               onClick={() => setIsEditing(true)}
               title={t("thread.renameThread")}
@@ -286,7 +289,7 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
               <span className="chat-header-title-text">
                 {thread.title || t("thread.newThread")}
               </span>
-            </button>
+            </Button>
           )}
 
           {projectName && !isEditing && (
@@ -308,7 +311,7 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
                   aria-expanded={menuOpen}
                   aria-haspopup="menu"
                 >
-                  <DotsThreeIcon size={16} weight="bold" />
+                  <DotsThreeIcon size={16} />
                 </button>
 
                 {menuOpen &&
@@ -384,8 +387,10 @@ function MenuItem({ item, openSubmenu, setOpenSubmenu, closeMenu }: MenuItemProp
   }
 
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
       role="menuitem"
       className={`chat-header-menu-item${item.danger ? " danger" : ""}`}
       onClick={item.onSelect}
@@ -394,6 +399,6 @@ function MenuItem({ item, openSubmenu, setOpenSubmenu, closeMenu }: MenuItemProp
       {item.shortcut && (
         <span className="chat-header-menu-shortcut">{item.shortcut}</span>
       )}
-    </button>
+    </Button>
   );
 }

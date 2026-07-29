@@ -25,6 +25,8 @@
 
 import React from 'react';
 import { DocumentTextIcon, FileIcon, FolderIcon, GlobeIcon, TerminalIcon, XIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import type { FileAttachment } from '@/types/message';
 import { FileAttachmentCard } from './FileAttachmentCard';
 
@@ -124,8 +126,11 @@ function AttachmentChipCard({
     const card = (
       <>
         {mode === 'input' && (
-          <button
+          <IconButton
             type="button"
+            variant="danger"
+            shape="round"
+            size="sm"
             className="browser-screenshot-attachment-remove"
             onClick={(event) => {
               event.stopPropagation();
@@ -134,7 +139,7 @@ function AttachmentChipCard({
             aria-label="Remove attachment"
           >
             <XIcon size={10} />
-          </button>
+          </IconButton>
         )}
         <img
           src={previewImage}
@@ -155,14 +160,16 @@ function AttachmentChipCard({
 
     if (mode === 'history') {
       return (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           data-attachment-id={att.id}
           className="browser-screenshot-attachment-card"
           onClick={handleActivate}
         >
           {card}
-        </button>
+        </Button>
       );
     }
 
@@ -202,14 +209,17 @@ function AttachmentChipCard({
       data-attachment-id={att.id}
       className="pasted-content-attachment"
     >
-      <button
+      <IconButton
         type="button"
+        variant="danger"
+        shape="round"
+        size="sm"
         className="pasted-content-remove"
         onClick={() => onRemove?.(att.id)}
         aria-label="Remove attachment"
       >
         <XIcon size={10} />
-      </button>
+      </IconButton>
       <div className="pasted-content-preview">{preview}</div>
       <div className="pasted-content-label">
         <Icon size={10} />

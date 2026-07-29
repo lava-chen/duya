@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowLeftIcon, WarningIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import type { PluginRegistryEntry, PluginCatalogEntry } from "@/lib/plugin-types";
 import { RuntimeStatusBadge } from "./RuntimeStatusBadge";
@@ -33,14 +34,10 @@ export function PluginManagementView({
   return (
     <div className="space-y-6">
       {/* Back button */}
-      <button
-        type="button"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        onClick={onBack}
-      >
+      <Button variant="ghost" size="sm" onClick={onBack}>
         <ArrowLeftIcon size={16} />
         Back to Plugins
-      </button>
+      </Button>
 
       {/* Issues section */}
       {issues.length > 0 && (
@@ -70,13 +67,14 @@ export function PluginManagementView({
                       : "Needs attention"}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className="text-xs text-accent hover:underline shrink-0"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0"
                   onClick={() => onPluginClick(item.id)}
                 >
                   View details
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -157,24 +155,24 @@ export function PluginManagementView({
                     </p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      className="px-2 py-1 text-xs rounded-md border border-border/60 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    <Button
+                      variant="secondary"
+                      size="sm"
                       disabled={busyPluginId === item.id}
                       onClick={() =>
                         item.enabled ? onDisable(item.id) : onEnable(item.id)
                       }
                     >
                       {item.enabled ? "Disable" : "Enable"}
-                    </button>
-                    <button
-                      type="button"
-                      className="px-2 py-1 text-xs rounded-md text-muted-foreground/60 hover:text-red-500 disabled:opacity-50"
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
                       disabled={busyPluginId === item.id}
                       onClick={() => onRemove(item.id)}
                     >
                       Remove
-                    </button>
+                    </Button>
                   </div>
                 </div>
               );

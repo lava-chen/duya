@@ -1,4 +1,5 @@
 import { XIcon } from '../icons';
+import { IconButton } from '@/components/ui/IconButton';
 
 interface FileAttachmentCardProps {
   id: string;
@@ -47,13 +48,17 @@ export function FileAttachmentCard({
         onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
       >
         {onRemove && (
-          <button
+          <IconButton
             type="button"
+            variant="danger"
+            shape="round"
+            size="sm"
+            aria-label="Remove attachment"
             onClick={(e) => { e.stopPropagation(); onRemove(id); }}
             className="absolute top-1.5 right-1.5 z-10 w-4 h-4 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors opacity-0 group-hover:opacity-100"
           >
             <XIcon size={8} className="text-white" />
-          </button>
+          </IconButton>
         )}
         <img
           src={previewSrc}
@@ -77,13 +82,17 @@ export function FileAttachmentCard({
         onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
       >
         {onRemove && (
-          <button
+          <IconButton
             type="button"
+            variant="danger"
+            shape="round"
+            size="sm"
+            aria-label="Remove attachment"
             onClick={(e) => { e.stopPropagation(); onRemove(id); }}
             className="absolute top-1.5 right-1.5 z-10 w-4 h-4 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors opacity-0 group-hover:opacity-100"
           >
             <XIcon size={8} className="text-white" />
-          </button>
+          </IconButton>
         )}
         <img
           src={previewSrc}
@@ -117,13 +126,17 @@ export function FileAttachmentCard({
       onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
     >
       {onRemove && (
-        <button
+        <IconButton
           type="button"
+          variant="danger"
+          shape="round"
+          size="sm"
+          aria-label="Remove attachment"
           onClick={(e) => { e.stopPropagation(); onRemove(id); }}
           className="absolute top-1.5 right-1.5 z-10 w-4 h-4 rounded-full bg-[var(--muted)]/70 flex items-center justify-center hover:bg-[var(--muted)] transition-colors opacity-0 group-hover:opacity-100"
         >
           <XIcon size={8} className="text-white" />
-        </button>
+        </IconButton>
       )}
 
       {/* File name */}

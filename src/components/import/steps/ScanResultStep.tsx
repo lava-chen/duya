@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { scanImportIPC } from "@/lib/import-ipc";
 import { ArrowRightIcon, ArrowLeftIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import type { ImportSource, ScanResult } from "@/types/import";
 
 interface ScanResultStepProps {
@@ -54,12 +55,9 @@ export function ScanResultStep({
     return (
       <div className="text-center py-8 space-y-4">
         <p className="text-red-500">{t("importFlow.scanFailed", { error })}</p>
-        <button
-          onClick={onBack}
-          className="text-sm text-[var(--accent)] hover:underline"
-        >
+        <Button variant="ghost" size="sm" onClick={onBack}>
           {t("importFlow.goBack")}
-        </button>
+        </Button>
       </div>
     );
   }
@@ -121,20 +119,19 @@ export function ScanResultStep({
       </div>
 
       <div className="flex justify-between">
-        <button
-          onClick={onBack}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <Button variant="ghost" size="md" onClick={onBack}>
           <ArrowLeftIcon size={16} />
           {t("importFlow.back")}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
           onClick={() => onComplete(result)}
-          className="inline-flex items-center gap-2 px-6 py-2 bg-[var(--accent)] text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity"
+          className="rounded-xl"
         >
           {t("importFlow.previewContent")}
           <ArrowRightIcon size={16} />
-        </button>
+        </Button>
       </div>
     </div>
   );

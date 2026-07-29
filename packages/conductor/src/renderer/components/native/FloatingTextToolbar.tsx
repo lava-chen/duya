@@ -3,19 +3,19 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  LinkSimple,
-  ListBullets,
-  Minus,
-  PaintBucket,
-  Plus,
-  TextAlignCenter,
-  TextAlignLeft,
-  TextAlignRight,
-  TextB,
-  TextItalic,
-  TextT,
-  Trash,
-} from "@phosphor-icons/react";
+  LinkSimpleIcon,
+  ListBulletsIcon,
+  MinusIcon,
+  PaintBucketIcon,
+  PlusIcon,
+  TextAlignCenterIcon,
+  TextAlignLeftIcon,
+  TextAlignRightIcon,
+  TextBIcon,
+  TextItalicIcon,
+  TextTIcon,
+  TrashIcon,
+} from "@/components/icons";
 import {
   CapsuleToolbar,
   CapsuleMoreMenu,
@@ -228,7 +228,7 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
           onClick={() => exec("bold")}
           style={{ ...CAPSULE_BTN_BASE, ...(active.bold ? CAPSULE_BTN_ACTIVE : {}) }}
         >
-          <TextB size={17} weight="bold" />
+          <TextBIcon size={17} />
         </button>
         <button
           type="button"
@@ -236,23 +236,23 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
           onClick={() => exec("italic")}
           style={{ ...CAPSULE_BTN_BASE, ...(active.italic ? CAPSULE_BTN_ACTIVE : {}) }}
         >
-          <TextItalic size={17} weight="bold" />
+          <TextItalicIcon size={17} />
         </button>
         <div style={CAPSULE_DIVIDER} />
 
         <button type="button" title="Decrease font size" onClick={() => adjustFontSize(-2)} style={CAPSULE_BTN_BASE}>
-          <Minus size={15} weight="bold" />
+          <MinusIcon size={15} />
         </button>
         <button type="button" title="Font size" style={{ ...CAPSULE_BTN_BASE, width: 24, fontSize: 13, fontWeight: 700 }}>
           M
         </button>
         <button type="button" title="Increase font size" onClick={() => adjustFontSize(2)} style={CAPSULE_BTN_BASE}>
-          <Plus size={15} weight="bold" />
+          <PlusIcon size={15} />
         </button>
         <div style={CAPSULE_DIVIDER} />
 
         {(["text", "fill"] as const).map((target) => {
-          const Icon = target === "text" ? TextT : PaintBucket;
+          const Icon = target === "text" ? TextTIcon : PaintBucketIcon;
           return (
             <button
               key={target}
@@ -261,18 +261,18 @@ export const FloatingTextToolbar: React.FC<FloatingTextToolbarProps> = ({ contai
               onClick={() => setPicker((current) => current === target ? null : target)}
               style={{ ...CAPSULE_BTN_BASE, ...(picker === target ? CAPSULE_BTN_ACTIVE : {}) }}
             >
-              <Icon size={17} weight="bold" />
+              <Icon size={17} />
             </button>
           );
         })}
         <div style={CAPSULE_DIVIDER} />
 
-        <button type="button" title="Align left" onClick={() => exec("justifyLeft")} style={CAPSULE_BTN_BASE}><TextAlignLeft size={17} weight="bold" /></button>
-        <button type="button" title="Align center" onClick={() => exec("justifyCenter")} style={CAPSULE_BTN_BASE}><TextAlignCenter size={17} weight="bold" /></button>
-        <button type="button" title="Align right" onClick={() => exec("justifyRight")} style={CAPSULE_BTN_BASE}><TextAlignRight size={17} weight="bold" /></button>
+        <button type="button" title="Align left" onClick={() => exec("justifyLeft")} style={CAPSULE_BTN_BASE}><TextAlignLeftIcon size={17} /></button>
+        <button type="button" title="Align center" onClick={() => exec("justifyCenter")} style={CAPSULE_BTN_BASE}><TextAlignCenterIcon size={17} /></button>
+        <button type="button" title="Align right" onClick={() => exec("justifyRight")} style={CAPSULE_BTN_BASE}><TextAlignRightIcon size={17} /></button>
         <div style={CAPSULE_DIVIDER} />
 
-        <button type="button" title="Delete selected text" onClick={() => exec("delete")} style={{ ...CAPSULE_BTN_BASE, color: "#ff9d9d" }}><Trash size={16} weight="bold" /></button>
+        <button type="button" title="Delete selected text" onClick={() => exec("delete")} style={{ ...CAPSULE_BTN_BASE, color: "#ff9d9d" }}><TrashIcon size={16} /></button>
         <CapsuleMoreMenu
           items={[
             { label: locked ? "Unlock position" : "Lock position", onSelect: toggleLocked },

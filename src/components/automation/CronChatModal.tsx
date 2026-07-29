@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { XIcon, SpinnerGapIcon, ArrowUpIcon, StopIcon } from "@/components/icons";
-import { Clock } from "@phosphor-icons/react";
+import { XIcon, SpinnerGapIcon, ArrowUpIcon, StopIcon, ClockIcon } from "@/components/icons";
 import { getThreadIPC } from "@/lib/ipc-client";
 import type { Message } from "@/types";
 import { MessageList } from "@/components/chat/MessageList";
@@ -16,6 +15,7 @@ import {
 } from "@/lib/stream-session-manager";
 import type { StreamPhase } from "@/types";
 import { useTranslation } from "@/hooks/useTranslation";
+import { IconButton } from "@/components/ui/IconButton";
 
 interface CronChatModalProps {
   sessionId: string;
@@ -223,7 +223,7 @@ export function CronChatModal({
         {/* Header */}
         <div className="cron-chat-modal-header">
           <div className="cron-chat-modal-title">
-            <Clock size={18} className="text-accent" />
+            <ClockIcon size={18} className="text-accent" />
             <div className="flex flex-col">
               <span id="cron-chat-modal-title" className="text-sm font-medium">
                 {sessionTitle || t('automation.cronSession')}
@@ -235,13 +235,15 @@ export function CronChatModal({
           </div>
           <div className="flex items-center gap-2">
             {getStatusDisplay()}
-            <button
+            <IconButton
+              variant="default"
+              size="md"
               className="cron-chat-modal-close"
               onClick={onClose}
               aria-label="Close"
             >
               <XIcon size={18} />
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -254,7 +256,7 @@ export function CronChatModal({
             </div>
           ) : displayMessages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-2">
-              <Clock size={32} className="text-muted-foreground/30" />
+              <ClockIcon size={32} className="text-muted-foreground/30" />
               <p className="text-sm text-muted-foreground">{t('automation.noMessages')}</p>
               <p className="text-[10px] text-muted-foreground/60">
                 {t('automation.noMessagesDesc')}
@@ -284,24 +286,30 @@ export function CronChatModal({
               rows={1}
             />
             {isStreaming ? (
-              <button
-                type="button"
-                onClick={handleStop}
+              <IconButton
+                variant="danger"
+                shape="round"
+                size="md"
                 className="cron-chat-modal-stop-btn"
+                onClick={handleStop}
                 title="Stop"
+                aria-label="Stop"
               >
                 <StopIcon size={14} />
-              </button>
+              </IconButton>
             ) : (
-              <button
-                type="button"
+              <IconButton
+                variant="primary"
+                shape="round"
+                size="md"
+                className="cron-chat-modal-send-btn"
                 onClick={handleSend}
                 disabled={!inputValue.trim()}
-                className="cron-chat-modal-send-btn"
                 title="Send"
+                aria-label="Send"
               >
                 <ArrowUpIcon size={14} />
-              </button>
+              </IconButton>
             )}
           </div>
         </div>

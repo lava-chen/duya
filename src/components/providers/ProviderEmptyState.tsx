@@ -15,6 +15,7 @@
  */
 
 import { PlusIcon, UsersThreeIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/hooks/useTranslation';
 
 export interface ProviderEmptyStateProps {
@@ -38,15 +39,16 @@ export function ProviderEmptyState({ onAdd }: ProviderEmptyStateProps) {
       <p className="mt-2 max-w-lg text-sm text-muted-foreground">
         {t('provider.noProvidersDescription')}
       </p>
-      <button
-        type="button"
+      <Button
+        variant="primary"
+        size="md"
         onClick={onAdd}
         data-testid="provider-empty-state-add"
-        className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors"
+        className="mt-6"
       >
         <PlusIcon size={16} />
         {t('provider.addProvider')}
-      </button>
+      </Button>
     </div>
   );
 }

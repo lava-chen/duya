@@ -16,6 +16,8 @@ import {
 import { FileAttachmentCard } from './FileAttachmentCard';
 import { AttachmentBar } from './AttachmentBar';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
 import { decodeMessageAttachments } from '@/lib/decode-message-attachments';
 import { parseAllShowWidgets } from '@/lib/widget-parser';
@@ -864,18 +866,22 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                 rows={3}
               />
               <div className="flex justify-end items-center gap-2 px-3 pb-2.5 pt-0.5">
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={handleEditCancel}
-                  className="px-2.5 py-1 text-xs rounded-md transition-colors text-[var(--muted)] hover:bg-[var(--surface-hover)]"
+                  className="text-[var(--muted)]"
                 >
                   {locale === 'zh' ? '取消' : 'Cancel'}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={handleEditSend}
-                  className="px-2.5 py-1 text-xs rounded-md transition-colors bg-[var(--text)] text-[var(--bg-canvas)] hover:opacity-90"
+                  className="bg-[var(--text)] text-[var(--bg-canvas)] hover:opacity-90"
                 >
                   {locale === 'zh' ? '发送' : 'Send'}
-                </button>
+                </Button>
               </div>
             </div>
           ) : (
@@ -892,21 +898,29 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                 <span className="text-[11px] text-muted-foreground/60 tabular-nums">
                   {formatMessageTime(message.timestamp, t, locale)}
                 </span>
-                <button
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  shape="square"
+                  aria-label="Copy message"
                   onClick={copyToClipboard}
-                  className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
+                  className="hover:bg-muted/50"
                   title="Copy message"
                 >
                   {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                </button>
+                </IconButton>
                 {isEditable && onEditSend && (
-                  <button
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    shape="square"
+                    aria-label={locale === 'zh' ? '编辑并重新发送' : 'Edit and resend'}
                     onClick={handleStartEdit}
-                    className="p-1 rounded hover:bg-muted/50 transition-colors text-muted-foreground"
+                    className="hover:bg-muted/50"
                     title={locale === 'zh' ? '编辑并重新发送' : 'Edit and resend'}
                   >
                     <NotePencilIcon size={12} />
-                  </button>
+                  </IconButton>
                 )}
               </div>
             </>
@@ -982,13 +996,17 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
           <span className="text-[11px] text-muted-foreground/60 tabular-nums">
             {formatMessageTime(message.timestamp, t, locale)}
           </span>
-          <button
+          <IconButton
+            variant="ghost"
+            size="md"
+            shape="square"
+            aria-label="Copy message"
             onClick={copyToClipboard}
-            className="p-1.5 rounded hover:bg-muted/50 transition-colors text-muted-foreground/60 hover:text-foreground"
+            className="hover:bg-muted/50 text-muted-foreground/60 hover:text-foreground"
             title="Copy message"
           >
             {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-          </button>
+          </IconButton>
         </div>
       </div>
     </div>

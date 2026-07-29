@@ -1,8 +1,7 @@
 "use client";
 
 import React from "react";
-import { ArrowClockwise, CopySimple, X } from "@phosphor-icons/react";
-import { TrashIcon } from "@/components/icons";
+import { ArrowClockwiseIcon, CopySimpleIcon, XIcon, TrashIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import {
   CAPSULE_BTN_BASE,
@@ -45,12 +44,12 @@ export function ElementUtilityActions({
       {leadingDivider && <div style={CAPSULE_DIVIDER} />}
       {showRotate && (
         <button type="button" title={t("conductor.utility.rotate")} onClick={onRotate} style={CAPSULE_BTN_BASE}>
-          <ArrowClockwise size={16} />
+          <ArrowClockwiseIcon size={16} />
         </button>
       )}
       {showDuplicate && (
         <button type="button" title={t("conductor.utility.duplicate")} onClick={onDuplicate} style={CAPSULE_BTN_BASE}>
-          <CopySimple size={16} />
+          <CopySimpleIcon size={16} />
         </button>
       )}
       <CapsuleMoreMenu
@@ -65,7 +64,7 @@ export function ElementUtilityActions({
         <TrashIcon size={16} />
       </button>
       <button type="button" title={t("conductor.utility.closeToolbar")} onClick={onDismiss} style={CAPSULE_BTN_BASE}>
-        <X size={16} />
+        <XIcon size={16} />
       </button>
     </>
   );

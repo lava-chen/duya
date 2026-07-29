@@ -8,6 +8,8 @@ import { addChatWidgetToCanvas } from '@duya/conductor/renderer/ipc/chat-widget-
 import { useOptionalPanel } from '@/hooks/usePanel';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
 import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
+import { IconButton } from '@/components/ui/IconButton';
+import { Button } from '@/components/ui/Button';
 
 interface WidgetRendererProps {
   widgetCode: string;
@@ -147,49 +149,67 @@ function WidgetActions({
           {addError}
         </div>
       )}
-      <button
+      <IconButton
+        variant="ghost"
+        size="md"
+        shape="square"
+        aria-label={addError ?? (added ? 'Added to canvas' : 'Add to canvas')}
         onClick={handleAddToCanvas}
         disabled={adding}
-        className="p-1.5 rounded-md bg-[var(--bg-canvas)]/80 hover:bg-[var(--bg-canvas)] text-[var(--text-secondary)] hover:text-[var(--text)] border border-[var(--border)]/50 backdrop-blur-sm transition-colors disabled:opacity-60 disabled:cursor-wait"
+        className="bg-[var(--bg-canvas)]/80 hover:bg-[var(--bg-canvas)] text-[var(--text-secondary)] hover:text-[var(--text)] border border-[var(--border)]/50 backdrop-blur-sm disabled:opacity-60 disabled:cursor-wait"
         title={addError ?? (added ? 'Added to canvas' : 'Add to canvas')}
       >
         {added ? <CheckIcon size={14} /> : <SquaresFourIcon size={14} />}
-      </button>
-      <button
+      </IconButton>
+      <IconButton
+        variant="ghost"
+        size="md"
+        shape="square"
+        aria-label="Copy source"
         onClick={handleCopy}
-        className="p-1.5 rounded-md bg-[var(--bg-canvas)]/80 hover:bg-[var(--bg-canvas)] text-[var(--text-secondary)] hover:text-[var(--text)] border border-[var(--border)]/50 backdrop-blur-sm transition-colors"
+        className="bg-[var(--bg-canvas)]/80 hover:bg-[var(--bg-canvas)] text-[var(--text-secondary)] hover:text-[var(--text)] border border-[var(--border)]/50 backdrop-blur-sm"
         title="Copy source"
       >
         {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-      </button>
+      </IconButton>
       <div className="relative" ref={menuRef}>
-        <button
+        <IconButton
+          variant="ghost"
+          size="md"
+          shape="square"
+          aria-label="Download"
           onClick={() => setMenuOpen(v => !v)}
-          className="p-1.5 rounded-md bg-[var(--bg-canvas)]/80 hover:bg-[var(--bg-canvas)] text-[var(--text-secondary)] hover:text-[var(--text)] border border-[var(--border)]/50 backdrop-blur-sm transition-colors"
+          className="bg-[var(--bg-canvas)]/80 hover:bg-[var(--bg-canvas)] text-[var(--text-secondary)] hover:text-[var(--text)] border border-[var(--border)]/50 backdrop-blur-sm"
           title="Download"
         >
           <DownloadSimpleIcon size={14} />
-        </button>
+        </IconButton>
         {menuOpen && (
           <div className="absolute right-0 mt-1 w-36 rounded-lg border border-[var(--border)] bg-[var(--bg-canvas)] shadow-lg overflow-hidden">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => handleDownload(ext)}
               className="w-full text-left px-3 py-2 text-xs text-[var(--text)] hover:bg-[var(--bg-hover)] transition-colors"
             >
               Download .{ext}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => handleDownload('svg')}
               className="w-full text-left px-3 py-2 text-xs text-[var(--text)] hover:bg-[var(--bg-hover)] transition-colors"
             >
               Download .svg
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => handleDownload('html')}
               className="w-full text-left px-3 py-2 text-xs text-[var(--text)] hover:bg-[var(--bg-hover)] transition-colors"
             >
               Download .html
-            </button>
+            </Button>
           </div>
         )}
       </div>

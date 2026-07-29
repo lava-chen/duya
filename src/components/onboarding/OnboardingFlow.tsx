@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { listProvidersIPC, upsertProviderIPC, activateProviderIPC } from "@/lib/ipc-client";
 import { XIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import { WelcomeStep } from "./steps/WelcomeStep";
 import { FeatureCarousel } from "./steps/FeatureCarousel";
 import { ConfigStep } from "./steps/ConfigStep";
@@ -241,13 +242,10 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
 
           {/* Skip button - show on all steps except last */}
           {!isLastStep && (
-            <button
-              onClick={handleSkip}
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-            >
+            <Button variant="ghost" size="sm" onClick={handleSkip}>
               <XIcon size={14} />
               {t("onboarding.skip")}
-            </button>
+            </Button>
           )}
         </div>
 

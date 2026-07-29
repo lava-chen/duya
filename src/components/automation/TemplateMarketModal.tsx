@@ -1,4 +1,4 @@
-import { X } from '@phosphor-icons/react';
+import { XIcon } from '@/components/icons';
 import type { AutomationTemplate } from '@/types/automation';
 import { useTranslation } from '@/hooks/useTranslation';
 
@@ -69,7 +69,7 @@ export function TemplateMarketModal({
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--muted)'; }}
             >
-              <X size={18} />
+              <XIcon size={18} />
             </button>
           </div>
         </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef } from "react";
-import { X, DotsSixVertical } from "@phosphor-icons/react";
+import { XIcon, DotsSixVerticalIcon } from "@/components/icons";
 import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { canvasTransformState } from "./CanvasArea";
 import { GRID_PX } from "../domain/canvas/units";
@@ -170,7 +170,7 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
           style={{ cursor: locked ? "default" : "grab" }}
         >
         <div className="flex items-center gap-2 min-w-0">
-          <DotsSixVertical size={12} className="text-[var(--muted)] flex-shrink-0" />
+          <DotsSixVerticalIcon size={12} className="text-[var(--muted)] flex-shrink-0" />
           <span className="text-xs font-medium text-[var(--text)] truncate">
             {label}
           </span>
@@ -190,7 +190,7 @@ export const ElementChrome: React.FC<ElementChromeProps> = ({
             onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
             onMouseLeave={(e) => (e.currentTarget.style.opacity = "0")}
           >
-            <X size={12} />
+            <XIcon size={12} />
           </button>
         )}
         </div>

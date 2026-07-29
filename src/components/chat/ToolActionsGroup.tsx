@@ -27,6 +27,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CaretRightIcon } from '@/components/icons';
 import type { ToolUseInfo, ToolResultInfo } from '@/types';
+import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/hooks/useTranslation';
 import { computeSegments } from './tools/segments';
 import {
@@ -182,8 +183,10 @@ function ToolActionsGroupImpl({
 
   return (
     <div className="w-full">
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={handleToggle}
         className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
       >
@@ -195,7 +198,7 @@ function ToolActionsGroupImpl({
           size={12}
           className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ml-auto ${expanded ? 'rotate-90' : ''}`}
         />
-      </button>
+      </Button>
 
       <AnimatePresence initial={false}>
         {expanded && (

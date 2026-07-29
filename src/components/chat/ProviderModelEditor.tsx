@@ -21,6 +21,7 @@ import {
   CaretUpIcon,
   ArrowUpRightIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { upsertModelCapabilityIPC } from '@/lib/ipc-client';
 import { useModelSelection } from '@/components/settings/forms/hooks/useModelSelection';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -125,8 +126,10 @@ export function ProviderModelEditor({
 
   return (
     <div className="space-y-1.5">
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
       >
@@ -137,7 +140,7 @@ export function ProviderModelEditor({
             {selectedCount}
           </span>
         )}
-      </button>
+      </Button>
 
       {expanded && (
         <div className="border border-border/50 rounded-lg overflow-hidden">
@@ -158,14 +161,16 @@ export function ProviderModelEditor({
               placeholder="Filter enabled models…"
               className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={openEditorForFreshModels}
               className="inline-flex items-center gap-1 text-[10px] text-accent hover:underline shrink-0"
             >
               {t('provider.modelInput.fetch')}
               <ArrowUpRightIcon size={10} />
-            </button>
+            </Button>
           </div>
 
           {enabledModelObjects.length === 0 ? (
@@ -182,8 +187,10 @@ export function ProviderModelEditor({
                   key={model.id}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent/5 transition-colors"
                 >
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => toggleAndNotify(model.id)}
                     className="flex-1 flex items-center gap-2 min-w-0"
                   >
@@ -195,7 +202,7 @@ export function ProviderModelEditor({
                         {model.id}
                       </div>
                     </div>
-                  </button>
+                  </Button>
                   {selection.editingCtxFor === model.id ? (
                     <input
                       autoFocus
@@ -211,8 +218,10 @@ export function ProviderModelEditor({
                       className="w-20 px-1.5 py-0.5 rounded border border-border/50 text-[10px] bg-chip text-foreground focus:outline-none focus:ring-1 focus:ring-accent/50"
                     />
                   ) : (
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => selection.beginEditContext(model.id, model.context_length)}
                       className="shrink-0 text-[10px] text-muted-foreground hover:text-accent"
                       title="Set context window"
@@ -220,7 +229,7 @@ export function ProviderModelEditor({
                       {formatContext(
                         selection.modelCapabilities.get(model.id) ?? model.context_length,
                       ) || 'set ctx'}
-                    </button>
+                    </Button>
                   )}
                 </div>
               ))}
@@ -231,13 +240,15 @@ export function ProviderModelEditor({
             <span>
               {selectedCount} model{selectedCount !== 1 ? 's' : ''} selected
             </span>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={openEditorForFreshModels}
               className="inline-flex items-center gap-1 text-accent hover:underline"
             >
               {t('provider.modelInput.manageInSettings')}
-            </button>
+            </Button>
           </div>
         </div>
       )}

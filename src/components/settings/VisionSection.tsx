@@ -11,6 +11,7 @@ import {
   KeyIcon,
   CpuIcon,
 } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
 import { testProviderIPC } from "@/lib/ipc-client";
@@ -103,7 +104,7 @@ export function VisionSection() {
       {/* Header */}
       <div className="settings-header mb-6">
         <h2 className="settings-title-copernicus text-xl flex items-center gap-2">
-          <EyeIcon size={20} weight="duotone" />
+          <EyeIcon size={20} />
           {t(tKey('settings.vision')) || 'Vision Model'}
         </h2>
         <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
@@ -122,7 +123,7 @@ export function VisionSection() {
                 color: enabled ? 'var(--accent)' : 'var(--muted)',
               }}
             >
-              <EyeIcon size={20} weight="duotone" />
+              <EyeIcon size={20} />
             </div>
             <div>
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
@@ -155,15 +156,15 @@ export function VisionSection() {
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {VISION_PRESETS.map((preset) => (
-                <button
+                <Button
                   key={`${preset.provider}-${preset.model}`}
-                  type="button"
-                  onClick={() => handlePresetSelect(preset)}
+                  variant="ghost"
                   className={`settings-card p-3 text-left transition-all duration-200 hover:scale-[1.02] ${
                     provider === preset.provider && model === preset.model
                       ? 'ring-2 ring-accent'
                       : ''
                   }`}
+                  onClick={() => handlePresetSelect(preset)}
                 >
                   <div className="flex items-center gap-2 mb-1.5">
                     <CpuIcon size={14} style={{ color: 'var(--accent)' }} />
@@ -174,7 +175,7 @@ export function VisionSection() {
                   <span className="text-xs" style={{ color: 'var(--muted)' }}>
                     {preset.model}
                   </span>
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -267,16 +268,10 @@ export function VisionSection() {
 
             {/* Test & Save Buttons */}
             <div className="flex items-center gap-3 pt-2">
-              <button
-                type="button"
+              <Button
+                variant="secondary"
                 onClick={handleTestConnection}
                 disabled={testStatus === "testing"}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium border transition-all duration-200 hover:scale-[1.02]"
-                style={{
-                  backgroundColor: 'var(--surface)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text)',
-                }}
               >
                 {testStatus === "testing" ? (
                   <SpinnerGapIcon size={14} className="animate-spin" />
@@ -294,16 +289,12 @@ export function VisionSection() {
                   : testStatus === "error"
                   ? (t(tKey('settings.testFailed')) || 'Failed')
                   : (t(tKey('settings.testConnection')) || 'Test Connection')}
-              </button>
+              </Button>
 
-              <button
-                type="button"
+              <Button
+                variant="primary"
                 onClick={handleSave}
                 disabled={!hasChanges || saving}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium text-white transition-all duration-200 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{
-                  backgroundColor: 'var(--accent)',
-                }}
               >
                 {saving ? (
                   <SpinnerGapIcon size={14} className="animate-spin" />
@@ -311,7 +302,7 @@ export function VisionSection() {
                   <CheckCircleIcon size={14} />
                 )}
                 {saving ? (t(tKey('settings.saving')) || 'Saving...') : (t(tKey('settings.save')) || 'Save')}
-              </button>
+              </Button>
             </div>
           </div>
 

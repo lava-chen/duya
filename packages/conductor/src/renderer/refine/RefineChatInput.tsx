@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PaperPlaneTilt, Stop } from "@phosphor-icons/react";
+import { PaperPlaneTiltIcon, StopIcon } from "@/components/icons";
 
 interface RefineChatInputProps {
   disabled: boolean;
@@ -49,7 +49,7 @@ export function RefineChatInput({ disabled, running, onSend, onStop }: RefineCha
             onClick={onStop}
             className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--error)] hover:bg-[var(--error-soft)] transition-colors"
           >
-            <Stop size={10} weight="fill" />
+            <StopIcon size={10} />
             Stop
           </button>
         )}
@@ -60,7 +60,7 @@ export function RefineChatInput({ disabled, running, onSend, onStop }: RefineCha
           disabled={disabled || !value.trim()}
           className="flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--accent)] text-white text-[10px] hover:opacity-90 disabled:opacity-40 transition-opacity"
         >
-          <PaperPlaneTilt size={10} weight="fill" />
+          <PaperPlaneTiltIcon size={10} />
           Send
         </button>
       </div>

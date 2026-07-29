@@ -7,6 +7,7 @@ import { ScanResultStep } from "./steps/ScanResultStep";
 import { PreviewStep } from "./steps/PreviewStep";
 import { ConflictStep } from "./steps/ConflictStep";
 import { CompleteStep } from "./steps/CompleteStep";
+import { Button } from "@/components/ui/Button";
 import type { ImportSource, ImportItem, ScanResult, ImportManifest, ConflictResolution, SessionImportItem } from "@/types/import";
 
 interface ImportFlowProps {
@@ -86,12 +87,9 @@ export function ImportFlow({ onComplete, onClose }: ImportFlowProps) {
             DUYA
           </span>
           {currentStep < 4 && (
-            <button
-              onClick={handleSkip}
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
+            <Button variant="ghost" size="sm" onClick={handleSkip}>
               {t("importFlow.skip")}
-            </button>
+            </Button>
           )}
         </div>
 

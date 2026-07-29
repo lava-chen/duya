@@ -9,8 +9,7 @@ import { CostBreakdownBar } from './CostBreakdownBar';
 import { UsageHeatmap } from './UsageHeatmap';
 import { SessionList } from './SessionList';
 import { ProviderQuotaView } from './ProviderQuotaView';
-import { ChartBarIcon, ArrowUpRightIcon } from '@/components/icons';
-import { BarChart3, Download } from 'lucide-react';
+import { ChartBarIcon, ArrowUpRightIcon, DownloadSimpleIcon } from '@/components/icons';
 
 export const UsageDashboard: React.FC = () => {
   const { t } = useTranslation();
@@ -79,7 +78,7 @@ export const UsageDashboard: React.FC = () => {
             disabled={isExporting || !hasData}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--border)] text-xs font-medium text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent-soft)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Download className="w-3.5 h-3.5" />
+            <DownloadSimpleIcon size={14} />
             {t('usage.export')}
           </button>
         </div>
@@ -88,7 +87,7 @@ export const UsageDashboard: React.FC = () => {
       {!hasData ? (
         <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-12 text-center">
           <div className="w-16 h-16 rounded-full bg-[var(--surface)] flex items-center justify-center mx-auto mb-4">
-            <BarChart3 className="w-8 h-8 text-[var(--muted)]" />
+            <ChartBarIcon size={32} className="text-[var(--muted)]" />
           </div>
           <h3 className="text-lg font-semibold text-[var(--text)] mb-2">{t('usage.noData')}</h3>
           <p className="text-sm text-[var(--muted)] max-w-md mx-auto">

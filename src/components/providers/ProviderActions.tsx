@@ -55,6 +55,8 @@ import {
   TerminalIcon,
   ChartLineIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { ReactNode } from 'react';
 import type { ProviderCardState } from './hooks/useProviderCardState';
@@ -68,11 +70,10 @@ export type MainButtonIconName =
   | 'ShieldAlert';
 
 export type MainButtonVariant =
-  | 'default'
+  | 'primary'
   | 'secondary'
-  | 'destructive'
-  | 'outline'
-  | 'ghost';
+  | 'ghost'
+  | 'danger';
 
 export interface MainButtonState {
   disabled: boolean;
@@ -116,16 +117,14 @@ export function getMainButtonState(
       return {
         disabled: false,
         variant: 'secondary',
-        className:
-          'bg-gray-200 text-muted-foreground hover:bg-gray-200 hover:text-muted-foreground ' +
-          'dark:bg-gray-700 dark:hover:bg-gray-700',
+        className: '',
         icon: 'Check',
         text: 'Default',
       };
     }
     return {
       disabled: false,
-      variant: 'default',
+      variant: 'primary',
       className: '',
       icon: 'Play',
       text: 'Set as default',
@@ -141,19 +140,15 @@ export function getMainButtonState(
       return {
         disabled: false,
         variant: 'secondary',
-        className:
-          'bg-blue-100 text-blue-600 hover:bg-blue-200 ' +
-          'dark:bg-blue-900/50 dark:text-blue-400 dark:hover:bg-blue-900/70',
+        className: '',
         icon: 'Check',
         text: 'In queue',
       };
     }
     return {
       disabled: false,
-      variant: 'default',
-      className:
-        'bg-blue-500 hover:bg-blue-600 ' +
-        'dark:bg-blue-600 dark:hover:bg-blue-700',
+      variant: 'primary',
+      className: '',
       icon: 'Plus',
       text: 'Add to queue',
     };
@@ -163,10 +158,8 @@ export function getMainButtonState(
   if (!card.isInConfig) {
     return {
       disabled: false,
-      variant: 'default',
-      className:
-        'bg-emerald-500 hover:bg-emerald-600 ' +
-        'dark:bg-emerald-600 dark:hover:bg-emerald-700',
+      variant: 'primary',
+      className: '',
       icon: 'Plus',
       text: 'Add to config',
     };
@@ -179,7 +172,7 @@ export function getMainButtonState(
     return {
       disabled: true,
       variant: 'secondary',
-      className: 'opacity-40 cursor-not-allowed',
+      className: '',
       icon: 'ShieldAlert',
       text: 'Blocked by proxy',
     };
@@ -190,9 +183,7 @@ export function getMainButtonState(
     return {
       disabled: true,
       variant: 'secondary',
-      className:
-        'bg-gray-200 text-muted-foreground hover:bg-gray-200 hover:text-muted-foreground ' +
-        'dark:bg-gray-700 dark:hover:bg-gray-700',
+      className: '',
       icon: 'Check',
       text: 'Default',
     };
@@ -201,11 +192,8 @@ export function getMainButtonState(
   // Default: set as default.
   return {
     disabled: false,
-    variant: 'default',
-    className: card.isProxyTakeover
-      ? 'bg-emerald-500 hover:bg-emerald-600 ' +
-        'dark:bg-emerald-600 dark:hover:bg-emerald-700'
-      : '',
+    variant: 'primary',
+    className: '',
     icon: 'Play',
     text: 'Set as default',
   };
@@ -256,8 +244,6 @@ export interface ProviderActionsProps {
   onOpenTerminal?: () => void;
 }
 
-const ICON_BTN_CLASS = 'h-7 w-7 p-1 rounded-lg hover:bg-chip text-muted-foreground';
-
 /**
  * Render the per-card action button cluster.
  *
@@ -286,15 +272,11 @@ export function ProviderActions({
 
   return (
     <div className="flex items-center gap-1.5">
-      <button
-        type="button"
+      <Button
+        variant={main.variant}
+        size="sm"
         onClick={mainDisabled ? undefined : onSwitch}
         disabled={mainDisabled}
-        className={
-          'inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ' +
-          main.className +
-          (mainDisabled ? ' opacity-40 cursor-not-allowed' : '')
-        }
         title={main.text}
       >
         {isTesting ? (
@@ -303,7 +285,7 @@ export function ProviderActions({
           renderIcon(main.icon)
         )}
         <span>{main.text}</span>
-      </button>
+      </Button>
 
       {/* Plan 209: action cluster is now always visible at low
           opacity, full opacity on hover/focus-within. The
@@ -318,103 +300,103 @@ export function ProviderActions({
           primary "In use / Enable" affordance. */}
       <div className="flex items-center gap-1.5 opacity-30 group-hover:opacity-100 group-focus-within:opacity-100 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
         {card.canEdit && (
-          <button
-            type="button"
-            onClick={onEdit}
-            className={ICON_BTN_CLASS + ' hover:text-foreground'}
+          <IconButton
+            variant="default"
+            size="md"
+            aria-label={t('provider.tooltip.edit')}
             title={t('provider.tooltip.edit')}
+            onClick={onEdit}
           >
             <NotePencilIcon size={14} />
-          </button>
+          </IconButton>
         )}
 
         {card.canDuplicate && onDuplicate && (
-          <button
-            type="button"
-            onClick={onDuplicate}
-            className={ICON_BTN_CLASS + ' hover:text-foreground'}
+          <IconButton
+            variant="default"
+            size="md"
+            aria-label={t('provider.tooltip.edit')}
             title={t('provider.tooltip.edit')}
+            onClick={onDuplicate}
           >
             <CopyIcon size={14} />
-          </button>
+          </IconButton>
         )}
 
         {card.canTest && onTest && (
-          <button
-            type="button"
+          <IconButton
+            variant="default"
+            size="md"
+            aria-label={t('provider.tooltip.test')}
+            title={t('provider.tooltip.test')}
             onClick={onTest}
             disabled={isTesting}
-            className={
-              ICON_BTN_CLASS +
-              (isTesting
-                ? ' opacity-40 cursor-not-allowed'
-                : ' hover:text-foreground')
-            }
-            title={t('provider.tooltip.test')}
           >
             {isTesting ? (
               <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-current border-r-transparent animate-spin" />
             ) : (
               <TestTubeIcon size={14} />
             )}
-          </button>
+          </IconButton>
         )}
 
         {onCheckQuota && (
-          <button
-            type="button"
-            onClick={canCheckQuota ? onCheckQuota : undefined}
-            disabled={!canCheckQuota}
-            className={
-              ICON_BTN_CLASS +
-              (canCheckQuota ? ' hover:text-foreground' : ' opacity-40 cursor-not-allowed')
+          <IconButton
+            variant="default"
+            size="md"
+            aria-label={
+              canCheckQuota
+                ? t('provider.tooltip.quota')
+                : t('provider.checkQuotaUnsupported')
             }
             title={
               canCheckQuota
                 ? t('provider.tooltip.quota')
                 : t('provider.checkQuotaUnsupported')
             }
+            onClick={canCheckQuota ? onCheckQuota : undefined}
+            disabled={!canCheckQuota}
           >
             <ChartBarIcon size={14} />
-          </button>
+          </IconButton>
         )}
 
         {card.canConfigureUsage && onConfigureUsage && (
-          <button
-            type="button"
-            onClick={onConfigureUsage}
-            className={ICON_BTN_CLASS + ' hover:text-foreground'}
+          <IconButton
+            variant="default"
+            size="md"
+            aria-label="Configure usage script"
             title="Configure usage script"
+            onClick={onConfigureUsage}
           >
             <ChartLineIcon size={14} />
-          </button>
+          </IconButton>
         )}
 
         {card.canOpenTerminal && onOpenTerminal && (
-          <button
-            type="button"
-            onClick={onOpenTerminal}
-            className={
-              ICON_BTN_CLASS +
-              ' hover:text-emerald-600 dark:hover:text-emerald-400'
-            }
+          <IconButton
+            variant="default"
+            size="md"
+            aria-label="Open terminal"
             title="Open terminal"
+            onClick={onOpenTerminal}
+            className="hover:text-emerald-600 dark:hover:text-emerald-400"
           >
             <TerminalIcon size={14} />
-          </button>
+          </IconButton>
         )}
 
         {card.canDelete && onDelete && (
-          <button
-            type="button"
+          <IconButton
+            variant="danger"
+            size="md"
+            aria-label={t('provider.tooltip.delete')}
+            title={t('provider.tooltip.delete')}
             onClick={onDelete}
             data-testid="provider-action-delete"
-            className={ICON_BTN_CLASS + ' hover:text-destructive'}
-            title={t('provider.tooltip.delete')}
-            aria-label={t('provider.tooltip.delete')}
           >
             <TrashIcon size={14} />
-          </button>
+          </IconButton>
         )}
       </div>
     </div>

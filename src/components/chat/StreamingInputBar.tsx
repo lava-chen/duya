@@ -25,6 +25,7 @@ import {
   CaretDownIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
+import { IconButton } from '@/components/ui/IconButton';
 
 // =============================================================================
 // Props
@@ -62,15 +63,16 @@ export function StreamingInputBar({
       <div className="streaming-input-bar">
         {/* Left: attach */}
         <div className="streaming-input-bar-left">
-          <button
-            type="button"
-            onClick={() => onAttach?.()}
+          <IconButton
+            variant="default"
+            size="sm"
             className="streaming-input-bar-icon-btn"
+            onClick={() => onAttach?.()}
             title={t('messageInput.attachFiles')}
             aria-label={t('messageInput.attachFiles')}
           >
-            <PlusIcon size={14} weight="bold" />
-          </button>
+            <PlusIcon size={14} stroke={2.5} />
+          </IconButton>
         </div>
 
         {/* Middle: permission + model (read-only display) */}
@@ -87,24 +89,27 @@ export function StreamingInputBar({
 
         {/* Right: mic + stop */}
         <div className="streaming-input-bar-right">
-          <button
-            type="button"
-            onClick={() => onMic?.()}
+          <IconButton
+            variant="default"
+            size="sm"
             className="streaming-input-bar-icon-btn"
+            onClick={() => onMic?.()}
             title="Voice (PR2)"
             aria-label="Voice"
           >
             <MicrophoneIcon size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={onStop}
+          </IconButton>
+          <IconButton
+            variant="danger"
+            shape="round"
+            size="sm"
             className="streaming-input-bar-stop-btn"
+            onClick={onStop}
             title="Stop"
             aria-label="Stop"
           >
-            <StopIcon size={12} weight="fill" />
-          </button>
+            <StopIcon size={12} fill="currentColor" />
+          </IconButton>
         </div>
       </div>
     </div>

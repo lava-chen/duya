@@ -33,6 +33,8 @@ import {
 } from "@/lib/git-ipc";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import type { PageTab } from "./registry";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import {
   collapseContextLines,
   parseReviewPatch,
@@ -93,10 +95,10 @@ function DiffLineView({ line, wrapped }: { line: ReviewDiffLine; wrapped: boolea
 
 function CollapsedLinesButton({ count, onExpand }: { count: number; onExpand: () => void }) {
   return (
-    <button type="button" className="code-review-collapsed-lines" onClick={onExpand}>
+    <Button type="button" variant="ghost" size="sm" className="code-review-collapsed-lines" onClick={onExpand}>
       <IconChevronDown size={14} aria-hidden="true" />
       显示 {count} 行未修改内容
-    </button>
+    </Button>
   );
 }
 
@@ -255,14 +257,17 @@ function ReviewContextMenu({
       style={{ position: "fixed", left: position.x, top: position.y, zIndex: 9999 }}
     >
       {items.map((item, i) => (
-        <button
+        <Button
           key={i}
+          type="button"
+          variant="ghost"
+          size="sm"
           className="file-tree-context-menu-item"
           onClick={item.action}
         >
           <span className="file-tree-context-menu-icon">{item.icon}</span>
           <span className="file-tree-context-menu-label">{item.label}</span>
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -434,8 +439,8 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
             <span className="code-review-scope-range">{scope === "latest-turn" ? "回合开始 → 结束" : "HEAD → 工作区"}</span>
           </div>
           <div className="code-review-scope-switch" role="group" aria-label="审阅范围">
-            <button type="button" className={scope === "latest-turn" ? "is-active" : ""} onClick={() => setScope("latest-turn")}>上一轮</button>
-            <button type="button" className={scope === "workspace" ? "is-active" : ""} onClick={() => setScope("workspace")}>工作区</button>
+            <Button type="button" variant="ghost" size="sm" className={scope === "latest-turn" ? "is-active" : ""} onClick={() => setScope("latest-turn")}>上一轮</Button>
+            <Button type="button" variant="ghost" size="sm" className={scope === "workspace" ? "is-active" : ""} onClick={() => setScope("workspace")}>工作区</Button>
           </div>
         </div>
         <div className="code-review-totals" aria-label={`${files.length} 个变更文件`}>
@@ -444,21 +449,21 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           <span className="code-review-file-count">{files.length} 个文件</span>
         </div>
         <div className="code-review-toolbar-actions">
-          <button type="button" className="code-review-icon-button" onClick={() => void refresh()} title="刷新变更" aria-label="刷新变更" disabled={loading}>
+          <IconButton type="button" variant="default" shape="square" className="code-review-icon-button" onClick={() => void refresh()} title="刷新变更" aria-label="刷新变更" disabled={loading}>
             <IconRefresh size={17} className={loading ? "animate-spin" : ""} />
-          </button>
-          <button type="button" className={`code-review-icon-button${wrapped ? " is-active" : ""}`} onClick={() => setWrapped((value) => !value)} title="自动换行" aria-label="自动换行" aria-pressed={wrapped}>
+          </IconButton>
+          <IconButton type="button" variant="default" shape="square" className={`code-review-icon-button${wrapped ? " is-active" : ""}`} onClick={() => setWrapped((value) => !value)} title="自动换行" aria-label="自动换行" aria-pressed={wrapped}>
             <IconTextWrap size={17} />
-          </button>
-          <button type="button" className={`code-review-icon-button${foldUnchanged ? " is-active" : ""}`} onClick={() => setFoldUnchanged((value) => !value)} title="折叠未修改内容" aria-label="折叠未修改内容" aria-pressed={foldUnchanged}>
+          </IconButton>
+          <IconButton type="button" variant="default" shape="square" className={`code-review-icon-button${foldUnchanged ? " is-active" : ""}`} onClick={() => setFoldUnchanged((value) => !value)} title="折叠未修改内容" aria-label="折叠未修改内容" aria-pressed={foldUnchanged}>
             <IconFold size={17} />
-          </button>
-          <button type="button" className={`code-review-icon-button${layout === "split" ? " is-active" : ""}`} onClick={() => setLayout((value) => value === "unified" ? "split" : "unified")} title={workspaceExpanded ? "切换统一/分栏差异" : "展开审阅页后可使用分栏差异"} aria-label="切换统一或分栏差异" aria-pressed={layout === "split"} disabled={!workspaceExpanded}>
+          </IconButton>
+          <IconButton type="button" variant="default" shape="square" className={`code-review-icon-button${layout === "split" ? " is-active" : ""}`} onClick={() => setLayout((value) => value === "unified" ? "split" : "unified")} title={workspaceExpanded ? "切换统一/分栏差异" : "展开审阅页后可使用分栏差异"} aria-label="切换统一或分栏差异" aria-pressed={layout === "split"} disabled={!workspaceExpanded}>
             <IconColumns2 size={17} />
-          </button>
-          <button type="button" className={`code-review-icon-button${showFiles ? " is-active" : ""}`} onClick={() => setShowFiles((value) => !value)} title={showFiles ? "隐藏文件" : "显示文件"} aria-label={showFiles ? "隐藏文件" : "显示文件"} aria-pressed={showFiles}>
+          </IconButton>
+          <IconButton type="button" variant="default" shape="square" className={`code-review-icon-button${showFiles ? " is-active" : ""}`} onClick={() => setShowFiles((value) => !value)} title={showFiles ? "隐藏文件" : "显示文件"} aria-label={showFiles ? "隐藏文件" : "显示文件"} aria-pressed={showFiles}>
             <IconLayoutSidebarRight size={17} />
-          </button>
+          </IconButton>
         </div>
       </header>
 
@@ -531,9 +536,11 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                   filteredFiles.map((file) => {
                     const isSelected = selectedPath === file.path;
                     return (
-                      <button
+                      <Button
                         key={file.path}
                         type="button"
+                        variant="ghost"
+                        size="sm"
                         className={`code-review-file-list-item${isSelected ? " is-selected" : ""}`}
                         onClick={() => handleSelectFile(file.path)}
                         onContextMenu={(e) => handleContextMenu(file.path, e)}
@@ -549,7 +556,7 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                           <span className="is-add">+{file.additions}</span>
                           <span className="is-remove">−{file.removals}</span>
                         </span>
-                      </button>
+                      </Button>
                     );
                   })
                 )}

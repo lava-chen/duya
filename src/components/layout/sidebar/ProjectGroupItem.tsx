@@ -5,6 +5,7 @@ import { useConversationStore, type Thread, type ProjectGroup } from "@/stores/c
 import { ThreadListItem } from "./ThreadListItem";
 import { FolderIcon, FolderOpenIcon, ArchiveIcon, DotsThreeIcon, FolderOpenIcon as OpenFolderIcon, CopyIcon, PlusIcon, CaretDownIcon, CaretRightIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
 
 interface ProjectGroupItemProps {
   project: ProjectGroup;
@@ -159,7 +160,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
             aria-label={t('thread.newThread')}
             title={t('thread.newThread')}
           >
-            <PlusIcon size={14} weight="bold" />
+            <PlusIcon size={14} stroke={2.5} />
           </button>
 
           {/* Three dots menu button - visible on hover */}
@@ -171,7 +172,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
             style={{ opacity: isHovered || showMenu ? 1 : 0 }}
             aria-label={t('project.options')}
           >
-            <DotsThreeIcon size={16} weight="bold" />
+            <DotsThreeIcon size={16} stroke={2.5} />
           </button>
         </div>
 
@@ -187,24 +188,28 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
               />
             ))}
             {hasMoreThreads && !showAllThreads && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 className="project-group-expand-all"
                 onClick={() => setShowAllThreads(true)}
               >
                 <CaretRightIcon size={10} />
                 <span>{t('common.showAll', { count: hiddenCount })}</span>
-              </button>
+              </Button>
             )}
             {hasMoreThreads && showAllThreads && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 className="project-group-expand-all"
                 onClick={() => setShowAllThreads(false)}
               >
                 <CaretDownIcon size={10} />
                 <span>{t('common.collapse')}</span>
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -217,31 +222,37 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
           className="project-dropdown-menu"
           style={{ top: menuPos.y, left: menuPos.x }}
         >
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             className="project-dropdown-item"
             onClick={handleOpenFolder}
           >
             <OpenFolderIcon size={14} />
             <span>{t("project.openFolder")}</span>
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             className="project-dropdown-item"
             onClick={handleCopyPath}
           >
             <CopyIcon size={14} />
             <span>{t("project.copyFolderPath")}</span>
-          </button>
+          </Button>
           <div className="project-dropdown-divider" />
-          <button
+          <Button
             type="button"
+            variant="danger"
+            size="sm"
             className="project-dropdown-item danger"
             onClick={handleDeleteProject}
           >
             <ArchiveIcon size={14} />
             <span>{t("project.removeProject")}</span>
-          </button>
+          </Button>
         </div>
       )}
     </>

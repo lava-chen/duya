@@ -41,6 +41,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { RichTextInput } from './RichTextInput';
 import type { Message } from '@/types/message';
+import { IconButton } from '@/components/ui/IconButton';
 
 function getEditableCursorPosition(element: HTMLElement | null, fallback: number): number {
   if (!element) return fallback;
@@ -1390,13 +1391,16 @@ export function MessageInput({
               <span className="px-2 py-0.5 bg-green-500/10 text-green-400 rounded text-xs">
                 CLI: {cliBadge.name}
               </span>
-              <button
-                type="button"
+              <IconButton
+                variant="ghost"
+                shape="round"
+                size="sm"
+                aria-label="Remove CLI badge"
                 onClick={handleRemoveCliBadge}
-                className="w-4 h-4 rounded-full bg-gray-700 flex items-center justify-center hover:bg-gray-600 transition-colors"
+                className="bg-gray-700 hover:bg-gray-600"
               >
                 <XIcon size={10} />
-              </button>
+              </IconButton>
             </div>
           )}
 
@@ -1405,8 +1409,11 @@ export function MessageInput({
             {/* Left: Plus Button (opens unified command popover) & Permission */}
             <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
               {/* Plus Button — opens the slash command popover (modes + settings + skills) */}
-              <button
-                type="button"
+              <IconButton
+                variant="ghost"
+                shape="square"
+                size="md"
+                aria-label={t('common.settings') || 'Settings'}
                 data-plus-trigger
                 onClick={() => {
                   if (popoverMode === 'skill') {
@@ -1415,7 +1422,7 @@ export function MessageInput({
                     openCommandPopover();
                   }
                 }}
-                className={`size-7 rounded-lg flex items-center justify-center transition-all text-xs border ${
+                className={`border ${
                   popoverMode === 'skill'
                     ? 'text-foreground bg-chip border-border'
                     : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
@@ -1423,7 +1430,7 @@ export function MessageInput({
                 title={t('common.settings') || 'Settings'}
               >
                 <PlusIcon size={16} />
-              </button>
+              </IconButton>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1505,14 +1512,17 @@ export function MessageInput({
                 </span>
               )}
               {isStreaming && onStop && (
-                <button
-                  type="button"
+                <IconButton
+                  variant="danger"
+                  shape="round"
+                  size="md"
+                  aria-label="Stop"
                   onClick={handleStop}
-                  className="w-8 h-8 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center hover:bg-red-500/30 transition-colors ml-1"
+                  className="bg-red-500/20 text-red-400 hover:bg-red-500/30 ml-1"
                   title="Stop"
                 >
                   <StopIcon size={16} />
-                </button>
+                </IconButton>
               )}
               <button
                 type="submit"

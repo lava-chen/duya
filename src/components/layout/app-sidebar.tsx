@@ -412,7 +412,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                       className={`sidebar-settings-link${isActive ? " active" : ""}`}
                     >
                       <span className="nav-icon">
-                        <Icon size={16} weight="regular" />
+                        <Icon size={16} />
                       </span>
                       <span>{t(item.labelKey as never)}</span>
                     </button>
@@ -554,7 +554,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             onClick={enterSettings}
           >
             <span className="nav-icon">
-              <GearSixIcon size={16} weight="regular" />
+              <GearSixIcon size={16} />
             </span>
             <span>{t('common.settings')}</span>
           </button>
@@ -566,9 +566,9 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             aria-label={t('sidebar.toggleThemeAria')}
           >
             {resolvedTheme === "dark" ? (
-              <SunIcon size={16} weight="regular" />
+              <SunIcon size={16} />
             ) : (
-              <MoonStarsIcon size={16} weight="regular" />
+              <MoonStarsIcon size={16} />
             )}
           </button>
         </div>

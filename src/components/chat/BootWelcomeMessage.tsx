@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@/hooks/useTranslation";
 import { FolderOpenIcon, CommandIcon, MessageCircleIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
 
 interface BootWelcomeMessageProps {
   onSelectProject?: () => void;
@@ -25,13 +26,15 @@ export function BootWelcomeMessage({ onSelectProject }: BootWelcomeMessageProps)
 
           <div className="flex flex-wrap items-center justify-center gap-2">
             {onSelectProject && (
-              <button
+              <Button
+                variant="ghost"
+                size="md"
                 onClick={onSelectProject}
-                className="flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors bg-[var(--chip)] hover:bg-[var(--border)] text-[var(--accent)]"
+                className="rounded-full bg-[var(--chip)] hover:bg-[var(--border)] text-[var(--accent)]"
               >
                 <FolderOpenIcon size={14} className="shrink-0" />
                 <span>{t("bootWelcome.actionSelectProject")}</span>
-              </button>
+              </Button>
             )}
 
             <div className="flex items-center gap-2 px-4 py-2 rounded-full text-sm bg-[var(--bg-surface)] text-muted-foreground border border-[var(--border)]">

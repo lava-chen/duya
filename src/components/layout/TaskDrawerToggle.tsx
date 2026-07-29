@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckSquareIcon } from "@phosphor-icons/react";
+import { CheckSquareIcon } from "@/components/icons";
 import { useEffect } from "react";
 import { usePanel } from "@/hooks/usePanel";
 import { useTaskCount } from "@/hooks/useTaskCount";
@@ -51,7 +51,7 @@ export function TaskDrawerToggle() {
       aria-pressed={taskDrawerOpen}
       data-testid="task-card-trigger"
     >
-      <CheckSquareIcon size={16} weight="regular" />
+      <CheckSquareIcon size={16} />
       {taskBadgeCount > 0 && (
         <span className={`panel-task-toggle-badge${runningBashCount > 0 ? " pulse" : ""}`}>
           {taskBadgeCount > 99 ? "99+" : taskBadgeCount}

@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, ArrowsClockwise, CircleNotch, Robot } from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowRightIcon, ArrowsClockwiseIcon, CircleNotchIcon, RobotIcon } from "@/components/icons";
+import { IconButton } from "@/components/ui/IconButton";
 
 type WebviewElement = HTMLElement & {
   canGoBack(): boolean;
@@ -154,39 +155,51 @@ export function AgentBrowserTab({ sessionId, onTitleChange }: AgentBrowserTabPro
   return (
     <div className="browser-panel">
       <div className="browser-panel-toolbar browser-agent-toolbar">
-        <button
+        <IconButton
           type="button"
+          variant="default"
+          shape="square"
+          size="sm"
           className="browser-panel-icon-btn"
           onClick={() => webviewNode?.goBack()}
           disabled={!canGoBack}
           title="Back"
+          aria-label="Back"
         >
-          <ArrowLeft size={14} />
-        </button>
-        <button
+          <ArrowLeftIcon size={14} />
+        </IconButton>
+        <IconButton
           type="button"
+          variant="default"
+          shape="square"
+          size="sm"
           className="browser-panel-icon-btn"
           onClick={() => webviewNode?.goForward()}
           disabled={!canGoForward}
           title="Forward"
+          aria-label="Forward"
         >
-          <ArrowRight size={14} />
-        </button>
-        <button
+          <ArrowRightIcon size={14} />
+        </IconButton>
+        <IconButton
           type="button"
+          variant="default"
+          shape="square"
+          size="sm"
           className="browser-panel-icon-btn"
           onClick={() => webviewNode?.reload()}
           title="Reload"
+          aria-label="Reload"
         >
-          <ArrowsClockwise size={14} />
-        </button>
+          <ArrowsClockwiseIcon size={14} />
+        </IconButton>
         <label className="browser-panel-address">
-          <Robot size={13} weight="fill" />
+          <RobotIcon size={13} fill="currentColor" />
           <input value={url} readOnly placeholder="Agent browser" spellCheck={false} title={title || url} />
         </label>
         {loading && (
           <span className="browser-agent-activity" title="Agent is waiting for this page">
-            <CircleNotch size={14} className="animate-spin" />
+            <CircleNotchIcon size={14} className="animate-spin" />
             <span>Agent</span>
           </span>
         )}

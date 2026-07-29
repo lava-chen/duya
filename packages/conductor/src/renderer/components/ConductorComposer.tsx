@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PaperPlaneTilt, SpinnerGap } from "@phosphor-icons/react";
+import { PaperPlaneTiltIcon, SpinnerGapIcon } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { useConductorStore } from "..//stores/conductor-store";
@@ -91,7 +91,7 @@ export function ConductorComposer() {
     <div className="flex-shrink-0 bg-transparent">
       <div className="flex items-center gap-2 bg-[var(--main-bg)] rounded-lg px-3 h-10">
         {isForwarding && (
-          <SpinnerGap size={14} className="animate-spin text-[var(--muted)] flex-shrink-0" />
+          <SpinnerGapIcon size={14} className="animate-spin text-[var(--muted)] flex-shrink-0" />
         )}
         <textarea
           value={value}
@@ -119,7 +119,7 @@ export function ConductorComposer() {
           disabled={!canSend}
           className="flex items-center justify-center w-7 h-7 rounded-full bg-[var(--send-btn)] text-white hover:bg-[var(--send-btn-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
         >
-          <PaperPlaneTilt size={14} weight="regular" />
+          <PaperPlaneTiltIcon size={14} />
         </button>
       </div>
     </div>

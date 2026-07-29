@@ -27,6 +27,8 @@ import {
 } from '@/components/settings/ui';
 import { ExtensionConfirmDialog } from '@/components/ExtensionConfirmDialog';
 import { BrowserAdvancedSection } from './BrowserAdvancedSection';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 
 // Chrome Web Store extension URL
 const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/duya-browser-bridge/hpkgmnimcghdnodpoehidjeinnhlnpkd';
@@ -305,15 +307,16 @@ export default function BrowserExtensionSection() {
                 </span>
               }
               action={
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={checkExtension}
                   disabled={status === 'checking'}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-surface border border-border/50 text-foreground hover:bg-muted transition-all disabled:opacity-50"
                   title={t('browserExtension.refresh')}
                 >
                   <ArrowsClockwiseIcon size={14} className={status === 'checking' ? 'animate-spin' : ''} />
                   {t('browserExtension.refresh')}
-                </button>
+                </Button>
               }
             />
             {lastChecked && (
@@ -333,14 +336,16 @@ export default function BrowserExtensionSection() {
               </div>
 
               {!showManualInstall && (
-                <button
+                <Button
+                  variant="primary"
+                  size="lg"
                   onClick={handleOpenChromeStore}
-                  className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
+                  className="w-full rounded-xl shadow-lg shadow-accent/20"
                 >
                   <ChromeIcon size={18} />
                   {t('browserExtension.openChromeStore')}
                   <ExternalLinkIcon size={14} />
-                </button>
+                </Button>
               )}
 
               {showManualInstall && (
@@ -350,39 +355,47 @@ export default function BrowserExtensionSection() {
                       <code className="flex-1 px-4 py-3 rounded-lg text-xs font-mono truncate bg-surface border border-border/50 text-foreground">
                         {extensionPath || '<DUYA_INSTALL_DIR>/extension/'}
                       </code>
-                      <button
+                      <IconButton
+                        variant="default"
+                        size="md"
+                        aria-label={t('common.copy')}
+                        title={t('common.copy')}
                         onClick={handleCopyPath}
                         disabled={!extensionPath}
-                        className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
-                        title={t('common.copy')}
                       >
                         {copied ? <CheckCircleIcon size={16} className="text-green-500" /> : <CopyIcon size={16} className="text-muted-foreground" />}
-                      </button>
-                      <button
+                      </IconButton>
+                      <IconButton
+                        variant="default"
+                        size="md"
+                        aria-label="Open folder"
+                        title="Open folder"
                         onClick={handleOpenFolder}
                         disabled={!extensionPath}
-                        className="p-3 rounded-lg bg-surface border border-border/50 hover:bg-muted transition-all disabled:opacity-50"
-                        title="Open folder"
                       >
                         <FolderOpenIcon size={16} className="text-muted-foreground" />
-                      </button>
+                      </IconButton>
                     </div>
                   </SettingsSection>
 
-                  <button
+                  <Button
+                    variant="primary"
+                    size="lg"
                     onClick={handleOpenExtensions}
-                    className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white bg-accent hover:bg-accent/90 transition-all shadow-lg shadow-accent/20"
+                    className="w-full rounded-xl shadow-lg shadow-accent/20"
                   >
                     <ChromeIcon size={18} />
                     {t('browserExtension.openChrome')}
                     <ExternalLinkIcon size={14} />
-                  </button>
+                  </Button>
                 </>
               )}
 
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setShowManualInstall(!showManualInstall)}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs transition-colors"
+                className="w-full"
                 style={{
                   color: 'var(--muted)',
                   backgroundColor: 'var(--surface)',
@@ -401,7 +414,7 @@ export default function BrowserExtensionSection() {
                 {showManualInstall
                   ? (t('browserExtension.useStoreInstall'))
                   : (t('browserExtension.useManualInstall'))}
-              </button>
+              </Button>
             </div>
           )}
         </SettingsSection>
@@ -424,14 +437,15 @@ export default function BrowserExtensionSection() {
                   disabled={settingsLoading}
                   className="flex-1 px-3 py-2 rounded-lg border text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent border-border/50 disabled:opacity-50"
                 />
-                <button
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={handleAddDomain}
                   disabled={settingsLoading}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
                 >
                   <PlusIcon size={14} />
                   {t('settings.security.addDomain')}
-                </button>
+                </Button>
               </div>
               {domainError && (
                 <p className="text-xs text-destructive mb-2">{domainError}</p>
@@ -444,14 +458,16 @@ export default function BrowserExtensionSection() {
                       className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface border border-border/50 text-sm text-foreground"
                     >
                       <span className="font-mono text-xs">{domain}</span>
-                      <button
+                      <IconButton
+                        variant="danger"
+                        size="sm"
+                        aria-label={t('settings.security.removeDomain')}
+                        title={t('settings.security.removeDomain')}
                         onClick={() => handleRemoveDomain(domain)}
                         disabled={settingsLoading}
-                        className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all disabled:opacity-50"
-                        title={t('settings.security.removeDomain')}
                       >
                         <XIcon size={14} />
-                      </button>
+                      </IconButton>
                     </div>
                   ))}
                 </div>
@@ -466,14 +482,14 @@ export default function BrowserExtensionSection() {
           {isDirty && (
             <div className="mt-4 flex items-center justify-end gap-3">
               <span className="text-xs text-muted-foreground">{t('settings.security.unsavedChanges')}</span>
-              <button
+              <Button
+                variant="primary"
                 onClick={handleSaveDomains}
                 disabled={saving}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
               >
                 {saving && <SpinnerGapIcon size={14} className="animate-spin" />}
                 {saving ? t('settings.security.saving') : t('settings.security.saveChanges')}
-              </button>
+              </Button>
             </div>
           )}
         </SettingsSection>
