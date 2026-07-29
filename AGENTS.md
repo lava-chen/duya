@@ -23,6 +23,29 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Docs: `docs/{design-docs,exec-plans,generated,product-specs,references}/`
 - Scoped guides: `docs/exec-plans/README.md`, `docs/design-docs/core-beliefs.md`
 
+## Code Review Workspace
+
+- Sidebar page: `src/components/layout/panels/CodeReviewPanel.tsx`; register it
+  through `src/components/layout/panels/registry.ts` and pass the session
+  working directory from `src/components/layout/PanelZone.tsx`.
+- Scope is always `HEAD` to the current working tree. It is read-only: never
+  add stage, commit, push, reset, or other mutating Git controls here.
+- Bridge contract: `git:review` lists porcelain status plus numstat totals;
+  `git:review-diff` returns the selected patch. Keep renderer shapes in
+  `src/lib/git-ipc.ts` synchronized with `electron/preload.ts` and
+  `electron/ipc/git-handlers.ts`.
+- Security boundary: accept only changed, project-relative paths; reject
+  absolute paths, traversal, `.git` metadata, and untracked symlinks resolving
+  outside the workspace. Keep diff output bounded at 1 MB and retain safe
+  partial output when the child-process buffer is exhausted.
+- UI contract: changed-file filter/tree, unified diff by default, split diff
+  only in expanded mode, optional context folding and wrapping, and hand off
+  the selected file through the existing chat attachment event.
+- Verify parser behavior in
+  `src/components/layout/panels/code-review-diff.test.ts`, bridge behavior in
+  `electron/ipc/__tests__/git-handlers.test.ts`, then exercise the panel in a
+  real Electron renderer; browser-only Vite cannot validate the preload path.
+
 ## Architecture
 
 - **HTTP+SSE 三层分离**：Main Process ↔ Agent Server (HTTP+SSE) ↔ Worker Processes

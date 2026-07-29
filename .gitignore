@@ -9,6 +9,9 @@ release/
 build/
 *.tsbuildinfo
 
+# Generated assembled prompt docs (read-only local reference, not source)
+/doya-general-prompt-assembled.md
+
 # In-place TypeScript emit (when tsc is invoked with emit on, .d.ts and
 # .js appear next to their .ts / .tsx sources). Track emit outputs by
 # filename pattern rather than path so genuine hand-written .d.ts
@@ -69,6 +72,7 @@ coverage/
 !src/hooks/__tests__/usePanel.test.ts
 !src/components/chat/tools/rows/SubAgentToolRow.test.tsx
 !src/components/layout/TaskDrawer.test.tsx
+!src/components/layout/panels/code-review-diff.test.ts
 !src/components/chat/SlashCommandPopover.test.tsx
 !packages/conductor/src/renderer/components/native/__tests__/native-element-capabilities.test.ts
 !packages/conductor/src/renderer/components/native/editing/__tests__/useElementEditSession.test.tsx
